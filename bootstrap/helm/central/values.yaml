@@ -612,8 +612,6 @@ metalNodes:
             macAddress: 2c:41:38:eb:d2:39
           - name: eno3
             macAddress: 00:02:c9:2f:30:c0
-          - name: eno3d1
-            macAddress: 00:02:c9:2f:30:c2
       sl230-blade2:
         labels:
           compute-model: sl230
@@ -784,8 +782,6 @@ metalNodes:
             macAddress: 2c:41:38:eb:d9:59
           - name: eno3
             macAddress: 00:02:c9:36:19:10
-          - name: eno3d1
-            macAddress: 00:02:c9:36:19:12
       sl230-blade4:
         labels:
           compute-model: sl230
