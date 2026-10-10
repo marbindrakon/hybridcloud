@@ -1008,6 +1008,24 @@ externalSecrets:
       installPlanApproval: Automatic
       source: redhat-operators
       sourceNamespace: openshift-marketplace
+    # The operator isolates its pods (deny-all + API server/DNS); the controller needs Vault.
+    externalSecretsConfig:
+      spec:
+        controllerConfig:
+          networkPolicies:
+            - name: allow-egress-to-central-vault
+              componentName: ExternalSecretsCoreController
+              egress:
+                - to:
+                    - namespaceSelector:
+                        matchLabels:
+                          kubernetes.io/metadata.name: central-vault
+                      podSelector:
+                        matchLabels:
+                          app.kubernetes.io/name: vault
+                  ports:
+                    - protocol: TCP
+                      port: 8200
 
 # ─── DNS Forwarder (services) ────────────────────────────────────────────────
 # Adds lab.signal9.gg → 172.18.42.10/172.18.42.11 forwarder to the services
