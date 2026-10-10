@@ -33,6 +33,8 @@ gitopsOperator:
   channel: latest
   installPlanApproval: Automatic
   argocdInstanceName: openshift-gitops
+  # Bind the Argo CD application controller to cluster-admin (the central app-of-apps needs it).
+  controllerClusterAdmin: false
   # Application-controller sync operation timeout (seconds). Syncs exceeding this are terminated.
   cmdParams:
     controller.sync.timeout.seconds: "600"

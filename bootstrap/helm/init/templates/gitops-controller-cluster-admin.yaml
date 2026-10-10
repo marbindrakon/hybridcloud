@@ -1,0 +1,20 @@
+{{- if and (include "sovereign-init.bootstrapOperator" .) .Values.gitopsOperator.controllerClusterAdmin }}
+---
+# shc: the central app-of-apps manages cluster-scoped resources and objects in many namespaces
+# (ACM, metal3 Provisioning, operators, CRDs). Upstream got this grant from the lab's base config;
+# grant it explicitly so the bootstrap has no lab-automation dependency (LAB-PLAN D3).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sovereign-gitops-controller-cluster-admin
+  labels:
+    {{- include "sovereign-init.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.gitopsOperator.argocdInstanceName }}-argocd-application-controller
+    namespace: {{ .Values.argocd.namespace }}
+{{- end }}
