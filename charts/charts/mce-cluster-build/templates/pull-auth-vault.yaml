@@ -1,0 +1,29 @@
+{{- if .Values.cluster.pullSecretVault -}}
+# ClusterDeployment/InfraEnv pullSecretRef "<cluster>-pull-secret". The lab chart's
+# pull-secret-vault.yaml never made it into this repo (.gitignore has *secret*); nothing else
+# creates the Secret. Keep "secret" out of this file name.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.cluster.name }}-pull-secret
+  namespace: {{ .Values.cluster.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: '0'
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ .Values.secretStoreName | default "vault-backend" }}
+  target:
+    name: {{ .Values.cluster.name }}-pull-secret
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ "{{" }} .pullSecret {{ "}}" }}"
+  data:
+    - secretKey: pullSecret
+      remoteRef:
+        key: {{ .Values.cluster.pullSecretVault }}
+        property: {{ .Values.cluster.pullSecretVaultProperty | default "pull_secret" }}
+{{- end }}

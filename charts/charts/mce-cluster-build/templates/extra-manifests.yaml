@@ -1,0 +1,20 @@
+{{- if and .Values.cluster.extraManifests (not .Values.provider.aws.extraManifestsSecret) (ne .Values.provider.type "Agent") -}}
+# Install-time manifests for Hive (ClusterDeployment.spec.provisioning.manifestsConfigMapRef),
+# e.g. the Authentication serviceAccountIssuer and chrony MachineConfigs. Keys are file names.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.cluster.name }}-manifests
+  namespace: {{ .Values.cluster.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: '0'
+data:
+  {{- range $file, $obj := .Values.cluster.extraManifests }}
+  {{ $file }}: |
+    {{- if kindIs "string" $obj }}
+    {{- $obj | nindent 4 }}
+    {{- else }}
+    {{- toYaml $obj | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

@@ -14,11 +14,16 @@ cluster:
   apiVIP: ""
   ingressVIP: ""
   # Vault paths (relative to ClusterSecretStore backend — vault-backend)
+  # Vault path (property pullSecretVaultProperty, default pull_secret) for <cluster>-pull-secret
   pullSecretVault: ""
+  pullSecretVaultProperty: pull_secret
   sshKeyVault: ""
   trustedCAs: ""
   sshPubKey: ""
   dnsServers: []
+  # Install-time manifests (file name -> object or YAML string) passed to Hive through a
+  # ConfigMap (non-Agent providers; ignored when provider.aws.extraManifestsSecret is set).
+  extraManifests: {}
 
 provider:
   # Vault path for provider credentials ExternalSecret

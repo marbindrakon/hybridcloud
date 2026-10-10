@@ -80,6 +80,9 @@ spec:
 {{ if .Values.provider.aws.extraManifestsSecret }}
     manifestsSecretRef:
       name: {{ .Values.cluster.name }}-manifests
+{{ else if .Values.cluster.extraManifests }}
+    manifestsConfigMapRef:
+      name: {{ .Values.cluster.name }}-manifests
 {{ end }}
 {{ if .Values.cluster.clusterImageSet }}
     imageSetRef:
