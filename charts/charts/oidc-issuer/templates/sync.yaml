@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oidc-sync
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oidc-sync
+  namespace: {{ .Values.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [oidc-documents]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: oidc-sync
+  namespace: {{ .Values.namespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: oidc-sync}
+subjects: [{kind: ServiceAccount, name: oidc-sync, namespace: {{ .Values.namespace }}}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shc-oidc-sync-issuer-discovery
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:service-account-issuer-discovery}
+subjects: [{kind: ServiceAccount, name: oidc-sync, namespace: {{ .Values.namespace }}}]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: oidc-sync
+  namespace: {{ .Values.namespace }}
+spec:
+  schedule: {{ .Values.sync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: oidc-sync
+          restartPolicy: Never
+          containers:
+            - name: sync
+              image: {{ .Values.sync.image }}
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -eo pipefail
+                  cd /tmp
+                  {{- range .Values.sync.clusters }}
+                  {{- if eq .source "local" }}
+                  # {{ .name }}: this cluster's own issuer documents
+                  oc get --raw /openid/v1/jwks > {{ .name }}__keys.json
+                  oc get --raw /.well-known/openid-configuration \
+                    | jq --arg iss "{{ $.Values.baseURL }}/{{ .name }}" \
+                         '.issuer = $iss | .jwks_uri = ($iss + "/keys.json")' > {{ .name }}__openid-configuration
+                  test "$(jq -r .issuer {{ .name }}__openid-configuration)" = "{{ $.Values.baseURL }}/{{ .name }}"
+                  {{- end }}
+                  {{- end }}
+                  oc create configmap oidc-documents -n {{ $.Values.namespace }} --dry-run=client -o yaml \
+                    {{- range .Values.sync.clusters }} --from-file={{ .name }}__keys.json --from-file={{ .name }}__openid-configuration{{- end }} \
+                    | oc apply --server-side --force-conflicts --field-manager=oidc-sync -f -
+                  echo "published: {{ range .Values.sync.clusters }}{{ .name }} {{ end }}"
+              resources: {requests: {cpu: 10m, memory: 64Mi}}

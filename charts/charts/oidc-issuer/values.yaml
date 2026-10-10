@@ -1,0 +1,23 @@
+# Public issuer base: every platform cluster gets issuer <baseURL>/<cluster>.
+host: oidc.shc.signal9.gg
+baseURL: https://oidc.shc.signal9.gg
+namespace: shc-oidc
+
+server:
+  replicas: 2
+  image: registry.access.redhat.com/ubi9/nginx-124:latest
+
+# Route TLS: certificate issued by cert-manager and referenced via spec.tls.externalCertificate, so the
+# edge reverse proxies can verify central's ingress for this host (D18).
+tls:
+  clusterIssuer: letsencrypt-shc
+  secretName: oidc-issuer-tls
+
+# Publisher: copies each cluster's discovery document and JWKS into the served store, rewriting
+# issuer/jwks_uri to the public base. "local" = this cluster (via its own API).
+sync:
+  schedule: "*/15 * * * *"
+  image: registry.redhat.io/openshift4/ose-tools-rhel9:latest  # has oc + jq (ose-cli lacks jq)
+  clusters:
+    - name: central
+      source: local

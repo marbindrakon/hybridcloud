@@ -1,0 +1,46 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: oidc-issuer
+  namespace: {{ .Values.namespace }}
+spec:
+  secretName: {{ .Values.tls.secretName }}
+  dnsNames: [{{ .Values.host }}]
+  issuerRef: {kind: ClusterIssuer, name: {{ .Values.tls.clusterIssuer }}}
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+---
+# The router reads the external certificate secret (OCP Route externalCertificate requirement).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: router-read-oidc-tls
+  namespace: {{ .Values.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ .Values.tls.secretName }}]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: router-read-oidc-tls
+  namespace: {{ .Values.namespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: router-read-oidc-tls}
+subjects:
+  - {kind: ServiceAccount, name: router, namespace: openshift-ingress}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: oidc-issuer
+  namespace: {{ .Values.namespace }}
+spec:
+  host: {{ .Values.host }}
+  to: {kind: Service, name: oidc-issuer}
+  port: {targetPort: http}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: None
+    externalCertificate:
+      name: {{ .Values.tls.secretName }}

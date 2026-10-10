@@ -1,0 +1,42 @@
+{{- if and (include "sovereign-central.applicationsEnabled" .) .Values.oidcIssuer.enabled }}
+---
+# shc (LAB-PLAN D17/§9): self-hosted service-account OIDC issuer documents, served from central only
+# behind the platform reverse proxies.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: oidc-issuer
+  namespace: {{ .Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+    app.kubernetes.io/component: identity
+    sovereign-cloud/target: central
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.oidcIssuer.syncWave | quote }}
+spec:
+  project: default
+  source:
+    repoURL: {{ printf "oci://%s/%s/oidc-issuer" .Values.oci.registry .Values.oci.repositoryBase | quote }}
+    chart: oidc-issuer
+    targetRevision: {{ .Values.oidcIssuer.chartVersion | quote }}
+    helm:
+      releaseName: oidc-issuer
+      valuesObject:
+        {{- toYaml .Values.oidcIssuer.values | nindent 8 }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.oidcIssuer.values.namespace | default "shc-oidc" }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+{{- end }}

@@ -441,6 +441,20 @@ rhacm:
         - "fa:16:3e:0d:d1:dc"  # central-2-prov
       watchAllNamespaces: true
 
+# ─── shc: cluster OIDC issuer (LAB-PLAN D17/§9) ──────────────────────────────
+oidcIssuer:
+  enabled: true
+  chartVersion: "0.1.0"
+  syncWave: "8"
+  values:
+    host: oidc.shc.signal9.gg
+    baseURL: https://oidc.shc.signal9.gg
+    namespace: shc-oidc
+    sync:
+      clusters:
+        - name: central
+          source: local
+
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
   enabled: false  # shc: P4 (services cluster)

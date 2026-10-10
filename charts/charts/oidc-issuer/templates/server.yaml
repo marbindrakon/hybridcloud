@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oidc-nginx
+  namespace: {{ .Values.namespace }}
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      server_tokens off;
+      default_type application/json;
+      # ConfigMap keys cannot contain '/': documents are stored as <cluster>__openid-configuration and
+      # <cluster>__keys.json and mapped to /<cluster>/.well-known/openid-configuration and /<cluster>/keys.json.
+      location ~ ^/([a-z0-9-]+)/\.well-known/openid-configuration$ { alias /srv/oidc/$1__openid-configuration; }
+      location ~ ^/([a-z0-9-]+)/keys\.json$ { alias /srv/oidc/$1__keys.json; }
+      location / { return 404; }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oidc-documents
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # contents are owned by the sync job, not by Argo
+    argocd.argoproj.io/compare-options: IgnoreExtraneous
+    argocd.argoproj.io/sync-options: Prune=false
+data: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oidc-issuer
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.server.replicas }}
+  selector: {matchLabels: {app: oidc-issuer}}
+  template:
+    metadata:
+      labels: {app: oidc-issuer}
+    spec:
+      containers:
+        - name: nginx
+          image: {{ .Values.server.image }}
+          command: ["nginx", "-g", "daemon off;"]
+          ports: [{containerPort: 8080, name: http}]
+          readinessProbe: {tcpSocket: {port: 8080}}
+          volumeMounts:
+            - {name: conf, mountPath: /opt/app-root/etc/nginx.d}
+            - {name: docs, mountPath: /srv/oidc, readOnly: true}
+          resources: {requests: {cpu: 10m, memory: 32Mi}}
+      volumes:
+        - {name: conf, configMap: {name: oidc-nginx}}
+        - {name: docs, configMap: {name: oidc-documents}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oidc-issuer
+  namespace: {{ .Values.namespace }}
+spec:
+  selector: {app: oidc-issuer}
+  ports: [{port: 8080, targetPort: http, name: http}]
