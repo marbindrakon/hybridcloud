@@ -103,7 +103,7 @@ sovereignNamespaces:
 
 # ─── Sovereign Namespaces (services cluster) ────────────────────────────────
 sovereignNamespacesServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.2.7"
   syncWave: "1"
   values:
@@ -175,7 +175,7 @@ rhbk:
 
 # ─── RHBK Services (Keycloak) ────────────────────────────────────────────────
 rhbkServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.10.2"
   syncWave: "20"
   destinationNamespace: services-rhbk
@@ -303,7 +303,7 @@ vault:
 
 # ─── Vault Services ─────────────────────────────────────────────────────────
 vaultServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.6.11"
   syncWave: "15"
   destinationNamespace: services-vault
@@ -373,7 +373,7 @@ vaultServices:
 
 # ─── Vault Services Init (separate App to avoid StatefulSet health deadlock) ─
 vaultServicesInit:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.2.3"
   syncWave: "20"
   values:
@@ -399,7 +399,7 @@ rhacm:
   syncWave: "10"
   values:
     operator:
-      channel: release-2.16
+      channel: "release-2.17"  # shc: D13
       installPlanApproval: Automatic
     multiClusterHub:
       enabled: true
@@ -414,7 +414,7 @@ rhacm:
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.5.5"
   syncWave: "30"
   destinationNamespace: aap
@@ -496,7 +496,7 @@ pluginIaac:
 
 # ─── Event Forwarder (central cluster — K8s Events → EDA Event Stream) ───────
 eventForwarder:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.5.5"
   syncWave: "32"
   image:
@@ -507,7 +507,7 @@ eventForwarder:
 
 # ─── OpenShift Virtualization (CNV) — central cluster ───────────────────────
 cnv:
-  enabled: true
+  enabled: false  # shc: D12: no CNV on central
   chartVersion: "0.1.0"
   syncWave: "12"
   destinationNamespace: openshift-cnv
@@ -538,7 +538,7 @@ cnv:
 
 # ─── Migration Toolkit for Virtualization (MTV) — central cluster ────────────
 mtv:
-  enabled: true
+  enabled: false  # shc: D12: no MTV on central
   chartVersion: "0.1.8"
   syncWave: "28"
   destinationNamespace: openshift-mtv
@@ -577,7 +577,7 @@ mtv:
 
 # ─── ODF / Noobaa (central) ─────────────────────────────────────────────────
 odf:
-  enabled: true
+  enabled: false  # shc: replaced by ODF external (LAB-PLAN D9/§7.5)
   chartVersion: "0.6.0"
   syncWave: "12"
   destinationNamespace: openshift-storage
@@ -589,7 +589,7 @@ odf:
 
 # ─── ODF / Noobaa (services) ────────────────────────────────────────────────
 odfServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.6.0"
   syncWave: "12"
   destinationNamespace: openshift-storage
@@ -663,7 +663,7 @@ quay:
 
 # ─── Quay (services) ────────────────────────────────────────────────────────
 quayServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.6.4"
   syncWave: "35"
   destinationNamespace: services-quay
@@ -940,7 +940,7 @@ crunchyPostgres:
 
 # ─── Crunchy Postgres (services) ────────────────────────────────────────────
 crunchyPostgresServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.5.0"
   syncWave: "11"
   destinationNamespace: postgres-operator
@@ -967,7 +967,7 @@ externalSecrets:
 # cluster CoreDNS so pods can resolve internal lab hostnames (vCenter, ESXi, etc.)
 # without falling through to public DNS which has no knowledge of private hosts.
 dnsForwarderServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.1.0"
   syncWave: "2"
   # Zone/IPs mirrored from lab.* (keep in sync via make render-values-lab)
@@ -983,7 +983,7 @@ dnsForwarderServices:
 
 # ─── External Secrets Operator (services) ───────────────────────────────────
 externalSecretsServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.1.4"
   syncWave: "5"
   values:
@@ -1094,7 +1094,7 @@ vaultSecretStore:
 # ─── Vault ClusterSecretStore (services → vault-central via external route) ─
 # Uses kubernetes-services auth mount on central vault (k8s auth, no root token)
 vaultSecretStoreServices:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.3.3"
   syncWave: "22"
   values:
@@ -1179,7 +1179,7 @@ sovereignJobs:
               key: services_password
               optional: true
     vmwareInit:
-      enabled: true
+      enabled: false  # shc: vSphere decommissioned
       playbook: vmware-init.yml
       activeDeadlineSeconds: 300
       syncWave: "24"
@@ -1209,7 +1209,7 @@ sovereignJobs:
         - name: KAFKA_EXTERNAL_BOOTSTRAP
           value: "hybridsovereign-kafka-kafka-bootstrap-amq-streams.apps.central.shc.signal9.gg:443"
     mtvCatalogSync:
-      enabled: true
+      enabled: false  # shc: D12: no MTV
       playbook: mtv-catalog-sync.yml
       activeDeadlineSeconds: 600
       syncWave: "35"
@@ -1414,7 +1414,7 @@ sovereignJobs:
         - name: REPO_NAME
           value: "tenancy_repo"
     keycloakServicesRealms:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
       playbook: keycloak-realms.yml
       activeDeadlineSeconds: 600
       syncWave: "28"
@@ -1441,7 +1441,7 @@ sovereignJobs:
         - name: FORCE_RERUN
           value: "2026-06-24-services-rhbk"
     keycloakServicesGroups:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
       playbook: keycloak-groups.yml
       activeDeadlineSeconds: 600
       syncWave: "29"
@@ -1459,7 +1459,7 @@ sovereignJobs:
         - name: EXTRA_GROUPS
           value: '[{"name":"acme-corp-platform-engineering-admins"},{"name":"acme-corp-platform-engineering-editors"},{"name":"acme-corp-platform-engineering-viewers"},{"name":"acme-corp-platform-ops-admins"},{"name":"acme-corp-platform-ops-editors"},{"name":"acme-corp-platform-ops-viewers"},{"name":"acme-corp-assignment-admins"},{"name":"acme-corp-developers"},{"name":"acme-corp-platform-viewers"},{"name":"acme-corp-devops"}]'
     keycloakServicesClients:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
       playbook: keycloak-clients.yml
       activeDeadlineSeconds: 600
       syncWave: "30"
@@ -1477,7 +1477,7 @@ sovereignJobs:
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     vaultServicesInit:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
       playbook: vault-services-init.yml
       activeDeadlineSeconds: 600
       syncWave: "29"
@@ -1521,7 +1521,7 @@ sovereignJobs:
         - name: OCP_SERVICES_SERVER
           value: "https://api.services.shc.signal9.gg:6443"
     aapLicenseServices:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
       playbook: aap-license.yml
       activeDeadlineSeconds: 600
       syncWave: "31"
@@ -1989,7 +1989,7 @@ sovereignJobs:
     # Runs after all operators are deployed (wave 45) so their CRDs exist.
     # Disables broken chart-default samples that have incorrect field names.
     operatorSamples:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
       playbook: operator-samples.yml
       activeDeadlineSeconds: 900
       syncWave: "45"
@@ -2040,7 +2040,7 @@ sovereignJobs:
 
     # ─── Quay Services Config: init admin + store in Vault + configure OIDC ─────
     quayServicesConfig:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
       playbook: quay-config.yml
       activeDeadlineSeconds: 1200
       syncWave: "37"
@@ -2487,7 +2487,7 @@ cloudAWSOperator:
 
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.9.18"
   syncWave: "40"
   destinationNamespace: sovereign-cloud
@@ -2519,7 +2519,7 @@ sovereignDashboard:
 
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "1.1.13"
   syncWave: "41"
   destinationNamespace: sovereign-cloud
@@ -2550,7 +2550,7 @@ tenancyDashboard:
 
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
 sovereignAdminPlugin:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.1.28"
   syncWave: "42"
   destinationNamespace: sovereign-cloud
@@ -2575,7 +2575,7 @@ sovereignAdminPlugin:
 
 # ─── Sovereign Tenant Console Plugin (services cluster) ──────────────────────
 sovereignTenantPlugin:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.1.23"
   syncWave: "42"
   destinationNamespace: sovereign-cloud
@@ -2667,7 +2667,7 @@ amqStreams:
 
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.1.22"
   syncWave: "38"
   destinationNamespace: sovereign-cloud
@@ -2690,7 +2690,7 @@ hybridsovereignPrimaryOperator:
 
 # ─── IAAC Git Sync StatefulSet (services) ────────────────────────────────────
 iaacGitSync:
-  enabled: true
+  enabled: false  # shc: P4 (services cluster)
   chartVersion: "0.1.2"
   syncWave: "40"
   destinationNamespace: sovereign-cloud-plugins
