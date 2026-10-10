@@ -1,0 +1,55 @@
+{{- if and (include "sovereign-central.applicationsEnabled" .) .Values.metalNodes.enabled }}
+---
+# shc (LAB-PLAN D19, §7 item 3): bare-metal node inventory for central's metal3 + assisted-service
+# (BareMetalHosts, BMC credentials, NMStateConfigs, shared late-binding InfraEnvs).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: metal-nodes
+  namespace: {{ .Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bare-metal
+    sovereign-cloud/target: central
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.metalNodes.syncWave | quote }}
+spec:
+  project: default
+  source:
+    repoURL: {{ printf "oci://%s/%s/metal-node-assignment" .Values.oci.registry .Values.oci.repositoryBase | quote }}
+    chart: metal-node-assignment
+    targetRevision: {{ .Values.metalNodes.chartVersion | quote }}
+    helm:
+      releaseName: metal-nodes
+      valuesObject:
+        {{- toYaml .Values.metalNodes.values | nindent 8 }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.metalNodes.namespace }}
+  # assisted-service's BMAC sets these on the BareMetalHosts (converged flow); never revert them.
+  ignoreDifferences:
+    - group: metal3.io
+      kind: BareMetalHost
+      jsonPointers:
+        - /spec/online
+        - /spec/image
+        - /spec/customDeploy
+        - /spec/userData
+        - /spec/networkData
+        - /spec/metaData
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+{{- end }}
