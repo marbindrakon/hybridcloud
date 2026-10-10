@@ -2103,6 +2103,9 @@ sovereignJobs:
       activeDeadlineSeconds: 300
       syncWave: "32"
       env:
+        # shc: the play reads VAULT_ADDR from env; upstream never set it (request URL had no host)
+        - name: VAULT_ADDR
+          value: "http://vault-active.central-vault.svc:8200"
         - name: RUN_ID
           value: "2026-06-24-fix-keycloak-test-users"
         - name: KEYCLOAK_CENTRAL_URL
