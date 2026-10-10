@@ -10,6 +10,8 @@ keycloak_services_admin_password: ""
 
 # 8 persistent test users covering all Rbac layer groups for acme-corp
 # Groups: <entity>-<team>-<role> convention matching Rbac CRs
+# shc: passwords live in central Vault (keycloak_test_users_vault_path), one random per user.
+keycloak_test_users_vault_path: "keycloak-test-users"
 keycloak_test_users:
   - realm: "sovereign-central"
     keycloak_url_key: central
@@ -17,7 +19,6 @@ keycloak_test_users:
     email: "sovereign-test-admin@example.com"
     firstName: "Test"
     lastName: "Admin"
-    password: "SovereignTest123!"
     groups:
       - "sovereign-admin"
   - realm: "sovereign-tenants"
@@ -26,7 +27,6 @@ keycloak_test_users:
     email: "acme-platform-eng-admin@example.com"
     firstName: "Acme"
     lastName: "PlatformEngAdmin"
-    password: "AcmeTest123!"
     groups:
       - "acme-corp-platform-engineering-admins"
   - realm: "sovereign-tenants"
@@ -35,7 +35,6 @@ keycloak_test_users:
     email: "acme-platform-eng-editor@example.com"
     firstName: "Acme"
     lastName: "PlatformEngEditor"
-    password: "AcmeTest123!"
     groups:
       - "acme-corp-platform-engineering-editors"
   - realm: "sovereign-tenants"
@@ -44,7 +43,6 @@ keycloak_test_users:
     email: "acme-platform-eng-viewer@example.com"
     firstName: "Acme"
     lastName: "PlatformEngViewer"
-    password: "AcmeTest123!"
     groups:
       - "acme-corp-platform-engineering-viewers"
   - realm: "sovereign-tenants"
@@ -53,7 +51,6 @@ keycloak_test_users:
     email: "acme-platform-ops-admin@example.com"
     firstName: "Acme"
     lastName: "PlatformOpsAdmin"
-    password: "AcmeTest123!"
     groups:
       - "acme-corp-platform-ops-admins"
   - realm: "sovereign-tenants"
@@ -62,7 +59,6 @@ keycloak_test_users:
     email: "acme-platform-ops-editor@example.com"
     firstName: "Acme"
     lastName: "PlatformOpsEditor"
-    password: "AcmeTest123!"
     groups:
       - "acme-corp-platform-ops-editors"
   - realm: "sovereign-tenants"
@@ -71,7 +67,6 @@ keycloak_test_users:
     email: "acme-platform-ops-viewer@example.com"
     firstName: "Acme"
     lastName: "PlatformOpsViewer"
-    password: "AcmeTest123!"
     groups:
       - "acme-corp-platform-ops-viewers"
   - realm: "sovereign-tenants"
@@ -80,7 +75,6 @@ keycloak_test_users:
     email: "acme-infra-admin@example.com"
     firstName: "Acme"
     lastName: "InfraAdmin"
-    password: "AcmeTest123!"
     groups:
       - "acme-corp-infra-admins"
   # ── Assignment RBAC test users (ocp-ses10 assignment validation) ─────────────
@@ -90,7 +84,6 @@ keycloak_test_users:
     email: "test-assignment-admin@example.com"
     firstName: "Test"
     lastName: "AssignmentAdmin"
-    password: "AssignmentTest123!"
     groups:
       - "acme-corp-assignment-admins"
   - realm: "sovereign-tenants"
@@ -99,7 +92,6 @@ keycloak_test_users:
     email: "test-assignment-developer@example.com"
     firstName: "Test"
     lastName: "AssignmentDeveloper"
-    password: "AssignmentTest123!"
     groups:
       - "acme-corp-developers"
   - realm: "sovereign-tenants"
@@ -108,7 +100,6 @@ keycloak_test_users:
     email: "test-assignment-viewer@example.com"
     firstName: "Test"
     lastName: "AssignmentViewer"
-    password: "AssignmentTest123!"
     groups:
       - "acme-corp-platform-viewers"
   - realm: "sovereign-tenants"
@@ -117,7 +108,6 @@ keycloak_test_users:
     email: "test-assignment-ops@example.com"
     firstName: "Test"
     lastName: "AssignmentOps"
-    password: "AssignmentTest123!"
     groups:
       - "acme-corp-devops"
   # Virtualization feature test users (feature 009)
@@ -127,7 +117,6 @@ keycloak_test_users:
     email: "test-virtualization-viewer@example.com"
     firstName: "Test"
     lastName: "VirtualizationViewer"
-    password: "VirtTest123!"
     groups:
       - "sovereign-admin"
   - realm: "sovereign-central"
@@ -136,6 +125,5 @@ keycloak_test_users:
     email: "test-vmware-ops@example.com"
     firstName: "Test"
     lastName: "VmwareOps"
-    password: "VirtTest123!"
     groups:
       - "sovereign-admin"

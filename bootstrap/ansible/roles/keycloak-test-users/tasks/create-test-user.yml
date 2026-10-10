@@ -20,11 +20,12 @@
       enabled: true
       credentials:
         - type: password
-          value: "SovereignTest@2026!"
+          value: "{{ keycloak_test_user_passwords[test_user.username] }}"
           temporary: false
     validate_certs: false
     status_code: [201, 409]
   register: create_user_result
+  no_log: true
 
 - name: "Get user ID for {{ test_user.username }}"
   ansible.builtin.uri:
@@ -42,6 +43,24 @@
   ansible.builtin.set_fact:
     _user_id: "{{ user_lookup.json[0].id }}"
   when: user_lookup.json | length > 0
+
+# shc: an existing user (409) gets the Vault password too, so Vault stays the source of truth
+- name: "Reset password of existing user {{ test_user.username }}"
+  ansible.builtin.uri:
+    url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/users/{{ _user_id }}/reset-password"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: password
+      temporary: false
+      value: "{{ keycloak_test_user_passwords[test_user.username] }}"
+    validate_certs: false
+    status_code: [204]
+  when: _user_id is defined and create_user_result.status == 409
+  no_log: true
 
 - name: "Add {{ test_user.username }} to groups"
   include_tasks: add-user-to-group.yml

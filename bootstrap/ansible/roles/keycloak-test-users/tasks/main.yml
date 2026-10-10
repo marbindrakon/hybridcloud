@@ -41,6 +41,50 @@
     kc_services_token: "{{ kc_services_token_resp.json.access_token }}"
   when: keycloak_services_url | length > 0
 
+# shc: per-user random passwords from central Vault (generated once, never in the repo). Upstream
+# created every test user with one password hardcoded here, on an internet-facing realm.
+- name: Read test user passwords from Vault
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/central/data/{{ keycloak_test_users_vault_path }}"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _test_user_pw_vault
+  no_log: true
+
+- name: Use stored test user passwords
+  ansible.builtin.set_fact:
+    keycloak_test_user_passwords: "{{ _test_user_pw_vault.json.data.data if _test_user_pw_vault.status == 200 else {} }}"
+  no_log: true
+
+- name: Generate passwords for test users without one
+  ansible.builtin.set_fact:
+    keycloak_test_user_passwords: >-
+      {{ keycloak_test_user_passwords | combine({item.username:
+           lookup('ansible.builtin.password', '/dev/null', length=24, chars=['ascii_letters', 'digits'])}) }}
+  loop: "{{ keycloak_test_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.username not in keycloak_test_user_passwords
+  register: _test_user_pw_generated
+  no_log: true
+
+- name: Store test user passwords in Vault
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/central/data/{{ keycloak_test_users_vault_path }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    body_format: json
+    body:
+      data: "{{ keycloak_test_user_passwords }}"
+    validate_certs: false
+    status_code: [200, 204]
+  when: _test_user_pw_generated.results | default([]) | selectattr('skipped', 'undefined') | list | length > 0
+  no_log: true
+
 - name: Create test users
   include_tasks: create-test-user.yml
   loop: "{{ keycloak_test_users }}"
