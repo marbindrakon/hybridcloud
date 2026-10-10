@@ -2265,7 +2265,7 @@ sovereignJobs:
         - name: ACS_URL
           value: "https://central-stackrox.apps.central.shc.signal9.gg"
         - name: ACS_ADMIN_SECRET_NAME
-          value: "stackrox-central-services-admin-password"
+          value: "central-htpasswd"  # shc: the ACS operator's generated admin Secret (key "password")
         - name: ACS_ADMIN_SECRET_NAMESPACE
           value: "stackrox"
         - name: VAULT_ADDR
