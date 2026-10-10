@@ -125,7 +125,8 @@
       type: "KUBERNETES_CLUSTER"
       mainImage: "registry.redhat.io/advanced-cluster-security/rhacs-main-rhel8"
       collectorImage: "registry.redhat.io/advanced-cluster-security/rhacs-collector-slim-rhel8"
-      centralApiEndpoint: "{{ acs_url | regex_replace('https://', '') }}"
+      # shc: ACS requires host:port ("Central API Endpoint must have port specified")
+      centralApiEndpoint: "{{ (acs_url | regex_replace('^https://', '') | regex_replace('/+$', '')) ~ ('' if (acs_url | regex_replace('^https://', '')) is search(':[0-9]+') else ':443') }}"
       runtimeSupport: false
       admissionControllerUpdates: true
       dynamicConfig:
