@@ -39,6 +39,37 @@
   set_fact:
     quay_admin_password: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
 
+# shc: re-runs reuse the stored admin token. /api/v1/user/initialize only works on an empty
+# database, so after the first run the init failed every time (10 retries, then fatal).
+- name: Read stored Quay admin credentials from Vault
+  uri:
+    url: "{{ vault_addr }}/v1/{{ vault_secret_path | regex_replace('^central/', 'central/data/') }}"
+    method: GET
+    validate_certs: false
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    status_code: [200, 404]
+  register: _quay_vault_existing
+  no_log: true
+
+- name: Check the stored Quay admin token
+  uri:
+    url: "{{ quay_url }}/api/v1/user/"
+    method: GET
+    validate_certs: false
+    headers:
+      Authorization: "Bearer {{ _quay_vault_existing.json.data.data.token }}"
+    status_code: [200, 401, 403]
+  register: _quay_token_check
+  when: _quay_vault_existing.status == 200 and (_quay_vault_existing.json.data.data.token | default('')) | length > 0
+  no_log: true
+
+- name: Reuse the stored Quay admin token
+  set_fact:
+    quay_access_token: "{{ _quay_vault_existing.json.data.data.token }}"
+  when: _quay_token_check is not skipped and _quay_token_check.status == 200
+  no_log: true
+
 - name: Initialize Quay superuser via API
   uri:
     url: "{{ quay_url }}/api/v1/user/initialize"
@@ -55,11 +86,13 @@
   retries: 10
   delay: 15
   until: _quay_init.status in [200, 201]
+  when: quay_access_token is not defined
   no_log: true
 
 - name: Set Quay access token
   set_fact:
     quay_access_token: "{{ _quay_init.json.access_token }}"
+  when: _quay_init is not skipped
   no_log: true
 
 # ─── Step 4: Store admin credentials in Vault ─────────────────────────────
@@ -78,6 +111,7 @@
         token: "{{ quay_access_token }}"
         url: "{{ quay_url }}"
     status_code: [200, 204]
+  when: _quay_init is not skipped
   no_log: true
 
 # ─── Step 5: Get Keycloak client secret from Vault ────────────────────────
