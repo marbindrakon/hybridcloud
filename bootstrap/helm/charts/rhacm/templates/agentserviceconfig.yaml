@@ -1,0 +1,44 @@
+{{- if .Values.agentServiceConfig.enabled }}
+---
+# Central Infrastructure Management (assisted-service) for agent-based / BareMetalHost cluster builds
+# (LAB-PLAN D19: mce-cluster-build agent provider + ipmi BMHs). MCE creates the CRD, hence the late
+# wave and SkipDryRunOnMissingResource.
+apiVersion: agent-install.openshift.io/v1beta1
+kind: AgentServiceConfig
+metadata:
+  name: agent
+  labels:
+    {{- include "rhacm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  databaseStorage:
+    {{- with .Values.agentServiceConfig.storageClassName }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: {{ .Values.agentServiceConfig.databaseStorage | quote }}
+  filesystemStorage:
+    {{- with .Values.agentServiceConfig.storageClassName }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: {{ .Values.agentServiceConfig.filesystemStorage | quote }}
+  imageStorage:
+    {{- with .Values.agentServiceConfig.storageClassName }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: {{ .Values.agentServiceConfig.imageStorage | quote }}
+  {{- with .Values.agentServiceConfig.osImages }}
+  osImages:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

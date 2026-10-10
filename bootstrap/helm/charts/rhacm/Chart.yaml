@@ -6,7 +6,7 @@ description: >
   Subscription, OperatorGroup, and MultiClusterHub instance and exposes all
   tunable parameters through values.yaml.
 type: application
-version: 0.5.0
+version: 0.5.1-shc.1
 # Tracks the upstream ACM operator channel — update when upgrading ACM.
 appVersion: "2.11"
 keywords:

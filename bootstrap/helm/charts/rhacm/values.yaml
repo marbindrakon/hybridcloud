@@ -79,3 +79,27 @@ operatorPodTolerations: []
 # ─── Extra annotations on all created resources ───────────────────────────────
 commonAnnotations: {}
 #  argocd.argoproj.io/sync-wave: "10"
+
+# ─── Central Infrastructure Management (assisted-service) ────────────────────
+agentServiceConfig:
+  enabled: false
+  # Empty = cluster default StorageClass.
+  storageClassName: ""
+  databaseStorage: 10Gi
+  filesystemStorage: 100Gi
+  imageStorage: 50Gi
+  # Empty = MCE's built-in OS image list.
+  osImages: []
+
+# ─── metal3 provisioning network (platform: baremetal hubs) ───────────────────
+provisioning:
+  enabled: false
+  # Managed | Unmanaged | Disabled
+  network: Disabled
+  ip: ""
+  networkCIDR: ""
+  dhcpRange: ""
+  # Either the hub nodes' provisioning NIC MACs, or an interface name.
+  macAddresses: []
+  interface: ""
+  watchAllNamespaces: true

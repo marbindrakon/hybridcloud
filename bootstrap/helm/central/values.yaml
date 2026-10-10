@@ -407,7 +407,7 @@ vaultServicesInit:
 # ─── RHACM ───────────────────────────────────────────────────────────────────
 rhacm:
   enabled: true
-  chartVersion: "0.5.0"
+  chartVersion: "0.5.1-shc.1"  # shc: + AgentServiceConfig + Provisioning (LAB-PLAN §7.4)
   enableMultiClusterHub: true
   destinationNamespace: open-cluster-management
   syncWave: "10"
@@ -425,6 +425,21 @@ rhacm:
         cluster-lifecycle: true
         volsync: false
         cluster-backup: false
+    # shc (D19): CIM for mce-cluster-build agent clusters; storage on the default SC (ODF external)
+    agentServiceConfig:
+      enabled: true
+    # shc (§4): metal3 Managed provisioning network on VLAN 231 via the masters' second NIC
+    provisioning:
+      enabled: true
+      network: Managed
+      ip: "172.18.231.3"
+      networkCIDR: "172.18.231.0/24"
+      dhcpRange: "172.18.231.20,172.18.231.199"
+      macAddresses:
+        - "fa:16:3e:87:83:fa"  # central-0-prov
+        - "fa:16:3e:e5:54:08"  # central-1-prov
+        - "fa:16:3e:0d:d1:dc"  # central-2-prov
+      watchAllNamespaces: true
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
