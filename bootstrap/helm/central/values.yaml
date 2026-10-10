@@ -780,7 +780,7 @@ gitea:
       replicaCount: 1
       image:
         registry: quay.signal9.gg
-        repository: hybrid-sovereign/gitea
+        repository: shc/gitea
         tag: "1.25.5"
         rootless: true
       gitea:
@@ -806,12 +806,12 @@ gitea:
         enabled: true
         image:
           registry: quay.signal9.gg
-          repository: hybrid-sovereign/postgresql
+          repository: shc/postgresql
           tag: "17.6.0-debian-12-r4"
         volumePermissions:
           image:
             registry: quay.signal9.gg
-            repository: hybrid-sovereign/os-shell
+            repository: shc/os-shell
             tag: "12-debian-12-r51"
       postgresql-ha:
         enabled: false
@@ -823,16 +823,16 @@ gitea:
         enabled: true
         image:
           registry: quay.signal9.gg
-          repository: hybrid-sovereign/valkey-cluster
+          repository: shc/valkey-cluster
           tag: "8.1.3-debian-12-r3"
         volumePermissions:
           image:
             registry: quay.signal9.gg
-            repository: hybrid-sovereign/os-shell
+            repository: shc/os-shell
             tag: "12-debian-12-r51"
         sysctlImage:
           registry: quay.signal9.gg
-          repository: hybrid-sovereign/os-shell
+          repository: shc/os-shell
           tag: "12-debian-12-r51"
       persistence:
         enabled: true
@@ -890,7 +890,7 @@ giteaCentral:
         type: Recreate
       image:
         registry: quay.signal9.gg
-        repository: hybrid-sovereign/gitea
+        repository: shc/gitea
         tag: "1.25.5"
         rootless: true
       gitea:
@@ -930,16 +930,16 @@ giteaCentral:
         enabled: true
         image:
           registry: quay.signal9.gg
-          repository: hybrid-sovereign/valkey-cluster
+          repository: shc/valkey-cluster
           tag: "8.1.3-debian-12-r3"
         volumePermissions:
           image:
             registry: quay.signal9.gg
-            repository: hybrid-sovereign/os-shell
+            repository: shc/os-shell
             tag: "12-debian-12-r51"
         sysctlImage:
           registry: quay.signal9.gg
-          repository: hybrid-sovereign/os-shell
+          repository: shc/os-shell
           tag: "12-debian-12-r51"
       persistence:
         enabled: true
