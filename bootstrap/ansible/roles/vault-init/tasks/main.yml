@@ -34,6 +34,12 @@
       {{ (vault_status_raw.stdout | from_json).initialized | default(false)
          if (vault_status_raw.stdout is defined and vault_status_raw.stdout | length > 0)
          else false }}
+    # shamir (keys) or transit/awskms/... (auto-unseal). Auto-unseal init yields recovery keys,
+    # which can't unseal; they are never stored with the root token (LAB-PLAN §7.6).
+    vault_seal_type: >-
+      {{ (vault_status_raw.stdout | from_json).type | default('shamir')
+         if (vault_status_raw.stdout is defined and vault_status_raw.stdout | length > 0)
+         else 'shamir' }}
   ignore_errors: true
 
 - name: Initialize Vault when not initialized
@@ -46,10 +52,11 @@
         container: vault
         command: >-
           vault operator init
-          -key-shares={{ vault_key_shares }}
-          -key-threshold={{ vault_key_threshold }}
+          {% if vault_seal_type == 'shamir' %}-key-shares={{ vault_key_shares }} -key-threshold={{ vault_key_threshold }}
+          {% else %}-recovery-shares={{ vault_key_shares }} -recovery-threshold={{ vault_key_threshold }}{% endif %}
           -format=json
       register: vault_init_result
+      no_log: true
       retries: 5
       delay: 10
       until: vault_init_result.rc is defined and vault_init_result.rc == 0
@@ -57,9 +64,29 @@
     - name: Parse init response
       ansible.builtin.set_fact:
         vault_root_token: "{{ (vault_init_result.stdout | from_json).root_token }}"
-        vault_unseal_keys: "{{ (vault_init_result.stdout | from_json).unseal_keys_b64 }}"
+        vault_unseal_keys: "{{ (vault_init_result.stdout | from_json).unseal_keys_b64 | default([]) }}"
+        vault_recovery_keys: "{{ (vault_init_result.stdout | from_json).recovery_keys_b64 | default([]) }}"
+      no_log: true
 
-    - name: Store init secrets as Kubernetes Secret
+    - name: Hand recovery keys to the operator (auto-unseal only; move offline, then delete this Secret)
+      when: vault_seal_type != 'shamir'
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ vault_secret_name }}-recovery"
+            namespace: "{{ vault_namespace }}"
+            annotations:
+              shc.signal9.gg/action: "move recovery keys offline, then delete this Secret"
+          type: Opaque
+          stringData:
+            recovery_keys: "{{ vault_recovery_keys | to_json }}"
+
+    - name: Store init secrets as Kubernetes Secret (shamir only)
+      when: vault_seal_type == 'shamir'
       kubernetes.core.k8s:
         state: present
         definition:
@@ -75,6 +102,22 @@
             unseal_keys_base64: "{{ vault_unseal_keys | to_json }}"
       retries: 3
       delay: 5
+      no_log: true
+
+    - name: Store the root token only (auto-unseal; never unseal or recovery keys)
+      when: vault_seal_type != 'shamir'
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ vault_secret_name }}"
+            namespace: "{{ vault_namespace }}"
+          type: Opaque
+          stringData:
+            root_token: "{{ vault_root_token }}"
 
 - name: Load existing credentials when already initialized
   when: vault_initialized
@@ -92,7 +135,8 @@
     - name: Load credentials from secret
       ansible.builtin.set_fact:
         vault_root_token: "{{ (existing_secret.resources[0].data.root_token | b64decode) }}"
-        vault_unseal_keys: "{{ (existing_secret.resources[0].data.unseal_keys | b64decode) | from_json }}"
+        vault_unseal_keys: "{{ ((existing_secret.resources[0].data.unseal_keys | default('W10=')) | b64decode) | from_json }}"
+      no_log: true
 
 - name: Unseal each Vault pod
   ansible.builtin.include_tasks: unseal-pod.yml

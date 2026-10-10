@@ -280,7 +280,21 @@ vault:
               storage "raft" {
                 path = "/vault/data"
               }
+              # shc (LAB-PLAN D7): auto-unseal against the lab Vault transit engine. Unseal-only:
+              # the token (Secret vault-transit-token, periodic, policy shc-central-unseal) can only
+              # encrypt/decrypt with this key. Recovery keys from init are kept offline.
+              seal "transit" {
+                address         = "https://vault.lab.signal9.gg"
+                mount_path      = "lab/shc-transit/"
+                key_name        = "shc-central-unseal"
+                disable_renewal = "false"
+              }
               service_registration "kubernetes" {}
+        # shc: transit seal token (VAULT_TOKEN is read by the seal; jobs use explicit X-Vault-Token)
+        extraSecretEnvironmentVars:
+          - envName: VAULT_TOKEN
+            secretName: vault-transit-token
+            secretKey: token
         dataStorage:
           enabled: true
           size: 10Gi
