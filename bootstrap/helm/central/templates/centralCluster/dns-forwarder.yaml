@@ -1,27 +1,17 @@
 ---
-# DNS forwarder: forward OCP cluster subdomain queries to their authoritative Route53 NS.
+# Central cluster CoreDNS forwarders (DNS/default), from values: dnsForwarderCentral.servers.
 #
-# Problem: OCP provision pods resolve `api.<cluster>.<slug>.<base>` via CoreDNS.
-# The default upstreams (8.8.8.8) cache negative responses for 1-5 minutes which
-# causes provision pods to fail with "no such host" for newly-created Route53 A records.
+# Upstream hardcoded its demo environment here: RHDP sandbox slug zones (*.opentlc.com) forwarded
+# to their Route53 NS, the lab base domain forwarded to 8.8.8.8, and lab.* / extra zones from
+# lab.dnsForwarderIps / lab.extraDnsServers. Forwarding the base domain to a public resolver hides
+# every private zone below it (e.g. the iLO names in oob.<base>) from pods.
 #
-# Fix: Forward directly to the authoritative Route53 NS for each zone so records
-# are visible immediately upon creation, bypassing public DNS caching.
+# shc: central's node resolver (lab IPA) already answers lab, OOB and public names, so central
+# only forwards its own platform zone to the authoritative primary, so that freshly created
+# records are visible at once (no negative caching in a recursor). See values.yaml.
 #
-# Key observation: The OCP installer creates `api.<cluster>.<slug>.<base>` A records
-# in the SLUG zone (<slug>.<base>), NOT in the cluster-specific child zone.
-# The cluster child zone (<cluster>.<slug>.<base>) only has NS + SOA records.
-# Therefore, we must forward to the SLUG zone NS, not the cluster zone NS.
-#
-# Zone hierarchy for sandbox5530.opentlc.com:
-#   sandbox5530.opentlc.com        NS: 205.251.197.94, 205.251.195.178  (public OPENTLC)
-#   73d59.sandbox5530.opentlc.com  NS: 205.251.195.52, 205.251.199.130  (ses7-env slug)
-#     api.ocp-ses7.73d59...  A record lives HERE (slug zone, not cluster zone)
-#   ocp-ses7.73d59...              NS: 205.251.194.203 (cluster zone, NS+SOA only)
-#
-# CoreDNS forwardPlugin is non-recursive. Forwarding to the cluster zone NS
-# returns NOERROR with 0 answers (AUTHORITY delegation) — not the A record.
-# Must target the SLUG zone NS which has the installer-created A records.
+# CoreDNS forwardPlugin is non-recursive and needs IP addresses: forward a zone only to servers
+# that are authoritative for it (or to recursors).
 apiVersion: operator.openshift.io/v1
 kind: DNS
 metadata:
@@ -29,59 +19,9 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "2"
 spec:
+{{- with .Values.dnsForwarderCentral.servers }}
   servers:
-    # Forward 73d59.sandbox5530.opentlc.com subdomain queries directly to slug zone NS.
-    # The OCP installer places api.ocp-ses7.73d59.* A records here.
-    # Verified: dig @205.251.195.52 api.ocp-ses7.73d59... returns ANSWER (5 A records).
-    - name: sandbox5530-73d59-forwarder
-      zones:
-        - 73d59.sandbox5530.opentlc.com
-      forwardPlugin:
-        policy: Sequential
-        upstreams:
-          - 205.251.195.52
-          - 205.251.199.130
-    - name: sandbox3512-04be0-forwarder
-      zones:
-        - 04be0.sandbox3512.opentlc.com
-      forwardPlugin:
-        policy: Sequential
-        upstreams:
-          # CoreDNS forwardPlugin requires IP addresses, not hostnames.
-          - 205.251.197.240
-          - 205.251.192.221
-          - 205.251.195.91
-          - 205.251.198.1
-    - name: opentlc-forwarder
-      zones:
-        - opentlc.com
-      forwardPlugin:
-        policy: Sequential
-        upstreams:
-          - 8.8.8.8
-          - 8.8.4.4
-    - name: base-domain-forwarder
-      zones:
-        - {{ .Values.lab.baseDomain | default "example.invalid" | quote }}
-      forwardPlugin:
-        policy: Sequential
-        upstreams:
-          - 8.8.8.8
-          - 8.8.4.4
-    # Forward lab zone to internal lab DNS servers (from values-lab / Vault lab-config).
-    - name: lab-domain-forwarder
-      zones:
-        - {{ .Values.lab.dnsForwarderZone | default .Values.lab.domain | default "lab.example.invalid" | quote }}
-      forwardPlugin:
-        policy: Sequential
-        upstreams:
-{{- range (.Values.lab.dnsForwarderIps | default list) }}
-          - {{ . | quote }}
-{{- else }}
-          - "127.0.0.1"
-{{- end }}
-    # Optional more-specific lab slug zones (from values-lab).
-{{- range (.Values.lab.extraDnsServers | default list) }}
+{{- range . }}
     - name: {{ .name | quote }}
       zones:
 {{- range .zones }}
@@ -93,4 +33,7 @@ spec:
 {{- range .upstreams }}
           - {{ . | quote }}
 {{- end }}
+{{- end }}
+{{- else }}
+  servers: []
 {{- end }}

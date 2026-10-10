@@ -25,25 +25,21 @@ lab:
   dnsForwarderIps:
     - "172.18.42.10"
     - "172.18.42.11"
-  extraDnsServers:
-    - name: ses4-slug-forwarder
-      zones:
-        - a4fce.lab.signal9.gg
-      policy: Sequential
-      upstreams:
-        - "205.251.193.121"
-        - "205.251.195.171"
-        - "205.251.197.184"
-        - "205.251.198.181"
-    - name: designate-zone-forwarder
+
+# ─── shc: central CoreDNS forwarders (templates/centralCluster/dns-forwarder.yaml) ───────────
+# Central's node resolver (IPA 172.18.42.20) answers lab, OOB (iLO) and public names, so the only
+# forwarder is the platform zone, straight to its authoritative primary ns1 (fresh records, no
+# recursor negative cache), with IPA as fallback when ns1 is unreachable. Upstream's RHDP sandbox
+# forwarders and "signal9.gg -> 8.8.8.8" (which hid oob.signal9.gg from pods) are gone.
+dnsForwarderCentral:
+  servers:
+    - name: shc-zone-forwarder
       zones:
         - shc.signal9.gg
       policy: Sequential
       upstreams:
-        - "8.8.8.8"
-        - "8.8.4.4"
-        - "172.18.42.10"
-        - "172.18.42.11"
+        - "75.8.222.11"
+        - "172.18.42.20"
 
 # Pull lab-config from Vault after `make upload-lab-config`.
 labConfigExternalSecret:
