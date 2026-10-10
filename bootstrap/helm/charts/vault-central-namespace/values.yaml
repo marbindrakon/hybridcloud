@@ -10,6 +10,8 @@ vaultInitPushSecret:
   sourceNamespace: central-vault
   sourceSecretName: vault-init-secrets
   remoteKey: vault-init
+  # false for an auto-unseal (transit/KMS) Vault: its init secret holds only root_token.
+  pushUnsealKeys: true
 
 # PushSecret: push vault-services-init-secrets K8s secret → Vault (runs AFTER vault-services-init job)
 vaultServicesInitPushSecret:

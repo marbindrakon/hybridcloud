@@ -1062,7 +1062,7 @@ externalSecretsServices:
 # ─── Vault Central Namespace (backup copies of init secrets) ─────────────────
 vaultCentralNamespace:
   enabled: true
-  chartVersion: "0.1.9-shc.1"
+  chartVersion: "0.1.9-shc.2"
   syncWave: "27"
   argocdChartsRepo: false
   # Used only when argocdChartsRepo is true. Prefer Gitea / internal mirror for disconnected.
@@ -1072,10 +1072,17 @@ vaultCentralNamespace:
     secretStore:
       name: vault-backend
       kind: ClusterSecretStore
+    # shc: central Vault auto-unseals via lab Vault transit (D7): vault-init-secrets holds only
+    # root_token (recovery keys are kept in lab Vault).
+    vaultInitPushSecret:
+      pushUnsealKeys: false
     vaultInitSecretsCopy:
       enabled: true
+      keys:
+        - secretKey: root_token
+          property: root_token
     vaultServicesInitSecretsCopy:
-      enabled: true
+      enabled: false  # shc: P4 (services cluster)
     # Services vault init PushSecret disabled: services-vault namespace is on services cluster
     vaultServicesInitPushSecret:
       enabled: false
