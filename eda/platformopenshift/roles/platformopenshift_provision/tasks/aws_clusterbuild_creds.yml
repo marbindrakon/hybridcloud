@@ -6,7 +6,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-po-{{ ansible_operator_meta.name }}-aws-creds"
@@ -83,7 +83,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-po-{{ ansible_operator_meta.name }}-pull-secret"
@@ -112,7 +112,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-po-{{ ansible_operator_meta.name }}-ssh-key"

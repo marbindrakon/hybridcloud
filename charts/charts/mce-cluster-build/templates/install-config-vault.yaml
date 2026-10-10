@@ -1,5 +1,5 @@
 {{- if and (ne .Values.provider.type "Agent") (.Values.installConfigVault) -}}
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: {{ .Values.cluster.name }}-install-config

@@ -2,5 +2,5 @@ apiVersion: v2
 name: sovereign-namespaces
 description: Creates sovereign cloud namespaces
 type: application
-version: 0.2.7
+version: 0.2.7-shc.1
 appVersion: "1.0"

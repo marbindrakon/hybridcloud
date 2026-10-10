@@ -6,7 +6,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-cloudaws-teardown-{{ cloudaws_cr_name }}-aws-creds"

@@ -2,7 +2,7 @@ apiVersion: v2
 name: hybridsovereign-namespace-operator
 description: Per-entity namespace operator for tenant CR reconciliation
 type: application
-version: 0.1.10
+version: 0.1.10-shc.1
 appVersion: "1.0.0"
 maintainers:
   - name: hybrid-sovereign-cloud

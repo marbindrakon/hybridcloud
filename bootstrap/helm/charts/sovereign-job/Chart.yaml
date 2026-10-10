@@ -2,5 +2,5 @@ apiVersion: v2
 name: sovereign-job
 description: Generic chart for a single sovereign Ansible job
 type: application
-version: 0.1.7
+version: 0.1.7-shc.1
 appVersion: "1.0"

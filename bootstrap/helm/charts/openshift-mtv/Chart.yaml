@@ -2,7 +2,7 @@ apiVersion: v2
 name: openshift-mtv
 description: Migration Toolkit for Virtualization (MTV / Forklift) operator with VMware vSphere provider for the central cluster
 type: application
-version: 0.1.8
+version: 0.1.8-shc.1
 appVersion: "2.12"
 keywords:
   - migration

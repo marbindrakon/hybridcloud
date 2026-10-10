@@ -2,7 +2,7 @@
 ---
 # ExternalSecret to create ArgoCD repository credential for hybrid-sovereign-cloud/charts.git
 # Vault: central/central/github-charts-token → {token, username}
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: argocd-charts-repo

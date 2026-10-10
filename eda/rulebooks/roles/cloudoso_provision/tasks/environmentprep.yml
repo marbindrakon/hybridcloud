@@ -25,7 +25,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-cloudoso-{{ cloudoso_cr_name }}-openstack-creds"
@@ -158,7 +158,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-cloudoso-{{ cloudoso_cr_name }}-route53-creds"

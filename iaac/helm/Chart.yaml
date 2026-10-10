@@ -2,5 +2,5 @@ apiVersion: v2
 name: iaac-git-sync
 description: IAAC Python StatefulSet — syncs hybridsovereign CRs to Gitea
 type: application
-version: 0.1.2
+version: 0.1.2-shc.1
 appVersion: "1.0.0"

@@ -2,5 +2,5 @@ apiVersion: v2
 name: event-forwarder
 description: Sovereign Cloud Event Forwarder - forwards operator K8s Events to AAP Event Stream
 type: application
-version: 0.5.5
+version: 0.5.5-shc.1
 appVersion: "0.3.0"

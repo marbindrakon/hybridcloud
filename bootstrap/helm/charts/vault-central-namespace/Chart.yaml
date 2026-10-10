@@ -2,5 +2,5 @@ apiVersion: v2
 name: vault-central-namespace
 description: Creates vault-central namespace and ExternalSecrets that copy vault init secrets for backup/reference
 type: application
-version: 0.1.9
+version: 0.1.9-shc.1
 appVersion: "1.0"

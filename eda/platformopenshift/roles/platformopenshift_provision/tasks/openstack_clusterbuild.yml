@@ -37,7 +37,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-platformopenshift-{{ cb_cluster_name }}-route53-creds"
@@ -130,7 +130,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-platformopenshift-{{ cb_cluster_name }}-pull-secret"
@@ -159,7 +159,7 @@
     validate_certs: false
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-platformopenshift-{{ cb_cluster_name }}-ssh-key"

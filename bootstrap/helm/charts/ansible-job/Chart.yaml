@@ -2,5 +2,5 @@ apiVersion: v2
 name: ansible-job
 description: Generic Ansible Job runner - one job per role invocation
 type: application
-version: 0.1.3
+version: 0.1.3-shc.1
 appVersion: "1.0"

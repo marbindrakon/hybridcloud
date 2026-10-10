@@ -81,7 +81,7 @@ oci:
 # ─── Sovereign Namespaces (central cluster) ──────────────────────────────────
 sovereignNamespaces:
   enabled: true
-  chartVersion: "0.2.7"
+  chartVersion: "0.2.7-shc.1"
   syncWave: "1"
   values:
     namespaces:
@@ -104,7 +104,7 @@ sovereignNamespaces:
 # ─── Sovereign Namespaces (services cluster) ────────────────────────────────
 sovereignNamespacesServices:
   enabled: false  # shc: P4 (services cluster)
-  chartVersion: "0.2.7"
+  chartVersion: "0.2.7-shc.1"
   syncWave: "1"
   values:
     ociPullSecret:
@@ -540,7 +540,7 @@ pluginIaac:
 # ─── Event Forwarder (central cluster — K8s Events → EDA Event Stream) ───────
 eventForwarder:
   enabled: false  # shc: P4 (services cluster)
-  chartVersion: "0.5.5"
+  chartVersion: "0.5.5-shc.1"
   syncWave: "32"
   image:
     repository: quay.signal9.gg/shc/event-forwarder
@@ -582,7 +582,7 @@ cnv:
 # ─── Migration Toolkit for Virtualization (MTV) — central cluster ────────────
 mtv:
   enabled: true  # shc: D12 rev 3: MTV on central
-  chartVersion: "0.1.8"
+  chartVersion: "0.1.8-shc.1"
   syncWave: "28"
   destinationNamespace: openshift-mtv
   values:
@@ -768,7 +768,7 @@ quayServices:
 # ─── Gitea (services cluster) ──────────────────────────────────────────────
 gitea:
   enabled: false
-  chartVersion: "0.4.3"
+  chartVersion: "0.4.6-shc.1"
   syncWave: "18"
   values:
     gitea:
@@ -876,7 +876,7 @@ gitea:
 # This is separate from the services-cluster Gitea (managed by the 'gitea' app above).
 giteaCentral:
   enabled: true
-  chartVersion: "0.4.6"
+  chartVersion: "0.4.6-shc.1"
   syncWave: "18"
   values:
     gitea:
@@ -1044,7 +1044,7 @@ externalSecretsServices:
 # ─── Vault Central Namespace (backup copies of init secrets) ─────────────────
 vaultCentralNamespace:
   enabled: true
-  chartVersion: "0.1.9"
+  chartVersion: "0.1.9-shc.1"
   syncWave: "27"
   argocdChartsRepo: false
   # Used only when argocdChartsRepo is true. Prefer Gitea / internal mirror for disconnected.
@@ -1125,7 +1125,7 @@ argocdClusterBuildsRepo:
 # ─── Vault ClusterSecretStore (central) — uses k8s auth ─────────────────────
 vaultSecretStore:
   enabled: true
-  chartVersion: "0.3.3-shc.1"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
+  chartVersion: "0.3.3-shc.2"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
   syncWave: "22"
   values:
     vault:
@@ -1142,7 +1142,7 @@ vaultSecretStore:
 # Uses kubernetes-services auth mount on central vault (k8s auth, no root token)
 vaultSecretStoreServices:
   enabled: false  # shc: P4 (services cluster)
-  chartVersion: "0.3.3-shc.1"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
+  chartVersion: "0.3.3-shc.2"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
   syncWave: "22"
   values:
     vault:
@@ -1169,7 +1169,7 @@ sovereignJobsRbac:
 
 # ─── Sovereign Jobs (individual Ansible job Applications) ────────────────────
 sovereignJobs:
-  chartVersion: "0.1.7"
+  chartVersion: "0.1.7-shc.1"
   namespace: sovereign-cloud-jobs
   serviceAccount: sovereign-ansible-runner
   image: "quay.signal9.gg/shc/ansible-runner:latest"
@@ -2650,7 +2650,7 @@ clusterBuilds:
   repoURL: "https://gitea-gitea.apps.central.shc.signal9.gg/gitea_admin/cluster_builds.git"
   chartsRepoURL: "oci://quay.signal9.gg/shc/mce-cluster-build"
   mceChartName: "mce-cluster-build"
-  mceChartVersion: "0.2.0"
+  mceChartVersion: "0.2.1-shc.1"
 
 # ─── ACM Policy: install ExternalSecrets on provisioned clusters ──────────────
 acmPolicies:
@@ -2715,7 +2715,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: false  # shc: P4 (services cluster)
-  chartVersion: "0.1.22"
+  chartVersion: "0.1.22-shc.1"
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
@@ -2738,7 +2738,7 @@ hybridsovereignPrimaryOperator:
 # ─── IAAC Git Sync StatefulSet (services) ────────────────────────────────────
 iaacGitSync:
   enabled: false  # shc: P4 (services cluster)
-  chartVersion: "0.1.2"
+  chartVersion: "0.1.2-shc.1"
   syncWave: "40"
   destinationNamespace: sovereign-cloud-plugins
   values:

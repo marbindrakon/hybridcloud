@@ -3,7 +3,7 @@
   kubernetes.core.k8s:
     state: present
     definition:
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: "eda-cloudoso-teardown-{{ cloudoso_cr_name }}-designate"
