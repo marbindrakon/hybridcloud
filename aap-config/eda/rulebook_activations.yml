@@ -140,7 +140,7 @@ eda_rulebook_activations:
     decision_environment: de-openstack-migration
     organization: Default
     restart_policy: on-failure
-    enabled: true
+    enabled: false  # shc: openstack-migration is disabled (no de-openstack-migration image)
     eda_credentials:
       - sovereign-aap-controller-credential
       - sovereign-kafka-consumer-credential
