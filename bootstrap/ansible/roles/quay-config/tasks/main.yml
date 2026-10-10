@@ -15,17 +15,18 @@
   when: _vault_init_secret.resources | length > 0
 
 # ─── Step 2: Wait for Quay to become ready ────────────────────────────────
-- name: Wait for QuayRegistry to report Healthy
-  kubernetes.core.k8s_info:
-    api_version: quay.redhat.com/v1
-    kind: QuayRegistry
-    namespace: "{{ quay_namespace | default('central-quay') }}"
-  register: _quay_registry
+# shc: health over HTTP. The k8s_info form looked for the QuayRegistry on the cluster the job runs
+# on (central), so for the services Quay it never matched and waited out its 60 retries.
+- name: Wait for Quay to report healthy
+  ansible.builtin.uri:
+    url: "{{ quay_url }}/health/instance"
+    method: GET
+    validate_certs: false
+    status_code: [200]
+  register: _quay_health
   retries: 60
   delay: 10
-  until:
-    - _quay_registry.resources | length > 0
-    - (_quay_registry.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Available') | selectattr('status', 'equalto', 'True') | list | length) > 0
+  until: _quay_health.status | default(0) == 200
   ignore_errors: true
 
 - name: Wait additional time for Quay API to stabilize
