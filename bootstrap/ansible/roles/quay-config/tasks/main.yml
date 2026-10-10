@@ -32,7 +32,7 @@
 - name: Wait additional time for Quay API to stabilize
   pause:
     seconds: 30
-  when: _quay_registry.resources | length > 0
+  when: _quay_health.status | default(0) == 200
 
 # ─── Step 3: Initialize Quay superuser ────────────────────────────────────
 - name: Generate secure admin password
