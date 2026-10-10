@@ -1284,9 +1284,9 @@ sovereignJobs:
         - name: VAULT_ADDR
           value: "http://vault-active.central-vault.svc:8200"
         - name: VAULT_SERVICES_ADDR
-          value: "https://vault-services.apps.services.shc.signal9.gg"
+          value: ""  # shc: P4 restore https://vault-services.apps.services.shc.signal9.gg
         - name: OCP_SERVICES_SERVER
-          value: "https://api.services.shc.signal9.gg:6443"
+          value: ""  # shc: P4 restore https://api.services.shc.signal9.gg:6443
         - name: VAULT_SECRET_NAMESPACE
           value: "central-vault"
     keycloakRealms:
