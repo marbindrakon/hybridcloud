@@ -11,3 +11,6 @@ backoffLimit: 5
 pushSecretToVaultCentral: true
 pushSecretStoreName: "vault-backend"
 vaultCentralPath: "vault-services-init"
+# shc: false for an auto-unsealed (transit) Vault: init stores only root_token (recovery keys go to
+# the operator), so there are no unseal keys to push (LAB-PLAN §7.6).
+pushUnsealKeys: true
