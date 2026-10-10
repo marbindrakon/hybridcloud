@@ -121,6 +121,37 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.registry.name }}-oidc-client
                   key: client_secret
+            - name: OIDC_CONFIG_KEY
+              value: {{ .Values.oidc.configKey | quote }}
+            {{- end }}
+            {{- if .Values.rgw.enabled }}
+            - name: RGW_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.name }}-rgw
+                  key: access_key
+            - name: RGW_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.name }}-rgw
+                  key: secret_key
+            {{- end }}
+            {{- if or .Values.oidc.enabled .Values.rgw.enabled }}
+            {{- $settings := dict }}
+            {{- if .Values.oidc.enabled }}
+            {{- $o := .Values.oidc }}
+            {{- $_ := set $settings "AUTHENTICATION_TYPE" $o.authenticationType }}
+            {{- $_ := set $settings $o.configKey (dict "SERVICE_NAME" $o.serviceName "CLIENT_ID" (required "oidc.clientId is required" $o.clientId) "OIDC_SERVER" (printf "%s/" (trimSuffix "/" (required "oidc.server is required" $o.server))) "LOGIN_SCOPES" $o.loginScopes "PREFERRED_GROUP_CLAIM_NAME" $o.groupClaim) }}
+            {{- end }}
+            {{- if .Values.rgw.enabled }}
+            {{- $r := .Values.rgw }}
+            {{- $_ := set $settings "DISTRIBUTED_STORAGE_CONFIG" (dict "default" (list "RadosGWStorage" (dict "hostname" (required "rgw.hostname is required" $r.hostname) "port" ($r.port | int) "is_secure" $r.isSecure "bucket_name" (required "rgw.bucket is required" $r.bucket) "storage_path" $r.storagePath))) }}
+            {{- $_ := set $settings "DISTRIBUTED_STORAGE_DEFAULT_LOCATIONS" (list) }}
+            {{- $_ := set $settings "DISTRIBUTED_STORAGE_PREFERENCE" (list "default") }}
+            {{- end }}
+            # shc: non-secret config-bundle settings (JSON); the job adds the secrets from env
+            - name: SHC_BUNDLE_SETTINGS
+              value: {{ $settings | toJson | quote }}
             {{- end }}
           volumeMounts:
             - name: shared-data
@@ -144,24 +175,30 @@ spec:
                   -p "{\"data\":{\"config.yaml\":\"${NEW_CONFIG_B64}\"}}"
                 echo "configBundle updated with DB_URI"
               fi
-              {{- if .Values.oidc.enabled }}
-              {{- $o := .Values.oidc }}
-              # shc: OIDC login through the config bundle (operator-managed Quay has no runtime config API)
-              CURRENT_CONFIG=$(oc get secret "$BUNDLE_SECRET" -n "$NS" -o jsonpath='{.data.config\.yaml}' | base64 -d)
-              if echo "$CURRENT_CONFIG" | grep -q "^{{ $o.configKey }}:"; then
-                echo "{{ $o.configKey }} already present in configBundle, skipping injection"
-              else
-                echo "Injecting {{ $o.configKey }} into configBundle..."
-                CURRENT_CONFIG=$(echo "$CURRENT_CONFIG" | grep -v "^AUTHENTICATION_TYPE:" || true)
-                NEW_CONFIG=$(printf '%s\nAUTHENTICATION_TYPE: %s\n%s:\n  SERVICE_NAME: %s\n  CLIENT_ID: %s\n  CLIENT_SECRET: '"'"'%s'"'"'\n  OIDC_SERVER: %s\n  LOGIN_SCOPES: %s\n  PREFERRED_GROUP_CLAIM_NAME: %s\n' \
-                  "$CURRENT_CONFIG" {{ $o.authenticationType | quote }} {{ $o.configKey | quote }} {{ $o.serviceName | quote }} \
-                  {{ required "oidc.clientId is required" $o.clientId | quote }} "$OIDC_CLIENT_SECRET" \
-                  {{ printf "%s/" (trimSuffix "/" (required "oidc.server is required" $o.server)) | quote }} \
-                  {{ toJson $o.loginScopes | quote }} {{ $o.groupClaim | quote }})
-                NEW_CONFIG_B64=$(echo "$NEW_CONFIG" | base64 -w0)
-                oc patch secret "$BUNDLE_SECRET" -n "$NS" --type=merge \
-                  -p "{\"data\":{\"config.yaml\":\"${NEW_CONFIG_B64}\"}}"
-                echo "configBundle updated with {{ $o.configKey }}"
-              fi
+              {{- if or .Values.oidc.enabled .Values.rgw.enabled }}
+              # shc: merge OIDC login and RGW storage into the config bundle (operator-managed Quay has
+              # no runtime config API). Patches only when a key differs; prints key names only.
+              python3 - <<'PY'
+              import base64, json, os, subprocess, yaml
+              ns, name = os.environ["NS"], os.environ["BUNDLE_SECRET"]
+              raw = subprocess.check_output(["oc", "get", "secret", name, "-n", ns, "-o", "jsonpath={.data.config\\.yaml}"])
+              cur = yaml.safe_load(base64.b64decode(raw)) or {}
+              want = json.loads(os.environ["SHC_BUNDLE_SETTINGS"])
+              if os.environ.get("OIDC_CLIENT_SECRET"):
+                  want[os.environ["OIDC_CONFIG_KEY"]]["CLIENT_SECRET"] = os.environ["OIDC_CLIENT_SECRET"]
+              if os.environ.get("RGW_ACCESS_KEY"):
+                  loc = want["DISTRIBUTED_STORAGE_CONFIG"]["default"][1]
+                  loc["access_key"], loc["secret_key"] = os.environ["RGW_ACCESS_KEY"], os.environ["RGW_SECRET_KEY"]
+              changed = sorted(k for k in want if cur.get(k) != want[k])
+              if not changed:
+                  print("configBundle already has the shc settings")
+              else:
+                  new = dict(cur)
+                  new.update(want)
+                  data = base64.b64encode(yaml.safe_dump(new, sort_keys=False).encode()).decode()
+                  subprocess.check_call(["oc", "patch", "secret", name, "-n", ns, "--type=merge",
+                                         "-p", json.dumps({"data": {"config.yaml": data}})])
+                  print("configBundle updated: " + ", ".join(changed))
+              PY
               {{- end }}
 {{- end }}

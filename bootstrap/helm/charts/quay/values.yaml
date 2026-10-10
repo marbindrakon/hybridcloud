@@ -63,3 +63,17 @@ oidc:
     secretStoreName: vault-backend
     vaultKey: ""
     property: ""
+
+# shc: object storage on Ceph RGW (unmanaged objectstorage; set registry.components.objectstorage.
+# managed: false). The db-init job merges DISTRIBUTED_STORAGE_* into the config bundle; the keys
+# (access_key, secret_key) come from Vault through an ExternalSecret.
+rgw:
+  enabled: false
+  hostname: ""
+  port: 443
+  isSecure: true
+  bucket: ""
+  storagePath: /datastorage/registry
+  credentials:
+    secretStoreName: vault-backend
+    vaultKey: ""
