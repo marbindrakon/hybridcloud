@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "tenancy-dashboard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tenancy-dashboard.selectorLabels" . | nindent 8 }}
+        {{- include "tenancy-dashboard.labels" . | nindent 8 }}
+      annotations:
+        oauth-client-secret-version: {{ include "tenancy-dashboard.oauthSecretChecksum" . | quote }}
+    spec:
+      serviceAccountName: {{ include "tenancy-dashboard.name" . }}
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: proxy-tls
+          secret:
+            secretName: {{ include "tenancy-dashboard.name" . }}-proxy-tls
+        - name: oauth-client-secret
+          secret:
+            secretName: {{ include "tenancy-dashboard.name" . }}-oauth-client
+      containers:
+        - name: oauth-proxy
+          image: {{ .Values.oauthProxy.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: proxy
+              containerPort: 8443
+              protocol: TCP
+          args:
+            - --https-address=:8443
+            - --provider=openshift
+            - --client-id={{ include "tenancy-dashboard.name" . }}
+            - --client-secret-file=/var/run/secrets/oauth/client-secret
+            - --upstream=http://localhost:8080
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            - --cookie-secret-file=/var/run/secrets/oauth/cookie-secret
+            - --cookie-expire=8h0m0s
+            - --cookie-httponly=true
+            - --cookie-secure=true
+            - --cookie-samesite=lax
+            - --email-domain=*
+            - --scope=user:full
+            - --pass-access-token=true
+            - --pass-user-headers=true
+            - --pass-basic-auth=false
+            - --skip-auth-regex=^/healthz$
+            - --skip-provider-button=true
+          volumeMounts:
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: oauth-client-secret
+              mountPath: /var/run/secrets/oauth
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: proxy
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: proxy
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+        - name: dashboard
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+            {{- range $key, $val := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

@@ -1,0 +1,132 @@
+{{- if .Values.oauthProxy.externalSecret.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dashboard.name" . }}-oauth-patch
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["oauth.openshift.io"]
+    resources: ["oauthclients"]
+    resourceNames: [{{ include "dashboard.name" . | quote }}]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ printf "%s-oauth-client" (include "dashboard.name" .) | quote }}]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ include "dashboard.name" . | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dashboard.name" . }}-oauth-patch
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dashboard.name" . }}-oauth-patch
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dashboard.name" . }}
+    namespace: {{ .Values.namespace }}
+{{- $oauthSyncScript := printf `set -euo pipefail
+SECRET_NAME="%s-oauth-client"
+CLIENT_NAME="%s"
+DEPLOYMENT_NAME="%s"
+NS="%s"
+
+CLIENT_SECRET=$(oc get secret "$SECRET_NAME" -n "$NS" -o jsonpath='{.data.client-secret}' | base64 -d)
+if [ -z "$CLIENT_SECRET" ]; then
+  echo "ERROR: client-secret is empty in secret $SECRET_NAME"
+  exit 1
+fi
+
+CURRENT=$(oc get oauthclient "$CLIENT_NAME" -o jsonpath='{.secret}' 2>/dev/null || echo "")
+NEEDS_RESTART=0
+if [ "$CURRENT" != "$CLIENT_SECRET" ]; then
+  echo "Patching OAuthClient $CLIENT_NAME with secret from $SECRET_NAME"
+  oc patch oauthclient "$CLIENT_NAME" --type=merge -p "{\"secret\":\"${CLIENT_SECRET}\"}"
+  echo "OAuthClient patched successfully."
+  NEEDS_RESTART=1
+else
+  echo "OAuthClient secret already matches."
+fi
+
+# oauth-proxy reads client/cookie secrets at startup; restart after any secret drift.
+SECRET_REV=$(oc get secret "$SECRET_NAME" -n "$NS" -o jsonpath='{.metadata.resourceVersion}')
+POD_REV=$(oc get deployment "$DEPLOYMENT_NAME" -n "$NS" -o jsonpath='{.spec.template.metadata.annotations.oauth-client-secret-version}' 2>/dev/null || echo "")
+if [ "$NEEDS_RESTART" = "1" ] || [ "$SECRET_REV" != "$POD_REV" ]; then
+  echo "Rolling out $DEPLOYMENT_NAME to pick up oauth secrets (secret=$SECRET_REV pod=$POD_REV)."
+  oc patch deployment "$DEPLOYMENT_NAME" -n "$NS" --type=strategic -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"oauth-client-secret-version\":\"${SECRET_REV}\"}}}}}"
+  oc rollout status deployment/"$DEPLOYMENT_NAME" -n "$NS" --timeout=120s
+else
+  echo "Deployment already running with current oauth secret revision."
+fi
+` (include "dashboard.name" .) (include "dashboard.name" .) (include "dashboard.name" .) .Values.namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dashboard.name" . }}-oauth-sync
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        {{- include "dashboard.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "dashboard.name" . }}
+      restartPolicy: Never
+      containers:
+        - name: oauth-sync
+          image: registry.redhat.io/openshift4/ose-cli:v4.14
+          command:
+            - /bin/bash
+            - -c
+            - |
+              {{ $oauthSyncScript | nindent 14 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "dashboard.name" . }}-oauth-sync
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata:
+          labels:
+            {{- include "dashboard.selectorLabels" . | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "dashboard.name" . }}
+          restartPolicy: Never
+          containers:
+            - name: oauth-sync
+              image: registry.redhat.io/openshift4/ose-cli:v4.14
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  {{ $oauthSyncScript | nindent 18 }}
+{{- end }}

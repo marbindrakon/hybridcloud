@@ -743,6 +743,8 @@ quayServices:
   syncWave: "35"
   destinationNamespace: services-quay
   values:
+    dbInitJob:
+      image: quay.signal9.gg/shc/ansible-runner:latest  # shc: chart default has no registry
     namePrefix: "svc-"
     skipNamespace: true
     namespace: services-quay
@@ -2647,7 +2649,7 @@ cloudAWSOperator:
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.9.18"
+  chartVersion: "0.9.18-shc.1"  # shc: vendored into charts/charts, ESO v1
   syncWave: "40"
   destinationNamespace: sovereign-cloud
   values:
@@ -2679,7 +2681,7 @@ sovereignDashboard:
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "1.1.13"
+  chartVersion: "1.1.13-shc.1"  # shc: vendored into charts/charts, ESO v1
   syncWave: "41"
   destinationNamespace: sovereign-cloud
   values:

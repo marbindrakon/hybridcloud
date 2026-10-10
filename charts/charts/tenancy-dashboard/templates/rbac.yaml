@@ -1,0 +1,80 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - hybridsovereign.redhat
+    resources:
+      - rbacs
+      - rbacs/status
+      - rbacconfigs
+      - rbacconfigs/status
+      - vaults
+      - vaults/status
+      - aaps
+      - aaps/status
+      - quays
+      - quays/status
+      - teams
+      - teams/status
+      - assignments
+      - assignments/status
+      - projects
+      - projects/status
+      - platformopenshifts
+      - platformopenshifts/status
+      - cloudosos
+      - cloudosos/status
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - users
+      - groups
+      - serviceaccounts
+    verbs:
+      - impersonate
+  - apiGroups:
+      - authorization.k8s.io
+    resources:
+      - selfsubjectaccessreviews
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "tenancy-dashboard.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tenancy-dashboard.name" . }}
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}-auth-delegator
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tenancy-dashboard.name" . }}
+    namespace: {{ .Values.namespace }}

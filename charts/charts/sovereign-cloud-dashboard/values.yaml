@@ -1,0 +1,42 @@
+namespace: sovereign-cloud
+
+clusterDomain: apps.shcstack-3.lab.signal9.gg
+
+image:
+  repository: quay.signal9.gg/hybrid-sovereign/sovereign-cloud-dashboard
+  tag: "1.2.8"
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: dashboard-pull-secret
+
+oauthProxy:
+  image: registry.redhat.io/openshift4/ose-oauth-proxy:v4.14
+  # cookieSecret and clientSecret must NOT be set here. Use externalSecret below.
+  cookieSecret: ""
+  clientSecret: ""
+  externalSecret:
+    enabled: true
+    secretStoreName: vault-backend
+    secretStoreKind: ClusterSecretStore
+    # Vault path must contain keys: client_secret, cookie_secret
+    vaultPath: "central/data/dashboard-oauth"
+    refreshInterval: "1h"
+
+replicas: 1
+
+route:
+  enabled: true
+  host: ""
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+env:
+  ENTITY_NAMESPACE: sovereign-cloud
+  NODE_ENV: production

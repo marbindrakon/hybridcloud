@@ -1,0 +1,13 @@
+apiVersion: v2
+name: sovereign-cloud-dashboard
+description: Sovereign Cloud Dashboard - entity management UI for OpenShift
+type: application
+version: 0.9.18-shc.1
+appVersion: "1.9.4"
+keywords:
+  - openshift
+  - dashboard
+  - entity
+  - react
+maintainers:
+  - name: hybrid-sovereign-cloud

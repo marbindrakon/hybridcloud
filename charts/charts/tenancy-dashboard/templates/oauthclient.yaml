@@ -1,0 +1,35 @@
+{{- $secretName := printf "%s-oauth-client" (include "tenancy-dashboard.name" .) }}
+{{- $existingSecret := lookup "v1" "Secret" .Values.namespace $secretName }}
+{{- $clientSecret := "" }}
+{{- if $existingSecret }}
+  {{- $clientSecret = index $existingSecret.data "client-secret" | b64dec }}
+{{- end }}
+---
+apiVersion: oauth.openshift.io/v1
+kind: OAuthClient
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+grantMethod: auto
+secret: {{ $clientSecret | default "pending-externalsecret-sync" | quote }}
+redirectURIs:
+  - https://{{ include "tenancy-dashboard.name" . }}-{{ .Values.namespace }}.{{ .Values.clusterDomain }}/oauth/callback
+{{- if not .Values.oauthProxy.externalSecret.enabled }}
+---
+# Fallback static secret — only used when externalSecret is disabled.
+# DEVIATION FROM BEST PRACTICE: Do not enable this in production.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}-oauth-client
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.oauthProxy.clientSecret | default "" | quote }}
+  cookie-secret: {{ .Values.oauthProxy.cookieSecret | default "" | quote }}
+{{- end }}

@@ -1,0 +1,39 @@
+{{- $secretName := printf "%s-oauth-client" (include "dashboard.name" .) }}
+{{- $existingSecret := lookup "v1" "Secret" .Values.namespace $secretName }}
+{{- $clientSecret := "" }}
+{{- if $existingSecret }}
+  {{- $clientSecret = index $existingSecret.data "client-secret" | b64dec }}
+{{- end }}
+---
+apiVersion: oauth.openshift.io/v1
+kind: OAuthClient
+metadata:
+  name: {{ include "dashboard.name" . }}
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+  annotations:
+    # Secret value is sourced from Vault via ExternalSecret → k8s Secret.
+    # On first deploy the value is empty until ExternalSecret populates it.
+    # ArgoCD selfHeal will reconcile once the ExternalSecret syncs.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+grantMethod: auto
+secret: {{ $clientSecret | default "pending-externalsecret-sync" | quote }}
+redirectURIs:
+  - https://{{ include "dashboard.name" . }}-{{ .Values.namespace }}.{{ .Values.clusterDomain }}/oauth/callback
+{{- if not .Values.oauthProxy.externalSecret.enabled }}
+---
+# Fallback static secret — only used when externalSecret is disabled.
+# DEVIATION FROM BEST PRACTICE: Do not enable this in production.
+# Production deployments must use externalSecret.enabled: true.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "dashboard.name" . }}-oauth-client
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.oauthProxy.clientSecret | default "" | quote }}
+  cookie-secret: {{ .Values.oauthProxy.cookieSecret | default "" | quote }}
+{{- end }}

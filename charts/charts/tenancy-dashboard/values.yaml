@@ -1,0 +1,41 @@
+namespace: sovereign-cloud
+
+clusterDomain: apps.shcservices.lab.signal9.gg
+
+image:
+  repository: quay.signal9.gg/hybrid-sovereign/tenancy-dashboard
+  tag: "3.4.0"
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: dashboard-pull-secret
+
+oauthProxy:
+  image: registry.redhat.io/openshift4/ose-oauth-proxy:v4.14
+  # cookieSecret and clientSecret must NOT be set here. Use externalSecret below.
+  cookieSecret: ""
+  clientSecret: ""
+  externalSecret:
+    enabled: true
+    secretStoreName: vault-backend
+    secretStoreKind: ClusterSecretStore
+    # Vault path must contain keys: client_secret, cookie_secret
+    vaultPath: "central/data/tenancy-dashboard-oauth"
+    refreshInterval: "1h"
+
+replicas: 1
+
+route:
+  enabled: true
+  host: ""
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+env:
+  NODE_ENV: production

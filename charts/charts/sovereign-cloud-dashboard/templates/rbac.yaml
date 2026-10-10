@@ -1,0 +1,99 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dashboard.name" . }}
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - hybridsovereign.redhat
+    resources:
+      - entities
+      - entities/status
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - delete
+  - apiGroups:
+      - hybridsovereign.redhat
+    resources:
+      - teams
+      - assignments
+      - projects
+      - platformopenshifts
+      - cloudosos
+      - rbacs
+      - rbacconfigs
+      - vaultkvs
+      - vaults
+      - aaporgs
+      - aapconfigs
+      - quayorgs
+      - quayconfigs
+      - iaacs
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - route.openshift.io
+    resources:
+      - routes
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - users
+      - groups
+      - serviceaccounts
+    verbs:
+      - impersonate
+  - apiGroups:
+      - authorization.k8s.io
+    resources:
+      - selfsubjectaccessreviews
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dashboard.name" . }}
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dashboard.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dashboard.name" . }}
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dashboard.name" . }}-auth-delegator
+  labels:
+    {{- include "dashboard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dashboard.name" . }}
+    namespace: {{ .Values.namespace }}
