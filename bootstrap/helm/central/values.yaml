@@ -444,7 +444,7 @@ rhacm:
 # ─── shc: cluster OIDC issuer (LAB-PLAN D17/§9) ──────────────────────────────
 oidcIssuer:
   enabled: true
-  chartVersion: "0.1.0"
+  chartVersion: "0.1.1"
   syncWave: "8"
   values:
     host: oidc.shc.signal9.gg
@@ -550,7 +550,7 @@ eventForwarder:
 
 # ─── OpenShift Virtualization (CNV) — central cluster ───────────────────────
 cnv:
-  enabled: false  # shc: D12: no CNV on central
+  enabled: true  # shc: D12 rev 3: CNV on central (no nested virt; central runs no VMs)
   chartVersion: "0.1.0"
   syncWave: "12"
   destinationNamespace: openshift-cnv
@@ -581,7 +581,7 @@ cnv:
 
 # ─── Migration Toolkit for Virtualization (MTV) — central cluster ────────────
 mtv:
-  enabled: false  # shc: D12: no MTV on central
+  enabled: true  # shc: D12 rev 3: MTV on central
   chartVersion: "0.1.8"
   syncWave: "28"
   destinationNamespace: openshift-mtv
@@ -600,13 +600,13 @@ mtv:
       ui:
         replicas: 2
     vmwareProvider:
-      enabled: true
+      enabled: false  # shc: vSphere decommissioned (no source provider in the lab build)
       name: vmware-vcenter
       type: vsphere
       url: "https://xna-vcenter-8.lab.signal9.gg/sdk"
       credentialsSecretName: vmware-vcenter-secret
     externalSecret:
-      enabled: true
+      enabled: false  # shc: vSphere decommissioned
       name: vmware-vcenter-es
       secretStoreName: vault-backend
       secretStoreKind: ClusterSecretStore
@@ -994,16 +994,20 @@ crunchyPostgresServices:
 # ─── External Secrets Operator (central) ────────────────────────────────────
 externalSecrets:
   enabled: true
-  chartVersion: "0.1.4"
+  # shc: central runs the Red Hat ESO operator from OLM (openshift-external-secrets chart), not the
+  # community operator from the external-secrets 0.1.4 chart.
+  chart: openshift-external-secrets
+  chartVersion: "0.1.0"
   syncWave: "5"
 
   values:
-    operator:
-      channel: stable
+    namespace: external-secrets-operator
+    subscription:
+      name: openshift-external-secrets-operator
+      channel: stable-v1
       installPlanApproval: Automatic
-      source: community-operators
+      source: redhat-operators
       sourceNamespace: openshift-marketplace
-    namespace: external-secrets
 
 # ─── DNS Forwarder (services) ────────────────────────────────────────────────
 # Adds lab.signal9.gg → 172.18.42.10/172.18.42.11 forwarder to the services
@@ -1252,7 +1256,7 @@ sovereignJobs:
         - name: KAFKA_EXTERNAL_BOOTSTRAP
           value: "hybridsovereign-kafka-kafka-bootstrap-amq-streams.apps.central.shc.signal9.gg:443"
     mtvCatalogSync:
-      enabled: false  # shc: D12: no MTV
+      enabled: false  # shc: P4 (services cluster)
       playbook: mtv-catalog-sync.yml
       activeDeadlineSeconds: 600
       syncWave: "35"

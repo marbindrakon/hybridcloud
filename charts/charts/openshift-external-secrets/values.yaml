@@ -1,0 +1,13 @@
+# Operator namespace (operands are deployed by the operator into "external-secrets").
+namespace: external-secrets-operator
+
+subscription:
+  name: openshift-external-secrets-operator
+  channel: stable-v1
+  installPlanApproval: Automatic
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+
+# ExternalSecretsConfig "cluster" spec (operator.openshift.io/v1alpha1); empty = operator defaults.
+externalSecretsConfig:
+  spec: {}

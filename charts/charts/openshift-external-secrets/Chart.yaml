@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openshift-external-secrets
+description: External Secrets Operator for Red Hat OpenShift (OLM) with its cluster-scoped ExternalSecretsConfig
+type: application
+version: 0.1.0
+appVersion: "1.2"

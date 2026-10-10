@@ -65,7 +65,7 @@ spec:
                   test "$(jq -r .issuer {{ .name }}__openid-configuration)" = "{{ $.Values.baseURL }}/{{ .name }}"
                   {{- end }}
                   {{- end }}
-                  oc create configmap oidc-documents -n {{ $.Values.namespace }} --dry-run=client -o yaml \
+                  oc create configmap oidc-documents -n {{ $.Values.namespace }} --dry-run=client -o yaml
                     {{- range .Values.sync.clusters }} --from-file={{ .name }}__keys.json --from-file={{ .name }}__openid-configuration{{- end }} \
                     | oc apply --server-side --force-conflicts --field-manager=oidc-sync -f -
                   echo "published: {{ range .Values.sync.clusters }}{{ .name }} {{ end }}"

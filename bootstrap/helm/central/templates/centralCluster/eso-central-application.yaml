@@ -1,8 +1,9 @@
 {{- if and (include "sovereign-central.applicationsEnabled" .) .Values.externalSecrets.enabled }}
 ---
 # External Secrets Operator on central. Upstream relied on the lab's base-config (or the disabled
-# ACM base-chart policy) to provide ESO on central; this installs it explicitly from the same chart
-# the services cluster uses, so central has no dependency on lab-hub automation (LAB-PLAN D3).
+# ACM base-chart policy) to provide ESO on central; this installs it explicitly so central has no
+# dependency on lab-hub automation (LAB-PLAN D3). The chart is a value: openshift-external-secrets
+# (Red Hat operator, OLM) on central, external-secrets (community) where the old chart is still used.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -18,8 +19,9 @@ spec:
   project: default
 
   source:
-    repoURL: {{ printf "oci://%s/%s/external-secrets" .Values.oci.registry .Values.oci.repositoryBase | quote }}
-    chart: external-secrets
+    {{- $chart := .Values.externalSecrets.chart | default "external-secrets" }}
+    repoURL: {{ printf "oci://%s/%s/%s" .Values.oci.registry .Values.oci.repositoryBase $chart | quote }}
+    chart: {{ $chart }}
     targetRevision: {{ .Values.externalSecrets.chartVersion | quote }}
     helm:
       releaseName: external-secrets-central

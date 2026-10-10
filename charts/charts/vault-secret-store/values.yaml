@@ -1,0 +1,17 @@
+vault:
+  server: "http://vault-active.vault.svc:8200"
+  path: "central"
+  caBundle: ""
+
+# auth.type: "kubernetes" (production default) | "token" (legacy init-only)
+auth:
+  type: kubernetes
+  # Kubernetes auth (used when auth.type: kubernetes)
+  mountPath: "kubernetes-central"
+  role: "external-secrets"
+  serviceAccountName: "external-secrets-vault-sa"
+  serviceAccountNamespace: "external-secrets"
+  # Token auth (used only when auth.type: token — init bootstrap fallback)
+  tokenSecretName: "vault-init-secrets"
+  tokenSecretNamespace: "vault"
+  tokenSecretKey: "root_token"

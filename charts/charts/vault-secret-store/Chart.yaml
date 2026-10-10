@@ -1,0 +1,6 @@
+apiVersion: v2
+name: vault-secret-store
+description: Vault ClusterSecretStore with Kubernetes auth for External Secrets Operator
+type: application
+version: 0.3.3-shc.1
+appVersion: "1.0"
