@@ -14,6 +14,12 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   secretName: {{ $k.name }}-external-tls
+  # Kafka's PEM keystore only reads PKCS#8 keys (cert-manager defaults to PKCS#1)
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    encoding: PKCS8
+    rotationPolicy: Always
   issuerRef:
     kind: ClusterIssuer
     name: {{ .externalCert.clusterIssuer }}
