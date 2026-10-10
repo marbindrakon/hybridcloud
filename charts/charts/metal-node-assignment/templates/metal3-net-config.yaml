@@ -1,0 +1,18 @@
+{{- range $a := .Values.assignments }}
+{{- $node := get $.Values.nodes $a.node }}
+{{- if or (eq $a.assignmentType "metal3") ($node.agentPreprovisioningConfig | default false) }}
+---
+# preprovisioningNetworkDataName for metal3 hosts (and agent hosts that opt in).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $a.node }}-net-config
+  namespace: {{ $a.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,PruneLast=true
+type: Opaque
+stringData:
+  nmstate: |
+    {{- toYaml $node.network.nmstateConfig | nindent 4 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: metal-node-assignment
+description: Bare-metal node inventory for central's metal3 and assisted-service (shc LAB-PLAN D19) - BareMetalHosts with Vault BMC credentials, NMStateConfigs, and the shared late-binding InfraEnvs the hosts register into
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

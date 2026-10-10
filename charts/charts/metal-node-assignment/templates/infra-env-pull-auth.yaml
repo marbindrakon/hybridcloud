@@ -1,0 +1,27 @@
+{{- range .Values.infraEnvs }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .name }}-pull-secret
+  namespace: {{ .namespace | default $.Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $.Values.secretStoreName }}
+  target:
+    name: {{ .name }}-pull-secret
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ "{{" }} .pullSecret {{ "}}" }}"
+  data:
+    - secretKey: pullSecret
+      remoteRef:
+        key: {{ required "infraEnvs[].pullSecretVault is required" .pullSecretVault }}
+        property: {{ .pullSecretVaultProperty | default ".dockerconfigjson" }}
+{{- end }}

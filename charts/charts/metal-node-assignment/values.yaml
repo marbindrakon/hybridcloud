@@ -1,0 +1,58 @@
+# Bare-metal node inventory (shc LAB-PLAN D19, §7 item 3). Ported from signal9-lab-gitops
+# charts/metal-node-assignment; the nodes/assignments schema is unchanged.
+#
+# Converged flow: a BareMetalHost labelled into an InfraEnv is PXE-booted by metal3 (ipmi://,
+# provisioning network) into assisted-service's discovery initrd and registers as an Agent with
+# its inventory. Agents in a shared InfraEnv stay unbound until a cluster build (mce-cluster-build,
+# provider.agent.infraEnvType: shared) binds them.
+
+# ClusterSecretStore for BMC credentials and InfraEnv pull secrets (central Vault).
+secretStoreName: vault-backend
+
+# Default BMC credential reference, used when a node has no bmc.externalSecret.
+bmcDefaults:
+  externalSecret: {}
+  #  vaultName: metal/bmc-sl230
+  #  usernameKey: username
+  #  passwordKey: password
+
+# Shared (late-binding) InfraEnvs: no clusterRef. NMStateConfigs of agent assignments select one
+# by assignments[].infraEnvName.
+infraEnvs: []
+#  - name: metal-infra-env
+#    namespace: metal-infra-env          # default: release namespace
+#    pullSecretVault: metal/pull-secret  # Vault key with the pull secret
+#    pullSecretVaultProperty: .dockerconfigjson
+#    sshAuthorizedKey: "ssh-ed25519 ..."   # discovery hosts only
+#    ntpSources: []
+#    osImageVersion: ""                   # default: newest in AgentServiceConfig osImages
+#    kernelArguments: []                  # appended to the discovery kernel command line
+#    agentLabels: {}
+
+assignments: []
+  #- node: <node name from node list>
+  #  namespace: <destination namespace>
+  #  assignmentType: metal3 / agent / agent-nobmh
+  #  extraLabels: {}
+  #  extraAnnotations: {}
+  #  infraEnvName: <infraenv name, only used if type is agent>
+
+nodes: {}
+  #<name>:
+  #  labels: {}
+  #  annotations: {}
+  #  hostname: <agent hostname; sets bmac.agent-install.openshift.io/hostname>
+  #  bootMac:
+  #  bootMode: legacy | UEFI | UEFISecureBoot   (default legacy)
+  #  cleaningMode: metadata | disabled          (default metadata)
+  #  rootDeviceHints: {}
+  #  agentPreprovisioningConfig: false
+  #  bmc:
+  #    url: ipmi://<address>
+  #    externalSecret:          # default: bmcDefaults.externalSecret
+  #      vaultName:
+  #      usernameKey:
+  #      passwordKey:
+  #  network:
+  #    nmstateConfig: {}
+  #    interfaceMap: []

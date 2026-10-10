@@ -1,0 +1,43 @@
+# File name keeps clear of upstream .gitignore (*credentials*, *secret*, *token*); no secret data here.
+{{- range .Values.assignments }}
+{{- $node := get $.Values.nodes .node }}
+{{- if ne .assignmentType "agent-nobmh" }}
+{{- $es := $node.bmc.externalSecret | default $.Values.bmcDefaults.externalSecret }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .node }}-bmc
+  namespace: {{ .namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $.Values.secretStoreName }}
+  # Owner, not the lab chart's Orphan: metal3 adds the BareMetalHost as a second owner of this
+  # Secret, and garbage collection deletes it only when every owner is gone. With Orphan the host is
+  # the only owner, so deleting a BareMetalHost deleted its credentials and a re-created host stayed
+  # in "registering" until the next refresh (found in P3). With two owners the Secret survives a host
+  # re-create and, while the host exists, removal of this ExternalSecret.
+  target:
+    name: {{ .node }}-bmc
+    creationPolicy: Owner
+    deletionPolicy: Retain
+    template:
+      engineVersion: v2
+      data:
+        username: "{{ "{{" }} .username {{ "}}" }}"
+        password: "{{ "{{" }} .password {{ "}}" }}"
+  data:
+    - secretKey: username
+      remoteRef:
+        key: {{ required (printf "no BMC credential reference for %s" .node) $es.vaultName }}
+        property: {{ $es.usernameKey | default "username" }}
+    - secretKey: password
+      remoteRef:
+        key: {{ $es.vaultName }}
+        property: {{ $es.passwordKey | default "password" }}
+{{- end }}
+{{- end }}

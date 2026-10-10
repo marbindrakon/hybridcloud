@@ -1,0 +1,20 @@
+{{- range $a := .Values.assignments }}
+{{- if or (eq $a.assignmentType "agent") (eq $a.assignmentType "agent-nobmh") }}
+{{- $node := get $.Values.nodes $a.node }}
+{{- if $node.network }}
+---
+apiVersion: agent-install.openshift.io/v1beta1
+kind: NMStateConfig
+metadata:
+  name: {{ $a.node }}-net-config
+  namespace: {{ $a.namespace }}
+  labels:
+    infraenvs.agent-install.openshift.io: {{ required "assignments[].infraEnvName is required for agent" $a.infraEnvName }}
+spec:
+  config:
+    {{- toYaml $node.network.nmstateConfig | nindent 4 }}
+  interfaces:
+    {{- toYaml $node.network.interfaceMap | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

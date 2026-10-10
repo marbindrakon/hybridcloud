@@ -1,0 +1,55 @@
+{{- range .Values.assignments }}
+{{- $node := required (printf "assignments: node %s is not in nodes" .node) (get $.Values.nodes .node) }}
+{{- if ne .assignmentType "agent-nobmh" }}
+---
+apiVersion: metal3.io/v1alpha1
+kind: BareMetalHost
+metadata:
+  name: {{ .node }}
+  namespace: {{ .namespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: ServerSideApply=true
+    {{- if eq .assignmentType "agent" }}
+    inspect.metal3.io: disabled
+    {{- with $node.hostname }}
+    bmac.agent-install.openshift.io/hostname: {{ . | quote }}
+    {{- end }}
+    {{- end }}
+    {{- with $node.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .extraAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  labels:
+    {{- if eq .assignmentType "agent" }}
+    infraenvs.agent-install.openshift.io: {{ required "assignments[].infraEnvName is required for agent" .infraEnvName }}
+    {{- end }}
+    {{- with $node.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  automatedCleaningMode: {{ $node.cleaningMode | default "metadata" }}
+  bootMode: {{ $node.bootMode | default "legacy" }}
+  bootMACAddress: {{ $node.bootMac | quote }}
+  {{- if or (eq .assignmentType "metal3") ($node.agentPreprovisioningConfig | default false) }}
+  preprovisioningNetworkDataName: {{ .node }}-net-config
+  {{- end }}
+  {{- if eq .assignmentType "metal3" }}
+  online: false
+  {{- else }}
+  online: true
+  {{- end }}
+  {{- with $node.rootDeviceHints }}
+  rootDeviceHints:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  bmc:
+    address: {{ $node.bmc.url | quote }}
+    credentialsName: {{ .node }}-bmc
+    disableCertificateVerification: true
+{{- end }}
+{{- end }}

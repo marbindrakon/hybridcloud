@@ -1,0 +1,39 @@
+{{- range .Values.infraEnvs }}
+{{- $ns := .namespace | default $.Release.Namespace }}
+---
+apiVersion: agent-install.openshift.io/v1beta1
+kind: InfraEnv
+metadata:
+  name: {{ .name }}
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  cpuArchitecture: x86_64
+  {{- with .osImageVersion }}
+  osImageVersion: {{ . | quote }}
+  {{- end }}
+  {{- with .ntpSources }}
+  additionalNTPSources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .kernelArguments }}
+  kernelArguments:
+    {{- range . }}
+    - operation: append
+      value: {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- with .agentLabels }}
+  agentLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  nmStateConfigLabelSelector:
+    matchLabels:
+      infraenvs.agent-install.openshift.io: {{ .name }}
+  pullSecretRef:
+    name: {{ .name }}-pull-secret
+  {{- with .sshAuthorizedKey }}
+  sshAuthorizedKey: {{ . | quote }}
+  {{- end }}
+{{- end }}
