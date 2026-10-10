@@ -94,7 +94,7 @@
       kubernetes_ca_cert: "{{ services_k8s_ca_cert }}"
       disable_local_ca_jwt: true
     status_code: [200, 204]
-  when: services_k8s_ca_cert | length > 0
+  when: (services_k8s_ca_cert | default('')) | length > 0
   retries: 3
   delay: 5
 
