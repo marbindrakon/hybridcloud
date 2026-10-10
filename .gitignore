@@ -13,6 +13,8 @@
 !**/templates/externalsecret-*.yaml
 *token*
 !**/templates/*token*.yaml
+# shc: Ansible task files named *token* were silently dropped (obtain_openshift_access_token.yml)
+!**/tasks/*token*.yml
 kubeconfig
 clouds.yaml
 
