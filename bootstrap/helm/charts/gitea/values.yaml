@@ -11,7 +11,7 @@ gitea:
   image:
     registry: 
     repository: hybrid-sovereign/gitea
-    tag: "1.25.5"
+    tag: "28.1.0"
     rootless: true
 
   gitea:
