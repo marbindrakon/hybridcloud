@@ -1178,7 +1178,7 @@ vaultCentralNamespace:
       vaultPath: "central/data/dashboard-central-reader"
       apiServer: "https://api.central.shc.signal9.gg:6443"
     edaS3Creds:
-      enabled: false  # shc: P4 (EDA log bucket is NooBaa on the services cluster)
+      enabled: true  # shc: P4 enabled (NooBaa bucket eda-job-logs on services; creds pushed to Vault eda-s3-logs)
       bucketName: "eda-job-logs"
       endpoint: "https://s3-openshift-storage.apps.services.shc.signal9.gg"
     centralServiceAccounts:
