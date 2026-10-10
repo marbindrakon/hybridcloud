@@ -92,6 +92,13 @@ spec:
         tls: true
         authentication:
           type: scram-sha-512
+        {{- if and .Values.kafka.listeners.externalCert.clusterIssuer .Values.kafka.listeners.externalCert.appsDomain }}
+        configuration:
+          brokerCertChainAndKey:
+            secretName: {{ .Values.kafka.name }}-external-tls
+            certificate: tls.crt
+            key: tls.key
+        {{- end }}
       {{- end }}
     config:
       offsets.topic.replication.factor: {{ .Values.kafka.replicas }}

@@ -1,0 +1,26 @@
+{{- with .Values.kafka.listeners }}
+{{- if and $.Values.kafka.enabled .externalRoute .externalCert.clusterIssuer .externalCert.appsDomain }}
+{{- $k := $.Values.kafka }}
+---
+# Certificate for the external route listener: route hosts are <cluster>-kafka-bootstrap-<ns> and
+# <cluster>-<pool>-<id>-<ns> under the apps domain (node IDs 0..replicas-1 of the single pool).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $k.name }}-external-tls
+  namespace: {{ $.Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  secretName: {{ $k.name }}-external-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ .externalCert.clusterIssuer }}
+  dnsNames:
+    - {{ printf "%s-kafka-bootstrap-%s.%s" $k.name $.Values.namespace .externalCert.appsDomain }}
+    {{- range $i := until (int $k.replicas) }}
+    - {{ printf "%s-%s-%d-%s.%s" $k.name $k.nodePool.name $i $.Values.namespace $.Values.kafka.listeners.externalCert.appsDomain }}
+    {{- end }}
+{{- end }}
+{{- end }}

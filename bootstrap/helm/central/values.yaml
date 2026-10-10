@@ -2745,7 +2745,7 @@ acmBasechart:
 # ─── AMQ Streams (central cluster) ───────────────────────────────────────────
 amqStreams:
   enabled: true
-  chartVersion: "0.2.4"
+  chartVersion: "0.2.4-shc.1"
   syncWave: "13"
   destinationNamespace: amq-streams
   values:
@@ -2760,6 +2760,10 @@ amqStreams:
         internalTls: true
         externalRoute: true
         externalPort: 9094
+        # shc: Let's Encrypt cert on the route listener so EDA/operators verify with system CAs
+        externalCert:
+          clusterIssuer: letsencrypt-shc
+          appsDomain: apps.central.shc.signal9.gg
 
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:

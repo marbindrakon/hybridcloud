@@ -25,6 +25,11 @@ kafka:
     internalTls: true
     externalRoute: true
     externalPort: 9094
+    # Publicly trusted certificate for the external route listener (cert-manager Certificate for the
+    # bootstrap and broker route hosts). Both empty = Strimzi cluster CA (clients must trust it).
+    externalCert:
+      clusterIssuer: ""
+      appsDomain: ""
 
 topics:
   - name: hybridsovereign-events
