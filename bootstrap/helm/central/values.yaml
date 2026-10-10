@@ -1121,7 +1121,7 @@ argocdClusterBuildsRepo:
 # ─── Vault ClusterSecretStore (central) — uses k8s auth ─────────────────────
 vaultSecretStore:
   enabled: true
-  chartVersion: "0.3.3"
+  chartVersion: "0.3.3-shc.1"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
   syncWave: "22"
   values:
     vault:
@@ -1138,7 +1138,7 @@ vaultSecretStore:
 # Uses kubernetes-services auth mount on central vault (k8s auth, no root token)
 vaultSecretStoreServices:
   enabled: false  # shc: P4 (services cluster)
-  chartVersion: "0.3.3"
+  chartVersion: "0.3.3-shc.1"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
   syncWave: "22"
   values:
     vault:
