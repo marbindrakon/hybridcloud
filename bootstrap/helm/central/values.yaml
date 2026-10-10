@@ -438,6 +438,14 @@ rhacm:
     # shc (D19): CIM for mce-cluster-build agent clusters; storage on the default SC (ODF external)
     agentServiceConfig:
       enabled: true
+      # shc (D13, §7 item 4): MCE 2.17.3's built-in list maps 4.22 to a pre-release RHCOS
+      # (4.22.0-ec.5). Pin the discovery OS to the GA boot image of the 4.22 installer in use
+      # (openshift-install 4.22.16 `coreos print-stream-json`). Replaces the whole built-in list.
+      osImages:
+        - openshiftVersion: "4.22"
+          version: "9.8.20260715-1"
+          cpuArchitecture: x86_64
+          url: https://rhcos.mirror.openshift.com/art/storage/prod/streams/rhel-9.8/builds/9.8.20260715-1/x86_64/rhcos-9.8.20260715-1-live-iso.x86_64.iso
     # shc (§4): metal3 Managed provisioning network on VLAN 231 via the masters' second NIC
     provisioning:
       enabled: true
