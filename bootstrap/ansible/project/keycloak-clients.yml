@@ -67,7 +67,9 @@
   post_tasks:
     - name: Write client secrets directly to Vault
       ansible.builtin.uri:
-        url: "{{ vault_addr }}/v1/central/data/keycloak-clients"
+        # shc: one KV entry per realm. A POST replaces the whole entry, so the services-realm run
+        # used to overwrite central's client secrets (same names "aap"/"acs" in both realms).
+        url: "{{ vault_addr }}/v1/central/data/{{ lookup('env', 'VAULT_CLIENTS_KEY') | default('keycloak-clients', true) }}"
         method: POST
         validate_certs: false
         headers:

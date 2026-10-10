@@ -1619,6 +1619,9 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "30"
       env:
+        # shc: own Vault entry; central's job owns "keycloak-clients"
+        - name: VAULT_CLIENTS_KEY
+          value: "keycloak-clients-services"
         - name: KEYCLOAK_URL
           value: "https://rhbk-services.apps.services.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
