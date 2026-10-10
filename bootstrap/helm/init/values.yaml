@@ -65,6 +65,8 @@ argocd:
 # ─── Services cluster registration ───────────────────────────────────────────
 clusters:
   services:
+    # Register the services cluster with ArgoCD (needs bearerToken). false = central-only bootstrap.
+    enabled: true
     # Human-readable name ArgoCD will use for this cluster entry
     name: services
     # Kubernetes API server URL for the services cluster
