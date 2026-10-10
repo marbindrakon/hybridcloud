@@ -1305,7 +1305,7 @@ sovereignJobs:
         - name: VAULT_NAMESPACE
           value: "central-vault"
     openshiftVaultSeed:
-      enabled: true
+      enabled: false  # shc: kubeadmin creds written to Vault by the lab bootstrap (seed-kubeadmin, owner 2026-10-10)
       playbook: openshift-vault-seed.yml
       activeDeadlineSeconds: 300
       syncWave: "24"
