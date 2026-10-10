@@ -444,7 +444,7 @@ rhacm:
 # ─── shc: cluster OIDC issuer (LAB-PLAN D17/§9) ──────────────────────────────
 oidcIssuer:
   enabled: true
-  chartVersion: "0.1.1"
+  chartVersion: "0.1.2"
   syncWave: "8"
   values:
     host: oidc.shc.signal9.gg
