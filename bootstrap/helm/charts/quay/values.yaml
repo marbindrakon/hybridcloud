@@ -46,3 +46,20 @@ crunchy:
 
 dbInitJob:
   image: "/hybrid-sovereign/ansible-runner:latest"
+
+# shc: OIDC login (Keycloak/RHBK) written into the config bundle by the db-init job. The quay-config
+# job's superuser-config API route answers 403 on operator-managed Quay 3.17. The client secret
+# comes from Vault through an ExternalSecret.
+oidc:
+  enabled: false
+  configKey: RHBK_LOGIN_CONFIG      # <ID>_LOGIN_CONFIG; <ID> becomes the external login service id
+  serviceName: Keycloak
+  clientId: ""
+  server: ""                        # realm URL; a trailing slash is added
+  loginScopes: [openid, email, profile]
+  groupClaim: groups
+  authenticationType: OIDC          # upstream's intent (team sync from OIDC groups)
+  clientSecret:
+    secretStoreName: vault-backend
+    vaultKey: ""
+    property: ""

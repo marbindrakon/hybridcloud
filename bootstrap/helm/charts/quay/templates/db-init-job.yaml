@@ -115,6 +115,13 @@ spec:
               value: "{{ .Values.registry.configBundleSecretName | default (printf "%s-config-bundle" .Values.registry.name) }}"
             - name: NS
               value: "{{ .Values.namespace }}"
+            {{- if .Values.oidc.enabled }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.name }}-oidc-client
+                  key: client_secret
+            {{- end }}
           volumeMounts:
             - name: shared-data
               mountPath: /shared
@@ -137,4 +144,24 @@ spec:
                   -p "{\"data\":{\"config.yaml\":\"${NEW_CONFIG_B64}\"}}"
                 echo "configBundle updated with DB_URI"
               fi
+              {{- if .Values.oidc.enabled }}
+              {{- $o := .Values.oidc }}
+              # shc: OIDC login through the config bundle (operator-managed Quay has no runtime config API)
+              CURRENT_CONFIG=$(oc get secret "$BUNDLE_SECRET" -n "$NS" -o jsonpath='{.data.config\.yaml}' | base64 -d)
+              if echo "$CURRENT_CONFIG" | grep -q "^{{ $o.configKey }}:"; then
+                echo "{{ $o.configKey }} already present in configBundle, skipping injection"
+              else
+                echo "Injecting {{ $o.configKey }} into configBundle..."
+                CURRENT_CONFIG=$(echo "$CURRENT_CONFIG" | grep -v "^AUTHENTICATION_TYPE:" || true)
+                NEW_CONFIG=$(printf '%s\nAUTHENTICATION_TYPE: %s\n%s:\n  SERVICE_NAME: %s\n  CLIENT_ID: %s\n  CLIENT_SECRET: '"'"'%s'"'"'\n  OIDC_SERVER: %s\n  LOGIN_SCOPES: %s\n  PREFERRED_GROUP_CLAIM_NAME: %s\n' \
+                  "$CURRENT_CONFIG" {{ $o.authenticationType | quote }} {{ $o.configKey | quote }} {{ $o.serviceName | quote }} \
+                  {{ required "oidc.clientId is required" $o.clientId | quote }} "$OIDC_CLIENT_SECRET" \
+                  {{ printf "%s/" (trimSuffix "/" (required "oidc.server is required" $o.server)) | quote }} \
+                  {{ toJson $o.loginScopes | quote }} {{ $o.groupClaim | quote }})
+                NEW_CONFIG_B64=$(echo "$NEW_CONFIG" | base64 -w0)
+                oc patch secret "$BUNDLE_SECRET" -n "$NS" --type=merge \
+                  -p "{\"data\":{\"config.yaml\":\"${NEW_CONFIG_B64}\"}}"
+                echo "configBundle updated with {{ $o.configKey }}"
+              fi
+              {{- end }}
 {{- end }}
