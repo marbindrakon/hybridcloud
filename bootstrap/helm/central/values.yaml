@@ -1414,7 +1414,7 @@ sovereignJobs:
         - name: KEYCLOAK_SERVICES_ADMIN_SECRET_NS
           value: "services-rhbk"
         - name: OCP_SERVICES_SERVER
-          value: "https://api.services.shc.signal9.gg:6443"
+          value: ""  # shc: P4 restore "https://api.services.shc.signal9.gg:6443" (services tasks are guarded on it)
         - name: SERVICES_REALM_NAME
           value: "sovereign-tenants"
     giteaInit:
