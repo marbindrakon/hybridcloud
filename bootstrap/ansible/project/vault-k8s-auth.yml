@@ -10,6 +10,10 @@
     vault_secret_name: "{{ lookup('env', 'VAULT_SECRET_NAME') | default('vault-init-secrets', true) }}"
     vault_services_addr: "{{ lookup('env', 'VAULT_SERVICES_ADDR') | default('', true) }}"
     ocp_services_server: "{{ lookup('env', 'OCP_SERVICES_SERVER') | default('', true) }}"
+    # shc: PEM bundle appended to the services cluster's kube-root-ca.crt for Vault's TokenReview
+    # calls, e.g. the runner image's system trust store when the services API serves a publicly
+    # trusted certificate (kube-root-ca.crt only holds the cluster's own CAs).
+    services_k8s_ca_extra_bundle: "{{ lookup('env', 'SERVICES_K8S_CA_EXTRA_BUNDLE') | default('', true) }}"
     vault_services_secret_namespace: "{{ lookup('env', 'VAULT_SERVICES_SECRET_NAMESPACE') | default('services-vault', true) }}"
 
   pre_tasks:
@@ -65,7 +69,9 @@
 
     - name: Set services cluster Kubernetes CA fact
       ansible.builtin.set_fact:
-        services_k8s_ca_cert: "{{ services_k8s_ca_resp.json.data['ca.crt'] }}"
+        services_k8s_ca_cert: >-
+          {{ services_k8s_ca_resp.json.data['ca.crt'] | trim ~ '\n'
+             ~ ((lookup('file', services_k8s_ca_extra_bundle) | trim ~ '\n') if services_k8s_ca_extra_bundle | length > 0 else '') }}
       when: vault_services_addr | length > 0 and services_k8s_ca_resp.status is defined and services_k8s_ca_resp.status == 200
 
     - name: Retrieve services vault init secrets via services cluster API
