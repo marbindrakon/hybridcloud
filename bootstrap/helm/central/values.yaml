@@ -1721,6 +1721,8 @@ sovereignJobs:
             secretKeyRef:
               name: aap-controller-oci-credentials
               key: registry
+        - name: OCI_REPOSITORY_BASE
+          value: "shc"  # shc: DE/EE registry namespace (default hybrid-sovereign)
         - name: OCI_ROBOT_USERNAME
           valueFrom:
             secretKeyRef:
@@ -1819,6 +1821,8 @@ sovereignJobs:
             secretKeyRef:
               name: eda-oci-credentials
               key: registry
+        - name: OCI_REPOSITORY_BASE
+          value: "shc"  # shc: DE/EE registry namespace (default hybrid-sovereign)
         - name: OCI_ROBOT_USERNAME
           valueFrom:
             secretKeyRef:
@@ -1946,6 +1950,8 @@ sovereignJobs:
             secretKeyRef:
               name: aap-config-as-code-oci-credentials
               key: registry
+        - name: OCI_REPOSITORY_BASE
+          value: "shc"  # shc: DE/EE registry namespace (default hybrid-sovereign)
         - name: OCI_ROBOT_USERNAME
           valueFrom:
             secretKeyRef:

@@ -8,7 +8,7 @@
 
   vars:
     aap_config_path: "{{ lookup('env', 'AAP_CONFIG_PATH') | default('/runner/project/aap-config', true) }}"
-    quay_registry: "{{ lookup('env', 'OCI_REGISTRY') | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}/hybrid-sovereign"
+    quay_registry: "{{ lookup('env', 'OCI_REGISTRY') | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}/{{ lookup('env', 'OCI_REPOSITORY_BASE') | default('hybrid-sovereign', true) }}"
     quay_registry_host: "{{ lookup('env', 'OCI_REGISTRY') | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
     aap_validate_certs: false
     aap_configuration_secure_logging: true

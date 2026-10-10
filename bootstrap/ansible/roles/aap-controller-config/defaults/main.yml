@@ -7,7 +7,7 @@ aap_username: "admin"
 aap_password: "{{ lookup('env', 'AAP_ADMIN_PASSWORD') }}"
 aap_validate_certs: false
 
-_quay_registry: "{{ lookup('env', 'OCI_REGISTRY') | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}/hybrid-sovereign"
+_quay_registry: "{{ lookup('env', 'OCI_REGISTRY') | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}/{{ lookup('env', 'OCI_REPOSITORY_BASE') | default('hybrid-sovereign', true) }}"
 _quay_registry_host: "{{ lookup('env', 'OCI_REGISTRY') | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
 _de_entity_tag: "0.1.7"
 _de_team_tag: "0.1.2"

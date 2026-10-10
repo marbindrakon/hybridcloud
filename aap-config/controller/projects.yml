@@ -1,5 +1,5 @@
 ---
-# Controller SCM project and execution environments (/hybrid-sovereign)
+# Controller SCM project and execution environments (<OCI_REGISTRY>/<OCI_REPOSITORY_BASE>, default hybrid-sovereign)
 controller_projects:
   - name: sovereign-eda-project
     organization: sovereign

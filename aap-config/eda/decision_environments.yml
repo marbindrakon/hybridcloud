@@ -1,5 +1,5 @@
 ---
-# EDA decision environments — images from {{ lookup('env', 'OCI_HOST') }}/hybrid-sovereign
+# EDA decision environments — images from <OCI_REGISTRY>/<OCI_REPOSITORY_BASE> (default hybrid-sovereign)
 eda_decision_environments:
   - name: de-entity
     description: Hybrid Sovereign decision environment for entity
