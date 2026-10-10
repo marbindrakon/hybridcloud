@@ -739,7 +739,7 @@ quay:
 # ─── Quay (services) ────────────────────────────────────────────────────────
 quayServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.6.4-shc.1"  # shc: OIDC through the config bundle
+  chartVersion: "0.6.4-shc.2"  # shc: OIDC and RGW storage through the config bundle
   syncWave: "35"
   destinationNamespace: services-quay
   values:
@@ -752,6 +752,14 @@ quayServices:
       clientSecret:
         vaultKey: keycloak-clients-services
         property: quay-services
+    # shc: registry storage on Atuin RGW (RGW-local user shc-services-quay, 200 GiB quota, bucket
+    # created by the lab bootstrap); keys from central Vault quay-services-rgw
+    rgw:
+      enabled: true
+      hostname: objectstore.atuin.signal9.gg
+      bucket: shc-services-quay
+      credentials:
+        vaultKey: quay-services-rgw
     dbInitJob:
       image: quay.signal9.gg/shc/ansible-runner:latest  # shc: chart default has no registry
     namePrefix: "svc-"
@@ -773,7 +781,7 @@ quayServices:
       configBundleSecretName: svc-sovereign-registry-config-bundle
       components:
         objectstorage:
-          managed: true
+          managed: false  # shc: Atuin Ceph RGW (rgw below), not NooBaa
         postgres:
           managed: false
         clair:
