@@ -1,0 +1,9 @@
+apiVersion: v2
+name: shc-cluster-base
+description: >-
+  Base layer for every platform cluster (shc LAB-PLAN D3/§7 item 12): cert-manager with a
+  Let's Encrypt RFC 2136 issuer and the API/ingress certificates, chrony, the Red Hat External
+  Secrets operator and cluster monitoring. Replaces the lab ocp-base-config chart upstream assumed.
+type: application
+version: 0.1.0
+appVersion: "4.22"

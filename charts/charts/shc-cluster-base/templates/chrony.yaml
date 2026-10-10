@@ -1,0 +1,30 @@
+{{- if and .Values.layers.base .Values.timesync.enabled }}
+{{- $conf := "" }}
+{{- range required "timesync.servers is required" .Values.timesync.servers }}
+{{- $conf = printf "%sserver %s iburst\n" $conf . }}
+{{- end }}
+{{- $conf = printf "%sdriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\nlogdir /var/log/chrony\n" $conf }}
+{{- range .Values.timesync.roles }}
+---
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-{{ . }}-chrony
+  labels:
+    machineconfiguration.openshift.io/role: {{ . }}
+  annotations:
+    # A MachineConfig change reboots the pool; never let a prune remove time sync.
+    argocd.argoproj.io/sync-options: Delete=false
+spec:
+  config:
+    ignition:
+      version: {{ $.Values.timesync.ignitionVersion }}
+    storage:
+      files:
+        - path: /etc/chrony.conf
+          mode: 420
+          overwrite: true
+          contents:
+            source: data:text/plain;charset=utf-8;base64,{{ $conf | b64enc }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,84 @@
+{{- if and .Values.layers.certs .Values.letsencrypt.enabled }}
+{{- $le := .Values.letsencrypt }}
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ $le.tsigSecret.name }}
+  namespace: cert-manager
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $le.tsigSecret.secretStoreName }}
+  target:
+    name: {{ $le.tsigSecret.name }}
+    creationPolicy: Owner
+  data:
+    - secretKey: secret
+      remoteRef:
+        key: {{ required "letsencrypt.tsigSecret.vaultKey is required" $le.tsigSecret.vaultKey }}
+        property: secret
+{{- if $le.account.vaultKey }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ $le.account.secretName }}
+  namespace: cert-manager
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $le.tsigSecret.secretStoreName }}
+  target:
+    name: {{ $le.account.secretName }}
+    creationPolicy: Owner
+  data:
+    - secretKey: tls.key
+      remoteRef:
+        key: {{ $le.account.vaultKey }}
+        property: tls.key
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ $le.issuerName }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  acme:
+    server: {{ $le.server }}
+    {{- with $le.email }}
+    email: {{ . }}
+    {{- end }}
+    privateKeySecretRef:
+      name: {{ $le.account.secretName }}
+    solvers:
+      - dns01:
+          rfc2136:
+            nameserver: {{ required "letsencrypt.rfc2136.nameserver is required" $le.rfc2136.nameserver }}
+            tsigKeyName: {{ required "letsencrypt.rfc2136.tsigKeyName is required" $le.rfc2136.tsigKeyName }}
+            tsigAlgorithm: {{ $le.rfc2136.tsigAlgorithm }}
+            tsigSecretSecretRef:
+              name: {{ $le.tsigSecret.name }}
+              key: secret
+        {{- with $le.dnsZones }}
+        selector:
+          dnsZones:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+{{- end }}

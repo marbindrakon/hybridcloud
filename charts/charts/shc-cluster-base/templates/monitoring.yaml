@@ -1,0 +1,30 @@
+{{- if and .Values.layers.base .Values.monitoring.enabled }}
+{{- $m := .Values.monitoring }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+  annotations:
+    {{- include "shc-cluster-base.patchOnly" . | nindent 4 }}
+data:
+  config.yaml: |
+    enableUserWorkload: {{ $m.userWorkload }}
+    prometheusK8s:
+      retention: {{ $m.prometheus.retention }}
+    {{- if $m.storageClass }}
+      volumeClaimTemplate:
+        spec:
+          storageClassName: {{ $m.storageClass }}
+          resources:
+            requests:
+              storage: {{ $m.prometheus.size }}
+    alertmanagerMain:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: {{ $m.storageClass }}
+          resources:
+            requests:
+              storage: {{ $m.alertmanager.size }}
+    {{- end }}
+{{- end }}

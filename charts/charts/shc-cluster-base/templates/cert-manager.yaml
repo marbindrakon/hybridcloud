@@ -1,0 +1,57 @@
+{{- if and .Values.layers.base .Values.certManager.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager-operator
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+    openshift.io/cluster-monitoring: "true"
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cert-manager-operator
+  namespace: cert-manager-operator
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  targetNamespaces:
+    - cert-manager-operator
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-cert-manager-operator
+  namespace: cert-manager-operator
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  name: openshift-cert-manager-operator
+  channel: {{ .Values.certManager.subscription.channel }}
+  installPlanApproval: {{ .Values.certManager.subscription.installPlanApproval }}
+  source: {{ .Values.certManager.subscription.source }}
+  sourceNamespace: {{ .Values.certManager.subscription.sourceNamespace }}
+{{- if .Values.certManager.recursiveNameservers }}
+---
+# The operator creates "cluster"; only the controller arguments are ours.
+apiVersion: operator.openshift.io/v1alpha1
+kind: CertManager
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    {{- include "shc-cluster-base.patchOnly" . | nindent 4 }}
+spec:
+  managementState: Managed
+  controllerConfig:
+    overrideArgs:
+      - --dns01-recursive-nameservers-only
+      - --dns01-recursive-nameservers={{ .Values.certManager.recursiveNameservers }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,49 @@
+{{- if and .Values.layers.base .Values.externalSecrets.enabled }}
+{{- $eso := .Values.externalSecrets }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $eso.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: external-secrets-operator
+  namespace: {{ $eso.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec: {}  # AllNamespaces (the only install mode the operator supports)
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ $eso.subscription.name }}
+  namespace: {{ $eso.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  name: {{ $eso.subscription.name }}
+  channel: {{ $eso.subscription.channel }}
+  installPlanApproval: {{ $eso.subscription.installPlanApproval }}
+  source: {{ $eso.subscription.source }}
+  sourceNamespace: {{ $eso.subscription.sourceNamespace }}
+---
+# Starts the operands (controller, webhook, cert-controller) in the external-secrets namespace.
+apiVersion: operator.openshift.io/v1alpha1
+kind: ExternalSecretsConfig
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  {{- toYaml $eso.config.spec | nindent 2 }}
+{{- end }}

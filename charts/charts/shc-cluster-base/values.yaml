@@ -1,0 +1,95 @@
+cluster:
+  # <name>.<baseDomain> is the cluster domain: api.<name>.<baseDomain>, *.apps.<name>.<baseDomain>
+  name: ""
+  baseDomain: ""
+
+# Two layers so one cluster can run them as two Argo CD Applications: "base" has no Vault
+# dependency and goes first (it installs ESO); "certs" needs the ClusterSecretStore, which comes
+# after ESO, for the TSIG key. A single release with both true is fine once the store exists.
+layers:
+  base: true
+  certs: true
+
+# ─── cert-manager Operator for Red Hat OpenShift ────────────────────────────
+certManager:
+  enabled: true
+  subscription:
+    channel: stable-v1
+    installPlanApproval: Automatic
+    source: redhat-operators
+    sourceNamespace: openshift-marketplace
+  # DNS-01 self-check against a recursive resolver only (the zone primary is not reachable as a
+  # recursor). Empty = operator default.
+  recursiveNameservers: ""
+
+# ─── Let's Encrypt ClusterIssuer (DNS-01 over RFC 2136) — layer "certs" ──────
+letsencrypt:
+  enabled: true
+  issuerName: letsencrypt-shc
+  server: https://acme-v02.api.letsencrypt.org/directory
+  email: ""
+  dnsZones: []
+  rfc2136:
+    nameserver: ""          # host:port of the zone primary
+    tsigKeyName: ""         # with trailing dot
+    tsigAlgorithm: HMACSHA256
+  # TSIG secret (key "secret") in the cert-manager namespace, from Vault through ESO.
+  tsigSecret:
+    name: shc-acme-tsig
+    secretStoreName: vault-backend
+    vaultKey: ""            # KV path relative to the store, property "secret"
+  # ACME account key. With vaultKey set, every cluster shares one platform account (one CAA
+  # accounturi); empty = cert-manager registers a new account for this cluster.
+  account:
+    secretName: letsencrypt-shc-account
+    vaultKey: ""            # property "tls.key"
+
+# ─── API and default-ingress certificates — layer "certs" ────────────────────
+certificates:
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  api:
+    # Named certificate for api.<cluster>. Clients that pinned the installer's CA must trust the
+    # public roots too: the Hive admin kubeconfig and Vault's kubernetes auth for remote clusters.
+    enabled: true
+  ingress:
+    enabled: true
+
+# ─── chrony (MachineConfig per pool) ────────────────────────────────────────
+timesync:
+  enabled: true
+  servers: []
+  # Pools to configure; names match install-time manifests (99-<role>-chrony) so the chart
+  # adopts them without a reboot.
+  roles:
+    - master
+    - worker
+  ignitionVersion: 3.4.0
+
+# ─── External Secrets Operator for Red Hat OpenShift ─────────────────────────
+externalSecrets:
+  enabled: true
+  namespace: external-secrets-operator
+  subscription:
+    name: openshift-external-secrets-operator
+    channel: stable-v1
+    installPlanApproval: Automatic
+    source: redhat-operators
+    sourceNamespace: openshift-marketplace
+  # ExternalSecretsConfig "cluster" spec. The operands run behind deny-all NetworkPolicies:
+  # add egress to the secret backend under controllerConfig.networkPolicies.
+  config:
+    spec: {}
+
+# ─── Cluster monitoring config ───────────────────────────────────────────────
+monitoring:
+  enabled: true
+  userWorkload: true
+  # Empty storageClass = no PVCs (emptyDir), as on a cluster without a default StorageClass.
+  storageClass: ""
+  prometheus:
+    retention: 7d
+    size: 50Gi
+  alertmanager:
+    size: 10Gi

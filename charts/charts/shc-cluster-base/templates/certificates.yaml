@@ -1,0 +1,81 @@
+{{- if .Values.layers.certs }}
+{{- $domain := include "shc-cluster-base.domain" . }}
+{{- $name := .Values.cluster.name }}
+{{- $issuer := .Values.letsencrypt.issuerName }}
+{{- $key := .Values.certificates.privateKey }}
+{{- if .Values.certificates.api.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-{{ $name }}
+  namespace: openshift-config
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  secretName: api-{{ $name }}-tls
+  dnsNames:
+    - api.{{ $domain }}
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ $issuer }}
+  privateKey:
+    algorithm: {{ $key.algorithm }}
+    size: {{ $key.size }}
+    rotationPolicy: Always
+---
+apiVersion: config.openshift.io/v1
+kind: APIServer
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    {{- include "shc-cluster-base.patchOnly" . | nindent 4 }}
+spec:
+  servingCerts:
+    namedCertificates:
+      - names:
+          - api.{{ $domain }}
+        servingCertificate:
+          name: api-{{ $name }}-tls
+{{- end }}
+{{- if .Values.certificates.ingress.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: apps-{{ $name }}
+  namespace: openshift-ingress
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  secretName: apps-{{ $name }}-tls
+  dnsNames:
+    - "*.apps.{{ $domain }}"
+    - apps.{{ $domain }}
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ $issuer }}
+  privateKey:
+    algorithm: {{ $key.algorithm }}
+    size: {{ $key.size }}
+    rotationPolicy: Always
+---
+apiVersion: operator.openshift.io/v1
+kind: IngressController
+metadata:
+  name: default
+  namespace: openshift-ingress-operator
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    {{- include "shc-cluster-base.patchOnly" . | nindent 4 }}
+spec:
+  defaultCertificate:
+    name: apps-{{ $name }}-tls
+{{- end }}
+{{- end }}
