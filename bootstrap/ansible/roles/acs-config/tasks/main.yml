@@ -203,6 +203,20 @@
   no_log: true
   when: acs_client_uuid is defined
 
+# shc: idempotent (the POST creates a duplicate on every run) and with the UI endpoint ACS requires
+# for OIDC ("OIDC requires a default UI endpoint").
+- name: List ACS auth providers
+  uri:
+    url: "{{ acs_url }}/v1/authProviders"
+    method: GET
+    validate_certs: false
+    url_username: admin
+    url_password: "{{ acs_admin_password }}"
+    force_basic_auth: true
+    status_code: [200]
+  register: _acs_auth_providers
+  no_log: true
+
 - name: Configure OIDC auth provider in ACS
   uri:
     url: "{{ acs_url }}/v1/authProviders"
@@ -215,6 +229,8 @@
     body:
       name: "Keycloak"
       type: "oidc"
+      enabled: true
+      uiEndpoint: "{{ acs_url | regex_replace('^https://', '') | regex_replace('/+$', '') }}"
       config:
         client_id: "{{ keycloak_client_id }}"
         client_secret: "{{ _acs_client_secret.json.value }}"
@@ -222,4 +238,6 @@
         mode: "post"
     status_code: [200, 201]
   no_log: true
-  when: acs_client_uuid is defined and _acs_client_secret is not skipped
+  when:
+    - acs_client_uuid is defined and _acs_client_secret is not skipped
+    - (_acs_auth_providers.json.authProviders | default([]) | selectattr('name', 'equalto', 'Keycloak') | list | length) == 0
