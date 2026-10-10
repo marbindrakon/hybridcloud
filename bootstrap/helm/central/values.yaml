@@ -103,7 +103,7 @@ sovereignNamespaces:
 
 # ─── Sovereign Namespaces (services cluster) ────────────────────────────────
 sovereignNamespacesServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.2.7-shc.1"
   syncWave: "1"
   values:
@@ -175,7 +175,7 @@ rhbk:
 
 # ─── RHBK Services (Keycloak) ────────────────────────────────────────────────
 rhbkServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.10.2"
   syncWave: "20"
   destinationNamespace: services-rhbk
@@ -317,7 +317,7 @@ vault:
 
 # ─── Vault Services ─────────────────────────────────────────────────────────
 vaultServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.6.11"
   syncWave: "15"
   destinationNamespace: services-vault
@@ -362,6 +362,19 @@ vaultServices:
                 }
               }
               service_registration "kubernetes" {}
+              # shc (LAB-PLAN D7): auto-unseal against the lab Vault transit engine, key
+              # shc-services-unseal (token in Secret vault-transit-token, encrypt/decrypt only).
+              seal "transit" {
+                address         = "https://vault.lab.signal9.gg"
+                mount_path      = "lab/shc-transit/"
+                key_name        = "shc-services-unseal"
+                disable_renewal = "false"
+              }
+        # shc: transit seal token (VAULT_TOKEN is read by the seal; jobs use explicit X-Vault-Token)
+        extraSecretEnvironmentVars:
+          - envName: VAULT_TOKEN
+            secretName: vault-transit-token
+            secretKey: token
         dataStorage:
           enabled: true
           size: 10Gi
@@ -387,8 +400,8 @@ vaultServices:
 
 # ─── Vault Services Init (separate App to avoid StatefulSet health deadlock) ─
 vaultServicesInit:
-  enabled: false  # shc: P4 (services cluster)
-  chartVersion: "0.2.3"
+  enabled: true  # shc: P4 (services cluster) enabled
+  chartVersion: "0.2.3-shc.1"
   syncWave: "20"
   values:
     namespace: services-vault
@@ -403,6 +416,7 @@ vaultServicesInit:
     pushSecretToVaultCentral: true
     pushSecretStoreName: "vault-backend"
     vaultCentralPath: "vault-services-init"
+    pushUnsealKeys: false  # shc: transit seal, no unseal keys (LAB-PLAN §7.6)
 
 # ─── RHACM ───────────────────────────────────────────────────────────────────
 rhacm:
@@ -457,7 +471,7 @@ oidcIssuer:
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.5.5"
   syncWave: "30"
   destinationNamespace: aap
@@ -557,7 +571,7 @@ pluginIaac:
 
 # ─── Event Forwarder (central cluster — K8s Events → EDA Event Stream) ───────
 eventForwarder:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: false  # shc: off: no sink reachable from services (Kafka default is central's in-cluster service; no EDA event stream)
   chartVersion: "0.5.5-shc.1"
   syncWave: "32"
   image:
@@ -650,7 +664,7 @@ odf:
 
 # ─── ODF / Noobaa (services) ────────────────────────────────────────────────
 odfServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.6.0"
   syncWave: "12"
   destinationNamespace: openshift-storage
@@ -724,7 +738,7 @@ quay:
 
 # ─── Quay (services) ────────────────────────────────────────────────────────
 quayServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.6.4"
   syncWave: "35"
   destinationNamespace: services-quay
@@ -736,7 +750,7 @@ quayServices:
       enabled: true
       name: svc-sovereign-registry
       configBundle: |
-        SERVER_HOSTNAME: quay.signal9.gg
+        SERVER_HOSTNAME: svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg  # shc: not the lab registry
         FEATURE_USER_INITIALIZE: true
         FEATURE_SUPERUSERS_FULL_ACCESS: true
         SUPER_USERS:
@@ -1001,7 +1015,7 @@ crunchyPostgres:
 
 # ─── Crunchy Postgres (services) ────────────────────────────────────────────
 crunchyPostgresServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.5.0"
   syncWave: "11"
   destinationNamespace: postgres-operator
@@ -1050,7 +1064,7 @@ externalSecrets:
 # cluster CoreDNS so pods can resolve internal lab hostnames (vCenter, ESXi, etc.)
 # without falling through to public DNS which has no knowledge of private hosts.
 dnsForwarderServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.1.0"
   syncWave: "2"
   # Zone/IPs mirrored from lab.* (keep in sync via make render-values-lab)
@@ -1064,9 +1078,53 @@ dnsForwarderServices:
           - "172.18.42.10"
           - "172.18.42.11"
 
+# ─── shc cluster base layer (services) ──────────────────────────────────────
+# shc (LAB-PLAN D3/§7 item 12): ESO (Red Hat operator), cert-manager, chrony, monitoring ("base",
+# wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
+shcClusterBaseServices:
+  enabled: true
+  chartVersion: "0.1.0"
+  syncWaves:
+    base: "0"
+    certs: "2"
+  values:
+    cluster:
+      name: services
+      baseDomain: shc.signal9.gg
+    certManager:
+      recursiveNameservers: "172.18.42.20:53"
+    letsencrypt:
+      dnsZones: [shc.signal9.gg]
+      rfc2136:
+        nameserver: "75.8.222.11:53"
+        tsigKeyName: shc-acme.
+      tsigSecret:
+        vaultKey: dns/shc-acme-tsig
+      account:
+        vaultKey: dns/letsencrypt-shc-account
+    timesync:
+      servers: [172.18.42.20, 172.18.0.79]
+    externalSecrets:
+      config:
+        spec:
+          controllerConfig:
+            networkPolicies:
+              # central Vault through its route on central's ingress VIP
+              - name: allow-egress-to-central-vault
+                componentName: ExternalSecretsCoreController
+                egress:
+                  - to:
+                      - ipBlock:
+                          cidr: 172.18.230.7/32
+                    ports:
+                      - protocol: TCP
+                        port: 443
+    monitoring:
+      storageClass: standard-csi
+
 # ─── External Secrets Operator (services) ───────────────────────────────────
 externalSecretsServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: false  # shc: replaced by shc-cluster-base (Red Hat ESO operator; community chart can't serve v1)
   chartVersion: "0.1.4"
   syncWave: "5"
   values:
@@ -1100,7 +1158,10 @@ vaultCentralNamespace:
         - secretKey: root_token
           property: root_token
     vaultServicesInitSecretsCopy:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
+      keys:  # shc: transit seal, root token only
+        - secretKey: root_token
+          property: root_token
     # Services vault init PushSecret disabled: services-vault namespace is on services cluster
     vaultServicesInitPushSecret:
       enabled: false
@@ -1184,14 +1245,13 @@ vaultSecretStore:
 # ─── Vault ClusterSecretStore (services → vault-central via external route) ─
 # Uses kubernetes-services auth mount on central vault (k8s auth, no root token)
 vaultSecretStoreServices:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.3.3-shc.2"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
-  syncWave: "22"
+  syncWave: "0"  # shc: ESO + store before every ExternalSecret on services
   values:
     vault:
       server: "https://vault-central.apps.central.shc.signal9.gg"
       path: "central"
-      caBundle: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZUekNDQkRlZ0F3SUJBZ0lVQWhkVXN1d3N6VXgva0pJMzdnY1M5WkdVbHJBd0RRWUpLb1pJaHZjTkFRRUwKQlFBd1lqRUxNQWtHQTFVRUJoTUNWVk14RVRBUEJnTlZCQWdUQ0VGeWEyRnVjMkZ6TVE4d0RRWURWUVFIRXdaUwpiMmRsY25NeEZUQVRCZ05WQkFvVERGTnBaMjVoYkRrZ1RHRmljekVZTUJZR0ExVUVBeE1QVTJsbmJtRnNPU0JCClEwMUZJRkl6TUI0WERUSTJNRGd4TXpFNE1UQXhNVm9YRFRJMk1URXhNVEU0TVRBME1Wb3dMakVzTUNvR0ExVUUKQXd3aktpNWhjSEJ6TG5Ob1l5MXpaWEoyYVdObGN6VXViR0ZpTG5OcFoyNWhiRGt1WjJjd2dnSWlNQTBHQ1NxRwpTSWIzRFFFQkFRVUFBNElDRHdBd2dnSUtBb0lDQVFDNit2bmtEQngrWEtMaWlXY013R1ZxTkpuNzZoTzgwYUJOClltSjdoMXVhWmhLdmlNem5tdElWeXNLWmh2bkdwQk40M2dzT3hLYlNGRnl0bk0xeWx0K0NuSkpSMXM2NnpyMjkKTXZXMFNVT0dVSk1wTnpaelJzdnRqRStQK3hmTXFGbUxVZkV1OVBtdmN0S1Z4QVZtR0pCYjFkeDdBQ2NuQzNmcwpFbGVpY2NPLzNaZ0xtYVBZaG1paVI4cU5iR1VsTXplRitwOXFwL1MzN0lTOUxHYUVUemMyMHgwMm43VjZXWkZTCjQ0Y2tHUCtUM3BOWFpjcitSWFczNUUvZXZFUmNqdWZGM3gxVGs5SVQxRlpXS25xUkF0VFJLWkpLdnVWdzJ3ckYKNkhNZERKbXhZbVVSdTBmcHIwZWhGWjByL1BaWDVRQTJYbzRtQTQrYTdRWmEwLzhibGtFWUw5bXVobVRuSmFrVApvbXVGeE1ha1FZek5kaEtXcFhha0lHWmhSbDhYc3FpdGFHb2ZCMzk2SEhVdngwbS9sT3ZxY3NOcjkwQXkxZFNsClloZng5N1laUUN6WkdRYm5POWVJa3pyb05zaFpFZm13b1N5NkYxaWpkdHBmSmIxNVhpeHJRUnVHVEJuMjRRL2EKbncrckYwa0Nhb3I0SnpEaUJMK1RmY2l6ZlVZaFEwN1NMbW5WZjEzM2NGeTh0M3UxbU11eC9NMFZUYmNuc3NKagpZZkM2M2xhUDdOeEJUTE9ZM0hmWWZQM001bk9kSHE1YVBDaW9HQjl2RlQzZWlhQ0t3OEkxVytDZFFpRHp0enpXCnVrbDdENXpPZnFWZWtZdWNKZFdMc0NqT0t0RXhoUUVzeHQzRUpZNm8rN28rSUFPWnNHanNvNy80RGppVVlXRFoKR2lDSUhMYWVlUUlEQVFBQm80SUJMekNDQVNzd0RnWURWUjBQQVFIL0JBUURBZ1dnTUIwR0ExVWRKUVFXTUJRRwpDQ3NHQVFVRkJ3TUJCZ2dyQmdFRkJRY0RBakFkQmdOVkhRNEVGZ1FVQjRtd3hIM0NjWXVoRzd6MXVMMzRyQ20wCmZFOHdId1lEVlIwakJCZ3dGb0FVLzdxbjd0SkpQaXp3eE5vci9SRkp4Mk8wUzFFd1B3WUlLd1lCQlFVSEFRRUUKTXpBeE1DOEdDQ3NHQVFVRkJ6QUNoaU5vZEhSd09pOHZjR3RwTG5OcFoyNWhiRGt1WjJjdmFYTnpkV1Z5TDNJegpMbU5sY2pBdUJnTlZIUkVFSnpBbGdpTXFMbUZ3Y0hNdWMyaGpMWE5sY25acFkyVnpOUzVzWVdJdWMybG5ibUZzCk9TNW5aekFUQmdOVkhTQUVEREFLTUFnR0JtZUJEQUVDQVRBMEJnTlZIUjhFTFRBck1DbWdKNkFsaGlOb2RIUncKT2k4dmNHdHBMbk5wWjI1aGJEa3VaMmN2YVhOemRXVnlMM0l6TG1ObGNqQU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBUUVBR0N1RW5pT2M5OGM4cFhIUXJQcGJLNzlEamRiVEUzMm5YdUZONXphVXFhTjdlVDF4am9aTDFDVTBoNHhHClArS1hJTmJUaXhvdDdPYjRVY0RIdzZGdkdGcy9RenI4RXM5SEY0R29EdVUxaWVnUnVUdmQ3TTFHeVVmck9JL0YKcThhWmFWalpZc3dST1F2SDdxaHora3dZYXhSdjNJU3hIeXg2dkZZL2xVcXAveGFBaW1qU3FlSWlYUjJmS01TZApycHB3OEFMcHpSaW1IWW8xaWlkSStnQVI0alc2d1RYOWlQOE0veU5FM1o0STJKbENqNEpEV1Nudk1od25OSTU5CjRMVkZIY1lwWEJYVGFKMVlvME05M1RHMWpzTVZ2enpPTWxJZThUWHc4M0NtdUdCWmxQMXdOaXJlUnhGNFhOWW8KK0wzQVVEdW53VnR2VXVFMTRIeUFCU2pFa2c9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCi0tLS0tQkVHSU4gQ0VSVElGSUNBVEUtLS0tLQpNSUlGbWpDQ0E0S2dBd0lCQWdJVWF5ZjRUcDh2YmlmRURFbFU0aXZYckdQcDY1c3dEUVlKS29aSWh2Y05BUUVMCkJRQXdaakVMTUFrR0ExVUVCaE1DVlZNeEVUQVBCZ05WQkFnTUNFRnlhMkZ1YzJGek1ROHdEUVlEVlFRSERBWlMKYjJkbGNuTXhGVEFUQmdOVkJBb01ERk5wWjI1aGJEa2dUR0ZpY3pFY01Cb0dBMVVFQXd3VFUybG5ibUZzT1NCUwpVMEVnVW05dmRDQllNVEFlRncweU5UQXhNVEl3TmpFME5UQmFGdzB6TlRBeE1UQXdOakUwTlRCYU1HSXhDekFKCkJnTlZCQVlUQWxWVE1SRXdEd1lEVlFRSUV3aEJjbXRoYm5OaGN6RVBNQTBHQTFVRUJ4TUdVbTluWlhKek1SVXcKRXdZRFZRUUtFd3hUYVdkdVlXdzVJRXhoWW5NeEdEQVdCZ05WQkFNVEQxTnBaMjVoYkRrZ1FVTk5SU0JTTXpDQwpBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQQURDQ0FRb0NnZ0VCQUtGWitMNkZ3a3F4T0djTkNSTDJIVjhqCkdnNksvUHp2K3ZKWEJZc0hTZ0pkSnRuL0dtYUc0dlA1U3FYQnVLSGxHdW5kRVVWMmp2SEl2TUtrTVF4VjhsNTgKc3V4cEIwWjVhc0hOR3ZPVW9qRTdBMVAwWHlTa005OEIrYW5OL1RhWE1RNDhHVFBSTmZjcGNLdFAxSG5IRWxrMQpBQ1duMVRUSWhrclBnTHlHaGhkTlBlaitpM3lSbEUwQm11eFpEQ1Ara3hSYVIxZ1VHbWFLUlZ2V3JwdXRzRUFRCjFueUZRQTA2bzNNVlJpZ1FUTmc1cmtZelRzdkN3cS9Fc3VuL0hYTXAyYTl4Z0RKRERwZGJIOEVxWVRKWmNwVTgKYUpLeW1aRXB3ampJYWtCZnZ2RXg3TG05OVJHWjlqcDBOUDNYTG9RU2hvd3NZNHl5bjg3RWdibzZHSXhoZ05VQwpBd0VBQWFPQ0FVSXdnZ0UrTUIwR0ExVWREZ1FXQkJUL3VxZnUwa2srTFBERTJpdjlFVW5IWTdSTFVUQWZCZ05WCkhTTUVHREFXZ0JSaENMTnFVbml0N0F0SXAyRllOL3YrWHNTZ1VUQVNCZ05WSFJNQkFmOEVDREFHQVFIL0FnRUEKTUE0R0ExVWREd0VCL3dRRUF3SUJoakFkQmdOVkhTVUVGakFVQmdnckJnRUZCUWNEQVFZSUt3WUJCUVVIQXdJdwpQd1lJS3dZQkJRVUhBUUVFTXpBeE1DOEdDQ3NHQVFVRkJ6QUNoaU5vZEhSd09pOHZjR3RwTG5OcFoyNWhiRGt1CloyY3ZhWE56ZFdWeUwzZ3hMbU5sY2pCRkJnTlZIU0FFUGpBOE1Eb0dCbWVCREFFQ0FUQXdNQzRHQ0NzR0FRVUYKQndJQkZpSm9kSFJ3T2k4dmNHdHBMbk5wWjI1aGJEa3VaMmN2Wkc4dGJtOTBMWFJ5ZFhOME1ERUdBMVVkSHdRcQpNQ2d3SnFBa29DS0dJR2gwZEhBNkx5OXdhMmt1YzJsbmJtRnNPUzVuWnk5amNtd3ZlREV1WTNKc01BMEdDU3FHClNJYjNEUUVCQ3dVQUE0SUNBUUEvVVBuaUM2WnRwWU5jVC9CSTBQNjVjbUI3ZmRZaVptRDNnQWg5QkpNVll4NncKWit3bHBNV3NZWE1hc1JoSTlteGxOdVJFNzFoUkh5bm9yaDN0K0xId1hSN0xZRXNZMTZyOFdRMjF4dWFrNm5TNApsNk04UThsNWxFMDhLOXQvNEViSDZpWkFYTjdGRi9DNkZNeGxDNGRoQ0ZVeUF4WmR2aUVxM2ZoazRFTGFzd1Z4CldDUnc5M2FGeDNvR3h0L3ZQbWEzQTJWMmxBNGlIM3BpZVN2b3FPN2ZGT3U4anlGdEJXbWFzK3ZjcWN3Y2RCa3oKSElJVFUyeFA5SGREVWgrZGIrVzJLY3k4R0tXRENneUt5U1E5b0dJVG0rWDRNL1gzL3gvTFc3WVFWcEgraGVLNwo2cEdsTDJ0ZDhIMktwaWNENU1hTHI5N0NrWG1GV0FoQWZycVY1UXl1UW52VHBqM25ub1ZCVGRaNHhqRUNTQ2RCCnZ6RUZHQ3cvdENWbCt0UXFNRjNHRXNQSjNuZlZHVmZUSmNJeFEvT2hlUVY3TXl4U3ZXVjBnSkpMRVpLcFE2WjQKZkZkNGZ6M2l1dEl3SlBtUGFUQ0hNY0ZHVVQ2S0JnVFdZU3RMbEFoY0JpSDVWSDVmWUtuMGMxTUVvVU44UndsagpIRkt0ZUtBRDQ0M1U0aGNxWnhhV3llQkFHWW1kR1NnclZKOXV0V3h4Ym84M3NVMjJrMVRxM2ZlcFI2YjZZdjg2ClI0UVpnc1pXeG1wem1oUkY5dU01VTNZZm16d2cyajVNWVBKZnEraHZ3QjNWMlA0SkRsbzZQRDViZHVjc3hFdzkKMkgrVG96NTcxcGdYTS9WR1ZJb21kSjR4NVdic0VDTXFqbnlaMzF2VzZSYXlCYm41MGZEcEVDaWM2ZndDc2c9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
     auth:
       type: kubernetes
       mountPath: "kubernetes-services"
@@ -1299,7 +1359,7 @@ sovereignJobs:
         - name: KAFKA_EXTERNAL_BOOTSTRAP
           value: "hybridsovereign-kafka-kafka-bootstrap-amq-streams.apps.central.shc.signal9.gg:443"
     mtvCatalogSync:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
       playbook: mtv-catalog-sync.yml
       activeDeadlineSeconds: 600
       syncWave: "35"
@@ -1331,9 +1391,12 @@ sovereignJobs:
         - name: VAULT_ADDR
           value: "http://vault-active.central-vault.svc:8200"
         - name: VAULT_SERVICES_ADDR
-          value: ""  # shc: P4 restore https://vault-services.apps.services.shc.signal9.gg
+          value: "https://vault-services.apps.services.shc.signal9.gg"
         - name: OCP_SERVICES_SERVER
-          value: ""  # shc: P4 restore https://api.services.shc.signal9.gg:6443
+          value: "https://api.services.shc.signal9.gg:6443"
+        # shc: the services API serves a Let's Encrypt certificate (owner: APIs on a trusted CA)
+        - name: SERVICES_K8S_CA_EXTRA_BUNDLE
+          value: "/etc/pki/tls/certs/ca-bundle.crt"
         - name: VAULT_SECRET_NAMESPACE
           value: "central-vault"
     keycloakRealms:
@@ -1432,7 +1495,7 @@ sovereignJobs:
         - name: KEYCLOAK_SERVICES_ADMIN_SECRET_NS
           value: "services-rhbk"
         - name: OCP_SERVICES_SERVER
-          value: ""  # shc: P4 restore "https://api.services.shc.signal9.gg:6443" (services tasks are guarded on it)
+          value: "https://api.services.shc.signal9.gg:6443"
         - name: SERVICES_REALM_NAME
           value: "sovereign-tenants"
     giteaInit:
@@ -1504,7 +1567,7 @@ sovereignJobs:
         - name: REPO_NAME
           value: "tenancy_repo"
     keycloakServicesRealms:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
       playbook: keycloak-realms.yml
       activeDeadlineSeconds: 600
       syncWave: "28"
@@ -1531,7 +1594,7 @@ sovereignJobs:
         - name: FORCE_RERUN
           value: "2026-06-24-services-rhbk"
     keycloakServicesGroups:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
       playbook: keycloak-groups.yml
       activeDeadlineSeconds: 600
       syncWave: "29"
@@ -1549,7 +1612,7 @@ sovereignJobs:
         - name: EXTRA_GROUPS
           value: '[{"name":"acme-corp-platform-engineering-admins"},{"name":"acme-corp-platform-engineering-editors"},{"name":"acme-corp-platform-engineering-viewers"},{"name":"acme-corp-platform-ops-admins"},{"name":"acme-corp-platform-ops-editors"},{"name":"acme-corp-platform-ops-viewers"},{"name":"acme-corp-assignment-admins"},{"name":"acme-corp-developers"},{"name":"acme-corp-platform-viewers"},{"name":"acme-corp-devops"}]'
     keycloakServicesClients:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
       playbook: keycloak-clients.yml
       activeDeadlineSeconds: 600
       syncWave: "30"
@@ -1567,7 +1630,7 @@ sovereignJobs:
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     vaultServicesInit:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: false  # shc: off: superseded by the in-cluster vault-services-init app (this external-route job assumes Shamir keys)
       playbook: vault-services-init.yml
       activeDeadlineSeconds: 600
       syncWave: "29"
@@ -1611,7 +1674,7 @@ sovereignJobs:
         - name: OCP_SERVICES_SERVER
           value: "https://api.services.shc.signal9.gg:6443"
     aapLicenseServices:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
       playbook: aap-license.yml
       activeDeadlineSeconds: 600
       syncWave: "31"
@@ -2085,7 +2148,7 @@ sovereignJobs:
     # Runs after all operators are deployed (wave 45) so their CRDs exist.
     # Disables broken chart-default samples that have incorrect field names.
     operatorSamples:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
       playbook: operator-samples.yml
       activeDeadlineSeconds: 900
       syncWave: "45"
@@ -2136,7 +2199,7 @@ sovereignJobs:
 
     # ─── Quay Services Config: init admin + store in Vault + configure OIDC ─────
     quayServicesConfig:
-      enabled: false  # shc: P4 (services cluster)
+      enabled: true  # shc: P4 (services cluster) enabled
       playbook: quay-config.yml
       activeDeadlineSeconds: 1200
       syncWave: "37"
@@ -2583,7 +2646,7 @@ cloudAWSOperator:
 
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.9.18"
   syncWave: "40"
   destinationNamespace: sovereign-cloud
@@ -2615,7 +2678,7 @@ sovereignDashboard:
 
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "1.1.13"
   syncWave: "41"
   destinationNamespace: sovereign-cloud
@@ -2646,7 +2709,7 @@ tenancyDashboard:
 
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
 sovereignAdminPlugin:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.1.28"
   syncWave: "42"
   destinationNamespace: sovereign-cloud
@@ -2671,7 +2734,7 @@ sovereignAdminPlugin:
 
 # ─── Sovereign Tenant Console Plugin (services cluster) ──────────────────────
 sovereignTenantPlugin:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.1.23"
   syncWave: "42"
   destinationNamespace: sovereign-cloud
@@ -2767,7 +2830,7 @@ amqStreams:
 
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.1.22-shc.1"
   syncWave: "38"
   destinationNamespace: sovereign-cloud
@@ -2790,7 +2853,7 @@ hybridsovereignPrimaryOperator:
 
 # ─── IAAC Git Sync StatefulSet (services) ────────────────────────────────────
 iaacGitSync:
-  enabled: false  # shc: P4 (services cluster)
+  enabled: true  # shc: P4 (services cluster) enabled
   chartVersion: "0.1.2-shc.1"
   syncWave: "40"
   destinationNamespace: sovereign-cloud-plugins

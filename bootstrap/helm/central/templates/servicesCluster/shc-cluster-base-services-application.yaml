@@ -1,0 +1,51 @@
+{{- /*
+shc (LAB-PLAN D3/§7 item 12): the platform base layer on the services cluster, as two Applications
+from one chart. "base" (ESO, cert-manager, chrony, monitoring) has no Vault dependency and runs before
+everything that holds ExternalSecrets; "certs" (Let's Encrypt issuer, API and ingress certificates)
+needs the ClusterSecretStore for the TSIG key and runs after vault-secret-store-services.
+*/}}
+{{- if and (include "sovereign-central.applicationsEnabled" .) .Values.shcClusterBaseServices.enabled }}
+{{- $cfg := .Values.shcClusterBaseServices }}
+{{- range $layer := list "base" "certs" }}
+{{- $values := mergeOverwrite (deepCopy $cfg.values) (dict "layers" (dict "base" (eq $layer "base") "certs" (eq $layer "certs"))) }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shc-cluster-{{ $layer }}-services
+  namespace: {{ $.Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cluster-base
+    sovereign-cloud/target: services
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ index $cfg.syncWaves $layer | quote }}
+spec:
+  project: services
+
+  source:
+    repoURL: {{ printf "oci://%s/%s/shc-cluster-base" $.Values.oci.registry $.Values.oci.repositoryBase | quote }}
+    chart: shc-cluster-base
+    targetRevision: {{ $cfg.chartVersion | quote }}
+    helm:
+      releaseName: shc-cluster-{{ $layer }}
+      valuesObject:
+        {{- toYaml $values | nindent 8 }}
+
+  destination:
+    server: {{ $.Values.servicesCluster.server | quote }}
+    namespace: openshift-config
+
+  ignoreDifferences:
+    {{- include "sovereign-central.esoIgnoreDifferences" $ | nindent 4 }}
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    {{- include "sovereign-central.syncRetry" $ | nindent 4 }}
+{{- end }}
+{{- end }}
