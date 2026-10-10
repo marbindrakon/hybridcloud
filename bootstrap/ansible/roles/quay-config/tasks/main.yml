@@ -196,10 +196,18 @@
     validate_certs: false
     headers:
       Authorization: "Bearer {{ quay_access_token }}"
-    status_code: 200
+    # shc: operator-managed Quay (3.17) answers 403: no runtime config API. OIDC then comes from
+    # the quay chart's config-bundle injection (oidc values) instead of the PUT below.
+    status_code: [200, 403]
   register: _quay_config
   retries: 3
   delay: 5
+  until: _quay_config.status in [200, 403]
+
+- name: Note that OIDC is configured through the config bundle
+  ansible.builtin.debug:
+    msg: "Quay has no superuser config API (403); OIDC login comes from the quay chart's config bundle (oidc values)."
+  when: _quay_config.status == 403
 
 - name: Apply OIDC config to Quay
   uri:
@@ -227,7 +235,7 @@
       }) }}"
     status_code: [200, 201]
   no_log: true
-  when: quay_oidc_client_secret is defined
+  when: quay_oidc_client_secret is defined and _quay_config.status == 200
 
 - name: Trigger Quay config reload
   uri:

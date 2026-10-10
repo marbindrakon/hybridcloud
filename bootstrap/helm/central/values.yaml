@@ -739,10 +739,19 @@ quay:
 # ─── Quay (services) ────────────────────────────────────────────────────────
 quayServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.6.4"
+  chartVersion: "0.6.4-shc.1"  # shc: OIDC through the config bundle
   syncWave: "35"
   destinationNamespace: services-quay
   values:
+    # shc: Quay login through RHBK (sovereign-tenants, client quay-services); the secret is the
+    # services realm's client secret (keycloak-clients-services)
+    oidc:
+      enabled: true
+      clientId: quay-services
+      server: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants
+      clientSecret:
+        vaultKey: keycloak-clients-services
+        property: quay-services
     dbInitJob:
       image: quay.signal9.gg/shc/ansible-runner:latest  # shc: chart default has no registry
     namePrefix: "svc-"
