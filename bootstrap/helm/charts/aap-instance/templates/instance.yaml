@@ -29,6 +29,9 @@ spec:
         name: {{ printf "%s-pguser-controller" (.Values.postgres.name | default "aap-pgcluster") }}
         key: password
     {{- end }}
+    {{- with .Values.controller.extraSpec }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
   {{- if .Values.eda.enabled }}
   eda:

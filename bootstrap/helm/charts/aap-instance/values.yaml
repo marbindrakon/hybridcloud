@@ -12,6 +12,8 @@ operator:
 controller:
   enabled: true
   replicas: 1
+  # Extra AutomationController spec fields passed through as-is (e.g. task_extra_env, ee_extra_env).
+  extraSpec: {}
 
 eda:
   enabled: true

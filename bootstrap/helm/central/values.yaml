@@ -482,7 +482,7 @@ aap:
 # ─── AAP (central cluster — EDA controller) ────────────────────────────────
 aapCentral:
   enabled: true
-  chartVersion: "0.5.5"
+  chartVersion: "0.5.5-shc.1"
   syncWave: "30"
   destinationNamespace: aap
   values:
@@ -491,6 +491,24 @@ aapCentral:
     controller:
       enabled: true
       replicas: 1
+      # shc: the controller SA is cluster-admin, so its pods are admitted under anyuid: the
+      # control-plane EE (project clones) runs as root, the task container as awx. git >= 2.35 then
+      # rejects the shared project checkouts ("dubious ownership"); trust them in both containers.
+      extraSpec:
+        task_extra_env: |
+          - name: GIT_CONFIG_COUNT
+            value: "1"
+          - name: GIT_CONFIG_KEY_0
+            value: safe.directory
+          - name: GIT_CONFIG_VALUE_0
+            value: "*"
+        ee_extra_env: |
+          - name: GIT_CONFIG_COUNT
+            value: "1"
+          - name: GIT_CONFIG_KEY_0
+            value: safe.directory
+          - name: GIT_CONFIG_VALUE_0
+            value: "*"
     eda:
       enabled: true
       replicas: 1
