@@ -1,6 +1,6 @@
 ---
 cloudoso_operator_namespace: sovereign-cloud
-central_api_server: "https://api.shc-cental5.lab.signal9.gg:6443"
+central_api_server: "https://api.central.shc.signal9.gg:6443"
 central_sa_secret_name: osohelper-creator-sa
 central_sa_secret_namespace: sovereign-cloud
 eda_central_work_namespace: sovereign-cloud-jobs
@@ -17,4 +17,4 @@ vault_init_secret_name: "vault-init-secrets"
 vault_init_secret_namespace: "central-vault"
 vault_init_addr: "http://vault-active.central-vault.svc:8200"
 
-eda_dashboard_host: "https://sovereign-aap-aap.apps.shc-cental5.lab.signal9.gg"
+eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"

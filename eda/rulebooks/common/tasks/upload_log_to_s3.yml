@@ -87,7 +87,7 @@
     S3_ACCESS_KEY: "{{ s3_access_key | default('') }}"
     S3_SECRET_KEY: "{{ s3_secret_key | default('') }}"
     S3_BUCKET: "{{ s3_bucket | default('eda-job-logs') }}"
-    S3_ENDPOINT: "{{ s3_endpoint | default('https://s3-openshift-storage.apps.shc-services5.lab.signal9.gg') }}"
+    S3_ENDPOINT: "{{ s3_endpoint | default('https://s3-openshift-storage.apps.services.shc.signal9.gg') }}"
     CR_NAME: "{{ cr_name }}"
     CR_NAMESPACE: "{{ cr_namespace }}"
     CR_KIND: "{{ cr_kind }}"

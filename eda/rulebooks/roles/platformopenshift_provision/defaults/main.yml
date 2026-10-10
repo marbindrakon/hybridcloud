@@ -1,6 +1,6 @@
 ---
 platformopenshift_operator_namespace: sovereign-cloud
-central_api_server: "https://api.shc-cental5.lab.signal9.gg:6443"
+central_api_server: "https://api.central.shc.signal9.gg:6443"
 central_sa_secret_name: awshelper-creator-sa
 oso_central_sa_secret_name: osohelper-creator-sa
 central_sa_secret_namespace: sovereign-cloud
@@ -27,4 +27,4 @@ vault_init_addr: "http://vault-active.central-vault.svc:8200"
 oci_registry_host: "{{ (lookup('env', 'OCI_HOST') | trim) or 'quay.signal9.gg' }}"
 mce_cluster_build_chart_version: "0.2.0"
 
-eda_dashboard_host: "https://sovereign-aap-aap.apps.shc-cental5.lab.signal9.gg"
+eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"

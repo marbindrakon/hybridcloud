@@ -3,7 +3,7 @@
   hosts: all
   sources:
     - ansible.eda.kafka:
-        host: "hybridsovereign-kafka-kafka-bootstrap-amq-streams.apps.shc-cental5.lab.signal9.gg"
+        host: "hybridsovereign-kafka-kafka-bootstrap-amq-streams.apps.central.shc.signal9.gg"
         port: "443"
         topic: hybridsovereign-events
         group_id: eda-rbacconfig-create

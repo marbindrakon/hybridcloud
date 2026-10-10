@@ -1,5 +1,5 @@
 ---
 plugin_rbac_operator_namespace: sovereign-cloud-plugins
 plugin_rbac_keycloak_realm: sovereign-tenants
-plugin_rbac_keycloak_url_default: "https://rhbk-services.apps.shc-services5.lab.signal9.gg"
-eda_dashboard_host: "https://sovereign-aap-aap.apps.shc-cental5.lab.signal9.gg"
+plugin_rbac_keycloak_url_default: "https://rhbk-services.apps.services.shc.signal9.gg"
+eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"

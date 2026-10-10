@@ -17,7 +17,7 @@ metadata:
 spec:
   displayName: Vault Central
   group: central
-  url: https://vault-central.apps.shc-cental5.lab.signal9.gg/
+  url: https://vault-central.apps.central.shc.signal9.gg/
   expectedStatus: 200
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
@@ -28,7 +28,7 @@ metadata:
 spec:
   displayName: Vault Services
   group: services
-  url: https://vault-services.apps.shc-services5.lab.signal9.gg/
+  url: https://vault-services.apps.services.shc.signal9.gg/
   expectedStatus: 200
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
@@ -39,7 +39,7 @@ metadata:
 spec:
   displayName: RHBK Central
   group: central
-  url: https://rhbk-central.apps.shc-cental5.lab.signal9.gg/
+  url: https://rhbk-central.apps.central.shc.signal9.gg/
   expectedStatus: 200
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
@@ -50,7 +50,7 @@ metadata:
 spec:
   displayName: RHBK Services
   group: services
-  url: https://rhbk-services.apps.shc-services5.lab.signal9.gg/
+  url: https://rhbk-services.apps.services.shc.signal9.gg/
   expectedStatus: 200
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
@@ -61,7 +61,7 @@ metadata:
 spec:
   displayName: Gitea
   group: central
-  url: https://gitea-gitea.apps.shc-cental5.lab.signal9.gg/
+  url: https://gitea-gitea.apps.central.shc.signal9.gg/
   expectedStatus: 200
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
@@ -72,5 +72,5 @@ metadata:
 spec:
   displayName: AAP Gateway
   group: central
-  url: https://sovereign-aap-aap.apps.shc-cental5.lab.signal9.gg/
+  url: https://sovereign-aap-aap.apps.central.shc.signal9.gg/
   expectedStatus: 200

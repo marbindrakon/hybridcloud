@@ -2,10 +2,10 @@
 assignment_operator_namespace: sovereign-cloud
 acm_central_sa_secret_name: assignment-acm-creator-sa
 acm_policy_namespace: sovereign-cloud-helpers
-central_api_server: "{{ (lookup('env', 'CENTRAL_API_SERVER') | trim) or 'https://api.shc-cental5.lab.signal9.gg:6443' }}"
+central_api_server: "{{ (lookup('env', 'CENTRAL_API_SERVER') | trim) or 'https://api.central.shc.signal9.gg:6443' }}"
 oci_registry_host: "{{ (lookup('env', 'OCI_HOST') | trim) or 'quay.signal9.gg' }}"
 sovereign_assignment_chart_version: "0.2.3"
 assignment_acm_policy_name: ""
 assignment_provisioned: false
 
-eda_dashboard_host: "https://sovereign-aap-aap.apps.shc-cental5.lab.signal9.gg"
+eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
