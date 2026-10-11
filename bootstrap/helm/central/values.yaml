@@ -477,6 +477,8 @@ oidcIssuer:
           source: acm
         - name: iaas1
           source: acm
+        - name: edge1
+          source: acm
 
 # ─── shc: bare-metal node inventory (LAB-PLAN D19, §7 item 3) ───────────────────────────────
 # charts/charts/metal-node-assignment on central: BareMetalHosts (ipmi://, legacy boot, converged
@@ -1470,6 +1472,9 @@ iaasClusters:
   iaas1:
     enabled: true  # shc: P5 - installed 2026-10-11, registered in Argo, Vault mount kubernetes-iaas1
     server: "https://api.iaas1.shc.signal9.gg:6443"
+  edge1:
+    enabled: false  # shc: P6 (two-node with fencing, blades 5/8) - enable after install, Argo registration, Vault mount
+    server: "https://api.edge1.shc.signal9.gg:6443"
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
