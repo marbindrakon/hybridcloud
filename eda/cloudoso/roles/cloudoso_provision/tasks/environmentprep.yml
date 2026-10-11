@@ -1,403 +1,171 @@
 ---
+# shc (§11.6 phase C): environment preparation through files/shc_openstack.py with the platform's
+# tenant admin account (domain `manager`, never cloud admin). Everything provision creates is
+# recorded on the CR status so teardown works from ids, not from names it re-derives.
 - name: Set environmentprep spec facts
   ansible.builtin.set_fact:
     ep_project: "{{ entity_name }}_{{ cloudoso_cr_name }}"
-    ep_vault_path: "{{ oso_spec.vaultPath | default('oso/accounts/shc_admin') }}"
-    ep_base_domain: "{{ oso_spec.baseDomain | default(lookup('env', 'LAB_DOMAIN') | default('lab.signal9.gg', true), true) }}"
-    ep_project_domain: "{{ oso_spec.projectDomain | default(default_project_domain) }}"
-    ep_entity_name: "{{ entity_name }}"
-    ep_route53_vault_path: "{{ oso_spec.route53VaultPath | default('oso/accounts/route53-openstack') }}"
-    ep_external_network: "{{ oso_spec.externalNetwork | default(default_external_network) }}"
-    ep_region_name: "{{ oso_spec.regionName | default(default_region_name) }}"
-    ep_landingzone: "{{ oso_spec.landingzone | default('default') }}"
-    ep_enable_vrf: "{{ oso_spec.enableVRF | default(false) | bool }}"
-    ep_vrf_id: "{{ oso_spec.vrfId | default('') }}"
-    use_designate_dns: "{{ (oso_spec.baseDomain | default(lookup('env', 'LAB_DOMAIN') | default('lab.signal9.gg', true), true)) == (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true)) }}"
-    ep_parent_zone_id: >-
-      {{ oso_spec.designateZoneId | default('')
-         if ((oso_spec.baseDomain | default(lookup('env', 'LAB_DOMAIN') | default('lab.signal9.gg', true), true)) == (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true)))
-         else '' }}
-
-- name: Create temporary ExternalSecret for OpenStack admin credentials
-  kubernetes.core.k8s:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-cloudoso-{{ cloudoso_cr_name }}-openstack-creds"
-        namespace: "{{ eda_central_work_namespace }}"
-        labels:
-          app.kubernetes.io/managed-by: eda-cloudoso
-          cloudoso: "{{ cloudoso_cr_name }}"
-      spec:
-        refreshInterval: 1m
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-cloudoso-{{ cloudoso_cr_name }}-openstack-creds"
-          creationPolicy: Owner
-        data:
-          - secretKey: clouds.yaml
-            remoteRef:
-              key: "{{ ep_vault_path }}"
-              property: clouds.yaml
-
-- name: Wait for OpenStack admin credentials
-  kubernetes.core.k8s_info:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Secret
-    name: "eda-cloudoso-{{ cloudoso_cr_name }}-openstack-creds"
-    namespace: "{{ eda_central_work_namespace }}"
-  register: openstack_admin_secret
-  until: >-
-    openstack_admin_secret.resources | length > 0 and
-    openstack_admin_secret.resources[0].data is defined and
-    openstack_admin_secret.resources[0].data['clouds.yaml'] is defined
-  retries: 30
-  delay: 10
-
-- name: Write OpenStack clouds.yaml to temp path
-  ansible.builtin.copy:
-    content: "{{ openstack_admin_secret.resources[0].data['clouds.yaml'] | b64decode }}"
-    dest: "/tmp/eda-cloudoso-{{ cloudoso_cr_name }}-clouds.yaml"
-    mode: '0600'
-  no_log: true
-
-- name: Set clouds.yaml path for OpenStack operations
-  ansible.builtin.set_fact:
-    clouds_yaml_path: "/tmp/eda-cloudoso-{{ cloudoso_cr_name }}-clouds.yaml"
-
-- name: Generate deterministic slug from CR name
-  ansible.builtin.set_fact:
+    ep_vault_path: "{{ oso_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true) }}"
+    ep_base_domain: "{{ oso_spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
+    ep_project_domain: "{{ oso_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true) }}"
+    ep_external_network: "{{ oso_spec.externalNetwork | default(cloudoso_defaults.externalNetwork | default(''), true) }}"
+    ep_region_name: "{{ oso_spec.regionName | default(cloudoso_defaults.regionName | default(''), true) }}"
+    ep_dns_provider: >-
+      {{ oso_spec.dnsProvider | default(cloudoso_defaults.dnsProvider | default(''), true)
+         | default('designate' if (oso_spec.designateZoneId | default('')) else 'route53', true) }}
+    ep_designate_zone_id: "{{ oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true) }}"
+    ep_designate_project_id: "{{ oso_spec.designateProjectId | default(cloudoso_defaults.designateProjectId | default(''), true) }}"
+    ep_route53_vault_path: "{{ oso_spec.route53VaultPath | default(cloudoso_defaults.route53VaultPath | default(''), true) }}"
     ep_slug: "{{ (cloudoso_cr_name | hash('sha256'))[:5] }}"
+    ep_clouds_config_vault: "oso/projects/{{ cloudoso_cr_name }}/clouds-config"
 
-- name: Derive domain names
+- name: Validate the CloudOSO environment settings
+  ansible.builtin.assert:
+    that:
+      - ep_vault_path | length > 0
+      - ep_project_domain | length > 0
+      - ep_external_network | length > 0
+      - ep_base_domain | length > 0
+      - ep_dns_provider in ['designate', 'route53']
+      - ep_dns_provider != 'designate' or (ep_designate_zone_id | length > 0 and ep_designate_project_id | length > 0)
+      - ep_dns_provider != 'route53' or ep_route53_vault_path | length > 0
+    fail_msg: >-
+      CloudOSO {{ cloudoso_cr_name }} needs vaultPath, projectDomain, externalNetwork, baseDomain and
+      a DNS provider (designate: designateZoneId + designateProjectId; route53: route53VaultPath),
+      from the spec or the installation's cloudoso_defaults.
+
+- name: Derive the environment DNS domain
   ansible.builtin.set_fact:
+    # Designate: <cloudoso>.<entity>.<baseDomain> inside the delegated tenant zone (entity keeps two
+    # entities' same-named CloudOSOs apart). Route53 keeps upstream's <slug>.<baseDomain>.
     ep_cluster_domain: >-
-      {{ (cloudoso_cr_name ~ '.' ~ (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true)))
-         if (use_designate_dns | default(false) | bool)
-         else (ep_slug ~ '.' ~ ep_base_domain) }}
+      {{ (cloudoso_cr_name ~ '.' ~ entity_name ~ '.' ~ ep_base_domain)
+         if ep_dns_provider == 'designate' else (ep_slug ~ '.' ~ ep_base_domain) }}
 
-- name: Create OpenStack project
-  openstack.cloud.project:
-    cloud: "{{ clouds_yaml_cloud }}"
-    name: "{{ ep_project }}"
-    description: "Sovereign Cloud project for {{ ep_entity_name | default(cloudoso_cr_name) }}"
-    state: present
-  environment:
-    OS_CLIENT_CONFIG_FILE: "{{ clouds_yaml_path }}"
-  register: os_project
+- name: Load the OpenStack account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ ep_vault_path }}"
+    os_account_tag: "cloudoso-{{ cloudoso_cr_name }}"
 
-- name: Assign admin role to shc_admin on new project
-  openstack.cloud.role_assignment:
-    cloud: "{{ clouds_yaml_cloud }}"
-    user: "{{ openstack_admin_user }}"
-    role: admin
-    project: "{{ ep_project }}"
-    state: present
-  environment:
-    OS_CLIENT_CONFIG_FILE: "{{ clouds_yaml_path }}"
-
-- name: Find or create floating IPs (idempotent via description tags)
-  ansible.builtin.shell: |
-    python3 -c "
-    import openstack, json, sys, yaml, os
-    cfg_path = os.environ.get('OS_CLIENT_CONFIG_FILE', '/etc/openstack/clouds.yaml')
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-    cloud_cfg = cfg['clouds']['{{ clouds_yaml_cloud }}']
-    auth = dict(cloud_cfg['auth'])
-    auth['project_name'] = '{{ ep_project }}'
-    auth['project_domain_name'] = '{{ ep_project_domain }}'
-    conn = openstack.connect(auth=auth, region_name=cloud_cfg.get('region_name','regionOne'), identity_api_version='3')
-    net = conn.network.find_network('{{ ep_external_network }}')
-    if net is None:
-        print('Network {{ ep_external_network }} not found', file=sys.stderr)
-        sys.exit(1)
-
-    cr_name = '{{ cloudoso_cr_name }}'
-    api_tag = f'sovereign-{cr_name}-api'
-    ingress_tag = f'sovereign-{cr_name}-ingress'
-
-    def find_or_create_fip(conn, net_id, description):
-        existing = list(conn.network.ips(description=description))
-        if existing:
-            return {'id': existing[0].id, 'ip': existing[0].floating_ip_address, 'created': False}
-        fip = conn.network.create_ip(floating_network_id=net_id, description=description)
-        return {'id': fip.id, 'ip': fip.floating_ip_address, 'created': True}
-
-    api_result = find_or_create_fip(conn, net.id, api_tag)
-    ingress_result = find_or_create_fip(conn, net.id, ingress_tag)
-    print(json.dumps({'api': api_result, 'ingress': ingress_result}))
-    "
-  environment:
-    OS_CLIENT_CONFIG_FILE: "{{ clouds_yaml_path }}"
-  register: fip_result_raw
-  changed_when: (fip_result_raw.stdout | from_json).api.created or (fip_result_raw.stdout | from_json).ingress.created
-
-- name: Set VIP facts
-  ansible.builtin.set_fact:
-    ep_api_vip: "{{ (fip_result_raw.stdout | from_json).api.ip }}"
-    ep_ingress_vip: "{{ (fip_result_raw.stdout | from_json).ingress.ip }}"
-    ep_api_fip_id: "{{ (fip_result_raw.stdout | from_json).api.id }}"
-    ep_ingress_fip_id: "{{ (fip_result_raw.stdout | from_json).ingress.id }}"
-
-- name: Create temporary ExternalSecret for Route53 credentials
-  when: not (use_designate_dns | default(false) | bool)
-  kubernetes.core.k8s:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
+- name: Read the existing project credential from Vault
+  ansible.builtin.uri:
+    url: >-
+      {{ lookup('env', 'VAULT_ADDR') | default('http://vault-active.central-vault.svc:8200', true) }}/v1/central/data/{{ ep_clouds_config_vault }}
+    method: GET
+    headers:
+      X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+    status_code: [200, 404]
     validate_certs: false
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-cloudoso-{{ cloudoso_cr_name }}-route53-creds"
-        namespace: "{{ eda_central_work_namespace }}"
-        labels:
-          app.kubernetes.io/managed-by: eda-cloudoso
-          cloudoso: "{{ cloudoso_cr_name }}"
-      spec:
-        refreshInterval: 1m
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-cloudoso-{{ cloudoso_cr_name }}-route53-creds"
-          creationPolicy: Owner
-        data:
-          - secretKey: AWS_ACCESS_KEY_ID
-            remoteRef:
-              key: "{{ ep_route53_vault_path }}"
-              property: access-key
-          - secretKey: AWS_SECRET_ACCESS_KEY
-            remoteRef:
-              key: "{{ ep_route53_vault_path }}"
-              property: secret-access-key
-
-- name: Wait for Route53 credentials
-  when: not (use_designate_dns | default(false) | bool)
-  kubernetes.core.k8s_info:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Secret
-    name: "eda-cloudoso-{{ cloudoso_cr_name }}-route53-creds"
-    namespace: "{{ eda_central_work_namespace }}"
-  register: route53_creds_secret
-  until: >-
-    route53_creds_secret.resources | length > 0 and
-    route53_creds_secret.resources[0].data is defined
-  retries: 30
-  delay: 10
-
-- name: Decode Route53 credentials
-  when: not (use_designate_dns | default(false) | bool)
-  ansible.builtin.set_fact:
-    r53_access_key_id: "{{ route53_creds_secret.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
-    r53_secret_access_key: "{{ route53_creds_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
+  register: ep_vault_creds
   no_log: true
 
-- name: List existing Route53 hosted zones
-  when: not (use_designate_dns | default(false) | bool)
+- name: Reuse the recorded application credential only while Vault holds its secret
+  ansible.builtin.set_fact:
+    ep_reuse_app_cred_id: >-
+      {{ (cloudoso_cr_lookup.resources[0].status.appCredentialId | default(''))
+         if (ep_vault_creds.status == 200 and
+             (ep_vault_creds.json.data.data['clouds.yaml'] | default('')) | length > 0) else '' }}
+
+- name: Create or reconcile the project, floating IPs and application credential
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_request:
+      action: provision
+      domain: "{{ ep_project_domain }}"
+      project: "{{ ep_project }}"
+      description: "Sovereign Cloud project for {{ entity_name }} (CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }})"
+      external_network: "{{ ep_external_network }}"
+      fip_descriptions:
+        api: "sovereign-{{ cloudoso_cr_name }}-api"
+        ingress: "sovereign-{{ cloudoso_cr_name }}-ingress"
+      app_cred_name: "sovereign-{{ ep_project }}"
+      app_cred_description: "CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
+      reuse_app_cred_id: "{{ ep_reuse_app_cred_id }}"
+      region: "{{ ep_region_name }}"
+      dns_zone_id: "{{ ep_designate_zone_id if ep_dns_provider == 'designate' else '' }}"
+      dns_project_id: "{{ ep_designate_project_id }}"
+
+- name: Keep the provision result
+  ansible.builtin.set_fact:
+    ep_os: "{{ os_result }}"
+  no_log: true
+
+- name: Check the environment domain sits inside the Designate zone
+  ansible.builtin.assert:
+    that:
+      - (ep_cluster_domain ~ '.').endswith('.' ~ ep_os.dns_zone.name)
+    fail_msg: "{{ ep_cluster_domain }} is not inside Designate zone {{ ep_os.dns_zone.name }} (baseDomain {{ ep_base_domain }})"
+  when: ep_dns_provider == 'designate'
+
+- name: Write the project's clouds.yaml (new application credential) to Vault
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
+  vars:
+    vault_kv_path: "{{ ep_clouds_config_vault }}"
+    vault_kv_write_data:
+      clouds.yaml: |
+        clouds:
+          openstack:
+            auth:
+              auth_url: "{{ ep_os.auth_url }}"
+              application_credential_id: "{{ ep_os.app_cred.id }}"
+              application_credential_secret: "{{ ep_os.app_cred.secret }}"
+            region_name: "{{ ep_os.region }}"
+            interface: "public"
+            identity_api_version: 3
+            auth_type: "v3applicationcredential"
+  when: ep_os.app_cred.created | bool
+
+- name: Read the Route53 credentials
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ ep_route53_vault_path }}"
+  when: ep_dns_provider == 'route53'
+
+- name: Find the parent Route53 hosted zone
   amazon.aws.route53_info:
     query: hosted_zone
   register: r53_zones
   environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
+    AWS_ACCESS_KEY_ID: "{{ vault_kv_data['access-key'] }}"
+    AWS_SECRET_ACCESS_KEY: "{{ vault_kv_data['secret-access-key'] }}"
     AWS_DEFAULT_REGION: "us-east-1"
+  when: ep_dns_provider == 'route53'
 
-- name: Set Route53 facts
-  when: not (use_designate_dns | default(false) | bool)
+- name: Set the Route53 zone id
   ansible.builtin.set_fact:
-    ep_parent_zone_name: "{{ ep_base_domain }}."
-    r53_existing_zones: "{{ r53_zones.hosted_zones | map(attribute='name') | list }}"
+    ep_route53_zone_id: >-
+      {{ (r53_zones.hosted_zones | selectattr('name', 'equalto', ep_base_domain ~ '.')
+          | map(attribute='id') | first | default('')) | regex_replace('^/hostedzone/', '') }}
+    vault_kv_data: {}
+  when: ep_dns_provider == 'route53'
 
-- name: Find parent hosted zone ID
-  when: not (use_designate_dns | default(false) | bool)
-  ansible.builtin.set_fact:
-    ep_parent_zone_id: >-
-      {{ (r53_zones.hosted_zones
-          | selectattr('name', 'equalto', ep_parent_zone_name)
-          | map(attribute='id')
-          | first
-          | default(''))
-         | regex_replace('^/hostedzone/', '') }}
-
-- name: Fail if parent zone not found
+- name: Fail if the parent Route53 zone is missing
   ansible.builtin.fail:
     msg: "Parent Route53 zone '{{ ep_base_domain }}' not found"
-  when:
-    - not (use_designate_dns | default(false) | bool)
-    - ep_parent_zone_id == ''
-
-- name: Use parent zone for DNS records
-  when: not (use_designate_dns | default(false) | bool)
-  ansible.builtin.set_fact:
-    ep_subdomain_zone_id: "{{ ep_parent_zone_id }}"
-
-- name: Read Vault root token
-  kubernetes.core.k8s_info:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Secret
-    name: "{{ vault_init_secret_name }}"
-    namespace: "{{ vault_init_secret_namespace }}"
-  register: vault_init_secret_info_ep
-
-- name: Set Vault root token
-  ansible.builtin.set_fact:
-    vault_root_token_ep: "{{ vault_init_secret_info_ep.resources[0].data.root_token | b64decode }}"
-  no_log: true
-
-- name: Check existing credential in Vault
-  ansible.builtin.uri:
-    url: "{{ vault_init_addr }}/v1/central/data/oso/projects/{{ cloudoso_cr_name }}/clouds-config"
-    method: GET
-    headers:
-      X-Vault-Token: "{{ vault_root_token_ep }}"
-    status_code: [200, 404]
-    validate_certs: false
-  register: vault_creds_check
-  no_log: true
-
-- name: Set existing credential fact
-  ansible.builtin.set_fact:
-    existing_cred_in_vault: "{{ vault_creds_check.status == 200 and (vault_creds_check.json.data.data['clouds.yaml'] | default('')) | length > 0 }}"
-
-- name: Validate existing credential against OpenStack
-  ansible.builtin.shell: |
-    python3 -c "
-    import openstack, json, sys, yaml, os
-    cfg_path = os.environ.get('OS_CLIENT_CONFIG_FILE', '/etc/openstack/clouds.yaml')
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-    cloud_cfg = cfg['clouds']['{{ clouds_yaml_cloud }}']
-    auth = dict(cloud_cfg['auth'])
-    auth['project_name'] = '{{ ep_project }}'
-    auth['project_domain_name'] = '{{ ep_project_domain }}'
-    conn = openstack.connect(auth=auth, region_name=cloud_cfg.get('region_name','regionOne'), identity_api_version='3')
-    cred_name = 'sovereign-{{ ep_project }}'
-    existing = list(conn.identity.application_credentials(user=conn.current_user_id, name=cred_name))
-    if existing:
-        print(json.dumps({'exists': True, 'id': existing[0].id}))
-    else:
-        print(json.dumps({'exists': False}))
-    "
-  environment:
-    OS_CLIENT_CONFIG_FILE: "{{ clouds_yaml_path }}"
-  register: cred_check_raw
-  changed_when: false
-  no_log: true
-
-- name: Parse credential check
-  ansible.builtin.set_fact:
-    cred_check: "{{ cred_check_raw.stdout | from_json }}"
-  no_log: true
-
-- name: Create application credential via openstacksdk (only if not exists)
-  ansible.builtin.shell: |
-    python3 -c "
-    import openstack, json, sys, yaml, os
-    cfg_path = os.environ.get('OS_CLIENT_CONFIG_FILE', '/etc/openstack/clouds.yaml')
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-    cloud_cfg = cfg['clouds']['{{ clouds_yaml_cloud }}']
-    auth = dict(cloud_cfg['auth'])
-    auth['project_name'] = '{{ ep_project }}'
-    auth['project_domain_name'] = '{{ ep_project_domain }}'
-    conn = openstack.connect(auth=auth, region_name=cloud_cfg.get('region_name','regionOne'), identity_api_version='3')
-    cred_name = 'sovereign-{{ ep_project }}'
-    existing = list(conn.identity.application_credentials(user=conn.current_user_id, name=cred_name))
-    for old in existing:
-        conn.identity.delete_application_credential(conn.current_user_id, old.id)
-    c = conn.identity.create_application_credential(
-        user=conn.current_user_id,
-        name=cred_name,
-        description='Auto-generated by CloudOSO EDA for project {{ ep_project }}')
-    print(json.dumps({'id': c.id, 'secret': c.secret, 'auth_url': auth.get('auth_url','')}))
-    "
-  environment:
-    OS_CLIENT_CONFIG_FILE: "{{ clouds_yaml_path }}"
-  register: app_cred_raw
-  changed_when: true
-  no_log: true
-  when: not (existing_cred_in_vault | bool and cred_check.exists | bool)
-
-- name: Parse application credential result (new credential)
-  ansible.builtin.set_fact:
-    app_cred_data: "{{ app_cred_raw.stdout | from_json }}"
-  no_log: true
-  when: app_cred_raw is not skipped
-
-- name: Set credential as unchanged (existing credential reused)
-  ansible.builtin.set_fact:
-    app_cred_unchanged: true
-  when: app_cred_raw is skipped
-
-- name: Reuse Vault root token
-  ansible.builtin.set_fact:
-    vault_root_token: "{{ vault_root_token_ep }}"
-  no_log: true
-
-- name: Build per-project clouds.yaml content
-  ansible.builtin.set_fact:
-    project_clouds_yaml: |
-      clouds:
-        openstack:
-          auth:
-            auth_url: "{{ app_cred_data.auth_url | default('https://identity.atuin.' ~ (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true))) }}"
-            application_credential_id: "{{ app_cred_data.id }}"
-            application_credential_secret: "{{ app_cred_data.secret }}"
-          region_name: "{{ ep_region_name }}"
-          interface: "public"
-          identity_api_version: 3
-          auth_type: "v3applicationcredential"
-  no_log: true
-  when: app_cred_unchanged is not defined
-
-- name: Write per-project clouds.yaml to Vault
-  ansible.builtin.uri:
-    url: "{{ vault_init_addr }}/v1/central/data/oso/projects/{{ cloudoso_cr_name }}/clouds-config"
-    method: POST
-    headers:
-      X-Vault-Token: "{{ vault_root_token }}"
-    body_format: json
-    body:
-      data:
-        clouds.yaml: "{{ project_clouds_yaml }}"
-    status_code: [200, 204]
-    validate_certs: false
-  no_log: true
-  when: app_cred_unchanged is not defined
-
-- name: Set Designate DNS zone id when not using Route53
-  when: use_designate_dns | default(false) | bool
-  ansible.builtin.set_fact:
-    ep_parent_zone_id: "{{ oso_spec.designateZoneId | default('') }}"
+  when: ep_dns_provider == 'route53' and ep_route53_zone_id | length == 0
 
 - name: Set CloudOSO environmentprep output facts
   ansible.builtin.set_fact:
-    oso_project_name: "{{ os_project.project.name | default(ep_project) }}"
-    oso_project_id: "{{ os_project.project.id | default('') }}"
-    oso_domain_id: "{{ os_project.project.domain_id | default('') }}"
-    oso_domain_name: "{{ os_project.project.domain_name | default(ep_project_domain) }}"
+    oso_project_name: "{{ ep_os.project.name }}"
+    oso_project_id: "{{ ep_os.project.id }}"
+    oso_domain_id: "{{ ep_os.project.domain_id }}"
+    oso_domain_name: "{{ ep_os.project.domain_name }}"
     oso_slug: "{{ ep_slug }}"
     oso_dns_domain: "{{ ep_cluster_domain }}"
-    oso_route53_zone_id: "{{ ep_parent_zone_id | default('') }}"
-    oso_api_vip: "{{ ep_api_vip }}"
-    oso_ingress_vip: "{{ ep_ingress_vip }}"
+    oso_route53_zone_id: "{{ ep_route53_zone_id | default('') }}"
+    oso_api_vip: "{{ ep_os.fips.api.ip }}"
+    oso_ingress_vip: "{{ ep_os.fips.ingress.ip }}"
     oso_external_network: "{{ ep_external_network }}"
+    oso_record:
+      accountVaultPath: "{{ ep_vault_path }}"
+      appCredentialId: "{{ ep_os.app_cred.id }}"
+      apiFloatingIPId: "{{ ep_os.fips.api.id }}"
+      ingressFloatingIPId: "{{ ep_os.fips.ingress.id }}"
+      dnsProvider: "{{ ep_dns_provider }}"
+      dnsZoneId: "{{ ep_designate_zone_id if ep_dns_provider == 'designate' else (ep_route53_zone_id | default('')) }}"
+      dnsZoneName: "{{ (ep_os.dns_zone.name | default('')) if ep_dns_provider == 'designate' else (ep_base_domain ~ '.') }}"
+      dnsProjectId: "{{ ep_designate_project_id if ep_dns_provider == 'designate' else '' }}"
+      route53VaultPath: "{{ ep_route53_vault_path if ep_dns_provider == 'route53' else '' }}"
+      vaultPaths:
+        - "{{ ep_clouds_config_vault }}"

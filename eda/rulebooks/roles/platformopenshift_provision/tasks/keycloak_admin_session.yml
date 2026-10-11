@@ -1,0 +1,43 @@
+---
+# shc (§11.6 phase C): Keycloak admin session for the per-cluster OIDC client, shared by provision
+# and teardown. Jobs run on central, so upstream's in-cluster Service URL on services didn't resolve,
+# and the admin Secret it read doesn't exist there; use the RHBK Route and the account in central
+# Vault (as rbac_provision does). Sets kc_base_url and kc_admin_token.
+- name: Discover the Keycloak Route on services
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: services-rhbk
+    label_selectors:
+      - app=keycloak
+  register: _kc_route
+
+- name: Set the Keycloak URL
+  ansible.builtin.set_fact:
+    kc_base_url: >-
+      {{ ('https://' ~ _kc_route.resources[0].spec.host) if (_kc_route.resources | default([]) | length > 0)
+         else keycloak_external_url }}
+
+- name: Fail without a Keycloak URL
+  ansible.builtin.assert:
+    that:
+      - kc_base_url | length > 0
+    fail_msg: No Keycloak Route in services-rhbk and KEYCLOAK_EXTERNAL_URL is unset
+
+- name: Load the Keycloak admin account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+  vars:
+    keycloak_vault_path: "{{ keycloak_admin_vault_path }}"
+
+- name: Get a Keycloak admin token
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+  vars:
+    keycloak_url: "{{ kc_base_url }}"
+
+- name: Keep the Keycloak admin token
+  ansible.builtin.set_fact:
+    kc_admin_token: "{{ keycloak_admin_token }}"
+  no_log: true

@@ -1,51 +1,7 @@
 ---
-- name: Create temporary ExternalSecret for OpenStack admin credentials (designate)
-  kubernetes.core.k8s:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-po-{{ cb_cluster_name }}-designate-creds"
-        namespace: "{{ eda_central_work_namespace }}"
-      spec:
-        refreshInterval: 1m
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-po-{{ cb_cluster_name }}-designate-creds"
-          creationPolicy: Owner
-        data:
-          - secretKey: clouds.yaml
-            remoteRef:
-              key: "{{ designate_admin_vault_path }}"
-              property: clouds.yaml
-
-- name: Wait for OpenStack admin credentials (designate)
-  kubernetes.core.k8s_info:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Secret
-    name: "eda-po-{{ cb_cluster_name }}-designate-creds"
-    namespace: "{{ eda_central_work_namespace }}"
-  register: designate_creds_secret
-  until: designate_creds_secret.resources | length > 0
-  retries: 30
-  delay: 10
-
-- name: Write clouds.yaml for designate
-  ansible.builtin.copy:
-    content: "{{ designate_creds_secret.resources[0].data['clouds.yaml'] | b64decode }}"
-    dest: "/tmp/eda-po-{{ cb_cluster_name }}-designate.yaml"
-    mode: '0600'
-  no_log: true
-
+# shc (§11.6 phase C): API and apps wildcard records in the CloudOSO's Designate zone, with the
+# account, zone and zone project the CloudOSO recorded (upstream hardcoded a lab project and its
+# parent zone). Sets cb_dns_records for the PlatformOpenshift status, which teardown deletes.
 - name: Validate VIPs before Designate DNS
   ansible.builtin.assert:
     that:
@@ -53,59 +9,29 @@
       - cb_ingress_vip | length > 0
     fail_msg: "CloudOSO apiVIP/ingressVIP must be set before Designate DNS records can be created."
 
-- name: Ensure openstacksdk is available for Designate tasks
-  ansible.builtin.pip:
-    name: openstacksdk
-    state: present
-  become: false
+- name: Load the OpenStack account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ designate_admin_vault_path }}"
+    os_account_tag: "po-{{ cb_cluster_name }}"
 
-- name: Create Designate DNS records for cluster endpoints
-  ansible.builtin.shell: |
-    python3 -c "
-    import openstack, yaml, os, sys
-    cfg_path = os.environ.get('OS_CLIENT_CONFIG_FILE')
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-    cloud_name = 'openstack'
-    cloud_cfg = cfg['clouds'][cloud_name]
-    auth = dict(cloud_cfg['auth'])
-    auth['project_name'] = '{{ designate_dns_project_name | default("lab-project") }}'
-    auth['project_domain_name'] = 'shc_domain'
-    conn = openstack.connect(
-        auth=auth,
-        region_name=cloud_cfg.get('region_name', 'regionOne'),
-        identity_api_version='3')
-    zone = conn.dns.find_zone('{{ lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true) }}.')
-    if zone is None:
-        raise SystemExit('Designate zone {{ lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true) }} not found')
-    records = [
-        ('api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}.', '{{ cb_api_vip }}'),
-        ('*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}.', '{{ cb_ingress_vip }}'),
-    ]
-    for name, ip in records:
-        existing = list(conn.dns.recordsets(zone, name=name, type='A'))
-        if existing and existing[0].records == [ip]:
-            print(f'unchanged {name} -> {ip}')
-            continue
-        if existing:
-            conn.dns.update_recordset(existing[0], records=[ip])
-        else:
-            conn.dns.create_recordset(zone, name=name, type='A', ttl=300, records=[ip])
-        print(f'upserted {name} -> {ip}')
-    "
-  environment:
-    OS_CLIENT_CONFIG_FILE: "/tmp/eda-po-{{ cb_cluster_name }}-designate.yaml"
-  register: designate_dns_result
-  changed_when: true
+- name: Create or update the Designate records
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_request:
+      action: dns-upsert
+      dns_zone_id: "{{ designate_zone_id }}"
+      dns_project_id: "{{ designate_project_id }}"
+      records:
+        - {name: "api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_api_vip }}"]}
+        - {name: "*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_ingress_vip }}"]}
 
-- name: Remove temporary designate credentials secret
-  kubernetes.core.k8s:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
+- name: Record the Designate records
+  ansible.builtin.set_fact:
+    cb_dns_records: "{{ os_result.records }}"
+
+- name: Remove the account's temp clouds.yaml
+  ansible.builtin.file:
+    path: "/tmp/eda-po-{{ cb_cluster_name }}-clouds.yaml"
     state: absent
-    api_version: v1
-    kind: Secret
-    name: "eda-po-{{ cb_cluster_name }}-designate-creds"
-    namespace: "{{ eda_central_work_namespace }}"
-  ignore_errors: true

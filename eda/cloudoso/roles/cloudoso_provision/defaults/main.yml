@@ -1,20 +1,8 @@
 ---
-cloudoso_operator_namespace: sovereign-cloud
-central_api_server: "https://api.central.shc.signal9.gg:6443"
-central_sa_secret_name: osohelper-creator-sa
-central_sa_secret_namespace: sovereign-cloud
 eda_central_work_namespace: sovereign-cloud-jobs
 
-clouds_yaml_path: "/tmp/eda-cloudoso-clouds.yaml"
-clouds_yaml_cloud: "openstack"
-
-default_external_network: "internet"
-default_project_domain: "shc_domain"
-default_region_name: "ATUIN"
-openstack_admin_user: "shc_admin"
-
-vault_init_secret_name: "vault-init-secrets"
-vault_init_secret_namespace: "central-vault"
-vault_init_addr: "http://vault-active.central-vault.svc:8200"
-
-eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
+# shc (§11.6 phase C): environment defaults for CloudOSO specs, set per installation through the
+# sovereign-localhost inventory variable `cloudoso_defaults` (config-as-code env CLOUDOSO_DEFAULTS).
+# A CR field wins over these. Keys: vaultPath, projectDomain, externalNetwork, baseDomain,
+# dnsProvider (designate|route53), designateZoneId, designateProjectId, route53VaultPath, regionName.
+cloudoso_defaults: {}

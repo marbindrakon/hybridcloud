@@ -6,6 +6,9 @@ controller_inventories:
     variables:
       aap_ui_url: "{{ lookup('env', 'AAP_GATEWAY_URL') }}"
       eda_log_s3_endpoint: "{{ lookup('env', 'EDA_LOG_S3_ENDPOINT') }}"
+      # shc (§11.6 phase C): installation defaults for CloudOSO / PlatformOpenshift (JSON objects)
+      cloudoso_defaults: "{{ lookup('env', 'CLOUDOSO_DEFAULTS') | default('{}', true) | from_json }}"
+      platformopenshift_defaults: "{{ lookup('env', 'PLATFORMOPENSHIFT_DEFAULTS') | default('{}', true) | from_json }}"
 
 controller_hosts:
   - name: localhost

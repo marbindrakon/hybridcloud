@@ -1,30 +1,34 @@
 ---
 platformopenshift_operator_namespace: sovereign-cloud
-central_api_server: "https://api.central.shc.signal9.gg:6443"
-central_sa_secret_name: awshelper-creator-sa
-oso_central_sa_secret_name: osohelper-creator-sa
-central_sa_secret_namespace: sovereign-cloud
 eda_central_work_namespace: sovereign-cloud-jobs
-keycloak_internal_url: "{{ lookup('env', 'KEYCLOAK_INTERNAL_URL') | default('http://rhbk-services-service.services-rhbk.svc:8080', true) }}"
+# Central API for the ACM policy calls in keycloak_oidc.yml / cluster_rbac.yml: the connection the
+# job resolved from Vault (aap-central-cluster-sa), not a hostname baked into the role.
+central_api_server: "{{ central_api_host | default('') }}"
 keycloak_external_url: "{{ lookup('env', 'KEYCLOAK_EXTERNAL_URL') }}"
 keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants', true) }}"
-keycloak_admin_secret_name: "rhbk-admin-credentials"
+# shc (§11.6 phase C): RHBK admin account in central Vault (the RbacConfig's secret)
+keycloak_admin_vault_path: rhbk-services-admin
 
-default_pull_secret_vault_path: "aws/ocp-pull-secret"
-default_ssh_key_vault_path: "aws/ocp-ssh-key"
-default_ocp_image_set: "img4.21.9-x86-64-appsub"
-default_control_plane_count: 3
-default_worker_count: 3
-default_control_plane_flavor: "b1.xlarge"
-default_worker_flavor: "b1.large"
-default_glance_image_override: "rhcos-9.6.20250826"
-default_external_network: "internet"
-default_project_domain: "shc_domain"
+# shc (§11.6 phase C): installation settings through the sovereign-localhost inventory variable
+# `platformopenshift_defaults` (config-as-code env PLATFORMOPENSHIFT_DEFAULTS). A CR field wins.
+# Keys: ocpImageSet, pullSecretVaultPath, pullSecretVaultProperty, sshKeyVaultPath,
+# controlPlaneCount, workerCount, controlPlaneFlavor, workerFlavor, glanceImage,
+# mceClusterBuildChart (oci:// ref), mceClusterBuildChartVersion. Fallbacks are upstream's.
+platformopenshift_defaults: {}
+default_pull_secret_vault_path: "{{ platformopenshift_defaults.pullSecretVaultPath | default('aws/ocp-pull-secret') }}"
+default_pull_secret_vault_property: "{{ platformopenshift_defaults.pullSecretVaultProperty | default('pull_secret') }}"
+default_ssh_key_vault_path: "{{ platformopenshift_defaults.sshKeyVaultPath | default('aws/ocp-ssh-key') }}"
+default_ocp_image_set: "{{ platformopenshift_defaults.ocpImageSet | default('img4.21.9-x86-64-appsub') }}"
+default_control_plane_count: "{{ platformopenshift_defaults.controlPlaneCount | default(3) }}"
+default_worker_count: "{{ platformopenshift_defaults.workerCount | default(3) }}"
+default_control_plane_flavor: "{{ platformopenshift_defaults.controlPlaneFlavor | default('b1.xlarge') }}"
+default_worker_flavor: "{{ platformopenshift_defaults.workerFlavor | default('b1.large') }}"
+# Empty: the installer uploads the release's own RHCOS image into the project.
+default_glance_image_override: "{{ platformopenshift_defaults.glanceImage | default('') }}"
 
-vault_init_secret_name: "vault-init-secrets"
-vault_init_secret_namespace: "central-vault"
-vault_init_addr: "http://vault-active.central-vault.svc:8200"
-oci_registry_host: "{{ (lookup('env', 'OCI_HOST') | trim) or 'quay.signal9.gg' }}"
-mce_cluster_build_chart_version: "0.2.0"
-
-eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
+vault_init_addr: "{{ lookup('env', 'VAULT_ADDR') | default('http://vault-active.central-vault.svc:8200', true) }}"
+oci_registry_host: "{{ lookup('env', 'OCI_HOST') | trim }}"
+mce_cluster_build_chart: >-
+  {{ platformopenshift_defaults.mceClusterBuildChart
+     | default('oci://' ~ oci_registry_host ~ '/hybrid-sovereign/mce-cluster-build', true) }}
+mce_cluster_build_chart_version: "{{ platformopenshift_defaults.mceClusterBuildChartVersion | default('0.2.0') }}"

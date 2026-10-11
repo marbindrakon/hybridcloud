@@ -1,12 +1,14 @@
 ---
+# shc (LAB-PLAN §11.6 phase C, design/TENANT-TEARDOWN.md §3.3): a teardown that verifies. It works
+# from what provision recorded on the CR status, refuses to delete a project that still holds
+# resources (status.deletion lists them; the CR stays Terminating and the operator re-publishes
+# with backoff), and sets deletionComplete only after every step succeeded.
 - block:
     - name: Parse event payload
       ansible.builtin.set_fact:
         cloudoso_cr_name: "{{ event_payload.regarding.name }}"
         cloudoso_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        eda_central_work_namespace: sovereign-cloud-jobs
-        clouds_yaml_cloud: openstack
-        default_project_domain: shc_domain
+        teardown_step: read
 
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -22,7 +24,7 @@
         namespace: "{{ cloudoso_cr_namespace }}"
       register: cloudoso_cr_lookup
 
-    - name: Read namespace for entity name
+    - name: Read namespace for the entity name
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
@@ -32,56 +34,109 @@
         name: "{{ cloudoso_cr_namespace }}"
       register: ns_info
 
-    - name: Set CloudOSO teardown facts
-      ansible.builtin.set_fact:
-        oso_spec: "{{ cloudoso_cr_lookup.resources[0].spec | default({}) }}"
-        cloudoso_entity_for_status: "{{ cloudoso_cr_lookup.resources[0].status.entity | default('') }}"
-        oso_slug: "{{ cloudoso_cr_lookup.resources[0].status.slug | default('') }}"
-        oso_domain: "{{ cloudoso_cr_lookup.resources[0].status.domain | default('') }}"
-        entity_name: >-
+    - name: Set CloudOSO teardown facts from the recorded status
+      vars:
+        _cr: "{{ cloudoso_cr_lookup.resources | default([]) | first | default({}) }}"
+        _st: "{{ _cr.status | default({}) }}"
+        _spec: "{{ _cr.spec | default({}) }}"
+        _entity: >-
           {{ (ns_info.resources | default([]) | first | default({})).metadata.labels['hybridsovereign.redhat/entity']
              | default(cloudoso_cr_namespace | regex_replace('^entity-', '')) }}
-      when: cloudoso_cr_lookup.resources | length > 0
-
-    - name: Set CloudOSO teardown derived facts
       ansible.builtin.set_fact:
-        ep_project: "{{ entity_name }}_{{ cloudoso_cr_name }}"
-        ep_base_domain: "{{ oso_spec.baseDomain | default(lookup('env', 'LAB_DOMAIN') | default('lab.signal9.gg', true), true) }}"
-        ep_route53_vault_path: "{{ oso_spec.route53VaultPath | default('oso/accounts/route53-openstack') }}"
-        ep_vault_path: "{{ oso_spec.vaultPath | default('oso/accounts/shc_admin') }}"
-        ep_project_domain: "{{ oso_spec.projectDomain | default(default_project_domain) }}"
-        ep_external_network: "{{ oso_spec.externalNetwork | default('ext-net') }}"
-      when: cloudoso_cr_lookup.resources | length > 0
+        cloudoso_entity_for_status: "{{ _st.entity | default(_entity) }}"
+        oso_vault_path: "{{ _st.accountVaultPath | default(_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true), true) }}"
+        oso_project_domain: "{{ _st.domainName | default(_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true), true) }}"
+        oso_project_id: "{{ _st.projectId | default('') }}"
+        oso_project_name: "{{ _st.projectName | default(_entity ~ '_' ~ cloudoso_cr_name, true) }}"
+        oso_fip_ids: "{{ [_st.apiFloatingIPId | default(''), _st.ingressFloatingIPId | default('')] | select | list }}"
+        oso_app_cred_ids: "{{ [_st.appCredentialId | default('')] | select | list }}"
+        oso_dns_provider: "{{ _st.dnsProvider | default('') }}"
+        oso_dns_zone_id: "{{ _st.dnsZoneId | default('') }}"
+        oso_dns_project_id: "{{ _st.dnsProjectId | default('') }}"
+        oso_domain: "{{ _st.domain | default('') }}"
+        oso_base_domain: "{{ _spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
+        oso_route53_vault_path: "{{ _st.route53VaultPath | default(_spec.route53VaultPath | default(''), true) }}"
+        oso_vault_paths: "{{ _st.vaultPaths | default(['oso/projects/' ~ cloudoso_cr_name ~ '/clouds-config'], true) }}"
 
-    - name: Set CloudOSO teardown fallback facts
+    - name: Tear down the OpenStack project
+      when: oso_vault_path | length > 0 and oso_project_domain | length > 0
+      block:
+        - name: Load the OpenStack account
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+          vars:
+            os_account_vault_path: "{{ oso_vault_path }}"
+            os_account_tag: "cloudoso-teardown-{{ cloudoso_cr_name }}"
+
+        - name: Note the step
+          ansible.builtin.set_fact:
+            teardown_step: project-empty-check
+
+        - name: Check the project holds nothing but the recorded floating IPs
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+          vars:
+            os_call_no_log: false
+            os_request:
+              action: check-empty
+              domain: "{{ oso_project_domain }}"
+              project_id: "{{ oso_project_id }}"
+              project: "{{ oso_project_name }}"
+              allowed_fip_ids: "{{ oso_fip_ids }}"
+              dns_zone_id: "{{ oso_dns_zone_id if oso_dns_provider == 'designate' else '' }}"
+              dns_project_id: "{{ oso_dns_project_id }}"
+              dns_suffix: "{{ oso_domain }}"
+
+        - name: Refuse to delete a project that still holds resources
+          ansible.builtin.fail:
+            msg: >-
+              Project {{ oso_project_name }} is not empty, kept it.
+              {% for kind, items in os_result.found.items() %}{{ kind }}: {{ items | join(', ') }}{{ '; ' if not loop.last }}{% endfor %}
+          when: not (os_result.empty | bool)
+
+        - name: Note the step
+          ansible.builtin.set_fact:
+            teardown_step: openstack-delete
+
+        - name: Delete the recorded floating IPs, application credential and the project
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+          vars:
+            os_call_no_log: false
+            os_request:
+              action: teardown
+              domain: "{{ oso_project_domain }}"
+              project_id: "{{ oso_project_id }}"
+              project: "{{ oso_project_name }}"
+              fip_ids: "{{ oso_fip_ids }}"
+              fip_descriptions:
+                - "sovereign-{{ cloudoso_cr_name }}-api"
+                - "sovereign-{{ cloudoso_cr_name }}-ingress"
+              app_cred_ids: "{{ oso_app_cred_ids }}"
+              app_cred_name: "sovereign-{{ oso_project_name }}"
+
+        - name: Keep the OpenStack teardown result
+          ansible.builtin.set_fact:
+            oso_teardown_result: "{{ os_result }}"
+
+    - name: Note the step
       ansible.builtin.set_fact:
-        oso_spec: {}
-        cloudoso_entity_for_status: ""
-        oso_slug: ""
-        oso_domain: ""
-        entity_name: "{{ cloudoso_cr_namespace | regex_replace('^entity-', '') }}"
-        ep_project: "{{ (cloudoso_cr_namespace | regex_replace('^entity-', '')) }}_{{ cloudoso_cr_name }}"
-        ep_base_domain: "{{ lookup('env', 'LAB_DOMAIN') }}"
-        ep_route53_vault_path: oso/accounts/route53-openstack
-        ep_vault_path: oso/accounts/shc_admin
-        ep_project_domain: shc_domain
-        ep_external_network: ext-net
-      when: cloudoso_cr_lookup.resources | length == 0
+        teardown_step: dns
 
-    - name: Tear down OpenStack project and floating IPs
-      ansible.builtin.include_tasks: delete_openstack.yml
-
-    - name: Tear down Route53 slug records
+    - name: Remove the Route53 slug delegation
       ansible.builtin.include_tasks: delete_route53.yml
-      when: oso_domain | length > 0 and oso_spec.baseDomain | default(lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true), true) != (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true))
+      when: oso_dns_provider == 'route53' and oso_domain | length > 0 and oso_route53_vault_path | length > 0
 
-    - name: Tear down Designate DNS records
-      ansible.builtin.include_tasks: delete_designate.yml
-      when: oso_spec.baseDomain | default('') == (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true))
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: vault
+
+    - name: Delete the project's Vault paths
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
+      vars:
+        vault_kv_delete_paths: "{{ oso_vault_paths }}"
 
     - name: Get deletion reconcile timestamp
       ansible.builtin.set_fact:
         cloudoso_delete_status_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+        cloudoso_leftover_sgs: "{{ oso_teardown_result.default_security_groups | default([]) }}"
 
     - name: Mark CloudOSO deletion complete on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -94,16 +149,22 @@
           status: ready
           ready: false
           deletionComplete: true
+          deletion: null
           lastReconciledAt: "{{ cloudoso_delete_status_time }}"
           name: "{{ cloudoso_cr_name }}"
           namespace: "{{ cloudoso_cr_namespace }}"
           entity: "{{ cloudoso_entity_for_status }}"
-          message: CloudOSO {{ cloudoso_cr_name }} teardown complete
+          leftoverDefaultSecurityGroups: "{{ cloudoso_leftover_sgs }}"
+          message: >-
+            CloudOSO {{ cloudoso_cr_name }} teardown complete.
+            {{ ('Default security group ' ~ (cloudoso_leftover_sgs | join(', ')) ~
+                ' is left for a cloud admin (Neutron reserves that delete).') if cloudoso_leftover_sgs else '' }}
 
   rescue:
     - name: Mark CloudOSO delete as failed on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
+        _msg: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA teardown failed')) }}"
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: cloudosos
         cr_name: "{{ cloudoso_cr_name }}"
@@ -112,10 +173,21 @@
           status: failed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA teardown failed')) }}"
+          message: "{{ _msg }}"
+          deletion:
+            failed: true
+            step: "{{ teardown_step | default('read') }}"
+            message: "{{ _msg }}"
+            at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 
     - name: Re-raise teardown failure
       ansible.builtin.fail:
-        msg: "CloudOSO {{ cloudoso_cr_name | default('unknown') }} EDA teardown failed"
+        msg: "CloudOSO {{ cloudoso_cr_name | default('unknown') }} EDA teardown failed at {{ teardown_step | default('read') }}"
+
+  always:
+    - name: Remove the account's temp clouds.yaml
+      ansible.builtin.file:
+        path: "/tmp/eda-cloudoso-teardown-{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        state: absent

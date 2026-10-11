@@ -1,14 +1,23 @@
 ---
+# shc (LAB-PLAN §11.6 phase C, design/TENANT-TEARDOWN.md §3.3): a teardown that verifies, against
+# central through the resolved Vault SA connection (job pods have no kubeconfig) and with the job's
+# VAULT_TOKEN. Order: ACM detach, Hive deprovision (checked), the recorded DNS records, the central
+# namespace (its PushSecrets would re-push deleted Vault keys), the recorded Vault paths, the Keycloak
+# client, the services viewer RBAC. Any failure lands in status.deletion and the CR stays
+# Terminating; deletionComplete only after every step succeeded.
 - block:
     - name: Parse event payload
       ansible.builtin.set_fact:
         platformopenshift_cr_name: "{{ event_payload.regarding.name }}"
         platformopenshift_cr_namespace: "{{ event_payload.regarding.namespace }}"
         platform_spec: "{{ event_payload.note | from_json }}"
-        eda_central_work_namespace: sovereign-cloud-jobs
+        teardown_step: read
 
     - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    - name: Resolve central cluster API connection from Vault SA
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_central_cluster_sa_from_vault.yml"
 
     - name: Read PlatformOpenshift CR from services cluster
       kubernetes.core.k8s_info:
@@ -21,57 +30,150 @@
         namespace: "{{ platformopenshift_cr_namespace }}"
       register: po_cr
 
-    - name: Set platform type and status facts
+    - name: Set platform type and recorded status facts
+      vars:
+        _st: "{{ (po_cr.resources | default([]) | first | default({})).status | default({}) }}"
       ansible.builtin.set_fact:
-        platform_type: "{{ po_cr.resources[0].spec.type | default(platform_spec.type | default('')) }}"
-        po_status_slug: "{{ po_cr.resources[0].status.slug | default('') }}"
-        po_status_domain: "{{ po_cr.resources[0].status.domain | default('') }}"
-      when: po_cr.resources | length > 0
+        platform_type: "{{ (po_cr.resources | default([]) | first | default({})).spec.type | default(platform_spec.type | default('')) }}"
+        po_status_slug: "{{ _st.slug | default('') }}"
+        po_status_domain: "{{ _st.domain | default('') }}"
+        po_dns: "{{ _st.dns | default({}) }}"
+        po_vault_paths: "{{ _st.vaultPaths | default([]) }}"
+        po_oidc_client_id: "{{ _st.oidcClientId | default('', true) | default(platformopenshift_cr_name ~ '-keycloak-oidc', true) }}"
 
-    - name: Set platform type fallback when CR unavailable
+    - name: Note the step
       ansible.builtin.set_fact:
-        platform_type: "{{ platform_spec.type | default('') }}"
-        po_status_slug: ""
-        po_status_domain: ""
-      when: po_cr.resources | length == 0
-
-    - name: Tear down Hive cluster build on central
-      ansible.builtin.include_tasks: delete_clusterbuild.yml
+        teardown_step: acm-detach
 
     - name: Tear down ACM policies and ManagedCluster
       ansible.builtin.include_tasks: delete_acm.yml
 
-    - name: Tear down AWS DNS records
-      ansible.builtin.include_tasks: delete_dns_aws.yml
-      when: platform_type == "aws"
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: deprovision
 
-    - name: Tear down OpenStack DNS records
+    - name: Tear down the Hive cluster build on central
+      ansible.builtin.include_tasks: delete_clusterbuild.yml
+
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: dns
+
+    - name: Tear down the recorded Designate records
       ansible.builtin.include_tasks: delete_dns_openstack.yml
-      when: platform_type == "openstack"
+      when:
+        - platform_type == "openstack"
+        - po_dns.provider | default('') == 'designate'
+        - po_dns.records | default([]) | length > 0
 
-    - name: Delete per-CR PlatformOpenshift viewer RoleBinding
+    - name: Tear down the recorded Route53 records (OpenStack)
+      ansible.builtin.include_tasks: delete_dns_aws.yml
+      vars:
+        r53_vault_path: "{{ po_dns.accountVaultPath }}"
+        r53_records: "{{ po_dns.records }}"
+      when:
+        - platform_type == "openstack"
+        - po_dns.provider | default('') == 'route53'
+        - po_dns.records | default([]) | length > 0
+
+    - name: Tear down the AWS cluster's Route53 records
+      ansible.builtin.include_tasks: delete_dns_aws.yml
+      vars:
+        r53_vault_path: "{{ aws_route53_vault_path | default('aws/accounts/route53') }}"
+        r53_records:
+          - {zone: "{{ po_status_domain }}", name: "api.{{ platformopenshift_cr_name }}.{{ po_status_domain }}"}
+          - {zone: "{{ po_status_domain }}", name: "*.apps.{{ platformopenshift_cr_name }}.{{ po_status_domain }}"}
+      when: platform_type == "aws" and po_status_domain | length > 0
+
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: central-namespace
+
+    - name: Delete the cluster namespace on central
+      kubernetes.core.k8s:
+        host: "{{ central_api_host }}"
+        api_key: "{{ central_bearer_token }}"
+        validate_certs: false
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ platformopenshift_cr_name }}"
+        wait: true
+        wait_timeout: 600
+
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: vault
+
+    - name: Delete the cluster's Vault paths
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
+      vars:
+        # recorded paths, plus the PushSecret keys for clusters provisioned before the record existed
+        vault_kv_delete_paths: >-
+          {{ po_vault_paths + ['admin-kubeconfig', 'admin-password', 'ssh-key', 'install-config']
+             | map('regex_replace', '^', 'cluster/oso/' ~ platformopenshift_cr_name ~ '/') | list }}
+
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: keycloak-client
+
+    - name: Open a Keycloak admin session
+      ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/keycloak_admin_session.yml"
+
+    - name: Find the cluster's OIDC client
+      ansible.builtin.uri:
+        url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ po_oidc_client_id | urlencode }}"
+        headers:
+          Authorization: "Bearer {{ kc_admin_token }}"
+        validate_certs: false
+      register: kc_client
+
+    - name: Delete the cluster's OIDC client
+      ansible.builtin.uri:
+        url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ item.id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ kc_admin_token }}"
+        validate_certs: false
+        status_code: [204, 404]
+      loop: "{{ kc_client.json | default([]) }}"
+      loop_control:
+        label: "{{ item.clientId }}"
+
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: services-rbac
+
+    - name: Delete the per-CR viewer Role and RoleBinding on services
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
         state: absent
         api_version: rbac.authorization.k8s.io/v1
-        kind: RoleBinding
+        kind: "{{ item }}"
         name: "{{ platformopenshift_cr_name }}-viewer"
         namespace: "{{ platformopenshift_cr_namespace }}"
-      ignore_errors: true
+      loop: [RoleBinding, Role]
 
-    - name: Delete per-CR PlatformOpenshift viewer Role
-      kubernetes.core.k8s:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: acm-detach-check
+
+    - name: Check the ManagedCluster is gone
+      kubernetes.core.k8s_info:
+        host: "{{ central_api_host }}"
+        api_key: "{{ central_bearer_token }}"
         validate_certs: false
-        state: absent
-        api_version: rbac.authorization.k8s.io/v1
-        kind: Role
-        name: "{{ platformopenshift_cr_name }}-viewer"
-        namespace: "{{ platformopenshift_cr_namespace }}"
-      ignore_errors: true
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ platformopenshift_cr_name }}"
+      register: mc_final
+
+    - name: Fail while the ManagedCluster remains
+      ansible.builtin.fail:
+        msg: "ManagedCluster {{ platformopenshift_cr_name }} is still present (finalizers) after the deprovision"
+      when: mc_final.resources | length > 0
 
     - name: Get current timestamp for status
       ansible.builtin.set_fact:
@@ -88,6 +190,7 @@
           status: ready
           ready: false
           deletionComplete: true
+          deletion: null
           lastReconciledAt: "{{ platformopenshift_delete_transition_time }}"
           message: PlatformOpenshift {{ platformopenshift_cr_name }} deleted by EDA
 
@@ -95,6 +198,7 @@
     - name: Mark PlatformOpenshift delete as failed on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
+        _msg: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA teardown failed')) }}"
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: platformopenshifts
         cr_name: "{{ platformopenshift_cr_name }}"
@@ -103,10 +207,24 @@
           status: failed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA teardown failed')) }}"
+          message: "{{ _msg }}"
+          deletion:
+            failed: true
+            step: "{{ teardown_step | default('read') }}"
+            message: "{{ _msg }}"
+            at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 
     - name: Re-raise teardown failure
       ansible.builtin.fail:
-        msg: "PlatformOpenshift {{ platformopenshift_cr_name | default('unknown') }} EDA teardown failed"
+        msg: "PlatformOpenshift {{ platformopenshift_cr_name | default('unknown') }} EDA teardown failed at {{ teardown_step | default('read') }}"
+
+  always:
+    - name: Remove temp credential files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/eda-po-teardown-{{ platformopenshift_cr_name | default('unknown') }}-clouds.yaml"
+        - "/tmp/{{ platformopenshift_cr_name | default('unknown') }}-kubeconfig"

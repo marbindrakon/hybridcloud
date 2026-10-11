@@ -1,93 +1,21 @@
 ---
-- name: Skip OpenStack DNS cleanup when domain unavailable
-  ansible.builtin.set_fact:
-    skip_os_dns: "{{ po_status_domain | default('') | length == 0 }}"
+# shc (§11.6 phase C): delete the Designate records the provision recorded (status.dns), with the
+# account and zone project it recorded. Route53 OpenStack environments go through delete_dns_aws.yml.
+- name: Load the OpenStack account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ po_dns.accountVaultPath }}"
+    os_account_tag: "po-teardown-{{ platformopenshift_cr_name }}"
 
-- name: Create temporary ExternalSecret for Route53 credentials (openstack teardown)
-  when: not (skip_os_dns | bool)
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-po-teardown-{{ platformopenshift_cr_name }}-r53"
-        namespace: "{{ eda_central_work_namespace | default('sovereign-cloud-jobs') }}"
-      spec:
-        refreshInterval: 1m
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-po-teardown-{{ platformopenshift_cr_name }}-r53"
-          creationPolicy: Owner
-        data:
-          - secretKey: AWS_ACCESS_KEY_ID
-            remoteRef:
-              key: "{{ openstack_route53_vault_path | default('oso/accounts/route53-openstack') }}"
-              property: access-key
-          - secretKey: AWS_SECRET_ACCESS_KEY
-            remoteRef:
-              key: "{{ openstack_route53_vault_path | default('oso/accounts/route53-openstack') }}"
-              property: secret-access-key
-
-- name: Wait for Route53 credentials (openstack teardown)
-  when: not (skip_os_dns | bool)
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Secret
-    name: "eda-po-teardown-{{ platformopenshift_cr_name }}-r53"
-    namespace: "{{ eda_central_work_namespace | default('sovereign-cloud-jobs') }}"
-  register: r53_secret_os
-  until: r53_secret_os.resources | length > 0
-  retries: 20
-  delay: 5
-  ignore_errors: true
-
-- name: Decode Route53 credentials (openstack teardown)
-  when:
-    - not (skip_os_dns | bool)
-    - r53_secret_os.resources | default([]) | length > 0
-  ansible.builtin.set_fact:
-    r53_access_key_id: "{{ r53_secret_os.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
-    r53_secret_access_key: "{{ r53_secret_os.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
-  no_log: true
-
-- name: Remove OpenStack API DNS record
-  when:
-    - not (skip_os_dns | bool)
-    - r53_access_key_id is defined
-  amazon.aws.route53:
-    state: absent
-    zone: "{{ po_status_domain }}"
-    record: "api.{{ platformopenshift_cr_name }}.{{ po_status_domain }}"
-    type: A
-  environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
-    AWS_DEFAULT_REGION: "us-east-1"
-  ignore_errors: true
-
-- name: Remove OpenStack Apps wildcard DNS record
-  when:
-    - not (skip_os_dns | bool)
-    - r53_access_key_id is defined
-  amazon.aws.route53:
-    state: absent
-    zone: "{{ po_status_domain }}"
-    record: "*.apps.{{ platformopenshift_cr_name }}.{{ po_status_domain }}"
-    type: A
-  environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
-    AWS_DEFAULT_REGION: "us-east-1"
-  ignore_errors: true
-
-- name: Remove temporary Route53 credentials secret (openstack)
-  kubernetes.core.k8s:
-    state: absent
-    api_version: v1
-    kind: Secret
-    name: "eda-po-teardown-{{ platformopenshift_cr_name }}-r53"
-    namespace: "{{ eda_central_work_namespace | default('sovereign-cloud-jobs') }}"
-  ignore_errors: true
+- name: Delete the recorded Designate records
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_request:
+      action: dns-delete
+      dns_zone_id: "{{ item.0 }}"
+      dns_project_id: "{{ po_dns.projectId }}"
+      records: "{{ item.1 }}"
+  loop: "{{ po_dns.records | groupby('zoneId') }}"
+  loop_control:
+    label: "{{ item.0 }}: {{ item.1 | map(attribute='name') | join(', ') }}"

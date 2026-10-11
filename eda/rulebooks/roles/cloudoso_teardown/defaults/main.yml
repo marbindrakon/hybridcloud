@@ -1,0 +1,4 @@
+---
+# shc (§11.6 phase C): installation defaults (inventory `cloudoso_defaults`), used only for a CR whose
+# provision never recorded its account and project; see cloudoso_provision.
+cloudoso_defaults: {}

@@ -1,0 +1,27 @@
+---
+# shc (§11.6 phase C): the platform's OpenStack account (a clouds.yaml in central Vault, property
+# clouds.yaml) written to a private temp file for files/shc_openstack.py. Read straight from Vault
+# with the job's VAULT_TOKEN: no temporary ExternalSecret left behind when a job fails.
+# Inputs: os_account_vault_path, os_account_tag (temp file name). Sets os_account_clouds_yaml.
+- name: Read the OpenStack account from Vault {{ os_account_vault_path }}
+  ansible.builtin.include_tasks: vault_kv_read.yml
+  vars:
+    vault_kv_path: "{{ os_account_vault_path }}"
+
+- name: Fail when the account has no clouds.yaml
+  ansible.builtin.assert:
+    that:
+      - (vault_kv_data['clouds.yaml'] | default('')) | length > 0
+    fail_msg: "Vault {{ os_account_vault_path }} has no clouds.yaml property"
+
+- name: Write the account clouds.yaml to a private temp file
+  ansible.builtin.copy:
+    content: "{{ vault_kv_data['clouds.yaml'] }}"
+    dest: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
+    mode: "0600"
+  no_log: true
+
+- name: Remember the account file
+  ansible.builtin.set_fact:
+    os_account_clouds_yaml: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
+    vault_kv_data: {}

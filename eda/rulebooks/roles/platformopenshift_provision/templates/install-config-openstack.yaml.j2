@@ -31,7 +31,9 @@ platform:
     apiFloatingIP: {{ cb_api_vip }}
     ingressFloatingIP: {{ cb_ingress_vip }}
     computeFlavor: {{ cb_controller_flavor }}
+{% if cb_glance_image | default('') | length > 0 %}
     clusterOSImage: {{ cb_glance_image }}
+{% endif %}
     externalDNS: []
 {% if cb_trust_bundle | default('') | trim | length > 0 %}
 additionalTrustBundle: |

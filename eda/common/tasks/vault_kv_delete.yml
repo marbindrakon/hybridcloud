@@ -1,0 +1,20 @@
+---
+# shc (§11.6 phase C): delete Vault KV v2 secrets with all their versions (metadata delete), with
+# the admin token injected on the EE job. Idempotent: a missing path counts as deleted.
+# Required: vault_kv_delete_paths (list). Sets vault_kv_deleted (list of paths).
+- name: Delete Vault KV paths
+  ansible.builtin.uri:
+    url: >-
+      {{ lookup('env', 'VAULT_ADDR') | default('http://vault-active.central-vault.svc:8200', true) }}/v1/{{ vault_kv_mount | default('central') }}/metadata/{{ item }}
+    method: DELETE
+    headers:
+      X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+    validate_certs: false
+    status_code: [204, 404]
+  loop: "{{ vault_kv_delete_paths | select | unique | list }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Record deleted Vault paths
+  ansible.builtin.set_fact:
+    vault_kv_deleted: "{{ vault_kv_delete_paths | select | unique | list }}"

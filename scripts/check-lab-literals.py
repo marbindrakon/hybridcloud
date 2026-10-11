@@ -16,6 +16,17 @@ SCOPE = [
     "eda/common/tasks/*.yml",
     "eda/rulebooks/common/tasks/*.yml",
     "aap-config/**/*.yml",
+    # §11.6 phase C: tenant cloud roles (the OpenStack path of PlatformOpenshift provision)
+    "eda/common/files/*.py",
+    "eda/rulebooks/roles/cloudoso_*/**/*.yml",
+    "eda/rulebooks/roles/platformopenshift_teardown/**/*.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/defaults/*.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/tasks/openstack*.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/tasks/designate_dns.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/tasks/keycloak_*.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/tasks/cleanup_stale_clusterbuild.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/templates/*openstack*.j2",
+    "eda/rulebooks/roles/platformopenshift_provision/templates/build-values.yaml.j2",
 ]
 PATTERNS = {
     "lab domain": re.compile(r"signal9\.(gg|lab)|\.lab\.signal9"),

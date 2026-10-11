@@ -47,24 +47,39 @@ spec:
                       description: "CloudOSO CR name providing the OpenStack environment"
                     controlPlaneCount:
                       type: integer
-                      description: "Control plane node count"
-                      default: 3
+                      description: "Control plane node count (default: the installation's platformopenshift_defaults, else 3)"
+                      minimum: 1
                     workerCount:
                       type: integer
-                      description: "Worker node count"
-                      default: 3
+                      description: "Worker node count; 0 makes a compact cluster (default: platformopenshift_defaults, else 3)"
+                      minimum: 0
                     controlPlaneFlavor:
                       type: string
-                      description: "OpenStack flavor for control plane"
-                      default: "m1.xlarge"
+                      description: "OpenStack flavor for control plane (default: platformopenshift_defaults)"
                     workerFlavor:
                       type: string
-                      description: "OpenStack flavor for workers"
-                      default: "m1.large"
+                      description: "OpenStack flavor for workers (default: platformopenshift_defaults)"
                     externalNetwork:
                       type: string
-                      description: "Neutron external network name"
-                      default: "ext-net"
+                      description: "Neutron external network name (default: the CloudOSO's)"
+                    ocpImageSet:
+                      type: string
+                      description: "Hive ClusterImageSet name (default: platformopenshift_defaults)"
+                    pullSecretVaultPath:
+                      type: string
+                      description: "Central Vault path of the pull secret (default: platformopenshift_defaults)"
+                    pullSecretVaultProperty:
+                      type: string
+                      description: "Property of the pull secret at pullSecretVaultPath (default: platformopenshift_defaults)"
+                    sshKeyVaultPath:
+                      type: string
+                      description: "Central Vault path with ssh_public_key / ssh_private_key (default: platformopenshift_defaults)"
+                    glanceImageOverride:
+                      type: string
+                      description: "Existing Glance image for the nodes; empty lets the installer upload the release's RHCOS"
+                    trustBundle:
+                      type: string
+                      description: "Additional trust bundle (PEM) for the install-config"
                 aws:
                   type: object
                   description: "AWS-specific configuration"

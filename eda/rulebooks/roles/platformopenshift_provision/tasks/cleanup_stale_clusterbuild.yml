@@ -94,10 +94,9 @@
       delay: 10
       ignore_errors: true
 
-    - name: Ensure Hive deprovision credentials exist before CD removal
-      ansible.builtin.include_tasks: ensure_deprovision_secrets.yml
-      when: existing_cd.resources | default([]) | length > 0
-
+    # shc (§11.6 §3.6): upstream included ensure_deprovision_secrets.yml, which was never committed.
+    # Hive's deprovision credentials belong to the Helm release, which this flow uninstalls only
+    # after the ClusterDeployment is gone, so they are still there.
     - name: Delete ClusterDeployment to trigger Hive deprovision
       kubernetes.core.k8s:
         host: "{{ central_api_host }}"

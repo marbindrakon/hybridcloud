@@ -1,0 +1,26 @@
+---
+# shc (§11.6 phase C): run one files/shc_openstack.py action with the account from
+# openstack_account.yml. Inputs: os_request (dict with `action`), os_call_no_log (default true:
+# provision returns an application credential secret). Sets os_result; fails with the helper's error.
+- name: "OpenStack {{ os_request.action }}"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../../../common/files/shc_openstack.py"
+    stdin: "{{ os_request | combine({'clouds_yaml': os_account_clouds_yaml}) | to_json }}"
+  register: _os_call
+  changed_when: os_request.action not in ['check-empty']
+  failed_when: false
+  no_log: "{{ os_call_no_log | default(true) }}"
+
+- name: "OpenStack {{ os_request.action }}: parse the result"
+  ansible.builtin.set_fact:
+    os_result: >-
+      {{ (_os_call.stdout | from_json) if (_os_call.stdout | default('') | trim).startswith('{')
+         else {'error': (_os_call.stderr | default('') | trim)[-600:]} }}
+  no_log: "{{ os_call_no_log | default(true) }}"
+
+- name: "OpenStack {{ os_request.action }}: fail on error"
+  ansible.builtin.fail:
+    msg: "OpenStack {{ os_request.action }} failed: {{ os_result.error | default('rc ' ~ _os_call.rc) }}"
+  when: _os_call.rc != 0

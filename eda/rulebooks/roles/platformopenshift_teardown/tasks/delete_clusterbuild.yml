@@ -1,78 +1,71 @@
 ---
-- name: Read Vault root token for Helm kubeconfig
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Secret
-    name: "{{ vault_init_secret_name }}"
-    namespace: "{{ vault_init_secret_namespace }}"
-  register: vault_init_secret_info
-
-- name: Set Vault root token
-  ansible.builtin.set_fact:
-    vault_root_token: "{{ vault_init_secret_info.resources[0].data.root_token | b64decode }}"
-    cb_app_name: "{{ platformopenshift_cr_name }}"
-  no_log: true
-
+# shc (§11.6 phase C): Hive deprovision with its failures surfaced. The chart's pre-delete hook
+# deletes the ClusterDeployment and waits for Hive's uninstall; a ClusterDeployment still present
+# afterwards fails the job (status.deletion step deprovision) and the operator retries with backoff.
 - name: Write central cluster kubeconfig for Helm
-  ansible.builtin.include_tasks: ../platformopenshift_provision/tasks/write_central_helm_kubeconfig.yml
+  ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/write_central_helm_kubeconfig.yml"
+  vars:
+    cb_app_name: "{{ platformopenshift_cr_name }}"
 
-- name: Check for existing Helm release
+- name: Check for the mce-cluster-build release
   ansible.builtin.command:
-    argv:
-      - helm
-      - status
-      - "{{ platformopenshift_cr_name }}"
-      - --namespace
-      - "{{ platformopenshift_cr_name }}"
-      - --kubeconfig
-      - "/tmp/{{ platformopenshift_cr_name }}-kubeconfig"
+    argv: [helm, status, "{{ platformopenshift_cr_name }}", --namespace, "{{ platformopenshift_cr_name }}",
+           --kubeconfig, "/tmp/{{ platformopenshift_cr_name }}-kubeconfig"]
   register: helm_status
   failed_when: false
   changed_when: false
 
-- name: Uninstall mce-cluster-build Helm release
+- name: Uninstall the release (its pre-delete hook runs the Hive deprovision)
   ansible.builtin.command:
-    argv:
-      - helm
-      - uninstall
-      - "{{ platformopenshift_cr_name }}"
-      - --namespace
-      - "{{ platformopenshift_cr_name }}"
-      - --wait
-      - --timeout
-      - "30m"
-      - --kubeconfig
-      - "/tmp/{{ platformopenshift_cr_name }}-kubeconfig"
+    argv: [helm, uninstall, "{{ platformopenshift_cr_name }}", --namespace, "{{ platformopenshift_cr_name }}",
+           --wait, --timeout, "{{ clusterbuild_uninstall_timeout }}",
+           --kubeconfig, "/tmp/{{ platformopenshift_cr_name }}-kubeconfig"]
   register: helm_uninstall
   when: helm_status.rc == 0
-  failed_when: false
-  changed_when: helm_uninstall.rc == 0
+  failed_when: helm_uninstall.rc != 0 and 'not found' not in (helm_uninstall.stderr | default(''))
 
-- name: Delete ClusterDeployment if still present
-  kubernetes.core.k8s:
-    state: absent
-    api_version: hive.openshift.io/v1
-    kind: ClusterDeployment
-    name: "{{ platformopenshift_cr_name }}"
-    namespace: "{{ platformopenshift_cr_name }}"
-  ignore_errors: true
-
-- name: Wait for ClusterDeployment deletion
+- name: Look for a ClusterDeployment left behind
   kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
     api_version: hive.openshift.io/v1
     kind: ClusterDeployment
     name: "{{ platformopenshift_cr_name }}"
     namespace: "{{ platformopenshift_cr_name }}"
-  register: cd_wait
-  until: cd_wait.resources | length == 0
-  retries: 120
-  delay: 15
-  ignore_errors: true
+  register: cd_left
 
-- name: Delete cluster namespace on central
+- name: Delete a ClusterDeployment without a release (Hive deprovisions it)
   kubernetes.core.k8s:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
     state: absent
-    api_version: v1
-    kind: Namespace
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
     name: "{{ platformopenshift_cr_name }}"
-  ignore_errors: true
+    namespace: "{{ platformopenshift_cr_name }}"
+    wait: true
+    wait_timeout: 3600
+  when: cd_left.resources | length > 0
+  register: cd_delete
+  failed_when: false
+
+- name: Check the ClusterDeployment is gone
+  kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    name: "{{ platformopenshift_cr_name }}"
+    namespace: "{{ platformopenshift_cr_name }}"
+  register: cd_final
+
+- name: Fail when Hive did not deprovision the cluster
+  ansible.builtin.fail:
+    msg: >-
+      ClusterDeployment {{ platformopenshift_cr_name }} is still present after the deprovision
+      (provisionStatus {{ cd_final.resources[0].status.provisionStatus | default('unknown') }});
+      check the uninstall job in namespace {{ platformopenshift_cr_name }} on central.
+  when: cd_final.resources | length > 0

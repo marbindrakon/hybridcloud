@@ -43,18 +43,30 @@ spec:
                   description: OpenStack project name hint (required)
                 vaultPath:
                   type: string
-                  description: Vault path for OpenStack admin credentials (e.g. oso/accounts/shc_admin)
+                  description: >-
+                    Central Vault path of the platform's OpenStack account (property clouds.yaml;
+                    a tenant domain manager). Default: the installation's cloudoso_defaults.
                 baseDomain:
                   type: string
-                  description: Base DNS domain (e.g. )
+                  description: >-
+                    Base DNS domain. With Designate the environment gets <name>.<entity>.<baseDomain>
+                    inside the zone designateZoneId. Default: the installation's cloudoso_defaults.
                 projectDomain:
                   type: string
-                  description: "Keystone domain name (default: shc_domain)"
-                  default: shc_domain
+                  description: "Keystone domain for the project. Default: the installation's cloudoso_defaults."
                 externalNetwork:
                   type: string
-                  description: External Neutron network
-                  default: ext-net
+                  description: "External Neutron network for the floating IPs. Default: the installation's cloudoso_defaults."
+                regionName:
+                  type: string
+                  description: "OpenStack region. Default: the account's clouds.yaml region."
+                dnsProvider:
+                  type: string
+                  description: >-
+                    DNS for the environment's clusters: designate (designateZoneId + designateProjectId)
+                    or route53 (route53VaultPath). Default: the installation's cloudoso_defaults, else
+                    designate when designateZoneId is set.
+                  enum: [designate, route53]
                 route53VaultPath:
                   type: string
                   description: Vault path for Route53 credentials (e.g. oso/accounts/route53-openstack)
@@ -64,12 +76,12 @@ spec:
                   default: default
                 designateZoneId:
                   type: string
-                  description: Designate zone UUID for shc. environments
-                  default: "895a1406-9ad2-4372-80f9-4e23fe1fd9ef"
+                  description: "Designate zone id for the environment's records. Default: the installation's cloudoso_defaults."
                 designateProjectId:
                   type: string
-                  description: OpenStack project ID owning the Designate zone
-                  default: "4cdae8e2b49c4f1fa4b4a69be8ea43e7"
+                  description: >-
+                    Project owning the Designate zone (the account needs member there). Default: the
+                    installation's cloudoso_defaults.
                 enableVRF:
                   type: boolean
                   description: Enable VRF networking for this environment (passed to provisioning; no effect until implemented)

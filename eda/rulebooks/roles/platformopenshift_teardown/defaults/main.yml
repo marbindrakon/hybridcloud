@@ -1,4 +1,7 @@
 ---
-vault_init_secret_name: "vault-init-secrets"
-vault_init_secret_namespace: "central-vault"
-vault_init_addr: "http://vault-active.central-vault.svc:8200"
+eda_central_work_namespace: sovereign-cloud-jobs
+# shc (§11.6 phase C): Hive deprovision through the chart's pre-delete hook (it waits up to 60 min)
+clusterbuild_uninstall_timeout: 65m
+keycloak_external_url: "{{ lookup('env', 'KEYCLOAK_EXTERNAL_URL') }}"
+keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants', true) }}"
+keycloak_admin_vault_path: rhbk-services-admin

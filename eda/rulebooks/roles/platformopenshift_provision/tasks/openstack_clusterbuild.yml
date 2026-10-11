@@ -10,206 +10,108 @@
   ansible.builtin.set_fact:
     cb_app_name: "{{ ansible_operator_meta.name }}"
     cb_cluster_name: "{{ ansible_operator_meta.name }}"
-    cb_cluster_domain: >-
-      {{ (oso_env_name ~ '.' ~ (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true)))
-         if (use_designate_dns | default(false) | bool)
-         else (cb_slug ~ '.' ~ cb_base_domain) }}
-    cb_image_set: "{{ platform_spec.openstack.ocpImageSet | default(default_ocp_image_set) }}"
+    cb_image_set: "{{ platform_spec.openstack.ocpImageSet | default(default_ocp_image_set, true) }}"
     cb_controller_flavor: "{{ oso_control_plane_flavor }}"
     cb_worker_flavor: "{{ oso_worker_flavor }}"
     cb_control_plane_count: "{{ oso_control_plane_count }}"
     cb_worker_count: "{{ oso_worker_count }}"
-    cb_pull_secret_vault: "{{ platform_spec.openstack.pullSecretVaultPath | default(default_pull_secret_vault_path) }}"
-    cb_ssh_key_vault: "{{ platform_spec.openstack.sshKeyVaultPath | default(default_ssh_key_vault_path) }}"
+    cb_pull_secret_vault: "{{ platform_spec.openstack.pullSecretVaultPath | default(default_pull_secret_vault_path, true) }}"
+    cb_pull_secret_vault_property: "{{ platform_spec.openstack.pullSecretVaultProperty | default(default_pull_secret_vault_property, true) }}"
+    cb_ssh_key_vault: "{{ platform_spec.openstack.sshKeyVaultPath | default(default_ssh_key_vault_path, true) }}"
     cb_provider_creds_vault: "oso/projects/{{ oso_env_name }}/clouds-config"
-    cb_install_config_vault: "oso/projects/{{ oso_env_name }}/install-config"
+    # shc (§11.6 phase C): per cluster (two clusters on one CloudOSO overwrote each other)
+    cb_install_config_vault: "oso/projects/{{ oso_env_name }}/clusters/{{ ansible_operator_meta.name }}/install-config"
     cb_trust_bundle: "{{ platform_spec.openstack.trustBundle | default('') }}"
-    cb_glance_image: "{{ platform_spec.openstack.glanceImageOverride | default(default_glance_image_override) }}"
+    cb_glance_image: "{{ platform_spec.openstack.glanceImageOverride | default(default_glance_image_override, true) }}"
+
+- name: Record the Vault paths this cluster writes (install-config here, PushSecrets in the monitor)
+  ansible.builtin.set_fact:
+    cb_vault_paths:
+      - "{{ cb_install_config_vault }}"
+      - "cluster/oso/{{ cb_app_name }}/admin-kubeconfig"
+      - "cluster/oso/{{ cb_app_name }}/admin-password"
+      - "cluster/oso/{{ cb_app_name }}/ssh-key"
+      - "cluster/oso/{{ cb_app_name }}/install-config"
+
+- name: Fail without a cluster-build chart
+  ansible.builtin.assert:
+    that:
+      - (mce_cluster_build_chart | trim) is match('oci://[^/]+/')
+    fail_msg: >-
+      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
+      (got '{{ mce_cluster_build_chart | trim }}').
 
 - name: Clean up failed or stale Hive cluster build before reprovisioning
   ansible.builtin.include_tasks: cleanup_stale_clusterbuild.yml
 
-- name: Create temporary ExternalSecret for Route53 credentials
+- name: Create Route53 records for the cluster
   when: not (use_designate_dns | default(false) | bool)
-  kubernetes.core.k8s:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-platformopenshift-{{ cb_cluster_name }}-route53-creds"
-        namespace: "{{ eda_central_work_namespace }}"
-        labels:
-          app.kubernetes.io/managed-by: eda-platformopenshift
-          platformopenshift: "{{ cb_cluster_name }}"
-      spec:
-        refreshInterval: 1m
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-platformopenshift-{{ cb_cluster_name }}-route53-creds"
-          creationPolicy: Owner
-        data:
-          - secretKey: AWS_ACCESS_KEY_ID
-            remoteRef:
-              key: "{{ cb_route53_vault_path }}"
-              property: access-key
-          - secretKey: AWS_SECRET_ACCESS_KEY
-            remoteRef:
-              key: "{{ cb_route53_vault_path }}"
-              property: secret-access-key
+  block:
+    - name: Read the Route53 credentials
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+      vars:
+        vault_kv_path: "{{ cb_route53_vault_path }}"
 
-- name: Wait for Route53 credentials
-  when: not (use_designate_dns | default(false) | bool)
-  kubernetes.core.k8s_info:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Secret
-    name: "eda-platformopenshift-{{ cb_cluster_name }}-route53-creds"
-    namespace: "{{ eda_central_work_namespace }}"
-  register: route53_creds_secret
-  until: >-
-    route53_creds_secret.resources | length > 0 and
-    route53_creds_secret.resources[0].data is defined
-  retries: 30
-  delay: 10
+    - name: Create Route53 A records for the API and apps wildcard
+      amazon.aws.route53:
+        state: present
+        zone: "{{ cb_base_domain }}"
+        record: "{{ item.name }}"
+        type: A
+        ttl: 300
+        value:
+          - "{{ item.ip }}"
+        overwrite: true
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ vault_kv_data['access-key'] }}"
+        AWS_SECRET_ACCESS_KEY: "{{ vault_kv_data['secret-access-key'] }}"
+        AWS_DEFAULT_REGION: "us-east-1"
+      loop:
+        - {name: "api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", ip: "{{ cb_api_vip }}"}
+        - {name: "*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", ip: "{{ cb_ingress_vip }}"}
+      loop_control:
+        label: "{{ item.name }}"
 
-- name: Decode Route53 credentials
-  when: not (use_designate_dns | default(false) | bool)
-  ansible.builtin.set_fact:
-    r53_access_key_id: "{{ route53_creds_secret.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
-    r53_secret_access_key: "{{ route53_creds_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
-  no_log: true
-
-- name: Create Route53 A record for API endpoint
-  when: not (use_designate_dns | default(false) | bool)
-  amazon.aws.route53:
-    state: present
-    zone: "{{ cb_base_domain }}"
-    record: "api.{{ cb_cluster_name }}.{{ cb_slug }}.{{ cb_base_domain }}"
-    type: A
-    ttl: 300
-    value:
-      - "{{ cb_api_vip }}"
-    overwrite: true
-  environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
-    AWS_DEFAULT_REGION: "us-east-1"
-
-- name: Create Route53 A record for Apps wildcard
-  when: not (use_designate_dns | default(false) | bool)
-  amazon.aws.route53:
-    state: present
-    zone: "{{ cb_base_domain }}"
-    record: "*.apps.{{ cb_cluster_name }}.{{ cb_slug }}.{{ cb_base_domain }}"
-    type: A
-    ttl: 300
-    value:
-      - "{{ cb_ingress_vip }}"
-    overwrite: true
-  environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
-    AWS_DEFAULT_REGION: "us-east-1"
+    - name: Record the Route53 records
+      ansible.builtin.set_fact:
+        vault_kv_data: {}
+        cb_dns_records:
+          - {zone: "{{ cb_base_domain }}", name: "api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", type: A}
+          - {zone: "{{ cb_base_domain }}", name: "*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", type: A}
 
 - name: Create Designate DNS records for internet-facing cluster
   ansible.builtin.include_tasks: designate_dns.yml
   when: use_designate_dns | default(false) | bool
 
-- name: Create temporary ExternalSecret for OCP pull secret
-  kubernetes.core.k8s:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-platformopenshift-{{ cb_cluster_name }}-pull-secret"
-        namespace: "{{ eda_central_work_namespace }}"
-        labels:
-          app.kubernetes.io/managed-by: eda-platformopenshift
-          platformopenshift: "{{ cb_cluster_name }}"
-      spec:
-        refreshInterval: 1h
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-platformopenshift-{{ cb_cluster_name }}-pull-secret"
-          creationPolicy: Owner
-        data:
-          - secretKey: pull_secret
-            remoteRef:
-              key: "{{ cb_pull_secret_vault }}"
-              property: pull_secret
+- name: Read the OCP pull secret
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ cb_pull_secret_vault }}"
 
-- name: Create temporary ExternalSecret for SSH key
-  kubernetes.core.k8s:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-platformopenshift-{{ cb_cluster_name }}-ssh-key"
-        namespace: "{{ eda_central_work_namespace }}"
-        labels:
-          app.kubernetes.io/managed-by: eda-platformopenshift
-          platformopenshift: "{{ cb_cluster_name }}"
-      spec:
-        refreshInterval: 1h
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-platformopenshift-{{ cb_cluster_name }}-ssh-key"
-          creationPolicy: Owner
-        data:
-          - secretKey: ssh_public_key
-            remoteRef:
-              key: "{{ cb_ssh_key_vault }}"
-              property: ssh_public_key
-          - secretKey: ssh_private_key
-            remoteRef:
-              key: "{{ cb_ssh_key_vault }}"
-              property: ssh_private_key
-
-- name: Wait for pull secret and SSH key
-  kubernetes.core.k8s_info:
-    host: "{{ central_api_host }}"
-    api_key: "{{ central_bearer_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Secret
-    name: "{{ item }}"
-    namespace: "{{ eda_central_work_namespace }}"
-  register: shared_secrets
-  until: >-
-    shared_secrets.resources | length > 0 and
-    shared_secrets.resources[0].data is defined
-  retries: 30
-  delay: 10
-  loop:
-    - "eda-platformopenshift-{{ cb_cluster_name }}-pull-secret"
-    - "eda-platformopenshift-{{ cb_cluster_name }}-ssh-key"
-
-- name: Decode pull secret and SSH key
+- name: Keep the pull secret
   ansible.builtin.set_fact:
-    cb_pull_secret_raw: "{{ (shared_secrets.results[0].resources[0].data.pull_secret | b64decode) }}"
-    cb_ssh_public_key: "{{ (shared_secrets.results[1].resources[0].data.ssh_public_key | b64decode) }}"
-    cb_ssh_private_key: "{{ (shared_secrets.results[1].resources[0].data.ssh_private_key | b64decode) }}"
+    cb_pull_secret_raw: "{{ vault_kv_data[cb_pull_secret_vault_property] | default('') }}"
   no_log: true
+
+- name: Read the cluster SSH key
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ cb_ssh_key_vault }}"
+
+- name: Keep the SSH public key
+  ansible.builtin.set_fact:
+    cb_ssh_public_key: "{{ vault_kv_data.ssh_public_key | default('') }}"
+    vault_kv_data: {}
+  no_log: true
+
+- name: Fail without a pull secret or SSH key
+  ansible.builtin.assert:
+    that:
+      - cb_pull_secret_raw | string | length > 0
+      - cb_ssh_public_key | length > 0
+    fail_msg: >-
+      Vault {{ cb_pull_secret_vault }} (property {{ cb_pull_secret_vault_property }}) or
+      {{ cb_ssh_key_vault }} (ssh_public_key) is missing.
 
 - name: Normalize pull secret to valid JSON
   ansible.builtin.command:
@@ -228,7 +130,7 @@
                 print(json.dumps(parsed, separators=(',', ':')))
             except Exception:
                 print(raw)
-    stdin: "{{ cb_pull_secret_raw }}"
+    stdin: "{{ cb_pull_secret_raw if (cb_pull_secret_raw is string) else (cb_pull_secret_raw | to_json) }}"
   register: _pull_secret_json_result
   no_log: true
   changed_when: false
@@ -238,29 +140,17 @@
     cb_pull_secret_json: "{{ _pull_secret_json_result.stdout | trim }}"
   no_log: true
 
-- name: Set Vault root token from job credential
-  ansible.builtin.set_fact:
-    vault_root_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
-  no_log: true
-
 - name: Render OpenStack install-config YAML
   ansible.builtin.set_fact:
     cb_install_config: "{{ lookup('template', 'install-config-openstack.yaml.j2') }}"
   no_log: true
 
 - name: Write install-config to Vault
-  ansible.builtin.uri:
-    url: "{{ vault_init_addr }}/v1/central/data/{{ cb_install_config_vault }}"
-    method: POST
-    headers:
-      X-Vault-Token: "{{ vault_root_token }}"
-    body_format: json
-    body:
-      data:
-        install-config.yaml: "{{ cb_install_config }}"
-    status_code: [200, 204]
-    validate_certs: false
-  no_log: true
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
+  vars:
+    vault_kv_path: "{{ cb_install_config_vault }}"
+    vault_kv_write_data:
+      install-config.yaml: "{{ cb_install_config }}"
 
 - name: Render build-values YAML to tempfile
   ansible.builtin.copy:
@@ -271,6 +161,15 @@
 
 - name: Write central cluster kubeconfig for Helm
   ansible.builtin.include_tasks: write_central_helm_kubeconfig.yml
+
+# shc (§11.6 phase C): the chart registry may be private; the platform pull secret is a Docker
+# config.json, which Helm reads as its registry config.
+- name: Write the Helm registry config from the pull secret
+  ansible.builtin.copy:
+    content: "{{ cb_pull_secret_json }}"
+    dest: "/tmp/{{ cb_app_name }}-registry.json"
+    mode: "0600"
+  no_log: true
 
 - name: Check existing Helm release
   ansible.builtin.command:
@@ -350,7 +249,7 @@
       - helm
       - upgrade
       - "{{ cb_app_name }}"
-      - "oci://{{ oci_registry_host }}/hybrid-sovereign/mce-cluster-build"
+      - "{{ mce_cluster_build_chart | trim }}"
       - --version
       - "{{ mce_cluster_build_chart_version }}"
       - --install
@@ -366,14 +265,19 @@
       - "10m"
       - --kubeconfig
       - "/tmp/{{ cb_app_name }}-kubeconfig"
+      - --registry-config
+      - "/tmp/{{ cb_app_name }}-registry.json"
   register: helm_deploy_result
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
 
-- name: Clean up temp values file
+- name: Clean up temp values and registry files
   ansible.builtin.file:
-    path: "/tmp/{{ cb_app_name }}-build-values.yaml"
+    path: "{{ item }}"
     state: absent
+  loop:
+    - "/tmp/{{ cb_app_name }}-build-values.yaml"
+    - "/tmp/{{ cb_app_name }}-registry.json"
   changed_when: false
 
 - name: Monitor cluster deployment and push secrets

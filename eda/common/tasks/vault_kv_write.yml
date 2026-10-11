@@ -1,0 +1,16 @@
+---
+# Write a secret to Vault KV v2 with the admin token injected on the EE job (counterpart of
+# vault_kv_read.yml). Required: vault_kv_path, vault_kv_write_data (dict).
+- name: Write {{ vault_kv_path }} to Vault KV
+  ansible.builtin.uri:
+    url: >-
+      {{ lookup('env', 'VAULT_ADDR') | default('http://vault-active.central-vault.svc:8200', true) }}/v1/{{ vault_kv_mount | default('central') }}/data/{{ vault_kv_path }}
+    method: POST
+    headers:
+      X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+    body_format: json
+    body:
+      data: "{{ vault_kv_write_data }}"
+    validate_certs: false
+    status_code: [200, 204]
+  no_log: true

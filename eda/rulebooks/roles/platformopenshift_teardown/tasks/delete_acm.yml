@@ -1,68 +1,42 @@
 ---
-- name: Delete ACM OIDC Policy
+# shc (§11.6 phase C): detach from ACM first, while the cluster can still run its klusterlet cleanup.
+- name: Delete the per-cluster ACM policies, placements and bindings
   kubernetes.core.k8s:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
     state: absent
-    api_version: policy.open-cluster-management.io/v1
-    kind: Policy
-    name: "{{ platformopenshift_cr_name }}-keycloak-oidc"
+    api_version: "{{ item.api_version }}"
+    kind: "{{ item.kind }}"
+    name: "{{ platformopenshift_cr_name }}-{{ item.suffix }}"
     namespace: openshift-gitops
-  ignore_errors: true
+  loop:
+    - {api_version: policy.open-cluster-management.io/v1, kind: Policy, suffix: keycloak-oidc}
+    - {api_version: policy.open-cluster-management.io/v1, kind: PlacementBinding, suffix: keycloak-oidc-binding}
+    - {api_version: cluster.open-cluster-management.io/v1beta1, kind: Placement, suffix: keycloak-oidc-placement}
+    - {api_version: policy.open-cluster-management.io/v1, kind: Policy, suffix: cluster-rbac}
+    - {api_version: policy.open-cluster-management.io/v1, kind: PlacementBinding, suffix: cluster-rbac-binding}
+    - {api_version: cluster.open-cluster-management.io/v1beta1, kind: Placement, suffix: cluster-rbac-placement}
+  loop_control:
+    label: "{{ item.kind }}/{{ platformopenshift_cr_name }}-{{ item.suffix }}"
 
-- name: Delete ACM OIDC PlacementBinding
+- name: Delete the ManagedCluster
   kubernetes.core.k8s:
-    state: absent
-    api_version: policy.open-cluster-management.io/v1
-    kind: PlacementBinding
-    name: "{{ platformopenshift_cr_name }}-keycloak-oidc-binding"
-    namespace: openshift-gitops
-  ignore_errors: true
-
-- name: Delete ACM OIDC Placement
-  kubernetes.core.k8s:
-    state: absent
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Placement
-    name: "{{ platformopenshift_cr_name }}-keycloak-oidc-placement"
-    namespace: openshift-gitops
-  ignore_errors: true
-
-- name: Delete cluster RBAC Policy
-  kubernetes.core.k8s:
-    state: absent
-    api_version: policy.open-cluster-management.io/v1
-    kind: Policy
-    name: "{{ platformopenshift_cr_name }}-cluster-rbac"
-    namespace: openshift-gitops
-  ignore_errors: true
-
-- name: Delete cluster RBAC PlacementBinding
-  kubernetes.core.k8s:
-    state: absent
-    api_version: policy.open-cluster-management.io/v1
-    kind: PlacementBinding
-    name: "{{ platformopenshift_cr_name }}-cluster-rbac-binding"
-    namespace: openshift-gitops
-  ignore_errors: true
-
-- name: Delete cluster RBAC Placement
-  kubernetes.core.k8s:
-    state: absent
-    api_version: cluster.open-cluster-management.io/v1beta1
-    kind: Placement
-    name: "{{ platformopenshift_cr_name }}-cluster-rbac-placement"
-    namespace: openshift-gitops
-  ignore_errors: true
-
-- name: Delete ManagedCluster
-  kubernetes.core.k8s:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
     state: absent
     api_version: cluster.open-cluster-management.io/v1
     kind: ManagedCluster
     name: "{{ platformopenshift_cr_name }}"
-  ignore_errors: true
 
-- name: Wait for ManagedCluster deletion
+# A cluster that never came up can hold its ManagedCluster finalizers; deprovision goes ahead
+# anyway and the final check (main.yml) fails the job if the ManagedCluster is still there.
+- name: Wait for the ManagedCluster to go
   kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
     api_version: cluster.open-cluster-management.io/v1
     kind: ManagedCluster
     name: "{{ platformopenshift_cr_name }}"
@@ -70,4 +44,4 @@
   until: mc_wait.resources | length == 0
   retries: 60
   delay: 10
-  ignore_errors: true
+  failed_when: false

@@ -11,9 +11,8 @@
 #   central_token       - Bearer token for central cluster API
 #
 # Reads:
-#   KEYCLOAK_INTERNAL_URL env var (defaults to http://rhbk-services-service.rhbk.svc:8080)
+#   the RHBK Route on services and the admin account in central Vault (keycloak_admin_session.yml)
 #   KEYCLOAK_REALM env var (defaults to sovereign-tenants)
-#   keycloak_admin_secret_name from defaults
 
 - name: Skip OIDC setup if console URL not yet available or central token is missing
   ansible.builtin.set_fact:
@@ -50,50 +49,9 @@
     - not (skip_oidc_setup | bool)
     - _ingress_ca_cm.resources | default([]) | length == 0
 
-- name: Read Keycloak admin secret
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Secret
-    name: "{{ keycloak_admin_secret_name }}"
-    namespace: "{{ platformopenshift_operator_namespace }}"
-  register: _kc_admin_secret
+- name: Open a Keycloak admin session
+  ansible.builtin.include_tasks: keycloak_admin_session.yml
   when: not (skip_oidc_setup | bool)
-  no_log: true
-
-- name: Fail if Keycloak admin secret not found
-  ansible.builtin.fail:
-    msg: "Keycloak admin secret {{ keycloak_admin_secret_name }} not found in {{ platformopenshift_operator_namespace }}"
-  when:
-    - not (skip_oidc_setup | bool)
-    - _kc_admin_secret.resources | default([]) | length == 0
-
-- name: Decode Keycloak admin credentials
-  ansible.builtin.set_fact:
-    kc_admin_user: "{{ _kc_admin_secret.resources[0].data.username | b64decode }}"
-    kc_admin_pass: "{{ _kc_admin_secret.resources[0].data.password | b64decode }}"
-  when: not (skip_oidc_setup | bool)
-  no_log: true
-
-- name: Get Keycloak admin token
-  ansible.builtin.uri:
-    url: "{{ keycloak_internal_url }}/realms/master/protocol/openid-connect/token"
-    method: POST
-    body_format: form-urlencoded
-    body:
-      grant_type: password
-      client_id: admin-cli
-      username: "{{ kc_admin_user }}"
-      password: "{{ kc_admin_pass }}"
-    validate_certs: false
-    status_code: [200]
-  register: _kc_token
-  when: not (skip_oidc_setup | bool)
-  no_log: true
-  retries: 3
-  delay: 5
 
 - name: Set OIDC client ID for this cluster
   ansible.builtin.set_fact:
@@ -102,10 +60,10 @@
 
 - name: Check if OIDC client already exists
   ansible.builtin.uri:
-    url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ ocp_oidc_client_id }}"
+    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ ocp_oidc_client_id }}"
     method: GET
     headers:
-      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+      Authorization: "Bearer {{ kc_admin_token }}"
     validate_certs: false
     status_code: [200]
   register: _kc_existing_client
@@ -113,10 +71,10 @@
 
 - name: Create OIDC client in Keycloak for OpenShift cluster
   ansible.builtin.uri:
-    url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients"
+    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients"
     method: POST
     headers:
-      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+      Authorization: "Bearer {{ kc_admin_token }}"
       Content-Type: application/json
     body_format: json
     body:
@@ -144,10 +102,10 @@
 
 - name: Get OIDC client UUID
   ansible.builtin.uri:
-    url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ ocp_oidc_client_id }}"
+    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ ocp_oidc_client_id }}"
     method: GET
     headers:
-      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+      Authorization: "Bearer {{ kc_admin_token }}"
     validate_certs: false
     status_code: [200]
   register: _kc_client_info
@@ -155,10 +113,10 @@
 
 - name: Get OIDC client secret
   ansible.builtin.uri:
-    url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}/client-secret"
+    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}/client-secret"
     method: GET
     headers:
-      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+      Authorization: "Bearer {{ kc_admin_token }}"
     validate_certs: false
     status_code: [200]
   register: _kc_client_secret
@@ -167,10 +125,10 @@
 
 - name: Add groups mapper to OIDC client (if not present)
   ansible.builtin.uri:
-    url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}/protocol-mappers/models"
+    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}/protocol-mappers/models"
     method: POST
     headers:
-      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+      Authorization: "Bearer {{ kc_admin_token }}"
       Content-Type: application/json
     body_format: json
     body:

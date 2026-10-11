@@ -14,6 +14,7 @@ cluster:
   apiVIP: "{{ cb_api_vip }}"
   ingressVIP: "{{ cb_ingress_vip }}"
   pullSecretVault: "{{ cb_pull_secret_vault }}"
+  pullSecretVaultProperty: "{{ cb_pull_secret_vault_property | default('pull_secret') }}"
   sshKeyVault: "{{ cb_ssh_key_vault }}"
   trustedCAs: "{{ cb_trust_bundle | default('') }}"
   sshPubKey: ""
@@ -27,7 +28,9 @@ provider:
   openstack:
     cloud: openstack
     externalNetwork: "{{ cb_external_network }}"
+{% if cb_glance_image | default('') | length > 0 %}
     existingImage: "{{ cb_glance_image }}"
+{% endif %}
     controlPlaneFlavor: "{{ cb_controller_flavor }}"
     workerFlavor: "{{ cb_worker_flavor }}"
     computeFlavor: "{{ cb_controller_flavor }}"

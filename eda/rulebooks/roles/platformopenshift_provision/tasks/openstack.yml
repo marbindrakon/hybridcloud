@@ -2,11 +2,10 @@
 - name: Set OpenStack spec facts
   ansible.builtin.set_fact:
     oso_env_name: "{{ platform_spec.openstack.environment }}"
-    oso_control_plane_count: "{{ platform_spec.openstack.controlPlaneCount | default(3) }}"
-    oso_worker_count: "{{ platform_spec.openstack.workerCount | default(3) }}"
-    oso_control_plane_flavor: "{{ platform_spec.openstack.controlPlaneFlavor | default('b1.xlarge') }}"
-    oso_worker_flavor: "{{ platform_spec.openstack.workerFlavor | default('b1.large') }}"
-    oso_external_network: "{{ platform_spec.openstack.externalNetwork | default('internet') }}"
+    oso_control_plane_count: "{{ platform_spec.openstack.controlPlaneCount | default(default_control_plane_count) }}"
+    oso_worker_count: "{{ platform_spec.openstack.workerCount | default(default_worker_count) }}"
+    oso_control_plane_flavor: "{{ platform_spec.openstack.controlPlaneFlavor | default(default_control_plane_flavor, true) }}"
+    oso_worker_flavor: "{{ platform_spec.openstack.workerFlavor | default(default_worker_flavor, true) }}"
 
 - name: Read CloudOSO CR
   kubernetes.core.k8s_info:
@@ -33,31 +32,38 @@
     fail_msg: >-
       CloudOSO '{{ oso_env_name }}' is not ready yet. Wait for environment preparation.
 
+# shc (§11.6 phase C): the environment's domain, DNS zone and account come from what the CloudOSO
+# recorded at provision, not from re-derived names or the old lab zone/project ids.
 - name: Extract CloudOSO details
+  vars:
+    _oso_st: "{{ cloudoso_cr.resources[0].status }}"
   ansible.builtin.set_fact:
-    cb_slug: "{{ cloudoso_cr.resources[0].status.slug }}"
-    oso_domain: "{{ cloudoso_cr.resources[0].status.domain }}"
-    cb_base_domain: "{{ cloudoso_cr.resources[0].spec.baseDomain }}"
-    oso_project_domain: "{{ cloudoso_cr.resources[0].spec.projectDomain | default('Default') }}"
-    cb_route53_vault_path: "{{ cloudoso_cr.resources[0].spec.route53VaultPath | default('oso/accounts/route53-openstack') }}"
-    cb_api_vip: "{{ cloudoso_cr.resources[0].status.apiVIP | default('') }}"
-    cb_ingress_vip: "{{ cloudoso_cr.resources[0].status.ingressVIP | default('') }}"
-    cb_external_network: "{{ oso_external_network }}"
-    use_designate_dns: "{{ cloudoso_cr.resources[0].spec.baseDomain | default('') == (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true)) }}"
-    designate_zone_id: "{{ cloudoso_cr.resources[0].spec.designateZoneId | default('895a1406-9ad2-4372-80f9-4e23fe1fd9ef') }}"
-    designate_project_id: "{{ cloudoso_cr.resources[0].status.projectId | default(cloudoso_cr.resources[0].spec.designateProjectId | default('')) }}"
-    designate_project_name: "{{ cloudoso_cr.resources[0].status.projectName | default('') }}"
-    designate_admin_vault_path: "{{ cloudoso_cr.resources[0].spec.vaultPath | default('oso/accounts/shc_admin') }}"
-    designate_dns_project_name: "{{ cloudoso_cr.resources[0].spec.designateDnsProject | default('lab-project') }}"
+    cb_slug: "{{ _oso_st.slug | default('') }}"
+    oso_domain: "{{ _oso_st.domain }}"
+    cb_cluster_domain: "{{ _oso_st.domain }}"
+    cb_base_domain: "{{ cloudoso_cr.resources[0].spec.baseDomain | default('') }}"
+    cb_route53_vault_path: "{{ _oso_st.route53VaultPath | default(cloudoso_cr.resources[0].spec.route53VaultPath | default(''), true) }}"
+    cb_api_vip: "{{ _oso_st.apiVIP | default('') }}"
+    cb_ingress_vip: "{{ _oso_st.ingressVIP | default('') }}"
+    cb_external_network: "{{ platform_spec.openstack.externalNetwork | default(_oso_st.externalNetwork, true) }}"
+    use_designate_dns: "{{ (_oso_st.dnsProvider | default('')) == 'designate' }}"
+    designate_zone_id: "{{ _oso_st.dnsZoneId | default('') }}"
+    designate_project_id: "{{ _oso_st.dnsProjectId | default('') }}"
+    designate_admin_vault_path: "{{ _oso_st.accountVaultPath | default('') }}"
+
+- name: Fail if the CloudOSO predates the recorded DNS settings
+  ansible.builtin.assert:
+    that:
+      - (cloudoso_cr.resources[0].status.dnsProvider | default('')) in ['designate', 'route53']
+      - not (use_designate_dns | bool) or (designate_zone_id | length > 0 and designate_project_id | length > 0 and designate_admin_vault_path | length > 0)
+    fail_msg: >-
+      CloudOSO '{{ oso_env_name }}' has no recorded DNS provider/zone/account; reconcile it
+      (reconcileNow) so its status carries dnsProvider, dnsZoneId, dnsProjectId and accountVaultPath.
 
 - name: Set cluster build identifiers
   ansible.builtin.set_fact:
     cb_app_name: "{{ ansible_operator_meta.name }}"
     cb_cluster_name: "{{ ansible_operator_meta.name }}"
-    cb_cluster_domain: >-
-      {{ (oso_env_name ~ '.' ~ (lookup('env', 'BASE_DOMAIN') | default('signal9.gg', true)))
-         if (use_designate_dns | default(false) | bool)
-         else (cb_slug ~ '.' ~ cb_base_domain) }}
 
 - name: Read PlatformOpenshift CR for existing cluster status
   kubernetes.core.k8s_info:
@@ -166,6 +172,13 @@
       provisionStatus: "{{ cb_provision_status | default('Unknown') }}"
       acmAvailable: "{{ cb_acm_available | default('Unknown') }}"
       clusterInstalled: "{{ cb_cluster_installed | default(false) | bool }}"
+      # shc (§11.6 phase C): what provision created, for teardown
+      dns:
+        provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
+        accountVaultPath: "{{ designate_admin_vault_path if (use_designate_dns | bool) else cb_route53_vault_path }}"
+        projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
+        records: "{{ cb_dns_records | default(po_cr_current.resources[0].status.dns.records | default([])) }}"
+      vaultPaths: "{{ cb_vault_paths | default(po_cr_current.resources[0].status.vaultPaths | default([])) }}"
       conditions:
         - type: Available
           status: "True"
@@ -183,6 +196,8 @@
     cluster_api_url: "{{ cb_api_url | default('') }}"
     cluster_apps_url: "{{ cb_apps_url | default('') }}"
     cluster_namespace: "{{ ansible_operator_meta.namespace }}"
+    # shc: upstream never passed the central token, so OIDC and cluster RBAC were always skipped
+    central_token: "{{ central_bearer_token }}"
   when: cb_cluster_installed | default(false) | bool
 
 - name: Update PlatformOpenshift status with OIDC info

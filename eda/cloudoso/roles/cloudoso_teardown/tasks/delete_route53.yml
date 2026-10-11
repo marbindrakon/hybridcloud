@@ -1,68 +1,20 @@
 ---
-- name: Create temporary ExternalSecret for Route53 credentials
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-cloudoso-teardown-{{ cloudoso_cr_name }}-r53"
-        namespace: "{{ eda_central_work_namespace }}"
-      spec:
-        refreshInterval: 1m
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-cloudoso-teardown-{{ cloudoso_cr_name }}-r53"
-          creationPolicy: Owner
-        data:
-          - secretKey: AWS_ACCESS_KEY_ID
-            remoteRef:
-              key: "{{ ep_route53_vault_path }}"
-              property: access-key
-          - secretKey: AWS_SECRET_ACCESS_KEY
-            remoteRef:
-              key: "{{ ep_route53_vault_path }}"
-              property: secret-access-key
-
-- name: Wait for Route53 credentials
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Secret
-    name: "eda-cloudoso-teardown-{{ cloudoso_cr_name }}-r53"
-    namespace: "{{ eda_central_work_namespace }}"
-  register: r53_secret
-  until: r53_secret.resources | length > 0
-  retries: 20
-  delay: 5
-  ignore_errors: true
-
-- name: Decode Route53 credentials
-  when: r53_secret.resources | default([]) | length > 0
-  ansible.builtin.set_fact:
-    r53_access_key_id: "{{ r53_secret.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
-    r53_secret_access_key: "{{ r53_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
-  no_log: true
+# Route53 environments: remove an NS delegation for the slug domain if one exists (upstream's older
+# provision created one). Credentials come straight from Vault, not a temporary ExternalSecret.
+- name: Read the Route53 credentials
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ oso_route53_vault_path }}"
 
 - name: Remove NS delegation for slug zone
-  when: r53_access_key_id is defined
   amazon.aws.route53:
     state: absent
-    zone: "{{ ep_base_domain }}"
+    zone: "{{ oso_base_domain }}"
     record: "{{ oso_domain }}"
     type: NS
   environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
+    AWS_ACCESS_KEY_ID: "{{ vault_kv_data['access-key'] }}"
+    AWS_SECRET_ACCESS_KEY: "{{ vault_kv_data['secret-access-key'] }}"
     AWS_DEFAULT_REGION: "us-east-1"
-  ignore_errors: true
-
-- name: Remove temporary Route53 credentials secret
-  kubernetes.core.k8s:
-    state: absent
-    api_version: v1
-    kind: Secret
-    name: "eda-cloudoso-teardown-{{ cloudoso_cr_name }}-r53"
-    namespace: "{{ eda_central_work_namespace }}"
-  ignore_errors: true
+  register: r53_ns_delete
+  failed_when: r53_ns_delete.failed and 'not found' not in (r53_ns_delete.msg | default('') | lower)

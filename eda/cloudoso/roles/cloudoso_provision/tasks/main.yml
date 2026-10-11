@@ -108,6 +108,17 @@
           apiVIP: "{{ oso_api_vip }}"
           ingressVIP: "{{ oso_ingress_vip }}"
           externalNetwork: "{{ oso_external_network }}"
+          # shc (§11.6 phase C): what provision created, for teardown
+          accountVaultPath: "{{ oso_record.accountVaultPath }}"
+          appCredentialId: "{{ oso_record.appCredentialId }}"
+          apiFloatingIPId: "{{ oso_record.apiFloatingIPId }}"
+          ingressFloatingIPId: "{{ oso_record.ingressFloatingIPId }}"
+          dnsProvider: "{{ oso_record.dnsProvider }}"
+          dnsZoneId: "{{ oso_record.dnsZoneId }}"
+          dnsZoneName: "{{ oso_record.dnsZoneName }}"
+          dnsProjectId: "{{ oso_record.dnsProjectId }}"
+          route53VaultPath: "{{ oso_record.route53VaultPath }}"
+          vaultPaths: "{{ oso_record.vaultPaths }}"
           conditions:
             - type: Ready
               status: "True"
@@ -142,3 +153,9 @@
     - name: Re-raise provisioning failure
       ansible.builtin.fail:
         msg: "CloudOSO {{ cloudoso_cr_name | default('unknown') }} EDA provisioning failed"
+
+  always:
+    - name: Remove the account's temp clouds.yaml
+      ansible.builtin.file:
+        path: "/tmp/eda-cloudoso-{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        state: absent

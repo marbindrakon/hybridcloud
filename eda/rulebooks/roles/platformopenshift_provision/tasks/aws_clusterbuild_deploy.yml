@@ -111,7 +111,7 @@
       - helm
       - upgrade
       - "{{ cb_app_name }}"
-      - "oci://{{ oci_registry_host }}/hybrid-sovereign/mce-cluster-build"
+      - "{{ mce_cluster_build_chart | trim }}"
       - --version
       - "{{ mce_cluster_build_chart_version }}"
       - --install

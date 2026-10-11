@@ -1,93 +1,30 @@
 ---
-- name: Skip AWS DNS cleanup when slug/domain unavailable
-  ansible.builtin.set_fact:
-    skip_aws_dns: "{{ (po_status_slug | default('') | length == 0) or (po_status_domain | default('') | length == 0) }}"
+# Route53 records of a cluster: AWS clusters (the slug zone) and Route53 OpenStack environments
+# (the records provision recorded). shc (§11.6 phase C): credentials come straight from Vault
+# (upstream's temporary ExternalSecret used a bare k8s call and was never deleted), and a failed
+# delete fails the job instead of being ignored.
+# Inputs: r53_vault_path, r53_records (list of {zone, name}).
+- name: Read the Route53 credentials
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ r53_vault_path }}"
 
-- name: Create temporary ExternalSecret for Route53 credentials (teardown)
-  when: not (skip_aws_dns | bool)
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: external-secrets.io/v1
-      kind: ExternalSecret
-      metadata:
-        name: "eda-po-teardown-{{ platformopenshift_cr_name }}-route53-creds"
-        namespace: "{{ eda_central_work_namespace | default('sovereign-cloud-jobs') }}"
-      spec:
-        refreshInterval: 1m
-        secretStoreRef:
-          name: vault-backend
-          kind: ClusterSecretStore
-        target:
-          name: "eda-po-teardown-{{ platformopenshift_cr_name }}-route53-creds"
-          creationPolicy: Owner
-        data:
-          - secretKey: AWS_ACCESS_KEY_ID
-            remoteRef:
-              key: "{{ aws_route53_vault_path | default('aws/accounts/route53') }}"
-              property: access-key
-          - secretKey: AWS_SECRET_ACCESS_KEY
-            remoteRef:
-              key: "{{ aws_route53_vault_path | default('aws/accounts/route53') }}"
-              property: secret-access-key
-
-- name: Wait for Route53 credentials (teardown)
-  when: not (skip_aws_dns | bool)
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Secret
-    name: "eda-po-teardown-{{ platformopenshift_cr_name }}-route53-creds"
-    namespace: "{{ eda_central_work_namespace | default('sovereign-cloud-jobs') }}"
-  register: r53_secret
-  until: r53_secret.resources | length > 0
-  retries: 20
-  delay: 5
-  ignore_errors: true
-
-- name: Decode Route53 credentials (teardown)
-  when:
-    - not (skip_aws_dns | bool)
-    - r53_secret.resources | default([]) | length > 0
-  ansible.builtin.set_fact:
-    r53_access_key_id: "{{ r53_secret.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
-    r53_secret_access_key: "{{ r53_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
-  no_log: true
-
-- name: Remove API DNS record from slug zone
-  when:
-    - not (skip_aws_dns | bool)
-    - r53_access_key_id is defined
+- name: Delete the cluster's Route53 A records
   amazon.aws.route53:
     state: absent
-    zone: "{{ po_status_domain }}"
-    record: "api.{{ platformopenshift_cr_name }}.{{ po_status_domain }}"
+    zone: "{{ item.zone }}"
+    record: "{{ item.name }}"
     type: A
   environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
+    AWS_ACCESS_KEY_ID: "{{ vault_kv_data['access-key'] }}"
+    AWS_SECRET_ACCESS_KEY: "{{ vault_kv_data['secret-access-key'] }}"
     AWS_DEFAULT_REGION: "us-east-1"
-  ignore_errors: true
+  loop: "{{ r53_records }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: r53_delete
+  failed_when: r53_delete.failed and 'not found' not in (r53_delete.msg | default('') | lower)
 
-- name: Remove Apps wildcard DNS record from slug zone
-  when:
-    - not (skip_aws_dns | bool)
-    - r53_access_key_id is defined
-  amazon.aws.route53:
-    state: absent
-    zone: "{{ po_status_domain }}"
-    record: "*.apps.{{ platformopenshift_cr_name }}.{{ po_status_domain }}"
-    type: A
-  environment:
-    AWS_ACCESS_KEY_ID: "{{ r53_access_key_id }}"
-    AWS_SECRET_ACCESS_KEY: "{{ r53_secret_access_key }}"
-    AWS_DEFAULT_REGION: "us-east-1"
-  ignore_errors: true
-
-- name: Remove temporary Route53 credentials secret
-  kubernetes.core.k8s:
-    state: absent
-    api_version: v1
-    kind: Secret
-    name: "eda-po-teardown-{{ platformopenshift_cr_name }}-route53-creds"
-    namespace: "{{ eda_central_work_namespace | default('sovereign-cloud-jobs') }}"
-  ignore_errors: true
+- name: Forget the Route53 credentials
+  ansible.builtin.set_fact:
+    vault_kv_data: {}
