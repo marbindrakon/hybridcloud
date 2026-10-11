@@ -49,4 +49,5 @@ spec:
       name: {{ .Values.quayServices.values.registry.configBundleSecretName | default (printf "%s-config-bundle" (.Values.quayServices.values.registry.name | default "sovereign-registry")) }}
       jsonPointers:
         - /data/config.yaml
+    {{- include "sovereign-central.esoIgnoreDifferences" . | nindent 4 }}
 {{- end }}

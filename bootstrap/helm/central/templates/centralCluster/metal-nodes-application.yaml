@@ -37,6 +37,7 @@ spec:
         - /spec/userData
         - /spec/networkData
         - /spec/metaData
+    {{- include "sovereign-central.esoIgnoreDifferences" . | nindent 4 }}
   syncPolicy:
     automated:
       prune: true

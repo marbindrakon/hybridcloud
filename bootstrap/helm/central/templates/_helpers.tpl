@@ -50,7 +50,8 @@ retry:
 {{- end }}
 
 {{/*
-Ignore ESO controller defaults on ExternalSecret/PushSecret (conversionStrategy, etc.).
+Ignore ESO controller defaults on ExternalSecret/PushSecret (conversionStrategy, etc.; shc: the Red Hat
+ESO 1.x operator also defaults remoteRef.nullBytePolicy and target.template.mergePolicy).
 */}}
 {{- define "sovereign-central.esoIgnoreDifferences" -}}
 - group: external-secrets.io
@@ -59,7 +60,9 @@ Ignore ESO controller defaults on ExternalSecret/PushSecret (conversionStrategy,
     - .spec.data[].remoteRef.conversionStrategy
     - .spec.data[].remoteRef.decodingStrategy
     - .spec.data[].remoteRef.metadataPolicy
+    - .spec.data[].remoteRef.nullBytePolicy
     - .spec.target.deletionPolicy
+    - .spec.target.template.mergePolicy
     - .spec.refreshInterval
   jsonPointers:
     - /spec/dataFrom
