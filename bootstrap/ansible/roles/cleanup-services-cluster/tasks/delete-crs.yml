@@ -1,64 +1,9 @@
 ---
-# Delete all CRs of each kind in a group across all namespaces
-- name: "List all {{ cr_group.group }} namespaces"
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_api_token }}"
-    validate_certs: false
-    api_version: v1
-    kind: Namespace
-  register: all_namespaces
-
-- name: "Delete all {{ item.kind }} CRs from each namespace"
-  kubernetes.core.k8s:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_api_token }}"
-    validate_certs: false
-    state: absent
-    api_version: "{{ cr_group.group }}/{{ cr_group.version }}"
-    kind: "{{ item.kind }}"
-    namespace: "{{ ns.metadata.name }}"
-    name: "{{ cr.metadata.name }}"
-  loop_control:
-    loop_var: cr
-  with_items: "{{ cr_list.resources | default([]) }}"
-  ignore_errors: true
-  vars:
-    cr_list_fetch: "{{ lookup('community.kubernetes.k8s',
-      api_version=cr_group.group + '/' + cr_group.version,
-      kind=item.kind,
-      namespace=ns.metadata.name,
-      host=services_api_host,
-      api_key=services_api_token,
-      validate_certs=false) }}"
+# shc (LAB-PLAN §11.6, design/TENANT-TEARDOWN.md §3.1): delete the kinds one at a time, in
+# services_cr_groups order, and wait for each to be gone - its finalizers run the EDA teardowns -
+# before the next. Upstream deleted everything at once, so clouds went before the clusters in them.
+- name: "Delete {{ cr_group.group }} CRs kind by kind"
+  ansible.builtin.include_tasks: delete-kind.yml
   loop: "{{ cr_group.kinds }}"
-  # Simplified approach using k8s_info per kind per namespace
-  when: false  # handled by direct delete below
-
-- name: "Delete all {{ cr_group.group }} resources from services cluster"
-  block:
-    - name: Get all CRs of each kind
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_api_token }}"
-        validate_certs: false
-        api_version: "{{ cr_group.group }}/{{ cr_group.version }}"
-        kind: "{{ kind_item }}"
-      register: found_crs
-      loop: "{{ cr_group.kinds }}"
-      loop_control:
-        loop_var: kind_item
-      ignore_errors: true
-
-    - name: Delete each found CR
-      kubernetes.core.k8s:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_api_token }}"
-        validate_certs: false
-        state: absent
-        api_version: "{{ cr_group.group }}/{{ cr_group.version }}"
-        kind: "{{ item.0.kind_item }}"
-        name: "{{ item.1.metadata.name }}"
-        namespace: "{{ item.1.metadata.namespace | default(omit) }}"
-      loop: "{{ found_crs.results | subelements('resources', skip_missing=True) }}"
-      ignore_errors: true
+  loop_control:
+    loop_var: kind_item

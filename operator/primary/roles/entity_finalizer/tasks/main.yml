@@ -27,6 +27,66 @@
             } | to_json
           }}
 
+    # shc (LAB-PLAN §11.6): tear down the entity's CRs in dependency order first. The namespace operator
+    # runs their finalizers, so it and the namespace go only after every tier is gone (upstream removed
+    # both at once, stranding CloudOSO/PlatformOpenshift finalizers - the P0 orphans).
+    - name: List the entity namespace's CRs
+      kubernetes.core.k8s_info:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+        namespace: "entity-{{ ansible_operator_meta.name }}"
+      loop: "{{ entity_teardown_tiers | flatten }}"
+      register: _entity_crs
+
+    - name: Find the first tier that still has CRs
+      ansible.builtin.set_fact:
+        _entity_tier_json: >-
+          {%- set by_kind = {} -%}
+          {%- for r in _entity_crs.results -%}
+            {%- set _ = by_kind.update({r.item: (r.resources | default([]) | map(attribute='metadata.name') | list)}) -%}
+          {%- endfor -%}
+          {%- set ns = namespace(tier=none) -%}
+          {%- for tier in entity_teardown_tiers -%}
+            {%- if ns.tier is none -%}
+              {%- set left = [] -%}
+              {%- for k in tier -%}{%- for n in by_kind.get(k, []) -%}{%- set _ = left.append(k ~ '/' ~ n) -%}{%- endfor -%}{%- endfor -%}
+              {%- if left | length > 0 -%}{%- set ns.tier = {'index': loop.index, 'left': left} -%}{%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.tier | to_json }}
+
+    - name: Tear down the current tier
+      when: (_entity_tier_json | from_json) is not none
+      block:
+        - name: Delete the tier's CRs
+          kubernetes.core.k8s:
+            state: absent
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: "{{ item.split('/')[0] }}"
+            name: "{{ item.split('/')[1] }}"
+            namespace: "entity-{{ ansible_operator_meta.name }}"
+            wait: false
+          loop: "{{ (_entity_tier_json | from_json).left }}"
+
+        - name: Record the teardown progress
+          operator_sdk.util.k8s_status:
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: Entity
+            name: "{{ ansible_operator_meta.name }}"
+            namespace: "{{ ansible_operator_meta.namespace }}"
+            status:
+              status: reconciling
+              ready: false
+              message: >-
+                Deleting tier {{ (_entity_tier_json | from_json).index }}/{{ entity_teardown_tiers | length }}:
+                waiting for {{ (_entity_tier_json | from_json).left | join(', ') }}
+
+        - name: Requeue until the tier is gone
+          ansible.builtin.fail:
+            msg: >-
+              Entity teardown waits for {{ (_entity_tier_json | from_json).left | join(', ') }}
+              (tier {{ (_entity_tier_json | from_json).index }}/{{ entity_teardown_tiers | length }})
+
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:
         name: _common

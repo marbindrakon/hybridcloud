@@ -1,0 +1,38 @@
+---
+- name: "List {{ kind_item }} CRs"
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_api_token }}"
+    validate_certs: false
+    api_version: "{{ cr_group.group }}/{{ cr_group.version }}"
+    kind: "{{ kind_item }}"
+  register: _kind_crs
+  failed_when: false
+
+- name: "Delete {{ kind_item }} CRs"
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_api_token }}"
+    validate_certs: false
+    state: absent
+    api_version: "{{ cr_group.group }}/{{ cr_group.version }}"
+    kind: "{{ kind_item }}"
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace | default(omit) }}"
+    wait: false
+  loop: "{{ _kind_crs.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.namespace | default('') }}/{{ item.metadata.name }}"
+
+- name: "Wait until every {{ kind_item }} is gone (its teardown finished)"
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_api_token }}"
+    validate_certs: false
+    api_version: "{{ cr_group.group }}/{{ cr_group.version }}"
+    kind: "{{ kind_item }}"
+  register: _kind_left
+  until: (_kind_left.resources | default([]) | length) == 0
+  retries: "{{ (services_cr_delete_wait_minutes | int) * 3 }}"
+  delay: 20
+  when: (_kind_crs.resources | default([]) | length) > 0

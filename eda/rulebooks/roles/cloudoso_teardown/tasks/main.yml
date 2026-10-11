@@ -61,7 +61,7 @@
         oso_domain: ""
         entity_name: "{{ cloudoso_cr_namespace | regex_replace('^entity-', '') }}"
         ep_project: "{{ (cloudoso_cr_namespace | regex_replace('^entity-', '')) }}_{{ cloudoso_cr_name }}"
-        ep_base_domain: {{ lookup('env', 'LAB_DOMAIN') }}
+        ep_base_domain: "{{ lookup('env', 'LAB_DOMAIN') }}"
         ep_route53_vault_path: oso/accounts/route53-openstack
         ep_vault_path: oso/accounts/shc_admin
         ep_project_domain: shc_domain

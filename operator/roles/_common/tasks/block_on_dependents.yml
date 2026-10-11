@@ -1,0 +1,57 @@
+---
+# shc (LAB-PLAN §11.6, design/TENANT-TEARDOWN.md §3.1): a delete waits while other CRs in the namespace
+# still use this one (a CloudOSO while PlatformOpenshift clusters run in its project, a cluster while
+# Assignments deploy onto it). The finalizer requeues with a readable status instead of tearing down
+# under its dependents - the P0 orphans came from the opposite.
+#
+# inputs:
+#   dependents_namespace  namespace to search
+#   dependent_checks      list of {kind, match: {"dotted.path": value, ...}}; a CR matches when every
+#                         path equals its value
+#   dependents_status     {apiVersion, kind, name} of the CR being deleted (for the status message)
+- name: List CRs that may depend on this one
+  kubernetes.core.k8s_info:
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ item.kind }}"
+    namespace: "{{ dependents_namespace }}"
+  loop: "{{ dependent_checks }}"
+  loop_control:
+    label: "{{ item.kind }}"
+  register: _dependents_lists
+
+- name: Find the dependents
+  ansible.builtin.set_fact:
+    _dependents: >-
+      {%- set out = [] -%}
+      {%- for r in _dependents_lists.results -%}
+        {%- for o in r.resources | default([]) -%}
+          {%- set ns = namespace(ok=true) -%}
+          {%- for path, want in r.item.match.items() -%}
+            {%- set cur = namespace(v=o) -%}
+            {%- for k in path.split('.') -%}
+              {%- set cur.v = (cur.v if cur.v is mapping else {}).get(k) -%}
+            {%- endfor -%}
+            {%- if cur.v != want -%}{%- set ns.ok = false -%}{%- endif -%}
+          {%- endfor -%}
+          {%- if ns.ok -%}{%- set _ = out.append(r.item.kind ~ '/' ~ o.metadata.name) -%}{%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Record what the delete is waiting for
+  operator_sdk.util.k8s_status:
+    api_version: "{{ dependents_status.apiVersion }}"
+    kind: "{{ dependents_status.kind }}"
+    name: "{{ dependents_status.name }}"
+    namespace: "{{ dependents_namespace }}"
+    status:
+      status: reconciling
+      ready: false
+      message: "Deletion waits for {{ _dependents | join(', ') }}"
+      deletionBlockedBy: "{{ _dependents }}"
+  when: _dependents | length > 0
+
+- name: Requeue until the dependents are gone
+  ansible.builtin.fail:
+    msg: "Deletion waits for {{ _dependents | join(', ') }}"
+  when: _dependents | length > 0

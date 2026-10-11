@@ -5,7 +5,8 @@ shc LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.4. Runs as a CronJob on th
 hybridsovereign.redhat CRs. For every CR that is not ready:
 
 - published (status.delivery.publishedAt) but not acknowledged by an EDA job within ackTimeoutMinutes:
-  annotate reconcileNow=true (the operator re-publishes with a new eventId), at most maxRedrives
+  annotate reconcileNow=true, or redeliver=true for a CR being deleted (the operator re-publishes with
+  a new eventId), at most maxRedrives
   times, and only for kinds in redriveKinds; otherwise status.delivery.state=NoAcknowledgement
 - acknowledged but not completed within the kind's jobTimeoutMinutes: status.delivery.state=Stalled
   (never re-driven: the job may still be changing things)
@@ -29,6 +30,8 @@ from kubernetes.client.rest import ApiException
 GROUP = "hybridsovereign.redhat"
 REDRIVES = f"{GROUP}/redrives"
 RECONCILE_NOW = "ansible.sdk.operatorframework.io/reconcileNow"
+# delete finalizers publish once (LAB-PLAN §11.6); this asks them to publish the delete event again
+REDELIVER = f"{GROUP}/redeliver"
 
 DEFAULTS = {
     "ackTimeoutMinutes": 10,
@@ -152,7 +155,8 @@ def main():
                 counts["redriven"] += 1
                 print(f"redrive {ref}: event {event_id} unacknowledged for {age:.0f} min "
                       f"(redrive {redrives + 1}/{cfg['maxRedrives']})")
-                patch_annotations({RECONCILE_NOW: "true", REDRIVES: str(redrives + 1)})
+                trigger = REDELIVER if meta.get("deletionTimestamp") else RECONCILE_NOW
+                patch_annotations({trigger: "true", REDRIVES: str(redrives + 1)})
             else:
                 counts["noAcknowledgement"] += 1
                 why = "redrive disabled for this kind" if not may_redrive else f"{redrives} redrives"

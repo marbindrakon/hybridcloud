@@ -15,22 +15,28 @@ services_platform_namespaces:
 services_cr_groups:
   - group: hybridsovereign.redhat
     version: v1alpha1
+    # shc (LAB-PLAN §11.6): deleted in this order, each kind waited for (its finalizers' EDA teardowns)
+    # before the next. Entity first: its finalizer tears down the entity namespace's CRs in dependency
+    # order. Then anything left outside entity namespaces, clusters before clouds, platform config last.
     kinds:
       - Entity
-      - Team
       - Assignment
-      - Project
       - PlatformOpenshift
-      - RbacConfig
-      - Rbac
-      - AAPConfig
-      - AAPOrg
-      - QuayConfig
-      - QuayOrg
-      - Iaac
-      - Vault
-      - VaultKV
       - CloudOSO
+      - Team
+      - Project
+      - AAPOrg
+      - QuayOrg
+      - VaultKV
+      - Rbac
+      - Vault
+      - Iaac
+      - AAPConfig
+      - QuayConfig
+      - RbacConfig
+
+# Per kind: how long to wait for its CRs to be gone (cluster teardowns take ~30-60 min)
+services_cr_delete_wait_minutes: 120
 
 # OLM subscription and CSV names (operator lifecycle manager)
 services_olm_subscriptions:
