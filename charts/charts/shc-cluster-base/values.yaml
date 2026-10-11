@@ -129,6 +129,23 @@ ops:
     labVaultAddr: ""
     minTTLDays: 7
     schedule: "15 6 * * *"
+  # Dispatch re-drive and stall detection (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md): only on the
+  # cluster that holds the hybridsovereign.redhat CRs (services). Failures surface as ShcBackupJobFailed.
+  edaRedrive:
+    enabled: false
+    schedule: "*/5 * * * *"
+    # python3 + kubernetes client + PyYAML
+    image: quay.signal9.gg/shc/ansible-runner:latest
+    config:
+      ackTimeoutMinutes: 10
+      jobTimeoutMinutes: 30
+      publishFailedMinutes: 15
+      maxRedrives: 3
+      # kinds whose EDA roles are idempotent (create-if-absent); others are only reported
+      redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment]
+      kinds:
+        PlatformOpenshift: {jobTimeoutMinutes: 150}
+        CloudOSO: {jobTimeoutMinutes: 150}
   certManagerMetrics:
     enabled: true
   alerts:

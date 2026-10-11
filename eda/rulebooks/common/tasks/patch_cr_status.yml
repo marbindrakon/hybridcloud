@@ -50,7 +50,25 @@
           }
           all_jobs = [job_entry]
 
+          # shc (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.2/§3.3): the operator writes
+          # status.delivery.eventId before it publishes. A job whose event is no longer the CR's
+          # current one was superseded (re-drive, reconcileNow, resync): it must not write status.
+          event_id = os.environ.get("EVENT_ID", "").strip()
+          headers = {"Authorization": f"Bearer {token}"}
+          if event_id:
+              cur = requests.get(url, headers=headers, verify=False, timeout=30)
+              if cur.status_code == 200:
+                  cur_id = ((cur.json().get("status") or {}).get("delivery") or {}).get("eventId", "")
+                  if cur_id and cur_id != event_id:
+                      print(json.dumps({"superseded": True, "eventId": event_id, "currentEventId": cur_id}))
+                      sys.exit(0)
+
           status_body = json.loads(os.environ["CR_STATUS_BODY"])
+          if event_id:
+              if cr_action == "reconciling":
+                  status_body["delivery"] = {"acknowledgedEventId": event_id, "jobId": str(job_id), "jobStartedAt": now}
+              else:
+                  status_body["delivery"] = {"completedEventId": event_id, "completedAt": now}
           if "observedGeneration" in status_body:
               status_body["observedGeneration"] = int(status_body["observedGeneration"])
           if "conditions" in status_body and isinstance(status_body["conditions"], list):
@@ -61,7 +79,7 @@
           body = json.dumps({"status": status_body})
 
           resp = requests.patch(url, data=body,
-              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/merge-patch+json"},
+              headers={**headers, "Content-Type": "application/merge-patch+json"},
               verify=False, timeout=30)
 
           try:
@@ -115,6 +133,7 @@
     TOWER_JOB_ID: "{{ tower_job_id | default(awx_job_id | default('')) | string }}"
     TOWER_URL: "{{ aap_ui_url | default('') }}"
     PATCH_IGNORE_NOT_FOUND: "{{ patch_ignore_not_found | default(false) | bool | ternary('1', '0') }}"
+    EVENT_ID: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
   register: _patch_cr_status_result
   changed_when: true
   no_log: false
@@ -122,3 +141,8 @@
 - name: "Log status patch result for {{ cr_plural }}/{{ cr_name }}"
   ansible.builtin.debug:
     msg: "stdout={{ _patch_cr_status_result.stdout | default('') }} stderr={{ _patch_cr_status_result.stderr | default('') }}"
+
+# shc (§11.1): a superseded event ends the job here, successfully, before it does any work.
+- name: "End the job: a newer request for {{ cr_plural }}/{{ cr_name }} superseded this event"
+  ansible.builtin.meta: end_play
+  when: "'superseded' in (_patch_cr_status_result.stdout | default(''))"

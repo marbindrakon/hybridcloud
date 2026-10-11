@@ -22,14 +22,8 @@
     KAFKA_SASL_MECHANISM: "{{ lookup('env', 'KAFKA_SASL_MECHANISM') | default('SCRAM-SHA-512', true) }}"
   register: amq_publish_result
   changed_when: true
-  failed_when: false
+  # shc (LAB-PLAN §11.1): a failed publish fails the reconcile (publish_operator_event records
+  # Published=False first), so ansible-operator requeues it with backoff instead of dropping it.
+  timeout: 90
   # credentials are env-only; keep result visible for triage
   no_log: false
-
-- name: Log AMQ publish failure
-  ansible.builtin.debug:
-    msg: >-
-      AMQ publish failed (non-fatal): rc={{ amq_publish_result.rc | default('?') }}
-      stderr={{ amq_publish_result.stderr | default('') | truncate(500, True, '…') }}
-      stdout={{ amq_publish_result.stdout | default('') | truncate(200, True, '…') }}
-  when: amq_publish_result.rc | default(0) != 0

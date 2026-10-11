@@ -256,6 +256,92 @@ spec:
                   [ "$TTL" -ge "$MIN_TTL" ] || { echo "below $((MIN_TTL / 86400)) days"; exit 1; }
 {{- end }}
 
+{{- if $o.edaRedrive.enabled }}
+{{- $r := $o.edaRedrive }}
+---
+# Dispatch re-drive and stall detection (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.4): files/eda_redrive.py
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eda-redrive
+  namespace: {{ $o.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shc-ops-eda-redrive
+rules:
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get, list]
+  - apiGroups: [hybridsovereign.redhat]
+    resources: ["*"]
+    verbs: [get, list, patch]
+  - apiGroups: [hybridsovereign.redhat]
+    resources: ["*/status"]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shc-ops-eda-redrive
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: shc-ops-eda-redrive
+subjects:
+  - kind: ServiceAccount
+    name: eda-redrive
+    namespace: {{ $o.namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eda-redrive
+  namespace: {{ $o.namespace }}
+data:
+  eda_redrive.py: |
+    {{- $.Files.Get "files/eda_redrive.py" | nindent 4 }}
+  config.yaml: |
+    {{- toYaml $r.config | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: eda-redrive
+  namespace: {{ $o.namespace }}
+spec:
+  schedule: {{ $r.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 240
+      template:
+        metadata:
+          annotations:
+            # the script and its config come from the ConfigMap; restart-free updates
+            shc/config-hash: {{ printf "%s%s" ($.Files.Get "files/eda_redrive.py") (toYaml $r.config) | sha256sum | trunc 16 | quote }}
+        spec:
+          serviceAccountName: eda-redrive
+          restartPolicy: Never
+          containers:
+            - name: redrive
+              image: {{ $r.image }}
+              command: [python3, /etc/eda-redrive/eda_redrive.py, --config, /etc/eda-redrive/config.yaml]
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/eda-redrive
+                  readOnly: true
+          volumes:
+            - name: config
+              configMap:
+                name: eda-redrive
+{{- end }}
+
 {{- if $o.certManagerMetrics.enabled }}
 ---
 # cert-manager metrics into platform monitoring (certificate expiry/readiness alerts below).

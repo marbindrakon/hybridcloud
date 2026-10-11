@@ -1,17 +1,92 @@
 ---
+# shc (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.1). Every event carries an eventId, written to
+# status.delivery *before* publishing so a fast job never sees an older id. The EDA job acknowledges it
+# (status.delivery.acknowledgedEventId) and exits when a newer eventId superseded its event. A failed
+# publish records Published=False/PublishFailed and fails the reconcile: ansible-operator requeues it
+# with exponential backoff until Kafka accepts it.
+- name: Generate the event id
+  ansible.builtin.set_fact:
+    operator_event_id: "{{ lookup('ansible.builtin.pipe', 'cat /proc/sys/kernel/random/uuid') }}"
+    operator_event_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
 - name: Build operator event payload for AMQ Streams
   ansible.builtin.set_fact:
     amq_event_payload:
+      eventId: "{{ operator_event_id }}"
       reason: "{{ operator_event_reason }}"
       regarding: "{{ operator_event_regarding }}"
       note: "{{ operator_event_note | default('') }}"
       reportingController: "{{ operator_reporting_controller | default('hybridsovereign-operator') }}"
       action: "{{ operator_event_action | default('Create') }}"
       cluster: services
-      timestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      timestamp: "{{ operator_event_time }}"
+
+- name: Record the event id before publishing
+  operator_sdk.util.k8s_status:
+    api_version: "{{ operator_event_regarding.apiVersion }}"
+    kind: "{{ operator_event_regarding.kind }}"
+    name: "{{ operator_event_regarding.name }}"
+    namespace: "{{ operator_event_regarding.namespace }}"
+    status:
+      delivery:
+        eventId: "{{ operator_event_id }}"
+        reason: "{{ operator_event_reason }}"
+        publishedAt: null
+      conditions:
+        - type: Published
+          status: Unknown
+          reason: Publishing
+          message: "{{ operator_event_reason }} event {{ operator_event_id }}"
+          lastTransitionTime: "{{ operator_event_time }}"
+  when: amq_kafka_enabled | default(true) | bool
 
 - name: Publish operator event to AMQ Streams
-  ansible.builtin.include_tasks: amq_publish.yml
+  block:
+    - name: Publish
+      ansible.builtin.include_tasks: amq_publish.yml
+  rescue:
+    - name: Keep the last line of the producer error (credentials are env-only, never in it)
+      ansible.builtin.set_fact:
+        _amq_publish_error: "{{ ((amq_publish_result.stderr | default('')) | string).splitlines() | select | list | last | default(ansible_failed_result.msg | default('publish failed'), true) }}"
+
+    - name: Record the failed publish
+      operator_sdk.util.k8s_status:
+        api_version: "{{ operator_event_regarding.apiVersion }}"
+        kind: "{{ operator_event_regarding.kind }}"
+        name: "{{ operator_event_regarding.name }}"
+        namespace: "{{ operator_event_regarding.namespace }}"
+        status:
+          conditions:
+            - type: Published
+              status: "False"
+              reason: PublishFailed
+              message: "{{ _amq_publish_error | truncate(300, True, '…') }}"
+              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+    - name: Fail the reconcile so it is retried with backoff
+      ansible.builtin.fail:
+        msg: >-
+          AMQ publish failed for {{ operator_event_regarding.kind }}/{{ operator_event_regarding.name }}
+          (event {{ operator_event_id }}); the operator retries with backoff
+
+- name: Record the published event
+  operator_sdk.util.k8s_status:
+    api_version: "{{ operator_event_regarding.apiVersion }}"
+    kind: "{{ operator_event_regarding.kind }}"
+    name: "{{ operator_event_regarding.name }}"
+    namespace: "{{ operator_event_regarding.namespace }}"
+    status:
+      delivery:
+        eventId: "{{ operator_event_id }}"
+        reason: "{{ operator_event_reason }}"
+        publishedAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      conditions:
+        - type: Published
+          status: "True"
+          reason: Published
+          message: "{{ operator_event_reason }} event {{ operator_event_id }}"
+          lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: amq_kafka_enabled | default(true) | bool
 
 - name: Emit optional Kubernetes Event for debugging
   kubernetes.core.k8s:

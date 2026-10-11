@@ -23,7 +23,7 @@ def main() -> int:
         "value_serializer": lambda v: json.dumps(v).encode("utf-8"),
         "key_serializer": lambda k: k.encode("utf-8") if k else None,
         "acks": "all",
-        "retries": 3,
+        "retries": 5,
         "request_timeout_ms": 15000,
     }
 
@@ -32,10 +32,15 @@ def main() -> int:
         kwargs["sasl_mechanism"] = os.environ.get("KAFKA_SASL_MECHANISM", "SCRAM-SHA-512")
         kwargs["sasl_plain_username"] = username
         kwargs["sasl_plain_password"] = password
+        # shc (LAB-PLAN §11.1/§11.2): verify the brokers. The external routes serve publicly trusted
+        # certificates for the bootstrap and broker hosts, so the default trust store applies;
+        # KAFKA_CA_CERT (PEM) is added for clusters whose routes pass through to the Strimzi CA.
         ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        # Strimzi passthrough route presents broker cert; hostname won't match route DNS.
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx.check_hostname = True
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        ca_pem = os.environ.get("KAFKA_CA_CERT", "").strip()
+        if ca_pem.startswith("-----BEGIN CERTIFICATE-----"):
+            ctx.load_verify_locations(cadata=ca_pem)
         kwargs["ssl_context"] = ctx
 
     producer = KafkaProducer(**kwargs)
@@ -45,9 +50,9 @@ def main() -> int:
     # Wrap so rulebooks can match event.body.payload.reason / regarding.
     message = payload if "payload" in payload else {"payload": payload}
     future = producer.send(topic, key=key, value=message)
-    future.get(timeout=15)
-    producer.flush()
-    producer.close()
+    future.get(timeout=30)
+    producer.flush(timeout=30)
+    producer.close(timeout=10)
     print("published", key)
     return 0
 
