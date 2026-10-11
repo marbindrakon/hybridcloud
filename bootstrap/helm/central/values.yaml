@@ -1402,7 +1402,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.2.0"
+    chartVersion: "0.2.1"
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -1676,7 +1676,7 @@ mtv:
 # transit seal token check, cert-manager metrics, alert rules.
 shcClusterOpsCentral:
   enabled: true
-  chartVersion: "0.2.0"
+  chartVersion: "0.2.1"
   syncWave: "24"
   values:
     layers:
@@ -2147,7 +2147,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.2.0"
+  chartVersion: "0.2.1"
   syncWaves:
     base: "0"
     certs: "2"
