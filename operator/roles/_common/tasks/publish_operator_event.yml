@@ -49,6 +49,15 @@
       ansible.builtin.set_fact:
         _amq_publish_error: "{{ ((amq_publish_result.stderr | default('')) | string).splitlines() | select | list | last | default(ansible_failed_result.msg | default('publish failed'), true) }}"
 
+    # The condition's transition time resets on every attempt; publishFailingSince keeps the first one.
+    - name: Read when publishing started failing
+      kubernetes.core.k8s_info:
+        api_version: "{{ operator_event_regarding.apiVersion }}"
+        kind: "{{ operator_event_regarding.kind }}"
+        name: "{{ operator_event_regarding.name }}"
+        namespace: "{{ operator_event_regarding.namespace }}"
+      register: _amq_publish_cr
+
     - name: Record the failed publish
       operator_sdk.util.k8s_status:
         api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -56,6 +65,10 @@
         name: "{{ operator_event_regarding.name }}"
         namespace: "{{ operator_event_regarding.namespace }}"
         status:
+          delivery:
+            publishFailingSince: >-
+              {{ (((_amq_publish_cr.resources | first | default({})).get('status') or {}).get('delivery') or {}).get('publishFailingSince')
+                 or operator_event_time }}
           conditions:
             - type: Published
               status: "False"
@@ -80,6 +93,7 @@
         eventId: "{{ operator_event_id }}"
         reason: "{{ operator_event_reason }}"
         publishedAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        publishFailingSince: null
       conditions:
         - type: Published
           status: "True"

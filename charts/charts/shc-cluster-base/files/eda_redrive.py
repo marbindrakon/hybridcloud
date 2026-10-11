@@ -9,8 +9,8 @@ hybridsovereign.redhat CRs. For every CR that is not ready:
   times, and only for kinds in redriveKinds; otherwise status.delivery.state=NoAcknowledgement
 - acknowledged but not completed within the kind's jobTimeoutMinutes: status.delivery.state=Stalled
   (never re-driven: the job may still be changing things)
-- not published, condition Published=False for longer than publishFailedMinutes: reported (the
-  operator is already retrying)
+- not published and status.delivery.publishFailingSince older than publishFailedMinutes: reported
+  (the operator is already retrying)
 
 Exits 1 while any CR is NoAcknowledgement, Stalled or PublishFailed, so the platform's job alert
 fires. Events from operators without eventId support carry no status.delivery and are skipped.
@@ -120,13 +120,13 @@ def main():
             # delivery.publishedAt is cleared before each publish and set once Kafka accepted the event.
             # (The Published condition is informational: EDA's merge patches replace the conditions list.)
             if not delivery.get("publishedAt"):
-                published = next((c for c in status.get("conditions") or [] if c.get("type") == "Published"), {})
-                if published.get("status") == "False":
-                    age = minutes_since(published.get("lastTransitionTime"), now)
-                    if age is not None and age > cfg["publishFailedMinutes"]:
-                        counts["publishFailed"] += 1
-                        problems.append(f"{ref}: PublishFailed for {age:.0f} min: {published.get('message', '')}")
-                continue  # publishing, or failing (the operator retries with backoff)
+                # failing: the operator retries with backoff; report once it has failed for a while
+                age = minutes_since(delivery.get("publishFailingSince"), now)
+                if age is not None and age > cfg["publishFailedMinutes"]:
+                    published = next((c for c in status.get("conditions") or [] if c.get("type") == "Published"), {})
+                    counts["publishFailed"] += 1
+                    problems.append(f"{ref}: PublishFailed for {age:.0f} min: {published.get('message', '')}")
+                continue
             counts["published"] += 1
 
             acknowledged = delivery.get("acknowledgedEventId") == event_id
