@@ -1,0 +1,1 @@
+{{ range (.details | fromJson) }}{{ if hasPrefix "PREFIX" .name }}{{ index .data "FIELD" }}{{ end }}{{ end }}

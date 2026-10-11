@@ -21,3 +21,8 @@ externalDetails:
 
 storageCluster:
   name: ocs-external-storagecluster
+
+# Default-named aliases rook-csi-{rbd,cephfs}-provisioner of the restricted provisioner users, needed
+# for volume attach (ControllerPublish) with restricted auth; see templates/csi-provisioner-aliases.yaml.
+csiProvisionerAliases:
+  enabled: true

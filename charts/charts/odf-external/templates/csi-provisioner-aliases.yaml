@@ -1,0 +1,36 @@
+{{- if and .Values.externalDetails.vaultKey .Values.csiProvisionerAliases.enabled }}
+{{- /*
+ODF 4.22 external mode with restricted CSI users (exporter --restricted-auth-permission): the RBD and
+CephFS ControllerPublish step looks for the default-named secrets rook-csi-{rbd,cephfs}-provisioner,
+which only exist for unrestricted users; volume attach then fails ("failed to get controller publish
+secret ... rook-csi-rbd-provisioner not found"). These aliases carry the restricted provisioner users
+(rook-csi-<type>-provisioner-<cluster>-<pool|fs>) under the default names, from the same exporter JSON.
+*/}}
+{{- range $type := list "rbd" "cephfs" }}
+{{- $prefix := printf "rook-csi-%s-provisioner-" $type }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: rook-csi-{{ $type }}-provisioner
+  namespace: {{ $.Values.namespace }}
+spec:
+  refreshInterval: {{ $.Values.externalDetails.refreshInterval }}
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $.Values.externalDetails.secretStoreName }}
+  target:
+    name: rook-csi-{{ $type }}-provisioner
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        userID: {{ $.Files.Get "files/csi-field.tmpl" | replace "PREFIX" $prefix | replace "FIELD" "userID" | quote }}
+        userKey: {{ $.Files.Get "files/csi-field.tmpl" | replace "PREFIX" $prefix | replace "FIELD" "userKey" | quote }}
+  data:
+    - secretKey: details
+      remoteRef:
+        key: {{ $.Values.externalDetails.vaultKey }}
+        property: {{ $.Values.externalDetails.property }}
+{{- end }}
+{{- end }}

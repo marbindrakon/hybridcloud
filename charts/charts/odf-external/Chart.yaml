@@ -2,5 +2,5 @@ apiVersion: v2
 name: odf-external
 description: OpenShift Data Foundation in external mode against an existing Ceph cluster (shc LAB-PLAN D9/§7 item 5) - operator, the exporter output from Vault through ESO, and the StorageCluster
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "4.22"
