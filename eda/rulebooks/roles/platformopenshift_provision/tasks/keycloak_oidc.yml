@@ -244,7 +244,7 @@
                                   - email
                                 groups:
                                   - groups
-                              issuer: "{{ keycloak_external_url }}/realms/{{ keycloak_realm }}"
+                              issuer: "{{ kc_base_url }}/realms/{{ keycloak_realm }}"
   when: not (skip_oidc_setup | bool)
 
 - name: Build ACM Placement for this cluster
