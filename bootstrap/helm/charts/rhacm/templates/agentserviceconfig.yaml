@@ -1,4 +1,21 @@
 {{- if .Values.agentServiceConfig.enabled }}
+{{- with .Values.agentServiceConfig.serviceEnv }}
+---
+# Environment overrides for assisted-service (shc LAB-PLAN P6: TNF_CLUSTERS_SUPPORT for two-node clusters
+# with fencing; MCE 2.17.3 ships it off). Read by the AgentServiceConfig annotation below; must live in the
+# namespace assisted-service runs in.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: assisted-service-overrides
+  namespace: {{ $.Values.agentServiceConfig.serviceNamespace | default "multicluster-engine" }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+data:
+  {{- range $k, $v := . }}
+  {{ $k }}: {{ $v | toString | quote }}
+  {{- end }}
+{{- end }}
 ---
 # Central Infrastructure Management (assisted-service) for agent-based / BareMetalHost cluster builds
 # (LAB-PLAN D19: mce-cluster-build agent provider + ipmi BMHs). MCE creates the CRD, hence the late
@@ -12,6 +29,10 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "10"
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    {{- if .Values.agentServiceConfig.serviceEnv }}
+    # assisted-service environment overrides (the only MCE mechanism for its feature flags)
+    unsupported.agent-install.openshift.io/assisted-service-configmap: assisted-service-overrides
+    {{- end }}
 spec:
   databaseStorage:
     {{- with .Values.agentServiceConfig.storageClassName }}

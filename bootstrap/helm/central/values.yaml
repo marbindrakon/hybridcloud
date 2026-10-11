@@ -417,7 +417,7 @@ vaultServicesInit:
 # ─── RHACM ───────────────────────────────────────────────────────────────────
 rhacm:
   enabled: true
-  chartVersion: "0.5.1-shc.1"  # shc: + AgentServiceConfig + Provisioning (LAB-PLAN §7.4)
+  chartVersion: "0.5.1-shc.2"  # shc: + AgentServiceConfig + Provisioning (LAB-PLAN §7.4), assisted-service env overrides (P6)
   enableMultiClusterHub: true
   destinationNamespace: open-cluster-management
   syncWave: "10"
@@ -438,6 +438,11 @@ rhacm:
     # shc (D19): CIM for mce-cluster-build agent clusters; storage on the default SC (ODF external)
     agentServiceConfig:
       enabled: true
+      # shc (P6): two-node OpenShift with fencing (edge1) through the agent path. MCE 2.17.3's
+      # assisted-service rejects per-Agent fencing credentials ("TNF clusters support is disabled")
+      # unless this flag is set.
+      serviceEnv:
+        TNF_CLUSTERS_SUPPORT: "true"
       # shc (D13, §7 item 4): MCE 2.17.3's built-in list maps 4.22 to a pre-release RHCOS
       # (4.22.0-ec.5). Pin the discovery OS to the GA boot image of the 4.22 installer in use
       # (openshift-install 4.22.16 `coreos print-stream-json`). Replaces the whole built-in list.

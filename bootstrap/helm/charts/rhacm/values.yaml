@@ -83,6 +83,11 @@ commonAnnotations: {}
 # ─── Central Infrastructure Management (assisted-service) ────────────────────
 agentServiceConfig:
   enabled: false
+  # assisted-service environment overrides (ConfigMap assisted-service-overrides + the AgentServiceConfig
+  # "unsupported.agent-install.openshift.io/assisted-service-configmap" annotation), e.g.
+  # TNF_CLUSTERS_SUPPORT: "true" for two-node clusters with fencing. Empty = none.
+  serviceEnv: {}
+  serviceNamespace: multicluster-engine
   # Empty = cluster default StorageClass.
   storageClassName: ""
   databaseStorage: 10Gi
