@@ -1449,7 +1449,7 @@ iaasClusterDefaults:
         serviceAccountNamespace: "external-secrets"
   odfExternal:
     enabled: true
-    chartVersion: "0.1.1"
+    chartVersion: "0.1.2"
     values: {}
   cnv:
     enabled: true
@@ -1671,6 +1671,16 @@ mtv:
         minAvailable: 1
 
 # ─── ODF / Noobaa (central) ─────────────────────────────────────────────────
+# shc (LAB-PLAN D9/D21): ODF external on central (charts/charts/odf-external). Adopts the day-1 objects
+# (p2/day1 40/50 + bootstrap.sh ceph-central); after the vault-backend store (wave 22).
+odfExternalCentral:
+  enabled: true
+  chartVersion: "0.1.2"
+  syncWave: "23"
+  values:
+    externalDetails:
+      vaultKey: clusters/central/ceph-external
+
 odf:
   enabled: false  # shc: replaced by ODF external (LAB-PLAN D9/§7.5)
   chartVersion: "0.6.0"

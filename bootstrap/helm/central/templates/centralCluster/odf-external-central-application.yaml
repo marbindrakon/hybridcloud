@@ -1,0 +1,43 @@
+{{- if and (include "sovereign-central.applicationsEnabled" .) .Values.odfExternalCentral.enabled }}
+---
+# shc (LAB-PLAN D9/D21, §7 item 5): ODF external on central, the same odf-external chart as the IaaS
+# clusters. Central's own Vault runs on this storage, so day 1 creates the operator, StorageCluster and
+# Ceph details Secrets before Vault exists (p2/day1 + bootstrap.sh ceph-central, from the lab hand-off
+# copy); this Application adopts them once the vault-backend store is up, and its ExternalSecrets
+# (central Vault clusters/central/ceph-external) take over the Secrets.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: odf-external-central
+  namespace: {{ .Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    sovereign-cloud/target: central
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.odfExternalCentral.syncWave | quote }}
+spec:
+  project: central
+  source:
+    repoURL: {{ printf "oci://%s/%s/odf-external" .Values.oci.registry .Values.oci.repositoryBase | quote }}
+    chart: odf-external
+    targetRevision: {{ .Values.odfExternalCentral.chartVersion | quote }}
+    helm:
+      releaseName: odf-external
+      valuesObject:
+        {{- toYaml .Values.odfExternalCentral.values | nindent 8 }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-storage
+  ignoreDifferences:
+    {{- include "sovereign-central.esoIgnoreDifferences" . | nindent 4 }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    {{- include "sovereign-central.syncRetry" . | nindent 4 }}
+{{- end }}

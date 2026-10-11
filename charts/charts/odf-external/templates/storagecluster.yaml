@@ -7,10 +7,15 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # never deleted with the Application: every RBD/CephFS volume on the cluster hangs off it
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Delete=false
 spec:
   externalStorage:
     enable: true
   labelSelector: {}
+  managedResources:
+    cephBlockPools:
+      defaultStorageClass: {{ .Values.storageCluster.defaultStorageClass }}
+      defaultVirtualizationStorageClass: {{ .Values.storageCluster.defaultVirtualizationStorageClass }}
   multiCloudGateway:
     reconcileStrategy: ignore
