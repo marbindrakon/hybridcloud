@@ -462,7 +462,7 @@ rhacm:
 # ─── shc: cluster OIDC issuer (LAB-PLAN D17/§9) ──────────────────────────────
 oidcIssuer:
   enabled: true
-  chartVersion: "0.1.2"
+  chartVersion: "0.1.3"
   syncWave: "8"
   values:
     host: oidc.shc.signal9.gg
@@ -472,6 +472,11 @@ oidcIssuer:
       clusters:
         - name: central
           source: local
+        # spokes through ACM (ManagedServiceAccount + cluster-proxy); each gets its issuer at install
+        - name: services
+          source: acm
+        - name: iaas1
+          source: acm
 
 # ─── shc: bare-metal node inventory (LAB-PLAN D19, §7 item 3) ───────────────────────────────
 # charts/charts/metal-node-assignment on central: BareMetalHosts (ipmi://, legacy boot, converged

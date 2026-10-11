@@ -14,10 +14,19 @@ tls:
   secretName: oidc-issuer-tls
 
 # Publisher: copies each cluster's discovery document and JWKS into the served store, rewriting
-# issuer/jwks_uri to the public base. "local" = this cluster (via its own API).
+# issuer/jwks_uri to the public base. Sources:
+#   local  this cluster, through its own API
+#   acm    ACM ManagedCluster <name>: a ManagedServiceAccount token (issuer discovery is open to every
+#          service account) through the cluster-proxy addon, so neither the spoke's API address nor its
+#          serving CA matter
+# A cluster that fails keeps its last published documents; the job still fails so it shows up.
 sync:
   schedule: "*/15 * * * *"
   image: registry.redhat.io/openshift4/ose-tools-rhel9:latest  # has oc + jq (ose-cli lacks jq)
   clusters:
     - name: central
       source: local
+  acm:
+    managedServiceAccount: shc-oidc-sync
+    # cluster-proxy addon user server; its serving certificate comes from the service CA
+    proxyURL: https://cluster-proxy-addon-user.multicluster-engine.svc:9092

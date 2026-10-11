@@ -29,6 +29,41 @@ metadata:
   name: shc-oidc-sync-issuer-discovery
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:service-account-issuer-discovery}
 subjects: [{kind: ServiceAccount, name: oidc-sync, namespace: {{ .Values.namespace }}}]
+{{- range .Values.sync.clusters }}
+{{- if eq .source "acm" }}
+---
+# {{ .name }}: service account on the managed cluster; its token is synced to Secret
+# {{ $.Values.sync.acm.managedServiceAccount }} in namespace {{ .name }} on this hub.
+apiVersion: authentication.open-cluster-management.io/v1beta1
+kind: ManagedServiceAccount
+metadata:
+  name: {{ $.Values.sync.acm.managedServiceAccount }}
+  namespace: {{ .name }}
+spec:
+  rotation:
+    enabled: true
+    validity: 168h
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: shc-oidc-sync
+  namespace: {{ .name }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $.Values.sync.acm.managedServiceAccount }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shc-oidc-sync
+  namespace: {{ .name }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: shc-oidc-sync}
+subjects: [{kind: ServiceAccount, name: oidc-sync, namespace: {{ $.Values.namespace }}}]
+{{- end }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -53,20 +88,48 @@ spec:
               command: ["/bin/bash", "-c"]
               args:
                 - |
-                  set -eo pipefail
-                  cd /tmp
+                  set -o pipefail
+                  cd /tmp; mkdir -p old new; rc=0
+                  # last published documents: a cluster that fails now keeps them
+                  oc get configmap oidc-documents -n {{ $.Values.namespace }} -o json \
+                    | jq -r '.data // {} | keys[]' | while read -r k; do
+                        oc get configmap oidc-documents -n {{ $.Values.namespace }} -o json | jq -r --arg k "$k" '.data[$k]' > "old/$k"
+                      done
+                  publish() {  # <cluster> <oc args...>: fetch, rewrite issuer, check, stage
+                    local n=$1; shift
+                    oc "$@" get --raw /openid/v1/jwks > "new/${n}__keys.json" \
+                      && oc "$@" get --raw /.well-known/openid-configuration \
+                        | jq --arg iss "{{ $.Values.baseURL }}/$n" '.issuer = $iss | .jwks_uri = ($iss + "/keys.json")' \
+                          > "new/${n}__openid-configuration" \
+                      && test "$(jq -r .issuer "new/${n}__openid-configuration")" = "{{ $.Values.baseURL }}/$n" \
+                      && jq -e '.keys | length > 0' "new/${n}__keys.json" >/dev/null
+                  }
                   {{- range .Values.sync.clusters }}
                   {{- if eq .source "local" }}
                   # {{ .name }}: this cluster's own issuer documents
-                  oc get --raw /openid/v1/jwks > {{ .name }}__keys.json
-                  oc get --raw /.well-known/openid-configuration \
-                    | jq --arg iss "{{ $.Values.baseURL }}/{{ .name }}" \
-                         '.issuer = $iss | .jwks_uri = ($iss + "/keys.json")' > {{ .name }}__openid-configuration
-                  test "$(jq -r .issuer {{ .name }}__openid-configuration)" = "{{ $.Values.baseURL }}/{{ .name }}"
+                  publish {{ .name }} || { echo "{{ .name }}: fetch failed"; rc=1; }
+                  {{- else if eq .source "acm" }}
+                  # {{ .name }}: ManagedCluster through cluster-proxy with its ManagedServiceAccount token
+                  T=$(oc get secret {{ $.Values.sync.acm.managedServiceAccount }} -n {{ .name }} -o jsonpath='{.data.token}' | base64 -d)
+                  if [ -n "$T" ]; then
+                    publish {{ .name }} --server={{ $.Values.sync.acm.proxyURL }}/{{ .name }} --token="$T" \
+                      --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
+                      || { echo "{{ .name }}: fetch failed"; rc=1; }
+                  else
+                    echo "{{ .name }}: no ManagedServiceAccount token yet"; rc=1
+                  fi
+                  unset T
                   {{- end }}
                   {{- end }}
-                  oc create configmap oidc-documents -n {{ $.Values.namespace }} --dry-run=client -o yaml
-                    {{- range .Values.sync.clusters }} --from-file={{ .name }}__keys.json --from-file={{ .name }}__openid-configuration{{- end }} \
-                    | oc apply --server-side --force-conflicts --field-manager=oidc-sync -f -
-                  echo "published: {{ range .Values.sync.clusters }}{{ .name }} {{ end }}"
+                  args=(); published=""
+                  for n in {{ range .Values.sync.clusters }}{{ .name }} {{ end }}; do
+                    if [ -s "new/${n}__keys.json" ] && [ -s "new/${n}__openid-configuration" ]; then d=new; published="$published $n"
+                    elif [ -s "old/${n}__keys.json" ] && [ -s "old/${n}__openid-configuration" ]; then d=old; echo "$n: keeping the last published documents"
+                    else continue; fi
+                    args+=(--from-file="${n}__keys.json=$d/${n}__keys.json" --from-file="${n}__openid-configuration=$d/${n}__openid-configuration")
+                  done
+                  oc create configmap oidc-documents -n {{ $.Values.namespace }} --dry-run=client -o yaml "${args[@]}" \
+                    | oc apply --server-side --force-conflicts --field-manager=oidc-sync -f - || rc=1
+                  echo "published:$published"
+                  exit $rc
               resources: {requests: {cpu: 10m, memory: 64Mi}}
