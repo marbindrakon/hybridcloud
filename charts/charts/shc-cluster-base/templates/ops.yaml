@@ -1,0 +1,376 @@
+{{- /*
+Operations layer (shc LAB-PLAN §10.1/§10.3, review O1/O2/S7): scheduled etcd backups, Vault raft
+snapshots, the transit seal token check, cert-manager metrics and the alert rules that watch them.
+Rendered with layers.base, or on its own with layers.ops (central, which has no base layer).
+Everything except the transit check runs in ops.namespace; the alert rules cover its CronJobs and
+the transit check in the Vault namespace.
+*/}}
+{{- if or .Values.layers.base .Values.layers.ops }}
+{{- $o := .Values.ops }}
+{{- if $o.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $o.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+    openshift.io/cluster-monitoring: "true"
+    # the etcd backup runs privileged on a control-plane node (hostPath /, chroot)
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+    security.openshift.io/scc.podSecurityLabelSync: "false"
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-options: Delete=false
+
+{{- if $o.etcdBackup.enabled }}
+{{- $e := $o.etcdBackup }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: etcd-backup
+  namespace: {{ $o.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: etcd-backup-privileged
+  namespace: {{ $o.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - kind: ServiceAccount
+    name: etcd-backup
+    namespace: {{ $o.namespace }}
+---
+# OCP's documented etcd backup (cluster-backup.sh: etcd snapshot + static pod resources) on one
+# control-plane node, kept on that node under {{ $e.hostDir }} (newest {{ $e.keep }}). Restore:
+# cluster-restore.sh from the same directory (OCP 4.22 "Restoring to a previous cluster state").
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: etcd-backup
+  namespace: {{ $o.namespace }}
+spec:
+  schedule: {{ $e.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          serviceAccountName: etcd-backup
+          restartPolicy: Never
+          hostNetwork: true
+          hostPID: true
+          nodeSelector:
+            node-role.kubernetes.io/master: ""
+          tolerations:
+            - operator: Exists
+          containers:
+            - name: backup
+              image: {{ $o.image }}
+              securityContext:
+                privileged: true
+                runAsUser: 0
+              env:
+                - name: KEEP
+                  value: {{ $e.keep | quote }}
+                - name: DIR
+                  value: {{ $e.hostDir | quote }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  D="$DIR/$(date -u +%Y%m%dT%H%M%SZ)"
+                  chroot /host /usr/local/bin/cluster-backup.sh "$D"
+                  chroot /host /bin/sh -c "ls -1d '$DIR'/*/ | sort -r | tail -n +$((KEEP + 1)) | xargs -r rm -rf"
+                  echo "backup on $(chroot /host hostname): $D"
+                  chroot /host du -sh "$D"
+              volumeMounts:
+                - name: host
+                  mountPath: /host
+          volumes:
+            - name: host
+              hostPath:
+                path: /
+                type: Directory
+{{- end }}
+
+{{- if $o.vaultSnapshot.enabled }}
+{{- $v := $o.vaultSnapshot }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-snapshot
+  namespace: {{ $o.namespace }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vault-snapshots
+  namespace: {{ $o.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with $v.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $v.size }}
+---
+# Raft snapshot of the platform Vault through its HTTP API: Kubernetes auth as this ServiceAccount
+# (Vault role {{ $v.role }} on auth/{{ $v.authMount }}, policy: read sys/storage/raft/snapshot), then
+# GET /v1/sys/storage/raft/snapshot into the PVC (newest {{ $v.keep }}). Restore: vault operator raft
+# snapshot restore (transit-sealed: the same seal key must be reachable).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-snapshot
+  namespace: {{ $o.namespace }}
+spec:
+  schedule: {{ $v.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          serviceAccountName: vault-snapshot
+          restartPolicy: Never
+          containers:
+            - name: snapshot
+              image: {{ $o.image }}
+              env:
+                - name: VAULT_ADDR
+                  value: {{ required "ops.vaultSnapshot.vaultAddr is required" $v.vaultAddr | quote }}
+                - name: AUTH_MOUNT
+                  value: {{ $v.authMount | quote }}
+                - name: ROLE
+                  value: {{ $v.role | quote }}
+                - name: KEEP
+                  value: {{ $v.keep | quote }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  TOKEN=$(curl -sSf -X POST "$VAULT_ADDR/v1/auth/$AUTH_MOUNT/login" \
+                            -d "{\"role\":\"$ROLE\",\"jwt\":\"$JWT\"}" | sed -n 's/.*"client_token":"\([^"]*\)".*/\1/p')
+                  [ -n "$TOKEN" ] || { echo "Vault login failed"; exit 1; }
+                  F="/snapshots/vault-$(date -u +%Y%m%dT%H%M%SZ).snap"
+                  curl -sSfL -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/sys/storage/raft/snapshot" -o "$F.part"
+                  mv "$F.part" "$F"
+                  curl -sS -o /dev/null -X POST -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/auth/token/revoke-self" || true
+                  ls -1 /snapshots/vault-*.snap | sort -r | tail -n +$((KEEP + 1)) | while read -r f; do rm -f "$f"; done
+                  ls -l "$F"
+              volumeMounts:
+                - name: snapshots
+                  mountPath: /snapshots
+          volumes:
+            - name: snapshots
+              persistentVolumeClaim:
+                claimName: vault-snapshots
+{{- end }}
+
+{{- if $o.transitTokenCheck.enabled }}
+{{- $t := $o.transitTokenCheck }}
+---
+# The platform Vault's transit seal token (D7) is periodic and renewed by the running Vault; if it
+# lapses (lab Vault unreachable for longer than the period), the next Vault restart cannot unseal.
+# Daily lookup-self against the lab Vault; fails below {{ $t.minTTLDays }} days left or when the lab Vault
+# is unreachable, which ShcBackupJobFailed reports.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: transit-token-check
+  namespace: {{ required "ops.transitTokenCheck.namespace is required" $t.namespace }}
+spec:
+  schedule: {{ $t.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+            - name: check
+              image: {{ $o.image }}
+              env:
+                - name: LAB_VAULT_ADDR
+                  value: {{ required "ops.transitTokenCheck.labVaultAddr is required" $t.labVaultAddr | quote }}
+                - name: MIN_TTL
+                  value: {{ mul $t.minTTLDays 86400 | quote }}
+                - name: TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $t.secretName }}
+                      key: token
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  TTL=$(curl -sSf -H "X-Vault-Token: $TOKEN" "$LAB_VAULT_ADDR/v1/auth/token/lookup-self" \
+                          | sed -n 's/.*"ttl":\([0-9]*\).*/\1/p')
+                  [ -n "$TTL" ] || { echo "token lookup failed"; exit 1; }
+                  echo "transit seal token TTL: $((TTL / 3600)) h"
+                  [ "$TTL" -ge "$MIN_TTL" ] || { echo "below $((MIN_TTL / 86400)) days"; exit 1; }
+{{- end }}
+
+{{- if $o.certManagerMetrics.enabled }}
+---
+# cert-manager metrics into platform monitoring (certificate expiry/readiness alerts below).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    openshift.io/cluster-monitoring: "true"
+  annotations:
+    {{- include "shc-cluster-base.patchOnly" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-k8s
+  namespace: cert-manager
+rules:
+  - apiGroups: [""]
+    resources: [services, endpoints, pods]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-k8s
+  namespace: cert-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-k8s
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-k8s
+    namespace: openshift-monitoring
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/instance: cert-manager
+  endpoints:
+    - port: tcp-prometheus-servicemonitor
+      interval: 60s
+{{- end }}
+
+{{- if $o.alerts.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: shc-platform
+  namespace: {{ $o.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  groups:
+    - name: shc-ops-jobs
+      rules:
+        - alert: ShcBackupJobFailed
+          expr: >-
+            max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}"})
+            > max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}"})
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.cronjob {{ "}}" }}: the last run failed"
+            description: "The most recent run of CronJob {{ "{{" }} $labels.cronjob {{ "}}" }} did not succeed. Check its Job logs."
+        - alert: ShcBackupJobNeverSucceeded
+          expr: >-
+            kube_cronjob_status_last_schedule_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}"}
+            unless on (namespace, cronjob) kube_cronjob_status_last_successful_time
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.cronjob {{ "}}" }} has run but never succeeded"
+            description: "CronJob {{ "{{" }} $labels.cronjob {{ "}}" }} has no successful run yet."
+        - alert: ShcBackupStale
+          expr: >-
+            time() - kube_cronjob_status_last_successful_time{namespace="{{ $o.namespace }}"} > {{ mul $o.alerts.staleHours 3600 }}
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $labels.cronjob {{ "}}" }}: no successful backup for {{ $o.alerts.staleHours }} h"
+            description: "The newest successful {{ "{{" }} $labels.cronjob {{ "}}" }} run is older than {{ $o.alerts.staleHours }} hours."
+    - name: shc-vault
+      rules:
+        - alert: ShcVaultPodsNotReady
+          expr: >-
+            kube_statefulset_status_replicas_ready{namespace=~"{{ $o.alerts.vaultNamespaces }}"}
+            < kube_statefulset_replicas{namespace=~"{{ $o.alerts.vaultNamespaces }}"}
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Vault {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.statefulset {{ "}}" }}: pods not ready (sealed or down)"
+            description: "A Vault pod is not ready: sealed (transit seal or lab Vault unreachable) or not running."
+    {{- if $o.certManagerMetrics.enabled }}
+    - name: shc-certificates
+      rules:
+        - alert: ShcCertificateExpiringSoon
+          expr: certmanager_certificate_expiration_timestamp_seconds - time() < {{ mul $o.alerts.certExpiryDays 86400 }}
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }} expires within {{ $o.alerts.certExpiryDays }} days"
+            description: "cert-manager has not renewed it; Let's Encrypt renews at 30 days left. Check the Certificate and its ACME order."
+        - alert: ShcCertificateNotReady
+          expr: certmanager_certificate_ready_status{condition!="True"} == 1
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }} is not ready"
+            description: "The Certificate's Ready condition is {{ "{{" }} $labels.condition {{ "}}" }}."
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

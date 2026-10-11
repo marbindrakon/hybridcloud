@@ -1402,7 +1402,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.1.0"
+    chartVersion: "0.2.0"
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -1671,6 +1671,28 @@ mtv:
         minAvailable: 1
 
 # ─── ODF / Noobaa (central) ─────────────────────────────────────────────────
+# shc (review O1/O2/S7): shc-cluster-base's ops layer on central (central has no base layer from
+# that chart: p2/day1). etcd backup, central Vault raft snapshots (bootstrap.sh vault-snapshot-auth),
+# transit seal token check, cert-manager metrics, alert rules.
+shcClusterOpsCentral:
+  enabled: true
+  chartVersion: "0.2.0"
+  syncWave: "24"
+  values:
+    layers:
+      base: false
+      certs: false
+      ops: true
+    ops:
+      vaultSnapshot:
+        enabled: true
+        vaultAddr: http://vault-active.central-vault.svc:8200
+        authMount: kubernetes-central
+      transitTokenCheck:
+        enabled: true
+        namespace: central-vault
+        labVaultAddr: https://vault.lab.signal9.gg
+
 # shc (LAB-PLAN D9/D21): ODF external on central (charts/charts/odf-external). Adopts the day-1 objects
 # (p2/day1 40/50 + bootstrap.sh ceph-central); after the vault-backend store (wave 22).
 odfExternalCentral:
@@ -2125,7 +2147,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.1.0"
+  chartVersion: "0.2.0"
   syncWaves:
     base: "0"
     certs: "2"
@@ -2163,6 +2185,18 @@ shcClusterBaseServices:
                         port: 443
     monitoring:
       storageClass: standard-csi
+    # review O1/O2/S7: etcd backup, services Vault raft snapshots (bootstrap.sh
+    # vault-snapshot-auth services), transit seal token check, alert rules
+    ops:
+      vaultSnapshot:
+        enabled: true
+        vaultAddr: http://vault-services-active.services-vault.svc:8200
+        authMount: kubernetes
+        storageClass: standard-csi
+      transitTokenCheck:
+        enabled: true
+        namespace: services-vault
+        labVaultAddr: https://vault.lab.signal9.gg
 
 # ─── External Secrets Operator (services) ───────────────────────────────────
 externalSecretsServices:

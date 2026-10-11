@@ -9,6 +9,9 @@ cluster:
 layers:
   base: true
   certs: true
+  # The ops section renders with the base layer, or alone with ops: true (central, which has no
+  # base layer from this chart).
+  ops: false
 
 # ─── cert-manager Operator for Red Hat OpenShift ────────────────────────────
 certManager:
@@ -93,3 +96,43 @@ monitoring:
     size: 50Gi
   alertmanager:
     size: 10Gi
+
+# ─── Operations: backups, seal token check, alert rules (layer base or ops) ──
+ops:
+  enabled: true
+  namespace: shc-ops
+  # curl, sed, coreutils, chroot; the cluster pull secret covers registry.redhat.io
+  image: registry.redhat.io/ubi9/ubi-minimal:latest
+  # cluster-backup.sh on one control-plane node, kept on that node's disk
+  etcdBackup:
+    enabled: true
+    schedule: "0 1 * * *"     # UTC
+    keep: 7
+    hostDir: /var/lib/etcd-backup
+  # Raft snapshots of this cluster's platform Vault into a PVC. The Vault side (policy reading
+  # sys/storage/raft/snapshot, a Kubernetes auth role for <namespace>/vault-snapshot) is
+  # bootstrap.sh vault-snapshot-auth.
+  vaultSnapshot:
+    enabled: false
+    schedule: "30 1 * * *"
+    vaultAddr: ""             # e.g. http://vault-active.central-vault.svc:8200
+    authMount: kubernetes
+    role: shc-vault-snapshot
+    keep: 14
+    size: 5Gi
+    storageClass: ""
+  # Daily lookup of the transit seal token's remaining TTL on the lab Vault (D7)
+  transitTokenCheck:
+    enabled: false
+    namespace: ""             # the platform Vault's namespace (holds the token Secret)
+    secretName: vault-transit-token
+    labVaultAddr: ""
+    minTTLDays: 7
+    schedule: "15 6 * * *"
+  certManagerMetrics:
+    enabled: true
+  alerts:
+    enabled: true
+    staleHours: 26
+    certExpiryDays: 14
+    vaultNamespaces: "central-vault|services-vault"

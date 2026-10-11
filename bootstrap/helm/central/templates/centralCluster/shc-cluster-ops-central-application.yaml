@@ -1,0 +1,37 @@
+{{- if and (include "sovereign-central.applicationsEnabled" .) .Values.shcClusterOpsCentral.enabled }}
+---
+# shc (review O1/O2/S7): the ops layer of shc-cluster-base on central - scheduled etcd backup, central
+# Vault raft snapshots, the transit seal token check and the platform alert rules. Central's other
+# base pieces are still the day-1 manifests (p2/day1).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shc-cluster-ops-central
+  namespace: {{ .Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-base
+    sovereign-cloud/target: central
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.shcClusterOpsCentral.syncWave | quote }}
+spec:
+  project: central
+  source:
+    repoURL: {{ printf "oci://%s/%s/shc-cluster-base" .Values.oci.registry .Values.oci.repositoryBase | quote }}
+    chart: shc-cluster-base
+    targetRevision: {{ .Values.shcClusterOpsCentral.chartVersion | quote }}
+    helm:
+      releaseName: shc-cluster-ops
+      valuesObject:
+        {{- toYaml .Values.shcClusterOpsCentral.values | nindent 8 }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shc-ops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - SkipDryRunOnMissingResource=true
+    {{- include "sovereign-central.syncRetry" . | nindent 4 }}
+{{- end }}
