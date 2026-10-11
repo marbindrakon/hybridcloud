@@ -220,7 +220,7 @@ rhbkConfig:
 # ─── ACS (disabled) ──────────────────────────────────────────────────────────
 acs:
   enabled: true
-  chartVersion: "0.2.1"
+  chartVersion: "0.2.0"
   syncWave: "25"
   destinationNamespace: rhacs-operator
   values:
@@ -234,7 +234,7 @@ acs:
 
 acsServices:
   enabled: false
-  chartVersion: "0.2.1"
+  chartVersion: "0.2.0"
   syncWave: "25"
   destinationNamespace: rhacs-operator
   values:
