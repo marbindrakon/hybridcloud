@@ -3,5 +3,9 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  pre_tasks:
+    # shc (§11.1): acknowledge the event, or end the job when a newer request superseded it
+    - name: Acknowledge the event
+      ansible.builtin.include_tasks: common/tasks/acknowledge_event.yml
   roles:
     - aapconfig_teardown

@@ -4,12 +4,13 @@
 shc LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.4. Runs as a CronJob on the cluster that holds the
 hybridsovereign.redhat CRs. For every CR that is not ready:
 
-- published (condition Published=True) but not acknowledged by an EDA job within ackTimeoutMinutes:
+- published (status.delivery.publishedAt) but not acknowledged by an EDA job within ackTimeoutMinutes:
   annotate reconcileNow=true (the operator re-publishes with a new eventId), at most maxRedrives
   times, and only for kinds in redriveKinds; otherwise status.delivery.state=NoAcknowledgement
 - acknowledged but not completed within the kind's jobTimeoutMinutes: status.delivery.state=Stalled
   (never re-driven: the job may still be changing things)
-- Published=False for longer than publishFailedMinutes: reported (the operator is already retrying)
+- not published, condition Published=False for longer than publishFailedMinutes: reported (the
+  operator is already retrying)
 
 Exits 1 while any CR is NoAcknowledgement, Stalled or PublishFailed, so the platform's job alert
 fires. Events from operators without eventId support carry no status.delivery and are skipped.
@@ -116,16 +117,16 @@ def main():
             if not event_id:
                 counts["legacy"] += 1
                 continue
-            published = next((c for c in status.get("conditions") or [] if c.get("type") == "Published"), {})
-
-            if published.get("status") == "False":
-                age = minutes_since(published.get("lastTransitionTime"), now)
-                if age is not None and age > cfg["publishFailedMinutes"]:
-                    counts["publishFailed"] += 1
-                    problems.append(f"{ref}: PublishFailed for {age:.0f} min: {published.get('message', '')}")
-                continue
-            if published.get("status") != "True":
-                continue  # publishing right now
+            # delivery.publishedAt is cleared before each publish and set once Kafka accepted the event.
+            # (The Published condition is informational: EDA's merge patches replace the conditions list.)
+            if not delivery.get("publishedAt"):
+                published = next((c for c in status.get("conditions") or [] if c.get("type") == "Published"), {})
+                if published.get("status") == "False":
+                    age = minutes_since(published.get("lastTransitionTime"), now)
+                    if age is not None and age > cfg["publishFailedMinutes"]:
+                        counts["publishFailed"] += 1
+                        problems.append(f"{ref}: PublishFailed for {age:.0f} min: {published.get('message', '')}")
+                continue  # publishing, or failing (the operator retries with backoff)
             counts["published"] += 1
 
             acknowledged = delivery.get("acknowledgedEventId") == event_id

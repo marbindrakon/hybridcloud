@@ -8,5 +8,9 @@
       validate_certs: false
     kubernetes.core.k8s_info:
       validate_certs: false
+  pre_tasks:
+    # shc (§11.1): acknowledge the event, or end the job when a newer request superseded it
+    - name: Acknowledge the event
+      ansible.builtin.include_tasks: common/tasks/acknowledge_event.yml
   roles:
     - cloudoso_teardown
