@@ -1,0 +1,16 @@
+# Applied once the operator's CRDs exist (SkipDryRunOnMissingResource); reconciles after the details
+# Secret appears.
+apiVersion: ocs.openshift.io/v1
+kind: StorageCluster
+metadata:
+  name: {{ .Values.storageCluster.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  externalStorage:
+    enable: true
+  labelSelector: {}
+  multiCloudGateway:
+    reconcileStrategy: ignore

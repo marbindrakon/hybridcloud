@@ -1,0 +1,23 @@
+# ODF external mode (shc LAB-PLAN D9, §7 item 5). The Ceph side (pool, restricted CSI clients) is made by
+# running ceph-external-cluster-details-exporter.py on the Ceph cluster, e.g.
+#   --rbd-data-pool-name shc-<cluster>-odf --k8s-cluster-name <cluster> --restricted-auth-permission true
+#   --v2-port-enable --monitoring-endpoint <mgrs> --monitoring-endpoint-port 9283 --format json
+# and its JSON output is stored in Vault; ESO turns it into rook-ceph-external-cluster-details.
+namespace: openshift-storage
+
+subscription:
+  name: odf-operator
+  channel: stable-4.22
+  installPlanApproval: Automatic
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+
+externalDetails:
+  secretStoreName: vault-backend
+  # KV path relative to the store; property holding the exporter's JSON output
+  vaultKey: ""
+  property: external_cluster_details
+  refreshInterval: 1h
+
+storageCluster:
+  name: ocs-external-storagecluster

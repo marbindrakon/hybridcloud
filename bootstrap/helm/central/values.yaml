@@ -1158,6 +1158,105 @@ metalNodes:
           - name: eno3d1
             macAddress: 00:02:c9:2f:25:d8
 
+# ─── shc: platform IaaS clusters (LAB-PLAN P5/P6) ───────────────────────────────────────────────
+# Bare-metal clusters built by central from metal-infra-env (mce-cluster-build Agent provider, lab
+# workspace p5/build-iaas1.sh). templates/iaasClusters renders, per enabled cluster, the base layer, a
+# ClusterSecretStore on central Vault (auth mount kubernetes-<name>, policy limited to that cluster's
+# keys), ODF external on Atuin Ceph and CNV. Enable a cluster once it is registered in Argo CD and its
+# Vault auth mount exists.
+iaasClusterDefaults:
+  enabled: false
+  server: ""
+  syncWaves:
+    base: "0"
+    store: "0"
+    certs: "2"
+    odf: "3"
+    cnv: "4"
+  clusterBase:
+    chartVersion: "0.1.0"
+    values:
+      cluster:
+        baseDomain: shc.signal9.gg
+      certManager:
+        recursiveNameservers: "172.18.42.20:53"
+      letsencrypt:
+        dnsZones: [shc.signal9.gg]
+        rfc2136:
+          nameserver: "75.8.222.11:53"
+          tsigKeyName: shc-acme.
+        tsigSecret:
+          vaultKey: dns/shc-acme-tsig
+        account:
+          vaultKey: dns/letsencrypt-shc-account
+      timesync:
+        servers: [172.18.42.20, 172.18.0.79]
+      externalSecrets:
+        config:
+          spec:
+            controllerConfig:
+              networkPolicies:
+                # central Vault through its route on central's ingress VIP
+                - name: allow-egress-to-central-vault
+                  componentName: ExternalSecretsCoreController
+                  egress:
+                    - to:
+                        - ipBlock:
+                            cidr: 172.18.230.7/32
+                      ports:
+                        - protocol: TCP
+                          port: 443
+      monitoring:
+        storageClass: ocs-external-storagecluster-ceph-rbd
+  secretStore:
+    chartVersion: "0.3.3-shc.2"
+    values:
+      vault:
+        server: "https://vault-central.apps.central.shc.signal9.gg"
+        path: "central"
+      auth:
+        type: kubernetes
+        role: "external-secrets"
+        serviceAccountName: "vault-eso-sa"
+        serviceAccountNamespace: "external-secrets"
+  odfExternal:
+    enabled: true
+    chartVersion: "0.1.0"
+    values: {}
+  cnv:
+    enabled: true
+    chartVersion: "0.1.0"
+    values:
+      namespace: openshift-cnv
+      subscription:
+        channel: stable
+        installPlanApproval: Automatic
+        source: redhat-operators
+        sourceNamespace: openshift-marketplace
+      hyperconverged:
+        enabled: true
+        name: kubevirt-hyperconverged
+        featureGates:
+          deployKubeSecondaryDNS: false
+          # golden images would import into the default StorageClass (Atuin Ceph); off until wanted
+          enableCommonBootImageImport: false
+        infra:
+          nodePlacement: {}
+        workloads:
+          nodePlacement: {}
+      pdb:
+        virtApi:
+          enabled: true
+          minAvailable: 1
+        virtController:
+          enabled: true
+          minAvailable: 1
+
+iaasClusters:
+  iaas1:
+    enabled: false  # shc: P5 - enable after the install, Argo registration and Vault auth mount
+    server: "https://api.iaas1.shc.signal9.gg:6443"
+
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
   enabled: true  # shc: P4 (services cluster) enabled

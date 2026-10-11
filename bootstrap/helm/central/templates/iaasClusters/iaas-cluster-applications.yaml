@@ -1,0 +1,209 @@
+{{- /*
+shc (LAB-PLAN P5/P6, D9/D19): platform IaaS clusters (bare metal, built by central from metal-infra-env).
+Per cluster in .Values.iaasClusters (merged over .Values.iaasClusterDefaults), one AppProject and:
+  shc-cluster-base-<c>     wave base   ESO, cert-manager, chrony, monitoring (no Vault dependency)
+  vault-secret-store-<c>   wave store  ClusterSecretStore vault-backend -> central Vault, auth mount kubernetes-<c>
+  shc-cluster-certs-<c>    wave certs  Let's Encrypt issuer, API and ingress certificates
+  odf-external-<c>         wave odf    ODF external on Atuin Ceph (exporter output from Vault clusters/<c>/ceph-external)
+  cnv-<c>                  wave cnv    OpenShift Virtualization
+The cluster must be registered in Argo CD (cluster Secret for .server) and its Vault auth mount configured
+before it is enabled.
+*/}}
+{{- if include "sovereign-central.applicationsEnabled" . }}
+{{- range $name, $cluster := .Values.iaasClusters }}
+{{- $c := mergeOverwrite (deepCopy $.Values.iaasClusterDefaults) (deepCopy $cluster) }}
+{{- if $c.enabled }}
+{{- $project := printf "iaas-%s" $name }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ $project }}
+  namespace: {{ $.Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  description: "Platform IaaS cluster {{ $name }}"
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: '*'
+      server: {{ $c.server | quote }}
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+
+{{- /* shc-cluster-base, two layers */}}
+{{- range $layer := list "base" "certs" }}
+{{- $values := mergeOverwrite (deepCopy $c.clusterBase.values) (dict "cluster" (dict "name" $name) "layers" (dict "base" (eq $layer "base") "certs" (eq $layer "certs"))) }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shc-cluster-{{ $layer }}-{{ $name }}
+  namespace: {{ $.Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cluster-base
+    sovereign-cloud/target: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ index $c.syncWaves $layer | quote }}
+spec:
+  project: {{ $project }}
+  source:
+    repoURL: {{ printf "oci://%s/%s/shc-cluster-base" $.Values.oci.registry $.Values.oci.repositoryBase | quote }}
+    chart: shc-cluster-base
+    targetRevision: {{ $c.clusterBase.chartVersion | quote }}
+    helm:
+      releaseName: shc-cluster-{{ $layer }}
+      valuesObject:
+        {{- toYaml $values | nindent 8 }}
+  destination:
+    server: {{ $c.server | quote }}
+    namespace: openshift-config
+  ignoreDifferences:
+    {{- include "sovereign-central.esoIgnoreDifferences" $ | nindent 4 }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    {{- include "sovereign-central.syncRetry" $ | nindent 4 }}
+{{- end }}
+
+{{- /* ClusterSecretStore: central Vault, cluster-specific auth mount and scoped policy */}}
+{{- $store := mergeOverwrite (deepCopy $c.secretStore.values) (dict "auth" (dict "mountPath" (printf "kubernetes-%s" $name))) }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault-secret-store-{{ $name }}
+  namespace: {{ $.Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: secrets
+    sovereign-cloud/target: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.store | quote }}
+spec:
+  project: {{ $project }}
+  source:
+    repoURL: {{ printf "oci://%s/%s/vault-secret-store" $.Values.oci.registry $.Values.oci.repositoryBase | quote }}
+    chart: vault-secret-store
+    targetRevision: {{ $c.secretStore.chartVersion | quote }}
+    helm:
+      releaseName: vault-secret-store-{{ $name }}
+      valuesObject:
+        {{- toYaml $store | nindent 8 }}
+  destination:
+    server: {{ $c.server | quote }}
+    namespace: {{ $store.auth.serviceAccountNamespace | default "external-secrets" }}
+  ignoreDifferences:
+    {{- include "sovereign-central.esoIgnoreDifferences" $ | nindent 4 }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+    {{- include "sovereign-central.syncRetry" $ | nindent 4 }}
+
+{{- if $c.odfExternal.enabled }}
+{{- $odf := mergeOverwrite (dict "externalDetails" (dict "vaultKey" (printf "clusters/%s/ceph-external" $name))) (deepCopy $c.odfExternal.values) }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: odf-external-{{ $name }}
+  namespace: {{ $.Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: storage
+    sovereign-cloud/target: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.odf | quote }}
+spec:
+  project: {{ $project }}
+  source:
+    repoURL: {{ printf "oci://%s/%s/odf-external" $.Values.oci.registry $.Values.oci.repositoryBase | quote }}
+    chart: odf-external
+    targetRevision: {{ $c.odfExternal.chartVersion | quote }}
+    helm:
+      releaseName: odf-external
+      valuesObject:
+        {{- toYaml $odf | nindent 8 }}
+  destination:
+    server: {{ $c.server | quote }}
+    namespace: openshift-storage
+  ignoreDifferences:
+    {{- include "sovereign-central.esoIgnoreDifferences" $ | nindent 4 }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    {{- include "sovereign-central.syncRetry" $ | nindent 4 }}
+{{- end }}
+
+{{- if $c.cnv.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cnv-{{ $name }}
+  namespace: {{ $.Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: virtualization
+    sovereign-cloud/target: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.cnv | quote }}
+spec:
+  project: {{ $project }}
+  source:
+    repoURL: {{ printf "oci://%s/%s/openshift-cnv" $.Values.oci.registry $.Values.oci.repositoryBase | quote }}
+    chart: openshift-cnv
+    targetRevision: {{ $c.cnv.chartVersion | quote }}
+    helm:
+      releaseName: cnv
+      valuesObject:
+        {{- toYaml $c.cnv.values | nindent 8 }}
+  destination:
+    server: {{ $c.server | quote }}
+    namespace: openshift-cnv
+  ignoreDifferences:
+    # HCO mutates HyperConverged after install; ignore operator-owned fields.
+    - group: hco.kubevirt.io
+      kind: HyperConverged
+      jqPathExpressions:
+        - .spec
+        - .status
+      jsonPointers:
+        - /metadata/annotations
+        - /metadata/labels
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    {{- include "sovereign-central.syncRetry" $ | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

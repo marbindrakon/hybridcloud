@@ -1,0 +1,22 @@
+{{- if .Values.externalDetails.vaultKey }}
+# The exporter's JSON (Ceph monitor endpoints, restricted CSI client keys, StorageClass parameters).
+# Holds Ceph keys: comes from Vault only, never from values.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: rook-ceph-external-cluster-details
+  namespace: {{ .Values.namespace }}
+spec:
+  refreshInterval: {{ .Values.externalDetails.refreshInterval }}
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ .Values.externalDetails.secretStoreName }}
+  target:
+    name: rook-ceph-external-cluster-details
+    creationPolicy: Owner
+  data:
+    - secretKey: external_cluster_details
+      remoteRef:
+        key: {{ .Values.externalDetails.vaultKey }}
+        property: {{ .Values.externalDetails.property }}
+{{- end }}
