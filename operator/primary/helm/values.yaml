@@ -37,3 +37,24 @@ amqKafka:
 
 metrics:
   enabled: true
+
+# shc: plugin configuration CRs (templates/plugin-configs.yaml), keyed by kind
+pluginConfigs:
+  RbacConfig:
+    enabled: true
+    name: keycloak-sovereign-tenants-services
+    spec:
+      type: keycloak
+      secret: rhbk-services-admin
+  AAPConfig:
+    enabled: true
+    name: aap-sovereign-services
+    spec:
+      secret: aap-admin
+      rbacConfig: keycloak-sovereign-tenants-services
+  QuayConfig:
+    enabled: true
+    name: quay-sovereign-services
+    spec:
+      secret: quay-services-admin
+      rbacConfig: keycloak-sovereign-tenants-services

@@ -1,0 +1,21 @@
+{{- /*
+shc: the services-side plugin configuration the AAPOrg/QuayOrg flows need (RbacConfig, AAPConfig,
+QuayConfig in the plugins namespace). Upstream only created them from the legacy per-plugin charts
+(pluginRbac/pluginAap/pluginQuay default*Config), which ADR-002 retired in favour of this operator.
+spec.secret names the central Vault key the EDA roles read.
+*/}}
+{{- range $kind, $c := .Values.pluginConfigs }}
+{{- if $c.enabled }}
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: {{ $kind }}
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $.Values.pluginsNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  {{- toYaml $c.spec | nindent 2 }}
+{{- end }}
+{{- end }}

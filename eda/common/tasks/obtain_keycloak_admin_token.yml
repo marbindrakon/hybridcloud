@@ -1,0 +1,28 @@
+---
+# Keycloak admin access token (password grant against the master realm), after
+# obtain_keycloak_admin_credentials.yml. Upstream included this file but never committed it
+# (.gitignore `*token*`). Inputs: keycloak_url, keycloak_admin_user, keycloak_admin_password;
+# optional keycloak_url_http_headers. Sets keycloak_admin_token.
+- name: Request Keycloak admin token
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: admin-cli
+      grant_type: password
+      username: "{{ keycloak_admin_user }}"
+      password: "{{ keycloak_admin_password }}"
+    headers: "{{ keycloak_url_http_headers | default({}) }}"
+    validate_certs: false
+    status_code: [200]
+  register: _kc_token_resp
+  retries: 5
+  delay: 5
+  until: _kc_token_resp is succeeded
+  no_log: true
+
+- name: Expose Keycloak admin token
+  ansible.builtin.set_fact:
+    keycloak_admin_token: "{{ _kc_token_resp.json.access_token }}"
+  no_log: true
