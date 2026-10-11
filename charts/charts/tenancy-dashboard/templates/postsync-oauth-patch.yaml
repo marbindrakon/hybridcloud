@@ -11,14 +11,6 @@ rules:
     resources: ["oauthclients"]
     resourceNames: [{{ include "tenancy-dashboard.name" . | quote }}]
     verbs: ["get", "patch"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: [{{ printf "%s-oauth-client" (include "tenancy-dashboard.name" .) | quote }}]
-    verbs: ["get"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    resourceNames: [{{ include "tenancy-dashboard.name" . | quote }}]
-    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -29,6 +21,41 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: {{ include "tenancy-dashboard.name" . }}-oauth-patch
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tenancy-dashboard.name" . }}
+    namespace: {{ .Values.namespace }}
+---
+# shc: the secret and Deployment rules are namespaced (they were cluster-wide by name).
+# list/watch (restricted by name) are what `oc rollout status` needs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}-oauth-patch
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ printf "%s-oauth-client" (include "tenancy-dashboard.name" .) | quote }}]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ include "tenancy-dashboard.name" . | quote }}]
+    verbs: ["get", "patch", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tenancy-dashboard.name" . }}-oauth-patch
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenancy-dashboard.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: {{ include "tenancy-dashboard.name" . }}-oauth-patch
 subjects:
   - kind: ServiceAccount

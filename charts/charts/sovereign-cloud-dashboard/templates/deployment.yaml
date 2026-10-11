@@ -17,8 +17,13 @@ spec:
       labels:
         {{- include "dashboard.selectorLabels" . | nindent 8 }}
         {{- include "dashboard.labels" . | nindent 8 }}
+      {{- /* shc: Argo renders without cluster access, so lookup finds nothing; leave the
+           annotation to the oauth-sync job then, or Argo and the job flip it every run. */}}
+      {{- $oauthRev := include "dashboard.oauthSecretChecksum" . }}
+      {{- if ne $oauthRev "pending" }}
       annotations:
-        oauth-client-secret-version: {{ include "dashboard.oauthSecretChecksum" . | quote }}
+        oauth-client-secret-version: {{ $oauthRev | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "dashboard.name" . }}
       {{- if .Values.imagePullSecrets }}
