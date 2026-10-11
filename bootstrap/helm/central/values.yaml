@@ -3892,13 +3892,16 @@ hybridsovereignPrimaryOperator:
   values:
     namespace: sovereign-cloud
     pluginsNamespace: sovereign-cloud-plugins
+    # shc: "img-" tags - the operator charts share these Quay repositories, and a chart push of
+    # hybridsovereign-namespace-operator 0.1.10 replaced the 0.1.10 image (namespace operators then
+    # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "0.1.20"
+      tag: "img-0.1.20"
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "0.1.10"
+        tag: "img-0.1.10"
     amqKafka:
       enabled: true
       vaultPath: amq-producer
