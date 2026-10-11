@@ -1244,13 +1244,14 @@ iaasClusterDefaults:
           nodePlacement: {}
         workloads:
           nodePlacement: {}
+      # virt-operator creates and owns virt-api-pdb / virt-controller-pdb itself. When the chart's
+      # copies land first (fresh cluster), virt-operator fails "poddisruptionbudget ... already exists"
+      # and KubeVirt never becomes Available (iaas1, P5). Central got away with it by ordering luck.
       pdb:
         virtApi:
-          enabled: true
-          minAvailable: 1
+          enabled: false
         virtController:
-          enabled: true
-          minAvailable: 1
+          enabled: false
 
 iaasClusters:
   iaas1:
