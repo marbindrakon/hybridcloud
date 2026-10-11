@@ -2207,6 +2207,13 @@ shcClusterBaseServices:
       # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md); the CRs live on services
       edaRedrive:
         enabled: true
+        # TEMPORARY (10-11 outage tests): short timings; revert after the tests
+        schedule: "* * * * *"
+        config:
+          ackTimeoutMinutes: 2
+          publishFailedMinutes: 3
+          jobTimeoutMinutes: 3
+          maxRedrives: 2
 
 # ─── External Secrets Operator (services) ───────────────────────────────────
 externalSecretsServices:
