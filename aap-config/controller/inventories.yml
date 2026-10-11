@@ -2,7 +2,10 @@
 controller_inventories:
   - name: sovereign-localhost
     organization: sovereign
-    variables: {}
+    # shc (LAB-PLAN §11.3): environment endpoints for the EDA job roles, from the config-as-code job env
+    variables:
+      aap_ui_url: "{{ lookup('env', 'AAP_GATEWAY_URL') }}"
+      eda_log_s3_endpoint: "{{ lookup('env', 'EDA_LOG_S3_ENDPOINT') }}"
 
 controller_hosts:
   - name: localhost

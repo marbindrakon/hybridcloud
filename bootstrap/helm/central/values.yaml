@@ -3097,6 +3097,9 @@ sovereignJobs:
           value: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
         - name: AAP_GATEWAY_URL
           value: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
+        # shc (§11.3): S3 endpoint for EDA job logs (inventory var eda_log_s3_endpoint)
+        - name: EDA_LOG_S3_ENDPOINT
+          value: "https://s3-openshift-storage.apps.services.shc.signal9.gg"
         - name: AAP_ADMIN_PASSWORD
           valueFrom:
             secretKeyRef:

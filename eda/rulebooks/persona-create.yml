@@ -3,16 +3,16 @@
   hosts: all
   sources:
     - ansible.eda.kafka:
-        host: "hybridsovereign-kafka-kafka-bootstrap-amq-streams.apps.central.shc.signal9.gg"
-        port: "443"
+        host: "{{ KAFKA_HOST }}"
+        port: "{{ KAFKA_PORT }}"
         topic: hybridsovereign-events
         group_id: eda-persona-create
         security_protocol: SASL_SSL
         sasl_mechanism: SCRAM-SHA-512
         sasl_plain_username: "{{ KAFKA_USERNAME }}"
         sasl_plain_password: "{{ KAFKA_PASSWORD }}"
-        check_hostname: false
-        verify_mode: CERT_NONE
+        check_hostname: true
+        verify_mode: CERT_REQUIRED
   rules:
     - name: Handle Persona Create
       condition: event.body.payload.reason in ["PersonaCreateRequested", "PersonaReconcileRequested"] and event.body.payload.regarding.kind == "Persona"
