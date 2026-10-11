@@ -1,6 +1,7 @@
-{{- if and .Values.cluster.extraManifests (not .Values.provider.aws.extraManifestsSecret) (ne .Values.provider.type "Agent") -}}
-# Install-time manifests for Hive (ClusterDeployment.spec.provisioning.manifestsConfigMapRef),
-# e.g. the Authentication serviceAccountIssuer and chrony MachineConfigs. Keys are file names.
+{{- if and .Values.cluster.extraManifests (not .Values.provider.aws.extraManifestsSecret) -}}
+# Install-time manifests, e.g. the Authentication serviceAccountIssuer and chrony MachineConfigs.
+# Keys are file names. Hive reads them through ClusterDeployment.spec.provisioning.manifestsConfigMapRef,
+# the Agent provider through AgentClusterInstall.spec.manifestsConfigMapRefs.
 apiVersion: v1
 kind: ConfigMap
 metadata:

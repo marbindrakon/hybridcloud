@@ -10,13 +10,21 @@ spec:
   clusterDeploymentRef:
     name: {{ .Values.cluster.name }}
 {{ if .Values.provider.agent.platformType }}
-  platformType: {{ .Values.provider.infraenv.platformType }}
+  platformType: {{ .Values.provider.agent.platformType }}
 {{ end }}
   imageSetRef:
 {{ if .Values.cluster.clusterImageSet }}
     name: {{ .Values.cluster.clusterImageSet }}
 {{ else }}
     name: {{ .Values.cluster.name }}-custom
+{{ end }}
+{{ if .Values.cluster.sshPubKey }}
+  sshPublicKey: {{ .Values.cluster.sshPubKey | quote }}
+{{ end }}
+{{ if and .Values.cluster.extraManifests (not .Values.provider.aws.extraManifestsSecret) }}
+  # Install-time manifests (extra-manifests.yaml), e.g. the Authentication serviceAccountIssuer
+  manifestsConfigMapRefs:
+    - name: {{ .Values.cluster.name }}-manifests
 {{ end }}
 {{ if not (eq .Values.provider.agent.useExternalLB true) }}
   apiVIP: {{ .Values.cluster.apiVIP }}

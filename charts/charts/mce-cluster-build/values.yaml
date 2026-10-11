@@ -21,8 +21,8 @@ cluster:
   trustedCAs: ""
   sshPubKey: ""
   dnsServers: []
-  # Install-time manifests (file name -> object or YAML string) passed to Hive through a
-  # ConfigMap (non-Agent providers; ignored when provider.aws.extraManifestsSecret is set).
+  # Install-time manifests (file name -> object or YAML string) in a ConfigMap, for Hive or the
+  # Agent provider's AgentClusterInstall (ignored when provider.aws.extraManifestsSecret is set).
   extraManifests: {}
 
 provider:
@@ -73,6 +73,8 @@ provider:
     sharedInfraEnv:
       namespace: metal-infra-env
       name: metal-infra-env
+    # AgentClusterInstall platformType (BareMetal, None, ...); with useExternalLB false the cluster
+    # runs its own keepalived VIPs (cluster.apiVIP/ingressVIP) in machineCIDR.
     platformType: null
     useExternalLB: true
     machineCIDR: ""
