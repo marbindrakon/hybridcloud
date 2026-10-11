@@ -48,6 +48,13 @@
             and (entity_ready | bool)
           }}
 
+    # shc (LAB-PLAN §11.6): deploy (idempotently) on every reconcile, before the "already processed"
+    # skip. Upstream deployed it after publishing; a reconcile interrupted in between (operator
+    # restart) left a ready Entity without its namespace operator, never repaired. This also rolls
+    # namespace operator image changes out on the primary operator's startup resync.
+    - name: Deploy per-entity namespace operator
+      ansible.builtin.include_tasks: deploy_namespace_operator.yml
+
     - name: Skip when already processed
       ansible.builtin.meta: end_host
       when: entity_skip_reconcile | bool
@@ -101,8 +108,6 @@
           uid: "{{ _hybridsovereign_redhat_entity.metadata.uid }}"
 
 
-    - name: Deploy per-entity namespace operator
-      ansible.builtin.include_tasks: deploy_namespace_operator.yml
 
   rescue:
     - name: Mark Entity as failed
