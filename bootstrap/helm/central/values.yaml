@@ -3940,11 +3940,11 @@ hybridsovereignPrimaryOperator:
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.23"
+      tag: "img-0.1.24"
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.13"
+        tag: "img-0.1.14"
     amqKafka:
       enabled: true
       vaultPath: amq-producer
