@@ -13,5 +13,7 @@
 *token*
 !**/templates/*secret*
 !**/templates/*token*
+# shc: Ansible role code named after what it handles (no secrets in it)
+!ansible/roles/*/files/*token*.py
 # Helm dependencies (downloaded by helm dependency build)
 helm/charts/*/charts/*.tgz
