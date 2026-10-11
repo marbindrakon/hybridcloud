@@ -1273,6 +1273,10 @@ metalNodes:
             macAddress: 2c:41:38:eb:d2:64
           - name: eno2
             macAddress: 2c:41:38:eb:d2:65
+          - name: eno3
+            macAddress: 00:02:c9:2f:3a:c0
+          - name: eno3d1
+            macAddress: 00:02:c9:2f:3a:c8
         fencing:
           address: redfish+https://172.18.2.35:443/redfish/v1/Systems/1/
       sl230-blade8:
@@ -1375,6 +1379,10 @@ metalNodes:
             macAddress: 2c:41:38:eb:d3:2c
           - name: eno2
             macAddress: 2c:41:38:eb:d3:2d
+          - name: eno3
+            macAddress: 24:be:05:a0:af:31
+          - name: eno3d1
+            macAddress: 24:be:05:a0:af:32
         fencing:
           address: redfish+https://172.18.2.38:443/redfish/v1/Systems/1/
 
@@ -1478,7 +1486,7 @@ iaasClusters:
     enabled: true  # shc: P5 - installed 2026-10-11, registered in Argo, Vault mount kubernetes-iaas1
     server: "https://api.iaas1.shc.signal9.gg:6443"
   edge1:
-    enabled: false  # shc: P6 (two-node with fencing, blades 5/8) - enable after install, Argo registration, Vault mount
+    enabled: true  # shc: P6 two-node with fencing (blades 5/8), installed 2026-10-11, Argo + Vault kubernetes-edge1
     server: "https://api.edge1.shc.signal9.gg:6443"
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
