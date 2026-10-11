@@ -33,7 +33,9 @@
             {%- endfor -%}
             {%- if cur.v != want -%}{%- set ns.ok = false -%}{%- endif -%}
           {%- endfor -%}
-          {%- if ns.ok -%}{%- set _ = out.append(r.item.kind ~ '/' ~ o.metadata.name) -%}{%- endif -%}
+          {#- a dependent whose deletion completed is about to go: don't wait for it -#}
+          {%- set done = ((o.status | default({}, true)).deletionComplete | default(false)) | bool -%}
+          {%- if ns.ok and not done -%}{%- set _ = out.append(r.item.kind ~ '/' ~ o.metadata.name) -%}{%- endif -%}
         {%- endfor -%}
       {%- endfor -%}
       {{ out }}

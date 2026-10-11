@@ -50,6 +50,17 @@
           uid: "{{ _hybridsovereign_redhat_platformopenshift.metadata.uid }}"
 
 
+    - name: Wake the CRs this one was holding up (deletion complete)
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: nudge_referenced
+      vars:
+        nudge_targets:
+          - kind: CloudOSO
+            name: "{{ _hybridsovereign_redhat_platformopenshift.spec.openstack.environment | default('') if (_hybridsovereign_redhat_platformopenshift.spec.type | default('')) == 'openstack' else '' }}"
+          - kind: CloudAWS
+            name: "{{ _hybridsovereign_redhat_platformopenshift.spec.aws.environment | default('') if (_hybridsovereign_redhat_platformopenshift.spec.type | default('')) == 'aws' else '' }}"
+      when: _hybridsovereign_redhat_platformopenshift.status.deletionComplete | default(false) | bool
     - name: Exit cleanly when EDA completed deletion
       ansible.builtin.meta: end_host
       when: _hybridsovereign_redhat_platformopenshift.status.deletionComplete | default(false) | bool

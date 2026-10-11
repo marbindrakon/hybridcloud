@@ -32,6 +32,15 @@
           namespace: "{{ ansible_operator_meta.namespace }}"
           uid: "{{ _hybridsovereign_redhat_networkplacement.metadata.uid }}"
 
+    - name: Wake the CRs this one was holding up (deletion complete)
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: nudge_referenced
+      vars:
+        nudge_targets:
+          - kind: "{{ _hybridsovereign_redhat_networkplacement.spec.backend.kind | default('CloudOSO') }}"
+            name: "{{ _hybridsovereign_redhat_networkplacement.spec.backend.name | default('') }}"
+      when: _hybridsovereign_redhat_networkplacement.status.deletionComplete | default(false) | bool
     - name: Exit cleanly when EDA completed deletion
       ansible.builtin.meta: end_host
       when: _hybridsovereign_redhat_networkplacement.status.deletionComplete | default(false) | bool

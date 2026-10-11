@@ -33,6 +33,15 @@
           uid: "{{ _hybridsovereign_redhat_assignment.metadata.uid }}"
 
 
+    - name: Wake the CRs this one was holding up (deletion complete)
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: nudge_referenced
+      vars:
+        nudge_targets:
+          - kind: PlatformOpenshift
+            name: "{{ _hybridsovereign_redhat_assignment.spec.openshift | default('') }}"
+      when: _hybridsovereign_redhat_assignment.status.deletionComplete | default(false) | bool
     - name: Exit cleanly when EDA completed deletion
       ansible.builtin.meta: end_host
       when: _hybridsovereign_redhat_assignment.status.deletionComplete | default(false) | bool

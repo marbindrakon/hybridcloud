@@ -1,0 +1,20 @@
+---
+# shc (LAB-PLAN §11.6): a delete that waited for this CR (block_on_dependents) only rechecks on its
+# finalizer's requeue backoff, which grows to ~17 min. When this CR's deletion completes, touch an
+# annotation on each CR it referenced so they reconcile now (annotation changes trigger a reconcile).
+# input: nudge_targets  list of {kind, name} in this CR's namespace; empty names are skipped
+- name: Wake the CRs this one was holding up
+  kubernetes.core.k8s:
+    state: patched
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ item.kind }}"
+    name: "{{ item.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    definition:
+      metadata:
+        annotations:
+          hybridsovereign.redhat/dependent-removed: "{{ ansible_operator_meta.name }} {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  loop: "{{ nudge_targets | selectattr('name') | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.name }}"
+  failed_when: false
