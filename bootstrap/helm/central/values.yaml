@@ -1402,7 +1402,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.2"
+    chartVersion: "0.3.3"
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -1683,7 +1683,7 @@ mtv:
 # transit seal token check, cert-manager metrics, alert rules.
 shcClusterOpsCentral:
   enabled: true
-  chartVersion: "0.3.2"
+  chartVersion: "0.3.3"
   syncWave: "24"
   values:
     layers:
@@ -2154,7 +2154,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.2"
+  chartVersion: "0.3.3"
   syncWaves:
     base: "0"
     certs: "2"
@@ -3940,11 +3940,11 @@ hybridsovereignPrimaryOperator:
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.22"
+      tag: "img-0.1.23"
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.12"
+        tag: "img-0.1.13"
     amqKafka:
       enabled: true
       vaultPath: amq-producer
