@@ -15,8 +15,26 @@
     postgres_gid: "26"
 
   tasks:
+    # shc: every k8s_info needs api_version (without it, discovery fails with KeyError 'kind').
+    - name: Read the AnsibleAutomationPlatform CR
+      kubernetes.core.k8s_info:
+        api_version: aap.ansible.com/v1alpha1
+        kind: AnsibleAutomationPlatform
+        namespace: "{{ aap_namespace }}"
+      register: aap_cr
+
+    # With spec.database.database_secret the platform runs on an external database (central: the
+    # Crunchy aap-pgcluster); a managed postgres-15 StatefulSet left from the first reconcile is
+    # unused, so there is nothing to guard.
+    - name: Skip when the platform uses an external database
+      ansible.builtin.meta: end_play
+      when: >-
+        aap_cr.resources | length > 0
+        and (aap_cr.resources[0].spec.database.database_secret | default('')) | length > 0
+
     - name: Read gateway postgres StatefulSet
       kubernetes.core.k8s_info:
+        api_version: apps/v1
         kind: StatefulSet
         namespace: "{{ aap_namespace }}"
         name: "{{ postgres_sts }}"
@@ -28,6 +46,7 @@
 
     - name: Read gateway postgres pod
       kubernetes.core.k8s_info:
+        api_version: v1
         kind: Pod
         namespace: "{{ aap_namespace }}"
         label_selector: >-
@@ -68,6 +87,7 @@
 
     - name: Wait for postgres pod termination
       kubernetes.core.k8s_info:
+        api_version: v1
         kind: Pod
         namespace: "{{ aap_namespace }}"
         name: "{{ pg_pod_name }}"
@@ -112,6 +132,7 @@
 
     - name: Wait for PVC repair pod completion
       kubernetes.core.k8s_info:
+        api_version: v1
         kind: Pod
         namespace: "{{ aap_namespace }}"
         name: aap-postgres-pvc-guard
@@ -125,6 +146,7 @@
     - name: Delete PVC repair pod
       kubernetes.core.k8s:
         state: absent
+        api_version: v1
         kind: Pod
         namespace: "{{ aap_namespace }}"
         name: aap-postgres-pvc-guard
@@ -144,6 +166,7 @@
 
     - name: Wait for postgres pod to become ready
       kubernetes.core.k8s_info:
+        api_version: v1
         kind: Pod
         namespace: "{{ aap_namespace }}"
         label_selector: >-

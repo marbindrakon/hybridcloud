@@ -1993,8 +1993,12 @@ giteaCentral:
             NAME: gitea
             USER: gitea
             SSL_MODE: require
+          # shc (review C3, owner 10-11): no Valkey. The bitnamilegacy images are frozen upstream, and
+          # while any valkey subchart is on, the gitea chart forces cache/session/queue to redis and
+          # ignores these. Single replica: in-process cache, sessions in Postgres (survive restarts),
+          # LevelDB queues on the data volume.
           session:
-            PROVIDER: memory
+            PROVIDER: db
           cache:
             ADAPTER: memory
           queue:
@@ -2008,20 +2012,9 @@ giteaCentral:
       redis-cluster:
         enabled: false
       valkey-cluster:
-        enabled: true
-        image:
-          registry: quay.signal9.gg
-          repository: shc/valkey-cluster
-          tag: "8.1.3-debian-12-r3"
-        volumePermissions:
-          image:
-            registry: quay.signal9.gg
-            repository: shc/os-shell
-            tag: "12-debian-12-r51"
-        sysctlImage:
-          registry: quay.signal9.gg
-          repository: shc/os-shell
-          tag: "12-debian-12-r51"
+        enabled: false
+      valkey:
+        enabled: false
       persistence:
         enabled: true
         size: 10Gi
@@ -2889,7 +2882,7 @@ sovereignJobs:
       syncWave: "31"
       env:
         - name: RUN_ID
-          value: "1"
+          value: "2"  # shc: api_version fix + skip with an external database
     edaConfig:
       enabled: false
       playbook: eda-config.yml
