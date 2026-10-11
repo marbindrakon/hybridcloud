@@ -9,3 +9,7 @@ keycloak_realm: "sovereign-central"
 keycloak_client_id: "quay-central"
 keycloak_admin_secret: ""
 keycloak_admin_secret_ns: "sovereign-cloud-jobs"
+# shc: Argo CD cluster Secret (openshift-gitops) for reaching the Quay cluster's API when Quay is not
+# on the cluster the job runs on; empty = in-cluster. Used to mint the long-lived admin token.
+quay_cluster_secret: ""
+quay_admin_token_ttl_days: 365

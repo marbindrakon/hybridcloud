@@ -70,6 +70,7 @@
   when: _quay_token_check is not skipped and _quay_token_check.status == 200
   no_log: true
 
+# 400 = the database already has users (initialize only works once); the token is then minted below.
 - name: Initialize Quay superuser via API
   uri:
     url: "{{ quay_url }}/api/v1/user/initialize"
@@ -81,21 +82,88 @@
       password: "{{ quay_admin_password }}"
       email: "admin@sovereign.local"
       access_token: true
-    status_code: [200, 201]
+    status_code: [200, 201, 400]
   register: _quay_init
   retries: 10
   delay: 15
-  until: _quay_init.status in [200, 201]
+  until: _quay_init.status in [200, 201, 400]
   when: quay_access_token is not defined
   no_log: true
 
-- name: Set Quay access token
+# shc: the initialize token lasts 2.5 h (Quay's create_user_access_token default expires_in=9000), and
+# with AUTHENTICATION_TYPE OIDC there is no password sign-in to get another. Whenever the stored token
+# isn't usable, mint a long-lived one (quay_admin_token_ttl_days) on the same "automation" application
+# through Quay's own data model in the quay-app pod (files/quay_mint_admin_token.py on stdin). The
+# Quay cluster is reached with Argo CD's cluster credentials (as mtv-catalog-sync does) when
+# quay_cluster_secret is set, else in-cluster. Re-run this job to replace an expired token.
+- name: Decide whether to mint a token
   set_fact:
-    quay_access_token: "{{ _quay_init.json.access_token }}"
-  when: _quay_init is not skipped
-  no_log: true
+    _quay_need_mint: "{{ quay_access_token is not defined }}"
+
+- name: Mint a long-lived Quay admin token
+  when: _quay_need_mint | bool
+  block:
+    - name: Read the Quay cluster's Argo CD credentials
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ quay_cluster_secret }}"
+        namespace: openshift-gitops
+      register: _quay_cluster
+      when: quay_cluster_secret | length > 0
+      no_log: true
+
+    - name: Set the Quay cluster connection
+      set_fact:
+        _quay_k8s_host: "{{ _quay_cluster.resources[0].data.server | b64decode }}"
+        _quay_k8s_token: "{{ (_quay_cluster.resources[0].data.config | b64decode | from_json).bearerToken }}"
+      when: quay_cluster_secret | length > 0
+      no_log: true
+
+    - name: Find a running quay-app pod
+      kubernetes.core.k8s_info:
+        host: "{{ _quay_k8s_host | default(omit) }}"
+        api_key: "{{ _quay_k8s_token | default(omit) }}"
+        validate_certs: false
+        api_version: v1
+        kind: Pod
+        namespace: "{{ quay_namespace }}"
+        label_selectors: [quay-component=quay-app]
+        field_selectors: [status.phase=Running]
+      register: _quay_app_pods
+      failed_when: _quay_app_pods.resources | length == 0
+
+    - name: Mint the token through Quay's data model
+      kubernetes.core.k8s_exec:
+        host: "{{ _quay_k8s_host | default(omit) }}"
+        api_key: "{{ _quay_k8s_token | default(omit) }}"
+        validate_certs: false
+        namespace: "{{ quay_namespace }}"
+        pod: "{{ _quay_app_pods.resources[0].metadata.name }}"
+        container: quay-app
+        command: >-
+          sh -c "cd /quay-registry && echo {{ lookup('file', 'quay_mint_admin_token.py') | b64encode }} | base64 -d
+          | QUAY_ADMIN_USER={{ quay_admin_user }} QUAY_TOKEN_TTL_DAYS={{ quay_admin_token_ttl_days }} timeout 300 python3 -W ignore -"
+      register: _quay_mint
+      no_log: true
+
+    - name: Set Quay access token
+      set_fact:
+        quay_access_token: "{{ _quay_mint.stdout_lines | last | trim }}"
+      no_log: true
+
+    - name: Verify the minted token
+      uri:
+        url: "{{ quay_url }}/api/v1/user/"
+        method: GET
+        validate_certs: false
+        headers:
+          Authorization: "Bearer {{ quay_access_token }}"
+        status_code: [200]
+      no_log: true
 
 # ─── Step 4: Store admin credentials in Vault ─────────────────────────────
+# The password is the new one only when initialize created the user; otherwise keep the stored one.
 - name: Write Quay admin credentials to Vault
   uri:
     url: "{{ vault_addr }}/v1/{{ vault_secret_path | regex_replace('^central/', 'central/data/') }}"
@@ -107,11 +175,13 @@
     body:
       data:
         username: "{{ quay_admin_user }}"
-        password: "{{ quay_admin_password }}"
+        password: >-
+          {{ quay_admin_password if (_quay_init is not skipped and _quay_init.status in [200, 201])
+             else (_quay_vault_existing.json.data.data.password | default('')) }}
         token: "{{ quay_access_token }}"
         url: "{{ quay_url }}"
     status_code: [200, 204]
-  when: _quay_init is not skipped
+  when: _quay_need_mint | bool
   no_log: true
 
 # ─── Step 5: Get Keycloak client secret from Vault ────────────────────────

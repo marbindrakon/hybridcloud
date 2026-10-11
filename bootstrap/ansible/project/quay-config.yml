@@ -11,6 +11,7 @@
     vault_namespace: "{{ lookup('env', 'VAULT_NAMESPACE') }}"
     vault_secret_path: "{{ lookup('env', 'VAULT_SECRET_PATH') }}"
     quay_namespace: "{{ 'central-quay' if 'central' in lookup('env', 'QUAY_URL') else 'services-quay' }}"
+    quay_cluster_secret: "{{ lookup('env', 'QUAY_CLUSTER_SECRET') | default('argocd-cluster-services' if 'services' in lookup('env', 'QUAY_URL') else '', true) }}"
     keycloak_url: "{{ lookup('env', 'KEYCLOAK_URL') }}"
     keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') }}"
     keycloak_client_id: "{{ lookup('env', 'KEYCLOAK_CLIENT_ID') }}"
