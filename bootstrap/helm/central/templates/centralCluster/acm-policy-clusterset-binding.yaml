@@ -1,0 +1,20 @@
+{{- /*
+shc (§11.6 phase E): the ManagedClusterSetBinding for the ACM policy namespace came with the
+spoke-ESO policy (acmPolicies.enabled), which this build leaves off (Red Hat ESO, D-ESO). The
+per-cluster policies the PlatformOpenshift jobs create there (OIDC, cluster RBAC) need it, or their
+Placements select nothing (NoManagedClusterSetBindings).
+*/ -}}
+{{- if and (include "sovereign-central.applicationsEnabled" .) (or .Values.acmPolicies.enabled .Values.acmPolicies.clusterSetBinding) }}
+---
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSetBinding
+metadata:
+  name: default
+  namespace: {{ .Values.acmPolicies.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.acmPolicies.syncWave | quote }}
+spec:
+  clusterSet: default
+{{- end }}

@@ -85,18 +85,6 @@ spec:
                   sourceNamespace: {{ .Values.acmPolicies.externalSecrets.sourceNamespace | quote }}
     {{- end }}
 ---
-apiVersion: cluster.open-cluster-management.io/v1beta2
-kind: ManagedClusterSetBinding
-metadata:
-  name: default
-  namespace: {{ .Values.acmPolicies.namespace }}
-  labels:
-    {{- include "sovereign-central.labels" . | nindent 4 }}
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ .Values.acmPolicies.syncWave | quote }}
-spec:
-  clusterSet: default
----
 apiVersion: policy.open-cluster-management.io/v1
 kind: PlacementBinding
 metadata:
