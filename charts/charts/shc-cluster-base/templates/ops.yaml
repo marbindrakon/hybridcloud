@@ -342,6 +342,113 @@ spec:
                 name: eda-redrive
 {{- end }}
 
+{{- if $o.tenantOrphanCheck.enabled }}
+{{- $c := $o.tenantOrphanCheck }}
+---
+# Tenant cloud orphan check (LAB-PLAN §11.6 phase D): files/tenant_orphan_check.py, report-only.
+# Reads the CloudOSO/PlatformOpenshift CRs (get/list only) and the tenant domain/zone with the
+# tenant admin account (a domain manager).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-orphan-check
+  namespace: {{ $o.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shc-ops-tenant-orphan-check
+rules:
+  - apiGroups: [hybridsovereign.redhat]
+    resources: [cloudosos, platformopenshifts]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shc-ops-tenant-orphan-check
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: shc-ops-tenant-orphan-check
+subjects:
+  - kind: ServiceAccount
+    name: tenant-orphan-check
+    namespace: {{ $o.namespace }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: tenant-orphan-check-account
+  namespace: {{ $o.namespace }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $c.secretStore }}
+  target:
+    name: tenant-orphan-check-account
+    creationPolicy: Owner
+  data:
+    - secretKey: clouds.yaml
+      remoteRef:
+        key: {{ required "ops.tenantOrphanCheck.accountVaultKey is required" $c.accountVaultKey }}
+        property: clouds.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-orphan-check
+  namespace: {{ $o.namespace }}
+data:
+  tenant_orphan_check.py: |
+    {{- $.Files.Get "files/tenant_orphan_check.py" | nindent 4 }}
+  config.yaml: |
+    {{- toYaml $c.config | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tenant-orphan-check
+  namespace: {{ $o.namespace }}
+spec:
+  schedule: {{ $c.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          annotations:
+            shc/config-hash: {{ printf "%s%s" ($.Files.Get "files/tenant_orphan_check.py") (toYaml $c.config) | sha256sum | trunc 16 | quote }}
+        spec:
+          serviceAccountName: tenant-orphan-check
+          restartPolicy: Never
+          containers:
+            - name: check
+              image: {{ required "ops.tenantOrphanCheck.image is required" $c.image }}
+              command: [python3, /etc/tenant-orphan-check/tenant_orphan_check.py,
+                        --config, /etc/tenant-orphan-check/config.yaml, --clouds, /etc/tenant-account/clouds.yaml]
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/tenant-orphan-check
+                  readOnly: true
+                - name: account
+                  mountPath: /etc/tenant-account
+                  readOnly: true
+          volumes:
+            - name: config
+              configMap:
+                name: tenant-orphan-check
+            - name: account
+              secret:
+                secretName: tenant-orphan-check-account
+{{- end }}
+
 {{- if $o.certManagerMetrics.enabled }}
 ---
 # cert-manager metrics into platform monitoring (certificate expiry/readiness alerts below).

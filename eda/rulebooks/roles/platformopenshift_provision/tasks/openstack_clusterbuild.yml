@@ -154,6 +154,26 @@
     vault_kv_write_data:
       install-config.yaml: "{{ cb_install_config }}"
 
+# shc (§11.6 phase C): record the DNS records and Vault paths as soon as they exist, so a build
+# that fails later still tears down cleanly (and the orphan check doesn't flag a running install).
+- name: Record DNS records and Vault paths on the status
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      status: reconciling
+      ready: false
+      message: "OpenStack cluster build {{ cb_cluster_name }} in progress"
+      dns:
+        provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
+        accountVaultPath: "{{ designate_admin_vault_path if (use_designate_dns | bool) else cb_route53_vault_path }}"
+        projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
+        records: "{{ cb_dns_records | default([]) }}"
+      vaultPaths: "{{ cb_vault_paths }}"
+
 - name: Render build-values YAML to tempfile
   ansible.builtin.copy:
     content: "{{ lookup('template', 'build-values.yaml.j2') }}"

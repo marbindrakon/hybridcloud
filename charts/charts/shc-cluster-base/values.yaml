@@ -146,6 +146,22 @@ ops:
       kinds:
         PlatformOpenshift: {jobTimeoutMinutes: 150}
         CloudOSO: {jobTimeoutMinutes: 150}
+  # Tenant cloud orphan check (LAB-PLAN §11.6 phase D, design/TENANT-TEARDOWN.md §3.5): report-only,
+  # on the cluster that holds the CloudOSO/PlatformOpenshift CRs (services). Findings fail the job
+  # (ShcBackupJobFailed). Scope: the tenant Keystone domain and the tenant DNS zone.
+  tenantOrphanCheck:
+    enabled: false
+    schedule: "45 5 * * *"
+    # python3 + openstacksdk + kubernetes client + PyYAML
+    image: ""
+    # central Vault key with the tenant admin's clouds.yaml (property clouds.yaml), via secretStore
+    accountVaultKey: ""
+    secretStore: vault-backend
+    config:
+      domain: ""
+      ignoreProjects: []
+      dnsZoneId: ""
+      dnsProjectId: ""
   certManagerMetrics:
     enabled: true
   alerts:

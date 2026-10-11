@@ -1414,7 +1414,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.3"
+    chartVersion: "0.3.4"
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -1695,7 +1695,7 @@ mtv:
 # transit seal token check, cert-manager metrics, alert rules.
 shcClusterOpsCentral:
   enabled: true
-  chartVersion: "0.3.3"
+  chartVersion: "0.3.4"
   syncWave: "24"
   values:
     layers:
@@ -2166,7 +2166,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.3"
+  chartVersion: "0.3.4"
   syncWaves:
     base: "0"
     certs: "2"
@@ -2219,6 +2219,17 @@ shcClusterBaseServices:
       # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md); the CRs live on services
       edaRedrive:
         enabled: true
+      # §11.6 phase D (design/TENANT-TEARDOWN.md §3.5): report-only orphan check of the tenant
+      # Keystone domain and DNS zone against the CloudOSO/PlatformOpenshift CRs (owner: domain only)
+      tenantOrphanCheck:
+        enabled: true
+        image: quay.signal9.gg/shc/de-cloudoso:0.1.7
+        accountVaultKey: oso/accounts/shc-tenant-admin
+        config:
+          domain: shc-tenants
+          ignoreProjects: [shc-tenant-dns]
+          dnsZoneId: b19bb752-5aeb-4187-a303-12f9cb60378e
+          dnsProjectId: 5074bdc4023c4fa09405a43ec7bbc6ea
 
 # ─── External Secrets Operator (services) ───────────────────────────────────
 externalSecretsServices:
