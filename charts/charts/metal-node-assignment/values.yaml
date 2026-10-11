@@ -56,3 +56,7 @@ nodes: {}
   #  network:
   #    nmstateConfig: {}
   #    interfaceMap: []
+  #  fencing:                   # two-node with fencing (agent nodes): Secret <node>-fencing + BMH annotation
+  #    address: redfish+https://<bmc>:443/redfish/v1/Systems/1/   # Redfish only; iLO4 needs the trailing slash
+  #    certificateVerification: Disabled                         # default Disabled
+  #    externalSecret: {}       # default: bmc.externalSecret, then bmcDefaults.externalSecret

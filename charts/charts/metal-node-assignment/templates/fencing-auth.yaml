@@ -1,0 +1,48 @@
+{{- /*
+Two-node OpenShift with fencing (TNF): Pacemaker fences through Redfish only (IPMI is not supported).
+For each agent node with fencing.address, a Secret <node>-fencing in the Agent's namespace with the keys
+assisted-service reads (address, username, password, certificateVerification); bmh.yaml points BMAC at it
+(bmac.agent-install.openshift.io/fencing-credentials-secret-name -> Agent.spec.fencingCredentialsSecretRef).
+BMAC's own create-fencing-credentials-secret would copy the BMH's ipmi:// address, so it is not used.
+File name keeps clear of upstream .gitignore (*credentials*, *secret*, *token*); no secret data here.
+*/}}
+{{- range .Values.assignments }}
+{{- $node := get $.Values.nodes .node }}
+{{- if and (eq .assignmentType "agent") $node.fencing }}
+{{- if $node.fencing.address }}
+{{- $es := $node.fencing.externalSecret | default ($node.bmc.externalSecret | default $.Values.bmcDefaults.externalSecret) }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .node }}-fencing
+  namespace: {{ .namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $.Values.secretStoreName }}
+  target:
+    name: {{ .node }}-fencing
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        address: {{ $node.fencing.address | quote }}
+        username: "{{ "{{" }} .username {{ "}}" }}"
+        password: "{{ "{{" }} .password {{ "}}" }}"
+        certificateVerification: {{ $node.fencing.certificateVerification | default "Disabled" | quote }}
+  data:
+    - secretKey: username
+      remoteRef:
+        key: {{ required (printf "no BMC credential reference for %s" .node) $es.vaultName }}
+        property: {{ $es.usernameKey | default "username" }}
+    - secretKey: password
+      remoteRef:
+        key: {{ $es.vaultName }}
+        property: {{ $es.passwordKey | default "password" }}
+{{- end }}
+{{- end }}
+{{- end }}
