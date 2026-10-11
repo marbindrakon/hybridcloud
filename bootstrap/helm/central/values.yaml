@@ -1254,7 +1254,7 @@ iaasClusterDefaults:
 
 iaasClusters:
   iaas1:
-    enabled: false  # shc: P5 - enable after the install, Argo registration and Vault auth mount
+    enabled: true  # shc: P5 - installed 2026-10-11, registered in Argo, Vault mount kubernetes-iaas1
     server: "https://api.iaas1.shc.signal9.gg:6443"
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
