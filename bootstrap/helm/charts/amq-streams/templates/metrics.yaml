@@ -1,0 +1,83 @@
+{{- if and .Values.kafka.enabled .Values.kafka.metrics.enabled }}
+{{- $k := .Values.kafka }}
+---
+# shc (review D3, LAB-PLAN §11.1): broker metrics for user-workload monitoring and the alerts that make a
+# Kafka problem visible (publishes and EDA consumers otherwise fail with nobody told). A minimal exporter
+# rule set: replication health, controller state, traffic.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $k.name }}-metrics
+  namespace: {{ .Values.namespace }}
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    rules:
+      - pattern: "kafka.server<type=ReplicaManager, name=(UnderReplicatedPartitions|UnderMinIsrPartitionCount|OfflineReplicaCount|PartitionCount|LeaderCount)><>Value"
+        name: "kafka_server_replicamanager_$1"
+        type: GAUGE
+      - pattern: "kafka.controller<type=KafkaController, name=(OfflinePartitionsCount|ActiveControllerCount|GlobalPartitionCount|GlobalTopicCount)><>Value"
+        name: "kafka_controller_kafkacontroller_$1"
+        type: GAUGE
+      - pattern: "kafka.server<type=BrokerTopicMetrics, name=(MessagesInPerSec|BytesInPerSec|BytesOutPerSec|FailedProduceRequestsPerSec|FailedFetchRequestsPerSec)><>Count"
+        name: "kafka_server_brokertopicmetrics_$1_total"
+        type: COUNTER
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $k.name }}-metrics
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/cluster: {{ $k.name }}
+      strimzi.io/kind: Kafka
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $k.name }}-alerts
+  namespace: {{ .Values.namespace }}
+spec:
+  groups:
+    - name: shc-kafka
+      rules:
+        - alert: ShcKafkaBrokersDown
+          expr: (count(up{pod=~"{{ $k.name }}-{{ $k.nodePool.name }}-[0-9]+"} == 1) or vector(0)) < {{ $k.replicas }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka {{ $k.name }}: fewer than {{ $k.replicas }} brokers answering"
+            description: "Operator events and EDA consumers depend on Kafka; check the {{ $k.name }} pods."
+        - alert: ShcKafkaNoActiveController
+          expr: sum(kafka_controller_kafkacontroller_activecontrollercount) != 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka {{ $k.name }}: {{ "{{" }} $value {{ "}}" }} active controllers (want 1)"
+            description: "The KRaft quorum has no single active controller."
+        - alert: ShcKafkaOfflinePartitions
+          expr: sum(kafka_controller_kafkacontroller_offlinepartitionscount) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka {{ $k.name }}: {{ "{{" }} $value {{ "}}" }} offline partitions"
+            description: "Partitions without a leader: publishes and consumers on them fail."
+        - alert: ShcKafkaUnderReplicatedPartitions
+          expr: sum(kafka_server_replicamanager_underreplicatedpartitions) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kafka {{ $k.name }}: {{ "{{" }} $value {{ "}}" }} under-replicated partitions"
+            description: "A broker is behind or down; one more failure can make partitions unavailable."
+{{- end }}

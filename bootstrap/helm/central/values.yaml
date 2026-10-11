@@ -3903,7 +3903,7 @@ acmBasechart:
 # ─── AMQ Streams (central cluster) ───────────────────────────────────────────
 amqStreams:
   enabled: true
-  chartVersion: "0.2.4-shc.2"
+  chartVersion: "0.2.4-shc.3"
   syncWave: "13"
   destinationNamespace: amq-streams
   values:
@@ -3913,6 +3913,9 @@ amqStreams:
       name: hybridsovereign-kafka
       replicas: 3
       storage: 10Gi
+      # shc (review D3, owner 10-11): broker metrics + alerts (rolls the brokers once)
+      metrics:
+        enabled: true
       listeners:
         internalPlain: true
         internalTls: true

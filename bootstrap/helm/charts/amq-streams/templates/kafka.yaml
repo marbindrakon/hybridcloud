@@ -118,6 +118,15 @@ spec:
     authorization:
       type: simple
     {{- end }}
+    {{- if .Values.kafka.metrics.enabled }}
+    # shc (review D3): JMX exporter on port 9404 (tcp-prometheus); rules in templates/metrics.yaml
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: {{ .Values.kafka.name }}-metrics
+          key: kafka-metrics-config.yml
+    {{- end }}
   entityOperator:
     topicOperator: {}
     userOperator: {}

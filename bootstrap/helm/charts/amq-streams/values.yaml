@@ -20,6 +20,9 @@ kafka:
       - broker
   authorization:
     enabled: true
+  # shc (review D3): JMX exporter + PodMonitor + alerts (user-workload monitoring)
+  metrics:
+    enabled: false
   listeners:
     internalPlain: true
     internalTls: true
