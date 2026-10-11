@@ -30,11 +30,10 @@ platform:
     externalNetwork: {{ cb_external_network }}
     apiFloatingIP: {{ cb_api_vip }}
     ingressFloatingIP: {{ cb_ingress_vip }}
-    computeFlavor: {{ cb_controller_flavor }}
 {% if cb_glance_image | default('') | length > 0 %}
     clusterOSImage: {{ cb_glance_image }}
 {% endif %}
-    externalDNS: []
+    externalDNS: {{ cb_external_dns | default([]) | to_json }}
 {% if cb_trust_bundle | default('') | trim | length > 0 %}
 additionalTrustBundle: |
 {{ cb_trust_bundle | trim | indent(2, true) }}

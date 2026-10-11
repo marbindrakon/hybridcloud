@@ -23,6 +23,8 @@
     cb_install_config_vault: "oso/projects/{{ oso_env_name }}/clusters/{{ ansible_operator_meta.name }}/install-config"
     cb_trust_bundle: "{{ platform_spec.openstack.trustBundle | default('') }}"
     cb_glance_image: "{{ platform_spec.openstack.glanceImageOverride | default(default_glance_image_override, true) }}"
+    # resolvers for the cluster subnet (empty: the cloud's DHCP default)
+    cb_external_dns: "{{ platformopenshift_defaults.externalDNS | default([]) }}"
 
 - name: Record the Vault paths this cluster writes (install-config here, PushSecrets in the monitor)
   ansible.builtin.set_fact:

@@ -40,6 +40,18 @@ dnsForwarderCentral:
       upstreams:
         - "75.8.222.11"
         - "172.18.42.20"
+    # §11.6 phase E: tenant cluster names live in the Designate zone delegated from ns1; ns1 answers
+    # those with a referral (no recursion), so ask the zone's own nameservers (tubul, jerakeen,
+    # berilia, great-tphon), authoritative and without a resolver's negative cache.
+    - name: shc-tenant-zone-forwarder
+      zones:
+        - tenants.shc.signal9.gg
+      policy: Sequential
+      upstreams:
+        - "75.8.222.46"
+        - "75.8.222.41"
+        - "75.8.222.44"
+        - "75.8.222.45"
 
 # Pull lab-config from Vault after `make upload-lab-config`.
 labConfigExternalSecret:
@@ -3106,11 +3118,12 @@ sovereignJobs:
         # shc (§11.6 phase C): CloudOSO / PlatformOpenshift installation defaults (inventory vars).
         # Tenant projects in Keystone domain shc-tenants via the domain-manager account, cluster DNS in
         # the Designate zone tenants.shc.signal9.gg (project shc-tenant-dns); design/TENANT-TEARDOWN.md §8.
-        # b1.3xlarge is the smallest Atuin flavor with the installer's 100 GB disk minimum.
+        # b1.3xlarge is the smallest Atuin flavor with the installer's 100 GB disk minimum; tenant nodes
+        # resolve through the lab IPA like services (DNS is an allowed lab dependency).
         - name: CLOUDOSO_DEFAULTS
           value: '{"vaultPath":"oso/accounts/shc-tenant-admin","projectDomain":"shc-tenants","externalNetwork":"internet","baseDomain":"tenants.shc.signal9.gg","dnsProvider":"designate","designateZoneId":"b19bb752-5aeb-4187-a303-12f9cb60378e","designateProjectId":"5074bdc4023c4fa09405a43ec7bbc6ea"}'
         - name: PLATFORMOPENSHIFT_DEFAULTS
-          value: '{"ocpImageSet":"img4.22.16-x86-64-appsub","pullSecretVaultPath":"oso/ocp-pull-secret","pullSecretVaultProperty":".dockerconfigjson","sshKeyVaultPath":"oso/ocp-ssh-key","controlPlaneFlavor":"b1.3xlarge","workerFlavor":"b1.3xlarge","mceClusterBuildChart":"oci://quay.signal9.gg/shc/mce-cluster-build","mceClusterBuildChartVersion":"0.2.1-shc.3"}'
+          value: '{"ocpImageSet":"img4.22.16-x86-64-appsub","pullSecretVaultPath":"oso/ocp-pull-secret","pullSecretVaultProperty":".dockerconfigjson","sshKeyVaultPath":"oso/ocp-ssh-key","controlPlaneFlavor":"b1.3xlarge","workerFlavor":"b1.3xlarge","mceClusterBuildChart":"oci://quay.signal9.gg/shc/mce-cluster-build","mceClusterBuildChartVersion":"0.2.1-shc.3","externalDNS":["172.18.42.20"]}'
         - name: AAP_ADMIN_PASSWORD
           valueFrom:
             secretKeyRef:
