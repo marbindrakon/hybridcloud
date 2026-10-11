@@ -73,6 +73,8 @@ spec:
       hs.message = "Waiting for ready replicas"
       return hs
   # Exclude RHACM clusterview CRDs — their broken OpenAPI schema corrupts ArgoCD's cache.
+  # shc: the field replaces the GitOps operator's default exclusions, so they are repeated here
+  # (high-churn or request-only kinds Argo never manages).
   resourceExclusions: |
     - apiGroups:
       - "clusterview.open-cluster-management.io"
@@ -80,6 +82,24 @@ spec:
       - "*"
       clusters:
       - "*"
+    - apiGroups: ["", discovery.k8s.io]
+      kinds: [Endpoints, EndpointSlice]
+      clusters: ["*"]
+    - apiGroups: [apiregistration.k8s.io]
+      kinds: [APIService]
+      clusters: ["*"]
+    - apiGroups: [coordination.k8s.io]
+      kinds: [Lease]
+      clusters: ["*"]
+    - apiGroups: [authentication.k8s.io, authorization.k8s.io]
+      kinds: [SelfSubjectReview, TokenReview, LocalSubjectAccessReview, SelfSubjectAccessReview, SelfSubjectRulesReview, SubjectAccessReview]
+      clusters: ["*"]
+    - apiGroups: [certificates.k8s.io]
+      kinds: [CertificateSigningRequest]
+      clusters: ["*"]
+    - apiGroups: [cert-manager.io]
+      kinds: [CertificateRequest]
+      clusters: ["*"]
   {{- $overrides := .Values.gitopsOperator.resourceOverrides | default dict }}
   {{- range $component := list "controller" "server" "repo" "applicationSet" "dex" "redis" }}
   {{- with index $overrides $component }}

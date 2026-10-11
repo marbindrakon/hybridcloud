@@ -1,4 +1,5 @@
-{{- if .Values.eda.rbac.enabled | default true }}
+{{- /* shc: `false | default true` is true, so the old test could never disable this */}}
+{{- if ne (toString (dig "rbac" "enabled" true .Values.eda)) "false" }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

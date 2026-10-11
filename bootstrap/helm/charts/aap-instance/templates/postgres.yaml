@@ -10,6 +10,14 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   postgresVersion: 16
+  # shc: the aap chart's WAL limits (reloadable)
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          max_wal_size: "2GB"
+          min_wal_size: "512MB"
+          wal_keep_size: "512MB"
   instances:
     - name: pgha
       replicas: {{ .Values.postgres.instances | default 2 }}

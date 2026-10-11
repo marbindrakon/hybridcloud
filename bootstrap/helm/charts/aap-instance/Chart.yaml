@@ -2,5 +2,5 @@ apiVersion: v2
 name: aap-instance
 description: AAP AnsibleAutomationPlatform CR — deploys after operator is already installed
 type: application
-version: 0.5.5-shc.1
+version: 0.5.5-shc.2
 appVersion: "2.6"

@@ -1,3 +1,14 @@
+{{- if .Values.manageNamespace }}
+---
+# shc: owned here when this chart replaces the aap chart on a cluster (the aap chart owned the namespace;
+# without it the Application would prune the namespace)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false
+{{- end }}
 ---
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup

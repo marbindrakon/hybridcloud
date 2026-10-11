@@ -1492,18 +1492,25 @@ iaasClusters:
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.5.5"
+  # shc (owner 10-11): the same chart as central (aap-instance). The aap chart's AAP CR set
+  # controller.database, which AAP 2.6 ignores, so gateway, controller and EDA ran on the operator's
+  # managed Postgres while the Crunchy cluster sat unused. aap-instance points them at Crunchy
+  # (external-postgres-sync job). manageNamespace keeps the aap Namespace the old chart owned.
+  chart: aap-instance
+  chartVersion: "0.5.5-shc.2"
   syncWave: "30"
   destinationNamespace: aap
   values:
     namespace: aap
-    instance:
-      enabled: true
-      name: sovereign-aap
+    name: sovereign-aap
+    manageNamespace: true
     controller:
       enabled: true
     eda:
-      enabled: false
+      # the operator runs EDA on services either way (the old chart's "false" only omitted replicas)
+      enabled: true
+      rbac:
+        enabled: false
     hub:
       enabled: false
     postgres:

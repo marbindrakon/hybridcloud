@@ -1,4 +1,6 @@
 namespace: aap
+# shc: render the Namespace (set when replacing the aap chart, which owned it)
+manageNamespace: false
 
 name: sovereign-aap
 

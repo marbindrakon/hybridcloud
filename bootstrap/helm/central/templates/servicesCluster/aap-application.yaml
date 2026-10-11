@@ -15,8 +15,8 @@ spec:
   project: services
 
   source:
-    repoURL: {{ printf "oci://%s/%s/aap" .Values.oci.registry .Values.oci.repositoryBase | quote }}
-    chart: aap
+    repoURL: {{ printf "oci://%s/%s/%s" .Values.oci.registry .Values.oci.repositoryBase (.Values.aap.chart | default "aap") | quote }}
+    chart: {{ .Values.aap.chart | default "aap" }}
     targetRevision: {{ .Values.aap.chartVersion | quote }}
     helm:
       releaseName: aap-services
