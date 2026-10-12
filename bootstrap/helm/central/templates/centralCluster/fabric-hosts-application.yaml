@@ -1,0 +1,48 @@
+{{- if and (include "sovereign-central.applicationsEnabled" .) .Values.fabricHosts.enabled }}
+---
+# shc (P7, design EDGE1-C6220-BGW-PLAN §3.2/§10): fabric hosts provisioned by central's metal3 outside the
+# assisted InfraEnv (the BGW pair on SL230s blades 5/8: RHEL from Katello + cloud-init). Same chart as
+# metal-nodes, but no ignoreDifferences on the BareMetalHosts: nothing else writes their image/userData, and
+# their spec must follow Git. The chart marks provisioned hosts Delete=false (deleting one would wipe it).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fabric-hosts
+  namespace: {{ .Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bare-metal
+    sovereign-cloud/target: central
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.fabricHosts.syncWave | quote }}
+spec:
+  project: default
+  source:
+    repoURL: {{ printf "oci://%s/%s/metal-node-assignment" .Values.oci.registry .Values.oci.repositoryBase | quote }}
+    chart: metal-node-assignment
+    targetRevision: {{ .Values.fabricHosts.chartVersion | quote }}
+    helm:
+      releaseName: fabric-hosts
+      valuesObject:
+        {{- toYaml .Values.fabricHosts.values | nindent 8 }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.fabricHosts.namespace }}
+  ignoreDifferences:
+    {{- include "sovereign-central.esoIgnoreDifferences" . | nindent 4 }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+{{- end }}
