@@ -2,7 +2,7 @@ apiVersion: v2
 name: openshift-cnv
 description: OpenShift Virtualization (CNV / KubeVirt) operator and HyperConverged instance for the central cluster
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "4.16"
 keywords:
   - virtualization

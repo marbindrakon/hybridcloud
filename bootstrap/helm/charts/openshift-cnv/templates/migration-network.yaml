@@ -1,0 +1,17 @@
+{{- if .Values.migrationNetwork.enabled }}
+---
+# Dedicated live-migration network (shc, design EDGE1-C6220-BGW-PLAN): KubeVirt moves VM memory over this
+# NetworkAttachmentDefinition instead of the pod network. It must live in the KubeVirt namespace; the
+# HyperConverged's liveMigrationConfig.network names it.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ .Values.migrationNetwork.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  {{- $cfg := dict "cniVersion" "0.3.1" "name" .Values.migrationNetwork.name "type" .Values.migrationNetwork.type "master" (required "migrationNetwork.master is required" .Values.migrationNetwork.master) "mode" "bridge" "ipam" (dict "type" "whereabouts" "range" (required "migrationNetwork.range is required" .Values.migrationNetwork.range)) }}
+  {{- if .Values.migrationNetwork.mtu }}{{- $_ := set $cfg "mtu" (int .Values.migrationNetwork.mtu) }}{{- end }}
+  config: {{ toJson $cfg | quote }}
+{{- end }}

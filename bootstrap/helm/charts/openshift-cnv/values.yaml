@@ -18,6 +18,16 @@ hyperconverged:
   workloads:
     nodePlacement: {}
 
+# Dedicated live-migration network (optional): a macvlan NetworkAttachmentDefinition on a host interface
+# with whereabouts IPAM (a non-routed range is enough), and HyperConverged liveMigrationConfig.network.
+migrationNetwork:
+  enabled: false
+  name: migration-network
+  type: macvlan
+  master: ""   # host interface, e.g. bond1.239
+  range: ""    # whereabouts range, e.g. 10.239.0.0/24
+  mtu: 0       # 0 = the interface's MTU
+
 pdb:
   virtApi:
     enabled: true

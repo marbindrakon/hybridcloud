@@ -17,6 +17,10 @@ spec:
     nodePlacement:
       {{- toYaml .Values.hyperconverged.infra.nodePlacement | nindent 6 }}
   {{- end }}
+  {{- if .Values.migrationNetwork.enabled }}
+  liveMigrationConfig:
+    network: {{ .Values.migrationNetwork.name }}
+  {{- end }}
   {{- if .Values.hyperconverged.workloads.nodePlacement }}
   workloads:
     nodePlacement:
