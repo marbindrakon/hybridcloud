@@ -1590,7 +1590,23 @@ metalNodes:
                 enabled: false
               ipv6:
                 enabled: false
+            - name: eno2
+              type: ethernet
+              state: up
+              mtu: 9000
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
             - name: enp130s0f0
+              type: ethernet
+              state: up
+              mtu: 9000
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp130s0f1
               type: ethernet
               state: up
               mtu: 9000
@@ -1617,6 +1633,7 @@ metalNodes:
                   primary: eno1
                 port:
                 - eno1
+                - eno2
             - name: bond0.238
               type: vlan
               state: up
@@ -1648,6 +1665,7 @@ metalNodes:
                   xmit_hash_policy: layer3+4
                 port:
                 - enp130s0f0
+                - enp130s0f1
             - name: bond1.11
               type: vlan
               state: up
@@ -1691,8 +1709,12 @@ metalNodes:
           interfaceMap:
           - name: eno1
             macAddress: f0:4d:a2:72:fa:e4
+          - name: eno2
+            macAddress: f0:4d:a2:72:fa:e5
           - name: enp130s0f0
             macAddress: 00:8c:fa:53:cf:c8
+          - name: enp130s0f1
+            macAddress: 00:8c:fa:53:cf:c9
       c6220-node3:
         labels:
           compute-model: c6220
@@ -1868,7 +1890,23 @@ metalNodes:
                 enabled: false
               ipv6:
                 enabled: false
+            - name: eno2
+              type: ethernet
+              state: up
+              mtu: 9000
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
             - name: enp130s0f0
+              type: ethernet
+              state: up
+              mtu: 9000
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp130s0f1
               type: ethernet
               state: up
               mtu: 9000
@@ -1895,6 +1933,7 @@ metalNodes:
                   primary: eno1
                 port:
                 - eno1
+                - eno2
             - name: bond0.238
               type: vlan
               state: up
@@ -1926,6 +1965,7 @@ metalNodes:
                   xmit_hash_policy: layer3+4
                 port:
                 - enp130s0f0
+                - enp130s0f1
             - name: bond1.11
               type: vlan
               state: up
@@ -1969,8 +2009,12 @@ metalNodes:
           interfaceMap:
           - name: eno1
             macAddress: f0:4d:a2:72:fb:02
+          - name: eno2
+            macAddress: f0:4d:a2:72:fb:03
           - name: enp130s0f0
             macAddress: 00:8c:fa:53:c8:b4
+          - name: enp130s0f1
+            macAddress: 00:8c:fa:53:c8:b5
 
 # ─── shc: platform IaaS clusters (LAB-PLAN P5/P6) ───────────────────────────────────────────────
 # Bare-metal clusters built by central from metal-infra-env (mce-cluster-build Agent provider, lab
