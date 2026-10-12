@@ -1,0 +1,51 @@
+{{- range $a := .Values.assignments }}
+{{- $node := get $.Values.nodes $a.node }}
+{{- if and (eq $a.assignmentType "metal3") $node.provision }}
+{{- with $node.provision.userData }}
+---
+# cloud-init user-data for a metal3-provisioned host. The template text comes from values (no secrets); the
+# secret parts (keys, password hash, registration data) are ExternalSecret template variables read from Vault.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ $a.node }}-user-data
+  namespace: {{ $a.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $.Values.secretStoreName }}
+  target:
+    name: {{ $a.node }}-user-data
+    creationPolicy: Owner
+    deletionPolicy: Retain
+    template:
+      engineVersion: v2
+      data:
+        userData: {{ required "provision.userData.template" .template | quote }}
+  data:
+    {{- range $k := .vaultKeys }}
+    - secretKey: {{ $k }}
+      remoteRef:
+        key: {{ required "provision.userData.vaultName" $node.provision.userData.vaultName }}
+        property: {{ $k }}
+    {{- end }}
+{{- end }}
+{{- with $node.provision.networkData }}
+---
+# OpenStack network_data.json for the config drive (cloud-init renders the host's network from it).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $a.node }}-network-data
+  namespace: {{ $a.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+type: Opaque
+stringData:
+  networkData: {{ toJson . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

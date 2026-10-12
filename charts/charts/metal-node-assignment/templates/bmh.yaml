@@ -8,7 +8,12 @@ metadata:
   name: {{ .node }}
   namespace: {{ .namespace }}
   annotations:
+    {{- if and (eq .assignmentType "metal3") $node.provision ($node.provision.protect | default true) }}
+    # Deleting a provisioned host deprovisions (and cleans) it: Argo never deletes these.
+    argocd.argoproj.io/sync-options: ServerSideApply=true,Delete=false
+    {{- else }}
     argocd.argoproj.io/sync-options: ServerSideApply=true
+    {{- end }}
     {{- if eq .assignmentType "agent" }}
     inspect.metal3.io: disabled
     {{- with $node.hostname }}
@@ -41,7 +46,25 @@ spec:
   {{- if or (eq .assignmentType "metal3") ($node.agentPreprovisioningConfig | default false) }}
   preprovisioningNetworkDataName: {{ .node }}-net-config
   {{- end }}
-  {{- if eq .assignmentType "metal3" }}
+  {{- if and (eq .assignmentType "metal3") $node.provision }}
+  # Plain metal3 provisioning (no assisted-service): write an OS image, cloud-init from the Secrets below.
+  online: {{ $node.provision.online | default true }}
+  image:
+    url: {{ required "provision.image.url" $node.provision.image.url | quote }}
+    checksum: {{ required "provision.image.checksum" $node.provision.image.checksum | quote }}
+    checksumType: {{ $node.provision.image.checksumType | default "sha256" }}
+    format: {{ $node.provision.image.format | default "qcow2" }}
+  {{- if $node.provision.userData }}
+  userData:
+    name: {{ .node }}-user-data
+    namespace: {{ .namespace }}
+  {{- end }}
+  {{- if $node.provision.networkData }}
+  networkData:
+    name: {{ .node }}-network-data
+    namespace: {{ .namespace }}
+  {{- end }}
+  {{- else if eq .assignmentType "metal3" }}
   online: false
   {{- else }}
   online: true

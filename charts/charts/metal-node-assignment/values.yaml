@@ -56,6 +56,15 @@ nodes: {}
   #  network:
   #    nmstateConfig: {}
   #    interfaceMap: []
+  #  provision:                 # assignmentType metal3 only: plain metal3 provisioning (OS image + cloud-init)
+  #    online: true
+  #    protect: true            # Argo Delete=false on the BareMetalHost (deleting a provisioned host wipes it)
+  #    image: {url: , checksum: , checksumType: sha256, format: qcow2}
+  #    userData:                # ExternalSecret -> Secret <node>-user-data (key userData)
+  #      vaultName:             # central Vault key holding the template variables
+  #      vaultKeys: []          # properties read into the template (ESO v2 template: {{ .key }})
+  #      template: |            # the cloud-config text
+  #    networkData: {}          # OpenStack network_data.json (links/networks/services) -> Secret <node>-network-data
   #  fencing:                   # two-node with fencing (agent nodes): Secret <node>-fencing + BMH annotation
   #    address: redfish+https://<bmc>:443/redfish/v1/Systems/1/   # Redfish only; iLO4 needs the trailing slash
   #    certificateVerification: Disabled                         # default Disabled
