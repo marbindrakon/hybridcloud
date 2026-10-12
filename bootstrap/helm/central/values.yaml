@@ -1893,7 +1893,7 @@ iaasClusters:
     enabled: true  # shc: P5 - installed 2026-10-11, registered in Argo, Vault mount kubernetes-iaas1
     server: "https://api.iaas1.shc.signal9.gg:6443"
   edge1:
-    enabled: false  # shc: P6 two-node build (blades 5/8) torn down 2026-10-12; rebuilt compact on the C6220 sleds (design EDGE1-C6220-BGW-PLAN)
+    enabled: true  # shc: rebuilt 2026-10-12 as compact 3-node on the C6220 sleds (design EDGE1-C6220-BGW-PLAN); Argo + Vault kubernetes-edge1
     server: "https://api.edge1.shc.signal9.gg:6443"
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
