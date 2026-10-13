@@ -57,8 +57,9 @@
       - (cloudoso_cr.resources[0].status.dnsProvider | default('')) in ['designate', 'route53']
       - not (use_designate_dns | bool) or (designate_zone_id | length > 0 and designate_project_id | length > 0 and designate_admin_vault_path | length > 0)
     fail_msg: >-
-      CloudOSO '{{ oso_env_name }}' has no recorded DNS provider/zone/account; reconcile it
-      (reconcileNow) so its status carries dnsProvider, dnsZoneId, dnsProjectId and accountVaultPath.
+      {{ ("CloudOSO '" ~ oso_env_name ~ "' is on a site without tenant DNS (dnsProvider none); an OpenShift cluster needs designate or route53.")
+         if (cloudoso_cr.resources[0].status.dnsProvider | default('')) == 'none' else
+         ("CloudOSO '" ~ oso_env_name ~ "' has no recorded DNS provider/zone/account; reconcile it (reconcileNow) so its status carries dnsProvider, dnsZoneId, dnsProjectId and accountVaultPath.") }}
 
 - name: Set cluster build identifiers
   ansible.builtin.set_fact:

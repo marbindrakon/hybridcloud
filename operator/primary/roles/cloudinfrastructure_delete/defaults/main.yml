@@ -1,0 +1,9 @@
+---
+# shc (P7.1): kinds whose spec.cloudRef can name a CloudInfrastructure (CloudGateway and CloudVirt from
+# P7.3; a kind whose CRD isn't installed is skipped). A CloudOSO that took the installation's default
+# site records it in status.cloudInfrastructure. Only sites in this namespace can be referenced.
+cloudinfrastructure_referencing_kinds:
+  - CloudOSO
+  - CloudGateway
+  - CloudVirt
+cloudinfrastructure_namespace: sovereign-cloud

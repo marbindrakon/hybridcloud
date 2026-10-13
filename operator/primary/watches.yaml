@@ -78,3 +78,17 @@
     role: uihealthchecker_delete
   maxConcurrentReconciles: 10
   watchAnnotationsChanges: true
+
+# shc (design/P7-PLAN.md P7.1): platform-owned cloud sites. The interval lets a Ready site be re-probed
+# (roles/cloudinfrastructure, cloudinfrastructure_reprobe_seconds) and retries a failed one.
+- version: v1alpha1
+  group: hybridsovereign.redhat
+  kind: CloudInfrastructure
+  role: cloudinfrastructure
+  finalizer:
+    name: cloudinfrastructures.hybridsovereign.redhat/finalizer
+    role: cloudinfrastructure_delete
+  maxConcurrentReconciles: 5
+  reconcileInterval: 600s
+  watchDependentResources: false
+  watchAnnotationsChanges: true

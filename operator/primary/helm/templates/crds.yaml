@@ -676,25 +676,40 @@ spec:
                 on the central cluster.
               type: object
               properties:
+                cloudRef:
+                  type: object
+                  description: >-
+                    The platform CloudInfrastructure (type openstack, namespace sovereign-cloud) the project is
+                    created on. It supplies the infrastructure credential and every site setting (projectDomain,
+                    externalNetwork, DNS, region); with a cloudRef in effect those spec fields below are ignored.
+                    Default: the installation's default site. Immutable once set.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.cloudRef is immutable
+                  properties:
+                    name:
+                      type: string
+                      maxLength: 253
                 project:
                   type: string
                   description: OpenStack project name hint (required)
                 vaultPath:
                   type: string
                   description: >-
-                    Central Vault path of the platform's OpenStack account (property clouds.yaml;
-                    a tenant domain manager). Default: the installation's cloudoso_defaults.
+                    Legacy, ignored with a cloudRef in effect. Vault path of the platform's
+                    OpenStack account (property clouds.yaml; a tenant domain manager).
                 baseDomain:
                   type: string
                   description: >-
                     Base DNS domain. With Designate the environment gets <name>.<entity>.<baseDomain>
-                    inside the zone designateZoneId. Default: the installation's cloudoso_defaults.
+                    inside the zone designateZoneId. Ignored with a cloudRef in effect. Default: the installation default.
                 projectDomain:
                   type: string
-                  description: "Keystone domain for the project. Default: the installation's cloudoso_defaults."
+                  description: "Keystone domain for the project. Ignored with a cloudRef in effect. Default: the installation default."
                 externalNetwork:
                   type: string
-                  description: "External Neutron network for the floating IPs. Default: the installation's cloudoso_defaults."
+                  description: "External Neutron network for the floating IPs. Ignored with a cloudRef in effect. Default: the installation default."
                 regionName:
                   type: string
                   description: "OpenStack region. Default: the account's clouds.yaml region."
@@ -702,9 +717,9 @@ spec:
                   type: string
                   description: >-
                     DNS for the environment's clusters: designate (designateZoneId + designateProjectId)
-                    or route53 (route53VaultPath). Default: the installation's cloudoso_defaults, else
+                    or route53 (route53VaultPath). Ignored with a cloudRef in effect. Default: the installation default, else
                     designate when designateZoneId is set.
-                  enum: [designate, route53]
+                  enum: [designate, route53, none]
                 route53VaultPath:
                   type: string
                   description: Vault path for Route53 credentials (e.g. oso/accounts/route53-openstack)
@@ -714,12 +729,12 @@ spec:
                   default: default
                 designateZoneId:
                   type: string
-                  description: "Designate zone id for the environment's records. Default: the installation's cloudoso_defaults."
+                  description: "Designate zone id for the environment's records. Ignored with a cloudRef in effect. Default: the installation default."
                 designateProjectId:
                   type: string
                   description: >-
                     Project owning the Designate zone (the account needs member there). Default: the
-                    installation's cloudoso_defaults.
+                    installation default. Ignored with a cloudRef in effect.
                 enableVRF:
                   type: boolean
                   description: Enable VRF networking for this environment (passed to provisioning; no effect until implemented)
@@ -3886,6 +3901,280 @@ spec:
         - name: Backend
           type: string
           jsonPath: .spec.backend.kind
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cloudinfrastructures.hybridsovereign.redhat
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  group: hybridsovereign.redhat
+  names:
+    kind: CloudInfrastructure
+    listKind: CloudInfrastructureList
+    plural: cloudinfrastructures
+    singular: cloudinfrastructure
+    shortNames:
+      - cinfra
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: >-
+            Platform-owned cloud site (an OpenStack cloud, an OpenShift cluster with OpenShift Virtualization,
+            or an AWS account) that tenant cloud projects and fabric gateways attach to. It holds the site's
+            infrastructure credential and settings; tenant objects never carry them. Exactly one of
+            spec.openstack, spec.openshift or spec.aws is set, matching spec.type.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - type
+              x-kubernetes-validations:
+                - rule: has(self.openstack) == (self.type == 'openstack')
+                  message: spec.openstack must be set if and only if spec.type is openstack
+                - rule: has(self.openshift) == (self.type == 'openshift')
+                  message: spec.openshift must be set if and only if spec.type is openshift
+                - rule: has(self.aws) == (self.type == 'aws')
+                  message: spec.aws must be set if and only if spec.type is aws
+              properties:
+                type:
+                  type: string
+                  description: Cloud type. Selects the typed section below. Immutable.
+                  enum: [openstack, openshift, aws]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.type is immutable
+                displayName:
+                  type: string
+                  maxLength: 128
+                  description: Human-readable site name shown in consoles.
+                credentialsRef:
+                  type: object
+                  description: >-
+                    The site's infrastructure credential, stored in the platform's Vault KV store.
+                    openstack: a cloud-admin clouds.yaml (key clouds.yaml; key ca.crt when the API certificate
+                    is not publicly trusted); openshift: key kubeconfig (not needed for clusterRef local);
+                    aws: keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+                  required: [vaultPath]
+                  properties:
+                    vaultPath:
+                      type: string
+                      minLength: 1
+                      maxLength: 512
+                      description: Vault KV path holding the credential.
+                entityRefs:
+                  type: array
+                  description: >-
+                    Entities allowed to reference this site from their cloud projects. Empty means every Entity.
+                  maxItems: 256
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [name]
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        maxLength: 63
+                        description: Entity name
+                openstack:
+                  type: object
+                  description: >-
+                    OpenStack site, reached through its public APIs only. The cloud's administrator configures
+                    its fabric underlay; the platform detects EVPN support through Neutron's evpn extension.
+                    Required when type is openstack.
+                  properties:
+                    region:
+                      type: string
+                      maxLength: 64
+                      description: OpenStack region. Default the credential's clouds.yaml region_name.
+                    projectDomain:
+                      type: string
+                      maxLength: 64
+                      description: >-
+                        Keystone domain for tenant projects. The infrastructure account is granted admin on it.
+                    createProjectDomain:
+                      type: boolean
+                      default: false
+                      description: Create projectDomain when it does not exist (otherwise a missing domain fails the site).
+                    externalNetwork:
+                      type: string
+                      maxLength: 255
+                      description: External Neutron network for tenant floating IPs.
+                    baseDomain:
+                      type: string
+                      maxLength: 253
+                      description: Parent DNS domain for tenant projects (designate, route53).
+                    dnsProvider:
+                      type: string
+                      enum: [designate, route53, none]
+                      default: none
+                      description: >-
+                        DNS for tenant environments: designate (zone in designate), route53 (route53VaultPath)
+                        or none (no tenant DNS; such a site can't host tenant OpenShift clusters).
+                    designate:
+                      type: object
+                      description: Designate zone for tenant DNS (dnsProvider designate). The infrastructure account is granted member on projectId.
+                      properties:
+                        zoneId:
+                          type: string
+                          maxLength: 64
+                        projectId:
+                          type: string
+                          maxLength: 64
+                    route53VaultPath:
+                      type: string
+                      maxLength: 512
+                      description: Vault KV path of the Route53 credentials (dnsProvider route53).
+                openshift:
+                  type: object
+                  description: >-
+                    OpenShift cluster with OpenShift Virtualization for tenant VMs (CloudVirt). Required when type
+                    is openshift.
+                  properties:
+                    clusterRef:
+                      type: string
+                      maxLength: 253
+                      default: local
+                      description: >-
+                        The cluster: local is the services cluster itself; anything else is a cluster reached
+                        through credentialsRef (key kubeconfig).
+                    bootImage:
+                      type: string
+                      maxLength: 512
+                      description: Default VM root disk image for CloudVirt (container disk URL).
+                    storageClass:
+                      type: string
+                      maxLength: 253
+                      description: StorageClass for VM disks.
+                aws:
+                  type: object
+                  description: AWS account. Required when type is aws.
+                  required: [accountId, region]
+                  properties:
+                    accountId:
+                      type: string
+                      pattern: '^[0-9]{12}$'
+                      description: AWS account ID.
+                    region:
+                      type: string
+                      maxLength: 32
+                      description: AWS region, e.g. us-east-1.
+                    baseDomain:
+                      type: string
+                      maxLength: 253
+                      description: Parent Route53 domain for tenant projects.
+            status:
+              type: object
+              properties:
+                capabilities:
+                  type: object
+                  description: >-
+                    What the site offers, as probed by the provision job. Keys: evpn (the site can attach to a
+                    HybridFabric: openstack = Neutron's evpn extension is loaded; openshift = CNO FRR provider,
+                    routeAdvertisements Enabled and fabric BGP sessions Established), api (the credential
+                    authenticates), virtualization (OpenShift Virtualization Available), dns (tenant DNS
+                    configured and reachable).
+                  additionalProperties:
+                    type: boolean
+                site:
+                  type: object
+                  description: Observed site details (informational).
+                  properties:
+                    endpoint:
+                      type: string
+                      description: Cloud API or cluster API endpoint.
+                    region:
+                      type: string
+                    version:
+                      type: string
+                      description: Platform version where the API reports one (OpenShift version).
+                  x-kubernetes-preserve-unknown-fields: true
+                status:
+                  type: string
+                  description: Lifecycle status (reconciling, ready, failed)
+                message:
+                  type: string
+                ready:
+                  type: boolean
+                deletionComplete:
+                  type: boolean
+                deletionBlockedBy:
+                  type: array
+                  items:
+                    type: string
+                lastReconciledAt:
+                  type: string
+                  format: date-time
+                observedGeneration:
+                  type: integer
+                  format: int64
+                edaJobs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      jobId:
+                        type: string
+                      url:
+                        type: string
+                      timestamp:
+                        type: string
+                      status:
+                        type: string
+                        enum: [running, success, failed]
+                    x-kubernetes-preserve-unknown-fields: true
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: EVPN
+          type: boolean
+          jsonPath: .status.capabilities.evpn
+        - name: Status
+          type: string
+          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready

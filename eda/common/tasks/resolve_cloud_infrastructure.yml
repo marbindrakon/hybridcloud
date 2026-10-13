@@ -1,0 +1,60 @@
+---
+# shc (design/P7-PLAN.md P7.1): resolve a CloudInfrastructure (platform namespace) by name, for the roles
+# that follow a cloudRef (CloudOSO now; CloudGateway, CloudVirt, NetworkPlacement in P7.3). Ported from
+# the hybridcloud-demojam helper.
+#
+# Usable = the last probe authenticated (status.capabilities.api) and the site isn't failed. Not
+# status.ready: every job's acknowledge step sets ready=false while it runs, so a site would look
+# unusable for the duration of its periodic re-probe.
+#
+# Required vars: ci_ref_name. Optional: ci_ref_namespace (default sovereign-cloud), ci_expected_type.
+# Sets (never fails; callers decide): ci_found, ci_obj, ci_spec, ci_type, ci_usable, ci_capabilities,
+# ci_error ('' when usable).
+- name: Reset CloudInfrastructure facts
+  ansible.builtin.set_fact:
+    ci_found: false
+    ci_obj: {}
+    ci_spec: {}
+    ci_type: ""
+    ci_usable: false
+    ci_capabilities: {}
+    ci_error: ""
+
+- name: Read CloudInfrastructure {{ ci_ref_name | default('') }}
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: CloudInfrastructure
+    name: "{{ ci_ref_name }}"
+    namespace: "{{ ci_ref_namespace | default('sovereign-cloud', true) }}"
+  register: _ci_lookup
+  failed_when: false
+  when: (ci_ref_name | default('')) | length > 0
+
+- name: Set CloudInfrastructure facts
+  vars:
+    _o: "{{ _ci_lookup.resources[0] }}"
+    _st: "{{ _ci_lookup.resources[0].status | default({}, true) }}"
+  ansible.builtin.set_fact:
+    ci_found: true
+    ci_obj: "{{ _o }}"
+    ci_spec: "{{ _o.spec | default({}) }}"
+    ci_type: "{{ _o.spec.type | default('') }}"
+    ci_capabilities: "{{ _st.capabilities | default({}, true) }}"
+    ci_usable: >-
+      {{ ((_st.capabilities | default({}, true)).api | default(false) | bool)
+         and (_st.status | default('')) != 'failed' and _o.metadata.deletionTimestamp is not defined }}
+  when: (_ci_lookup.resources | default([])) | length > 0
+
+- name: Record the resolution error
+  ansible.builtin.set_fact:
+    ci_error: >-
+      {%- set ns = ci_ref_namespace | default('sovereign-cloud', true) -%}
+      {%- if (ci_ref_name | default('')) | length == 0 -%}cloudRef name is empty
+      {%- elif not ci_found -%}CloudInfrastructure {{ ns }}/{{ ci_ref_name }} not found
+      {%- elif (ci_expected_type | default('')) | length > 0 and ci_type != ci_expected_type -%}CloudInfrastructure {{ ci_ref_name }} has type {{ ci_type }}, expected {{ ci_expected_type }}
+      {%- elif ci_obj.metadata.deletionTimestamp is defined -%}CloudInfrastructure {{ ci_ref_name }} is being deleted
+      {%- elif not ci_usable -%}CloudInfrastructure {{ ci_ref_name }} is not usable (status {{ (ci_obj.status | default({}, true)).status | default('unprobed', true) }}: {{ ((ci_obj.status | default({}, true)).message | default('') | string)[:200] }})
+      {%- endif -%}

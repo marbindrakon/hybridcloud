@@ -19,6 +19,8 @@ SCOPE = [
     # §11.6 phase C: tenant cloud roles (the OpenStack path of PlatformOpenshift provision)
     "eda/common/files/*.py",
     "eda/rulebooks/roles/cloudoso_*/**/*.yml",
+    # P7.1: CloudInfrastructure
+    "eda/rulebooks/roles/cloudinfrastructure_*/**/*.yml",
     "eda/rulebooks/roles/platformopenshift_teardown/**/*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/defaults/*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/tasks/openstack*.yml",

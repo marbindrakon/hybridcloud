@@ -1,0 +1,209 @@
+---
+# type openshift. Read only. Target cluster: clusterRef local = the services cluster (the job's own
+# connection); anything else = the kubeconfig in credentialsRef.vaultPath (for a platform IaaS cluster:
+# an ACM ManagedServiceAccount token pushed to Vault by central, read-only probe RBAC from a
+# ClusterPermission). Sets ci_credentials_message, ci_capabilities_out, ci_site_out, ci_type_message,
+# ci_evpn_reason, ci_evpn_message, ci_notes.
+- name: Set openshift section facts
+  ansible.builtin.set_fact:
+    ci_ocp: "{{ ci_cr_spec.openshift | default({}) }}"
+    ci_ocp_local: "{{ ((ci_cr_spec.openshift | default({})).clusterRef | default('local', true)) == 'local' }}"
+    ci_cluster_kubeconfig: "/tmp/eda-ci-{{ cloudinfrastructure_cr_name }}-kubeconfig"
+
+# k8s modules take host/api_key or a kubeconfig; one dict serves both (omit the unused keys).
+- name: Connect to the services cluster (clusterRef local)
+  ansible.builtin.set_fact:
+    ci_k8s:
+      host: "{{ services_api_host }}"
+      api_key: "{{ services_bearer_token }}"
+    ci_endpoint: "{{ services_api_host }}"
+    ci_credentials_message: "clusterRef local: the services cluster connection."
+  no_log: true
+  when: ci_ocp_local | bool
+
+- name: Read the cluster kubeconfig from Vault
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ ci_cr_spec.credentialsRef.vaultPath }}"
+  when: not (ci_ocp_local | bool)
+
+- name: Set the kubeconfig failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: CredentialsUnavailable
+  when:
+    - not (ci_ocp_local | bool)
+    - (vault_kv_data.kubeconfig | default('')) | length == 0
+
+- name: Require a kubeconfig for a remote cluster
+  ansible.builtin.assert:
+    that: cloudinfrastructure_fail_reason != 'CredentialsUnavailable'
+    fail_msg: "Vault {{ ci_cr_spec.credentialsRef.vaultPath }} has no kubeconfig property (clusterRef {{ ci_ocp.clusterRef }})."
+
+- name: Write the cluster kubeconfig (temp, 0600)
+  ansible.builtin.copy:
+    content: "{{ vault_kv_data.kubeconfig }}"
+    dest: "{{ ci_cluster_kubeconfig }}"
+    mode: "0600"
+  no_log: true
+  when: not (ci_ocp_local | bool)
+
+- name: Use the cluster kubeconfig
+  ansible.builtin.set_fact:
+    ci_k8s:
+      kubeconfig: "{{ ci_cluster_kubeconfig }}"
+    ci_endpoint: >-
+      {{ ((vault_kv_data.kubeconfig | from_yaml).clusters | default([{}]) | first).cluster.server | default('') }}
+    ci_credentials_message: "clusterRef {{ ci_ocp.clusterRef }}: kubeconfig from Vault {{ ci_cr_spec.credentialsRef.vaultPath }}."
+    vault_kv_data: {}
+  no_log: true
+  when: not (ci_ocp_local | bool)
+
+- name: Read the cluster version
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: _ci_cv
+  failed_when: false
+
+- name: Set the API failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: CredentialsInvalid
+  when: (_ci_cv.resources | default([])) | length == 0
+
+- name: Require API access
+  ansible.builtin.assert:
+    that: cloudinfrastructure_fail_reason != 'CredentialsInvalid'
+    fail_msg: >-
+      Cannot read ClusterVersion on {{ ci_endpoint | trim }} with {{ ci_credentials_message }}
+      {{ (_ci_cv.msg | default('') | string)[:300] }}
+
+- name: Read KubeVirt (OpenShift Virtualization)
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: KubeVirt
+  register: _ci_kubevirt
+  failed_when: false
+
+- name: Evaluate OpenShift Virtualization
+  ansible.builtin.set_fact:
+    ci_cnv_available: >-
+      {{ _ci_kubevirt.resources | default([]) | map(attribute='status') | map('default', {}, true)
+         | map(attribute='conditions') | map('default', [], true) | flatten
+         | selectattr('type', 'equalto', 'Available') | selectattr('status', 'equalto', 'True') | list | length > 0 }}
+
+- name: Set the virtualization failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: CnvNotAvailable
+  when: not (ci_cnv_available | bool)
+
+- name: Require OpenShift Virtualization
+  ansible.builtin.assert:
+    that: ci_cnv_available | bool
+    fail_msg: >-
+      No Available KubeVirt on {{ ci_endpoint | trim }}: an openshift site needs OpenShift Virtualization.
+      {{ (_ci_kubevirt.msg | default('') | string)[:200] }}
+
+- name: Check the VM storage class
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "{{ ci_ocp.storageClass }}"
+  register: _ci_sc
+  failed_when: false
+  when: (ci_ocp.storageClass | default('', true)) | length > 0
+
+- name: Note a missing storage class
+  ansible.builtin.set_fact:
+    ci_notes: "{{ ci_notes + ['storageClass ' ~ ci_ocp.storageClass ~ ' not found'] }}"
+  when:
+    - (ci_ocp.storageClass | default('', true)) | length > 0
+    - (_ci_sc.resources | default([])) | length == 0
+
+- name: Read the cluster network operator config
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: operator.openshift.io/v1
+    kind: Network
+    name: cluster
+  register: _ci_cno
+  failed_when: false
+
+- name: Read the fabric BGP sessions (frr-k8s)
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: frrk8s.metallb.io/v1beta1
+    kind: BGPSessionState
+    namespace: "{{ ci_frr_namespace }}"
+  register: _ci_bgp
+  failed_when: false
+
+- name: Read the CNO routing settings
+  vars:
+    _spec: "{{ ((_ci_cno.resources | default([]) + [{}]) | first).spec | default({}) }}"
+  ansible.builtin.set_fact:
+    ci_cno_frr: "{{ 'FRR' in ((_spec.additionalRoutingCapabilities | default({})).providers | default([])) }}"
+    ci_cno_ra: "{{ ((_spec.defaultNetwork | default({})).ovnKubernetesConfig | default({})).routeAdvertisements | default('', true) }}"
+    ci_bgp_all: "{{ _ci_bgp.resources | default([]) | selectattr('status', 'defined') | list }}"
+
+- name: Summarize the sessions
+  vars:
+    _default_vrf: >-
+      {%- set out = [] -%}
+      {%- for s in ci_bgp_all -%}
+        {%- if ((s.metadata.labels | default({}))['frrk8s.metallb.io/vrf'] | default('')) == '' -%}
+          {%- set _ = out.append(s) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  ansible.builtin.set_fact:
+    ci_bgp_sessions: "{{ _default_vrf | length }}"
+    ci_bgp_established: "{{ _default_vrf | selectattr('status.bgpStatus', 'defined') | selectattr('status.bgpStatus', 'equalto', 'Established') | list | length }}"
+    ci_bgp_peers: "{{ _default_vrf | map(attribute='status.peer') | unique | sort | list }}"
+
+- name: Note sessions that are down
+  ansible.builtin.set_fact:
+    ci_notes: "{{ ci_notes + [(ci_bgp_sessions | int - ci_bgp_established | int) ~ ' of ' ~ ci_bgp_sessions ~ ' fabric BGP sessions not Established'] }}"
+  when: ci_bgp_established | int < ci_bgp_sessions | int
+
+- name: Set openshift result facts
+  vars:
+    _evpn: "{{ (ci_cno_frr | bool) and ci_cno_ra == 'Enabled' and (ci_bgp_established | int > 0) }}"
+  ansible.builtin.set_fact:
+    ci_capabilities_out:
+      api: true
+      virtualization: true
+      frrK8s: "{{ (ci_cno_frr | bool) and ci_cno_ra == 'Enabled' }}"
+      evpn: "{{ _evpn | bool }}"
+    ci_evpn_reason: >-
+      {{ 'FabricUnderlayEstablished' if (_evpn | bool)
+         else ('NoFabricSessions' if ((ci_cno_frr | bool) and ci_cno_ra == 'Enabled') else 'RouteAdvertisementsDisabled') }}
+    ci_evpn_message: >-
+      CNO FRR provider {{ ci_cno_frr | bool }}, routeAdvertisements {{ ci_cno_ra | default('unset', true) }};
+      fabric BGP sessions {{ ci_bgp_established }}/{{ ci_bgp_sessions }} Established
+      (peers {{ ci_bgp_peers | join(', ') | default('none', true) }}).
+    ci_site_out:
+      endpoint: "{{ ci_endpoint | trim }}"
+      version: "{{ ((_ci_cv.resources | first).status | default({})).desired.version | default('') }}"
+      cluster: "{{ ci_ocp.clusterRef | default('local', true) }}"
+      routeAdvertisements: "{{ ci_cno_ra }}"
+      underlay:
+        sessions: "{{ ci_bgp_sessions | int }}"
+        established: "{{ ci_bgp_established | int }}"
+        peers: "{{ ci_bgp_peers }}"
+    ci_type_message: >-
+      OpenShift {{ ((_ci_cv.resources | first).status | default({})).desired.version | default('?') }} with OpenShift
+      Virtualization at {{ ci_endpoint | trim }};

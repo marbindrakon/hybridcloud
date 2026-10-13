@@ -58,3 +58,7 @@ pluginConfigs:
     spec:
       secret: quay-services-admin
       rbacConfig: keycloak-sovereign-tenants-services
+
+# shc (design/P7-PLAN.md P7.1): platform cloud sites (templates/cloud-infrastructures.yaml), keyed by name,
+# each {spec: <CloudInfrastructure spec>} (enabled: false skips one). Registered in `namespace`.
+cloudInfrastructures: {}

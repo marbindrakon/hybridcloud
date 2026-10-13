@@ -1,0 +1,80 @@
+---
+# shc (design/P7-PLAN.md P7.1): the CloudOSO's site. spec.cloudRef, else the installation default
+# (cloudoso_defaults.cloudRef), names a CloudInfrastructure of type openstack; it supplies the account
+# (credentialsRef: the site's cloud admin) and every site setting. The tenant's own site-level spec fields
+# are ignored then: a tenant must not choose the Vault account or the Keystone domain its project is made
+# with. Without any cloudRef the legacy fields (spec over cloudoso_defaults) apply unchanged.
+#
+# Expects oso_spec, entity_name, cloudoso_cr_name, services_api_host/token.
+# Sets oso_cloudinfra_name ('' = legacy), oso_settings {vaultPath, projectDomain, externalNetwork,
+# baseDomain, regionName, dnsProvider, designateZoneId, designateProjectId, route53VaultPath},
+# oso_settings_note.
+- name: Pick the site
+  vars:
+    _default: "{{ cloudoso_defaults.cloudRef | default('', true) }}"
+  ansible.builtin.set_fact:
+    oso_cloudinfra_name: >-
+      {{ (oso_spec.cloudRef | default({}, true)).name | default('', true)
+         or (_default.name | default('') if _default is mapping else _default) }}
+    oso_settings_note: ""
+
+# (No block with `when` around an include_tasks: in AAP that skipped every following task.)
+- name: Read the CloudInfrastructure
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+  vars:
+    ci_ref_name: "{{ oso_cloudinfra_name }}"
+    ci_expected_type: openstack
+  when: oso_cloudinfra_name | length > 0
+
+- name: Require a usable openstack site
+  ansible.builtin.assert:
+    that: ci_error | length == 0
+    fail_msg: "CloudOSO {{ cloudoso_cr_name }}: {{ ci_error }}"
+  when: oso_cloudinfra_name | length > 0
+
+- name: Require the entity to be allowed on the site
+  ansible.builtin.assert:
+    that: >-
+      (ci_spec.entityRefs | default([]) | length == 0)
+      or (entity_name in (ci_spec.entityRefs | map(attribute='name') | list))
+    fail_msg: "Entity {{ entity_name }} may not use CloudInfrastructure {{ oso_cloudinfra_name }} (spec.entityRefs)."
+  when: oso_cloudinfra_name | length > 0
+
+- name: Take the account and settings from the site
+  when: oso_cloudinfra_name | length > 0
+  vars:
+    _os: "{{ ci_spec.openstack | default({}) }}"
+    _ignored: >-
+      {{ ['vaultPath', 'projectDomain', 'externalNetwork', 'baseDomain', 'regionName', 'dnsProvider',
+          'designateZoneId', 'designateProjectId', 'route53VaultPath']
+         | select('in', oso_spec | dict2items | rejectattr('value', 'in', ['', none]) | map(attribute='key') | list) | list }}
+  ansible.builtin.set_fact:
+    oso_settings:
+      vaultPath: "{{ (ci_spec.credentialsRef | default({})).vaultPath | default('') }}"
+      projectDomain: "{{ _os.projectDomain | default('') }}"
+      externalNetwork: "{{ _os.externalNetwork | default('') }}"
+      baseDomain: "{{ _os.baseDomain | default('') }}"
+      regionName: "{{ _os.region | default('') }}"
+      dnsProvider: "{{ _os.dnsProvider | default('none', true) }}"
+      designateZoneId: "{{ (_os.designate | default({})).zoneId | default('') }}"
+      designateProjectId: "{{ (_os.designate | default({})).projectId | default('') }}"
+      route53VaultPath: "{{ _os.route53VaultPath | default('') }}"
+    oso_settings_note: >-
+      {{ ('Site settings from CloudInfrastructure ' ~ oso_cloudinfra_name ~ '; ignored spec.' ~ (_ignored | join(', spec.')) ~ '.')
+         if _ignored | length > 0 else '' }}
+
+- name: Legacy settings (no cloudRef in effect)
+  when: oso_cloudinfra_name | length == 0
+  ansible.builtin.set_fact:
+    oso_settings:
+      vaultPath: "{{ oso_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true) }}"
+      projectDomain: "{{ oso_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true) }}"
+      externalNetwork: "{{ oso_spec.externalNetwork | default(cloudoso_defaults.externalNetwork | default(''), true) }}"
+      baseDomain: "{{ oso_spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
+      regionName: "{{ oso_spec.regionName | default(cloudoso_defaults.regionName | default(''), true) }}"
+      dnsProvider: >-
+        {{ oso_spec.dnsProvider | default(cloudoso_defaults.dnsProvider | default(''), true)
+           | default('designate' if (oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true)) else 'route53', true) }}
+      designateZoneId: "{{ oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true) }}"
+      designateProjectId: "{{ oso_spec.designateProjectId | default(cloudoso_defaults.designateProjectId | default(''), true) }}"
+      route53VaultPath: "{{ oso_spec.route53VaultPath | default(cloudoso_defaults.route53VaultPath | default(''), true) }}"

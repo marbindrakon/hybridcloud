@@ -1,0 +1,5 @@
+---
+# shc (design/P7-PLAN.md P7.1): CloudInfrastructure probe settings.
+# openshift sites: the fabric underlay's BGP sessions are read from frr-k8s BGPSessionStates here
+# (default VRF only; tenant VRF sessions don't count as underlay).
+ci_frr_namespace: openshift-frr-k8s

@@ -2,10 +2,11 @@
 """OpenStack steps of the CloudOSO / PlatformOpenshift jobs (shc LAB-PLAN §11.6 phase C).
 
 Reads one JSON request on stdin and prints one JSON result on stdout; exits non-zero with
-{"error": ...} on failure. The account is a clouds.yaml entry for the platform's tenant admin:
-a password user with `manager` on the tenant Keystone domain (never cloud admin). This script
-picks the scope per call (domain for Keystone, the project for its resources), so the account's
-own scope keys are dropped.
+{"error": ...} on failure. The account is a clouds.yaml entry: the site's cloud-admin account from its
+CloudInfrastructure (P7.1, design/P7-PLAN.md decision 14), or the legacy tenant admin (a password user
+with `manager` on the tenant Keystone domain). This script picks the scope per call (domain for
+Keystone, the project for its resources), so the account's own scope keys are dropped; site-probe uses
+the account's own scope. A private CA comes as request["cacert"] (a file path) or clouds.yaml `cacert`.
 
 Actions (request["action"]):
   provision     project in the domain, `member` for the account, API/ingress floating IPs found or
@@ -16,6 +17,9 @@ Actions (request["action"]):
   teardown      deletes the recorded floating IPs, application credentials and the project.
   dns-upsert    creates or updates A records in a Designate zone (scoped to the zone's project).
   dns-delete    deletes recordsets by name/type from a Designate zone; reports what was missing.
+  site-probe    CloudInfrastructure probe (cloud admin): authenticates, reports the catalog, Neutron's
+                extensions (evpn) and the external network; ensures the tenant project domain (created
+                only when asked), the account's admin role on it and member on the Designate project.
 """
 import json
 import sys
@@ -31,15 +35,20 @@ class Account:
     def __init__(self, req):
         with open(req["clouds_yaml"]) as f:
             cfg = yaml.safe_load(f)["clouds"][req.get("cloud", "openstack")]
+        self.own_auth = dict(cfg["auth"])
         self.auth = {k: v for k, v in cfg["auth"].items() if k not in SCOPE_KEYS}
         self.region = req.get("region") or cfg.get("region_name")
         self.interface = cfg.get("interface", "public")
-        self.verify = cfg.get("verify", True)
+        self.verify = req.get("cacert") or cfg.get("cacert") or cfg.get("verify", True)
 
     def connect(self, **scope):
         return openstack.connect(auth={**self.auth, **scope}, region_name=self.region,
                                  interface=self.interface, verify=self.verify,
                                  identity_api_version="3")
+
+    def own_scope(self):
+        return openstack.connect(auth=self.own_auth, region_name=self.region, interface=self.interface,
+                                 verify=self.verify, identity_api_version="3")
 
     def domain(self, name):
         return self.connect(domain_name=name)
@@ -154,12 +163,15 @@ def check_empty(req):
     add("volumes", (describe(v, "name", "id") for v in conn.block_storage.volumes()))
     add("volume_snapshots", (describe(s, "name", "id") for s in conn.block_storage.snapshots()))
     add("images", (describe(i, "name", "id") for i in conn.image.images(owner=pid)))
-    try:
-        add("load_balancers", (describe(lb, "name", "id")
-                               for lb in conn.load_balancer.load_balancers(project_id=pid)))
-    except openstack.exceptions.ForbiddenException:
-        found["load_balancers"] = ["not checked: the account may not list Octavia load balancers"]
-    add("dns_zones", (describe(z, "name", "id") for z in conn.dns.zones()))
+    # Octavia and Designate are optional services (rhoso-bm runs neither).
+    if conn.has_service("load-balancer"):
+        try:
+            add("load_balancers", (describe(lb, "name", "id")
+                                   for lb in conn.load_balancer.load_balancers(project_id=pid)))
+        except openstack.exceptions.ForbiddenException:
+            found["load_balancers"] = ["not checked: the account may not list Octavia load balancers"]
+    if conn.has_service("dns"):
+        add("dns_zones", (describe(z, "name", "id") for z in conn.dns.zones()))
     if req.get("dns_zone_id") and req.get("dns_suffix"):
         conn_z = acct.project(req["dns_project_id"])
         suffix = req["dns_suffix"].rstrip(".") + "."
@@ -237,8 +249,60 @@ def dns_delete(req):
     return {"deleted": deleted, "missing": missing}
 
 
+def site_probe(req):
+    """CloudInfrastructure type openstack. Read-only apart from the tenant domain and the account's
+    grants on it (and on the Designate project), which the tenant jobs' domain-scoped calls need."""
+    acct = Account(req)
+    conn = acct.own_scope()
+    conn.authorize()
+    access = conn.session.auth.get_access(conn.session)
+    out = {"auth": True, "user_id": access.user_id, "project_id": access.project_id,
+           "roles": sorted(access.role_names), "endpoint": acct.own_auth.get("auth_url", ""),
+           "region": acct.region or "", "notes": []}
+    out["services"] = sorted({s["type"] for s in access.service_catalog.catalog})
+    aliases = sorted(e.alias for e in conn.network.extensions())
+    out["evpn_extension"] = "evpn" in aliases
+    out["network_extensions"] = [a for a in aliases if a.startswith(("bgp", "evpn"))]
+    if req.get("external_network"):
+        net = conn.network.find_network(req["external_network"])
+        out["external_network"] = {"found": net is not None,
+                                   "external": bool(net and net.is_router_external),
+                                   "id": net.id if net else ""}
+    if req.get("project_domain"):
+        name = req["project_domain"]
+        dom = conn.identity.find_domain(name)
+        created = False
+        if dom is None and req.get("create_project_domain"):
+            dom = conn.identity.create_domain(name=name, description=req.get("domain_description", ""),
+                                              is_enabled=True)
+            created = True
+        if dom is None:
+            out["project_domain"] = {"name": name, "found": False}
+        else:
+            admin = conn.identity.find_role("admin", ignore_missing=False)
+            granted = False
+            if not conn.identity.validate_user_has_domain_role(dom, access.user_id, admin):
+                conn.identity.assign_domain_role_to_user(dom, access.user_id, admin)
+                granted = True
+            out["project_domain"] = {"name": name, "found": True, "id": dom.id, "enabled": dom.is_enabled,
+                                     "created": created, "admin_granted": granted}
+    if req.get("dns_project_id"):
+        member = conn.identity.find_role("member", ignore_missing=False)
+        proj = conn.identity.get_project(req["dns_project_id"])
+        granted = False
+        if not conn.identity.validate_user_has_project_role(proj, access.user_id, member):
+            conn.identity.assign_project_role_to_user(proj, access.user_id, member)
+            granted = True
+        zone = None
+        if req.get("dns_zone_id"):
+            z = acct.project(proj.id).dns.get_zone(req["dns_zone_id"])
+            zone = {"id": z.id, "name": z.name, "status": z.status}
+        out["dns"] = {"project_id": proj.id, "member_granted": granted, "zone": zone}
+    return out
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
-           "dns-upsert": dns_upsert, "dns-delete": dns_delete}
+           "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

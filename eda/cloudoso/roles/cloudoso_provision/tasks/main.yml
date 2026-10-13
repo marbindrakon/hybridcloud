@@ -70,6 +70,10 @@
           Namespace {{ cloudoso_cr_namespace }} is missing label
           hybridsovereign.redhat/entity. Cannot provision CloudOSO.
 
+    # shc (P7.1): the site (CloudInfrastructure) and its account and settings
+    - name: Resolve the CloudOSO's site
+      ansible.builtin.include_tasks: cloudref.yml
+
     - name: Run OpenStack environment preparation
       ansible.builtin.include_tasks: environmentprep.yml
 
@@ -94,8 +98,11 @@
           lastReconciledAt: "{{ cloudoso_status_time }}"
           message: >-
             OpenStack project {{ oso_project_name }} ({{ oso_project_id }})
-            provisioned by EDA in Keystone domain {{ oso_domain_name }}.
+            provisioned by EDA in Keystone domain {{ oso_domain_name }}{{ (' on ' ~ oso_cloudinfra_name) if oso_cloudinfra_name | length > 0 else '' }}.
+            {{ oso_settings_note }}
           name: "{{ cloudoso_cr_name }}"
+          # shc (P7.1): the site this project lives on ('' = legacy account)
+          cloudInfrastructure: "{{ oso_cloudinfra_name }}"
           namespace: "{{ cloudoso_cr_namespace }}"
           entity: "{{ entity_name }}"
           projectName: "{{ oso_project_name }}"
@@ -141,6 +148,8 @@
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          # shc (P7.1): a failed provision may have created the project; its site must not be deleted under it
+          cloudInfrastructure: "{{ oso_cloudinfra_name | default('') }}"
           conditions:
             - type: Ready
               status: "False"
@@ -155,7 +164,8 @@
         msg: "CloudOSO {{ cloudoso_cr_name | default('unknown') }} EDA provisioning failed"
 
   always:
-    - name: Remove the account's temp clouds.yaml
+    - name: Remove the account's temp files
       ansible.builtin.file:
-        path: "/tmp/eda-cloudoso-{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        path: "/tmp/eda-cloudoso-{{ cloudoso_cr_name | default('unknown') }}-{{ item }}"
         state: absent
+      loop: [clouds.yaml, ca.crt]

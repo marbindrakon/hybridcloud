@@ -1,0 +1,7 @@
+---
+# Kinds whose spec.cloudRef can name a CloudInfrastructure (a kind whose CRD isn't installed is skipped).
+# A CloudOSO on the installation's default site records it in status.cloudInfrastructure.
+cit_referencing_kinds:
+  - CloudOSO
+  - CloudGateway
+  - CloudVirt

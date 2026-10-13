@@ -1,0 +1,120 @@
+---
+# type openstack: one files/shc_openstack.py site-probe with the site's cloud-admin account.
+# Sets ci_credentials_message, ci_capabilities_out, ci_site_out, ci_type_message, ci_evpn_reason,
+# ci_evpn_message, ci_notes.
+- name: Set openstack section facts
+  ansible.builtin.set_fact:
+    ci_os: "{{ ci_cr_spec.openstack | default({}) }}"
+    ci_os_dns: "{{ (ci_cr_spec.openstack | default({})).dnsProvider | default('none', true) }}"
+
+- name: Load the site's cloud-admin account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ ci_cr_spec.credentialsRef.vaultPath }}"
+    os_account_tag: "ci-{{ cloudinfrastructure_cr_name }}"
+
+- name: Probe the site
+  block:
+    - name: Probe the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_request:
+          action: site-probe
+          region: "{{ ci_os.region | default('', true) }}"
+          external_network: "{{ ci_os.externalNetwork | default('', true) }}"
+          project_domain: "{{ ci_os.projectDomain | default('', true) }}"
+          create_project_domain: "{{ ci_os.createProjectDomain | default(false) | bool }}"
+          domain_description: "Tenant projects of the sovereign cloud platform (CloudInfrastructure {{ cloudinfrastructure_cr_name }})"
+          dns_project_id: "{{ (ci_os.designate | default({})).projectId | default('', true) if ci_os_dns == 'designate' else '' }}"
+          dns_zone_id: "{{ (ci_os.designate | default({})).zoneId | default('', true) if ci_os_dns == 'designate' else '' }}"
+  rescue:
+    - name: Set the probe failure reason
+      ansible.builtin.set_fact:
+        cloudinfrastructure_fail_reason: >-
+          {{ 'CredentialsInvalid' if (os_result.error | default('')) is search('Unauthorized|401|authenticat', ignorecase=True)
+             else 'ProbeFailed' }}
+
+    - name: Fail with the probe's error
+      ansible.builtin.fail:
+        msg: "Site probe failed with {{ ci_cr_spec.credentialsRef.vaultPath }}: {{ os_result.error | default(ansible_failed_result.msg | default('')) }}"
+
+- name: Keep the probe result
+  ansible.builtin.set_fact:
+    ci_probe: "{{ os_result }}"
+
+- name: Set the external-network failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: ExternalNetworkNotFound
+  when:
+    - (ci_os.externalNetwork | default('', true)) | length > 0
+    - not ((ci_probe.external_network | default({})).external | default(false) | bool)
+
+- name: Require the external network
+  ansible.builtin.assert:
+    that: cloudinfrastructure_fail_reason != 'ExternalNetworkNotFound'
+    fail_msg: >-
+      External network {{ ci_os.externalNetwork }} {{ 'is not router:external' if (ci_probe.external_network | default({})).found | default(false)
+      else 'not found' }} on {{ cloudinfrastructure_cr_name }}.
+
+- name: Set the project-domain failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: ProjectDomainNotFound
+  when:
+    - (ci_os.projectDomain | default('', true)) | length > 0
+    - not ((ci_probe.project_domain | default({})).found | default(false) | bool)
+
+- name: Require the tenant project domain
+  ansible.builtin.assert:
+    that: cloudinfrastructure_fail_reason != 'ProjectDomainNotFound'
+    fail_msg: >-
+      Keystone domain {{ ci_os.projectDomain }} not found on {{ cloudinfrastructure_cr_name }}
+      (set spec.openstack.createProjectDomain to create it).
+
+- name: Set the DNS failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: DnsNotConfigured
+  when: >-
+    (ci_os_dns == 'designate' and ((ci_probe.dns | default({})).zone | default(none)) is none)
+    or (ci_os_dns == 'route53' and (ci_os.route53VaultPath | default('', true)) | length == 0)
+    or (ci_os_dns != 'none' and (ci_os.baseDomain | default('', true)) | length == 0)
+
+- name: Require the tenant DNS settings
+  ansible.builtin.assert:
+    that: cloudinfrastructure_fail_reason != 'DnsNotConfigured'
+    fail_msg: >-
+      dnsProvider {{ ci_os_dns }} needs baseDomain and {{ 'designate.zoneId/projectId (a readable zone)' if ci_os_dns == 'designate'
+      else 'route53VaultPath' }}.
+
+- name: Note grants and a created domain
+  ansible.builtin.set_fact:
+    ci_notes: >-
+      {{ ci_notes
+         + (['created Keystone domain ' ~ ci_os.projectDomain] if (ci_probe.project_domain | default({})).created | default(false) else [])
+         + (['granted the account admin on domain ' ~ ci_os.projectDomain] if (ci_probe.project_domain | default({})).admin_granted | default(false) else [])
+         + (['granted the account member on the Designate project'] if (ci_probe.dns | default({})).member_granted | default(false) else [])
+         + (['Keystone domain ' ~ ci_os.projectDomain ~ ' is disabled'] if ((ci_probe.project_domain | default({})).found | default(false)) and not ((ci_probe.project_domain | default({})).enabled | default(true)) else []) }}
+
+- name: Set openstack result facts
+  ansible.builtin.set_fact:
+    ci_credentials_message: "Keystone token issued for project {{ ci_probe.project_id }} (roles {{ ci_probe.roles | join(', ') }})."
+    ci_capabilities_out:
+      api: true
+      evpn: "{{ ci_probe.evpn_extension | bool }}"
+      dns: "{{ ci_os_dns != 'none' }}"
+    ci_evpn_reason: "{{ 'NeutronEvpnExtension' if (ci_probe.evpn_extension | bool) else 'NoNeutronEvpnExtension' }}"
+    ci_evpn_message: >-
+      Neutron evpn extension {{ 'loaded' if (ci_probe.evpn_extension | bool) else 'not loaded' }}
+      (routing extensions: {{ ci_probe.network_extensions | join(', ') | default('none', true) }}).
+    ci_site_out:
+      endpoint: "{{ ci_probe.endpoint }}"
+      region: "{{ ci_probe.region }}"
+      services: "{{ ci_probe.services }}"
+      networkExtensions: "{{ ci_probe.network_extensions }}"
+      externalNetworkId: "{{ (ci_probe.external_network | default({})).id | default('') }}"
+      projectDomainId: "{{ (ci_probe.project_domain | default({})).id | default('') }}"
+      dnsZone: "{{ ((ci_probe.dns | default({})).zone | default({}, true)).name | default('') }}"
+    ci_type_message: >-
+      Keystone ok, services {{ ci_probe.services | join(',') }}; tenant domain
+      {{ ci_os.projectDomain | default('-', true) }}, external network {{ ci_os.externalNetwork | default('-', true) }},
+      DNS {{ ci_os_dns }}.

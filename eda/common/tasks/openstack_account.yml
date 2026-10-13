@@ -2,7 +2,10 @@
 # shc (§11.6 phase C): the platform's OpenStack account (a clouds.yaml in central Vault, property
 # clouds.yaml) written to a private temp file for files/shc_openstack.py. Read straight from Vault
 # with the job's VAULT_TOKEN: no temporary ExternalSecret left behind when a job fails.
-# Inputs: os_account_vault_path, os_account_tag (temp file name). Sets os_account_clouds_yaml.
+# shc (P7.1): a CloudInfrastructure credential may add property ca.crt (a private CA, e.g. RHOSO's
+# rootca-public); it goes to a second temp file that openstack_call.yml passes as the request's cacert.
+# Inputs: os_account_vault_path, os_account_tag (temp file name).
+# Sets os_account_clouds_yaml, os_account_cacert ('' without a CA).
 - name: Read the OpenStack account from Vault {{ os_account_vault_path }}
   ansible.builtin.include_tasks: vault_kv_read.yml
   vars:
@@ -21,7 +24,15 @@
     mode: "0600"
   no_log: true
 
-- name: Remember the account file
+- name: Write the account's CA bundle to a temp file
+  ansible.builtin.copy:
+    content: "{{ vault_kv_data['ca.crt'] }}"
+    dest: "/tmp/eda-{{ os_account_tag }}-ca.crt"
+    mode: "0600"
+  when: (vault_kv_data['ca.crt'] | default('')) | length > 0
+
+- name: Remember the account files
   ansible.builtin.set_fact:
     os_account_clouds_yaml: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
+    os_account_cacert: "{{ ('/tmp/eda-' ~ os_account_tag ~ '-ca.crt') if (vault_kv_data['ca.crt'] | default('')) | length > 0 else '' }}"
     vault_kv_data: {}

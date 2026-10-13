@@ -127,6 +127,25 @@ controller_templates:
     ask_variables_on_launch: true
     credentials:
       - sovereign-vault-admin-credential
+  # shc (design/P7-PLAN.md P7.1): CloudInfrastructure site probe; de-cloudoso has openstacksdk + kubernetes
+  - name: cloudinfrastructure-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudinfrastructure-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: cloudinfrastructure-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudinfrastructure-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
   - name: platformopenshift-provision
     organization: sovereign
     project: sovereign-eda-project

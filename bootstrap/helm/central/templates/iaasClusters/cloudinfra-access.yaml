@@ -1,0 +1,104 @@
+{{- /*
+shc (design/P7-PLAN.md P7.1, §3.2): a platform IaaS cluster's credential for its CloudInfrastructure
+(type openshift, credentialsRef.vaultPath cloudinfra/<cluster>). Per cluster in .Values.iaasClusters
+with cloudInfra.enabled, on central (the ACM hub), in the cluster's namespace:
+  ManagedServiceAccount  ACM creates the service account on the cluster and keeps a rotated token here
+  ClusterPermission      the account's ClusterRole on the cluster (cloudInfra.rules: the site probe's
+                         reads; the fabric jobs add theirs in P7.3)
+  PushSecret             a kubeconfig (cluster API + token) to central Vault cloudinfra/<cluster>,
+                         re-pushed when ACM rotates the token
+The cluster API serves a publicly trusted certificate, so the kubeconfig carries no CA.
+*/}}
+{{- if include "sovereign-central.applicationsEnabled" . }}
+{{- range $name, $cluster := .Values.iaasClusters }}
+{{- $c := mergeOverwrite (deepCopy $.Values.iaasClusterDefaults) (deepCopy $cluster) }}
+{{- $ci := $c.cloudInfra | default dict }}
+{{- if and $c.enabled $ci.enabled }}
+{{- $sa := $ci.serviceAccount | default "shc-cloudinfra" }}
+{{- $server := $ci.apiServer | default (printf "https://api.%s.%s:6443" $name $c.clusterBase.values.cluster.baseDomain) }}
+---
+apiVersion: authentication.open-cluster-management.io/v1beta1
+kind: ManagedServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $name }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    sovereign-cloud/target: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.base | quote }}
+spec:
+  rotation:
+    enabled: true
+    validity: {{ $ci.tokenValidity | default "168h" }}
+---
+apiVersion: rbac.open-cluster-management.io/v1alpha1
+kind: ClusterPermission
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $name }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    sovereign-cloud/target: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.base | quote }}
+spec:
+  clusterRole:
+    rules:
+      {{- toYaml $ci.rules | nindent 6 }}
+  clusterRoleBinding:
+    subject:
+      kind: ServiceAccount
+      name: {{ $sa }}
+      namespace: open-cluster-management-agent-addon
+---
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $name }}
+  labels:
+    {{- include "sovereign-central.labels" $ | nindent 4 }}
+    sovereign-cloud/target: {{ $name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.base | quote }}
+spec:
+  refreshInterval: 1h
+  updatePolicy: Replace
+  deletionPolicy: Delete
+  secretStoreRefs:
+    - kind: ClusterSecretStore
+      name: vault-backend
+  selector:
+    secret:
+      name: {{ $sa }}
+  template:
+    engineVersion: v2
+    data:
+      kubeconfig: |
+        apiVersion: v1
+        kind: Config
+        clusters:
+          - name: {{ $name }}
+            cluster:
+              server: {{ $server }}
+        users:
+          - name: {{ $sa }}
+            user:
+              token: {{ "{{ .token }}" }}
+        contexts:
+          - name: {{ $name }}
+            context:
+              cluster: {{ $name }}
+              user: {{ $sa }}
+        current-context: {{ $name }}
+  data:
+    - conversionStrategy: None
+      match:
+        secretKey: kubeconfig
+        remoteRef:
+          remoteKey: cloudinfra/{{ $name }}
+          property: kubeconfig
+{{- end }}
+{{- end }}
+{{- end }}

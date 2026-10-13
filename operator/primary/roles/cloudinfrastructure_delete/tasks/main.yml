@@ -1,0 +1,107 @@
+---
+# shc (P7.1): a site is deleted only after every tenant object that uses it is gone (the same rule as
+# _common/block_on_dependents, across namespaces). The wait needs no event or job; the finalizer's requeue
+# rechecks with backoff. The EDA teardown then only confirms and marks deletionComplete.
+- block:
+    - name: List objects that may use this site
+      kubernetes.core.k8s_info:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+      loop: "{{ cloudinfrastructure_referencing_kinds }}"
+      register: _ci_referrer_lists
+      failed_when: false
+      when: ansible_operator_meta.namespace == cloudinfrastructure_namespace
+
+    - name: Find the users of this site
+      ansible.builtin.set_fact:
+        _ci_users: >-
+          {%- set out = [] -%}
+          {%- for r in _ci_referrer_lists.results | default([]) -%}
+            {%- for o in r.resources | default([]) -%}
+              {%- set ref = ((o.spec | default({}, true)).cloudRef | default({}, true)).name | default('', true) -%}
+              {%- set used = ((o.status | default({}, true)).cloudInfrastructure | default('', true)) -%}
+              {%- set done = ((o.status | default({}, true)).deletionComplete | default(false)) | bool -%}
+              {%- if (ref == ansible_operator_meta.name or used == ansible_operator_meta.name) and not done -%}
+                {%- set _ = out.append(r.item ~ ' ' ~ o.metadata.namespace ~ '/' ~ o.metadata.name) -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Record what the delete waits for
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudInfrastructure
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: reconciling
+          ready: false
+          message: "Deletion waits for {{ _ci_users | join(', ') }}"
+          deletionBlockedBy: "{{ _ci_users }}"
+      when: _ci_users | length > 0
+
+    - name: Requeue until the site is unused
+      ansible.builtin.fail:
+        msg: "Deletion waits for {{ _ci_users | join(', ') }}"
+      when: _ci_users | length > 0
+
+    - name: Get current timestamp
+      ansible.builtin.set_fact:
+        cloudinfrastructure_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+    - name: Mark CloudInfrastructure as awaiting EDA delete
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudInfrastructure
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: reconciling
+          ready: false
+          message: Awaiting EDA delete
+          deletionBlockedBy: []
+          lastReconciledAt: "{{ cloudinfrastructure_delete_transition_time }}"
+
+    - name: Publish operator event to AMQ Streams
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: publish_operator_event
+      vars:
+        operator_event_reason: "CloudInfrastructureDeleteRequested"
+        operator_event_action: "Delete"
+        operator_event_note: "{{ _hybridsovereign_redhat_cloudinfrastructure.spec | to_json }}"
+        operator_reporting_controller: cloudinfrastructure-operator
+        operator_event_regarding:
+          apiVersion: hybridsovereign.redhat/v1alpha1
+          kind: CloudInfrastructure
+          name: "{{ ansible_operator_meta.name }}"
+          namespace: "{{ ansible_operator_meta.namespace }}"
+          uid: "{{ _hybridsovereign_redhat_cloudinfrastructure.metadata.uid }}"
+
+    - name: Exit cleanly when EDA completed deletion
+      ansible.builtin.meta: end_host
+      when: _hybridsovereign_redhat_cloudinfrastructure.status.deletionComplete | default(false) | bool
+
+    - name: Block finalizer until EDA completes deletion
+      ansible.builtin.fail:
+        msg: Waiting for EDA to complete deletion
+
+  rescue:
+    - name: Mark CloudInfrastructure delete as failed
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudInfrastructure
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: failed
+          ready: false
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+          message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('Deletion failed')) }}"
+      ignore_errors: true
+      when: (_ci_users | default([])) | length == 0
+
+    - name: Re-raise to signal finalizer failure
+      ansible.builtin.fail:
+        msg: "CloudInfrastructure {{ ansible_operator_meta.name }} deletion waits or failed — see status.message for details"

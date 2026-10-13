@@ -1,0 +1,25 @@
+---
+- name: CloudInfrastructure Create Rulebook
+  hosts: all
+  sources:
+    - ansible.eda.kafka:
+        host: "{{ KAFKA_HOST }}"
+        port: "{{ KAFKA_PORT }}"
+        topic: hybridsovereign-events
+        group_id: eda-cloudinfrastructure-create
+        security_protocol: SASL_SSL
+        sasl_mechanism: SCRAM-SHA-512
+        sasl_plain_username: "{{ KAFKA_USERNAME }}"
+        sasl_plain_password: "{{ KAFKA_PASSWORD }}"
+        check_hostname: true
+        verify_mode: CERT_REQUIRED
+  rules:
+    - name: Handle CloudInfrastructure Create
+      condition: event.body.payload.reason in ["CloudInfrastructureCreateRequested", "CloudInfrastructureReconcileRequested"] and event.body.payload.regarding.kind == "CloudInfrastructure"
+      action:
+        run_job_template:
+          name: cloudinfrastructure-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"

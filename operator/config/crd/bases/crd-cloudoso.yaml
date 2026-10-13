@@ -38,25 +38,40 @@ spec:
                 on the central cluster.
               type: object
               properties:
+                cloudRef:
+                  type: object
+                  description: >-
+                    The platform CloudInfrastructure (type openstack, namespace sovereign-cloud) the project is
+                    created on. It supplies the infrastructure credential and every site setting (projectDomain,
+                    externalNetwork, DNS, region); with a cloudRef in effect those spec fields below are ignored.
+                    Default: the installation's default site. Immutable once set.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.cloudRef is immutable
+                  properties:
+                    name:
+                      type: string
+                      maxLength: 253
                 project:
                   type: string
                   description: OpenStack project name hint (required)
                 vaultPath:
                   type: string
                   description: >-
-                    Central Vault path of the platform's OpenStack account (property clouds.yaml;
-                    a tenant domain manager). Default: the installation's cloudoso_defaults.
+                    Legacy, ignored with a cloudRef in effect. Vault path of the platform's
+                    OpenStack account (property clouds.yaml; a tenant domain manager).
                 baseDomain:
                   type: string
                   description: >-
                     Base DNS domain. With Designate the environment gets <name>.<entity>.<baseDomain>
-                    inside the zone designateZoneId. Default: the installation's cloudoso_defaults.
+                    inside the zone designateZoneId. Ignored with a cloudRef in effect. Default: the installation default.
                 projectDomain:
                   type: string
-                  description: "Keystone domain for the project. Default: the installation's cloudoso_defaults."
+                  description: "Keystone domain for the project. Ignored with a cloudRef in effect. Default: the installation default."
                 externalNetwork:
                   type: string
-                  description: "External Neutron network for the floating IPs. Default: the installation's cloudoso_defaults."
+                  description: "External Neutron network for the floating IPs. Ignored with a cloudRef in effect. Default: the installation default."
                 regionName:
                   type: string
                   description: "OpenStack region. Default: the account's clouds.yaml region."
@@ -64,9 +79,9 @@ spec:
                   type: string
                   description: >-
                     DNS for the environment's clusters: designate (designateZoneId + designateProjectId)
-                    or route53 (route53VaultPath). Default: the installation's cloudoso_defaults, else
+                    or route53 (route53VaultPath). Ignored with a cloudRef in effect. Default: the installation default, else
                     designate when designateZoneId is set.
-                  enum: [designate, route53]
+                  enum: [designate, route53, none]
                 route53VaultPath:
                   type: string
                   description: Vault path for Route53 credentials (e.g. oso/accounts/route53-openstack)
@@ -76,12 +91,12 @@ spec:
                   default: default
                 designateZoneId:
                   type: string
-                  description: "Designate zone id for the environment's records. Default: the installation's cloudoso_defaults."
+                  description: "Designate zone id for the environment's records. Ignored with a cloudRef in effect. Default: the installation default."
                 designateProjectId:
                   type: string
                   description: >-
                     Project owning the Designate zone (the account needs member there). Default: the
-                    installation's cloudoso_defaults.
+                    installation default. Ignored with a cloudRef in effect.
                 enableVRF:
                   type: boolean
                   description: Enable VRF networking for this environment (passed to provisioning; no effect until implemented)

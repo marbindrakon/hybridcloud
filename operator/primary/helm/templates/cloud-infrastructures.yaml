@@ -1,0 +1,19 @@
+{{- /*
+shc (design/P7-PLAN.md P7.1): the platform's cloud sites as CloudInfrastructure CRs in the platform
+namespace. Removing one from values deletes it; its finalizer waits until no tenant object uses it.
+*/}}
+{{- range $name, $c := .Values.cloudInfrastructures }}
+{{- if ne (toString $c.enabled) "false" }}
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudInfrastructure
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  {{- toYaml $c.spec | nindent 2 }}
+{{- end }}
+{{- end }}

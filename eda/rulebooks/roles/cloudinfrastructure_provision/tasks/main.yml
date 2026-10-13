@@ -1,0 +1,155 @@
+---
+# shc (design/P7-PLAN.md P7.1, §3.2): CloudInfrastructure provision = probe the site and record what it
+# offers (status.capabilities, status.site). Ported from the hybridcloud-demojam fabric restructure with
+# OpenStack sites API-only (owner 10-11: no RHOSO-specific management; the cloud admin owns the underlay):
+#   type openstack : the cloud-admin clouds.yaml authenticates; capabilities.evpn = Neutron's evpn
+#                    extension is loaded. The only writes: the tenant project domain (when
+#                    createProjectDomain) and the account's admin role on it / member on the Designate
+#                    project, which the CloudOSO jobs' domain-scoped calls need.
+#   type openshift : OpenShift Virtualization Available; capabilities.evpn = CNO FRR provider +
+#                    routeAdvertisements Enabled + fabric BGP sessions Established (read only).
+#   type aws       : not probed yet (P8); the site fails with TypeNotSupported.
+- block:
+    - name: Parse event payload
+      ansible.builtin.set_fact:
+        cloudinfrastructure_cr_name: "{{ event_payload.regarding.name }}"
+        cloudinfrastructure_cr_namespace: "{{ event_payload.regarding.namespace }}"
+        cloudinfrastructure_fail_reason: ""
+
+    - name: Resolve services cluster API connection from Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    - name: Read CloudInfrastructure CR
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudInfrastructure
+        name: "{{ cloudinfrastructure_cr_name }}"
+        namespace: "{{ cloudinfrastructure_cr_namespace }}"
+      register: cloudinfrastructure_cr_lookup
+
+    - name: Fail if CloudInfrastructure CR is missing
+      ansible.builtin.fail:
+        msg: "CloudInfrastructure {{ cloudinfrastructure_cr_name }} not found in {{ cloudinfrastructure_cr_namespace }}"
+      when: cloudinfrastructure_cr_lookup.resources | default([]) | length == 0
+
+    - name: Set spec/generation facts from the live CR
+      ansible.builtin.set_fact:
+        ci_cr_spec: "{{ cloudinfrastructure_cr_lookup.resources[0].spec | default({}) }}"
+        ci_cr_type: "{{ cloudinfrastructure_cr_lookup.resources[0].spec.type | default('') }}"
+        cloudinfrastructure_generation: "{{ cloudinfrastructure_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
+        ci_capabilities_out: {evpn: false, api: false}
+        ci_site_out: {}
+        ci_notes: []
+
+    - name: Set the unsupported-type failure reason
+      ansible.builtin.set_fact:
+        cloudinfrastructure_fail_reason: TypeNotSupported
+      when: ci_cr_type not in ['openstack', 'openshift']
+
+    - name: Refuse types without a probe
+      ansible.builtin.fail:
+        msg: >-
+          CloudInfrastructure {{ cloudinfrastructure_cr_name }}: type {{ ci_cr_type }} is not supported yet
+          (openstack and openshift sites are).
+      when: ci_cr_type not in ['openstack', 'openshift']
+
+    - name: Set the credentials-missing failure reason
+      ansible.builtin.set_fact:
+        cloudinfrastructure_fail_reason: CredentialsMissing
+      when:
+        - ci_cr_type == 'openstack' or ((ci_cr_spec.openshift | default({})).clusterRef | default('local', true)) != 'local'
+        - ((ci_cr_spec.credentialsRef | default({}, true)).vaultPath | default('', true)) | length == 0
+
+    - name: Require spec.credentialsRef.vaultPath
+      ansible.builtin.assert:
+        that: cloudinfrastructure_fail_reason != 'CredentialsMissing'
+        fail_msg: >-
+          CloudInfrastructure {{ cloudinfrastructure_cr_name }} ({{ ci_cr_type }}) needs spec.credentialsRef.vaultPath.
+
+    - name: Probe an openstack site
+      ansible.builtin.include_tasks: openstack.yml
+      when: ci_cr_type == 'openstack'
+
+    - name: Probe an openshift site
+      ansible.builtin.include_tasks: openshift.yml
+      when: ci_cr_type == 'openshift'
+
+    - name: Get timestamp
+      ansible.builtin.set_fact:
+        cloudinfrastructure_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+        ci_message: >-
+          {{ ci_cr_type }} site ready: {{ ci_type_message | default('') }} evpn={{ ci_capabilities_out.evpn | default(false) }}.
+          {{ ci_notes | join('; ') }}
+
+    - name: Mark CloudInfrastructure ready
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudinfrastructures
+        cr_name: "{{ cloudinfrastructure_cr_name }}"
+        cr_namespace: "{{ cloudinfrastructure_cr_namespace }}"
+        cr_status_body:
+          status: ready
+          ready: true
+          message: "{{ ci_message | trim }}"
+          lastReconciledAt: "{{ cloudinfrastructure_status_transition_time }}"
+          observedGeneration: "{{ cloudinfrastructure_generation }}"
+          capabilities: "{{ ci_capabilities_out }}"
+          site: "{{ ci_site_out }}"
+          conditions:
+            - type: Ready
+              status: "True"
+              lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
+              reason: EDASucceeded
+              message: "{{ ci_message | trim }}"
+            - type: CredentialsValid
+              status: "True"
+              lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
+              reason: Verified
+              message: "{{ ci_credentials_message | default('') }}"
+            - type: EvpnCapable
+              status: "{{ 'True' if (ci_capabilities_out.evpn | default(false) | bool) else 'False' }}"
+              lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
+              reason: "{{ ci_evpn_reason | default('Checked') }}"
+              message: "{{ ci_evpn_message | default('') | trim }}"
+
+  rescue:
+    - name: Mark CloudInfrastructure failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        _msg: "{{ (ansible_failed_result.msg | default('EDA provision failed') | string) | truncate(600, True, '…') }}"
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudinfrastructures
+        cr_name: "{{ cloudinfrastructure_cr_name }}"
+        cr_namespace: "{{ cloudinfrastructure_cr_namespace }}"
+        cr_status_body:
+          status: failed
+          ready: false
+          message: "{{ _msg }}"
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+          capabilities: {evpn: false, api: false}
+          conditions:
+            - type: Ready
+              status: "False"
+              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+              reason: "{{ cloudinfrastructure_fail_reason if (cloudinfrastructure_fail_reason | default('') | length > 0) else 'EDAFailed' }}"
+              message: "{{ _msg }}"
+      ignore_errors: true
+      when: services_api_host is defined and services_bearer_token is defined
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "CloudInfrastructure {{ cloudinfrastructure_cr_name | default('unknown') }} provision failed"
+
+  always:
+    - name: Remove the probe's temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/eda-ci-{{ cloudinfrastructure_cr_name | default('unknown') }}-clouds.yaml"
+        - "/tmp/eda-ci-{{ cloudinfrastructure_cr_name | default('unknown') }}-ca.crt"
+        - "/tmp/eda-ci-{{ cloudinfrastructure_cr_name | default('unknown') }}-kubeconfig"

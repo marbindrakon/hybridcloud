@@ -1,0 +1,84 @@
+---
+# shc (design/P7-PLAN.md P7.1): CloudInfrastructure teardown. Provision creates nothing a delete should
+# remove (a tenant domain it created and the account's grants stay: tenant projects may still be in them,
+# and the cloud admin decides). The operator's finalizer already waits until no tenant object uses the
+# site; this re-checks (an object created meanwhile) and marks deletionComplete.
+- block:
+    - name: Parse event payload
+      ansible.builtin.set_fact:
+        cloudinfrastructure_cr_name: "{{ event_payload.regarding.name }}"
+        cloudinfrastructure_cr_namespace: "{{ event_payload.regarding.namespace }}"
+
+    - name: Resolve services cluster API connection from Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    - name: List objects that may use this site
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+      loop: "{{ cit_referencing_kinds }}"
+      register: _cit_refs
+      failed_when: false
+
+    - name: Collect the users
+      ansible.builtin.set_fact:
+        cit_users: >-
+          {%- set out = [] -%}
+          {%- for r in _cit_refs.results | default([]) -%}
+            {%- for o in r.resources | default([]) -%}
+              {%- set ref = ((o.spec | default({}, true)).cloudRef | default({}, true)).name | default('', true) -%}
+              {%- set used = (o.status | default({}, true)).cloudInfrastructure | default('', true) -%}
+              {%- set done = ((o.status | default({}, true)).deletionComplete | default(false)) | bool -%}
+              {%- if (ref == cloudinfrastructure_cr_name or used == cloudinfrastructure_cr_name) and not done -%}
+                {%- set _ = out.append(r.item ~ ' ' ~ o.metadata.namespace ~ '/' ~ o.metadata.name) -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Refuse while the site is in use
+      ansible.builtin.fail:
+        msg: >-
+          CloudInfrastructure {{ cloudinfrastructure_cr_name }} is still used by {{ cit_users | join(', ') }}.
+      when: cit_users | length > 0
+
+    - name: Mark deletion complete
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudinfrastructures
+        cr_name: "{{ cloudinfrastructure_cr_name }}"
+        cr_namespace: "{{ cloudinfrastructure_cr_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: ready
+          ready: false
+          deletionComplete: true
+          message: CloudInfrastructure teardown complete (no tenant object uses the site).
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+  rescue:
+    - name: Mark teardown refused or failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        _msg: "{{ ansible_failed_result.msg | default('EDA teardown failed') }}"
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudinfrastructures
+        cr_name: "{{ cloudinfrastructure_cr_name }}"
+        cr_namespace: "{{ cloudinfrastructure_cr_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: failed
+          ready: false
+          deletionComplete: false
+          message: "{{ _msg }}"
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+      ignore_errors: true
+      when: services_api_host is defined
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "CloudInfrastructure {{ cloudinfrastructure_cr_name | default('unknown') }} teardown refused or failed"

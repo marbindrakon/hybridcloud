@@ -1,21 +1,21 @@
 ---
 # shc (§11.6 phase C): environment preparation through files/shc_openstack.py with the platform's
-# tenant admin account (domain `manager`, never cloud admin). Everything provision creates is
-# recorded on the CR status so teardown works from ids, not from names it re-derives.
+# OpenStack account: the site's cloud admin (P7.1, CloudInfrastructure credentialsRef) or the legacy
+# tenant admin (domain `manager`). Everything provision creates is recorded on the CR status so teardown
+# works from ids, not from names it re-derives.
 - name: Set environmentprep spec facts
   ansible.builtin.set_fact:
     ep_project: "{{ entity_name }}_{{ cloudoso_cr_name }}"
-    ep_vault_path: "{{ oso_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true) }}"
-    ep_base_domain: "{{ oso_spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
-    ep_project_domain: "{{ oso_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true) }}"
-    ep_external_network: "{{ oso_spec.externalNetwork | default(cloudoso_defaults.externalNetwork | default(''), true) }}"
-    ep_region_name: "{{ oso_spec.regionName | default(cloudoso_defaults.regionName | default(''), true) }}"
-    ep_dns_provider: >-
-      {{ oso_spec.dnsProvider | default(cloudoso_defaults.dnsProvider | default(''), true)
-         | default('designate' if (oso_spec.designateZoneId | default('')) else 'route53', true) }}
-    ep_designate_zone_id: "{{ oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true) }}"
-    ep_designate_project_id: "{{ oso_spec.designateProjectId | default(cloudoso_defaults.designateProjectId | default(''), true) }}"
-    ep_route53_vault_path: "{{ oso_spec.route53VaultPath | default(cloudoso_defaults.route53VaultPath | default(''), true) }}"
+    # shc (P7.1): from the CloudInfrastructure (cloudref.yml), or the legacy spec/defaults
+    ep_vault_path: "{{ oso_settings.vaultPath }}"
+    ep_base_domain: "{{ oso_settings.baseDomain }}"
+    ep_project_domain: "{{ oso_settings.projectDomain }}"
+    ep_external_network: "{{ oso_settings.externalNetwork }}"
+    ep_region_name: "{{ oso_settings.regionName }}"
+    ep_dns_provider: "{{ oso_settings.dnsProvider | trim }}"
+    ep_designate_zone_id: "{{ oso_settings.designateZoneId }}"
+    ep_designate_project_id: "{{ oso_settings.designateProjectId }}"
+    ep_route53_vault_path: "{{ oso_settings.route53VaultPath }}"
     ep_slug: "{{ (cloudoso_cr_name | hash('sha256'))[:5] }}"
     ep_clouds_config_vault: "oso/projects/{{ cloudoso_cr_name }}/clouds-config"
 
@@ -25,22 +25,23 @@
       - ep_vault_path | length > 0
       - ep_project_domain | length > 0
       - ep_external_network | length > 0
-      - ep_base_domain | length > 0
-      - ep_dns_provider in ['designate', 'route53']
+      - ep_dns_provider in ['designate', 'route53', 'none']
+      - ep_dns_provider == 'none' or ep_base_domain | length > 0
       - ep_dns_provider != 'designate' or (ep_designate_zone_id | length > 0 and ep_designate_project_id | length > 0)
       - ep_dns_provider != 'route53' or ep_route53_vault_path | length > 0
     fail_msg: >-
-      CloudOSO {{ cloudoso_cr_name }} needs vaultPath, projectDomain, externalNetwork, baseDomain and
-      a DNS provider (designate: designateZoneId + designateProjectId; route53: route53VaultPath),
-      from the spec or the installation's cloudoso_defaults.
+      CloudOSO {{ cloudoso_cr_name }} needs an account (vaultPath), projectDomain, externalNetwork and a DNS
+      provider (designate: baseDomain + designateZoneId + designateProjectId; route53: baseDomain +
+      route53VaultPath; none), from {{ ('CloudInfrastructure ' ~ oso_cloudinfra_name) if oso_cloudinfra_name | length > 0
+      else "the spec or the installation's cloudoso_defaults" }}.
 
 - name: Derive the environment DNS domain
   ansible.builtin.set_fact:
     # Designate: <cloudoso>.<entity>.<baseDomain> inside the delegated tenant zone (entity keeps two
-    # entities' same-named CloudOSOs apart). Route53 keeps upstream's <slug>.<baseDomain>.
+    # entities' same-named CloudOSOs apart). Route53 keeps upstream's <slug>.<baseDomain>. none: no domain.
     ep_cluster_domain: >-
-      {{ (cloudoso_cr_name ~ '.' ~ entity_name ~ '.' ~ ep_base_domain)
-         if ep_dns_provider == 'designate' else (ep_slug ~ '.' ~ ep_base_domain) }}
+      {{ (cloudoso_cr_name ~ '.' ~ entity_name ~ '.' ~ ep_base_domain) if ep_dns_provider == 'designate'
+         else ((ep_slug ~ '.' ~ ep_base_domain) if ep_dns_provider == 'route53' else '') }}
 
 - name: Load the OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
@@ -164,7 +165,7 @@
       ingressFloatingIPId: "{{ ep_os.fips.ingress.id }}"
       dnsProvider: "{{ ep_dns_provider }}"
       dnsZoneId: "{{ ep_designate_zone_id if ep_dns_provider == 'designate' else (ep_route53_zone_id | default('')) }}"
-      dnsZoneName: "{{ (ep_os.dns_zone.name | default('')) if ep_dns_provider == 'designate' else (ep_base_domain ~ '.') }}"
+      dnsZoneName: "{{ (ep_os.dns_zone.name | default('')) if ep_dns_provider == 'designate' else ((ep_base_domain ~ '.') if ep_dns_provider == 'route53' else '') }}"
       dnsProjectId: "{{ ep_designate_project_id if ep_dns_provider == 'designate' else '' }}"
       route53VaultPath: "{{ ep_route53_vault_path if ep_dns_provider == 'route53' else '' }}"
       vaultPaths:

@@ -34,6 +34,25 @@
         name: "{{ cloudoso_cr_namespace }}"
       register: ns_info
 
+    # shc (P7.1): a provision that failed before recording its account: take the account and domain
+    # from the CloudOSO's site (spec.cloudRef, status.cloudInfrastructure or the installation default).
+    - name: Find the CloudOSO's site when no account was recorded
+      vars:
+        _cr: "{{ cloudoso_cr_lookup.resources | default([]) | first | default({}) }}"
+        _default: "{{ cloudoso_defaults.cloudRef | default('', true) }}"
+      ansible.builtin.set_fact:
+        cloudoso_td_site: >-
+          {{ ((_cr.status | default({})).accountVaultPath | default('', true) | length > 0) | ternary('',
+             ((_cr.spec | default({})).cloudRef | default({}, true)).name | default('', true)
+             or (_cr.status | default({})).cloudInfrastructure | default('', true)
+             or (_default.name | default('') if _default is mapping else _default)) }}
+
+    - name: Read the CloudOSO's site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ cloudoso_td_site }}"
+      when: cloudoso_td_site | length > 0
+
     - name: Set CloudOSO teardown facts from the recorded status
       vars:
         _cr: "{{ cloudoso_cr_lookup.resources | default([]) | first | default({}) }}"
@@ -42,10 +61,16 @@
         _entity: >-
           {{ (ns_info.resources | default([]) | first | default({})).metadata.labels['hybridsovereign.redhat/entity']
              | default(cloudoso_cr_namespace | regex_replace('^entity-', '')) }}
+        _site_vault: "{{ ((ci_spec | default({})).credentialsRef | default({})).vaultPath | default('') if cloudoso_td_site | length > 0 else '' }}"
+        _site_domain: "{{ ((ci_spec | default({})).openstack | default({})).projectDomain | default('') if cloudoso_td_site | length > 0 else '' }}"
       ansible.builtin.set_fact:
         cloudoso_entity_for_status: "{{ _st.entity | default(_entity) }}"
-        oso_vault_path: "{{ _st.accountVaultPath | default(_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true), true) }}"
-        oso_project_domain: "{{ _st.domainName | default(_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true), true) }}"
+        oso_vault_path: >-
+          {{ _st.accountVaultPath | default(_site_vault, true)
+             | default(_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true), true) }}
+        oso_project_domain: >-
+          {{ _st.domainName | default(_site_domain, true)
+             | default(_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true), true) }}
         oso_project_id: "{{ _st.projectId | default('') }}"
         oso_project_name: "{{ _st.projectName | default(_entity ~ '_' ~ cloudoso_cr_name, true) }}"
         oso_fip_ids: "{{ [_st.apiFloatingIPId | default(''), _st.ingressFloatingIPId | default('')] | select | list }}"
@@ -187,7 +212,8 @@
         msg: "CloudOSO {{ cloudoso_cr_name | default('unknown') }} EDA teardown failed at {{ teardown_step | default('read') }}"
 
   always:
-    - name: Remove the account's temp clouds.yaml
+    - name: Remove the account's temp files
       ansible.builtin.file:
-        path: "/tmp/eda-cloudoso-teardown-{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        path: "/tmp/eda-cloudoso-teardown-{{ cloudoso_cr_name | default('unknown') }}-{{ item }}"
         state: absent
+      loop: [clouds.yaml, ca.crt]
