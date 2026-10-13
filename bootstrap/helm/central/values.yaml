@@ -1960,6 +1960,12 @@ fabricHosts:
               bond_xmit_hash_policy: layer3+4
               ethernet_mac_address: 00:02:c9:2f:3a:c0
               mtu: 9000
+            - id: bond1.237
+              type: vlan
+              vlan_link: bond1
+              vlan_id: 237
+              vlan_mac_address: 00:02:c9:2f:3a:c0
+              mtu: 9000
             networks:
             - id: mgmt
               type: ipv4
@@ -1970,6 +1976,24 @@ fabricHosts:
               - network: 0.0.0.0
                 netmask: 0.0.0.0
                 gateway: 172.18.0.1
+            - id: transit
+              type: ipv4
+              link: bond1.237
+              ip_address: 172.18.237.11
+              netmask: 255.255.255.0
+              routes:
+              - network: 172.18.234.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
+              - network: 172.18.235.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
+              - network: 172.18.236.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
+              - network: 172.18.239.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
             services:
             - type: dns
               address: 172.18.42.20
@@ -2105,6 +2129,12 @@ fabricHosts:
               bond_xmit_hash_policy: layer3+4
               ethernet_mac_address: 24:be:05:a0:af:31
               mtu: 9000
+            - id: bond1.237
+              type: vlan
+              vlan_link: bond1
+              vlan_id: 237
+              vlan_mac_address: 24:be:05:a0:af:31
+              mtu: 9000
             networks:
             - id: mgmt
               type: ipv4
@@ -2115,6 +2145,24 @@ fabricHosts:
               - network: 0.0.0.0
                 netmask: 0.0.0.0
                 gateway: 172.18.0.1
+            - id: transit
+              type: ipv4
+              link: bond1.237
+              ip_address: 172.18.237.12
+              netmask: 255.255.255.0
+              routes:
+              - network: 172.18.234.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
+              - network: 172.18.235.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
+              - network: 172.18.236.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
+              - network: 172.18.239.0
+                netmask: 255.255.255.0
+                gateway: 172.18.237.1
             services:
             - type: dns
               address: 172.18.42.20
@@ -2135,7 +2183,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.4"
+    chartVersion: "0.3.5"  # 0.3.5: optional fabric underlay (P7.2)
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -2218,9 +2266,38 @@ iaasClusters:
   iaas1:
     enabled: true  # shc: P5 - installed 2026-10-11, registered in Argo, Vault mount kubernetes-iaas1
     server: "https://api.iaas1.shc.signal9.gg:6443"
+    clusterBase:
+      values:
+        # P7.2 fabric underlay (P7-PLAN §9): VTEP VLAN 236 on bond0, iBGP to the route reflectors
+        fabric:
+          enabled: true
+          routeReflectors: [172.18.234.11, 172.18.234.12]
+          vtepInterface: {base: bond0, vlan: 236, mtu: 9000, prefixLength: 24}
+          gateway: 172.18.236.1
+          routes: [172.18.234.0/24, 172.18.235.0/24, 172.18.237.0/24, 172.18.239.0/24]
+          nodes:
+            - {name: iaas1-blade1, vtepIP: 172.18.236.11}
+            - {name: iaas1-blade2, vtepIP: 172.18.236.12}
+            - {name: iaas1-blade3, vtepIP: 172.18.236.13}
+            - {name: iaas1-blade4, vtepIP: 172.18.236.14}
+            - {name: iaas1-blade6, vtepIP: 172.18.236.16}
+            - {name: iaas1-blade7, vtepIP: 172.18.236.17}
   edge1:
     enabled: true  # shc: rebuilt 2026-10-12 as compact 3-node on the C6220 sleds (design EDGE1-C6220-BGW-PLAN); Argo + Vault kubernetes-edge1
     server: "https://api.edge1.shc.signal9.gg:6443"
+    clusterBase:
+      values:
+        # P7.2 fabric underlay (P7-PLAN §9): VTEP VLAN 239 on bond1, iBGP to the route reflectors
+        fabric:
+          enabled: true
+          routeReflectors: [172.18.234.11, 172.18.234.12]
+          vtepInterface: {base: bond1, vlan: 239, mtu: 9000, prefixLength: 24}
+          gateway: 172.18.239.1
+          routes: [172.18.234.0/24, 172.18.235.0/24, 172.18.236.0/24, 172.18.237.0/24]
+          nodes:
+            - {name: edge1-node1, vtepIP: 172.18.239.21}
+            - {name: edge1-node2, vtepIP: 172.18.239.22}
+            - {name: edge1-node3, vtepIP: 172.18.239.23}
     cnv:
       values:
         # The machine network is the 1G LOM bond; VM memory moves over the 10G bond instead: VLAN 239 (edge1
