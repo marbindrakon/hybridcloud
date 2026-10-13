@@ -99,6 +99,7 @@
           message: >-
             OpenStack project {{ oso_project_name }} ({{ oso_project_id }})
             provisioned by EDA in Keystone domain {{ oso_domain_name }}{{ (' on ' ~ oso_cloudinfra_name) if oso_cloudinfra_name | length > 0 else '' }}.
+            {{ ('DNS zone ' ~ oso_record.dns.zone ~ ' shared with the project' ~ (', delegated from the global zone' if oso_record.dns.delegated else '') ~ '.') if (oso_record.dns | default({})).zone is defined else '' }}
             {{ oso_settings_note }}
           name: "{{ cloudoso_cr_name }}"
           # shc (P7.1): the site this project lives on ('' = legacy account)
@@ -126,6 +127,8 @@
           dnsProjectId: "{{ oso_record.dnsProjectId }}"
           route53VaultPath: "{{ oso_record.route53VaultPath }}"
           vaultPaths: "{{ oso_record.vaultPaths }}"
+          # design/TENANT-DNS.md: the environment zone ({} without one)
+          dns: "{{ oso_record.dns }}"
           conditions:
             - type: Ready
               status: "True"
@@ -166,6 +169,10 @@
   always:
     - name: Remove the account's temp files
       ansible.builtin.file:
-        path: "/tmp/eda-cloudoso-{{ cloudoso_cr_name | default('unknown') }}-{{ item }}"
+        path: "/tmp/eda-cloudoso-{{ item }}"
         state: absent
-      loop: [clouds.yaml, ca.crt]
+      loop:
+        - "{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        - "{{ cloudoso_cr_name | default('unknown') }}-ca.crt"
+        - "dns-{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        - "dns-{{ cloudoso_cr_name | default('unknown') }}-ca.crt"

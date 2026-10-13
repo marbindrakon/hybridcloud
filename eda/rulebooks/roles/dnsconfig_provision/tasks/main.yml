@@ -1,0 +1,118 @@
+---
+# shc (design/TENANT-DNS.md D1): DNSConfig provision = probe the global tenant zone with the DNS-only
+# account (spec.secret) and record its name and NS records (environment zones served elsewhere are
+# delegated from it). Read only.
+- block:
+    - name: Parse event payload
+      ansible.builtin.set_fact:
+        dnsconfig_cr_name: "{{ event_payload.regarding.name }}"
+        dnsconfig_cr_namespace: "{{ event_payload.regarding.namespace }}"
+        dnsconfig_fail_reason: ""
+
+    - name: Resolve services cluster API connection from Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    - name: Read the DNSConfig
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: DNSConfig
+        name: "{{ dnsconfig_cr_name }}"
+        namespace: "{{ dnsconfig_cr_namespace }}"
+      register: dnsconfig_cr_lookup
+
+    - name: Fail if the DNSConfig is missing
+      ansible.builtin.fail:
+        msg: "DNSConfig {{ dnsconfig_cr_name }} not found in {{ dnsconfig_cr_namespace }}"
+      when: dnsconfig_cr_lookup.resources | default([]) | length == 0
+
+    - name: Set spec facts
+      ansible.builtin.set_fact:
+        dnsconfig_spec: "{{ dnsconfig_cr_lookup.resources[0].spec }}"
+        dnsconfig_generation: "{{ dnsconfig_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
+
+    - name: Load the DNS account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ dnsconfig_spec.secret }}"
+        os_account_tag: "dnscfg-{{ dnsconfig_cr_name }}"
+
+    - name: Probe the global zone
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_request:
+          action: probe
+          project_id: "{{ dnsconfig_spec.designate.projectId }}"
+          zone_id: "{{ dnsconfig_spec.designate.zoneId }}"
+
+    - name: Set the zone-mismatch failure reason
+      ansible.builtin.set_fact:
+        dnsconfig_fail_reason: ZoneMismatch
+      when: os_result.zone != (dnsconfig_spec.domain | regex_replace('\.$', '')) ~ '.'
+
+    - name: Require the zone to be the configured domain
+      ansible.builtin.assert:
+        that: dnsconfig_fail_reason != 'ZoneMismatch'
+        fail_msg: "Zone {{ dnsconfig_spec.designate.zoneId }} is {{ os_result.zone }}, not {{ dnsconfig_spec.domain }}."
+
+    - name: Mark the DNSConfig ready
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        _now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+        _msg: "Global tenant zone {{ os_result.zone }} ({{ os_result.status }}), nameservers {{ os_result.nameservers | join(', ') }}."
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: dnsconfigs
+        cr_name: "{{ dnsconfig_cr_name }}"
+        cr_namespace: "{{ dnsconfig_cr_namespace }}"
+        cr_status_body:
+          status: ready
+          ready: true
+          message: "{{ _msg }}"
+          zone: "{{ os_result.zone }}"
+          nameservers: "{{ os_result.nameservers }}"
+          lastReconciledAt: "{{ _now }}"
+          observedGeneration: "{{ dnsconfig_generation }}"
+          conditions:
+            - type: Ready
+              status: "True"
+              lastTransitionTime: "{{ _now }}"
+              reason: EDASucceeded
+              message: "{{ _msg }}"
+
+  rescue:
+    - name: Mark the DNSConfig failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        _msg: "{{ (ansible_failed_result.msg | default('EDA provision failed') | string) | truncate(600, True, '…') }}"
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: dnsconfigs
+        cr_name: "{{ dnsconfig_cr_name }}"
+        cr_namespace: "{{ dnsconfig_cr_namespace }}"
+        cr_status_body:
+          status: failed
+          ready: false
+          message: "{{ _msg }}"
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+          conditions:
+            - type: Ready
+              status: "False"
+              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+              reason: "{{ dnsconfig_fail_reason if (dnsconfig_fail_reason | default('') | length > 0) else 'EDAFailed' }}"
+              message: "{{ _msg }}"
+      ignore_errors: true
+      when: services_api_host is defined and services_bearer_token is defined
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "DNSConfig {{ dnsconfig_cr_name | default('unknown') }} provision failed"
+
+  always:
+    - name: Remove the account's temp files
+      ansible.builtin.file:
+        path: "/tmp/eda-dnscfg-{{ dnsconfig_cr_name | default('unknown') }}-{{ item }}"
+        state: absent
+      loop: [clouds.yaml, ca.crt]

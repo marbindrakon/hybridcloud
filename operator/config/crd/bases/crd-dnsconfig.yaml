@@ -1,0 +1,146 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dnsconfigs.hybridsovereign.redhat
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  group: hybridsovereign.redhat
+  names:
+    kind: DNSConfig
+    listKind: DNSConfigList
+    plural: dnsconfigs
+    singular: dnsconfig
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: >-
+            The platform's tenant DNS namespace: one global domain under which every tenant environment gets a
+            zone named <environment>.<entity>.<domain>, whatever site the environment is on. Lives in the
+            plugins namespace; the platform uses the first Ready DNSConfig.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [domain, provider, secret]
+              x-kubernetes-validations:
+                - rule: self.provider != 'designate' || has(self.designate)
+                  message: spec.designate is required when spec.provider is designate
+              properties:
+                domain:
+                  type: string
+                  maxLength: 200
+                  description: The global tenant DNS domain, e.g. tenants.example.com (no trailing dot).
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.domain is immutable
+                provider:
+                  type: string
+                  enum: [designate]
+                  description: DNS service that holds the global domain's zone.
+                secret:
+                  type: string
+                  maxLength: 512
+                  description: >-
+                    Vault KV path of the DNS service credential. designate: key clouds.yaml (an account with the
+                    member role on designate.projectId only) and optional ca.crt.
+                designate:
+                  type: object
+                  description: The global domain's zone in Designate.
+                  required: [projectId, zoneId]
+                  properties:
+                    projectId:
+                      type: string
+                      maxLength: 64
+                      description: Project that owns the global domain's zone.
+                    zoneId:
+                      type: string
+                      maxLength: 64
+                      description: The global domain's zone.
+            status:
+              type: object
+              properties:
+                status:
+                  type: string
+                  description: Lifecycle status (reconciling, ready, failed)
+                ready:
+                  type: boolean
+                message:
+                  type: string
+                zone:
+                  type: string
+                  description: The global zone as the DNS service reports it.
+                nameservers:
+                  type: array
+                  description: The global zone's NS records. An environment zone served by other nameservers is delegated from it.
+                  items:
+                    type: string
+                deletionComplete:
+                  type: boolean
+                lastReconciledAt:
+                  type: string
+                  format: date-time
+                observedGeneration:
+                  type: integer
+                  format: int64
+                edaJobs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      jobId:
+                        type: string
+                      url:
+                        type: string
+                      timestamp:
+                        type: string
+                      status:
+                        type: string
+                        enum: [running, success, failed]
+                    x-kubernetes-preserve-unknown-fields: true
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Domain
+          type: string
+          jsonPath: .spec.domain
+        - name: Provider
+          type: string
+          jsonPath: .spec.provider
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

@@ -7,8 +7,8 @@
 #
 # Expects oso_spec, entity_name, cloudoso_cr_name, services_api_host/token.
 # Sets oso_cloudinfra_name ('' = legacy), oso_settings {vaultPath, projectDomain, externalNetwork,
-# baseDomain, regionName, dnsProvider, designateZoneId, designateProjectId, route53VaultPath},
-# oso_settings_note.
+# baseDomain, regionName, dnsProvider (designate|route53|none legacy; zone = an environment zone),
+# designateZoneId, designateProjectId, route53VaultPath}, oso_settings_note, oso_env_dns (zone only).
 - name: Pick the site
   vars:
     _default: "{{ cloudoso_defaults.cloudRef | default('', true) }}"
@@ -53,15 +53,52 @@
       vaultPath: "{{ (ci_spec.credentialsRef | default({})).vaultPath | default('') }}"
       projectDomain: "{{ _os.projectDomain | default('') }}"
       externalNetwork: "{{ _os.externalNetwork | default('') }}"
-      baseDomain: "{{ _os.baseDomain | default('') }}"
       regionName: "{{ _os.region | default('') }}"
-      dnsProvider: "{{ _os.dnsProvider | default('none', true) }}"
-      designateZoneId: "{{ (_os.designate | default({})).zoneId | default('') }}"
-      designateProjectId: "{{ (_os.designate | default({})).projectId | default('') }}"
-      route53VaultPath: "{{ _os.route53VaultPath | default('') }}"
+      # tenant DNS (design/TENANT-DNS.md): set below from the site's dns.mode and the DNSConfig
+      baseDomain: ""
+      dnsProvider: none
+      designateZoneId: ""
+      designateProjectId: ""
+      route53VaultPath: ""
     oso_settings_note: >-
       {{ ('Site settings from CloudInfrastructure ' ~ oso_cloudinfra_name ~ '; ignored spec.' ~ (_ignored | join(', spec.')) ~ '.')
          if _ignored | length > 0 else '' }}
+
+# Tenant DNS (design/TENANT-DNS.md D1): on a site with dns.mode native the environment gets its own zone
+# <cloudoso>.<entity>.<tenant domain> in the site's Designate, owned by the site's DNS project and shared with
+# the CloudOSO's project. platform mode (no OpenStack tenant zones yet) leaves the environment without DNS.
+- name: Read the platform's DNSConfig
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+  when:
+    - oso_cloudinfra_name | length > 0
+    - ((ci_spec.dns | default({}, true)).mode | default('platform', true)) == 'native'
+
+- name: Require tenant DNS for a site with native DNS
+  ansible.builtin.assert:
+    that:
+      - dnscfg_usable | bool
+      - (((ci_obj.status | default({})).site | default({})).dns | default({})).projectId | default('') | length > 0
+    fail_msg: >-
+      CloudOSO {{ cloudoso_cr_name }}: site {{ oso_cloudinfra_name }} has dns.mode native, but
+      {{ 'no DNSConfig is usable' if not (dnscfg_usable | bool) else 'the site has no DNS project yet (probe it again)' }}.
+  when:
+    - oso_cloudinfra_name | length > 0
+    - ((ci_spec.dns | default({}, true)).mode | default('platform', true)) == 'native'
+
+- name: Use an environment zone
+  ansible.builtin.set_fact:
+    oso_settings: "{{ oso_settings | combine({'dnsProvider': 'zone', 'baseDomain': dnscfg_domain}) }}"
+    oso_env_dns:
+      ownerProjectId: "{{ ci_obj.status.site.dns.projectId }}"
+      siteNameservers: "{{ ci_obj.status.site.dns.nameservers | default([]) }}"
+      globalNameservers: "{{ dnscfg_nameservers }}"
+      dnsConfig: "{{ dnscfg_name }}"
+      dnsConfigSecret: "{{ dnscfg_secret }}"
+      globalProjectId: "{{ dnscfg_project_id }}"
+      globalZoneId: "{{ dnscfg_zone_id }}"
+  when:
+    - oso_cloudinfra_name | length > 0
+    - ((ci_spec.dns | default({}, true)).mode | default('platform', true)) == 'native'
 
 - name: Legacy settings (no cloudRef in effect)
   when: oso_cloudinfra_name | length == 0

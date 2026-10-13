@@ -156,6 +156,29 @@ eda_rulebook_activations:
     eda_credentials:
       - sovereign-aap-controller-credential
       - sovereign-kafka-consumer-credential
+  # shc (design/TENANT-DNS.md D1)
+  - name: dnsconfig-create-activation
+    description: Rulebook activation for dnsconfig-create
+    project: sovereign-eda-rulebooks
+    rulebook: dnsconfig-create.yml
+    decision_environment: de-cloudoso
+    organization: Default
+    restart_policy: on-failure
+    enabled: true
+    eda_credentials:
+      - sovereign-aap-controller-credential
+      - sovereign-kafka-consumer-credential
+  - name: dnsconfig-delete-activation
+    description: Rulebook activation for dnsconfig-delete
+    project: sovereign-eda-rulebooks
+    rulebook: dnsconfig-delete.yml
+    decision_environment: de-cloudoso
+    organization: Default
+    restart_policy: on-failure
+    enabled: true
+    eda_credentials:
+      - sovereign-aap-controller-credential
+      - sovereign-kafka-consumer-credential
   - name: openstack-migration-create-activation
     description: Rulebook activation for openstack-migration-create
     project: sovereign-eda-rulebooks

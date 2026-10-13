@@ -1,0 +1,25 @@
+---
+- name: DNSConfig Create Rulebook
+  hosts: all
+  sources:
+    - ansible.eda.kafka:
+        host: "{{ KAFKA_HOST }}"
+        port: "{{ KAFKA_PORT }}"
+        topic: hybridsovereign-events
+        group_id: eda-dnsconfig-create
+        security_protocol: SASL_SSL
+        sasl_mechanism: SCRAM-SHA-512
+        sasl_plain_username: "{{ KAFKA_USERNAME }}"
+        sasl_plain_password: "{{ KAFKA_PASSWORD }}"
+        check_hostname: true
+        verify_mode: CERT_REQUIRED
+  rules:
+    - name: Handle DNSConfig Create
+      condition: event.body.payload.reason in ["DNSConfigCreateRequested", "DNSConfigReconcileRequested"] and event.body.payload.regarding.kind == "DNSConfig"
+      action:
+        run_job_template:
+          name: dnsconfig-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"

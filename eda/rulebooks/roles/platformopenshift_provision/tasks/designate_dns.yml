@@ -31,7 +31,8 @@
   ansible.builtin.set_fact:
     cb_dns_records: "{{ os_result.records }}"
 
-- name: Remove the account's temp clouds.yaml
+- name: Remove the account's temp files
   ansible.builtin.file:
-    path: "/tmp/eda-po-{{ cb_cluster_name }}-clouds.yaml"
+    path: "/tmp/eda-po-{{ cb_cluster_name }}-{{ item }}"
     state: absent
+  loop: [clouds.yaml, ca.crt]

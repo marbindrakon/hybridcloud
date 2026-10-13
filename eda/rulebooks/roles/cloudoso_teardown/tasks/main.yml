@@ -76,6 +76,8 @@
         oso_fip_ids: "{{ [_st.apiFloatingIPId | default(''), _st.ingressFloatingIPId | default('')] | select | list }}"
         oso_app_cred_ids: "{{ [_st.appCredentialId | default('')] | select | list }}"
         oso_dns_provider: "{{ _st.dnsProvider | default('') }}"
+        # design/TENANT-DNS.md: the environment zone ({} for a legacy record)
+        oso_env_dns: "{{ _st.dns | default({}, true) }}"
         oso_dns_zone_id: "{{ _st.dnsZoneId | default('') }}"
         oso_dns_project_id: "{{ _st.dnsProjectId | default('') }}"
         oso_domain: "{{ _st.domain | default('') }}"
@@ -106,7 +108,8 @@
               project_id: "{{ oso_project_id }}"
               project: "{{ oso_project_name }}"
               allowed_fip_ids: "{{ oso_fip_ids }}"
-              dns_zone_id: "{{ oso_dns_zone_id if oso_dns_provider == 'designate' else '' }}"
+              # an environment zone holds its own SOA/NS and goes with the environment (T4): no record check
+              dns_zone_id: "{{ oso_dns_zone_id if (oso_dns_provider == 'designate' and (oso_env_dns.zoneId | default('')) | length == 0) else '' }}"
               dns_project_id: "{{ oso_dns_project_id }}"
               dns_suffix: "{{ oso_domain }}"
 
@@ -140,6 +143,42 @@
         - name: Keep the OpenStack teardown result
           ansible.builtin.set_fact:
             oso_teardown_result: "{{ os_result }}"
+
+    # design/TENANT-DNS.md D1 / T4: the environment zone goes with the environment, tenant records and shares
+    # included; then its delegation in the global zone (DNSConfig account).
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: dns-zone
+
+    - name: Delete the environment zone with its shares
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_request:
+          action: delete-zone
+          owner_project_id: "{{ oso_env_dns.ownerProjectId }}"
+          zone_id: "{{ oso_env_dns.zoneId }}"
+      when: (oso_env_dns.zoneId | default('')) | length > 0
+
+    - name: Load the DNSConfig account for the delegation
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ oso_env_dns.dnsConfigSecret }}"
+        os_account_tag: "cloudoso-teardown-dns-{{ cloudoso_cr_name }}"
+      when: (oso_env_dns.zoneId | default('')) | length > 0 and (oso_env_dns.delegated | default(false) | bool)
+
+    - name: Remove the delegation from the global zone
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_request:
+          action: delete-delegation
+          project_id: "{{ oso_env_dns.globalProjectId }}"
+          zone_id: "{{ oso_env_dns.globalZoneId }}"
+          name: "{{ oso_env_dns.zone }}"
+      when: (oso_env_dns.zoneId | default('')) | length > 0 and (oso_env_dns.delegated | default(false) | bool)
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -214,6 +253,10 @@
   always:
     - name: Remove the account's temp files
       ansible.builtin.file:
-        path: "/tmp/eda-cloudoso-teardown-{{ cloudoso_cr_name | default('unknown') }}-{{ item }}"
+        path: "/tmp/eda-cloudoso-teardown-{{ item }}"
         state: absent
-      loop: [clouds.yaml, ca.crt]
+      loop:
+        - "{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        - "{{ cloudoso_cr_name | default('unknown') }}-ca.crt"
+        - "dns-{{ cloudoso_cr_name | default('unknown') }}-clouds.yaml"
+        - "dns-{{ cloudoso_cr_name | default('unknown') }}-ca.crt"

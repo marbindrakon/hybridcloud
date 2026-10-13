@@ -1,0 +1,38 @@
+---
+# shc (design/TENANT-DNS.md D1): the platform's tenant DNS namespace (DNSConfig in the plugins namespace;
+# the first usable one by name). Usable = the last probe succeeded (status.nameservers set) and it isn't
+# failed or being deleted (not status.ready: a job's acknowledge step clears it while a re-probe runs).
+# Optional: dnscfg_namespace (default sovereign-cloud-plugins).
+# Sets (never fails): dnscfg_found, dnscfg_usable, dnscfg_name, dnscfg_domain, dnscfg_secret,
+# dnscfg_project_id, dnscfg_zone_id, dnscfg_nameservers.
+- name: Read DNSConfigs
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: DNSConfig
+    namespace: "{{ dnscfg_namespace | default('sovereign-cloud-plugins', true) }}"
+  register: _dnscfg_list
+  failed_when: false
+
+- name: Pick the DNSConfig
+  vars:
+    _usable: >-
+      {{ _dnscfg_list.resources | default([])
+         | rejectattr('metadata.deletionTimestamp', 'defined')
+         | selectattr('status', 'defined')
+         | selectattr('status.nameservers', 'defined')
+         | rejectattr('status.status', 'equalto', 'failed')
+         | sort(attribute='metadata.name') | list }}
+    _all: "{{ _dnscfg_list.resources | default([]) | sort(attribute='metadata.name') | list }}"
+    _d: "{{ (_usable + _all + [{}]) | first }}"
+  ansible.builtin.set_fact:
+    dnscfg_found: "{{ _all | length > 0 }}"
+    dnscfg_usable: "{{ _usable | length > 0 }}"
+    dnscfg_name: "{{ (_d.metadata | default({})).name | default('') }}"
+    dnscfg_domain: "{{ (_d.spec | default({})).domain | default('') | regex_replace('\\.$', '') }}"
+    dnscfg_secret: "{{ (_d.spec | default({})).secret | default('') }}"
+    dnscfg_project_id: "{{ ((_d.spec | default({})).designate | default({})).projectId | default('') }}"
+    dnscfg_zone_id: "{{ ((_d.spec | default({})).designate | default({})).zoneId | default('') }}"
+    dnscfg_nameservers: "{{ (_d.status | default({})).nameservers | default([]) }}"

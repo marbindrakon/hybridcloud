@@ -6,9 +6,9 @@
 # lab.dnsForwarderIps / lab.extraDnsServers. Forwarding the base domain to a public resolver hides
 # every private zone below it (e.g. the iLO names in oob.<base>) from pods.
 #
-# shc: central's node resolver (lab IPA) already answers lab, OOB and public names, so central
-# only forwards its own platform zone to the authoritative primary, so that freshly created
-# records are visible at once (no negative caching in a recursor). See values.yaml.
+# shc: central's node resolver (lab IPA, recursive) answers lab, OOB, public and the platform's and
+# tenants' names, delegations included, so central needs no forwarders (values.yaml); the empty list
+# renders servers: [] and clears earlier ones.
 #
 # CoreDNS forwardPlugin is non-recursive and needs IP addresses: forward a zone only to servers
 # that are authoritative for it (or to recursors).

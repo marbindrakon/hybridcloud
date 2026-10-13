@@ -19,7 +19,8 @@ Actions (request["action"]):
   dns-delete    deletes recordsets by name/type from a Designate zone; reports what was missing.
   site-probe    CloudInfrastructure probe (cloud admin): authenticates, reports the catalog, Neutron's
                 extensions (evpn) and the external network; ensures the tenant project domain (created
-                only when asked), the account's admin role on it and member on the Designate project.
+                only when asked) with the account's admin role on it, and the site's DNS project (created
+                only when asked) with the account's member role on it.
 """
 import json
 import sys
@@ -286,18 +287,35 @@ def site_probe(req):
                 granted = True
             out["project_domain"] = {"name": name, "found": True, "id": dom.id, "enabled": dom.is_enabled,
                                      "created": created, "admin_granted": granted}
-    if req.get("dns_project_id"):
-        member = conn.identity.find_role("member", ignore_missing=False)
-        proj = conn.identity.get_project(req["dns_project_id"])
-        granted = False
-        if not conn.identity.validate_user_has_project_role(proj, access.user_id, member):
-            conn.identity.assign_project_role_to_user(proj, access.user_id, member)
-            granted = True
-        zone = None
-        if req.get("dns_zone_id"):
-            z = acct.project(proj.id).dns.get_zone(req["dns_zone_id"])
-            zone = {"id": z.id, "name": z.name, "status": z.status}
-        out["dns"] = {"project_id": proj.id, "member_granted": granted, "zone": zone}
+    if req.get("dns_project"):
+        # the site's DNS project (tenant DNS, design/TENANT-DNS.md): owns the platform's parent zone and the
+        # environment zones; the account needs `member` there to create and share them
+        dp = req["dns_project"]
+        dom = conn.identity.find_domain(dp["domain"], ignore_missing=False)
+        proj = conn.identity.find_project(dp["name"], domain_id=dom.id)
+        created = False
+        if proj is None and dp.get("create"):
+            proj = conn.identity.create_project(name=dp["name"], domain_id=dom.id,
+                                                description=dp.get("description", ""))
+            created = True
+        if proj is None:
+            out["dns_project"] = {"name": dp["name"], "found": False}
+        else:
+            member = conn.identity.find_role("member", ignore_missing=False)
+            granted = False
+            if not conn.identity.validate_user_has_project_role(proj, access.user_id, member):
+                conn.identity.assign_project_role_to_user(proj, access.user_id, member)
+                granted = True
+            quota = None
+            if dp.get("zone_quota"):
+                # every environment zone counts against the DNS project's zone quota (Designate default 10)
+                cur = conn.dns.get_quota(proj.id)
+                quota = {"zones": cur.zones, "raised": False}
+                if (cur.zones or 0) < int(dp["zone_quota"]):
+                    conn.dns.update_quota(proj.id, zones=int(dp["zone_quota"]))
+                    quota = {"zones": int(dp["zone_quota"]), "raised": True}
+            out["dns_project"] = {"name": dp["name"], "found": True, "id": proj.id, "created": created,
+                                  "member_granted": granted, "zone_quota": quota}
     return out
 
 

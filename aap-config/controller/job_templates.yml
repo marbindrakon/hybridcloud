@@ -146,6 +146,25 @@ controller_templates:
     ask_variables_on_launch: true
     credentials:
       - sovereign-vault-admin-credential
+  # shc (design/TENANT-DNS.md D1): DNSConfig probe (openstacksdk in de-cloudoso)
+  - name: dnsconfig-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/dnsconfig-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: dnsconfig-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/dnsconfig-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
   - name: platformopenshift-provision
     organization: sovereign
     project: sovereign-eda-project

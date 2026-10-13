@@ -1,12 +1,13 @@
 ---
 # shc (§11.6 phase C): run one files/shc_openstack.py action with the account from
-# openstack_account.yml (and its CA file, P7.1). Inputs: os_request (dict with `action`), os_call_no_log (default true:
+# openstack_account.yml (and its CA file, P7.1). Inputs: os_request (dict with `action`), os_helper (default
+# shc_openstack.py; shc_dns.py for tenant DNS), os_call_no_log (default true:
 # provision returns an application credential secret). Sets os_result; fails with the helper's error.
 - name: "OpenStack {{ os_request.action }}"
   ansible.builtin.command:
     argv:
       - python3
-      - "{{ role_path }}/../../../common/files/shc_openstack.py"
+      - "{{ role_path }}/../../../common/files/{{ os_helper | default('shc_openstack.py') }}"
     stdin: "{{ os_request | combine({'clouds_yaml': os_account_clouds_yaml, 'cacert': os_account_cacert | default('')}) | to_json }}"
   register: _os_call
   changed_when: os_request.action not in ['check-empty']

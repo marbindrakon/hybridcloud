@@ -1,0 +1,61 @@
+---
+# shc (design/TENANT-DNS.md D1): DNSConfig delete. Environment zones are removed by their own teardowns;
+# the global zone is never deleted by the platform. The EDA teardown only marks deletionComplete.
+- block:
+    - name: Get current timestamp
+      ansible.builtin.set_fact:
+        dnsconfig_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+    - name: Mark DNSConfig as awaiting EDA delete
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: DNSConfig
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: reconciling
+          ready: false
+          message: Awaiting EDA delete
+          lastReconciledAt: "{{ dnsconfig_delete_transition_time }}"
+
+    - name: Publish operator event to AMQ Streams
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: publish_operator_event
+      vars:
+        operator_event_reason: "DNSConfigDeleteRequested"
+        operator_event_action: "Delete"
+        operator_event_note: "{{ _hybridsovereign_redhat_dnsconfig.spec | to_json }}"
+        operator_reporting_controller: dnsconfig-operator
+        operator_event_regarding:
+          apiVersion: hybridsovereign.redhat/v1alpha1
+          kind: DNSConfig
+          name: "{{ ansible_operator_meta.name }}"
+          namespace: "{{ ansible_operator_meta.namespace }}"
+          uid: "{{ _hybridsovereign_redhat_dnsconfig.metadata.uid }}"
+
+    - name: Exit cleanly when EDA completed deletion
+      ansible.builtin.meta: end_host
+      when: _hybridsovereign_redhat_dnsconfig.status.deletionComplete | default(false) | bool
+
+    - name: Block finalizer until EDA completes deletion
+      ansible.builtin.fail:
+        msg: Waiting for EDA to complete deletion
+
+  rescue:
+    - name: Mark DNSConfig delete as failed
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: DNSConfig
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: failed
+          ready: false
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+          message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('Deletion failed')) }}"
+      ignore_errors: true
+
+    - name: Re-raise to signal finalizer failure
+      ansible.builtin.fail:
+        msg: "DNSConfig {{ ansible_operator_meta.name }} deletion failed — see status.message for details"

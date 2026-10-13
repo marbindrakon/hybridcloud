@@ -111,31 +111,6 @@ spec:
                       type: string
                       maxLength: 255
                       description: External Neutron network for tenant floating IPs.
-                    baseDomain:
-                      type: string
-                      maxLength: 253
-                      description: Parent DNS domain for tenant projects (designate, route53).
-                    dnsProvider:
-                      type: string
-                      enum: [designate, route53, none]
-                      default: none
-                      description: >-
-                        DNS for tenant environments: designate (zone in designate), route53 (route53VaultPath)
-                        or none (no tenant DNS; such a site can't host tenant OpenShift clusters).
-                    designate:
-                      type: object
-                      description: Designate zone for tenant DNS (dnsProvider designate). The infrastructure account is granted member on projectId.
-                      properties:
-                        zoneId:
-                          type: string
-                          maxLength: 64
-                        projectId:
-                          type: string
-                          maxLength: 64
-                    route53VaultPath:
-                      type: string
-                      maxLength: 512
-                      description: Vault KV path of the Route53 credentials (dnsProvider route53).
                 openshift:
                   type: object
                   description: >-
@@ -157,6 +132,45 @@ spec:
                       type: string
                       maxLength: 253
                       description: StorageClass for VM disks.
+                dns:
+                  type: object
+                  description: >-
+                    Where tenant environment DNS zones on this site live. Every environment gets a zone named
+                    <environment>.<entity>.<tenant DNS domain> (the platform's DNSConfig).
+                  x-kubernetes-validations:
+                    - rule: self.mode != 'native' || (has(self.project) && size(self.project) > 0)
+                      message: dns.project is required when dns.mode is native
+                  properties:
+                    mode:
+                      type: string
+                      enum: [native, platform]
+                      default: platform
+                      description: >-
+                        native: environment zones are created in this site's own DNS service, owned by
+                        dns.project and shared with the environment's project, so tenants manage their records
+                        with the site's normal tools. platform: environment zones are held by the platform's DNS
+                        service and edited through the platform.
+                    project:
+                      type: string
+                      maxLength: 64
+                      description: >-
+                        native: the project on this site that owns the platform's parent zone (the tenant DNS
+                        domain, which reserves the namespace on this site) and every environment zone.
+                    projectDomain:
+                      type: string
+                      maxLength: 64
+                      description: Keystone domain of dns.project. Default spec.openstack.projectDomain.
+                    createProject:
+                      type: boolean
+                      default: false
+                      description: Create dns.project when it does not exist (otherwise a missing project fails the site).
+                    zoneQuota:
+                      type: integer
+                      minimum: 1
+                      default: 1000
+                      description: >-
+                        native: the DNS service's zone quota ensured for dns.project (at least this many); every
+                        environment zone on this site counts against it.
                 aws:
                   type: object
                   description: AWS account. Required when type is aws.
@@ -183,8 +197,8 @@ spec:
                     What the site offers, as probed by the provision job. Keys: evpn (the site can attach to a
                     HybridFabric: openstack = Neutron's evpn extension is loaded; openshift = CNO FRR provider,
                     routeAdvertisements Enabled and fabric BGP sessions Established), api (the credential
-                    authenticates), virtualization (OpenShift Virtualization Available), dns (tenant DNS
-                    configured and reachable).
+                    authenticates), virtualization (OpenShift Virtualization Available), dns (environment zones can be created
+                    on this site).
                   additionalProperties:
                     type: boolean
                 site:

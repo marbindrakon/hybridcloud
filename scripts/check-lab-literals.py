@@ -21,6 +21,7 @@ SCOPE = [
     "eda/rulebooks/roles/cloudoso_*/**/*.yml",
     # P7.1: CloudInfrastructure
     "eda/rulebooks/roles/cloudinfrastructure_*/**/*.yml",
+    "eda/rulebooks/roles/dnsconfig_*/**/*.yml",
     "eda/rulebooks/roles/platformopenshift_teardown/**/*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/defaults/*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/tasks/openstack*.yml",

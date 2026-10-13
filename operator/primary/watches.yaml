@@ -92,3 +92,16 @@
   reconcileInterval: 600s
   watchDependentResources: false
   watchAnnotationsChanges: true
+
+# shc (design/TENANT-DNS.md D1): the platform's tenant DNS namespace (plugins namespace)
+- version: v1alpha1
+  group: hybridsovereign.redhat
+  kind: DNSConfig
+  role: dnsconfig
+  finalizer:
+    name: dnsconfigs.hybridsovereign.redhat/finalizer
+    role: dnsconfig_delete
+  maxConcurrentReconciles: 2
+  reconcileInterval: 600s
+  watchDependentResources: false
+  watchAnnotationsChanges: true

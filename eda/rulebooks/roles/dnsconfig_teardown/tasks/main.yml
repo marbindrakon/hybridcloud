@@ -1,0 +1,26 @@
+---
+# shc (design/TENANT-DNS.md D1): DNSConfig teardown. The platform never deletes the global zone, and
+# environment zones go with their environments' teardowns; this only marks deletionComplete.
+- block:
+    - name: Parse event payload
+      ansible.builtin.set_fact:
+        dnsconfig_cr_name: "{{ event_payload.regarding.name }}"
+        dnsconfig_cr_namespace: "{{ event_payload.regarding.namespace }}"
+
+    - name: Resolve services cluster API connection from Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    - name: Mark deletion complete
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: dnsconfigs
+        cr_name: "{{ dnsconfig_cr_name }}"
+        cr_namespace: "{{ dnsconfig_cr_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: ready
+          ready: false
+          deletionComplete: true
+          message: DNSConfig teardown complete (the global zone itself is never deleted by the platform).
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
