@@ -144,6 +144,9 @@ kind: FRRConfiguration
 metadata:
   name: fabric-rr-{{ $n.name }}
   namespace: openshift-frr-k8s
+  labels:
+    # RouteAdvertisements select the sessions they advertise over by label (frrConfigurationSelector)
+    shc.signal9.gg/fabric: route-reflectors
   annotations:
     argocd.argoproj.io/sync-wave: "4"
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
