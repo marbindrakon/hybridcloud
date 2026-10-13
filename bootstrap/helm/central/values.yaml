@@ -2259,6 +2259,25 @@ iaasClusterDefaults:
       - {apiGroups: [operator.openshift.io], resources: [networks], verbs: [get, list]}
       - {apiGroups: [frrk8s.metallb.io], resources: [bgpsessionstates], verbs: [get, list]}
       - {apiGroups: [storage.k8s.io], resources: [storageclasses], verbs: [get, list]}
+  # P7.3 (design/P7-PLAN.md §12.4 d, owner-approved RBAC 2026-10-13): the fabric jobs' write credential,
+  # central Vault cloudinfra/<cluster>-fabric. Tenant VM namespaces get RoleBindings to `edit` only (bind is
+  # limited to it); NADs/UDNs in those namespaces are denied by an admission policy on the cluster.
+  fabricAccess:
+    enabled: false
+    serviceAccount: shc-fabric
+    tokenValidity: 168h
+    apiServer: ""
+    rules:
+      - {apiGroups: [k8s.ovn.org], resources: [clusteruserdefinednetworks, routeadvertisements, vteps], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [""], resources: [namespaces, resourcequotas, limitranges], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], verbs: [bind], resourceNames: [edit]}
+      - {apiGroups: [""], resources: [nodes], verbs: [get, list]}
+      - {apiGroups: [config.openshift.io], resources: [networks, clusterversions], verbs: [get, list]}
+      - {apiGroups: [operator.openshift.io], resources: [networks], verbs: [get, list]}
+      - {apiGroups: [frrk8s.metallb.io], resources: [frrconfigurations, bgpsessionstates], verbs: [get, list]}
+      - {apiGroups: [nmstate.io], resources: [nodenetworkconfigurationpolicies, nodenetworkstates], verbs: [get, list]}
+      - {apiGroups: [kubevirt.io], resources: [virtualmachines, virtualmachineinstances], verbs: [get, list]}
 
 iaasClusters:
   iaas1:
@@ -2266,6 +2285,8 @@ iaasClusters:
     server: "https://api.iaas1.shc.signal9.gg:6443"
     cloudInfra:
       enabled: true  # P7.1: CloudInfrastructure iaas1 (central Vault cloudinfra/iaas1)
+    fabricAccess:
+      enabled: true  # P7.3: fabric write credential (central Vault cloudinfra/iaas1-fabric)
     clusterBase:
       values:
         # P7.2 fabric underlay (P7-PLAN §9): VTEP VLAN 236 on bond0, iBGP to the route reflectors
@@ -2285,6 +2306,10 @@ iaasClusters:
   edge1:
     enabled: true  # shc: rebuilt 2026-10-12 as compact 3-node on the C6220 sleds (design EDGE1-C6220-BGW-PLAN); Argo + Vault kubernetes-edge1
     server: "https://api.edge1.shc.signal9.gg:6443"
+    cloudInfra:
+      enabled: true  # P7.3 (owner 10-13: edge1 is the third fabric site): CloudInfrastructure edge1, central Vault cloudinfra/edge1
+    fabricAccess:
+      enabled: true  # P7.3: fabric write credential (central Vault cloudinfra/edge1-fabric)
     clusterBase:
       values:
         # P7.2 fabric underlay (P7-PLAN §9): VTEP VLAN 239 on bond1, iBGP to the route reflectors
@@ -4837,6 +4862,15 @@ hybridsovereignPrimaryOperator:
             clusterRef: iaas1
             storageClass: ocs-external-storagecluster-ceph-rbd
           dns: {mode: platform}   # CloudVirt zones held by the platform (TENANT-DNS D3)
+      edge1:
+        spec:
+          type: openshift
+          displayName: edge1 (OpenShift Virtualization, compact)
+          credentialsRef: {vaultPath: cloudinfra/edge1}
+          openshift:
+            clusterRef: edge1
+            storageClass: ocs-external-storagecluster-ceph-rbd
+          dns: {mode: platform}
     # TENANT-DNS D1: the platform's tenant DNS namespace (DNSConfig in sovereign-cloud-plugins). The global zone
     # tenants.shc.signal9.gg lives in Atuin Designate (project shc-tenant-dns); credential = the DNS-only account
     # shc-tenant-dns (p7/tenant-dns-account.sh, bootstrap.sh seed-tenant-dns).
