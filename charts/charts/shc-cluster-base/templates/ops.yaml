@@ -559,6 +559,30 @@ spec:
           annotations:
             summary: "Vault {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.statefulset {{ "}}" }}: pods not ready (sealed or down)"
             description: "A Vault pod is not ready: sealed (transit seal or lab Vault unreachable) or not running."
+    {{- $ea := $o.alerts.etcd | default dict }}
+    {{- if $ea.enabled }}
+    - name: shc-etcd
+      rules:
+        - alert: ShcEtcdSlowFsync
+          expr: >-
+            histogram_quantile(0.99, sum by (namespace, pod, le) (rate(etcd_disk_wal_fsync_duration_seconds_bucket{job=~".*etcd.*"}[5m])))
+            > {{ $ea.fsyncP99Seconds }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $labels.pod {{ "}}" }}: WAL fsync p99 {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
+            description: "The 99th percentile of etcd's WAL fsync on {{ "{{" }} $labels.pod {{ "}}" }} has been above {{ $ea.fsyncP99Seconds }} s for 5 minutes (healthy: tens of milliseconds). The control plane's storage is slow or contended; leader elections follow when single fsyncs approach the election timeout. Check the storage backend's latency and bulk writes on the node's disk."
+        - alert: ShcEtcdLeaderChanges
+          expr: >-
+            max(increase(etcd_server_leader_changes_seen_total{job=~".*etcd.*"}[30m])) >= {{ $ea.leaderChanges }}
+            unless on () (max_over_time(cluster_operator_conditions{name=~"etcd|machine-config", condition="Progressing"}[30m]) == 1)
+          labels:
+            severity: warning
+          annotations:
+            summary: "etcd changed leader at least {{ $ea.leaderChanges }} times in 30 minutes"
+            description: "etcd elected a new leader at least {{ $ea.leaderChanges }} times in the last 30 minutes outside an etcd or machine-config rollout. A leader change means the leader missed heartbeats for the whole election timeout: usually a disk stall (see ShcEtcdSlowFsync and slow fdatasync lines in the etcd log) or lost control-plane connectivity."
+    {{- end }}
     {{- if $o.certManagerMetrics.enabled }}
     - name: shc-certificates
       rules:

@@ -2167,7 +2167,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.6"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label
+    chartVersion: "0.3.7"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -2502,7 +2502,7 @@ mtv:
 # transit seal token check, cert-manager metrics, alert rules.
 shcClusterOpsCentral:
   enabled: true
-  chartVersion: "0.3.4"
+  chartVersion: "0.3.7"  # 0.3.7: etcd fsync / leader-change alerts
   syncWave: "24"
   values:
     layers:
@@ -2973,7 +2973,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.4"
+  chartVersion: "0.3.7"  # 0.3.7: etcd fsync / leader-change alerts
   syncWaves:
     base: "0"
     certs: "2"

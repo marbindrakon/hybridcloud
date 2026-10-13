@@ -169,6 +169,12 @@ ops:
     staleHours: 26
     certExpiryDays: 14
     vaultNamespaces: "central-vault|services-vault"
+    # etcd on virtual or network-backed disks: warns well before OpenShift's own etcd alerts
+    # (fsync p99 > 0.5 s / 1 s for 10 min, more than 5 leader changes in 10 min)
+    etcd:
+      enabled: true
+      fsyncP99Seconds: 0.1   # WAL fsync p99 (5 min rate), sustained for 5 min
+      leaderChanges: 2       # within 30 min, outside etcd and machine-config rollouts
 
 # ─── Fabric underlay (P7.2) — layer "certs" ──────────────────────────────────
 # EVPN underlay of an IaaS cluster (templates/fabric.yaml): NMState operator + per-node VTEP VLAN interface and
