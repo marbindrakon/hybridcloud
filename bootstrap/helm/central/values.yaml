@@ -2261,11 +2261,27 @@ iaasClusterDefaults:
           enabled: false
         virtController:
           enabled: false
+  # P7.1 (P7-PLAN §3.2): credential of the cluster's CloudInfrastructure (type openshift): ACM
+  # ManagedServiceAccount + ClusterPermission + PushSecret -> central Vault cloudinfra/<cluster>
+  cloudInfra:
+    enabled: false
+    serviceAccount: shc-cloudinfra
+    tokenValidity: 168h
+    apiServer: ""   # default https://api.<cluster>.<baseDomain>:6443
+    rules:
+      # the site probe (eda cloudinfrastructure_provision/openshift.yml); read only
+      - {apiGroups: [config.openshift.io], resources: [clusterversions], verbs: [get, list]}
+      - {apiGroups: [kubevirt.io], resources: [kubevirts], verbs: [get, list]}
+      - {apiGroups: [operator.openshift.io], resources: [networks], verbs: [get, list]}
+      - {apiGroups: [frrk8s.metallb.io], resources: [bgpsessionstates], verbs: [get, list]}
+      - {apiGroups: [storage.k8s.io], resources: [storageclasses], verbs: [get, list]}
 
 iaasClusters:
   iaas1:
     enabled: true  # shc: P5 - installed 2026-10-11, registered in Argo, Vault mount kubernetes-iaas1
     server: "https://api.iaas1.shc.signal9.gg:6443"
+    cloudInfra:
+      enabled: true  # P7.1: CloudInfrastructure iaas1 (central Vault cloudinfra/iaas1)
     clusterBase:
       values:
         # P7.2 fabric underlay (P7-PLAN §9): VTEP VLAN 236 on bond0, iBGP to the route reflectors
@@ -3919,7 +3935,7 @@ sovereignJobs:
               property: root_token
       env:
         - name: RUN_ID
-          value: "2026-10-11-aap-config-v12"
+          value: "2026-10-13-aap-config-v13"  # v13: cloudinfrastructure JTs + activations, CLOUDOSO_DEFAULTS cloudRef
         - name: AAP_CONFIG_PATH
           value: "/runner/project/aap-config"
         - name: AAP_CONTROLLER_HOST
@@ -3938,8 +3954,9 @@ sovereignJobs:
         # the Designate zone tenants.shc.signal9.gg (project shc-tenant-dns); design/TENANT-TEARDOWN.md §8.
         # b1.3xlarge is the smallest Atuin flavor with the installer's 100 GB disk minimum; tenant nodes
         # resolve through the lab IPA like services (DNS is an allowed lab dependency).
+        # P7.1: a CloudOSO without spec.cloudRef goes to this CloudInfrastructure (site settings live there)
         - name: CLOUDOSO_DEFAULTS
-          value: '{"vaultPath":"oso/accounts/shc-tenant-admin","projectDomain":"shc-tenants","externalNetwork":"internet","baseDomain":"tenants.shc.signal9.gg","dnsProvider":"designate","designateZoneId":"b19bb752-5aeb-4187-a303-12f9cb60378e","designateProjectId":"5074bdc4023c4fa09405a43ec7bbc6ea"}'
+          value: '{"cloudRef":"atuin"}'
         - name: PLATFORMOPENSHIFT_DEFAULTS
           value: '{"ocpImageSet":"img4.22.16-x86-64-appsub","pullSecretVaultPath":"oso/ocp-pull-secret","pullSecretVaultProperty":".dockerconfigjson","sshKeyVaultPath":"oso/ocp-ssh-key","controlPlaneFlavor":"b1.3xlarge","workerFlavor":"b1.3xlarge","mceClusterBuildChart":"oci://quay.signal9.gg/shc/mce-cluster-build","mceClusterBuildChartVersion":"0.2.1-shc.3","externalDNS":["172.18.42.20"]}'
         - name: AAP_ADMIN_PASSWORD
@@ -4771,7 +4788,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.3"
+  chartVersion: "0.1.22-shc.4"  # shc.4: CloudInfrastructure CRD + sites, CloudOSO cloudRef (P7.1)
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
@@ -4782,7 +4799,7 @@ hybridsovereignPrimaryOperator:
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.25"
+      tag: "img-0.1.26"  # img-0.1.26: CloudInfrastructure watch (P7.1)
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
@@ -4793,6 +4810,44 @@ hybridsovereignPrimaryOperator:
     imagePullSecrets:
       - name: quay-pull-secret
     replicas: 2
+    # P7.1 (P7-PLAN §3.2, decision 14): the platform's cloud sites. Credentials: central Vault cloudinfra/<site>
+    # (openstack: the cloud-admin account shc-infra, bootstrap.sh seed-cloudinfra; openshift: the
+    # ManagedServiceAccount kubeconfig from iaasClusters.<c>.cloudInfra). CloudOSO's default site:
+    # aap-config CLOUDOSO_DEFAULTS.cloudRef.
+    cloudInfrastructures:
+      atuin:
+        spec:
+          type: openstack
+          displayName: Atuin
+          credentialsRef: {vaultPath: cloudinfra/atuin}
+          openstack:
+            region: ATUIN
+            projectDomain: shc-tenants
+            externalNetwork: internet
+            baseDomain: tenants.shc.signal9.gg
+            dnsProvider: designate
+            designate:
+              zoneId: b19bb752-5aeb-4187-a303-12f9cb60378e
+              projectId: 5074bdc4023c4fa09405a43ec7bbc6ea
+      rhoso-bm:
+        spec:
+          type: openstack
+          displayName: RHOSO bare metal (FR6, EVPN)
+          credentialsRef: {vaultPath: cloudinfra/rhoso-bm}
+          openstack:
+            region: regionOne
+            projectDomain: shc-tenants
+            createProjectDomain: true
+            externalNetwork: public
+            dnsProvider: none
+      iaas1:
+        spec:
+          type: openshift
+          displayName: iaas1 (OpenShift Virtualization)
+          credentialsRef: {vaultPath: cloudinfra/iaas1}
+          openshift:
+            clusterRef: iaas1
+            storageClass: ocs-external-storagecluster-ceph-rbd
 
 # ─── IAAC Git Sync StatefulSet (services) ────────────────────────────────────
 iaacGitSync:
