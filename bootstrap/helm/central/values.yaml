@@ -1890,6 +1890,87 @@ fabricHosts:
                 table-id: 254
         rootDeviceHints:
           serialNumber: 171216775EA0
+        provision:
+          protect: true
+          image: &id002
+            url: http://satellite.lab.signal9.gg/pulp/content/Signal9/Library/content/dist/rhel9/9/x86_64/baseos/iso/rhel-9.8-x86_64-kvm.qcow2
+            checksum: b99091f1b4489111004d449398d9cc6aa024cb48b02c72fa99e6ca1fc48a7e4e
+            checksumType: sha256
+            format: qcow2
+          userData:
+            vaultName: fabric/bgw
+            vaultKeys: &id003
+            - ssh_public_key
+            - console_password_hash
+            - katello_org
+            - katello_activation_key
+            template: "#cloud-config\nhostname: bgw-1\nfqdn: bgw-1.lab.signal9.gg\nssh_pwauth: false\ndisable_root: true\nssh_authorized_keys:\n\
+              \  - {{ .ssh_public_key }}\nchpasswd:\n  expire: false\n  users:\n    - name: cloud-user\n      password: \"{{ .console_password_hash\
+              \ }}\"\n      type: hash\nwrite_files:\n  - path: /etc/sysctl.d/90-shc-bgw.conf\n    content: |\n      net.ipv4.ip_forward\
+              \ = 1\n      net.ipv6.conf.all.forwarding = 1\nruncmd:\n  # cloud-final can start before the LOM bond's VLAN 10\
+              \ carries traffic (bgw-1, 10-12: carrier ~32 s into boot,\n  # name resolution failed at runcmd): wait up to 5 min\
+              \ for DNS and Katello first.\n  - [sh, -c, \"for i in $(seq 1 60); do getent hosts satellite.lab.signal9.gg >/dev/null\
+              \ && curl -sfo /dev/null http://satellite.lab.signal9.gg/pub/katello-ca-consumer-latest.noarch.rpm && exit 0; sleep\
+              \ 5; done; exit 1\"]\n  - [sh, -c, \"sysctl --system >/dev/null\"]\n  - [sh, -c, \"grubby --update-kernel=ALL --args='console=tty0\
+              \ console=ttyS1,115200n8'\"]\n  - [sh, -c, \"rpm -Uvh http://satellite.lab.signal9.gg/pub/katello-ca-consumer-latest.noarch.rpm\"\
+              ]\n  - [sh, -c, \"subscription-manager register --org='{{ .katello_org }}' --activationkey='{{ .katello_activation_key\
+              \ }}'\"]\n  - [sh, -c, \"dnf -y install frr wireguard-tools nftables && touch /var/lib/shc-bgw-base-done\"]\n"
+          networkData:
+            links:
+            - id: eno1
+              type: phy
+              ethernet_mac_address: 2c:41:38:eb:d2:64
+              mtu: 1500
+            - id: eno2
+              type: phy
+              ethernet_mac_address: 2c:41:38:eb:d2:65
+              mtu: 1500
+            - id: bond0
+              type: bond
+              bond_links:
+              - eno1
+              - eno2
+              bond_mode: active-backup
+              bond_miimon: 100
+              ethernet_mac_address: 2c:41:38:eb:d2:64
+              mtu: 1500
+            - id: bond0.10
+              type: vlan
+              vlan_link: bond0
+              vlan_id: 10
+              vlan_mac_address: 2c:41:38:eb:d2:64
+              mtu: 1500
+            - id: eno3
+              type: phy
+              ethernet_mac_address: 00:02:c9:2f:3a:c0
+              mtu: 9000
+            - id: eno3d1
+              type: phy
+              ethernet_mac_address: 00:02:c9:2f:3a:c8
+              mtu: 9000
+            - id: bond1
+              type: bond
+              bond_links:
+              - eno3
+              - eno3d1
+              bond_mode: 802.3ad
+              bond_miimon: 100
+              bond_xmit_hash_policy: layer3+4
+              ethernet_mac_address: 00:02:c9:2f:3a:c0
+              mtu: 9000
+            networks:
+            - id: mgmt
+              type: ipv4
+              link: bond0.10
+              ip_address: 172.18.0.61
+              netmask: 255.255.255.0
+              routes:
+              - network: 0.0.0.0
+                netmask: 0.0.0.0
+                gateway: 172.18.0.1
+            services:
+            - type: dns
+              address: 172.18.42.20
       bgw-2:
         labels:
           compute-model: sl230
@@ -1962,18 +2043,10 @@ fabricHosts:
           serialNumber: 171216775E4D
         provision:
           protect: true
-          image:
-            url: http://satellite.lab.signal9.gg/pulp/content/Signal9/Library/content/dist/rhel9/9/x86_64/baseos/iso/rhel-9.8-x86_64-kvm.qcow2
-            checksum: b99091f1b4489111004d449398d9cc6aa024cb48b02c72fa99e6ca1fc48a7e4e
-            checksumType: sha256
-            format: qcow2
+          image: *id002
           userData:
             vaultName: fabric/bgw
-            vaultKeys:
-            - ssh_public_key
-            - console_password_hash
-            - katello_org
-            - katello_activation_key
+            vaultKeys: *id003
             template: "#cloud-config\nhostname: bgw-2\nfqdn: bgw-2.lab.signal9.gg\nssh_pwauth: false\ndisable_root: true\nssh_authorized_keys:\n\
               \  - {{ .ssh_public_key }}\nchpasswd:\n  expire: false\n  users:\n    - name: cloud-user\n      password: \"{{ .console_password_hash\
               \ }}\"\n      type: hash\nwrite_files:\n  - path: /etc/sysctl.d/90-shc-bgw.conf\n    content: |\n      net.ipv4.ip_forward\
