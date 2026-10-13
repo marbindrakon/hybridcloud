@@ -10,6 +10,9 @@ controller_projects:
     scm_delete_on_update: false
     scm_update_on_launch: true
     scm_branch: main
+    # shc (P7.1): sync before the job templates are created; a JT whose playbook the project's last sync
+    # doesn't have fails (ignored), so a new kind's JTs were silently missing after a gitea-seed
+    update_project: true
     wait: true
 
 controller_execution_environments:
