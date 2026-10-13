@@ -1929,11 +1929,11 @@ fabricHosts:
             - id: eno3
               type: phy
               ethernet_mac_address: 00:02:c9:2f:3a:c0
-              mtu: 9000
+              mtu: 9100
             - id: eno3d1
               type: phy
               ethernet_mac_address: 00:02:c9:2f:3a:c8
-              mtu: 9000
+              mtu: 9100
             - id: bond1
               type: bond
               bond_links:
@@ -1943,13 +1943,13 @@ fabricHosts:
               bond_miimon: 100
               bond_xmit_hash_policy: layer3+4
               ethernet_mac_address: 00:02:c9:2f:3a:c0
-              mtu: 9000
+              mtu: 9100
             - id: bond1.237
               type: vlan
               vlan_link: bond1
               vlan_id: 237
               vlan_mac_address: 00:02:c9:2f:3a:c0
-              mtu: 9000
+              mtu: 9100
             networks:
             - id: mgmt
               type: ipv4
@@ -2098,11 +2098,11 @@ fabricHosts:
             - id: eno3
               type: phy
               ethernet_mac_address: 24:be:05:a0:af:31
-              mtu: 9000
+              mtu: 9100
             - id: eno3d1
               type: phy
               ethernet_mac_address: 24:be:05:a0:af:32
-              mtu: 9000
+              mtu: 9100
             - id: bond1
               type: bond
               bond_links:
@@ -2112,13 +2112,13 @@ fabricHosts:
               bond_miimon: 100
               bond_xmit_hash_policy: layer3+4
               ethernet_mac_address: 24:be:05:a0:af:31
-              mtu: 9000
+              mtu: 9100
             - id: bond1.237
               type: vlan
               vlan_link: bond1
               vlan_id: 237
               vlan_mac_address: 24:be:05:a0:af:31
-              mtu: 9000
+              mtu: 9100
             networks:
             - id: mgmt
               type: ipv4
