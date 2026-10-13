@@ -1,0 +1,177 @@
+{{- /*
+Fabric underlay (shc P7.2, design/P7-PLAN.md §3.1/§9) for an IaaS cluster joining the EVPN fabric. Rendered with
+the certs layer (the BGP password comes from Vault); off by default, on for iaas1/edge1 through iaasClusters.
+  - kubernetes-nmstate operator + NMState; one NNCP per node: the VTEP VLAN interface on the fabric bond and
+    routes to the other fabric subnets through the site's fabric gateway (sessions and VXLAN stay on the fabric
+    VLANs instead of following the machine network's default route);
+  - CNO: FRR routing capability + OVN-K route advertisements (patch-only; OVN-K rolls once);
+  - one FRRConfiguration per node: iBGP to the route reflectors from the node's VTEP address (the RRs only
+    accept the fabric subnets), l2vpn evpn activated (raw), graceful restart, password from Vault.
+*/}}
+{{- if and .Values.layers.certs .Values.fabric.enabled }}
+{{- $f := .Values.fabric }}
+{{- $vif := printf "%s.%v" $f.vtepInterface.base $f.vtepInterface.vlan }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-nmstate
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-options: Delete=false
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-nmstate
+  namespace: openshift-nmstate
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  targetNamespaces:
+    - openshift-nmstate
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: kubernetes-nmstate-operator
+  namespace: openshift-nmstate
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  channel: {{ $f.nmstate.channel }}
+  installPlanApproval: Automatic
+  name: kubernetes-nmstate-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+---
+apiVersion: nmstate.io/v1
+kind: NMState
+metadata:
+  name: nmstate
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec: {}
+{{- range $n := $f.nodes }}
+---
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: fabric-vtep-{{ $n.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: {{ $n.name }}
+  desiredState:
+    interfaces:
+      - name: {{ $vif }}
+        type: vlan
+        state: up
+        mtu: {{ $f.vtepInterface.mtu }}
+        vlan:
+          base-iface: {{ $f.vtepInterface.base }}
+          id: {{ $f.vtepInterface.vlan }}
+        ipv4:
+          enabled: true
+          dhcp: false
+          address:
+            - ip: {{ $n.vtepIP }}
+              prefix-length: {{ $f.vtepInterface.prefixLength }}
+        ipv6:
+          enabled: false
+    routes:
+      config:
+        {{- range $dst := $f.routes }}
+        - destination: {{ $dst }}
+          next-hop-address: {{ $f.gateway }}
+          next-hop-interface: {{ $vif }}
+          table-id: 254
+        {{- end }}
+{{- end }}
+---
+# Cluster singleton, patch-only: FRR routing capability and OVN-K route advertisements.
+apiVersion: operator.openshift.io/v1
+kind: Network
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    {{- include "shc-cluster-base.patchOnly" . | nindent 4 }}
+spec:
+  additionalRoutingCapabilities:
+    providers:
+      - FRR
+  defaultNetwork:
+    ovnKubernetesConfig:
+      routeAdvertisements: Enabled
+---
+# The namespace exists once CNO deploys frr-k8s (FRR capability above).
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: fabric-bgp
+  namespace: openshift-frr-k8s
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $f.password.secretStoreName }}
+  target:
+    name: fabric-bgp
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/basic-auth
+      engineVersion: v2
+      data:
+        password: "{{ "{{" }} .password {{ "}}" }}"
+  data:
+    - secretKey: password
+      remoteRef:
+        key: {{ $f.password.vaultKey }}
+        property: password
+{{- range $n := $f.nodes }}
+---
+apiVersion: frrk8s.metallb.io/v1beta1
+kind: FRRConfiguration
+metadata:
+  name: fabric-rr-{{ $n.name }}
+  namespace: openshift-frr-k8s
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/hostname: {{ $n.name }}
+  bgp:
+    routers:
+      - asn: {{ $f.asn }}
+        neighbors:
+          {{- range $rr := $f.routeReflectors }}
+          - address: {{ $rr }}
+            asn: {{ $f.asn }}
+            sourceaddress: {{ $n.vtepIP }}
+            enableGracefulRestart: true
+            passwordSecret:
+              name: fabric-bgp
+              namespace: openshift-frr-k8s
+          {{- end }}
+  raw:
+    priority: 5
+    rawConfig: |
+      router bgp {{ $f.asn }}
+       address-family l2vpn evpn
+      {{- range $rr := $f.routeReflectors }}
+        neighbor {{ $rr }} activate
+      {{- end }}
+       exit-address-family
+{{- end }}
+{{- end }}

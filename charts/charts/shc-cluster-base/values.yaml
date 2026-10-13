@@ -169,3 +169,24 @@ ops:
     staleHours: 26
     certExpiryDays: 14
     vaultNamespaces: "central-vault|services-vault"
+
+# ─── Fabric underlay (P7.2) — layer "certs" ──────────────────────────────────
+# EVPN underlay of an IaaS cluster (templates/fabric.yaml): NMState operator + per-node VTEP VLAN interface and
+# fabric routes, CNO FRR + route advertisements, per-node FRRConfiguration to the route reflectors. Off by default.
+fabric:
+  enabled: false
+  asn: 65010
+  routeReflectors: []        # e.g. [172.18.234.11, 172.18.234.12]
+  password:
+    secretStoreName: vault-backend
+    vaultKey: fabric/bgp     # property "password"
+  nmstate:
+    channel: stable
+  vtepInterface:
+    base: bond0              # the fabric bond
+    vlan: 0                  # the site's fabric VLAN
+    mtu: 9000
+    prefixLength: 24
+  gateway: ""                # the site's fabric gateway (.1)
+  routes: []                 # the other fabric subnets, via the gateway
+  nodes: []                  # [{name: <node>, vtepIP: <address>}]
