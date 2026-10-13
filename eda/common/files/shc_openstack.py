@@ -172,7 +172,9 @@ def check_empty(req):
         except openstack.exceptions.ForbiddenException:
             found["load_balancers"] = ["not checked: the account may not list Octavia load balancers"]
     if conn.has_service("dns"):
-        add("dns_zones", (describe(z, "name", "id") for z in conn.dns.zones()))
+        # only zones the project owns: zones shared with it (its environment zone, design/TENANT-DNS.md) are
+        # listed too, but they belong to the platform's DNS project and go with the environment's teardown
+        add("dns_zones", (describe(z, "name", "id") for z in conn.dns.zones() if z.project_id == pid))
     if req.get("dns_zone_id") and req.get("dns_suffix"):
         conn_z = acct.project(req["dns_project_id"])
         suffix = req["dns_suffix"].rstrip(".") + "."
