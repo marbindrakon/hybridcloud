@@ -585,15 +585,15 @@ metalNodes:
             - name: eno3
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: eno3d1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -610,7 +610,7 @@ metalNodes:
             - name: bond0.233
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 233
@@ -689,15 +689,15 @@ metalNodes:
             - name: eno3
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: eno3d1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -714,7 +714,7 @@ metalNodes:
             - name: bond0.233
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 233
@@ -793,15 +793,15 @@ metalNodes:
             - name: eno3
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: eno3d1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -818,7 +818,7 @@ metalNodes:
             - name: bond0.233
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 233
@@ -897,15 +897,15 @@ metalNodes:
             - name: eno3
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: eno3d1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -922,7 +922,7 @@ metalNodes:
             - name: bond0.233
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 233
@@ -1001,15 +1001,15 @@ metalNodes:
             - name: eno3
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: eno3d1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1026,7 +1026,7 @@ metalNodes:
             - name: bond0.233
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 233
@@ -1105,15 +1105,15 @@ metalNodes:
             - name: eno3
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: eno3d1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1130,7 +1130,7 @@ metalNodes:
             - name: bond0.233
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 233
@@ -1196,7 +1196,7 @@ metalNodes:
             - name: eno1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1204,7 +1204,7 @@ metalNodes:
             - name: eno2
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1212,7 +1212,7 @@ metalNodes:
             - name: enp130s0f0
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1220,7 +1220,7 @@ metalNodes:
             - name: enp130s0f1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1228,7 +1228,7 @@ metalNodes:
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: true
                 dhcp: true
@@ -1248,7 +1248,7 @@ metalNodes:
             - name: bond0.238
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 238
@@ -1263,7 +1263,7 @@ metalNodes:
             - name: bond1
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1295,7 +1295,7 @@ metalNodes:
             - name: bond1.239
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond1
                 id: 239
@@ -1346,7 +1346,7 @@ metalNodes:
             - name: eno1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1354,7 +1354,7 @@ metalNodes:
             - name: eno2
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1362,7 +1362,7 @@ metalNodes:
             - name: enp130s0f0
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1370,7 +1370,7 @@ metalNodes:
             - name: enp130s0f1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1378,7 +1378,7 @@ metalNodes:
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: true
                 dhcp: true
@@ -1398,7 +1398,7 @@ metalNodes:
             - name: bond0.238
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 238
@@ -1413,7 +1413,7 @@ metalNodes:
             - name: bond1
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1445,7 +1445,7 @@ metalNodes:
             - name: bond1.239
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond1
                 id: 239
@@ -1496,7 +1496,7 @@ metalNodes:
             - name: eno1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1504,7 +1504,7 @@ metalNodes:
             - name: eno2
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1512,7 +1512,7 @@ metalNodes:
             - name: enp130s0f0
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1520,7 +1520,7 @@ metalNodes:
             - name: enp130s0f1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1528,7 +1528,7 @@ metalNodes:
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: true
                 dhcp: true
@@ -1548,7 +1548,7 @@ metalNodes:
             - name: bond0.238
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 238
@@ -1563,7 +1563,7 @@ metalNodes:
             - name: bond1
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1595,7 +1595,7 @@ metalNodes:
             - name: bond1.239
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond1
                 id: 239
@@ -1646,7 +1646,7 @@ metalNodes:
             - name: eno1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1654,7 +1654,7 @@ metalNodes:
             - name: eno2
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1662,7 +1662,7 @@ metalNodes:
             - name: enp130s0f0
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1670,7 +1670,7 @@ metalNodes:
             - name: enp130s0f1
               type: ethernet
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1678,7 +1678,7 @@ metalNodes:
             - name: bond0
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: true
                 dhcp: true
@@ -1698,7 +1698,7 @@ metalNodes:
             - name: bond0.238
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond0
                 id: 238
@@ -1713,7 +1713,7 @@ metalNodes:
             - name: bond1
               type: bond
               state: up
-              mtu: 9000
+              mtu: 9100
               ipv4:
                 enabled: false
               ipv6:
@@ -1745,7 +1745,7 @@ metalNodes:
             - name: bond1.239
               type: vlan
               state: up
-              mtu: 9000
+              mtu: 9100
               vlan:
                 base-iface: bond1
                 id: 239
