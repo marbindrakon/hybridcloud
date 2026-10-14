@@ -1,0 +1,10 @@
+---
+# one fabric's ledger into foc_ledgers
+- name: "Ledger of {{ foc_fabric.metadata.name }}"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: ledger-get, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ foc_fabric.metadata.name }}"}
+
+- name: "Keep the ledger of {{ foc_fabric.metadata.name }}"
+  ansible.builtin.set_fact:
+    foc_ledgers: "{{ foc_ledgers | combine({foc_fabric.metadata.name: fab_ledger_result.ledger | default({})}) }}"

@@ -18,6 +18,7 @@ actions:
                   plus a hash when longer than 63 (namespace names are global on the site's cluster), with its
                   labels; selector = all of the environment's namespaces, networkSelector = those naming network
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
+  orphan-report   {crs, ledgers, sites, nodes}  the fabric orphan check's findings (see orphan_report)
 """
 import hashlib
 import ipaddress
@@ -235,9 +236,82 @@ def placement_names(req):
                        "hybridsovereign.redhat/l3vni": str(vni)}}
 
 
+def orphan_report(req):
+    """Fabric orphan check (report only): what the platform realized that no CR owns any more, and CR claims that
+    the ledger does not back. Input: crs {fabrics, gateways, networks, placements, cloudvirts} (CR objects),
+    ledgers {fabric: ledger}, sites [{gateway, type, cudns: [{name, l3vni}], routeAdvertisements: [...],
+    namespaces: [{name, labels}], networks: [{name, sharedTo}], routers: [{name, evpnVni}]}],
+    nodes [{fabric, node, netns: {name: [vrf]}}]. Returns {findings: [str], counts}."""
+    crs, findings = req.get("crs") or {}, []
+
+    def key(o):
+        return f"{o['kind']}/{o['metadata']['namespace']}/{o['metadata']['name']}"
+
+    owners = {key(o) for kind in ("fabrics", "gateways", "networks", "placements") for o in crs.get(kind) or []}
+    placements = crs.get("placements") or []
+    by_vni = {}
+    for p in placements:
+        r = (p.get("status") or {}).get("realization") or {}
+        if r.get("l3Vni") is not None:
+            by_vni[int(r["l3Vni"])] = p
+    for fab, led in (req.get("ledgers") or {}).items():
+        alloc = (led or {}).get("alloc") or {}
+        for kind, entries in alloc.items():
+            for owner, value in entries.items():
+                if owner not in owners:
+                    findings.append(f"ledger {fab}: {kind} {value} held by {owner}, which no longer exists")
+        vnis = {int(v): o for o, v in (alloc.get("vni") or {}).items()}
+        for v, p in by_vni.items():
+            if vnis.get(v) != key(p) and ((p.get("status") or {}).get("cloudGateway")):
+                gw = next((g for g in crs.get("gateways") or [] if g["metadata"]["name"] == p["status"]["cloudGateway"]), None)
+                if gw and gw["spec"]["fabricRef"]["name"] == fab:
+                    findings.append(f"{key(p)} claims VNI {v}, which the ledger of {fab} does not record for it")
+    cvs = {(c["metadata"]["namespace"], c["metadata"]["name"]): c for c in crs.get("cloudvirts") or []}
+    for site in req.get("sites") or []:
+        gw, where = site.get("gateway"), f"site {site.get('site')}"
+        for kind in ("cudns", "routeAdvertisements"):
+            for o in site.get(kind) or []:
+                p = by_vni.get(int(o.get("l3vni") or -1))
+                if p is None or (p.get("status") or {}).get("cloudGateway") != gw:
+                    findings.append(f"{where}: {kind[:-1]} {o['name']} (VNI {o.get('l3vni')}) has no placement")
+        ns_owned = set()
+        for c in cvs.values():
+            for n in (c.get("status") or {}).get("namespaces") or []:
+                if isinstance(n, dict) and n.get("namespace"):
+                    ns_owned.add(n["namespace"])
+        for n in site.get("namespaces") or []:
+            if n["name"] not in ns_owned:
+                findings.append(f"{where}: namespace {n['name']} (CloudVirt label {n.get('labels', {}).get('hybridsovereign.redhat/cloudvirt')}) "
+                                "belongs to no CloudVirt")
+        for kind in ("networks", "routers"):
+            for o in site.get(kind) or []:
+                m = re.fullmatch(r"hn(\d+)", o.get("name") or "")
+                p = by_vni.get(int(m.group(1))) if m else None
+                if p is None or (p.get("status") or {}).get("cloudGateway") != gw:
+                    findings.append(f"{where}: {kind[:-1]} {o.get('name')} in the platform project has no placement")
+                elif kind == "networks":
+                    want = ((p.get("status") or {}).get("realization") or {}).get("site", {}).get("sharedTo")
+                    extra = [t for t in o.get("sharedTo") or [] if t != want]
+                    if extra:
+                        findings.append(f"{where}: network {o['name']} is also shared to {', '.join(extra)}")
+    gws = {g["metadata"]["name"]: g for g in crs.get("gateways") or []}
+    for n in req.get("nodes") or []:
+        for ns, vrfs in (n.get("netns") or {}).items():
+            g = gws.get(ns[3:]) if ns.startswith("gw-") else None
+            if g is None:
+                findings.append(f"node {n['node']}: namespace {ns} belongs to no CloudGateway")
+                continue
+            want = {v.get("vrf") for v in ((g.get("status") or {}).get("realization") or {}).get("vrfs") or []}
+            for v in vrfs:
+                if v not in want:
+                    findings.append(f"node {n['node']}: VRF {v} in {ns} is not one of CloudGateway {g['metadata']['name']}'s")
+    return {"errors": [], "findings": findings,
+            "counts": {"placements": len(placements), "sites": len(req.get("sites") or []), "nodes": len(req.get("nodes") or [])}}
+
+
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
-           "placement-names": placement_names}
+           "placement-names": placement_names, "orphan-report": orphan_report}
 
 
 def main():

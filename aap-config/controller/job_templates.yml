@@ -221,6 +221,15 @@ controller_templates:
     ask_variables_on_launch: true
     credentials:
       - sovereign-vault-admin-credential
+  # shc (P7.3.9): report-only fabric orphan check (fails when something has no owner)
+  - name: fabric-orphan-check
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/fabric-orphan-check-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    credentials:
+      - sovereign-vault-admin-credential
   - name: networkplacement-provision
     organization: sovereign
     project: sovereign-eda-project

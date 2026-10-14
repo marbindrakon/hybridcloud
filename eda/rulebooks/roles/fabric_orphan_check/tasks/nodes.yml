@@ -1,0 +1,49 @@
+---
+# one fabric's border gateway nodes, read only (no lease): the gw-* network namespaces and the VRFs in each
+- name: The platform's realization parameters
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+  vars:
+    fab_real_fabric: "{{ foc_fabric.metadata.name }}"
+
+- name: Read the nodes
+  block:
+    - name: Connect to the border gateway nodes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
+      vars:
+        bgw_fabric_spec: "{{ foc_fabric.spec }}"
+        bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
+
+    - name: List the gateway namespaces and their VRFs
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json, subprocess
+        out = {}
+        for line in subprocess.run(["ip", "netns", "list"], capture_output=True, text=True).stdout.splitlines():
+            ns = line.split()[0] if line.split() else ""
+            if not ns.startswith("gw-"):
+                continue
+            links = json.loads(subprocess.run(["ip", "netns", "exec", ns, "ip", "-j", "link", "show", "type", "vrf"],
+                                              capture_output=True, text=True).stdout or "[]")
+            out[ns] = sorted(l["ifname"] for l in links)
+        print(json.dumps(out))
+        PY
+      args:
+        executable: /bin/bash
+      register: _foc_node
+      changed_when: false
+      delegate_to: "{{ item.name }}"
+      loop: "{{ foc_fabric.spec.borderGateway.nodes }}"
+      loop_control:
+        label: "{{ item.name }}"
+  always:
+    - name: Remove the SSH key
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+
+- name: Keep the nodes
+  ansible.builtin.set_fact:
+    foc_nodes: >-
+      {%- set out = [] -%}
+      {%- for r in _foc_node.results -%}
+        {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': r.stdout | from_json}) -%}
+      {%- endfor -%}
+      {{ foc_nodes + out }}

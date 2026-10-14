@@ -1,0 +1,8 @@
+---
+# shc (design/P7-PLAN.md P7.3.9): fabric orphan check (report only; job template fabric-orphan-check)
+- name: Fabric orphan check
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - fabric_orphan_check

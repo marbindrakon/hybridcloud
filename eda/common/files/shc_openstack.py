@@ -30,6 +30,8 @@ Actions (request["action"]):
                 advertise_host, and the network shared to the tenant project (RBAC access_as_shared). state
                 absent removes them, refused while other ports (the tenant's VMs) use the network.
                 recreateRouter: delete and recreate the router (the site fills its gateway chassis at creation).
+  platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
+                owners in the platform project, for the fabric orphan check.
 """
 import json
 import sys
@@ -467,9 +469,29 @@ def placement_network(req):
             "changed": changed}
 
 
+def platform_inventory(req):
+    """The cloud admin's own scope, read only: what the platform project holds."""
+    acct = Account(req)
+    conn = acct.own_scope()
+    dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
+    proj = conn.identity.find_project(req["platformProject"], domain_id=dom.id)
+    if proj is None:
+        return {"found": False, "networks": [], "routers": []}
+    nets = []
+    for n in conn.network.networks(project_id=proj.id):
+        shares = [r.target_project_id for r in conn.network.rbac_policies(object_id=n.id, action="access_as_shared")]
+        nets.append({"id": n.id, "name": n.name, "tags": n.tags or [], "sharedTo": shares})
+    routers = []
+    for r in conn.network.routers(project_id=proj.id):
+        vni = conn.network.get(f"/routers/{r.id}").json()["router"].get("evpn_vni")
+        routers.append({"id": r.id, "name": r.name, "evpnVni": vni})
+    return {"found": True, "projectId": proj.id, "networks": nets, "routers": routers}
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
-           "platform-project": platform_project, "placement-network": placement_network}
+           "platform-project": platform_project, "placement-network": placement_network,
+           "platform-inventory": platform_inventory}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

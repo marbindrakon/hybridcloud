@@ -1,0 +1,77 @@
+---
+# one CloudGateway's site, read only: OpenShift = the CUDNs and RouteAdvertisements labelled with a layer 3 VNI and
+# the namespaces labelled as CloudVirt namespaces (fabric credential); OpenStack = the platform project (site account)
+- name: "Resolve site {{ foc_gw.spec.cloudRef.name }}"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+  vars:
+    ci_ref_name: "{{ foc_gw.spec.cloudRef.name }}"
+    ci_ref_namespace: "{{ fabric_platform_namespace }}"
+
+- name: "Site {{ foc_gw.spec.cloudRef.name }} (OpenShift)"
+  when: ci_found | bool and ci_type == 'openshift'
+  block:
+    - name: The site's fabric credential
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
+      vars:
+        site_kc_tag: "foc-{{ foc_gw.metadata.name }}"
+
+    - name: List the platform's objects on the site
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ site_kubeconfig }}"
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        label_selectors: ["{{ item.label }}"]
+      loop:
+        - {api: k8s.ovn.org/v1, kind: ClusterUserDefinedNetwork, label: hybridsovereign.redhat/l3vni}
+        - {api: k8s.ovn.org/v1, kind: RouteAdvertisements, label: hybridsovereign.redhat/l3vni}
+        - {api: v1, kind: Namespace, label: hybridsovereign.redhat/cloudvirt}
+      loop_control:
+        label: "{{ item.kind }}"
+      register: _foc_site
+
+    - name: Keep the site's objects
+      vars:
+        _l: "{{ _foc_site.results }}"
+      ansible.builtin.set_fact:
+        foc_sites: >-
+          {%- set c = [] -%}{%- set r = [] -%}{%- set n = [] -%}
+          {%- for o in _l[0].resources -%}{%- set _ = c.append({'name': o.metadata.name, 'l3vni': o.metadata.labels['hybridsovereign.redhat/l3vni']}) -%}{%- endfor -%}
+          {%- for o in _l[1].resources -%}{%- set _ = r.append({'name': o.metadata.name, 'l3vni': o.metadata.labels['hybridsovereign.redhat/l3vni']}) -%}{%- endfor -%}
+          {%- for o in _l[2].resources -%}{%- set _ = n.append({'name': o.metadata.name, 'labels': o.metadata.labels}) -%}{%- endfor -%}
+          {{ foc_sites + [{'site': foc_gw.spec.cloudRef.name, 'gateway': foc_gw.metadata.name, 'type': 'openshift',
+                           'cudns': c, 'routeAdvertisements': r, 'namespaces': n}] }}
+  always:
+    - name: Remove the site kubeconfig
+      ansible.builtin.file:
+        path: "/tmp/eda-foc-{{ foc_gw.metadata.name }}-kubeconfig"
+        state: absent
+
+- name: "Site {{ foc_gw.spec.cloudRef.name }} (OpenStack)"
+  when: ci_found | bool and ci_type == 'openstack'
+  block:
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ foc_gw.spec.fabricRef.name }}"
+
+    - name: The site's OpenStack account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ ci_spec.credentialsRef.vaultPath }}"
+        os_account_tag: "foc-{{ foc_gw.metadata.name }}"
+
+    - name: The platform project's contents
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_request:
+          action: platform-inventory
+          region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
+          domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
+          platformProject: "{{ fab_real.openstack.platformProject }}"
+
+    - name: Keep the site's objects
+      ansible.builtin.set_fact:
+        foc_sites: >-
+          {{ foc_sites + [{'site': foc_gw.spec.cloudRef.name, 'gateway': foc_gw.metadata.name, 'type': 'openstack',
+              'networks': os_result.networks, 'routers': os_result.routers}] }}
