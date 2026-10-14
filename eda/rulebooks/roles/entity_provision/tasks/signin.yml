@@ -1,0 +1,120 @@
+---
+# shc (design/P7-PLAN.md §12.20): tenant sign-in on the services cluster. OpenShift group names can't contain "/", so
+# the entity's RoleBindings can't name the Rbac CRs' Keycloak group paths. As on the IaaS sites (cloudvirt_provision
+# access.yml), the services sign-in client gets a client role <entity>.<rbac> per Rbac CR the Entity uses, mapped to
+# that Rbac's Keycloak group; the client's mapper puts a member's client roles into the groups claim, so OpenShift
+# sees the group <entity>.<rbac>. Entity names have no dots (the namespace entity-<name> is a DNS label), so the first
+# dot separates the entity. Client roles carry the attribute entity=<entity>; this entity's roles that are no longer
+# wanted are deleted, with their group mappings.
+# Input: es_wanted = [{rbac, path, group}] (path = the Rbac's Keycloak group path); empty on teardown.
+- name: Sign-in settings
+  ansible.builtin.set_fact:
+    es_realm: "{{ entity_signin_realm | default('sovereign-tenants') }}"
+    es_client_id: "{{ entity_signin_client | default('openshift-services') }}"
+
+- name: Discover the Keycloak route on services
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: services-rhbk
+    label_selectors: ["app=keycloak"]
+  register: _es_kc_route
+
+- name: Keycloak URL
+  ansible.builtin.set_fact:
+    es_kc: "https://{{ _es_kc_route.resources[0].spec.host }}"
+
+- name: Keycloak admin credentials
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+  vars:
+    keycloak_vault_path: rhbk-services-admin
+
+- name: Keycloak admin token
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+  vars:
+    keycloak_url: "{{ es_kc }}"
+
+- name: Find the sign-in client
+  ansible.builtin.uri:
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/clients?clientId={{ es_client_id }}"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  register: _es_client
+
+- name: Refuse a realm without the sign-in client
+  ansible.builtin.fail:
+    msg: "Entity {{ entity_cr_name }}: the tenant realm {{ es_realm }} has no sign-in client {{ es_client_id }}"
+  when: _es_client.json | length == 0
+
+- name: Read the client roles
+  ansible.builtin.uri:
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/clients/{{ _es_client.json[0].id }}/roles?briefRepresentation=false"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  register: _es_roles_now
+
+- name: Ensure the client roles
+  ansible.builtin.uri:
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/clients/{{ _es_client.json[0].id }}/roles"
+    method: POST
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    body_format: json
+    body:
+      name: "{{ item }}"
+      description: "Group {{ item }} on the services cluster (Entity {{ entity_cr_name }})"
+      attributes: {entity: ["{{ entity_cr_name }}"]}
+    validate_certs: false
+    status_code: [201, 409]
+  loop: "{{ es_wanted | map(attribute='group') | unique | list }}"
+  when: item not in (_es_roles_now.json | map(attribute='name') | list)
+
+- name: Read the wanted client roles
+  ansible.builtin.uri:
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/clients/{{ _es_client.json[0].id }}/roles/{{ item | urlencode }}"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  loop: "{{ es_wanted | map(attribute='group') | unique | list }}"
+  register: _es_roles
+
+- name: Find the Rbac groups
+  ansible.builtin.uri:
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/group-by-path/{{ item.path | urlencode }}"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  loop: "{{ es_wanted }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: _es_groups
+
+- name: Map the client role to the Rbac group
+  ansible.builtin.uri:
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/groups/{{ item.json.id }}/role-mappings/clients/{{ _es_client.json[0].id }}"
+    method: POST
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    body_format: json
+    body: "{{ [(_es_roles.results | selectattr('item', 'equalto', item.item.group) | first).json] }}"
+    validate_certs: false
+    status_code: [204]
+  loop: "{{ _es_groups.results }}"
+  loop_control:
+    label: "{{ item.item.path }} -> {{ item.item.group }}"
+  changed_when: false
+
+- name: Delete this entity's client roles that are no longer wanted
+  ansible.builtin.uri:
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/clients/{{ _es_client.json[0].id }}/roles/{{ item | urlencode }}"
+    method: DELETE
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+    status_code: [204, 404]
+  loop: >-
+    {{ _es_roles_now.json
+       | selectattr('attributes', 'defined')
+       | selectattr('attributes.entity', 'defined')
+       | selectattr('attributes.entity', 'equalto', [entity_cr_name])
+       | map(attribute='name')
+       | reject('in', es_wanted | map(attribute='group') | list)
+       | list }}

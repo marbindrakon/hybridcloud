@@ -131,6 +131,21 @@
         )
       }}
 
+# shc (design/P7-PLAN.md §12.20): OpenShift can't hold the Keycloak group paths as groups; members of an Rbac's group
+# sign in to services with the group <entity>.<rbac> (signin.yml), and the RoleBindings name that.
+- name: The services sign-in groups of the Rbac CRs
+  ansible.builtin.set_fact:
+    es_wanted: >-
+      {%- set out = [] -%}
+      {%- for n in _all_rbac_names -%}
+        {%- set p = _rbac_group_cache.get(n, '') -%}
+        {%- if p -%}{%- set _ = out.append({'rbac': n, 'path': p, 'group': entity_cr_name ~ '.' ~ n}) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Tenant sign-in on services
+  ansible.builtin.include_tasks: signin.yml
+
 - name: Build subjects and create RoleBinding for each named role
   kubernetes.core.k8s:
     host: "{{ services_api_host }}"
@@ -147,18 +162,11 @@
           app.kubernetes.io/managed-by: entity-operator
           hybridsovereign.redhat/entity: "{{ entity_cr_name }}"
       subjects: >-
-        {{
-          ns_rbac[item.spec_key]
-          | default([])
-          | select('in', _rbac_group_cache)
-          | map('extract', _rbac_group_cache)
-          | select('ne', None)
-          | select('ne', '')
-          | list
-          | map('regex_replace', '^(.+)$', '{"name":"\1","kind":"Group","apiGroup":"rbac.authorization.k8s.io"}')
-          | map('from_json')
-          | list
-        }}
+        {%- set out = [] -%}
+        {%- for g in es_wanted | selectattr('rbac', 'in', ns_rbac[item.spec_key] | default([])) -%}
+          {%- set _ = out.append({'name': g.group, 'kind': 'Group', 'apiGroup': 'rbac.authorization.k8s.io'}) -%}
+        {%- endfor -%}
+        {{ out }}
       roleRef:
         kind: Role
         name: "{{ item.role_name }}"

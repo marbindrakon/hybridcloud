@@ -3551,6 +3551,9 @@ sovereignJobs:
           value: "sovereign-admin"
         - name: EXTRA_GROUPS
           value: '[{"name":"acme-corp-platform-engineering-admins"},{"name":"acme-corp-platform-engineering-editors"},{"name":"acme-corp-platform-engineering-viewers"},{"name":"acme-corp-platform-ops-admins"},{"name":"acme-corp-platform-ops-editors"},{"name":"acme-corp-platform-ops-viewers"},{"name":"acme-corp-assignment-admins"},{"name":"acme-corp-developers"},{"name":"acme-corp-platform-viewers"},{"name":"acme-corp-devops"}]'
+    # shc (design/P7-PLAN.md §12.20): openshift-services' entity-groups mapper puts the user's roles of that client into
+    # the groups claim; the Entity job gives each Rbac CR's Keycloak group the client role <entity>.<rbac> and binds that
+    # group in the entity namespace (Keycloak group paths contain "/", which OpenShift group names can't).
     keycloakServicesClients:
       enabled: true  # shc: P4 (services cluster) enabled
       playbook: keycloak-clients.yml
@@ -3569,7 +3572,7 @@ sovereignJobs:
         - name: REALM_NAME
           value: "sovereign-tenants"
         - name: KEYCLOAK_CLIENTS
-          value: '[{"realm":"sovereign-tenants","client_id":"openshift-services","name":"OpenShift Services","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"quay-services","name":"Quay Services","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"]}]'
+          value: '[{"realm":"sovereign-tenants","client_id":"openshift-services","name":"OpenShift Services","redirect_uris":["*"],"protocol_mappers":[{"name":"entity-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-services","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"quay-services","name":"Quay Services","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"]}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     # shc (P7.3.7, design/P7-PLAN.md §12.4 e / §12.15; owner 10-14: IdP changes allowed): tenant sign-in on the IaaS

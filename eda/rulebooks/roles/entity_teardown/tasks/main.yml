@@ -20,6 +20,12 @@
         namespace: "{{ entity_cr_namespace }}"
       register: entity_cr_lookup
 
+    # shc (design/P7-PLAN.md §12.20): the entity's services sign-in roles (and their group mappings) go with it
+    - name: Drop this entity's services sign-in roles
+      ansible.builtin.include_tasks: "{{ role_path }}/../entity_provision/tasks/signin.yml"
+      vars:
+        es_wanted: []
+
     - name: Delete entity namespace on services cluster
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"
