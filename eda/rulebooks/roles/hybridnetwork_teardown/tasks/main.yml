@@ -1,10 +1,21 @@
 ---
-# shc (design/P7-PLAN.md P7.3.3): HybridNetwork teardown. The operator's finalizer has already waited for the objects that
-# depend on this one. Nothing is realized yet, so the job confirms the CR and marks deletionComplete; removing
-# the network's VPN route target in the ledger (P7.3.8) comes with the step that creates it.
+# shc (design/P7-PLAN.md P7.3.8): HybridNetwork teardown. The operator's finalizer has already waited for the
+# network's placements and the CloudVirt namespaces naming it. Releases the network's VPN route target in its fabric's
+# ledger, then marks deletionComplete.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: Release the VPN route target
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger:
+          action: ledger-release
+          namespace: "{{ fabric_platform_namespace }}"
+          fabric: "{{ fab_st.fabric }}"
+          kind: vpnTarget
+          owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+      when: fab_st.fabric | default('', true) | length > 0
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

@@ -3,13 +3,20 @@
 # or CloudVirt), the backend's site and the site's CloudGateway; records site and gateway as soon as they are known
 # (the CloudGateway's delete waits on status.cloudGateway); checks the prefixes against the network's other
 # placements. On a CloudVirt it serves the environment's namespaces that name the network (status.namespaces).
-# Realizing it (VNIs from the ledger, the backend network, the gateway VRF) is P7.3.8; until then it
-# ends pending: on the network, backend or gateway while those aren't ready, else with reason NotImplemented.
+# Ends pending on the network, backend or gateway while those aren't ready. Then (P7.3.8): VNIs from the fabric's
+# ledger (layer 3; layer 2 for a CloudVirt), recorded in status.realization (the gateway job reads them), the site
+# side (backend_<kind>.yml), the gateway asked to carry the placement's VRF (pending WaitingForGateway until it
+# does; the gateway job wakes the placement), and the site's routes checked on every border gateway node.
 - block:
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:
         fab_read_entity: true
+
+    # a provision job that outlived the CR's deletion must not take the gateway back (status.realization)
+    - name: End the job for a placement being deleted
+      ansible.builtin.meta: end_play
+      when: fab_deleting | bool
 
     - name: Start with nothing to wait for
       ansible.builtin.set_fact:
@@ -174,6 +181,7 @@
           action: cloudvirt-namespaces
           entity: "{{ fab_entity }}"
           cloudvirt: "{{ np_backend_name }}"
+          network: "{{ fab_spec.network }}"
           namespaces: >-
             {{ ((np_backend.spec | default({}, true)).namespaces | default([], true))
                | selectattr('network', 'defined') | selectattr('network', 'equalto', fab_spec.network) | list }}
@@ -182,6 +190,7 @@
     - name: Record the namespaces the network serves (CloudVirt)
       ansible.builtin.set_fact:
         np_status: "{{ np_status | combine({'namespaces': fab_check_result.namespaces | map(attribute='namespace') | list}) }}"
+        np_ns_map: "{{ fab_check_result }}"
       when: np_backend_kind == 'CloudVirt' and np_backend | length > 0
 
     - name: Record the readiness of the backend and the gateway
@@ -219,15 +228,176 @@
       ansible.builtin.meta: end_play
       when: np_waiting | length > 0
 
-    # P7.3.8 replaces this with the VNIs, the backend network and the gateway VRFs
-    - name: Report the placement validated, not realized
+    # ---- realization (P7.3.8) ----
+    - name: Read the fabric
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ np_gateway.spec.fabricRef.name }}"
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _np_fabric
+
+    - name: Set the fabric facts
+      ansible.builtin.set_fact:
+        np_fabric: "{{ _np_fabric.resources[0] }}"
+        np_asn: "{{ _np_fabric.resources[0].spec.domainAsn }}"
+        np_owner: "NetworkPlacement/{{ fab_namespace }}/{{ fab_name }}"
+
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ np_fabric.metadata.name }}"
+
+    - name: The placement's layer 3 VNI
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ np_fabric.metadata.name }}",
+                     kind: vni, owner: "{{ np_owner }}"}
+
+    - name: Keep the layer 3 VNI
+      ansible.builtin.set_fact:
+        np_l3vni: "{{ fab_ledger_result.value | int }}"
+
+    - name: The placement's layer 2 VNI (a CloudVirt's MAC-VRF)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ np_fabric.metadata.name }}",
+                     kind: l2vni, owner: "{{ np_owner }}"}
+      when: np_backend_kind == 'CloudVirt'
+
+    - name: Name the placement's objects
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check: {action: placement-names, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}", entity: "{{ fab_entity }}",
+                    network: "{{ fab_spec.network }}", l3Vni: "{{ np_l3vni }}"}
+
+    - name: Set the placement's numbers
+      ansible.builtin.set_fact:
+        np_names: "{{ fab_check_result }}"
+        np_real: >-
+          {{ {'l3Vni': np_l3vni | int, 'vpnTarget': np_network.status.realization.vpnTarget | int,
+              'routeTarget': np_asn ~ ':' ~ np_l3vni, 'vrf': fab_check_result.vrf,
+              'mtu': (np_network.status.mtu | default(np_fabric.spec.overlayMtu)) | int}
+             | combine({'l2Vni': fab_ledger_result.value | int} if np_backend_kind == 'CloudVirt' else {}) }}
+        np_recreated: "{{ ((fab_st.realization | default({}, true)).routerRecreated | default(false)) | bool }}"
+
+    # the gateway job reads these to carry the placement's VRF
+    - name: Record the numbers
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: networkplacements
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        cr_status_partial: true
+        patch_ignore_not_found: true
+        cr_status_body: "{{ np_status | combine({'realization': np_real | combine({'gatewayRelease': false})}) }}"
+
+    - name: The CloudVirt namespaces that name the network (selected by label)
+      ansible.builtin.set_fact:
+        np_ns_selector: "{{ np_ns_map.networkSelector }}"
+      when: np_backend_kind == 'CloudVirt'
+
+    - name: The site side ({{ np_backend_kind }})
+      ansible.builtin.include_tasks: "backend_{{ np_backend_kind | lower }}.yml"
+
+    - name: Does the gateway carry the placement
+      ansible.builtin.set_fact:
+        np_gw_carries: >-
+          {{ ((np_gateway.status | default({}, true)).realization | default({}, true)).vrfs | default([], true)
+             | selectattr('placement', 'equalto', fab_namespace ~ '/' ~ fab_name)
+             | selectattr('vni', 'equalto', np_l3vni | int) | list | length > 0 }}
+
+    - name: Ask the gateway to carry the placement
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: CloudGateway, namespace: "{{ fabric_platform_namespace }}", name: "{{ np_gateway.metadata.name }}"}]
+      when: not np_gw_carries | bool
+
+    - name: Report the placement waiting for its gateway
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
         fab_outcome: pending
-        fab_reason: NotImplemented
-        fab_message: Spec valid, network, backend and gateway ready; realizing the placement is not implemented yet
-        fab_waiting_for: [implementation]
-        fab_status: "{{ np_status }}"
+        fab_reason: WaitingForGateway
+        fab_message: "Site side ready; waiting for CloudGateway {{ np_gateway.metadata.name }} to carry the network (VRF {{ np_names.vrf }})"
+        fab_waiting_for: ["CloudGateway {{ np_gateway.metadata.name }} (VRF {{ np_names.vrf }})"]
+        fab_status: "{{ np_status | combine({'realization': np_real | combine({'site': np_backend_status})}) }}"
+      when: not np_gw_carries | bool
+
+    - name: End the job until the gateway carries it
+      ansible.builtin.meta: end_play
+      when: not np_gw_carries | bool
+
+    - name: Check the gateway's routes
+      ansible.builtin.include_tasks: gateway_routes.yml
+      vars:
+        np_route_wait: "{{ fab_real.placement.routeWait }}"
+
+    # an OpenStack site fills a router's gateway chassis only when the router is created: recreate it once
+    - name: Recreate the router once when the site advertises nothing
+      when:
+        - np_routes_missing | bool
+        - np_backend_kind == 'CloudOSO'
+        - not np_recreated | bool
+      block:
+        - name: Recreate the router
+          ansible.builtin.include_tasks: backend_cloudoso.yml
+          vars:
+            np_recreate_router: true
+
+        - name: Remember the recreation
+          ansible.builtin.set_fact:
+            np_recreated: true
+
+        - name: Check the gateway's routes after the recreation
+          ansible.builtin.include_tasks: gateway_routes.yml
+          vars:
+            np_route_wait: "{{ fab_real.placement.routeWait }}"
+
+    - name: Set the final status
+      ansible.builtin.set_fact:
+        np_final: >-
+          {{ np_status | combine({'realization': np_real | combine({'site': np_backend_status, 'gateway': np_route_nodes,
+                                                                    'routerRecreated': np_recreated | bool})}) }}
+
+    - name: Report the placement waiting for the site's routes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: RoutesMissing
+        fab_message: >-
+          The gateway carries VRF {{ np_names.vrf }} but has no route from the site for
+          {{ np_route_nodes | map(attribute='missing') | flatten | unique | join(', ') }}
+          ({{ np_route_nodes | selectattr('missing') | map(attribute='name') | join(', ') }})
+        fab_waiting_for: ["the site's routes for {{ np_route_nodes | map(attribute='missing') | flatten | unique | join(', ') }}"]
+        fab_status: "{{ np_final }}"
+      when: np_routes_missing | bool
+
+    - name: End the job while routes are missing
+      ansible.builtin.meta: end_play
+      when: np_routes_missing | bool
+
+    - name: Report the placement ready
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: ready
+        fab_reason: Ready
+        fab_message: >-
+          {{ fab_spec.prefixes | join(', ') }} on {{ np_site }} through CloudGateway {{ np_gateway.metadata.name }}
+          (VNI {{ np_l3vni }}{{ (', MAC-VRF ' ~ np_real.l2Vni) if np_real.l2Vni is defined else '' }}); routes of
+          the network's other placements on the gateway: {{ np_route_nodes | map(attribute='vpnRoutes') | map('string') | join('/') }}
+        fab_status: "{{ np_final }}"
+
+    - name: Tell the network and the backend
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs:
+          - {kind: HybridNetwork, namespace: "{{ fab_namespace }}", name: "{{ fab_spec.network }}"}
+          - {kind: "{{ np_backend_kind }}", namespace: "{{ fab_namespace }}", name: "{{ np_backend_name if np_backend_kind == 'CloudVirt' else '' }}"}
+      when: fab_st.status | default('') != 'ready'
 
   rescue:
     - name: Mark the NetworkPlacement failed

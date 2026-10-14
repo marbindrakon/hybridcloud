@@ -13,9 +13,11 @@ actions:
                   prefixes disjoint among themselves, from the network's other placements and from reserved
   pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
                   (index 1 is the border gateway root; the same addresses on every node)
-  cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}]}
+  cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
                   the site namespace of each CloudVirt namespace: <entity>-<cloudvirt>-<name>, cut to 54 characters
-                  plus a hash when longer than 63 (namespace names are global on the site's cluster)
+                  plus a hash when longer than 63 (namespace names are global on the site's cluster), with its
+                  labels; selector = all of the environment's namespaces, networkSelector = those naming network
+  placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
 """
 import hashlib
 import ipaddress
@@ -187,6 +189,24 @@ def site_namespace(entity, cloudvirt, name):
     return base[:54].rstrip("-") + "-" + hashlib.sha1(base.encode()).hexdigest()[:8]
 
 
+def label_value(v):
+    """A Kubernetes label value for v: itself when valid, else a shortened form with a hash."""
+    v = str(v or "")
+    if len(v) <= 63 and re.fullmatch(r"([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?", v):
+        return v
+    base = re.sub(r"[^A-Za-z0-9_.-]", "-", v)[:54].strip("-_.")
+    return base + "-" + hashlib.sha1(v.encode()).hexdigest()[:8]
+
+
+def site_labels(entity, cloudvirt, network=""):
+    """Labels of a CloudVirt's site namespaces; the placement's network selects namespaces by the same labels."""
+    out = {"hybridsovereign.redhat/entity": label_value(entity),
+           "hybridsovereign.redhat/cloudvirt": label_value(cloudvirt)}
+    if network:
+        out["hybridsovereign.redhat/hybridnetwork"] = label_value(network)
+    return out
+
+
 def cloudvirt_namespaces(req):
     out, errors, seen = [], [], {}
     for n in req.get("namespaces") or []:
@@ -194,12 +214,30 @@ def cloudvirt_namespaces(req):
         if ns in seen:
             errors.append(f"namespaces {seen[ns]} and {n.get('name')} map to the same site namespace {ns}")
         seen[ns] = n.get("name")
-        out.append({"name": n.get("name"), "namespace": ns, "network": n.get("network") or ""})
-    return {"errors": errors, "namespaces": out}
+        labels = site_labels(req.get("entity", ""), req.get("cloudvirt", ""), n.get("network") or "")
+        labels["hybridsovereign.redhat/cloudvirt-namespace"] = label_value(n.get("name"))
+        out.append({"name": n.get("name"), "namespace": ns, "network": n.get("network") or "", "labels": labels})
+    return {"errors": errors, "namespaces": out,
+            "selector": site_labels(req.get("entity", ""), req.get("cloudvirt", "")),
+            "networkSelector": site_labels(req.get("entity", ""), req.get("cloudvirt", ""), req.get("network") or "")
+            if req.get("network") else {}}
+
+
+def placement_names(req):
+    """Names of a placement's realized objects. Site objects are named after the placement's L3 VNI: unique on the
+    fabric and short, because OpenShift derives Linux device names (15 characters) from the network name."""
+    vni, key = int(req["l3Vni"]), f"{req['namespace']}/{req['name']}"
+    return {"vrf": f"t{vni}", "cudn": f"hn{vni}", "routeAdvertisement": f"hn{vni}",
+            "osNetwork": f"hn{vni}", "osRouter": f"hn{vni}", "tag": f"shc-placement={key}",
+            "labels": {"hybridsovereign.redhat/entity": label_value(req.get("entity", "")),
+                       "hybridsovereign.redhat/networkplacement": label_value(req["name"]),
+                       "hybridsovereign.redhat/hybridnetwork": label_value(req.get("network", "")),
+                       "hybridsovereign.redhat/l3vni": str(vni)}}
 
 
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
-           "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses}
+           "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
+           "placement-names": placement_names}
 
 
 def main():

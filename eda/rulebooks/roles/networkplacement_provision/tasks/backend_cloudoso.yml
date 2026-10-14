@@ -1,0 +1,44 @@
+---
+# shc (design/P7-PLAN.md P7.3.8, §12.3.2): the site side of a placement on a CloudOSO (OpenStack site with EVPN):
+# in the platform project, a network (the network's MTU), a subnet per prefix and a router with the placement's
+# layer 3 VNI (the site advertises the subnets as EVPN type-5 routes under it), shared to the CloudOSO's project
+# (Neutron RBAC). The tenant attaches its VMs to the network; the router and subnets stay the platform's. Uses the
+# site account (cloud admin). Input: np_recreate_router (bool). Sets np_backend_status.
+- name: The site's OpenStack account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ ci_spec.credentialsRef.vaultPath }}"
+    os_account_tag: "np-{{ fab_name }}"
+
+- name: The placement's network, router and share
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_request:
+      action: placement-network
+      region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
+      domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
+      platformProject: "{{ fab_real.openstack.platformProject }}"
+      name: "{{ np_names.osNetwork }}"
+      tag: "{{ np_names.tag }}"
+      description: "NetworkPlacement {{ fab_namespace }}/{{ fab_name }} (HybridNetwork {{ fab_spec.network }})"
+      mtu: "{{ np_real.mtu | int }}"
+      prefixes: "{{ fab_spec.prefixes }}"
+      l3Vni: "{{ np_real.l3Vni | int }}"
+      shareProjectId: "{{ np_backend.status.projectId }}"
+      recreateRouter: "{{ np_recreate_router | default(false) | bool }}"
+
+- name: Refuse a router without the placement's VNI
+  ansible.builtin.fail:
+    msg: "router {{ np_names.osRouter }} has evpn_vni {{ os_result.evpnVni }}, expected {{ np_real.l3Vni }}"
+  when: os_result.evpnVni | int != np_real.l3Vni | int
+
+- name: Record the site side
+  ansible.builtin.set_fact:
+    np_backend_status:
+      project: "{{ fab_real.openstack.platformProject }}"
+      networkId: "{{ os_result.networkId }}"
+      routerId: "{{ os_result.routerId }}"
+      subnets: "{{ os_result.subnets }}"
+      sharedTo: "{{ np_backend.status.projectId }}"
+    np_backend_changed: "{{ (os_result.created | length + os_result.changed | length) > 0 }}"

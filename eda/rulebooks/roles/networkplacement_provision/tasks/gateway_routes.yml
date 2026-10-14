@@ -1,0 +1,69 @@
+---
+# shc (design/P7-PLAN.md P7.3.8): does the site's gateway hold the placement's routes on every border gateway node?
+# Read-only (vtysh over SSH, no lease). For each node: the VRF's routes inside the placement's prefixes that the
+# site advertised (next hop in the site underlay), and the routes of the network's other placements (VPN); waits up
+# to np_route_wait seconds (default 0) for the site's. Sets
+# np_route_nodes [{name, siteRoutes, vpnRoutes, missing: [prefix]}] and np_routes_missing (bool).
+- name: Connect to the border gateway nodes
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
+  vars:
+    bgw_fabric_spec: "{{ np_fabric.spec }}"
+    bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
+
+- name: Read the VRF on each node
+  block:
+    - name: Read the gateway VRF's routes (waiting up to np_route_wait s for the site's)
+      ansible.builtin.shell: |
+        check() {
+        vtysh -N gw-{{ np_gateway.metadata.name }} -c 'show bgp vrf {{ np_names.vrf }} ipv4 unicast json' | python3 -c '
+        import ipaddress, json, sys
+        mine = [ipaddress.ip_network(p) for p in sys.argv[2].split(",")]
+        site = ipaddress.ip_network(sys.argv[1])
+        routes = json.load(sys.stdin).get("routes", {})
+        found, vpn = set(), 0
+        for pfx, paths in routes.items():
+            net = ipaddress.ip_network(pfx)
+            best = [p for p in (paths if isinstance(paths, list) else [paths]) if p.get("valid")][:1]
+            for p in best:
+                nhs = [n.get("ip") for n in p.get("nexthops", []) if n.get("ip")]
+                if any(ipaddress.ip_address(h) in site for h in nhs):
+                    found.update(str(m) for m in mine if net.subnet_of(m))
+                else:
+                    vpn += 1
+        print(json.dumps({"siteRoutes": len(found), "vpnRoutes": vpn,
+                          "missing": [str(m) for m in mine if str(m) not in found]}))' \
+          {{ np_gateway.spec.siteUnderlay.cidr }} {{ fab_spec.prefixes | join(',') }}
+        }
+        end=$((SECONDS + {{ np_route_wait | default(0) | int }}))
+        while :; do
+          out=$(check)
+          case "$out" in *'"missing": []'*) break ;; esac
+          [ $SECONDS -ge $end ] && break
+          sleep 10
+        done
+        echo "$out"
+      args:
+        executable: /bin/bash
+      register: _np_routes
+      changed_when: false
+      failed_when: _np_routes.rc != 0 or not (_np_routes.stdout | trim).startswith('{')
+      delegate_to: "{{ item.name }}"
+      loop: "{{ np_fabric.spec.borderGateway.nodes }}"
+      loop_control:
+        label: "{{ item.name }}"
+  always:
+    - name: Remove the SSH key
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+
+- name: Summarize the routes
+  ansible.builtin.set_fact:
+    np_route_nodes: >-
+      {%- set out = [] -%}
+      {%- for r in _np_routes.results -%}
+        {%- set _ = out.append({'name': r.item.name} | combine(r.stdout | from_json)) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Any prefix missing on a node
+  ansible.builtin.set_fact:
+    np_routes_missing: "{{ np_route_nodes | map(attribute='missing') | flatten | length > 0 }}"

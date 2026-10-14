@@ -13,6 +13,9 @@
 #   the namespace with the gateway's site address, and a veth from the namespace's core0 (link address) to the core
 #   bridge. down deletes the veth and the namespace (the VLAN device goes with it). FRR's routes are FRR's own
 #   (staticd), never kernel routes set here.
+#   vrfs [{name, vni, mtu}]: one Linux VRF per network placed at the site (table = VNI) with its layer 3 VNI: a
+#   bridge br<vni> in the VRF and a VXLAN device vx<vni> from the gateway's site address; VRFs named t<digits> that
+#   are no longer listed are removed with their devices.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down]}; ACT=${2:-up}
@@ -99,6 +102,33 @@ gateway)
     for a in $(stray core0 0.0.0.0/0 "$LINK"); do $X ip addr del "$a" dev core0; done
     $X ip addr show dev core0 | grep -q " ${LINK} " || $X ip addr add "$LINK" dev core0
     $X sysctl -qw net.mpls.conf.lo.input=1 net.mpls.conf.core0.input=1
+    VTEP=${ADDR%/*}
+    WANT=$(jq -r '.vrfs // [] | .[].name' "$CONF")
+    [ -z "$WANT" ] || modprobe vrf
+    for v in $(jq -r '.vrfs // [] | .[] | [.name, .vni, (.mtu // 9000)] | join(":")' "$CONF"); do
+      IFS=: read -r VRF VNI VMTU <<<"$v"
+      $X ip link show "$VRF" >/dev/null 2>&1 || $X ip link add "$VRF" type vrf table "$VNI"
+      $X ip link set "$VRF" up
+      if ! $X ip link show "br$VNI" >/dev/null 2>&1; then
+        $X ip link add "br$VNI" type bridge
+        $X ip link set "br$VNI" addrgenmode none
+      fi
+      $X ip link set "br$VNI" master "$VRF" mtu "$VMTU" up
+      if ! $X ip link show "vx$VNI" >/dev/null 2>&1; then
+        $X ip link add "vx$VNI" type vxlan id "$VNI" dstport 4789 local "$VTEP" nolearning
+        $X ip link set "vx$VNI" addrgenmode none
+      fi
+      $X ip link set "vx$VNI" master "br$VNI" mtu "$VMTU" up
+      $X ip link set "vx$VNI" type bridge_slave neigh_suppress on learning off
+      $X sysctl -qw "net.mpls.conf.$VRF.input=1" 2>/dev/null || true
+    done
+    for VRF in $($X ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^t[0-9]+$' || true); do
+      echo "$WANT" | grep -qx "$VRF" && continue
+      VNI=${VRF#t}
+      $X ip link del "vx$VNI" 2>/dev/null || true
+      $X ip link del "br$VNI" 2>/dev/null || true
+      $X ip link del "$VRF"
+    done
     NSX=""
   else
     ip link show "$CV" >/dev/null 2>&1 && ip link del "$CV"

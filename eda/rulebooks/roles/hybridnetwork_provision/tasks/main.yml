@@ -1,8 +1,9 @@
 ---
 # shc (design/P7-PLAN.md P7.3.3, §12.3): HybridNetwork provision. Resolves the fabric (spec.fabricRef, else the
 # one recorded earlier, else the platform's only fabric), checks the Entity may use it and the MTU, and records
-# entity, fabric, MTU and the placement counts. Allocating the network's VPN route target from the fabric's ledger
-# is P7.3.8; until then it ends pending: on the fabric while that isn't ready, else with reason NotImplemented.
+# entity, fabric, MTU and the placement counts; ends pending while the fabric isn't ready. Then allocates the
+# network's VPN route target from the fabric's ledger (P7.3.8): the gateways of the sites the network is placed on
+# exchange its routes under it.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -136,15 +137,28 @@
       ansible.builtin.meta: end_play
       when: hn_waiting | length > 0
 
-    # P7.3.8 replaces this with the VPN route target allocation
-    - name: Report the network validated, not realized
+    # the network's VPN route target: the gateways of every site it is placed on import and export it
+    - name: The network's VPN route target
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger:
+          action: ledger-allocate
+          namespace: "{{ fabric_platform_namespace }}"
+          fabric: "{{ hn_fabric_name }}"
+          kind: vpnTarget
+          owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+
+    - name: Report the network ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
-        fab_outcome: pending
-        fab_reason: NotImplemented
-        fab_message: Spec valid, fabric ready; allocating the network's route target is not implemented yet
-        fab_waiting_for: [implementation]
-        fab_status: "{{ hn_status }}"
+        fab_outcome: ready
+        fab_reason: Ready
+        fab_message: >-
+          On HybridFabric {{ hn_fabric_name }}, MTU {{ hn_status.mtu }};
+          {{ hn_status.placementsReady }}/{{ hn_status.placementCount }} placements ready
+        fab_status: >-
+          {{ hn_status | combine({'realization': {'vpnTarget': fab_ledger_result.value | int,
+                                                  'routeTarget': hn_fabric.spec.domainAsn ~ ':' ~ fab_ledger_result.value}}) }}
 
   rescue:
     - name: Mark the HybridNetwork failed

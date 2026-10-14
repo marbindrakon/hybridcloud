@@ -190,6 +190,42 @@
         cg_changed_nodes: []
         cg_bgp_password: ""
 
+    # the networks placed at this site: every NetworkPlacement that names this gateway (status.cloudGateway) and
+    # holds its numbers (status.realization), unless its teardown released the gateway; the gateway carries one
+    # VRF per placement and is the only writer of the instance's configuration
+    - name: List the placements on this gateway
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: NetworkPlacement
+      register: _cg_placements
+
+    - name: Set the gateway's VRFs
+      ansible.builtin.set_fact:
+        cg_vrfs: >-
+          {%- set out = [] -%}
+          {%- for p in _cg_placements.resources | default([]) -%}
+            {%- set st = p.status | default({}, true) -%}
+            {%- set r = st.realization | default({}, true) -%}
+            {%- if st.cloudGateway | default('') == fab_name and r.l3Vni is defined and r.vpnTarget is defined
+                  and not (r.gatewayRelease | default(false) | bool) -%}
+              {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name,
+                                      'vrf': 't' ~ r.l3Vni, 'vni': r.l3Vni | int, 'vpnTarget': r.vpnTarget | int,
+                                      'mtu': cg_fabric.spec.overlayMtu | int}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out | sort(attribute='vni') }}
+        cg_vrfs_before: "{{ ((fab_st.realization | default({}, true)).vrfs | default([], true)) }}"
+
+    - name: Add the VRFs to the instance
+      ansible.builtin.set_fact:
+        cg_instance: >-
+          {%- set out = [] -%}
+          {%- for v in cg_vrfs -%}{%- set _ = out.append({'name': v.vrf, 'vni': v.vni, 'mtu': v.mtu}) -%}{%- endfor -%}
+          {{ cg_instance | combine({'vrfs': out}) }}
+
     - name: Read the BGP session password
       when: ((fab_spec.bgp | default({})).passwordRef | default((cg_fabric.spec.bgp | default({})).passwordRef | default(none))) is not none
       block:
@@ -258,7 +294,22 @@
                                    'nodes': cg_node_results,
                                    'realization': {'model': fab_real.model, 'peIndex': cg_pe.index, 'loopback': cg_pe.loopbackIp,
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
-                                                   'netns': 'gw-' ~ fab_name}}) }}
+                                                   'netns': 'gw-' ~ fab_name,
+                                                   'vrfs': cg_vrfs | map('dict2items') | map('rejectattr', 'key', 'equalto', 'mtu')
+                                                           | map('items2dict') | list}}) }}
+
+    # the placements this run added or removed wait for it (pending / deletion): wake them
+    - name: Wake the placements whose VRF changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        _now: "{{ cg_vrfs | map(attribute='placement') | zip(cg_vrfs | map(attribute='vni')) | map('join', '#') | list }}"
+        _was: "{{ cg_vrfs_before | map(attribute='placement') | zip(cg_vrfs_before | map(attribute='vni')) | map('join', '#') | list }}"
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for k in (_now | symmetric_difference(_was)) | map('regex_replace', '#.*$', '') | unique -%}
+            {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
+          {%- endfor -%}
+          {{ out }}
 
   rescue:
     - name: Remove the SSH key

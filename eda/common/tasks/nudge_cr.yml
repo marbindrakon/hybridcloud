@@ -1,0 +1,23 @@
+---
+# shc (design/P7-PLAN.md P7.3.8): make the operator publish an event for other CRs now (reconcileNow), so a job
+# that changed what they wait for doesn't leave them to their reconcilePeriod. Used between the fabric kinds (a
+# placement asks its gateway to carry its VRF; the gateway wakes the placements it added or removed).
+# Input: nudge_crs  list of {kind, namespace, name}; missing CRs are ignored.
+- name: Wake the CRs that wait for this job
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: patched
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ item.kind }}"
+    name: "{{ item.name }}"
+    namespace: "{{ item.namespace }}"
+    definition:
+      metadata:
+        annotations:
+          ansible.sdk.operatorframework.io/reconcileNow: "true"
+  loop: "{{ nudge_crs | default([]) | selectattr('name') | list }}"
+  loop_control:
+    label: "{{ item.kind }} {{ item.namespace }}/{{ item.name }}"
+  failed_when: false

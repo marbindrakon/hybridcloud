@@ -28,3 +28,10 @@ fabric_realization_defaults:
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric
+  openshift:
+    # OpenShift sites: the FRRConfigurations (labels) whose BGP sessions to the site's gateway carry the placements'
+    # routes; empty selects every FRRConfiguration of the site
+    frrConfigurationSelector: {}
+  placement:
+    # how long a placement job waits for the gateways to hold the site's routes for its prefixes (s)
+    routeWait: 180

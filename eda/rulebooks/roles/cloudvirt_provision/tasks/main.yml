@@ -2,9 +2,11 @@
 # shc (design/P7-PLAN.md P7.3.3, §12.3): CloudVirt provision. Resolves the site (type openshift, the Entity
 # allowed, virtualization offered), checks the Rbac CRs it grants access to, maps its namespaces to site
 # namespaces (<entity>-<cloudvirt>-<name>; none may clash with another environment's) and records per namespace
-# whether its network is placed here. Realizing it (the namespaces with quota and access, tenant sign-in on the
-# site, the admission policy) is P7.3.7; until then it ends pending: on the site or the Rbac CRs while those
-# aren't there, else with reason NotImplemented.
+# whether its network is placed here; ends pending on the site or the Rbac CRs while those aren't there. Then
+# (P7.3.7) realizes the namespaces on the site with the fabric credential: labels (a namespace with a network gets
+# the primary-network label at creation; the network's placement selects it by label), a ResourceQuota from
+# spec.quota, and removal of namespaces that left the spec once they hold no VMs. Tenant access to the namespaces
+# (sign-in on the site, RoleBindings for the Rbac CRs) is not realized yet.
 - block:
     - name: Read the CloudVirt
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -84,6 +86,7 @@
       ansible.builtin.set_fact:
         cv_namespaces: "{{ fab_check_result.namespaces }}"
         cv_ns_errors: "{{ fab_check_result.errors }}"
+        cv_selector: "{{ fab_check_result.selector }}"
 
     - name: List the Entity's other environments, networks and placements
       kubernetes.core.k8s_info:
@@ -173,15 +176,118 @@
       ansible.builtin.meta: end_play
       when: cv_waiting | length > 0
 
-    # P7.3.7 replaces this with the site-side sign-in, role and admission policy
-    - name: Report the environment validated, not realized
+    - name: Realize the namespaces on the site
+      block:
+        - name: The site's fabric credential
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
+          vars:
+            site_kc_tag: "cv-{{ fab_namespace }}-{{ fab_name }}"
+
+        - name: Ensure the site namespaces
+          kubernetes.core.k8s:
+            kubeconfig: "{{ site_kubeconfig }}"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ item.namespace }}"
+                annotations:
+                  openshift.io/display-name: "{{ fab_entity }} / {{ fab_name }} / {{ item.name }}"
+                  openshift.io/description: >-
+                    VM namespace {{ item.name }} of CloudVirt {{ fab_namespace }}/{{ fab_name }}{{ (', network '
+                    ~ item.network) if item.network else '' }} (managed by the platform)
+                # a namespace with a network takes it as its primary network: the label has to be there from the start
+                labels: >-
+                  {{ item.labels | combine({'k8s.ovn.org/primary-user-defined-network': ''} if item.network else {}) }}
+          loop: "{{ cv_namespaces }}"
+          loop_control:
+            label: "{{ item.namespace }}"
+          register: _cv_ns_apply
+
+        - name: Set the namespaces' quota
+          kubernetes.core.k8s:
+            kubeconfig: "{{ site_kubeconfig }}"
+            state: "{{ 'present' if _hard | length > 0 else 'absent' }}"
+            definition:
+              apiVersion: v1
+              kind: ResourceQuota
+              metadata:
+                name: cloudvirt-quota
+                namespace: "{{ item.namespace }}"
+                labels: "{{ item.labels }}"
+              spec:
+                hard: "{{ _hard }}"
+          vars:
+            _q: "{{ fab_spec.quota | default({}, true) }}"
+            _hard: >-
+              {{ ({'requests.cpu': _q.cpu | string} if _q.cpu is defined else {})
+                 | combine({'requests.memory': _q.memory | string} if _q.memory is defined else {})
+                 | combine({'requests.storage': _q.storage | string} if _q.storage is defined else {})
+                 | combine({'count/virtualmachines.kubevirt.io': _q.virtualMachines | string} if _q.virtualMachines is defined else {}) }}
+          loop: "{{ cv_namespaces }}"
+          loop_control:
+            label: "{{ item.namespace }}"
+          register: _cv_quota
+
+        # namespaces of this environment that left spec.namespaces: removed once they hold no VMs
+        - name: List the environment's site namespaces
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ site_kubeconfig }}"
+            api_version: v1
+            kind: Namespace
+            label_selectors: "{{ cv_selector | dict2items | map(attribute='key') | zip(cv_selector.values()) | map('join', '=') | list }}"
+          register: _cv_site_ns
+
+        - name: Find the namespaces to remove
+          ansible.builtin.set_fact:
+            cv_stale: >-
+              {{ _cv_site_ns.resources | default([]) | map(attribute='metadata.name')
+                 | difference(cv_namespaces | map(attribute='namespace')) | list }}
+
+        - name: Count the VMs in the namespaces to remove
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ site_kubeconfig }}"
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            namespace: "{{ item }}"
+          loop: "{{ cv_stale }}"
+          register: _cv_stale_vms
+
+        - name: Remove the namespaces without VMs
+          kubernetes.core.k8s:
+            kubeconfig: "{{ site_kubeconfig }}"
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ item.item }}"
+          loop: "{{ _cv_stale_vms.results | default([]) }}"
+          loop_control:
+            label: "{{ item.item }}"
+          when: item.resources | default([]) | length == 0
+
+        - name: Keep the removed namespaces that still hold VMs
+          ansible.builtin.set_fact:
+            cv_kept: >-
+              {{ _cv_stale_vms.results | default([]) | rejectattr('resources', 'equalto', []) | map(attribute='item') | list }}
+      always:
+        - name: Remove the site kubeconfig
+          ansible.builtin.file:
+            path: "{{ site_kubeconfig | default('/tmp/eda-cv-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
+            state: absent
+
+    - name: Report the environment ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
-        fab_outcome: pending
-        fab_reason: NotImplemented
-        fab_message: Spec valid, site ready; preparing tenant access on the site is not implemented yet
-        fab_waiting_for: [implementation]
-        fab_status: "{{ cv_status }}"
+        fab_outcome: ready
+        fab_reason: Ready
+        fab_message: >-
+          {{ cv_namespaces | length }} namespace(s) on {{ cv_site_name }}
+          ({{ cv_ns_status | selectattr('ready') | list | length }} with their network){{ '; removed from spec but still
+          holding VMs: ' ~ cv_kept | join(', ') if cv_kept | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
+          | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}
+        fab_status: >-
+          {{ cv_status | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {}) }}
 
   rescue:
     - name: Mark the CloudVirt failed

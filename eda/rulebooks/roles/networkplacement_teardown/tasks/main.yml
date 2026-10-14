@@ -1,10 +1,192 @@
 ---
-# shc (design/P7-PLAN.md P7.3.3): NetworkPlacement teardown. The operator's finalizer has already waited for the objects that
-# depend on this one. Nothing is realized yet, so the job confirms the CR and marks deletionComplete; removing
-# the backend network, the gateway VRFs and the VNIs (P7.3.8) comes with the step that creates it.
+# shc (design/P7-PLAN.md P7.3.8): NetworkPlacement teardown. The operator's finalizer has already waited for the
+# CloudVirt namespaces that name the network. In order:
+# 1. the gateway drops the placement's VRF: status.realization.gatewayRelease, the gateway is woken and wakes this
+#    placement again once its VRF is gone (the deletion waits meanwhile);
+# 2. the site side: CloudVirt = the RouteAdvertisements and the ClusterUserDefinedNetwork; CloudOSO = the share,
+#    router, subnets and network in the platform project (refused while the tenant's ports still use the network);
+# 3. the VNIs go back to the fabric's ledger; deletionComplete.
 - block:
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
+
+    - name: What was realized
+      ansible.builtin.set_fact:
+        npd_real: "{{ fab_st.realization | default({}, true) }}"
+        npd_gw_name: "{{ fab_st.cloudGateway | default('', true) }}"
+        npd_key: "{{ fab_namespace }}/{{ fab_name }}"
+        npd_owner: "NetworkPlacement/{{ fab_namespace }}/{{ fab_name }}"
+
+    - name: Read the gateway
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudGateway
+        name: "{{ npd_gw_name }}"
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _npd_gw
+      when: npd_gw_name | length > 0
+
+    - name: Set the gateway facts
+      ansible.builtin.set_fact:
+        npd_gw: "{{ (_npd_gw.resources | default([], true) + [{}]) | first }}"
+
+    - name: Does the gateway still carry the placement
+      ansible.builtin.set_fact:
+        npd_carried: >-
+          {{ ((npd_gw.status | default({}, true)).realization | default({}, true)).vrfs | default([], true)
+             | selectattr('placement', 'equalto', npd_key) | list | length > 0 }}
+
+    - name: Release the gateway
+      when: npd_carried | bool
+      block:
+        - name: Mark the placement released
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: networkplacements
+            cr_name: "{{ fab_name }}"
+            cr_namespace: "{{ fab_namespace }}"
+            cr_status_partial: true
+            patch_ignore_not_found: true
+            cr_status_body:
+              status: reconciling
+              message: "Deletion waits for CloudGateway {{ npd_gw_name }} to remove VRF {{ npd_real.vrf | default('') }}"
+              realization: {gatewayRelease: true}
+
+        - name: Wake the gateway
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+          vars:
+            nudge_crs: [{kind: CloudGateway, namespace: "{{ fabric_platform_namespace }}", name: "{{ npd_gw_name }}"}]
+
+        - name: End the job until the gateway has dropped the VRF
+          ansible.builtin.meta: end_play
+
+    - name: Remove the site side
+      when: npd_real.l3Vni is defined and fab_st.site | default('', true) | length > 0
+      block:
+        - name: Resolve the site
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+          vars:
+            ci_ref_name: "{{ fab_st.site }}"
+            ci_ref_namespace: "{{ fabric_platform_namespace }}"
+
+        - name: The platform's realization parameters
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+          vars:
+            fab_real_fabric: "{{ npd_gw.spec.fabricRef.name | default('') }}"
+
+        - name: Name the placement's objects
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+          vars:
+            fab_check: {action: placement-names, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}", entity: "{{ fab_entity }}",
+                        network: "{{ fab_spec.network }}", l3Vni: "{{ npd_real.l3Vni }}"}
+
+        - name: Set the names
+          ansible.builtin.set_fact:
+            npd_names: "{{ fab_check_result }}"
+
+        - name: Remove the OpenShift site side
+          when: fab_spec.backend.kind == 'CloudVirt' and ci_found | bool
+          block:
+            - name: The site's fabric credential
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
+              vars:
+                site_kc_tag: "npd-{{ fab_namespace }}-{{ fab_name }}"
+
+            - name: Namespaces still on the network
+              kubernetes.core.k8s_info:
+                kubeconfig: "{{ site_kubeconfig }}"
+                api_version: v1
+                kind: Namespace
+                label_selectors: >-
+                  {{ npd_sel | dict2items | map(attribute='key') | zip(npd_sel.values()) | map('join', '=') | list }}
+              vars:
+                npd_sel:
+                  hybridsovereign.redhat/entity: "{{ npd_names.labels['hybridsovereign.redhat/entity'] }}"
+                  hybridsovereign.redhat/cloudvirt: "{{ fab_spec.backend.name }}"
+                  hybridsovereign.redhat/hybridnetwork: "{{ npd_names.labels['hybridsovereign.redhat/hybridnetwork'] }}"
+              register: _npd_ns
+
+            - name: Refuse while namespaces use the network
+              ansible.builtin.fail:
+                msg: >-
+                  Deletion waits for the site namespaces on the network:
+                  {{ _npd_ns.resources | map(attribute='metadata.name') | join(', ') }}
+              when: _npd_ns.resources | default([]) | length > 0
+
+            - name: Delete the RouteAdvertisements and the network
+              kubernetes.core.k8s:
+                kubeconfig: "{{ site_kubeconfig }}"
+                state: absent
+                api_version: k8s.ovn.org/v1
+                kind: "{{ item.kind }}"
+                name: "{{ item.name }}"
+                wait: true
+                wait_timeout: 300
+              loop:
+                - {kind: RouteAdvertisements, name: "{{ npd_names.routeAdvertisement }}"}
+                - {kind: ClusterUserDefinedNetwork, name: "{{ npd_names.cudn }}"}
+              loop_control:
+                label: "{{ item.kind }}/{{ item.name }}"
+          always:
+            - name: Remove the site kubeconfig
+              ansible.builtin.file:
+                path: "{{ site_kubeconfig | default('/tmp/eda-npd-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
+                state: absent
+
+        - name: Remove the OpenStack site side
+          when: fab_spec.backend.kind == 'CloudOSO' and ci_found | bool
+          block:
+            - name: The site's OpenStack account
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+              vars:
+                os_account_vault_path: "{{ ci_spec.credentialsRef.vaultPath }}"
+                os_account_tag: "npd-{{ fab_name }}"
+
+            - name: Delete the share, router, subnets and network
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+              vars:
+                os_call_no_log: false
+                os_request:
+                  action: placement-network
+                  state: absent
+                  region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
+                  domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
+                  platformProject: "{{ fab_real.openstack.platformProject }}"
+                  name: "{{ npd_names.osNetwork }}"
+                  tag: "{{ npd_names.tag }}"
+
+            - name: Report the ports that block the deletion
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+              vars:
+                cr_api_version: hybridsovereign.redhat/v1alpha1
+                cr_plural: networkplacements
+                cr_name: "{{ fab_name }}"
+                cr_namespace: "{{ fab_namespace }}"
+                cr_status_partial: true
+                patch_ignore_not_found: true
+                cr_status_body:
+                  status: reconciling
+                  message: "Deletion waits for ports on network {{ npd_names.osNetwork }}: {{ os_result.blocked[:10] | join(', ') }}"
+                  deletionBlockedBy: "{{ os_result.blocked }}"
+              when: os_result.blocked | default([]) | length > 0
+
+            - name: End the job while ports remain
+              ansible.builtin.meta: end_play
+              when: os_result.blocked | default([]) | length > 0
+
+    - name: Release the VNIs
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-release, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ npd_gw.spec.fabricRef.name }}",
+                     kind: "{{ item }}", owner: "{{ npd_owner }}"}
+      loop: [vni, l2vni]
+      when: npd_gw.spec is defined
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -18,20 +200,22 @@
           status: ready
           ready: false
           deletionComplete: true
+          deletionBlockedBy: []
           message: Deleted
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
   rescue:
-    - name: Mark the NetworkPlacement teardown failed
+    - name: Report the teardown waiting or failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
+        _waits: "{{ ansible_failed_result.msg | default('') is match('Deletion waits for ') }}"
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: networkplacements
         cr_name: "{{ fab_name }}"
         cr_namespace: "{{ fab_namespace }}"
         patch_ignore_not_found: true
         cr_status_body:
-          status: failed
+          status: "{{ 'reconciling' if _waits else 'failed' }}"
           ready: false
           message: "{{ ansible_failed_result.msg | default('NetworkPlacement teardown failed') }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -41,3 +225,4 @@
     - name: Re-raise
       ansible.builtin.fail:
         msg: "NetworkPlacement {{ fab_name | default('unknown') }} teardown failed"
+      when: not (ansible_failed_result.msg | default('') is match('Deletion waits for '))

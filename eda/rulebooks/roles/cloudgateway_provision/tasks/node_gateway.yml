@@ -123,6 +123,10 @@
     import json, sys
     peers = json.load(sys.stdin).get("peers", {})
     sys.exit(0 if all(peers.get(r, {}).get("state") == "Established" for r in sys.argv[1:]) else 1)' {{ fab_spec.siteUnderlay.upstreamRouteReflectors | default([]) | join(' ') }}
+    $V -c 'show vrf vni json' | python3 -c '
+    import json, sys
+    up = {v.get("vrf"): str(v.get("state", "")).lower() for v in json.load(sys.stdin).get("vrfs", [])}
+    sys.exit(0 if all(up.get(n) == "up" for n in sys.argv[1:]) else 1)' {{ cg_vrfs | map(attribute='vrf') | join(' ') }}
   args:
     executable: /bin/bash
   register: _cg_verify
@@ -144,14 +148,31 @@
   changed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+- name: "{{ bgw_node.name }}: read the VRFs' routes"
+  ansible.builtin.shell: |
+    for v in {{ cg_vrfs | map(attribute='vrf') | join(' ') }}; do
+      printf '%s ' "$v"; vtysh -N gw-{{ fab_name }} -c "show bgp vrf $v ipv4 unicast json" 2>/dev/null \
+        | python3 -c 'import json, sys; print(len(json.load(sys.stdin).get("routes", {})))' 2>/dev/null || echo 0
+    done
+  register: _cg_vrf_routes
+  changed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: record the node"
   vars:
     _s: "{{ _cg_sessions.stdout | from_json }}"
+    _vr: >-
+      {%- set out = {} -%}
+      {%- for l in _cg_vrf_routes.stdout_lines | default([]) if l.split() | length == 2 -%}
+        {%- set _ = out.update({l.split()[0]: l.split()[1] | int}) -%}
+      {%- endfor -%}
+      {{ out }}
   ansible.builtin.set_fact:
     cg_node_results: >-
       {{ cg_node_results + [{
            'name': bgw_node.name, 'address': cg_node_addr, 'ready': true,
            'siteSessions': _s.site | int, 'upstreamSessions': _s.upstream | int, 'coreSessions': 1,
+           'vrfs': cg_vrfs | length, 'vrfRoutes': _vr,
            'message': 'gateway instance gw-' ~ fab_name ~ ': VPNv4 to ' ~ cg_root_pe.loopbackIp ~ ', IS-IS SR SID '
                       ~ cg_pe.sid ~ ', loopback ' ~ cg_pe.loopbackIp,
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}] }}

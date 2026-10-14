@@ -5,12 +5,43 @@ hostname {{ bgw_node.name }}-gw-{{ fab_name }}
 log syslog informational
 service integrated-vtysh-config
 !
+{% for v in cg_vrfs %}
+vrf {{ v.vrf }}
+ vni {{ v.vni }}
+exit-vrf
+!
+{% endfor %}
 {% for rr in cg_upstream_remote %}
 ip route {{ rr }}/32 {{ fab_spec.siteUnderlay.gateway }}
 {% endfor %}
 !
 interface lo
- ip router isis CORE
+ ip {% for v in cg_vrfs %}
+! NetworkPlacement {{ v.placement }}: the site's routes (layer 3 VNI {{ v.vni }}) <-> the network's VPN ({{ cg_fabric.spec.domainAsn }}:{{ v.vpnTarget }})
+router bgp {{ cg_fabric.spec.domainAsn }} vrf {{ v.vrf }}
+ bgp router-id {{ cg_node_addr }}
+ no bgp default ipv4-unicast
+ !
+ address-family ipv4 unicast
+  label vpn export auto
+{# RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback with the VNI's low 16 bits #}
+  rd vpn export {{ (cg_fabric.spec.domainAsn ~ ':' ~ v.vni) if cg_fabric.spec.domainAsn | int <= 65535 else (cg_pe.loopbackIp ~ ':' ~ (v.vni | int % 65536)) }}
+  rt vpn both {{ cg_fabric.spec.domainAsn }}:{{ v.vpnTarget }}
+  nexthop vpn export {{ cg_pe.loopbackIp }}
+  route-map vpn export TO-VPN
+  export vpn
+  import vpn
+ exit-address-family
+ !
+ address-family l2vpn evpn
+  advertise ipv4 unicast route-map GW-T5
+  route-target import {{ cg_fabric.spec.domainAsn }}:{{ v.vni }}
+  route-target export {{ cg_fabric.spec.domainAsn }}:{{ v.vni }}
+ exit-address-family
+exit
+!
+{% endfor %}
+router isis CORE
  isis passive
 exit
 !

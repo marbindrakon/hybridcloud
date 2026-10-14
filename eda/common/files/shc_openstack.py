@@ -24,6 +24,12 @@ Actions (request["action"]):
   platform-project  a platform-owned project (CloudGateway, design/P7-PLAN.md §12.3.2) in a domain, with
                 `member` for the account: state present ensures it; state absent deletes it only when it holds
                 no networks, routers, ports or RBAC policies (refused otherwise).
+  placement-network  a NetworkPlacement's objects in the platform project (design/P7-PLAN.md §12.3.2), cloud
+                admin scope: network <name> (MTU, tag), a subnet per prefix, router <name> with evpn_vni (the
+                site advertises the subnets as EVPN type-5 routes under that VNI), the subnets on the router with
+                advertise_host, and the network shared to the tenant project (RBAC access_as_shared). state
+                absent removes them, refused while other ports (the tenant's VMs) use the network.
+                recreateRouter: delete and recreate the router (the site fills its gateway chassis at creation).
 """
 import json
 import sys
@@ -355,9 +361,115 @@ def platform_project(req):
     return {"name": proj.name, "id": proj.id, "domain_id": dom.id, "created": created, "member_granted": granted}
 
 
+def _router_ports(conn, router_id):
+    return list(conn.network.ports(device_id=router_id))
+
+
+def _delete_router(conn, router):
+    for p in _router_ports(conn, router.id):
+        if p.device_owner in ("network:router_interface", "network:router_interface_distributed",
+                              "network:ha_router_replicated_interface"):
+            for ip in p.fixed_ips:
+                conn.network.remove_interface_from_router(router, subnet_id=ip["subnet_id"])
+    conn.network.delete_router(router)
+
+
+def placement_network(req):
+    """The cloud admin's own scope: a placement's network, subnets, EVPN router and share, in the platform project."""
+    acct = Account(req)
+    conn = acct.own_scope()
+    dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
+    proj = conn.identity.find_project(req["platformProject"], domain_id=dom.id)
+    if proj is None:
+        raise RuntimeError(f"platform project {req['platformProject']} does not exist (the CloudGateway creates it)")
+    name, tag = req["name"], req["tag"]
+    net = next(iter(conn.network.networks(name=name, project_id=proj.id)), None)
+    router = next(iter(conn.network.routers(name=name, project_id=proj.id)), None)
+    if req.get("state", "present") == "absent":
+        out = {"name": name, "found": bool(net or router), "deleted": []}
+        if net is not None:
+            busy = [f"port {describe(p, 'name', 'device_owner')}" for p in conn.network.ports(network_id=net.id)
+                    if not (p.device_owner or "").startswith("network:")]
+            if busy:
+                return {**out, "blocked": busy}
+            for r in conn.network.rbac_policies(object_id=net.id):
+                conn.network.delete_rbac_policy(r)
+                out["deleted"].append(f"rbac {r.id}")
+        if router is not None:
+            _delete_router(conn, router)
+            out["deleted"].append(f"router {router.id}")
+        if net is not None:
+            for sn in conn.network.subnets(network_id=net.id):
+                conn.network.delete_subnet(sn)
+                out["deleted"].append(f"subnet {sn.cidr}")
+            conn.network.delete_network(net)
+            out["deleted"].append(f"network {net.id}")
+        return out
+
+    created, changed = [], []
+    if net is None:
+        net = conn.network.create_network(name=name, project_id=proj.id, mtu=int(req["mtu"]),
+                                          description=req.get("description", ""))
+        created.append("network")
+    elif int(req["mtu"]) != net.mtu:
+        net = conn.network.update_network(net, mtu=int(req["mtu"]))
+        changed.append("mtu")
+    if tag not in (net.tags or []):
+        conn.network.set_tags(net, sorted(set((net.tags or []) + [tag])))
+    have = {sn.cidr: sn for sn in conn.network.subnets(network_id=net.id)}
+    subnets = {}
+    for i, cidr in enumerate(req["prefixes"]):
+        sn = have.get(cidr)
+        if sn is None:
+            sn = conn.network.create_subnet(name=f"{name}-{i}", network_id=net.id, project_id=proj.id,
+                                            ip_version=4, cidr=cidr, enable_dhcp=True)
+            created.append(f"subnet {cidr}")
+        subnets[cidr] = sn.id
+    if router is not None and req.get("recreateRouter"):
+        _delete_router(conn, router)
+        router = None
+        changed.append("router recreated")
+    if router is not None:
+        rv = conn.network.get(f"/routers/{router.id}").json()["router"].get("evpn_vni")
+        if int(rv or 0) != int(req["l3Vni"]):
+            raise RuntimeError(f"router {name} has evpn_vni {rv}, expected {req['l3Vni']}")
+    if router is None:
+        r = conn.network.post("/routers", json={"router": {"name": name, "project_id": proj.id,
+                                                           "evpn_vni": int(req["l3Vni"])}})
+        if r.status_code >= 300:
+            raise RuntimeError(f"router create: HTTP {r.status_code} {r.text[:300]}")
+        router = conn.network.get_router(r.json()["router"]["id"])
+        created.append("router")
+    attached = {ip["subnet_id"] for p in _router_ports(conn, router.id) for ip in p.fixed_ips}
+    for cidr, sid in subnets.items():
+        if sid not in attached:
+            r = conn.network.put(f"/routers/{router.id}/add_router_interface",
+                                 json={"subnet_id": sid, "advertise_host": True})
+            if r.status_code >= 300:
+                raise RuntimeError(f"router interface {cidr}: HTTP {r.status_code} {r.text[:300]}")
+            created.append(f"interface {cidr}")
+    rbac = None
+    if req.get("shareProjectId"):
+        for rp in conn.network.rbac_policies(object_id=net.id, action="access_as_shared"):
+            if rp.target_project_id == req["shareProjectId"]:
+                rbac = rp
+        if rbac is None:
+            rbac = conn.network.create_rbac_policy(object_type="network", object_id=net.id, action="access_as_shared",
+                                                   target_project_id=req["shareProjectId"])
+            created.append("share")
+        for rp in conn.network.rbac_policies(object_id=net.id, action="access_as_shared"):
+            if rp.target_project_id != req["shareProjectId"]:
+                conn.network.delete_rbac_policy(rp)
+                changed.append(f"share to {rp.target_project_id} removed")
+    evpn = conn.network.get(f"/routers/{router.id}").json()["router"].get("evpn_vni")
+    return {"name": name, "projectId": proj.id, "networkId": net.id, "routerId": router.id, "subnets": subnets,
+            "evpnVni": evpn, "shareId": rbac.id if rbac else "", "mtu": net.mtu, "created": created,
+            "changed": changed}
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
-           "platform-project": platform_project}
+           "platform-project": platform_project, "placement-network": placement_network}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

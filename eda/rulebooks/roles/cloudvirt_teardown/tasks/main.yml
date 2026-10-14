@@ -1,10 +1,99 @@
 ---
-# shc (design/P7-PLAN.md P7.3.3): CloudVirt teardown. The operator's finalizer has already waited for the objects that
-# depend on this one. Nothing is realized yet, so the job confirms the CR and marks deletionComplete; removing
-# the site-side access for the environment (P7.3.7) comes with the step that creates it.
+# shc (design/P7-PLAN.md P7.3.7): CloudVirt teardown. Removes the environment's namespaces from its site (found by
+# label, so namespaces that already left the spec go too). Refused while any of them holds VirtualMachines: the
+# status says which (deletionBlockedBy) and the operator's finalizer asks again later. Waits until the namespaces
+# are gone, then marks deletionComplete; the operator then wakes the placements that waited for them.
 - block:
     - name: Read the CloudVirt
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
+
+    - name: Resolve the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ fab_spec.cloudRef.name }}"
+        ci_ref_namespace: "{{ fabric_platform_namespace }}"
+        ci_expected_type: openshift
+
+    - name: The environment's namespace labels
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check: {action: cloudvirt-namespaces, entity: "{{ fab_entity }}", cloudvirt: "{{ fab_name }}", namespaces: []}
+
+    - name: Remove the namespaces from the site
+      when: ci_found | bool
+      block:
+        - name: The site's fabric credential
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
+          vars:
+            site_kc_tag: "cvd-{{ fab_namespace }}-{{ fab_name }}"
+
+        - name: List the environment's site namespaces
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ site_kubeconfig }}"
+            api_version: v1
+            kind: Namespace
+            label_selectors: >-
+              {{ fab_check_result.selector | dict2items | map(attribute='key')
+                 | zip(fab_check_result.selector.values()) | map('join', '=') | list }}
+          register: _cvd_ns
+
+        - name: List their VMs
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ site_kubeconfig }}"
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            namespace: "{{ item }}"
+          loop: "{{ _cvd_ns.resources | default([]) | map(attribute='metadata.name') | list }}"
+          register: _cvd_vms
+
+        - name: Collect the VMs
+          ansible.builtin.set_fact:
+            cvd_vms: >-
+              {%- set out = [] -%}
+              {%- for r in _cvd_vms.results | default([]) -%}
+                {%- for vm in r.resources | default([]) -%}
+                  {%- set _ = out.append('VirtualMachine ' ~ r.item ~ '/' ~ vm.metadata.name) -%}
+                {%- endfor -%}
+              {%- endfor -%}
+              {{ out }}
+
+        - name: Report the VMs that block the deletion
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: cloudvirts
+            cr_name: "{{ fab_name }}"
+            cr_namespace: "{{ fab_namespace }}"
+            patch_ignore_not_found: true
+            cr_status_body:
+              status: reconciling
+              ready: false
+              message: "Deletion waits for {{ cvd_vms | length }} VM(s) on {{ fab_spec.cloudRef.name }}: {{ cvd_vms[:10] | join(', ') }}"
+              deletionBlockedBy: "{{ cvd_vms }}"
+              lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+          when: cvd_vms | length > 0
+
+        - name: End the job while VMs remain
+          ansible.builtin.meta: end_play
+          when: cvd_vms | length > 0
+
+        - name: Delete the namespaces
+          kubernetes.core.k8s:
+            kubeconfig: "{{ site_kubeconfig }}"
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ item }}"
+            wait: true
+            wait_timeout: 600
+          loop: "{{ _cvd_ns.resources | default([]) | map(attribute='metadata.name') | list }}"
+      always:
+        - name: Remove the site kubeconfig
+          ansible.builtin.file:
+            path: "{{ site_kubeconfig | default('/tmp/eda-cvd-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
+            state: absent
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -18,6 +107,7 @@
           status: ready
           ready: false
           deletionComplete: true
+          deletionBlockedBy: []
           message: Deleted
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
