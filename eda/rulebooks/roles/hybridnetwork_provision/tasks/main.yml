@@ -194,16 +194,17 @@
       ansible.builtin.set_fact:
         hn_egress: >-
           {%- if hn_egress_want | bool and not hn_egress_offered | bool -%}
-            {{ {'internet': 'unavailable'} }}
+            {{ {'internet': 'unavailable', 'sourceAddresses': none} }}
           {%- elif hn_egress_want | bool and hn_egress_carried | length > 0 -%}
             {{ {'internet': 'ready', 'sourceAddresses': hn_egress_carried.sourceAddresses} }}
           {%- elif hn_egress_want | bool -%}
-            {{ {'internet': 'pending'} }}
+            {{ {'internet': 'pending', 'sourceAddresses': none} }}
           {%- elif hn_egress_carried | length > 0 -%}
-            {{ {'internet': 'removing'} }}
+            {{ {'internet': 'removing', 'sourceAddresses': none} }}
           {%- else -%}
             {{ {} }}
           {%- endif -%}
+        # (status is merge-patched: a field left out keeps its old value, so non-ready states clear the addresses)
         hn_egress_note: >-
           {{ {'unavailable': '; internet egress unavailable (HybridFabric ' ~ hn_fabric_name ~ ' offers none)',
               'ready': '; internet egress',
