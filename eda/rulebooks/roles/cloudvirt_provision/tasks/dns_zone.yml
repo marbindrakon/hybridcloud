@@ -1,0 +1,70 @@
+---
+# shc (design/TENANT-DNS.md D3): the environment's zone <cloudvirt>.<entity>.<domain>, held by the platform (site dns
+# mode platform): created in the global tenant zone's project with the DNSConfig's DNS-only account, not shared
+# (the tenant edits it from its VM namespaces through the tenant DNS controller). Environment names are unique per
+# Entity across kinds: a CloudOSO of the same name holds that zone name. Sets cv_dns ({} when there is no usable
+# DNSConfig: the environment works without a zone).
+- name: The platform's tenant DNS namespace
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+
+- name: Note a missing DNSConfig
+  ansible.builtin.set_fact:
+    cv_dns: {}
+    cv_dns_note: "; no environment zone (no usable DNSConfig)"
+  when: not dnscfg_usable | bool
+
+- name: Realize the zone
+  when: dnscfg_usable | bool
+  block:
+    - name: CloudOSOs of the Entity
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudOSO
+        name: "{{ fab_name }}"
+        namespace: "{{ fab_namespace }}"
+      register: _cv_same_name
+
+    - name: Refuse an environment name a CloudOSO already uses
+      ansible.builtin.set_fact:
+        fab_fail_reason: EnvironmentNameTaken
+        fab_fail_msg: >-
+          CloudVirt {{ fab_name }}: CloudOSO {{ fab_name }} in this namespace already uses the environment name (and its
+          zone {{ fab_name }}.{{ fab_entity }}.{{ dnscfg_domain }})
+      when: _cv_same_name.resources | default([]) | length > 0
+
+    - name: Stop on a taken name
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: _cv_same_name.resources | default([]) | length > 0
+
+    - name: The DNS-only account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ dnscfg_secret }}"
+        os_account_tag: "cv-dns-{{ fab_name }}"
+
+    - name: Ensure the environment zone
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_request:
+          action: ensure-zone
+          owner_project_id: "{{ dnscfg_project_id }}"
+          name: "{{ fab_name }}.{{ fab_entity }}.{{ dnscfg_domain }}"
+          email: "hostmaster@{{ dnscfg_domain }}"
+          description: "Environment zone of CloudVirt {{ fab_namespace }}/{{ fab_name }} (platform-held)"
+
+    - name: Record the zone
+      ansible.builtin.set_fact:
+        cv_dns:
+          zone: "{{ os_result.zone }}"
+          zoneId: "{{ os_result.zone_id }}"
+          mode: platform
+          provider: designate
+          owner: "{{ dnscfg_project_id }}"
+          nameservers: "{{ os_result.nameservers }}"
+        cv_dns_note: "; zone {{ os_result.zone }}"

@@ -96,6 +96,29 @@
             path: "{{ site_kubeconfig | default('/tmp/eda-cvd-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
             state: absent
 
+    # TENANT-DNS D3 (T4): the environment zone goes with the environment, tenant records included
+    - name: Delete the environment zone
+      when: (fab_st.dns | default({}, true)).zoneId | default('', true) | length > 0
+      block:
+        - name: The platform's tenant DNS namespace
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+
+        - name: The DNS-only account
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+          vars:
+            os_account_vault_path: "{{ dnscfg_secret }}"
+            os_account_tag: "cvd-dns-{{ fab_name }}"
+
+        - name: Delete the zone
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+          vars:
+            os_helper: shc_dns.py
+            os_call_no_log: false
+            os_request:
+              action: delete-zone
+              owner_project_id: "{{ fab_st.dns.owner }}"
+              zone_id: "{{ fab_st.dns.zoneId }}"
+
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:

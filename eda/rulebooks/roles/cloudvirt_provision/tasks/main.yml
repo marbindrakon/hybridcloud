@@ -278,6 +278,10 @@
             path: "{{ site_kubeconfig | default('/tmp/eda-cv-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
             state: absent
 
+    - name: The environment zone (site DNS mode platform)
+      ansible.builtin.include_tasks: dns_zone.yml
+      when: ((ci_spec.dns | default({})).mode | default('platform')) == 'platform'
+
     - name: Report the environment ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -287,9 +291,10 @@
           {{ cv_namespaces | length }} namespace(s) on {{ cv_site_name }}
           ({{ cv_ns_status | selectattr('ready') | list | length }} with their network){{ '; removed from spec but still
           holding VMs: ' ~ cv_kept | join(', ') if cv_kept | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
-          | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}
+          | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}{{ cv_dns_note | default('') }}
         fab_status: >-
-          {{ cv_status | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {}) }}
+          {{ cv_status | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {})
+             | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {}) }}
 
   rescue:
     - name: Mark the CloudVirt failed
