@@ -150,7 +150,7 @@
               'allocated': hf_ledger.allocated,
               'available': hf_ledger.available,
               'nodes': hf_node_results,
-              'realization': {'model': 'linux-pe', 'routeReflector': hf_pe.loopbackIp, 'nodeSid': hf_pe.sid,
+              'realization': {'model': fab_real.model, 'routeReflector': hf_pe.loopbackIp, 'nodeSid': hf_pe.sid,
                               'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet}} }}
 
   rescue:

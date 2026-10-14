@@ -256,7 +256,7 @@
         fab_status: >-
           {{ cg_status | combine({'site': cg_status.site | combine(cg_site_extra),
                                    'nodes': cg_node_results,
-                                   'realization': {'model': 'linux-pe', 'peIndex': cg_pe.index, 'loopback': cg_pe.loopbackIp,
+                                   'realization': {'model': fab_real.model, 'peIndex': cg_pe.index, 'loopback': cg_pe.loopbackIp,
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name}}) }}
 

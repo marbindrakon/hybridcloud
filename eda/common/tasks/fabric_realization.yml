@@ -14,3 +14,11 @@
       {{ fabric_realization_defaults
          | combine(_inst | dict2items | rejectattr('key', 'equalto', 'fabrics') | items2dict, recursive=True)
          | combine((_inst.fabrics | default({})).get(fab_real_fabric, {}), recursive=True) }}
+
+- name: Refuse a realization model this platform does not implement
+  ansible.builtin.assert:
+    that: fab_real.model in fabric_realization_models
+    fail_msg: >-
+      HybridFabric {{ fab_real_fabric }}: realization model {{ fab_real.model }} is not implemented
+      (implemented: {{ fabric_realization_models | join(', ') }})
+    quiet: true

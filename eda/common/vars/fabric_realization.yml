@@ -3,9 +3,14 @@
 # the realization's own parameters: border gateway nodes are Linux hosts reached over SSH, each node runs the
 # fabric root (VPNv4 route reflector) and one network namespace per CloudGateway (a provider edge: EVPN-VXLAN on
 # the site side, IS-IS segment routing + MPLS L3VPN over a node-local core bridge on the fabric side).
+# realization models these roles implement
+fabric_realization_models: [linux-pe]
 # An installation overrides any of it with the sovereign-localhost inventory variable `fabric_realization`
 # (aap-config env FABRIC_REALIZATION, JSON), and per fabric under fabric_realization.fabrics.<name>.
 fabric_realization_defaults:
+  # which realization drives the border gateway: linux-pe = RHEL hosts with FRR (this platform's implementation).
+  # Another model (e.g. a vendor router OS) would add its own node tasks; the CRs stay the same.
+  model: linux-pe
   # route target values per HybridNetwork between the gateways (<domainAsn>:<value>); must stay clear of the
   # fabric's VNI pools so a VPN route target never equals a site route target
   vpnTargetPool: {start: 10000, end: 10999}
