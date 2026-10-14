@@ -2294,6 +2294,7 @@ iaasClusters:
           enabled: true
           routeReflectors: [172.18.234.11, 172.18.234.12]
           vtepInterface: {base: bond0, vlan: 236, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
+          sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.236.1
           routes: [172.18.234.0/24, 172.18.235.0/24, 172.18.237.0/24, 172.18.239.0/24]
           nodes:
@@ -2317,6 +2318,7 @@ iaasClusters:
           enabled: true
           routeReflectors: [172.18.234.11, 172.18.234.12]
           vtepInterface: {base: bond1, vlan: 239, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
+          sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.239.1
           routes: [172.18.234.0/24, 172.18.235.0/24, 172.18.236.0/24, 172.18.237.0/24]
           nodes:
