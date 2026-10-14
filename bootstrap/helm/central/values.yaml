@@ -2292,12 +2292,12 @@ iaasClusters:
         # P7.2 fabric underlay (P7-PLAN §9): VTEP VLAN 236 on bond0, iBGP to the route reflectors
         fabric:
           enabled: true
-          routeReflectors: [172.18.234.11, 172.18.234.12]
-          gateways: [172.18.236.4, 172.18.236.5]   # P7.3.6: CloudGateway iaas1 on bgw-1/2 (BFD); then the RRs go
+          routeReflectors: []   # P7.3.6 (10-14): the Atuin RRs retired; the site's route reflectors are its gateways
+          gateways: [172.18.236.4, 172.18.236.5]   # CloudGateway iaas1 on bgw-1/2 (BFD)
           vtepInterface: {base: bond0, vlan: 236, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.236.1
-          routes: [172.18.234.0/24, 172.18.235.0/24, 172.18.237.0/24, 172.18.239.0/24]
+          routes: [172.18.235.0/24, 172.18.237.0/24, 172.18.239.0/24]   # 172.18.234.0/24 (the Atuin RRs) dropped at the cutover
           nodes:
             - {name: iaas1-blade1, vtepIP: 172.18.236.11}
             - {name: iaas1-blade2, vtepIP: 172.18.236.12}
@@ -2317,12 +2317,12 @@ iaasClusters:
         # P7.2 fabric underlay (P7-PLAN §9): VTEP VLAN 239 on bond1, iBGP to the route reflectors
         fabric:
           enabled: true
-          routeReflectors: [172.18.234.11, 172.18.234.12]
-          gateways: [172.18.239.4, 172.18.239.5]   # P7.3.6: CloudGateway edge1 on bgw-1/2 (BFD); then the RRs go
+          routeReflectors: []   # P7.3.6 (10-14): the Atuin RRs retired; the site's route reflectors are its gateways
+          gateways: [172.18.239.4, 172.18.239.5]   # CloudGateway edge1 on bgw-1/2 (BFD)
           vtepInterface: {base: bond1, vlan: 239, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.239.1
-          routes: [172.18.234.0/24, 172.18.235.0/24, 172.18.236.0/24, 172.18.237.0/24]
+          routes: [172.18.235.0/24, 172.18.236.0/24, 172.18.237.0/24]   # 172.18.234.0/24 (the Atuin RRs) dropped at the cutover
           nodes:
             - {name: edge1-node1, vtepIP: 172.18.239.21}
             - {name: edge1-node2, vtepIP: 172.18.239.22}
