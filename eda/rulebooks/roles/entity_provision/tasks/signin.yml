@@ -81,7 +81,7 @@
 
 - name: Find the Rbac groups
   ansible.builtin.uri:
-    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/group-by-path/{{ item.path | urlencode }}"
+    url: "{{ es_kc }}/admin/realms/{{ es_realm }}/group-by-path/{{ item.path | regex_replace('^/+', '') | urlencode }}"
     headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
     validate_certs: false
   loop: "{{ es_wanted }}"
