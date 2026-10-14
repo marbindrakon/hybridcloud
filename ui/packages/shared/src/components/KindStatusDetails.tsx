@@ -279,11 +279,11 @@ function HybridFabricDetails({ item }: { item: HybridFabric }): React.ReactEleme
         <Table aria-label={t('detail.borderGatewayNodes')} variant="compact">
           <Thead>
             <Tr>
-              <Th>{t('common.name')}</Th>
-              <Th>{t('fields.nodeAddress')}</Th>
-              <Th>{t('detail.ready')}</Th>
-              <Th>{t('detail.lastApplied')}</Th>
-              <Th>{t('common.message')}</Th>
+              <Th modifier="wrap">{t('common.name')}</Th>
+              <Th modifier="wrap">{t('fields.nodeAddress')}</Th>
+              <Th modifier="wrap">{t('detail.ready')}</Th>
+              <Th modifier="wrap">{t('detail.lastApplied')}</Th>
+              <Th modifier="wrap">{t('common.message')}</Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -315,10 +315,10 @@ function HybridFabricDetails({ item }: { item: HybridFabric }): React.ReactEleme
           <Table aria-label={t('detail.poolUse')} variant="compact">
             <Thead>
               <Tr>
-                <Th>{t('detail.pool')}</Th>
-                <Th>{t('detail.allocated')}</Th>
-                <Th>{t('detail.available')}</Th>
-                <Th>{t('detail.use')}</Th>
+                <Th modifier="wrap">{t('detail.pool')}</Th>
+                <Th modifier="wrap">{t('detail.allocated')}</Th>
+                <Th modifier="wrap">{t('detail.available')}</Th>
+                <Th modifier="wrap">{t('detail.use')}</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -432,21 +432,21 @@ function CloudGatewayDetails({ item }: { item: CloudGateway }): React.ReactEleme
           <Table aria-label={t('detail.gatewayNodes')} variant="compact">
             <Thead>
               <Tr>
-                <Th>{t('common.name')}</Th>
-                <Th>{t('fields.nodeUnderlayAddress')}</Th>
-                <Th>{t('detail.ready')}</Th>
-                <Th>{t('detail.siteSessions')}</Th>
-                <Th>{t('detail.coreSessions')}</Th>
-                <Th>{t('detail.upstreamSessions')}</Th>
-                {wireguard && <Th>{t('detail.tunnel')}</Th>}
-                <Th>{t('common.message')}</Th>
+                <Th modifier="wrap">{t('common.name')}</Th>
+                <Th modifier="wrap">{t('fields.nodeUnderlayAddress')}</Th>
+                <Th modifier="wrap">{t('detail.ready')}</Th>
+                <Th modifier="wrap">{t('detail.siteSessions')}</Th>
+                <Th modifier="wrap">{t('detail.coreSessions')}</Th>
+                <Th modifier="wrap">{t('detail.upstreamSessions')}</Th>
+                {wireguard && <Th modifier="wrap">{t('detail.tunnel')}</Th>}
+                <Th modifier="wrap">{t('common.message')}</Th>
               </Tr>
             </Thead>
             <Tbody>
               {nodes.map((n, i) => (
                 <Tr key={n.name ?? i}>
-                  <Td dataLabel={t('common.name')}>{n.name || <Dash />}</Td>
-                  <Td dataLabel={t('fields.nodeUnderlayAddress')}>
+                  <Td dataLabel={t('common.name')} modifier="nowrap">{n.name || <Dash />}</Td>
+                  <Td dataLabel={t('fields.nodeUnderlayAddress')} modifier="nowrap">
                     <Mono>{n.address}</Mono>
                   </Td>
                   <Td dataLabel={t('detail.ready')}>
@@ -477,10 +477,10 @@ function CloudGatewayDetails({ item }: { item: CloudGateway }): React.ReactEleme
               <Table aria-label={t('detail.wireguardNodes')} variant="compact" className="sc-mb">
                 <Thead>
                   <Tr>
-                    <Th>{t('common.name')}</Th>
-                    <Th>{t('fields.wireguardPublicKey')}</Th>
-                    <Th>{t('fields.wireguardListenPort')}</Th>
-                    <Th>{t('detail.tunnelAddress')}</Th>
+                    <Th modifier="wrap">{t('common.name')}</Th>
+                    <Th modifier="wrap">{t('fields.wireguardPublicKey')}</Th>
+                    <Th modifier="wrap">{t('fields.wireguardListenPort')}</Th>
+                    <Th modifier="wrap">{t('detail.tunnelAddress')}</Th>
                   </Tr>
                 </Thead>
                 <Tbody>
@@ -501,11 +501,11 @@ function CloudGatewayDetails({ item }: { item: CloudGateway }): React.ReactEleme
               <Table aria-label={t('detail.wireguardPeers')} variant="compact">
                 <Thead>
                   <Tr>
-                    <Th>{t('detail.node')}</Th>
-                    <Th>{t('detail.peer')}</Th>
-                    <Th>{t('fields.wireguardEndpoint')}</Th>
-                    <Th>{t('detail.lastHandshake')}</Th>
-                    <Th>{t('detail.state')}</Th>
+                    <Th modifier="wrap">{t('detail.node')}</Th>
+                    <Th modifier="wrap">{t('detail.peer')}</Th>
+                    <Th modifier="wrap">{t('fields.wireguardEndpoint')}</Th>
+                    <Th modifier="wrap">{t('detail.lastHandshake')}</Th>
+                    <Th modifier="wrap">{t('detail.state')}</Th>
                   </Tr>
                 </Thead>
                 <Tbody>
@@ -707,11 +707,11 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
         <Table aria-label={t('fields.vmNamespaces')} variant="compact">
           <Thead>
             <Tr>
-              <Th>{t('common.name')}</Th>
-              <Th>{t('detail.siteNamespace')}</Th>
-              <Th>{t('fields.namespaceNetwork')}</Th>
-              <Th>{t('detail.ready')}</Th>
-              <Th>{t('common.message')}</Th>
+              <Th modifier="wrap">{t('common.name')}</Th>
+              <Th modifier="wrap">{t('detail.siteNamespace')}</Th>
+              <Th modifier="wrap">{t('fields.namespaceNetwork')}</Th>
+              <Th modifier="wrap">{t('detail.ready')}</Th>
+              <Th modifier="wrap">{t('common.message')}</Th>
             </Tr>
           </Thead>
           <Tbody>
