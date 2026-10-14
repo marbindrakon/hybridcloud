@@ -25,7 +25,14 @@ function userToken(req) {
   return null;
 }
 
-function proxyRequest(apiServer, k8sPath, method, token, body, res) {
+/** Patch media types the API server accepts; any other body is sent as application/json. */
+const PATCH_TYPES = [
+  "application/merge-patch+json",
+  "application/json-patch+json",
+  "application/strategic-merge-patch+json",
+];
+
+function proxyRequest(apiServer, k8sPath, method, token, body, res, contentType) {
   let url;
   try {
     url = new URL(k8sPath, apiServer);
@@ -38,7 +45,7 @@ function proxyRequest(apiServer, k8sPath, method, token, body, res) {
     Authorization: `Bearer ${token}`,
     Accept: "application/json",
   };
-  if (body) headers["Content-Type"] = "application/json";
+  if (body) headers["Content-Type"] = contentType || "application/json";
 
   const opts = {
     hostname: url.hostname,
@@ -142,6 +149,8 @@ export function createApiK8sProxy(apiServer) {
       req.method !== "GET" && req.method !== "HEAD" && req.body && Object.keys(req.body).length
         ? req.body
         : undefined;
-    return proxyRequest(apiServer, k8sPath, req.method, token, body, res);
+    const incomingType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+    const contentType = req.method === "PATCH" && PATCH_TYPES.includes(incomingType) ? incomingType : undefined;
+    return proxyRequest(apiServer, k8sPath, req.method, token, body, res, contentType);
   };
 }

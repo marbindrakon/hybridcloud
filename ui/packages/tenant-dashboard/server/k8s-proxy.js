@@ -70,16 +70,244 @@ const ENTITY_NS_LABEL_SELECTOR = "hybridsovereign.redhat/entity";
 const PLUGINS_NS = "sovereign-cloud-plugins";
 const RECONCILE_ANNOTATION = "ansible.sdk.operatorframework.io/reconcileNow";
 /**
- * spec.cloudRef of a tenant cloud project: a CloudInfrastructure in sovereign-cloud. Returns the
- * sanitized reference, null when absent, or false when present but invalid.
+ * Spec sanitizers. Create and update endpoints accept exactly the fields of this platform's CRDs
+ * and pass them through; unknown fields are dropped, wrong types are refused, and nothing the CRD
+ * does not require is required here (the API server applies the CRD defaults and rules).
+ * Each returns { spec } or { error }.
  */
-function sanitizeCloudRef(raw) {
+function isObject(v) {
+  return v != null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Non-empty trimmed strings of the listed keys. */
+function pickStrings(src, keys) {
+  const out = {};
+  for (const k of keys) {
+    const v = src?.[k];
+    if (typeof v === "string" && v.trim()) out[k] = v.trim();
+  }
+  return out;
+}
+
+/** List of non-empty trimmed strings, or undefined when absent/empty; false when not a string list. */
+function stringList(v) {
+  if (v == null) return undefined;
+  if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) return false;
+  const out = v.map((x) => x.trim()).filter(Boolean);
+  return out.length ? out : undefined;
+}
+
+/** Integer in [min, max], undefined when absent, false when invalid. */
+function intIn(v, min, max) {
+  if (v == null || v === "") return undefined;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isInteger(n) && n >= min && n <= max ? n : false;
+}
+
+/** `{ name }` reference: null when absent, false when invalid. */
+function sanitizeNameRef(raw) {
   if (raw == null) return null;
-  if (typeof raw !== "object" || typeof raw.name !== "string") return false;
+  if (!isObject(raw) || typeof raw.name !== "string") return false;
   const name = raw.name.trim();
   if (!name || name.length > 253 || !NAME_PATTERN.test(name)) return false;
-  if (raw.kind != null && raw.kind !== "CloudInfrastructure") return false;
-  return { kind: "CloudInfrastructure", name };
+  return { name };
+}
+
+/** spec.cloudRef of a tenant cloud project: a CloudInfrastructure in the platform namespace. */
+function sanitizeCloudRef(raw) {
+  return sanitizeNameRef(raw);
+}
+
+function sanitizePlatformOpenshiftSpec(raw) {
+  if (!isObject(raw)) return { error: "spec must be an object" };
+  const spec = {};
+  if (raw.type != null) {
+    if (raw.type !== "openstack" && raw.type !== "aws") return { error: "spec.type must be openstack or aws" };
+    spec.type = raw.type;
+  }
+  if (raw.openstack != null) {
+    if (!isObject(raw.openstack)) return { error: "spec.openstack must be an object" };
+    const os = pickStrings(raw.openstack, [
+      "environment",
+      "controlPlaneFlavor",
+      "workerFlavor",
+      "externalNetwork",
+      "ocpImageSet",
+      "pullSecretVaultPath",
+      "pullSecretVaultProperty",
+      "sshKeyVaultPath",
+      "glanceImageOverride",
+      "trustBundle",
+    ]);
+    const cp = intIn(raw.openstack.controlPlaneCount, 1, 1000);
+    const workers = intIn(raw.openstack.workerCount, 0, 1000);
+    if (cp === false || workers === false) return { error: "spec.openstack node counts must be integers" };
+    if (cp !== undefined) os.controlPlaneCount = cp;
+    if (workers !== undefined) os.workerCount = workers;
+    spec.openstack = os;
+  }
+  if (raw.aws != null) {
+    if (!isObject(raw.aws)) return { error: "spec.aws must be an object" };
+    const aws = pickStrings(raw.aws, ["environment", "region", "controllerFlavor", "workerFlavor"]);
+    if (!aws.environment) return { error: "spec.aws.environment is required" };
+    if (raw.aws.clusterType != null) {
+      if (raw.aws.clusterType !== "standalone" && raw.aws.clusterType !== "ha") {
+        return { error: "spec.aws.clusterType must be standalone or ha" };
+      }
+      aws.clusterType = raw.aws.clusterType;
+    }
+    const cp = intIn(raw.aws.controlPlaneCount, 0, 1000);
+    const workers = intIn(raw.aws.workerCount, 0, 1000);
+    if (cp === false || workers === false) return { error: "spec.aws node counts must be integers" };
+    if (cp !== undefined) aws.controlPlaneCount = cp;
+    if (workers !== undefined) aws.workerCount = workers;
+    spec.aws = aws;
+  }
+  if (raw.toolRbac != null) {
+    if (!isObject(raw.toolRbac)) return { error: "spec.toolRbac must be an object" };
+    const toolRbac = {};
+    for (const key of ["clusterAdminRbac", "clusterOperatorRbac", "clusterDeveloperRbac", "clusterViewerRbac"]) {
+      const list = stringList(raw.toolRbac[key]);
+      if (list === false) return { error: `spec.toolRbac.${key} must be a list of Rbac names` };
+      if (list) toolRbac[key] = list;
+    }
+    if (Object.keys(toolRbac).length) spec.toolRbac = toolRbac;
+  }
+  const viewers = stringList(raw.clusterViewerRbac);
+  if (viewers === false) return { error: "spec.clusterViewerRbac must be a list of Rbac names" };
+  if (viewers) spec.clusterViewerRbac = viewers;
+  return { spec };
+}
+
+function sanitizeCloudOSOSpec(raw) {
+  if (!isObject(raw)) return { error: "spec must be an object" };
+  const spec = pickStrings(raw, [
+    "project",
+    "vaultPath",
+    "baseDomain",
+    "projectDomain",
+    "externalNetwork",
+    "regionName",
+    "route53VaultPath",
+    "landingzone",
+    "designateZoneId",
+    "designateProjectId",
+    "vrfId",
+  ]);
+  const cloudRef = sanitizeCloudRef(raw.cloudRef);
+  if (cloudRef === false) return { error: "spec.cloudRef.name is invalid" };
+  if (cloudRef) spec.cloudRef = cloudRef;
+  if (raw.dnsProvider != null && raw.dnsProvider !== "") {
+    if (!["designate", "route53", "none"].includes(raw.dnsProvider)) {
+      return { error: "spec.dnsProvider must be designate, route53 or none" };
+    }
+    spec.dnsProvider = raw.dnsProvider;
+  }
+  if (raw.enableVRF != null) {
+    if (typeof raw.enableVRF !== "boolean") return { error: "spec.enableVRF must be a boolean" };
+    spec.enableVRF = raw.enableVRF;
+  }
+  return { spec };
+}
+
+function sanitizeCloudAWSSpec(raw) {
+  if (!isObject(raw)) return { error: "spec must be an object" };
+  const spec = pickStrings(raw, ["account", "vaultPath", "baseDomain", "landingzone"]);
+  if (!spec.account || !spec.vaultPath || !spec.baseDomain) {
+    return { error: "spec.account, spec.vaultPath and spec.baseDomain are required" };
+  }
+  return { spec };
+}
+
+const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+function sanitizeCloudVirtSpec(raw) {
+  if (!isObject(raw)) return { error: "spec must be an object" };
+  const spec = pickStrings(raw, ["description", "storageClass"]);
+  const cloudRef = sanitizeCloudRef(raw.cloudRef);
+  if (!cloudRef) return { error: "spec.cloudRef.name (a CloudInfrastructure of type openshift) is required" };
+  spec.cloudRef = cloudRef;
+  if (raw.namespaces != null) {
+    if (!Array.isArray(raw.namespaces)) return { error: "spec.namespaces must be a list" };
+    const namespaces = [];
+    for (const n of raw.namespaces) {
+      if (!isObject(n) || typeof n.name !== "string" || !DNS_LABEL.test(n.name.trim()) || n.name.trim().length > 30) {
+        return { error: "each spec.namespaces[].name must be a DNS label of at most 30 characters" };
+      }
+      const item = { name: n.name.trim() };
+      if (n.network != null && n.network !== "") {
+        if (typeof n.network !== "string" || !NAME_PATTERN.test(n.network.trim())) {
+          return { error: "spec.namespaces[].network must be a HybridNetwork name" };
+        }
+        item.network = n.network.trim();
+      }
+      namespaces.push(item);
+    }
+    spec.namespaces = namespaces;
+  }
+  if (raw.quota != null) {
+    if (!isObject(raw.quota)) return { error: "spec.quota must be an object" };
+    const quota = {};
+    for (const key of ["cpu", "memory", "storage"]) {
+      const v = raw.quota[key];
+      if (v == null || v === "") continue;
+      if (typeof v === "number" && Number.isFinite(v)) quota[key] = v;
+      else if (typeof v === "string" && v.trim()) quota[key] = v.trim();
+      else return { error: `spec.quota.${key} must be a quantity` };
+    }
+    const vms = intIn(raw.quota.virtualMachines, 0, Number.MAX_SAFE_INTEGER);
+    if (vms === false) return { error: "spec.quota.virtualMachines must be an integer of at least 0" };
+    if (vms !== undefined) quota.virtualMachines = vms;
+    if (Object.keys(quota).length) spec.quota = quota;
+  }
+  if (raw.toolRbac != null) {
+    if (!isObject(raw.toolRbac)) return { error: "spec.toolRbac must be an object" };
+    const toolRbac = {};
+    for (const key of ["editRbac", "viewRbac"]) {
+      const list = stringList(raw.toolRbac[key]);
+      if (list === false) return { error: `spec.toolRbac.${key} must be a list of Rbac names` };
+      if (list) toolRbac[key] = list;
+    }
+    if (Object.keys(toolRbac).length) spec.toolRbac = toolRbac;
+  }
+  return { spec };
+}
+
+function sanitizeHybridNetworkSpec(raw) {
+  if (!isObject(raw)) return { error: "spec must be an object" };
+  const spec = pickStrings(raw, ["description"]);
+  const fabricRef = sanitizeNameRef(raw.fabricRef);
+  if (fabricRef === false) return { error: "spec.fabricRef.name is invalid" };
+  if (fabricRef) spec.fabricRef = fabricRef;
+  const mtu = intIn(raw.mtu, 1280, 9216);
+  if (mtu === false) return { error: "spec.mtu must be an integer from 1280 to 9216" };
+  if (mtu !== undefined) spec.mtu = mtu;
+  const viewers = stringList(raw.networkViewerRbac);
+  if (viewers === false) return { error: "spec.networkViewerRbac must be a list of Rbac names" };
+  if (viewers) spec.networkViewerRbac = viewers;
+  if (raw.egress != null) {
+    if (!isObject(raw.egress)) return { error: "spec.egress must be an object" };
+    if (raw.egress.internet != null) {
+      if (typeof raw.egress.internet !== "boolean") return { error: "spec.egress.internet must be a boolean" };
+      spec.egress = { internet: raw.egress.internet };
+    }
+  }
+  return { spec };
+}
+
+function sanitizeNetworkPlacementSpec(raw) {
+  if (!isObject(raw)) return { error: "spec must be an object" };
+  const network = typeof raw.network === "string" ? raw.network.trim() : "";
+  if (!network || !NAME_PATTERN.test(network)) return { error: "spec.network (a HybridNetwork name) is required" };
+  const backend = raw.backend;
+  if (!isObject(backend) || (backend.kind !== "CloudOSO" && backend.kind !== "CloudVirt")) {
+    return { error: "spec.backend.kind must be CloudOSO or CloudVirt" };
+  }
+  const backendName = typeof backend.name === "string" ? backend.name.trim() : "";
+  if (!backendName || !NAME_PATTERN.test(backendName)) return { error: "spec.backend.name is required" };
+  const prefixes = stringList(raw.prefixes);
+  if (!prefixes) return { error: "spec.prefixes must be a non-empty list of IPv4 prefixes" };
+  return { spec: { network, backend: { kind: backend.kind, name: backendName }, prefixes } };
 }
 
 const KIND_PLURALS = {
@@ -168,6 +396,14 @@ export function createK8sHandlers(apiServer) {
 
   function cloudvirtsCollectionPath(namespace) {
     return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/cloudvirts`;
+  }
+
+  function hybridnetworksCollectionPath(namespace) {
+    return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/hybridnetworks`;
+  }
+
+  function networkplacementsCollectionPath(namespace) {
+    return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/networkplacements`;
   }
   function personasCollectionPath(namespace) {
     return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/personas`;
@@ -792,148 +1028,16 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
-      if (!spec || typeof spec !== "object") {
-        return res.status(400).json({ message: "spec is required" });
-      }
-      const { type } = spec;
-      if (type !== "aws" && type !== "openstack" && type !== "hosted") {
-        return res.status(400).json({ message: "spec.type must be aws, openstack, or hosted" });
-      }
-
-      function toPositiveInt(raw, fallback) {
-        const n = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
-        return Number.isFinite(n) && n >= 1 ? n : fallback;
-      }
-
-      function sanitizeToolRbac(raw) {
-        if (!raw || typeof raw !== "object") return undefined;
-        const out = {};
-        for (const key of [
-          "clusterAdminRbac",
-          "clusterOperatorRbac",
-          "clusterDeveloperRbac",
-          "clusterViewerRbac",
-        ]) {
-          const list = raw[key];
-          if (!Array.isArray(list)) continue;
-          const cleaned = list
-            .filter((v) => typeof v === "string")
-            .map((v) => v.trim())
-            .filter(Boolean);
-          if (cleaned.length) out[key] = cleaned;
-        }
-        return Object.keys(out).length ? out : undefined;
-      }
-
-      let platformSpec;
-      if (type === "aws") {
-        const aws = spec.aws;
-        if (!aws || typeof aws.environment !== "string" || !aws.environment.trim()) {
-          return res.status(400).json({ message: "spec.aws.environment is required" });
-        }
-        const clusterType =
-          aws.clusterType === "ha" || aws.clusterType === "standalone"
-            ? aws.clusterType
-            : "standalone";
-        platformSpec = {
-          type: "aws",
-          aws: {
-            environment: aws.environment.trim(),
-            region:
-              typeof aws.region === "string" && aws.region.trim()
-                ? aws.region.trim()
-                : "us-east-1",
-            clusterType,
-            controlPlaneCount: toPositiveInt(aws.controlPlaneCount, 3),
-            workerCount: toPositiveInt(aws.workerCount, 2),
-            controllerFlavor:
-              typeof aws.controllerFlavor === "string" && aws.controllerFlavor.trim()
-                ? aws.controllerFlavor.trim()
-                : "m5.xlarge",
-            workerFlavor:
-              typeof aws.workerFlavor === "string" && aws.workerFlavor.trim()
-                ? aws.workerFlavor.trim()
-                : "m5.large",
-          },
-        };
-      } else if (type === "hosted") {
-        const hosted = spec.hosted;
-        if (!hosted || typeof hosted.environment !== "string" || !hosted.environment.trim()) {
-          return res.status(400).json({ message: "spec.hosted.environment is required" });
-        }
-        platformSpec = {
-          type: "hosted",
-          hosted: {
-            environment: hosted.environment.trim(),
-            nodePoolReplicas: toPositiveInt(hosted.nodePoolReplicas, 2),
-          },
-        };
-      } else {
-        const os = spec.openstack;
-        if (!os || typeof os.environment !== "string" || !os.environment.trim()) {
-          return res.status(400).json({ message: "spec.openstack.environment is required" });
-        }
-        platformSpec = {
-          type: "openstack",
-          openstack: {
-            environment: os.environment.trim(),
-            controlPlaneCount: toPositiveInt(os.controlPlaneCount, 3),
-            workerCount: toPositiveInt(os.workerCount, 3),
-            controlPlaneFlavor:
-              typeof os.controlPlaneFlavor === "string" && os.controlPlaneFlavor.trim()
-                ? os.controlPlaneFlavor.trim()
-                : "m1.xlarge",
-            workerFlavor:
-              typeof os.workerFlavor === "string" && os.workerFlavor.trim()
-                ? os.workerFlavor.trim()
-                : "m1.large",
-            externalNetwork:
-              typeof os.externalNetwork === "string" && os.externalNetwork.trim()
-                ? os.externalNetwork.trim()
-                : "ext-net",
-          },
-        };
-      }
-
-      const toolRbac = sanitizeToolRbac(spec.toolRbac);
-      if (toolRbac) platformSpec.toolRbac = toolRbac;
-
-      // Explicit address plan; omitted CIDRs are allocated from the CloudInfrastructure defaults.
-      // Clusters do not join a fabric: spec.fabric and networking.allocateFromFabric/fabricRef are dropped.
-      if (spec.networking != null) {
-        if (typeof spec.networking !== "object") {
-          return res.status(400).json({ message: "spec.networking must be an object" });
-        }
-        const networking = {};
-        for (const key of ["clusterNetwork", "serviceNetwork"]) {
-          const list = spec.networking[key];
-          if (list == null) continue;
-          if (!Array.isArray(list) || !list.every((v) => typeof v === "string")) {
-            return res.status(400).json({ message: `spec.networking.${key} must be a list of CIDRs` });
-          }
-          const cleaned = list.map((v) => v.trim()).filter(Boolean);
-          if (cleaned.length) networking[key] = cleaned;
-        }
-        if (typeof spec.networking.allowConflict === "boolean") {
-          networking.allowConflict = spec.networking.allowConflict;
-        }
-        if (Object.keys(networking).length) platformSpec.networking = networking;
-      }
-
-      const platform = {
+      const clean = sanitizePlatformOpenshiftSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const obj = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "PlatformOpenshift",
         metadata: { name, namespace },
-        spec: platformSpec,
+        spec: clean.spec,
       };
       try {
-        const resp = await k8sRequest(
-          apiServer,
-          platformopenshiftsCollectionPath(namespace),
-          "POST",
-          token,
-          platform,
-        );
+        const resp = await k8sRequest(apiServer, platformopenshiftsCollectionPath(namespace), "POST", token, obj);
         if (resp.status === 409) return res.status(409).json({ message: `PlatformOpenshift '${name}' already exists` });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
         if (resp.status >= 400) {
@@ -995,10 +1099,13 @@ export function createK8sHandlers(apiServer) {
       if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
       if (!spec) return res.status(400).json({ message: "spec is required" });
+      const clean = sanitizePlatformOpenshiftSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       try {
         const urlPath = `${platformopenshiftsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
-        const patch = [{ op: "merge", path: "/spec", value: spec }];
-        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, { spec }, "application/merge-patch+json");
+        // The editor sends the whole spec: replace it (fields left out are removed).
+        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
+        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status === 404) return res.status(404).json({ message: "Not found" });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
         if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch PlatformOpenshift" });
@@ -1016,51 +1123,16 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
-      if (!spec || typeof spec !== "object") {
-        return res.status(400).json({ message: "spec is required" });
-      }
-      const {
-        project,
-        baseDomain,
-        projectDomain,
-        externalNetwork,
-        route53VaultPath,
-        landingzone,
-        designateZoneId,
-        designateProjectId,
-      } = spec;
-      // Credentials and site settings come from the CloudInfrastructure named by spec.cloudRef.
-      const cloudRef = sanitizeCloudRef(spec.cloudRef);
-      if (!cloudRef) {
-        return res.status(400).json({ message: "spec.cloudRef.name (a CloudInfrastructure of type openstack) is required" });
-      }
-      if (!project || typeof project !== "string" || !project.trim()) {
-        return res.status(400).json({ message: "spec.project is required" });
-      }
-      if (!baseDomain || typeof baseDomain !== "string" || !baseDomain.trim()) {
-        return res.status(400).json({ message: "spec.baseDomain is required" });
-      }
-      // Optional: unset values fall back to the CloudInfrastructure.
-      const optional = (key, value) =>
-        value && typeof value === "string" && value.trim() ? { [key]: value.trim() } : {};
-      const cloudoso = {
+      const clean = sanitizeCloudOSOSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const obj = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "CloudOSO",
         metadata: { name, namespace },
-        spec: {
-          cloudRef,
-          project: project.trim(),
-          baseDomain: baseDomain.trim(),
-          ...optional("projectDomain", projectDomain),
-          ...optional("externalNetwork", externalNetwork),
-          ...optional("route53VaultPath", route53VaultPath),
-          ...optional("landingzone", landingzone),
-          ...optional("designateZoneId", designateZoneId),
-          ...optional("designateProjectId", designateProjectId),
-        },
+        spec: clean.spec,
       };
       try {
-        const resp = await k8sRequest(apiServer, cloudososCollectionPath(namespace), "POST", token, cloudoso);
+        const resp = await k8sRequest(apiServer, cloudososCollectionPath(namespace), "POST", token, obj);
         if (resp.status === 409) return res.status(409).json({ message: `CloudOSO '${name}' already exists` });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
         if (resp.status >= 400) {
@@ -1122,12 +1194,12 @@ export function createK8sHandlers(apiServer) {
       if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
       if (!spec) return res.status(400).json({ message: "spec is required" });
-      if (spec.enableVRF === true && (!spec.vrfId || typeof spec.vrfId !== "string" || !spec.vrfId.trim())) {
-        return res.status(400).json({ message: "spec.vrfId is required when enableVRF is true" });
-      }
+      const clean = sanitizeCloudOSOSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       try {
         const urlPath = `${cloudososCollectionPath(namespace)}/${encodeURIComponent(name)}`;
-        const patch = [{ op: "replace", path: "/spec", value: spec }];
+        // The editor sends the whole spec: replace it (fields left out are removed).
+        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status === 404) return res.status(404).json({ message: "Not found" });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
@@ -1289,40 +1361,16 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
-      // With spec.cloudRef the credentials come from the CloudInfrastructure (type aws).
-      const cloudRef = sanitizeCloudRef(spec?.cloudRef);
-      if (cloudRef === false) {
-        return res.status(400).json({ message: "spec.cloudRef.name is invalid" });
-      }
-      const hasCredRef =
-        spec?.credentialsSecretRef &&
-        typeof spec.credentialsSecretRef === "object" &&
-        typeof spec.credentialsSecretRef.name === "string" &&
-        spec.credentialsSecretRef.name.trim();
-      const hasVault = spec?.vaultPath && typeof spec.vaultPath === "string" && spec.vaultPath.trim();
-      if (!spec?.account || !spec?.baseDomain || (!cloudRef && !hasCredRef && !hasVault)) {
-        return res.status(400).json({
-          message:
-            "spec.account, spec.baseDomain, and spec.cloudRef.name (or credentialsSecretRef.name / vaultPath) are required",
-        });
-      }
-      const cloudaws = {
+      const clean = sanitizeCloudAWSSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const obj = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "CloudAWS",
         metadata: { name, namespace },
-        spec: {
-          account: spec.account,
-          baseDomain: spec.baseDomain,
-          ...(cloudRef
-            ? { cloudRef }
-            : hasCredRef
-              ? { credentialsSecretRef: { name: spec.credentialsSecretRef.name.trim() } }
-              : { vaultPath: spec.vaultPath }),
-          ...(spec?.landingzone ? { landingzone: spec.landingzone } : {}),
-        },
+        spec: clean.spec,
       };
       try {
-        const resp = await k8sRequest(apiServer, cloudawssCollectionPath(namespace), "POST", token, cloudaws);
+        const resp = await k8sRequest(apiServer, cloudawssCollectionPath(namespace), "POST", token, obj);
         if (resp.status === 409) return res.status(409).json({ message: `CloudAWS '${name}' already exists` });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
         if (resp.status >= 400) {
@@ -1364,9 +1412,12 @@ export function createK8sHandlers(apiServer) {
       if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
       if (!spec) return res.status(400).json({ message: "spec is required" });
+      const clean = sanitizeCloudAWSSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       try {
         const urlPath = `${cloudawssCollectionPath(namespace)}/${encodeURIComponent(name)}`;
-        const patch = [{ op: "replace", path: "/spec", value: spec }];
+        // The editor sends the whole spec: replace it (fields left out are removed).
+        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status === 404) return res.status(404).json({ message: "Not found" });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
@@ -1424,31 +1475,16 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
-      // Credentials and site settings come from the CloudInfrastructure named by spec.cloudRef.
-      const cloudRef = sanitizeCloudRef(spec?.cloudRef);
-      if (!cloudRef || !spec?.baseDomain) {
-        return res.status(400).json({
-          message: "spec.cloudRef.name (a CloudInfrastructure of type openshift) and spec.baseDomain are required",
-        });
-      }
-      const quotaHard = spec?.vmNamespaceQuota?.hard;
-      if (quotaHard != null && (typeof quotaHard !== "object" || Array.isArray(quotaHard))) {
-        return res.status(400).json({ message: "spec.vmNamespaceQuota.hard must be an object" });
-      }
-      const cloudvirt = {
+      const clean = sanitizeCloudVirtSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const obj = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "CloudVirt",
         metadata: { name, namespace },
-        spec: {
-          cloudRef,
-          baseDomain: spec.baseDomain,
-          ...(spec?.storageClass ? { storageClass: spec.storageClass } : {}),
-          ...(spec?.networkAttachment ? { networkAttachment: spec.networkAttachment } : {}),
-          ...(quotaHard ? { vmNamespaceQuota: { hard: quotaHard } } : {}),
-        },
+        spec: clean.spec,
       };
       try {
-        const resp = await k8sRequest(apiServer, cloudvirtsCollectionPath(namespace), "POST", token, cloudvirt);
+        const resp = await k8sRequest(apiServer, cloudvirtsCollectionPath(namespace), "POST", token, obj);
         if (resp.status === 409) return res.status(409).json({ message: `CloudVirt '${name}' already exists` });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
         if (resp.status >= 400) {
@@ -1490,9 +1526,12 @@ export function createK8sHandlers(apiServer) {
       if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
       if (!spec) return res.status(400).json({ message: "spec is required" });
+      const clean = sanitizeCloudVirtSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       try {
         const urlPath = `${cloudvirtsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
-        const patch = [{ op: "replace", path: "/spec", value: spec }];
+        // The editor sends the whole spec: replace it (fields left out are removed).
+        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status === 404) return res.status(404).json({ message: "Not found" });
         if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
@@ -1520,6 +1559,206 @@ export function createK8sHandlers(apiServer) {
         res.json({ message: `CloudVirt '${name}' deleted` });
       } catch (err) {
         console.error("CloudVirt delete error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async listHybridNetworks(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const namespace = req.query.namespace;
+      if (!namespace || !NS_PATTERN.test(namespace)) {
+        return res.status(400).json({ message: "namespace query parameter required" });
+      }
+      try {
+        const resp = await k8sRequest(apiServer, hybridnetworksCollectionPath(namespace), "GET", token);
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list HybridNetworks" });
+        res.json(resp.body?.items || []);
+      } catch (err) {
+        console.error("HybridNetwork list error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async getHybridNetwork(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${hybridnetworksCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "GET", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get HybridNetwork" });
+        res.json(resp.body);
+      } catch (err) {
+        console.error("HybridNetwork get error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async createHybridNetwork(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name, namespace, spec } = req.body || {};
+      if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
+      if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      const clean = sanitizeHybridNetworkSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const obj = {
+        apiVersion: "hybridsovereign.redhat/v1alpha1",
+        kind: "HybridNetwork",
+        metadata: { name, namespace },
+        spec: clean.spec,
+      };
+      try {
+        const resp = await k8sRequest(apiServer, hybridnetworksCollectionPath(namespace), "POST", token, obj);
+        if (resp.status === 409) return res.status(409).json({ message: `HybridNetwork '${name}' already exists` });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) {
+          return res.status(502).json({ message: resp.body?.message || "Failed to create HybridNetwork" });
+        }
+        res.status(201).json(resp.body);
+      } catch (err) {
+        console.error("HybridNetwork create error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async patchHybridNetwork(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      const { spec } = req.body || {};
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      if (!spec) return res.status(400).json({ message: "spec is required" });
+      const clean = sanitizeHybridNetworkSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      try {
+        const urlPath = `${hybridnetworksCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        // The editor sends the whole spec: replace it (fields left out are removed).
+        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
+        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch HybridNetwork" });
+        res.json(resp.body);
+      } catch (err) {
+        console.error("HybridNetwork patch error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async deleteHybridNetwork(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${hybridnetworksCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete HybridNetwork" });
+        res.json({ message: `HybridNetwork '${name}' deleted` });
+      } catch (err) {
+        console.error("HybridNetwork delete error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async listNetworkPlacements(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const namespace = req.query.namespace;
+      if (!namespace || !NS_PATTERN.test(namespace)) {
+        return res.status(400).json({ message: "namespace query parameter required" });
+      }
+      try {
+        const resp = await k8sRequest(apiServer, networkplacementsCollectionPath(namespace), "GET", token);
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list NetworkPlacements" });
+        res.json(resp.body?.items || []);
+      } catch (err) {
+        console.error("NetworkPlacement list error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async getNetworkPlacement(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${networkplacementsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "GET", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get NetworkPlacement" });
+        res.json(resp.body);
+      } catch (err) {
+        console.error("NetworkPlacement get error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async createNetworkPlacement(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name, namespace, spec } = req.body || {};
+      if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
+      if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      const clean = sanitizeNetworkPlacementSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const obj = {
+        apiVersion: "hybridsovereign.redhat/v1alpha1",
+        kind: "NetworkPlacement",
+        metadata: { name, namespace },
+        spec: clean.spec,
+      };
+      try {
+        const resp = await k8sRequest(apiServer, networkplacementsCollectionPath(namespace), "POST", token, obj);
+        if (resp.status === 409) return res.status(409).json({ message: `NetworkPlacement '${name}' already exists` });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) {
+          return res.status(502).json({ message: resp.body?.message || "Failed to create NetworkPlacement" });
+        }
+        res.status(201).json(resp.body);
+      } catch (err) {
+        console.error("NetworkPlacement create error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async deleteNetworkPlacement(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${networkplacementsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete NetworkPlacement" });
+        res.json({ message: `NetworkPlacement '${name}' deleted` });
+      } catch (err) {
+        console.error("NetworkPlacement delete error:", err.message);
         res.status(502).json({ message: "Failed to communicate with cluster API" });
       }
     },
@@ -2335,6 +2574,8 @@ export function createK8sHandlers(apiServer) {
         { resource: "cloudosos",           group: "hybridsovereign.redhat" },
         { resource: "cloudawss",           group: "hybridsovereign.redhat" },
         { resource: "cloudvirts",          group: "hybridsovereign.redhat" },
+        { resource: "hybridnetworks",      group: "hybridsovereign.redhat" },
+        { resource: "networkplacements",   group: "hybridsovereign.redhat" },
         { resource: "platformopenshifts",  group: "hybridsovereign.redhat" },
         { resource: "vaultkvs",            group: "hybridsovereign.redhat" },
         { resource: "vaults",              group: "hybridsovereign.redhat" },

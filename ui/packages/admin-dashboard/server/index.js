@@ -68,7 +68,18 @@ app.use("/api/", (_req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "16kb" }));
+// Kubernetes patch bodies (merge / JSON patch) are JSON too; the /api/k8s proxy forwards their type.
+app.use(
+  express.json({
+    limit: "16kb",
+    type: [
+      "application/json",
+      "application/merge-patch+json",
+      "application/json-patch+json",
+      "application/strategic-merge-patch+json",
+    ],
+  }),
+);
 
 function extractUser(req, _res, next) {
   const user = req.headers["x-forwarded-user"];

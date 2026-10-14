@@ -66,7 +66,18 @@ app.use("/api/", (_req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "256kb" }));
+// Kubernetes patch bodies (merge / JSON patch) are JSON too; the /api/k8s proxy forwards their type.
+app.use(
+  express.json({
+    limit: "256kb",
+    type: [
+      "application/json",
+      "application/merge-patch+json",
+      "application/json-patch+json",
+      "application/strategic-merge-patch+json",
+    ],
+  }),
+);
 
 function requireAuth(req, res, next) {
   const raw = req.headers["x-forwarded-access-token"];
@@ -191,6 +202,19 @@ app.get("/api/cloudvirts/:name", requireAuth, k8s.getCloudVirt);
 app.post("/api/cloudvirts", requireAuth, mutationLimiter, k8s.createCloudVirt);
 app.patch("/api/cloudvirts/:name", requireAuth, mutationLimiter, k8s.patchCloudVirt);
 app.delete("/api/cloudvirts/:name", requireAuth, mutationLimiter, k8s.deleteCloudVirt);
+
+// HybridNetwork CRUD
+app.get("/api/hybridnetworks", requireAuth, k8s.listHybridNetworks);
+app.get("/api/hybridnetworks/:name", requireAuth, k8s.getHybridNetwork);
+app.post("/api/hybridnetworks", requireAuth, mutationLimiter, k8s.createHybridNetwork);
+app.patch("/api/hybridnetworks/:name", requireAuth, mutationLimiter, k8s.patchHybridNetwork);
+app.delete("/api/hybridnetworks/:name", requireAuth, mutationLimiter, k8s.deleteHybridNetwork);
+
+// NetworkPlacement CRUD (network, backend and prefixes are immutable: no update)
+app.get("/api/networkplacements", requireAuth, k8s.listNetworkPlacements);
+app.get("/api/networkplacements/:name", requireAuth, k8s.getNetworkPlacement);
+app.post("/api/networkplacements", requireAuth, mutationLimiter, k8s.createNetworkPlacement);
+app.delete("/api/networkplacements/:name", requireAuth, mutationLimiter, k8s.deleteNetworkPlacement);
 
 // Project CRUD
 app.get("/api/projects/:name", requireAuth, k8s.getProject);
