@@ -8,114 +8,128 @@ import {
   TableIcon,
   TopologyIcon,
 } from '@patternfly/react-icons';
-import { HybridSovereignKind, K8sResource } from '../types';
+import type {
+  CloudGateway,
+  CloudInfrastructure,
+  HybridFabric,
+  HybridNetwork,
+  HybridSovereignKind,
+  K8sResource,
+  NetworkPlacement,
+} from '../types';
 import { useOverviewCRs } from '../hooks/overviewCrs';
+import { useTranslation } from '../i18n';
 import { normalizeHealth } from './StatusBadge';
+import { PoolBar } from './KindStatusDetails';
 
 /**
  * Network Overview — the hybrid fabric as one picture.
  *
  * Three views of the same data, in dependency order:
- *   1. Fabric summary  — each HybridFabric: ASN, border gateway, VNI pool use.
- *   2. Fabric map      — border gateway at the centre, one spoke per site
- *                        (CloudGateway -> CloudInfrastructure), link state on
- *                        the edge. This is the "across clouds" picture.
- *   3. VRF x backend   — rows are tenant HybridNetworks, columns are the cloud
- *                        projects they are placed on. A cell is one
- *                        NetworkPlacement.
+ *   1. Fabric summary  — each HybridFabric: ASN, overlay MTU, border gateway nodes ready, pool use.
+ *   2. Fabric map      — the fabric at the centre, one spoke per CloudGateway to its
+ *                        CloudInfrastructure: site type, transport, sessions per node, tunnel state.
+ *   3. Networks        — per entity, rows are HybridNetworks (with their internet egress), columns
+ *                        are the entity's cloud environments (CloudVirt, CloudOSO). A cell is one
+ *                        NetworkPlacement: its state and prefixes.
  *
- * Accessibility: cell state is never colour alone — every cell and edge
- * carries an icon and a text label, there is always a legend, and the whole
- * matrix has a table view (the amber "pending" swatch is below 3:1 against the
- * surface, so the label is what carries the meaning).
+ * Accessibility: state is never colour alone — every cell and edge carries an icon and a text
+ * label, there is a legend, and the network matrix has a table view.
  */
 
 export type NetState = 'ready' | 'pending' | 'failed' | 'absent';
 
 export interface NetworkOverviewProps {
-  /** Scope to one tenant: only that entity's HybridNetworks are shown. */
+  /** Scope to one tenant: only that entity's networks and environments are shown. */
   entityNamespace?: string;
-  /** Pre-fetched Overview CRs, to avoid a second aggregate fetch. */
+  /** Pre-fetched CRs, to avoid a second aggregate fetch. */
   resources?: K8sResource[];
   resourcesLoading?: boolean;
   resourcesError?: Error | null;
-  /** Called when a node or row is activated, for drill-down navigation. */
+  /** Called when a gateway, network or placement is activated, for drill-down navigation. */
   onSelect?: (kind: HybridSovereignKind, item: K8sResource) => void;
 }
 
+interface NodeSessions {
+  name: string;
+  ready?: boolean;
+  site?: number;
+  core?: number;
+  upstream?: number;
+  tunnel?: string;
+}
+
 interface Spoke {
-  gateway: K8sResource;
+  gateway: CloudGateway;
   siteName: string;
   siteType: string;
+  transport: string;
   state: NetState;
-  tunnel: string;
-  detail: string;
+  /** wireguard only: up when every node's tunnel is up, down when one is down */
+  tunnel: '' | 'up' | 'down' | 'partial';
+  nodes: NodeSessions[];
 }
 
 interface Backend {
-  /** `${kind}/${name}` */
+  /** `${kind}/${name}` within the entity */
   id: string;
   kind: string;
   name: string;
   siteName: string;
+  item?: K8sResource;
 }
 
 interface Cell {
   state: NetState;
   prefixes: string[];
-  placementName?: string;
+  placement?: NetworkPlacement;
 }
 
-const STATE_META: Record<
-  NetState,
-  { label: string; icon: React.ComponentType<{ className?: string }>; cls: string }
-> = {
-  ready: { label: 'Ready', icon: CheckCircleIcon, cls: 'ready' },
-  pending: { label: 'Pending', icon: InProgressIcon, cls: 'pending' },
-  failed: { label: 'Failed', icon: ExclamationCircleIcon, cls: 'failed' },
-  absent: { label: 'Not placed', icon: MinusCircleIcon, cls: 'absent' },
+interface EntityGroup {
+  namespace: string;
+  entity: string;
+  networks: HybridNetwork[];
+  backends: Backend[];
+}
+
+const STATE_ICON: Record<NetState, { icon: React.ComponentType<{ className?: string }>; cls: string }> = {
+  ready: { icon: CheckCircleIcon, cls: 'ready' },
+  pending: { icon: InProgressIcon, cls: 'pending' },
+  failed: { icon: ExclamationCircleIcon, cls: 'failed' },
+  absent: { icon: MinusCircleIcon, cls: 'absent' },
 };
 
-function itemsOfKind(items: K8sResource[], kind: HybridSovereignKind): K8sResource[] {
-  return items.filter((i) => (i.kind || '') === kind);
+function itemsOfKind<T extends K8sResource>(items: K8sResource[], kind: HybridSovereignKind): T[] {
+  return items.filter((i) => (i.kind || '') === kind) as T[];
 }
 
 function stateOf(item: K8sResource): NetState {
-  const health = normalizeHealth(st(item).ready as boolean | undefined, st(item).status as string | undefined);
+  const health = normalizeHealth(item.status?.ready, item.status?.status);
   if (health === 'ready') return 'ready';
   if (health === 'failed') return 'failed';
-  if (health === 'unknown') return 'pending';
   return 'pending';
 }
 
-function cloudRefName(item: K8sResource): string {
-  const ref = (item.spec as { cloudRef?: { name?: string } } | undefined)?.cloudRef;
-  return typeof ref?.name === 'string' ? ref.name : '';
+function refName(item: K8sResource, key: string): string {
+  const ref = (item.spec as Record<string, unknown> | undefined)?.[key];
+  if (ref && typeof ref === 'object') {
+    const n = (ref as { name?: unknown }).name;
+    return typeof n === 'string' ? n : '';
+  }
+  return '';
 }
 
-/**
- * Per-kind status fields (vni, bgwEndpoint, placements, ...) are declared on the
- * specific *Status interfaces, but these lists arrive as the generic
- * K8sResource whose status is the base OperatorStatus. Read them as a bag.
- */
-function st(item: K8sResource): Record<string, unknown> {
-  return (item.status ?? {}) as unknown as Record<string, unknown>;
+function entityOf(ns: string): string {
+  return ns.replace(/^entity-/, '');
 }
 
-function str(v: unknown): string {
-  return typeof v === 'string' ? v : '';
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined;
-}
-
-/** Geometry for the radial fabric map. */
+/** Geometry for the fabric map. */
 const MAP_W = 760;
 const HUB_R = 54;
-const SPOKE_W = 150;
-const SPOKE_H = 56;
-const ROW_GAP = 76;
+const SPOKE_W = 230;
+const SPOKE_BASE_H = 58;
+const NODE_LINE_H = 13;
+const SPOKE_GAP = 18;
 
 export function NetworkOverview({
   entityNamespace,
@@ -124,184 +138,173 @@ export function NetworkOverview({
   resourcesError,
   onSelect,
 }: NetworkOverviewProps): React.ReactElement {
+  const { t } = useTranslation();
   const [asTable, setAsTable] = useState(false);
   const useParent = resources !== undefined;
   const overview = useOverviewCRs(0, { enabled: !useParent });
 
-  // Tenant scope still needs the platform half (fabric, gateways, sites) from
-  // sovereign-cloud, so the aggregate fetch is used either way and the tenant's
-  // own HybridNetworks are filtered out of it below.
+  // A tenant scope still shows the platform half (fabric, gateways, sites) when it is readable;
+  // only the tenant's own networks and environments are drawn below it.
   const items = useParent ? (resources as K8sResource[]) : overview.items;
   const loading = useParent ? !!resourcesLoading : overview.loading;
   const error = useParent ? resourcesError ?? null : overview.error;
 
   const model = useMemo(() => {
-    const fabrics = itemsOfKind(items, 'HybridFabric');
-    const gateways = itemsOfKind(items, 'CloudGateway');
-    const links = itemsOfKind(items, 'TransportLink');
-    const infra = itemsOfKind(items, 'CloudInfrastructure');
-    const placements = itemsOfKind(items, 'NetworkPlacement');
-
-    let networks = itemsOfKind(items, 'HybridNetwork');
-    if (entityNamespace) {
-      networks = networks.filter((n) => n.metadata.namespace === entityNamespace);
-    }
+    const inScope = (i: K8sResource) => !entityNamespace || i.metadata.namespace === entityNamespace;
+    const fabrics = itemsOfKind<HybridFabric>(items, 'HybridFabric');
+    const gateways = itemsOfKind<CloudGateway>(items, 'CloudGateway');
+    const infra = itemsOfKind<CloudInfrastructure>(items, 'CloudInfrastructure');
+    const networks = itemsOfKind<HybridNetwork>(items, 'HybridNetwork').filter(inScope);
+    const placements = itemsOfKind<NetworkPlacement>(items, 'NetworkPlacement').filter(inScope);
+    const environments = [
+      ...itemsOfKind<K8sResource>(items, 'CloudVirt'),
+      ...itemsOfKind<K8sResource>(items, 'CloudOSO'),
+    ].filter(inScope);
 
     const infraByName = new Map(infra.map((i) => [i.metadata.name, i]));
-    const linkByGateway = new Map(
-      links.map((l) => [str((l.spec as { cloudGatewayRef?: string })?.cloudGatewayRef), l]),
-    );
 
-    // One spoke per CloudGateway: a site attached to the fabric.
-    const spokes: Spoke[] = gateways.map((gw) => {
-      const siteName = cloudRefName(gw) || str(st(gw).cloudInfrastructure);
+    // One spoke per CloudGateway, grouped by the fabric it joins.
+    const spokesByFabric = new Map<string, Spoke[]>();
+    for (const gw of gateways) {
+      const siteName = refName(gw, 'cloudRef');
       const site = infraByName.get(siteName);
-      const link = linkByGateway.get(gw.metadata.name);
-      const transportReady = st(gw).transportReady === true;
+      const transport = gw.spec?.transport || 'none';
+      const nodes: NodeSessions[] = (gw.status?.nodes ?? []).map((n) => ({
+        name: n.name ?? '',
+        ready: n.ready,
+        site: n.siteSessions,
+        core: n.coreSessions,
+        upstream: n.upstreamSessions,
+        tunnel: n.tunnel,
+      }));
+      let tunnel: Spoke['tunnel'] = '';
+      if (transport === 'wireguard') {
+        const states = nodes.map((n) => n.tunnel).filter(Boolean);
+        if (states.length === 0) tunnel = 'down';
+        else if (states.every((s) => s === 'up')) tunnel = 'up';
+        else if (states.every((s) => s !== 'up')) tunnel = 'down';
+        else tunnel = 'partial';
+      }
       const gwState = stateOf(gw);
-      // The edge is only "ready" when the gateway AND its tunnel are up.
-      const state: NetState = gwState === 'ready' && !transportReady ? 'pending' : gwState;
-      const tunnel =
-        str((link?.spec as { tunnelType?: string } | undefined)?.tunnelType) ||
-        str((gw.spec as { transport?: { type?: string } } | undefined)?.transport?.type) ||
-        'none';
-      const peers = num(st(gw).peerCount);
-      return {
+      const spoke: Spoke = {
         gateway: gw,
-        siteName: siteName || '(unbound)',
-        siteType: str((site?.spec as { type?: string } | undefined)?.type) || 'unknown',
-        state,
+        siteName: siteName || '—',
+        siteType: (gw.status?.site?.type as string | undefined) || site?.spec?.type || '—',
+        transport,
+        // The edge is ready only when the gateway is ready and, for a tunnel, every node's tunnel is up.
+        state: gwState === 'ready' && transport === 'wireguard' && tunnel !== 'up' ? 'pending' : gwState,
         tunnel,
-        detail: [
-          `transport ${transportReady ? 'up' : 'down'}`,
-          peers !== undefined ? `${peers} peer${peers === 1 ? '' : 's'}` : '',
-          str(st(gw).gatewayAddress),
-        ]
-          .filter(Boolean)
-          .join(' · '),
+        nodes,
       };
-    });
+      const fabricName = refName(gw, 'fabricRef');
+      spokesByFabric.set(fabricName, [...(spokesByFabric.get(fabricName) ?? []), spoke]);
+    }
+    const fabricNames = Array.from(
+      new Set([...fabrics.map((f) => f.metadata.name), ...Array.from(spokesByFabric.keys())]),
+    ).sort();
 
-    // Columns: every cloud project that carries at least one placement, plus
-    // every project on an attached site, so empty sites are still visible.
-    const backendMap = new Map<string, Backend>();
-    const addBackend = (kind: string, name: string) => {
-      if (!kind || !name) return;
-      const id = `${kind}/${name}`;
-      if (backendMap.has(id)) return;
-      const project = items.find((i) => (i.kind || '') === kind && i.metadata.name === name);
-      backendMap.set(id, {
-        id,
-        kind,
-        name,
-        siteName: project ? cloudRefName(project) : '',
-      });
+    // Environments (columns) and networks (rows), per entity namespace.
+    const groups = new Map<string, EntityGroup>();
+    const group = (ns: string): EntityGroup => {
+      let g = groups.get(ns);
+      if (!g) {
+        g = { namespace: ns, entity: entityOf(ns), networks: [], backends: [] };
+        groups.set(ns, g);
+      }
+      return g;
     };
+    const addBackend = (ns: string, kind: string, name: string, item?: K8sResource) => {
+      if (!kind || !name) return;
+      const g = group(ns);
+      const id = `${kind}/${name}`;
+      if (g.backends.some((b) => b.id === id)) return;
+      g.backends.push({ id, kind, name, siteName: item ? refName(item, 'cloudRef') : '', item });
+    };
+    for (const n of networks) group(n.metadata.namespace ?? '').networks.push(n);
+    for (const e of environments) addBackend(e.metadata.namespace ?? '', e.kind || '', e.metadata.name, e);
     for (const p of placements) {
-      const b = (p.spec as { backend?: { kind?: string; name?: string } } | undefined)?.backend;
-      addBackend(str(b?.kind), str(b?.name));
+      addBackend(p.metadata.namespace ?? '', p.spec?.backend?.kind ?? '', p.spec?.backend?.name ?? '');
     }
-    for (const n of networks) {
-      const sp = (st(n).placements ?? []) as Array<{ backendKind?: string; backendName?: string }>;
-      for (const p of sp) addBackend(str(p.backendKind), str(p.backendName));
+    const entityGroups = Array.from(groups.values())
+      .filter((g) => g.networks.length > 0 || g.backends.length > 0)
+      .sort((a, b) => a.namespace.localeCompare(b.namespace));
+    for (const g of entityGroups) {
+      g.networks.sort((a, b) => a.metadata.name.localeCompare(b.metadata.name));
+      g.backends.sort(
+        (a, b) => a.siteName.localeCompare(b.siteName) || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name),
+      );
     }
-    const backends = Array.from(backendMap.values()).sort(
-      (a, b) => a.siteName.localeCompare(b.siteName) || a.name.localeCompare(b.name),
-    );
 
-    // Cells: prefer the NetworkPlacement CR, fall back to the summary the
-    // HybridNetwork operator writes into status.placements[].
     const cells = new Map<string, Cell>();
     for (const p of placements) {
-      const spec = p.spec as
-        | { network?: string; backend?: { kind?: string; name?: string }; prefixes?: string[] }
-        | undefined;
-      const netName = str(spec?.network);
-      const id = `${str(spec?.backend?.kind)}/${str(spec?.backend?.name)}`;
-      if (!netName || id === '/') continue;
-      cells.set(`${p.metadata.namespace}|${netName}|${id}`, {
+      const net = p.spec?.network ?? '';
+      const id = `${p.spec?.backend?.kind ?? ''}/${p.spec?.backend?.name ?? ''}`;
+      if (!net || id === '/') continue;
+      cells.set(`${p.metadata.namespace}|${net}|${id}`, {
         state: stateOf(p),
-        prefixes: Array.isArray(spec?.prefixes) ? (spec?.prefixes as string[]) : [],
-        placementName: p.metadata.name,
+        prefixes: Array.isArray(p.spec?.prefixes) ? p.spec.prefixes : [],
+        placement: p,
       });
     }
-    for (const n of networks) {
-      const sp = (st(n).placements ?? []) as Array<{
-        name?: string;
-        backendKind?: string;
-        backendName?: string;
-        prefixes?: string[];
-        ready?: boolean;
-      }>;
-      for (const p of sp) {
-        const id = `${str(p.backendKind)}/${str(p.backendName)}`;
-        const key = `${n.metadata.namespace}|${n.metadata.name}|${id}`;
-        if (cells.has(key) || id === '/') continue;
-        cells.set(key, {
-          state: p.ready ? 'ready' : 'pending',
-          prefixes: Array.isArray(p.prefixes) ? p.prefixes : [],
-          placementName: str(p.name),
-        });
-      }
-    }
 
-    return { fabrics, spokes, backends, networks, cells, infra };
+    return { fabrics, fabricNames, spokesByFabric, entityGroups, cells, networks };
   }, [items, entityNamespace]);
 
-  const cellFor = (net: K8sResource, backendId: string): Cell =>
+  const cellFor = (net: HybridNetwork, backendId: string): Cell =>
     model.cells.get(`${net.metadata.namespace}|${net.metadata.name}|${backendId}`) ?? {
       state: 'absent',
       prefixes: [],
     };
 
   if (loading && model.fabrics.length === 0 && model.networks.length === 0) {
-    return <Spinner aria-label="Loading network overview" />;
+    return <Spinner aria-label={t('networkOverview.loading')} />;
   }
 
-  if (error && model.fabrics.length === 0) {
+  if (error && model.fabrics.length === 0 && model.networks.length === 0) {
     return (
-      <Alert variant="warning" title="Unable to load the network overview" isInline>
-        {error.message || 'Failed to list Hybrid Sovereign networking resources.'}
+      <Alert variant="warning" title={t('networkOverview.unableToLoad')} isInline>
+        {error.message}
       </Alert>
     );
   }
 
-  if (model.fabrics.length === 0 && model.networks.length === 0) {
+  if (model.fabricNames.length === 0 && model.entityGroups.length === 0) {
     return (
-      <Alert variant="info" title="No hybrid networking configured" isInline>
-        No HybridFabric or HybridNetwork found
-        {entityNamespace ? ` in ${entityNamespace}` : ''}. A platform admin creates the fabric and
-        its gateways; tenants then place HybridNetworks on cloud projects.
+      <Alert variant="info" title={t('networkOverview.emptyTitle')} isInline>
+        {t('networkOverview.emptyBody')}
       </Alert>
     );
   }
+
+  const showEntity = !entityNamespace;
 
   return (
-    <div className="sc-netov" aria-label="Network overview">
-      {model.fabrics.map((f) => (
-        <FabricSummary key={f.metadata.name} fabric={f} spokes={model.spokes} />
-      ))}
-
-      {model.spokes.length > 0 && (
-        <section className="sc-netov__section">
-          <h3 className="sc-netov__title">Fabric map</h3>
-          <p className="sc-netov__hint">
-            The border gateway and every site attached to it. Tenant clusters are deliberately not
-            fabric members — only cloud projects carry VRFs.
-          </p>
-          <FabricMap spokes={model.spokes} fabric={model.fabrics[0]} onSelect={onSelect} />
-          <Legend />
-        </section>
-      )}
+    <div className="sc-netov" aria-label={t('nav.networkOverview')}>
+      {model.fabricNames.map((name) => {
+        const fabric = model.fabrics.find((f) => f.metadata.name === name);
+        const spokes = model.spokesByFabric.get(name) ?? [];
+        return (
+          <React.Fragment key={name || '-'}>
+            {fabric && <FabricSummary fabric={fabric} spokes={spokes} />}
+            {spokes.length > 0 && (
+              <section className="sc-netov__section">
+                <h3 className="sc-netov__title">
+                  {t('networkOverview.fabricMap')} {name && <code>{name}</code>}
+                </h3>
+                <p className="sc-netov__hint">{t('networkOverview.fabricMapHint')}</p>
+                <FabricMap spokes={spokes} fabricName={name} onSelect={onSelect} />
+                <Legend />
+              </section>
+            )}
+          </React.Fragment>
+        );
+      })}
 
       <section className="sc-netov__section">
         <div className="sc-netov__section-head">
           <div>
-            <h3 className="sc-netov__title">Networks across clouds</h3>
-            <p className="sc-netov__hint">
-              Each row is a tenant VRF; each column a cloud project it can be placed on. A cell is
-              one NetworkPlacement.
-            </p>
+            <h3 className="sc-netov__title">{t('networkOverview.networksTitle')}</h3>
+            <p className="sc-netov__hint">{t('networkOverview.networksHint')}</p>
           </div>
           <Button
             variant="secondary"
@@ -309,24 +312,26 @@ export function NetworkOverview({
             icon={asTable ? <TopologyIcon /> : <TableIcon />}
             onClick={() => setAsTable((v) => !v)}
           >
-            {asTable ? 'Matrix view' : 'Table view'}
+            {asTable ? t('networkOverview.matrixView') : t('networkOverview.tableView')}
           </Button>
         </div>
 
-        {model.networks.length === 0 ? (
-          <Alert variant="info" title="No tenant networks" isInline>
-            No HybridNetwork {entityNamespace ? `in ${entityNamespace}` : 'on this hub'} yet.
-          </Alert>
+        {model.entityGroups.length === 0 ? (
+          <Alert variant="info" title={t('networkOverview.noNetworks')} isInline />
         ) : asTable ? (
-          <PlacementTable networks={model.networks} backends={model.backends} cellFor={cellFor} />
+          <PlacementTable groups={model.entityGroups} cellFor={cellFor} showEntity={showEntity} />
         ) : (
           <>
-            <PlacementMatrix
-              networks={model.networks}
-              backends={model.backends}
-              cellFor={cellFor}
-              onSelect={onSelect}
-            />
+            {model.entityGroups.map((g) => (
+              <div key={g.namespace} style={{ marginBottom: '1rem' }}>
+                {showEntity && (
+                  <h4 className="sc-netov__title" style={{ fontSize: '0.875rem' }}>
+                    {t('networkOverview.entity')} <code>{g.entity}</code>
+                  </h4>
+                )}
+                <PlacementMatrix group={g} cellFor={cellFor} onSelect={onSelect} />
+              </div>
+            ))}
             <Legend />
           </>
         )}
@@ -335,62 +340,68 @@ export function NetworkOverview({
   );
 }
 
-function FabricSummary({
-  fabric,
-  spokes,
-}: {
-  fabric: K8sResource;
-  spokes: Spoke[];
-}): React.ReactElement {
-  const fs = st(fabric);
-  const allocated = num(fs.allocatedVniCount) ?? 0;
-  const available = num(fs.availableVniCount) ?? 0;
-  const total = allocated + available;
-  const pct = total > 0 ? Math.round((allocated / total) * 100) : 0;
-  const asn =
-    num((fabric.spec as { domainAsn?: number } | undefined)?.domainAsn) ?? num(fs.domainAsn);
+function FabricSummary({ fabric, spokes }: { fabric: HybridFabric; spokes: Spoke[] }): React.ReactElement {
+  const { t } = useTranslation();
+  const st = fabric.status ?? {};
   const state = stateOf(fabric);
-  const Meta = STATE_META[state];
+  const Meta = STATE_ICON[state];
+  const specNodes = fabric.spec?.borderGateway?.nodes ?? [];
+  const statusNodes = st.nodes ?? [];
+  const nodesReady = statusNodes.filter((n) => n.ready).length;
+  const nodesTotal = Math.max(specNodes.length, statusNodes.length);
   const attached = spokes.filter((s) => s.state === 'ready').length;
+  const allocated = st.allocated ?? {};
+  const available = st.available ?? {};
+  const pools = Array.from(new Set([...Object.keys(allocated), ...Object.keys(available)])).sort();
 
   return (
     <section className="sc-netov__section sc-netov__fabric">
       <div className="sc-netov__fabric-head">
         <h3 className="sc-netov__title">
-          Fabric <code>{fabric.metadata.name}</code>
+          {t('networkOverview.fabric')} <code>{fabric.metadata.name}</code>
         </h3>
         <span className={`sc-netov__state sc-netov__state--${Meta.cls}`}>
-          <Meta.icon /> {Meta.label}
+          <Meta.icon /> {t(`networkOverview.state_${state}`)}
         </span>
       </div>
       <dl className="sc-netov__facts">
-        <Fact label="Domain ASN" value={asn !== undefined ? String(asn) : '—'} />
-        <Fact label="Border gateway" value={str(fs.bgwEndpoint) || str(fs.bgwAddress) || '—'} />
+        <Fact label={t('fields.domainAsn')} value={fabric.spec?.domainAsn !== undefined ? String(fabric.spec.domainAsn) : '—'} />
         <Fact
-          label="Sites attached"
-          value={`${attached} of ${spokes.length}`}
+          label={t('fields.overlayMtu')}
+          value={fabric.spec?.overlayMtu !== undefined ? String(fabric.spec.overlayMtu) : '—'}
         />
-        <Fact label="BGP peers" value={String(num(fs.bgwPeerCount) ?? 0)} />
+        <Fact
+          label={t('networkOverview.borderGatewayNodesReady')}
+          value={t('detail.countOf', { count: nodesReady, total: nodesTotal })}
+        />
+        <Fact
+          label={t('networkOverview.sitesAttached')}
+          value={t('detail.countOf', { count: attached, total: spokes.length })}
+        />
       </dl>
-      <div className="sc-netov__pool">
-        <div className="sc-netov__pool-label">
-          <span>VNI pool</span>
-          <span className="sc-netov__pool-value">
-            {allocated} allocated / {total || '—'}
-          </span>
+      {pools.length > 0 && (
+        <div className="sc-netov__pools" style={{ display: 'grid', gap: '0.375rem' }}>
+          {pools.map((p) => {
+            const a = typeof allocated[p] === 'number' ? allocated[p] : 0;
+            const v = typeof available[p] === 'number' ? available[p] : 0;
+            const total = a + v;
+            const pct = total > 0 ? Math.round((a / total) * 100) : 0;
+            return (
+              <div key={p} className="sc-netov__pool">
+                <div className="sc-netov__pool-label">
+                  <span>
+                    {t('networkOverview.pool')} <code>{p}</code>
+                  </span>
+                  <span className="sc-netov__pool-value">
+                    {t('networkOverview.poolValue', { allocated: a, total })}
+                  </span>
+                </div>
+                <PoolBar allocated={a} total={total} pct={pct} label={p} />
+              </div>
+            );
+          })}
         </div>
-        {/* Magnitude, so a single-hue bar, not a status colour. */}
-        <div
-          className="sc-netov__pool-track"
-          role="meter"
-          aria-valuenow={allocated}
-          aria-valuemin={0}
-          aria-valuemax={total || allocated}
-          aria-label="VNI pool allocation"
-        >
-          <span className="sc-netov__pool-fill" style={{ width: `${Math.max(pct, total ? 1 : 0)}%` }} />
-        </div>
-      </div>
+      )}
     </section>
   );
 }
@@ -404,19 +415,41 @@ function Fact({ label, value }: { label: string; value: string }): React.ReactEl
   );
 }
 
+function short(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 function FabricMap({
   spokes,
-  fabric,
+  fabricName,
   onSelect,
 }: {
   spokes: Spoke[];
-  fabric?: K8sResource;
+  fabricName: string;
   onSelect?: NetworkOverviewProps['onSelect'];
 }): React.ReactElement {
-  const height = Math.max(spokes.length, 1) * ROW_GAP + 48;
+  const { t } = useTranslation();
+  const heights = spokes.map((s) => SPOKE_BASE_H + Math.max(s.nodes.length, 1) * NODE_LINE_H);
+  const tops: number[] = [];
+  let y = 24;
+  for (const h of heights) {
+    tops.push(y);
+    y += h + SPOKE_GAP;
+  }
+  const height = Math.max(y + 8, 2 * HUB_R + 48);
   const hubX = 110;
   const hubY = height / 2;
   const spokeX = MAP_W - SPOKE_W - 24;
+
+  const nodeLine = (n: NodeSessions): string => {
+    const parts = [
+      t('networkOverview.sessionsSite', { count: n.site ?? 0 }),
+      t('networkOverview.sessionsCore', { count: n.core ?? 0 }),
+    ];
+    if (n.upstream) parts.push(t('networkOverview.sessionsUpstream', { count: n.upstream }));
+    if (n.tunnel) parts.push(t('networkOverview.tunnelState', { state: t(`detail.${n.tunnel === 'up' ? 'up' : 'down'}`) }));
+    return `${n.name}: ${parts.join(' · ')}`;
+  };
 
   return (
     <div className="sc-netov__map-wrap">
@@ -424,26 +457,25 @@ function FabricMap({
         className="sc-netov__map"
         viewBox={`0 0 ${MAP_W} ${height}`}
         role="img"
-        aria-label={`Fabric map: ${spokes.length} site${spokes.length === 1 ? '' : 's'} attached`}
+        aria-label={t('networkOverview.mapAria', { count: spokes.length })}
       >
         {spokes.map((s, i) => {
-          const y = 24 + i * ROW_GAP + SPOKE_H / 2;
+          const cy = tops[i] + heights[i] / 2;
           const x1 = hubX + HUB_R;
           const mx = (x1 + spokeX) / 2;
-          const meta = STATE_META[s.state];
+          const meta = STATE_ICON[s.state];
+          const label =
+            s.transport === 'wireguard'
+              ? `${s.transport} · ${t(`networkOverview.tunnel_${s.tunnel || 'down'}`)}`
+              : s.transport;
           return (
             <g key={s.gateway.metadata.name}>
               <path
-                d={`M ${x1} ${hubY} C ${mx} ${hubY}, ${mx} ${y}, ${spokeX} ${y}`}
+                d={`M ${x1} ${hubY} C ${mx} ${hubY}, ${mx} ${cy}, ${spokeX} ${cy}`}
                 className={`sc-netov__edge sc-netov__edge--${meta.cls}`}
               />
-              <text
-                x={mx}
-                y={(hubY + y) / 2 - 6}
-                textAnchor="middle"
-                className="sc-netov__edge-label"
-              >
-                {s.tunnel}
+              <text x={mx} y={(hubY + cy) / 2 - 6} textAnchor="middle" className="sc-netov__edge-label">
+                {label}
               </text>
             </g>
           );
@@ -452,47 +484,51 @@ function FabricMap({
         <g transform={`translate(${hubX - HUB_R}, ${hubY - HUB_R})`}>
           <circle cx={HUB_R} cy={HUB_R} r={HUB_R} className="sc-netov__hub" />
           <text x={HUB_R} y={HUB_R - 4} textAnchor="middle" className="sc-netov__hub-kind">
-            Border GW
+            {t('networkOverview.hubLabel')}
           </text>
           <text x={HUB_R} y={HUB_R + 12} textAnchor="middle" className="sc-netov__hub-name">
-            {fabric
-              ? fabric.metadata.name.length > 17
-                ? `${fabric.metadata.name.slice(0, 16)}…`
-                : fabric.metadata.name
-              : 'fabric'}
+            {short(fabricName || '—', 17)}
           </text>
         </g>
 
         {spokes.map((s, i) => {
-          const y = 24 + i * ROW_GAP;
-          const meta = STATE_META[s.state];
+          const meta = STATE_ICON[s.state];
+          const select = onSelect ? () => onSelect('CloudGateway', s.gateway) : undefined;
+          const lines = s.nodes.length ? s.nodes.map(nodeLine) : [t('networkOverview.noNodeStatus')];
           return (
             <g
               key={`n-${s.gateway.metadata.name}`}
-              transform={`translate(${spokeX}, ${y})`}
+              transform={`translate(${spokeX}, ${tops[i]})`}
               className={`sc-netov__node sc-netov__node--${meta.cls}`}
-              role={onSelect ? 'button' : undefined}
-              tabIndex={onSelect ? 0 : undefined}
-              onClick={onSelect ? () => onSelect('CloudGateway', s.gateway) : undefined}
+              role={select ? 'button' : undefined}
+              tabIndex={select ? 0 : undefined}
+              onClick={select}
               onKeyDown={
-                onSelect
+                select
                   ? (e) => {
-                      if (e.key === 'Enter' || e.key === ' ') onSelect('CloudGateway', s.gateway);
+                      if (e.key === 'Enter' || e.key === ' ') select();
                     }
                   : undefined
               }
             >
-              <title>{`${s.siteName} (${s.siteType}) — ${meta.label}\n${s.detail}`}</title>
-              <rect width={SPOKE_W} height={SPOKE_H} rx={3} />
-              <text x={12} y={20} className="sc-netov__node-kind">
-                {s.siteType}
+              <title>
+                {`${s.siteName} (${s.siteType}) — ${t(`networkOverview.state_${s.state}`)}\n${lines.join('\n')}`}
+              </title>
+              <rect width={SPOKE_W} height={heights[i]} rx={3} />
+              <text x={12} y={18} className="sc-netov__node-kind">
+                {`${s.siteType} · ${s.transport}`}
               </text>
-              <text x={12} y={37} className="sc-netov__node-name">
-                {s.siteName.length > 17 ? `${s.siteName.slice(0, 16)}…` : s.siteName}
+              <text x={12} y={35} className="sc-netov__node-name">
+                {short(s.siteName, 26)}
               </text>
-              <text x={12} y={50} className="sc-netov__node-state">
-                {meta.label}
+              <text x={12} y={49} className="sc-netov__node-state">
+                {t(`networkOverview.state_${s.state}`)}
               </text>
+              {lines.map((line, j) => (
+                <text key={j} x={12} y={49 + (j + 1) * NODE_LINE_H} className="sc-netov__node-state">
+                  {short(line, 40)}
+                </text>
+              ))}
             </g>
           );
         })}
@@ -501,36 +537,44 @@ function FabricMap({
   );
 }
 
+/** "egress: ready (addresses)" / "egress: off" for one network. */
+function egressText(n: HybridNetwork, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const wanted = n.spec?.egress?.internet === true;
+  const state = n.status?.egress?.internet ?? '';
+  if (!wanted && !state) return t('networkOverview.egressOff');
+  const sources = Array.isArray(n.status?.egress?.sourceAddresses) ? n.status?.egress?.sourceAddresses ?? [] : [];
+  const label = state ? t(`detail.egress_${state}`, { defaultValue: state }) : t('networkOverview.egressRequested');
+  return sources.length
+    ? t('networkOverview.egressWithSources', { state: label, sources: sources.join(', ') })
+    : t('networkOverview.egressState', { state: label });
+}
+
 function PlacementMatrix({
-  networks,
-  backends,
+  group,
   cellFor,
   onSelect,
 }: {
-  networks: K8sResource[];
-  backends: Backend[];
-  cellFor: (n: K8sResource, id: string) => Cell;
+  group: EntityGroup;
+  cellFor: (n: HybridNetwork, id: string) => Cell;
   onSelect?: NetworkOverviewProps['onSelect'];
 }): React.ReactElement {
-  if (backends.length === 0) {
-    return (
-      <Alert variant="info" title="No placements yet" isInline>
-        These networks exist as VRFs but are not placed on any cloud project.
-      </Alert>
-    );
+  const { t } = useTranslation();
+  if (group.networks.length === 0) {
+    return <Alert variant="info" title={t('networkOverview.noNetworks')} isInline />;
+  }
+  if (group.backends.length === 0) {
+    return <Alert variant="info" title={t('networkOverview.noEnvironments')} isInline />;
   }
   return (
     <div className="sc-netov__matrix-wrap">
       <table className="sc-netov__matrix">
-        <caption className="pf-v6-screen-reader">
-          Tenant networks by cloud project; each cell gives the placement state
-        </caption>
+        <caption className="pf-v6-screen-reader">{t('networkOverview.matrixCaption')}</caption>
         <thead>
           <tr>
             <th scope="col" className="sc-netov__rowhead">
-              Network (VRF)
+              {t('networkOverview.network')}
             </th>
-            {backends.map((b) => (
+            {group.backends.map((b) => (
               <th key={b.id} scope="col" className="sc-netov__colhead">
                 <span className="sc-netov__colhead-kind">{b.kind}</span>
                 <span className="sc-netov__colhead-name" title={b.name}>
@@ -542,10 +586,8 @@ function PlacementMatrix({
           </tr>
         </thead>
         <tbody>
-          {networks.map((n) => {
-            const vni = num(st(n).vni);
-            const rt = str(st(n).canonicalRt);
-            const entity = str(st(n).entity);
+          {group.networks.map((n) => {
+            const mtu = n.status?.mtu ?? n.spec?.mtu;
             return (
               <tr key={`${n.metadata.namespace}/${n.metadata.name}`}>
                 <th scope="row" className="sc-netov__rowhead">
@@ -558,28 +600,37 @@ function PlacementMatrix({
                     {n.metadata.name}
                   </button>
                   <span className="sc-netov__rowmeta">
-                    {entity && <>{entity} · </>}
-                    {vni !== undefined ? `VNI ${vni}` : 'VNI —'}
-                    {rt && <> · RT {rt}</>}
+                    {mtu !== undefined ? `${t('networkOverview.mtuValue', { mtu })} · ` : ''}
+                    {egressText(n, t)}
                   </span>
                 </th>
-                {backends.map((b) => {
+                {group.backends.map((b) => {
                   const c = cellFor(n, b.id);
-                  const meta = STATE_META[c.state];
-                  const prefixes = c.prefixes.length ? c.prefixes.join(', ') : 'no prefixes';
+                  const meta = STATE_ICON[c.state];
+                  const label = t(`networkOverview.state_${c.state}`);
+                  const prefixes = c.prefixes.join(', ');
+                  const select =
+                    onSelect && c.placement ? () => onSelect('NetworkPlacement', c.placement as K8sResource) : undefined;
                   return (
                     <td key={b.id} className={`sc-netov__cell sc-netov__cell--${meta.cls}`}>
                       <span
                         className="sc-netov__cell-inner"
-                        title={`${n.metadata.name} on ${b.name}: ${meta.label}${
-                          c.state === 'absent' ? '' : `\n${prefixes}`
-                        }`}
+                        title={`${n.metadata.name} → ${b.kind} ${b.name}: ${label}${prefixes ? `\n${prefixes}` : ''}`}
+                        role={select ? 'button' : undefined}
+                        tabIndex={select ? 0 : undefined}
+                        onClick={select}
+                        onKeyDown={
+                          select
+                            ? (e) => {
+                                if (e.key === 'Enter' || e.key === ' ') select();
+                              }
+                            : undefined
+                        }
+                        style={select ? { cursor: 'pointer' } : undefined}
                       >
                         <meta.icon />
-                        <span className="sc-netov__cell-label">{meta.label}</span>
-                        {c.state !== 'absent' && c.prefixes.length > 0 && (
-                          <span className="sc-netov__cell-prefix">{c.prefixes[0]}</span>
-                        )}
+                        <span className="sc-netov__cell-label">{label}</span>
+                        {c.state !== 'absent' && prefixes && <span className="sc-netov__cell-prefix">{prefixes}</span>}
                       </span>
                     </td>
                   );
@@ -594,47 +645,46 @@ function PlacementMatrix({
 }
 
 function PlacementTable({
-  networks,
-  backends,
+  groups,
   cellFor,
+  showEntity,
 }: {
-  networks: K8sResource[];
-  backends: Backend[];
-  cellFor: (n: K8sResource, id: string) => Cell;
+  groups: EntityGroup[];
+  cellFor: (n: HybridNetwork, id: string) => Cell;
+  showEntity: boolean;
 }): React.ReactElement {
+  const { t } = useTranslation();
   const rows: Array<{
-    net: string;
+    key: string;
     entity: string;
-    vni: string;
-    rt: string;
+    net: string;
+    egress: string;
     backend: string;
-    state: NetState;
-    prefixes: string;
     placement: string;
+    prefixes: string;
+    state: NetState;
   }> = [];
-  for (const n of networks) {
-    for (const b of backends) {
-      const c = cellFor(n, b.id);
-      if (c.state === 'absent') continue;
-      rows.push({
-        net: n.metadata.name,
-        entity: str(st(n).entity),
-        vni: num(st(n).vni) !== undefined ? String(num(st(n).vni)) : '—',
-        rt: str(st(n).canonicalRt) || '—',
-        backend: `${b.kind}/${b.name}`,
-        state: c.state,
-        prefixes: c.prefixes.join(', ') || '—',
-        placement: c.placementName ?? '—',
-      });
+  for (const g of groups) {
+    for (const n of g.networks) {
+      for (const b of g.backends) {
+        const c = cellFor(n, b.id);
+        if (c.state === 'absent') continue;
+        rows.push({
+          key: `${g.namespace}/${n.metadata.name}/${b.id}`,
+          entity: g.entity,
+          net: n.metadata.name,
+          egress: egressText(n, t),
+          backend: `${b.kind}/${b.name}`,
+          placement: c.placement?.metadata.name ?? '—',
+          prefixes: c.prefixes.join(', ') || '—',
+          state: c.state,
+        });
+      }
     }
   }
 
   if (rows.length === 0) {
-    return (
-      <Alert variant="info" title="No placements yet" isInline>
-        These networks exist as VRFs but are not placed on any cloud project.
-      </Alert>
-    );
+    return <Alert variant="info" title={t('networkOverview.noPlacements')} isInline />;
   }
 
   return (
@@ -642,31 +692,29 @@ function PlacementTable({
       <table className="sc-netov__table">
         <thead>
           <tr>
-            <th scope="col">Network</th>
-            <th scope="col">Entity</th>
-            <th scope="col">VNI</th>
-            <th scope="col">Route target</th>
-            <th scope="col">Backend</th>
-            <th scope="col">Placement</th>
-            <th scope="col">Prefixes</th>
-            <th scope="col">State</th>
+            {showEntity && <th scope="col">{t('networkOverview.entity')}</th>}
+            <th scope="col">{t('networkOverview.network')}</th>
+            <th scope="col">{t('fields.egressInternet')}</th>
+            <th scope="col">{t('fields.backendName')}</th>
+            <th scope="col">{t('kinds.NetworkPlacement')}</th>
+            <th scope="col">{t('fields.prefixes')}</th>
+            <th scope="col">{t('detail.state')}</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => {
-            const meta = STATE_META[r.state];
+            const meta = STATE_ICON[r.state];
             return (
-              <tr key={`${r.net}-${r.backend}`}>
+              <tr key={r.key}>
+                {showEntity && <td>{r.entity}</td>}
                 <td>{r.net}</td>
-                <td>{r.entity || '—'}</td>
-                <td>{r.vni}</td>
-                <td>{r.rt}</td>
+                <td>{r.egress}</td>
                 <td>{r.backend}</td>
                 <td>{r.placement}</td>
                 <td>{r.prefixes}</td>
                 <td>
                   <span className={`sc-netov__state sc-netov__state--${meta.cls}`}>
-                    <meta.icon /> {meta.label}
+                    <meta.icon /> {t(`networkOverview.state_${r.state}`)}
                   </span>
                 </td>
               </tr>
@@ -679,13 +727,14 @@ function PlacementTable({
 }
 
 function Legend(): React.ReactElement {
+  const { t } = useTranslation();
   return (
-    <ul className="sc-netov__legend" aria-label="State legend">
-      {(Object.keys(STATE_META) as NetState[]).map((k) => {
-        const m = STATE_META[k];
+    <ul className="sc-netov__legend" aria-label={t('networkOverview.legend')}>
+      {(Object.keys(STATE_ICON) as NetState[]).map((k) => {
+        const m = STATE_ICON[k];
         return (
           <li key={k} className={`sc-netov__state sc-netov__state--${m.cls}`}>
-            <m.icon /> {m.label}
+            <m.icon /> {t(`networkOverview.state_${k}`)}
           </li>
         );
       })}

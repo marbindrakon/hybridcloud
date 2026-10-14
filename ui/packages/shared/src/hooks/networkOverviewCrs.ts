@@ -37,16 +37,14 @@ export function useNetworkOverviewCRs(entityNamespace?: string): NetworkOverview
   // Platform half — read-only context, best effort.
   const fabrics = useK8sResourceList<K8sResource>('HybridFabric', { namespace: PLATFORM_NS, ...opts });
   const gateways = useK8sResourceList<K8sResource>('CloudGateway', { namespace: PLATFORM_NS, ...opts });
-  const links = useK8sResourceList<K8sResource>('TransportLink', { namespace: PLATFORM_NS, ...opts });
   const infra = useK8sResourceList<K8sResource>('CloudInfrastructure', { namespace: PLATFORM_NS, ...opts });
 
-  // Tenant half. Undefined namespace means cluster-wide, which is what the
-  // admin views want.
+  // Tenant half: networks, placements and the environments they can be placed on (CloudVirt,
+  // CloudOSO). Undefined namespace means cluster-wide, which is what the admin views want.
   const networks = useK8sResourceList<K8sResource>('HybridNetwork', tenantOpts);
   const placements = useK8sResourceList<K8sResource>('NetworkPlacement', tenantOpts);
   const cloudOso = useK8sResourceList<K8sResource>('CloudOSO', tenantOpts);
   const cloudVirt = useK8sResourceList<K8sResource>('CloudVirt', tenantOpts);
-  const cloudAws = useK8sResourceList<K8sResource>('CloudAWS', tenantOpts);
 
   const tag = (list: K8sResource[], kind: HybridSovereignKind) =>
     list.map((i) => (i.kind ? i : { ...i, kind }));
@@ -55,28 +53,24 @@ export function useNetworkOverviewCRs(entityNamespace?: string): NetworkOverview
     () => [
       ...tag(fabrics.items, 'HybridFabric'),
       ...tag(gateways.items, 'CloudGateway'),
-      ...tag(links.items, 'TransportLink'),
       ...tag(infra.items, 'CloudInfrastructure'),
       ...tag(networks.items, 'HybridNetwork'),
       ...tag(placements.items, 'NetworkPlacement'),
       ...tag(cloudOso.items, 'CloudOSO'),
       ...tag(cloudVirt.items, 'CloudVirt'),
-      ...tag(cloudAws.items, 'CloudAWS'),
     ],
     [
       fabrics.items,
       gateways.items,
-      links.items,
       infra.items,
       networks.items,
       placements.items,
       cloudOso.items,
       cloudVirt.items,
-      cloudAws.items,
     ],
   );
 
-  const all = [fabrics, gateways, links, infra, networks, placements, cloudOso, cloudVirt, cloudAws];
+  const all = [fabrics, gateways, infra, networks, placements, cloudOso, cloudVirt];
 
   return {
     items,
