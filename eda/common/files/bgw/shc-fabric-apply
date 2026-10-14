@@ -16,9 +16,10 @@
 #   vrfs [{name, vni, mtu}]: one Linux VRF per network placed at the site (table = VNI) with its layer 3 VNI: a
 #   bridge br<vni> in the VRF and a VXLAN device vx<vni> from the gateway's site address; VRFs named t<digits> that
 #   are no longer listed are removed with their devices.
+#   shc-fabric-apply <instance> post   (gateway, after FRR started: see post_start below)
 set -euo pipefail
 NSX=""
-I=${1:?usage: shc-fabric-apply <instance> [up|down]}; ACT=${2:-up}
+I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
 CONF=/etc/shc-fabric/$I.json
 [ -r "$CONF" ] || { echo "no $CONF" >&2; exit 2; }
 q() { jq -er "$1" "$CONF"; }
@@ -40,6 +41,30 @@ snapshot() {
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true; } | sha1sum
+}
+
+# After the gateway's FRR starts with VRFs in its configuration, zebra's VRF setup can recreate bgpd's listen
+# socket after the site peer group's TCP MD5 password was applied to it; the site's sessions then never come up
+# (TcpExtTCPMD5Unexpected grows). Once the VRFs are known to FRR, set the password again (read from frr.conf, never
+# printed). Harmless when nothing was lost: there are no site sessions yet right after a start.
+post_start() {
+  local ns conf asn pw i want have
+  ns=$(q .netns); conf=/etc/frr/$ns/frr.conf
+  want=$(jq -r '.vrfs // [] | .[].name' "$CONF" | sort | tr '\n' ' ')
+  for i in $(seq 1 30); do
+    have=$(vtysh -N "$ns" -c 'show vrf' 2>/dev/null | awk '$1 == "vrf" {print $2}' | sort | tr '\n' ' ')
+    vtysh -N "$ns" -c 'show bgp summary' >/dev/null 2>&1 && [ "$have" = "$want" ] && break
+    sleep 2
+  done
+  sleep 3
+  asn=$(awk '/^router bgp [0-9]+$/ {print $3; exit}' "$conf")
+  pw=$(awk '/^ neighbor SITE password / {print $4; exit}' "$conf")
+  if [ -n "$asn" ] && [ -n "$pw" ]; then
+    vtysh -N "$ns" -c 'configure terminal' -c "router bgp $asn" -c 'no neighbor SITE password' \
+      -c "neighbor SITE password $pw" >/dev/null 2>&1 || echo "site password refresh failed" >&2
+    echo "site password refreshed (VRFs: ${want:-none})"
+  fi
+  unset pw
 }
 
 case "$TYPE" in
@@ -64,6 +89,7 @@ root)
   fi
   ;;
 gateway)
+  if [ "$ACT" = post ]; then post_start; exit 0; fi
   NS=$(q .netns); TRUNK=$(q .trunk); VLAN=$(q .vlan); VDEV="$TRUNK.$VLAN"; ADDR=$(q .address)
   LO=$(q .loopback); LOPOOL=$(q .loopbackPool); BR=$(q .coreBridge); CV=$(q .coreVeth); LINK=$(q .link)
   CMTU=$(q .coreMtu); MTU=$(jq -r '.mtu // empty' "$CONF"); X="ip netns exec $NS"

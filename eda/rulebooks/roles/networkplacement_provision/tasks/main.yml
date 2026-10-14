@@ -304,7 +304,21 @@
     - name: The site side ({{ np_backend_kind }})
       ansible.builtin.include_tasks: "backend_{{ np_backend_kind | lower }}.yml"
 
+    # read again: a gateway run may have picked the placement up while the site side was being built
+    - name: Read the gateway again
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudGateway
+        name: "{{ np_gateway.metadata.name }}"
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _np_gw_again
+
     - name: Does the gateway carry the placement
+      vars:
+        np_gateway: "{{ _np_gw_again.resources[0] }}"
       ansible.builtin.set_fact:
         np_gw_carries: >-
           {{ ((np_gateway.status | default({}, true)).realization | default({}, true)).vrfs | default([], true)

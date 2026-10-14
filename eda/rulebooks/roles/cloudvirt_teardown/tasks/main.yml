@@ -67,8 +67,9 @@
             cr_name: "{{ fab_name }}"
             cr_namespace: "{{ fab_namespace }}"
             patch_ignore_not_found: true
+            # pending (not reconciling) completes the delete event: the finalizer's next attempt publishes again
             cr_status_body:
-              status: reconciling
+              status: pending
               ready: false
               message: "Deletion waits for {{ cvd_vms | length }} VM(s) on {{ fab_spec.cloudRef.name }}: {{ cvd_vms[:10] | join(', ') }}"
               deletionBlockedBy: "{{ cvd_vms }}"

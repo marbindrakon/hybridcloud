@@ -14,6 +14,7 @@ PIDFile=/var/run/frr/gw-%i/watchfrr.pid
 ExecStartPre=/usr/local/sbin/shc-fabric-apply gw-%i up
 ExecStartPre=/usr/bin/install -d -o frr -g frr -m 0755 /var/run/frr /var/run/frr/gw-%i
 ExecStart=/usr/libexec/frr/frrinit.sh start gw-%i
+ExecStartPost=/usr/local/sbin/shc-fabric-apply gw-%i post
 ExecStop=/usr/libexec/frr/frrinit.sh stop gw-%i
 ExecReload=/usr/libexec/frr/frr-reload.py --pathspace gw-%i --reload /etc/frr/gw-%i/frr.conf
 Restart=always

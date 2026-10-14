@@ -44,6 +44,8 @@
     - name: Release the gateway
       when: npd_carried | bool
       block:
+        # status pending (not reconciling, not partial) completes the delete event, so the gateway's wake-up
+        # publishes a new one
         - name: Mark the placement released
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
           vars:
@@ -51,12 +53,14 @@
             cr_plural: networkplacements
             cr_name: "{{ fab_name }}"
             cr_namespace: "{{ fab_namespace }}"
-            cr_status_partial: true
             patch_ignore_not_found: true
             cr_status_body:
-              status: reconciling
+              status: pending
+              ready: false
               message: "Deletion waits for CloudGateway {{ npd_gw_name }} to remove VRF {{ npd_real.vrf | default('') }}"
+              deletionBlockedBy: ["CloudGateway {{ fabric_platform_namespace }}/{{ npd_gw_name }} (VRF {{ npd_real.vrf | default('') }})"]
               realization: {gatewayRelease: true}
+              lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
         - name: Wake the gateway
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
@@ -168,10 +172,11 @@
                 cr_plural: networkplacements
                 cr_name: "{{ fab_name }}"
                 cr_namespace: "{{ fab_namespace }}"
-                cr_status_partial: true
                 patch_ignore_not_found: true
                 cr_status_body:
-                  status: reconciling
+                  status: pending
+                  ready: false
+                  lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
                   message: "Deletion waits for ports on network {{ npd_names.osNetwork }}: {{ os_result.blocked[:10] | join(', ') }}"
                   deletionBlockedBy: "{{ os_result.blocked }}"
               when: os_result.blocked | default([]) | length > 0
@@ -215,7 +220,7 @@
         cr_namespace: "{{ fab_namespace }}"
         patch_ignore_not_found: true
         cr_status_body:
-          status: "{{ 'reconciling' if _waits else 'failed' }}"
+          status: "{{ 'pending' if _waits else 'failed' }}"
           ready: false
           message: "{{ ansible_failed_result.msg | default('NetworkPlacement teardown failed') }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
