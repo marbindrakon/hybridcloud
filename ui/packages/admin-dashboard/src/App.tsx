@@ -29,7 +29,6 @@ import {
   FolderOpenIcon,
   UsersIcon,
   ClusterIcon,
-  LayerGroupIcon,
   TopologyIcon,
   CogIcon,
   OutlinedBellIcon,
@@ -40,6 +39,8 @@ import {
   BarsIcon,
   GlobeIcon,
   UserEditIcon,
+  InfrastructureIcon,
+  NetworkIcon,
 } from '@patternfly/react-icons';
 import { NavLink, Routes, Route, useLocation } from 'react-router-dom';
 import {
@@ -56,6 +57,7 @@ import { ServicesPage } from './pages/ServicesPage';
 import { CreateResourcePage } from './pages/CreateResourcePage';
 import { AdminResourceDetailPage } from './pages/AdminResourceDetailPage';
 import { UIHealthPage } from './pages/UIHealthPage';
+import NetworkOverviewPage from './pages/NetworkOverviewPage';
 
 type NavEntry =
   | {
@@ -70,37 +72,30 @@ type NavEntry =
 
 /** Static sidebar — all links always visible; pages fetch K8s only on navigate/refresh */
 const NAV: NavEntry[] = [
+  { type: 'sep', labelKey: 'nav.admin' },
   { type: 'link', path: '/', labelKey: 'nav.overview', icon: TachometerAltIcon, end: true },
   { type: 'link', path: '/entities', labelKey: 'nav.entities', icon: BuildingIcon, kind: 'Entity' },
   { type: 'link', path: '/personas', labelKey: 'nav.personas', icon: UserEditIcon, kind: 'Persona' },
-  { type: 'sep', labelKey: 'nav.platform' },
-  { type: 'link', path: '/services', labelKey: 'nav.serviceUrls', icon: GlobeIcon, kind: 'AAPConfig' },
-  { type: 'link', path: '/operators', labelKey: 'nav.operators', icon: CogIcon, kind: 'RbacConfig' },
-  { type: 'sep', labelKey: 'nav.tenancyRead' },
-  { type: 'link', path: '/teams', labelKey: 'nav.teams', icon: UsersIcon, kind: 'Team' },
-  { type: 'link', path: '/projects', labelKey: 'nav.projects', icon: FolderOpenIcon, kind: 'Project' },
+  { type: 'sep', labelKey: 'nav.adminNetworks' },
   {
     type: 'link',
-    path: '/platforms',
-    labelKey: 'nav.platformOpenshift',
-    icon: ClusterIcon,
-    kind: 'PlatformOpenshift',
+    path: '/networking/overview',
+    labelKey: 'nav.networkOverview',
+    icon: NetworkIcon,
   },
-  { type: 'link', path: '/clouds', labelKey: 'nav.cloudEnvironments', icon: LayerGroupIcon, kind: 'CloudOSO' },
-  {
-    type: 'link',
-    path: '/assignments',
-    labelKey: 'nav.assignments',
-    icon: ProjectDiagramIcon,
-    kind: 'Assignment',
-  },
-  { type: 'sep', labelKey: 'nav.hybridVpc' },
   {
     type: 'link',
     path: '/networking/fabrics',
     labelKey: 'nav.hybridFabrics',
     icon: TopologyIcon,
     kind: 'HybridFabric',
+  },
+  {
+    type: 'link',
+    path: '/clouds/infrastructure',
+    labelKey: 'nav.cloudInfrastructure',
+    icon: InfrastructureIcon,
+    kind: 'CloudInfrastructure',
   },
   {
     type: 'link',
@@ -116,12 +111,26 @@ const NAV: NavEntry[] = [
     icon: ProjectDiagramIcon,
     kind: 'TransportLink',
   },
+  { type: 'sep', labelKey: 'nav.adminMonitor' },
+  { type: 'link', path: '/services', labelKey: 'nav.serviceUrls', icon: GlobeIcon, kind: 'AAPConfig' },
+  { type: 'link', path: '/operators', labelKey: 'nav.operators', icon: CogIcon, kind: 'RbacConfig' },
+  { type: 'sep', labelKey: 'nav.team' },
+  { type: 'link', path: '/teams', labelKey: 'nav.teams', icon: UsersIcon, kind: 'Team' },
+  { type: 'link', path: '/projects', labelKey: 'nav.projects', icon: FolderOpenIcon, kind: 'Project' },
   {
     type: 'link',
-    path: '/networking/uihealth',
-    labelKey: 'nav.uiHealth',
-    icon: TachometerAltIcon,
-    kind: 'UIHealthChecker',
+    path: '/assignments',
+    labelKey: 'nav.assignments',
+    icon: ProjectDiagramIcon,
+    kind: 'Assignment',
+  },
+  { type: 'sep', labelKey: 'nav.appPlatform' },
+  {
+    type: 'link',
+    path: '/platforms',
+    labelKey: 'nav.platformOpenshift',
+    icon: ClusterIcon,
+    kind: 'PlatformOpenshift',
   },
 ];
 
@@ -141,6 +150,7 @@ function ThemeToggle(): React.ReactElement {
 function AdminNav(): React.ReactElement {
   const location = useLocation();
   const { t } = useTranslation();
+  const { mode } = useTheme();
   const groups = React.useMemo(() => {
     const result: { titleKey?: string; items: Extract<NavEntry, { type: 'link' }>[] }[] = [];
     let current: { titleKey?: string; items: Extract<NavEntry, { type: 'link' }>[] } = { items: [] };
@@ -157,7 +167,7 @@ function AdminNav(): React.ReactElement {
   }, []);
 
   return (
-    <Nav theme="dark" aria-label={t('nav.adminNav')}>
+    <Nav theme={mode} aria-label={t('nav.adminNav')}>
       {groups.map((group, gi) => (
         <NavList key={group.titleKey ?? `group-${gi}`}>
           {group.titleKey ? (
@@ -190,6 +200,7 @@ function AdminNav(): React.ReactElement {
 function AdminLayout(): React.ReactElement {
   const [isSidebarOpen, setSidebarOpen] = React.useState(true);
   const { t } = useTranslation();
+  const { mode } = useTheme();
 
   const header = (
     <Masthead className="sc-pf-masthead">
@@ -217,7 +228,7 @@ function AdminLayout(): React.ReactElement {
       <MastheadContent>
         <Toolbar id="admin-masthead-toolbar" isFullHeight isStatic>
           <ToolbarContent>
-            <ToolbarGroup align={{ default: 'alignRight' }}>
+            <ToolbarGroup align={{ default: 'alignEnd' }}>
               <ToolbarItem>
                 <LanguageToggle isCompact />
               </ToolbarItem>
@@ -243,7 +254,7 @@ function AdminLayout(): React.ReactElement {
   );
 
   const sidebar = (
-    <PageSidebar theme="dark" isSidebarOpen={isSidebarOpen} id="admin-sidebar">
+    <PageSidebar theme={mode} isSidebarOpen={isSidebarOpen} id="admin-sidebar">
       <PageSidebarBody>
         <div className="sc-sidebar-title">{t('nav.sovereignAdmin')}</div>
         <AdminNav />
@@ -252,7 +263,7 @@ function AdminLayout(): React.ReactElement {
   );
 
   return (
-    <Page header={header} sidebar={sidebar} isManagedSidebar>
+    <Page className="sc-standalone-shell" header={header} sidebar={sidebar} isManagedSidebar>
       <PageSection isFilled className="sc-page-section sc-page-section--dashboard">
         <div className="sc-page">
           <Routes>
@@ -329,13 +340,51 @@ function AdminLayout(): React.ReactElement {
             <Route
               path="/clouds"
               element={
+                <>
+                  <ResourceListPage
+                    kind="CloudInfrastructure"
+                    title={t('pages.cloudInfrastructureSection')}
+                    subtitle={t('pages.cloudInfrastructureSectionSubtitle')}
+                    listPath="/clouds/infrastructure"
+                    createPath="/create/cloudinfrastructure"
+                    namespace="sovereign-cloud"
+                  />
+                  <div style={{ marginTop: '1.5rem' }}>
+                    <ResourceListPage
+                      kind="CloudOSO"
+                      title={t('pages.cloudProjectsSection')}
+                      subtitle={t('pages.cloudProjectsSectionSubtitle')}
+                      secondaryKind="CloudAWS"
+                      tertiaryKind="CloudVirt"
+                      listPath="/clouds/cloudoso"
+                      secondaryListPath="/clouds/cloudaws"
+                      tertiaryListPath="/clouds/cloudvirt"
+                    />
+                  </div>
+                </>
+              }
+            />
+            <Route
+              path="/clouds/infrastructure"
+              element={
                 <ResourceListPage
-                  kind="CloudOSO"
-                  title={t('nav.cloudEnvironments')}
-                  subtitle={t('pages.cloudEnvironmentsSubtitle')}
-                  secondaryKind="CloudAWS"
-                  listPath="/clouds/cloudoso"
-                  secondaryListPath="/clouds/cloudaws"
+                  kind="CloudInfrastructure"
+                  title={t('nav.cloudInfrastructure')}
+                  subtitle={t('pages.cloudInfrastructureSectionSubtitle')}
+                  listPath="/clouds/infrastructure"
+                  createPath="/create/cloudinfrastructure"
+                  namespace="sovereign-cloud"
+                />
+              }
+            />
+            <Route
+              path="/clouds/infrastructure/:name"
+              element={
+                <AdminResourceDetailPage
+                  kind="CloudInfrastructure"
+                  title={t('nav.cloudInfrastructure')}
+                  listPath="/clouds/infrastructure"
+                  fixedNamespace="sovereign-cloud"
                 />
               }
             />
@@ -349,6 +398,12 @@ function AdminLayout(): React.ReactElement {
               path="/clouds/cloudaws/:namespace/:name"
               element={
                 <AdminResourceDetailPage kind="CloudAWS" title={t('nav.cloudEnvironments')} listPath="/clouds" />
+              }
+            />
+            <Route
+              path="/clouds/cloudvirt/:namespace/:name"
+              element={
+                <AdminResourceDetailPage kind="CloudVirt" title={t('nav.cloudEnvironments')} listPath="/clouds" />
               }
             />
             <Route
@@ -399,6 +454,7 @@ function AdminLayout(): React.ReactElement {
               path="/services/vaultkvs/:namespace/:name"
               element={<AdminResourceDetailPage kind="VaultKV" title={t('nav.serviceUrls')} listPath="/services" />}
             />
+            <Route path="/networking/overview" element={<NetworkOverviewPage />} />
             <Route
               path="/networking/fabrics"
               element={

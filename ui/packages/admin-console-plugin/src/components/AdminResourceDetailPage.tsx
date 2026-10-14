@@ -1,5 +1,6 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
-import { useHistory, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, PageSection } from '@patternfly/react-core';
 import { HybridSovereignKind, ResourceDetail } from '@hybridsovereign/shared';
 import '@hybridsovereign/shared/styles/openshift.css';
@@ -13,7 +14,7 @@ export function makeAdminDetailPage(
   fixedNamespace?: string,
 ): React.FC {
   const Page: React.FC = () => {
-    const history = useHistory();
+    const navigate = useNavigate();
     const { namespace: nsParam, name } = useParams<{ namespace?: string; name: string }>();
     const resourceName = name ? decodeURIComponent(name) : '';
     const namespace = fixedNamespace ?? (nsParam ? decodeURIComponent(nsParam) : '');
@@ -43,8 +44,8 @@ export function makeAdminDetailPage(
             namespace={namespace}
             parentTitle={title}
             parentPath={listPath}
-            onBack={() => history.push(listPath)}
-            onDeleted={() => history.push(listPath)}
+            onBack={() => navigate(listPath)}
+            onDeleted={() => navigate(listPath)}
           />
         </div>
       </PageSection>

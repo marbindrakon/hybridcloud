@@ -1,5 +1,6 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
-import { useHistory, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, PageSection } from '@patternfly/react-core';
 import {
   HybridSovereignKind,
@@ -25,7 +26,7 @@ export function makeTenantDetailPage(
 ): React.FC {
   const listPath = `/hybridsovereign/tenant/${listSegment}`;
   const Page: React.FC = () => {
-    const history = useHistory();
+    const navigate = useNavigate();
     const { name } = useParams<{ name: string }>();
     const { namespace, entities, selectEntity, entity } = useEntityNamespace();
     const resourceName = name ? decodeURIComponent(name) : '';
@@ -54,8 +55,8 @@ export function makeTenantDetailPage(
               namespace={namespace}
               parentTitle={title}
               parentPath={listPath}
-              onBack={() => history.push(listPath)}
-              onDeleted={() => history.push(listPath)}
+              onBack={() => navigate(listPath)}
+              onDeleted={() => navigate(listPath)}
             />
           )}
         </div>

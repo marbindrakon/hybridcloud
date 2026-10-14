@@ -1,12 +1,23 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
-import { PageSection, Tabs, Tab, TabTitleText } from '@patternfly/react-core';
+import { useNavigate } from 'react-router-dom';
+import { Button, PageSection, Tabs, Tab, TabTitleText } from '@patternfly/react-core';
+import { PlusCircleIcon } from '@patternfly/react-icons';
 import { PageHeader, useTranslation } from '@hybridsovereign/shared';
 import { AdminResourceListPage } from './AdminResourceListPage';
 import '@hybridsovereign/shared/styles/openshift.css';
 
 const AdminServicesPage: React.FC = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = React.useState<string | number>(0);
+
+  const createForTab =
+    activeTab === 0
+      ? { label: 'AAP Org', path: '/hybridsovereign/create/aaporg' }
+      : activeTab === 1
+        ? { label: 'Quay Org', path: '/hybridsovereign/create/quayorg' }
+        : { label: 'Vault', path: '/hybridsovereign/create/vault' };
 
   return (
     <PageSection className="sc-console-page">
@@ -19,6 +30,15 @@ const AdminServicesPage: React.FC = () => {
             { label: 'Platform' },
             { label: t('nav.serviceUrls') },
           ]}
+          actions={
+            <Button
+              variant="primary"
+              icon={<PlusCircleIcon />}
+              onClick={() => navigate(createForTab.path)}
+            >
+              {t('common.create')} {createForTab.label}
+            </Button>
+          }
         />
         <Tabs activeKey={activeTab} onSelect={(_e, key) => setActiveTab(key)} mountOnEnter unmountOnExit>
           <Tab eventKey={0} title={<TabTitleText>AAP</TabTitleText>}>

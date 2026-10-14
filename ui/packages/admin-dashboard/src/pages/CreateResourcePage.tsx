@@ -7,6 +7,7 @@ const LIST_PATH: Record<string, string> = {
   entity: '/entities',
   persona: '/personas',
   hybridfabric: '/networking/fabrics',
+  cloudinfrastructure: '/clouds/infrastructure',
   cloudgateway: '/networking/gateways',
   transportlink: '/networking/transport',
   uihealthchecker: '/networking/uihealth',

@@ -8,6 +8,7 @@ import {
 } from '@patternfly/react-icons';
 import { HybridSovereignKind, K8sResource } from '../types';
 import { useK8sResourceList } from '../hooks/k8s';
+import { useOverviewCRs } from '../hooks/overviewCrs';
 import { useCanListKind } from '../hooks/permissions';
 import { normalizeHealth } from './StatusBadge';
 
@@ -31,7 +32,28 @@ export interface TopologyEdge {
 export interface EntityTopologyProps {
   entityNamespace?: string;
   filterByPermissions?: boolean;
+  /** Pre-fetched Overview CRs (avoids a second aggregate fetch on admin Overview). */
+  resources?: K8sResource[];
+  resourcesLoading?: boolean;
+  resourcesError?: Error | null;
 }
+
+function itemsOfKind(items: K8sResource[], kind: HybridSovereignKind): K8sResource[] {
+  return items.filter((i) => (i.kind || '') === kind);
+}
+
+/** spec.cloudRef.name — the CloudInfrastructure a cloud project or gateway sits on. */
+function cloudRefOf(item: K8sResource): string {
+  const ref = (item.spec as { cloudRef?: { name?: string } } | undefined)?.cloudRef;
+  return typeof ref?.name === 'string' ? ref.name : '';
+}
+
+/** PlatformOpenshift type → kind of the cloud project named by spec.<type>.environment */
+const PLATFORM_ENV_KIND: Record<string, HybridSovereignKind> = {
+  hosted: 'CloudVirt',
+  openstack: 'CloudOSO',
+  aws: 'CloudAWS',
+};
 
 const COL_GAP = 200;
 const ROW_GAP = 64;
@@ -91,23 +113,68 @@ function edgePath(
 export function EntityTopology({
   entityNamespace,
   filterByPermissions = false,
+  resources,
+  resourcesLoading,
+  resourcesError,
 }: EntityTopologyProps): React.ReactElement {
   const ns = entityNamespace ?? '';
-  const listOpts = useMemo(
-    () => (entityNamespace ? { namespace: entityNamespace } : {}),
-    [entityNamespace],
-  );
+  const scoped = !!entityNamespace;
+  // Admin platform view: never hit cluster-scoped list URLs (console proxy 404s).
+  const useParentResources = !scoped && resources !== undefined;
+  const overview = useOverviewCRs(0, { enabled: !scoped && !useParentResources });
 
-  const entities = useK8sResourceList<K8sResource>('Entity', {
-    enabled: !entityNamespace,
-    namespace: 'sovereign-cloud',
+  const teams = useK8sResourceList<K8sResource>('Team', {
+    namespace: entityNamespace,
+    enabled: scoped,
   });
-  const teams = useK8sResourceList<K8sResource>('Team', listOpts);
-  const projects = useK8sResourceList<K8sResource>('Project', listOpts);
-  const assignments = useK8sResourceList<K8sResource>('Assignment', listOpts);
-  const platforms = useK8sResourceList<K8sResource>('PlatformOpenshift', listOpts);
-  const cloudOso = useK8sResourceList<K8sResource>('CloudOSO', listOpts);
-  const cloudAws = useK8sResourceList<K8sResource>('CloudAWS', listOpts);
+  const projects = useK8sResourceList<K8sResource>('Project', {
+    namespace: entityNamespace,
+    enabled: scoped,
+  });
+  const assignments = useK8sResourceList<K8sResource>('Assignment', {
+    namespace: entityNamespace,
+    enabled: scoped,
+  });
+  const platforms = useK8sResourceList<K8sResource>('PlatformOpenshift', {
+    namespace: entityNamespace,
+    enabled: scoped,
+  });
+  const cloudOso = useK8sResourceList<K8sResource>('CloudOSO', {
+    namespace: entityNamespace,
+    enabled: scoped,
+  });
+  const cloudAws = useK8sResourceList<K8sResource>('CloudAWS', {
+    namespace: entityNamespace,
+    enabled: scoped,
+  });
+  const cloudVirt = useK8sResourceList<K8sResource>('CloudVirt', {
+    namespace: entityNamespace,
+    enabled: scoped,
+  });
+  // Tenants usually cannot list sovereign-cloud; infra nodes then come from cloudRef names alone.
+  const cloudInfra = useK8sResourceList<K8sResource>('CloudInfrastructure', {
+    namespace: 'sovereign-cloud',
+    enabled: scoped,
+  });
+
+  const aggregateItems = useParentResources ? resources ?? [] : overview.items;
+  const entityItems = scoped ? [] : itemsOfKind(aggregateItems, 'Entity');
+  const teamItems = scoped ? teams.items : itemsOfKind(aggregateItems, 'Team');
+  const projectItems = scoped ? projects.items : itemsOfKind(aggregateItems, 'Project');
+  const assignmentItems = scoped ? assignments.items : itemsOfKind(aggregateItems, 'Assignment');
+  const platformItems = scoped
+    ? platforms.items
+    : itemsOfKind(aggregateItems, 'PlatformOpenshift');
+  const cloudOsoItems = scoped ? cloudOso.items : itemsOfKind(aggregateItems, 'CloudOSO');
+  const cloudAwsItems = scoped ? cloudAws.items : itemsOfKind(aggregateItems, 'CloudAWS');
+  const cloudVirtItems = scoped ? cloudVirt.items : itemsOfKind(aggregateItems, 'CloudVirt');
+  const cloudInfraItems = scoped
+    ? cloudInfra.error
+      ? []
+      : cloudInfra.items
+    : itemsOfKind(aggregateItems, 'CloudInfrastructure');
+  const fabricItems = scoped ? [] : itemsOfKind(aggregateItems, 'HybridFabric');
+  const gatewayItems = scoped ? [] : itemsOfKind(aggregateItems, 'CloudGateway');
 
   const permNs = ns || 'sovereign-cloud';
   const teamPerm = useCanListKind(permNs, 'Team', { enabled: filterByPermissions });
@@ -116,6 +183,7 @@ export function EntityTopology({
   const platformPerm = useCanListKind(permNs, 'PlatformOpenshift', { enabled: filterByPermissions });
   const cloudOsoPerm = useCanListKind(permNs, 'CloudOSO', { enabled: filterByPermissions });
   const cloudAwsPerm = useCanListKind(permNs, 'CloudAWS', { enabled: filterByPermissions });
+  const cloudVirtPerm = useCanListKind(permNs, 'CloudVirt', { enabled: filterByPermissions });
 
   const [zoom, setZoom] = useState(1);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -148,28 +216,50 @@ export function EntityTopology({
             namespace: entityNamespace,
           },
         ]
-      : entities.items.map((e) => toNode(e, 'Entity'));
+      : entityItems.map((e) => toNode(e, 'Entity'));
 
-    const teamNodes = allow(teamPerm.allowed) ? teams.items.map((i) => toNode(i, 'Team')) : [];
+    const teamNodes = allow(teamPerm.allowed) ? teamItems.map((i) => toNode(i, 'Team')) : [];
     const projectNodes = allow(projectPerm.allowed)
-      ? projects.items.map((i) => toNode(i, 'Project'))
+      ? projectItems.map((i) => toNode(i, 'Project'))
       : [];
     const assignmentNodes = allow(assignmentPerm.allowed)
-      ? assignments.items.map((i) => toNode(i, 'Assignment'))
+      ? assignmentItems.map((i) => toNode(i, 'Assignment'))
       : [];
     const platformNodes = allow(platformPerm.allowed)
-      ? platforms.items.map((i) => toNode(i, 'PlatformOpenshift'))
+      ? platformItems.map((i) => toNode(i, 'PlatformOpenshift'))
       : [];
-    const cloudNodes = [
-      ...(allow(cloudOsoPerm.allowed) ? cloudOso.items.map((i) => toNode(i, 'CloudOSO')) : []),
-      ...(allow(cloudAwsPerm.allowed) ? cloudAws.items.map((i) => toNode(i, 'CloudAWS')) : []),
+    const visibleClouds: Array<{ item: K8sResource; kind: HybridSovereignKind }> = [
+      ...(allow(cloudOsoPerm.allowed) ? cloudOsoItems.map((item) => ({ item, kind: 'CloudOSO' as const })) : []),
+      ...(allow(cloudAwsPerm.allowed) ? cloudAwsItems.map((item) => ({ item, kind: 'CloudAWS' as const })) : []),
+      ...(allow(cloudVirtPerm.allowed) ? cloudVirtItems.map((item) => ({ item, kind: 'CloudVirt' as const })) : []),
     ];
+    const cloudNodes = visibleClouds.map(({ item, kind }) => toNode(item, kind));
+    const fabricNodes = fabricItems.map((i) => toNode(i, 'HybridFabric'));
+
+    // Site nodes: CloudInfrastructure objects, plus any cloudRef name we cannot read (tenant view).
+    const infraNodes = cloudInfraItems.map((i) => toNode(i, 'CloudInfrastructure'));
+    const infraNames = new Set(infraNodes.map((n) => n.label));
+    const referencedInfra = [
+      ...visibleClouds.map(({ item }) => cloudRefOf(item)),
+      ...gatewayItems.map(cloudRefOf),
+    ].filter(Boolean);
+    for (const infraName of referencedInfra) {
+      if (infraNames.has(infraName)) continue;
+      infraNames.add(infraName);
+      infraNodes.push({
+        id: `CloudInfrastructure/sovereign-cloud/${infraName}`,
+        label: infraName,
+        kind: 'CloudInfrastructure',
+        namespace: 'sovereign-cloud',
+        status: 'unknown',
+      });
+    }
 
     // Build edges ONLY from real CR references (no mesh heuristics)
     const edgePairs: Array<{ fromKind: string; fromName: string; toKind: string; toName: string; failed?: boolean }> =
       [];
 
-    for (const a of assignments.items) {
+    for (const a of assignmentItems) {
       if (!allow(assignmentPerm.allowed)) break;
       const spec = (a.spec || {}) as AssignSpec;
       const failed = statusFromReady(a.status?.ready, a.status?.status) === 'failed';
@@ -214,25 +304,47 @@ export function EntityTopology({
       }
     }
 
-    // Platform → CloudOSO/CloudAWS when platform.spec.cloudRef matches
-    for (const p of platforms.items) {
-      const cloudRef = (p.spec as { cloudRef?: string } | undefined)?.cloudRef;
-      if (!cloudRef) continue;
-      const cloud =
-        cloudOso.items.find((c) => c.metadata.name === cloudRef) ||
-        cloudAws.items.find((c) => c.metadata.name === cloudRef);
-      if (cloud) {
-        const kind: HybridSovereignKind = cloudAws.items.some((c) => c.metadata.name === cloud.metadata.name)
-          ? 'CloudAWS'
-          : 'CloudOSO';
-        edgePairs.push({
-          fromKind: kind,
-          fromName: cloud.metadata.name,
-          toKind: 'PlatformOpenshift',
-          toName: p.metadata.name,
-          failed: statusFromReady(p.status?.ready, p.status?.status) === 'failed',
-        });
-      }
+    // HybridFabric → CloudInfrastructure through each CloudGateway (fabricRef + cloudRef)
+    for (const g of gatewayItems) {
+      const fabricName = (g.spec as { fabricRef?: string } | undefined)?.fabricRef;
+      const infraName = cloudRefOf(g);
+      if (!fabricName || !infraName) continue;
+      edgePairs.push({
+        fromKind: 'HybridFabric',
+        fromName: fabricName,
+        toKind: 'CloudInfrastructure',
+        toName: infraName,
+        failed: statusFromReady(g.status?.ready, g.status?.status) === 'failed',
+      });
+    }
+
+    // CloudInfrastructure → tenant cloud project (spec.cloudRef)
+    for (const { item, kind } of visibleClouds) {
+      const infraName = cloudRefOf(item);
+      if (!infraName) continue;
+      edgePairs.push({
+        fromKind: 'CloudInfrastructure',
+        fromName: infraName,
+        toKind: kind,
+        toName: item.metadata.name,
+        failed: statusFromReady(item.status?.ready, item.status?.status) === 'failed',
+      });
+    }
+
+    // Cloud project → PlatformOpenshift (spec.<type>.environment)
+    for (const p of platformItems) {
+      const spec = (p.spec ?? {}) as { type?: string } & Record<string, unknown>;
+      const cloudKind = PLATFORM_ENV_KIND[spec.type ?? ''];
+      const env = (spec[spec.type ?? ''] as { environment?: string } | undefined)?.environment;
+      if (!cloudKind || !env) continue;
+      if (!visibleClouds.some((c) => c.kind === cloudKind && c.item.metadata.name === env)) continue;
+      edgePairs.push({
+        fromKind: cloudKind,
+        fromName: env,
+        toKind: 'PlatformOpenshift',
+        toName: p.metadata.name,
+        failed: statusFromReady(p.status?.ready, p.status?.status) === 'failed',
+      });
     }
 
     // Entity → Team / Entity → Platform only for scoped ownership (namespace membership)
@@ -286,13 +398,17 @@ export function EntityTopology({
       referenced.add(`${ep.toKind}:${ep.toName}`);
     }
     const keep = (n: TopologyNode) =>
-      n.kind === 'Entity' || referenced.has(`${n.kind}:${n.label}`);
+      n.kind === 'Entity' ||
+      (!entityNamespace && (n.kind === 'HybridFabric' || n.kind === 'CloudInfrastructure')) ||
+      referenced.has(`${n.kind}:${n.label}`);
 
     const filteredTeams = teamNodes.filter(keep);
     const filteredProjects = projectNodes.filter(keep);
     const filteredAssignments = assignmentNodes.filter(keep);
     const filteredPlatforms = platformNodes.filter(keep);
     const filteredClouds = cloudNodes.filter(keep);
+    const filteredFabrics = fabricNodes.filter(keep);
+    const filteredInfra = infraNodes.filter(keep);
 
     // Order columns by dependency flow; sort rows to reduce crossings
     const teamOrder = new Map(filteredTeams.map((t, i) => [t.label, i]));
@@ -315,8 +431,16 @@ export function EntityTopology({
 
     const columns: TopologyNode[][] = (
       entityNamespace
-        ? [entityNodes, filteredTeams, filteredProjects, filteredClouds, filteredPlatforms, filteredAssignments]
-        : [entityNodes, filteredPlatforms, filteredAssignments]
+        ? [
+            entityNodes,
+            filteredTeams,
+            filteredProjects,
+            filteredInfra,
+            filteredClouds,
+            filteredPlatforms,
+            filteredAssignments,
+          ]
+        : [filteredFabrics, filteredInfra, entityNodes, filteredClouds, filteredPlatforms, filteredAssignments]
     ).filter((c) => c.length > 0);
 
     const { nodes, width, height } = layoutColumns(columns);
@@ -337,13 +461,17 @@ export function EntityTopology({
     return { nodes, edges, width: Math.max(width, 640), height: Math.max(height, 200) };
   }, [
     entityNamespace,
-    entities.items,
-    teams.items,
-    projects.items,
-    assignments.items,
-    platforms.items,
-    cloudOso.items,
-    cloudAws.items,
+    entityItems,
+    teamItems,
+    projectItems,
+    assignmentItems,
+    platformItems,
+    cloudOsoItems,
+    cloudAwsItems,
+    cloudVirtItems,
+    cloudInfraItems,
+    fabricItems,
+    gatewayItems,
     filterByPermissions,
     teamPerm.allowed,
     projectPerm.allowed,
@@ -351,25 +479,32 @@ export function EntityTopology({
     platformPerm.allowed,
     cloudOsoPerm.allowed,
     cloudAwsPerm.allowed,
+    cloudVirtPerm.allowed,
   ]);
 
-  const loading =
-    entities.loading ||
-    teams.loading ||
-    projects.loading ||
-    assignments.loading ||
-    platforms.loading ||
-    cloudOso.loading ||
-    cloudAws.loading;
+  const loading = scoped
+    ? teams.loading ||
+      projects.loading ||
+      assignments.loading ||
+      platforms.loading ||
+      cloudOso.loading ||
+      cloudAws.loading ||
+      cloudVirt.loading
+    : useParentResources
+      ? !!resourcesLoading
+      : overview.loading;
 
-  const listError =
-    entities.error ||
-    teams.error ||
-    projects.error ||
-    assignments.error ||
-    platforms.error ||
-    cloudOso.error ||
-    cloudAws.error;
+  const listError = scoped
+    ? teams.error ||
+      projects.error ||
+      assignments.error ||
+      platforms.error ||
+      cloudOso.error ||
+      cloudAws.error ||
+      cloudVirt.error
+    : useParentResources
+      ? resourcesError ?? null
+      : overview.error;
 
   if (loading && graph.nodes.length === 0) {
     return <Spinner aria-label="Loading topology" />;

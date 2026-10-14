@@ -1,13 +1,6 @@
 import React from 'react';
-import {
-  Button,
-  Toolbar,
-  ToolbarContent,
-  ToolbarItem,
-  SearchInput,
-  ToggleGroup,
-  ToggleGroupItem,
-} from '@patternfly/react-core';
+import { Button, SearchInput } from '@patternfly/react-core';
+import { SyncAltIcon } from '@patternfly/react-icons';
 import { useTranslation } from '../i18n';
 
 export type StatusFilter = 'all' | 'ready' | 'failed' | 'pending' | 'reconciling';
@@ -34,36 +27,44 @@ export function FilterToolbar({
 }: FilterToolbarProps): React.ReactElement {
   const { t } = useTranslation();
   return (
-    <Toolbar className="sc-filter-bar" id="sc-filter-toolbar">
-      <ToolbarContent>
-        <ToolbarItem>
-          <SearchInput
-            aria-label={t('common.filterResources')}
-            placeholder={searchPlaceholder ?? t('common.filterByName')}
-            value={search}
-            onChange={(_e, v) => onSearchChange(v)}
-            onClear={() => onSearchChange('')}
-          />
-        </ToolbarItem>
-        <ToolbarItem>
-          <ToggleGroup aria-label={t('common.statusFilter')}>
-            {FILTERS.map((f) => (
-              <ToggleGroupItem
-                key={f}
-                text={t(`status.${f}`)}
-                buttonId={`status-${f}`}
-                isSelected={statusFilter === f}
-                onChange={() => onStatusFilterChange(f)}
-              />
-            ))}
-          </ToggleGroup>
-        </ToolbarItem>
-        <ToolbarItem align={{ default: 'alignRight' }}>
-          <Button variant="secondary" onClick={onRefresh}>
-            {t('common.refresh')}
-          </Button>
-        </ToolbarItem>
-      </ToolbarContent>
-    </Toolbar>
+    <div className="sc-filter-bar" role="toolbar" aria-label={t('common.statusFilter')}>
+      <div className="sc-filter-bar__search">
+        <SearchInput
+          aria-label={t('common.filterResources')}
+          placeholder={searchPlaceholder ?? t('common.filterByName')}
+          value={search}
+          onChange={(_e, v) => onSearchChange(v)}
+          onClear={() => onSearchChange('')}
+        />
+      </div>
+      <div className="sc-filter-bar__chips" role="group" aria-label={t('common.statusFilter')}>
+        {FILTERS.map((f) => {
+          const selected = statusFilter === f;
+          return (
+            <button
+              key={f}
+              type="button"
+              id={`status-${f}`}
+              className={`sc-status-chip sc-status-chip--${f}${selected ? ' sc-status-chip--selected' : ''}`}
+              aria-pressed={selected}
+              onClick={() => onStatusFilterChange(f)}
+            >
+              {f !== 'all' && <span className="sc-status-chip__dot" aria-hidden />}
+              <span className="sc-status-chip__label">{t(`status.${f}`)}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="sc-filter-bar__actions">
+        <Button
+          variant="secondary"
+          className="sc-filter-bar__refresh"
+          icon={<SyncAltIcon />}
+          onClick={onRefresh}
+        >
+          {t('common.refresh')}
+        </Button>
+      </div>
+    </div>
   );
 }

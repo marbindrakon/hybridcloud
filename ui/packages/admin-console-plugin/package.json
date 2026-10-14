@@ -1,6 +1,6 @@
 {
   "name": "@hybridsovereign/admin-console-plugin",
-  "version": "1.2.20",
+  "version": "1.2.31",
   "private": true,
   "description": "OpenShift Console dynamic plugin for Hybrid Sovereign admin views",
   "main": "dist/plugin-entry.js",
@@ -11,7 +11,7 @@
   },
   "consolePlugin": {
     "name": "sovereign-admin-plugin",
-    "version": "1.2.20",
+    "version": "1.2.31",
     "displayName": "Sovereign Cloud",
     "description": "Sovereign Cloud admin perspective \u2014 Entities, Personas, Services, Operators",
     "exposedModules": {
@@ -33,6 +33,9 @@
       "AdminAssignmentDetailPage": "./src/components/AdminAssignmentDetailPage.tsx",
       "AdminCloudOSODetailPage": "./src/components/AdminCloudOSODetailPage.tsx",
       "AdminCloudAWSDetailPage": "./src/components/AdminCloudAWSDetailPage.tsx",
+      "AdminCloudVirtDetailPage": "./src/components/AdminCloudVirtDetailPage.tsx",
+      "AdminCloudInfrastructuresPage": "./src/components/AdminCloudInfrastructuresPage.tsx",
+      "AdminCloudInfrastructureDetailPage": "./src/components/AdminCloudInfrastructureDetailPage.tsx",
       "AdminRbacDetailPage": "./src/components/AdminRbacDetailPage.tsx",
       "AdminAAPOrgDetailPage": "./src/components/AdminAAPOrgDetailPage.tsx",
       "AdminAAPConfigDetailPage": "./src/components/AdminAAPConfigDetailPage.tsx",
@@ -42,6 +45,7 @@
       "AdminVaultKVDetailPage": "./src/components/AdminVaultKVDetailPage.tsx",
       "AdminCreatePage": "./src/components/AdminCreatePage.tsx",
       "AdminHybridFabricsPage": "./src/components/AdminHybridFabricsPage.tsx",
+      "AdminNetworkOverviewPage": "./src/components/AdminNetworkOverviewPage.tsx",
       "AdminCloudGatewaysPage": "./src/components/AdminCloudGatewaysPage.tsx",
       "AdminTransportLinksPage": "./src/components/AdminTransportLinksPage.tsx",
       "AdminUIHealthPage": "./src/components/AdminUIHealthPage.tsx",
@@ -49,7 +53,6 @@
       "AdminCloudGatewayDetailPage": "./src/components/AdminCloudGatewayDetailPage.tsx",
       "AdminTransportLinkDetailPage": "./src/components/AdminTransportLinkDetailPage.tsx",
       "AdminUIHealthCheckerDetailPage": "./src/components/AdminUIHealthCheckerDetailPage.tsx",
-      "PerspectiveIcon": "./src/PerspectiveIcon.tsx",
       "perspective": "./src/perspective.tsx",
       "AdminRbacConfigDetailPage": "./src/components/AdminRbacConfigDetailPage.tsx"
     }
@@ -57,12 +60,12 @@
   "dependencies": {
     "@hybridsovereign/shared": "*",
     "@openshift-console/dynamic-plugin-sdk": "^1.8.0",
-    "@patternfly/react-core": "^5.4.1",
-    "@patternfly/react-icons": "^5.4.0",
-    "@patternfly/react-table": "^5.4.1",
+    "@patternfly/react-core": "^6.4.0",
+    "@patternfly/react-icons": "^6.4.0",
+    "@patternfly/react-table": "^6.4.0",
     "react": "^17.0.2",
     "react-dom": "^17.0.2",
-    "react-router-dom": "^5.3.4"
+    "react-router-dom": "6.30.4"
   },
   "devDependencies": {
     "@openshift-console/dynamic-plugin-sdk-webpack": "^1.2.0",

@@ -1,3 +1,4 @@
+import '../consoleK8sBootstrap';
 import { makeAdminDetailPage } from './AdminResourceDetailPage';
 
 export const AdminPersonaDetailPage = makeAdminDetailPage(
@@ -28,6 +29,11 @@ export const AdminCloudOSODetailPage = makeAdminDetailPage(
 );
 export const AdminCloudAWSDetailPage = makeAdminDetailPage(
   'CloudAWS',
+  'Cloud Environments',
+  '/hybridsovereign/clouds',
+);
+export const AdminCloudVirtDetailPage = makeAdminDetailPage(
+  'CloudVirt',
   'Cloud Environments',
   '/hybridsovereign/clouds',
 );

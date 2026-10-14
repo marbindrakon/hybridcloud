@@ -4,6 +4,9 @@ import {
   Button,
   Label,
   Modal,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
   ModalVariant,
   Spinner,
   Tab,
@@ -275,6 +278,35 @@ export function ResourceDetail({
         </Alert>
       )}
 
+      {kind === 'PlatformOpenshift' &&
+        (() => {
+          const net = (resource.status as { networking?: Record<string, unknown> } | undefined)?.networking;
+          if (!net || typeof net !== 'object') return null;
+          const conflict = String(net.conflictCheck ?? '');
+          const conflictMsg = String(net.conflictMessage ?? '');
+          const cidrs = [
+            ...(Array.isArray(net.clusterNetwork) ? net.clusterNetwork : []),
+            ...(Array.isArray(net.serviceNetwork) ? net.serviceNetwork : []),
+            ...(Array.isArray(net.machineNetwork) ? net.machineNetwork : []),
+          ].map(String);
+          return (
+            <div style={{ marginBottom: '1rem', display: 'grid', gap: '0.5rem' }}>
+              {conflict === 'failed' || conflictMsg ? (
+                <Alert variant="danger" title="Fabric IPAM conflict" isInline>
+                  {conflictMsg || `conflictCheck=${conflict}`}
+                </Alert>
+              ) : null}
+              {cidrs.length > 0 ? (
+                <Alert variant="info" title="Allocated cluster CIDRs (status.networking)" isInline>
+                  {cidrs.join(' · ')}
+                  {net.fabricRef ? ` · fabricRef=${String(net.fabricRef)}` : ''}
+                  {conflict ? ` · conflictCheck=${conflict}` : ''}
+                </Alert>
+              ) : null}
+            </div>
+          );
+        })()}
+
       <Tabs
         activeKey={activeTab}
         onSelect={(_e, k) => setActiveTab(k)}
@@ -304,19 +336,22 @@ export function ResourceDetail({
 
       <Modal
         variant={ModalVariant.small}
-        title={`Delete ${kind}?`}
         isOpen={confirmDelete}
         onClose={() => setConfirmDelete(false)}
-        actions={[
+      >
+        <ModalHeader title={`Delete ${kind}?`} />
+        <ModalBody>
+          This will permanently delete <strong>{name}</strong> from namespace{' '}
+          <strong>{namespace}</strong>.
+        </ModalBody>
+        <ModalFooter>
           <Button key="confirm" variant="danger" isDisabled={deleting} onClick={handleDelete}>
             {deleting ? 'Deleting…' : 'Delete'}
-          </Button>,
+          </Button>
           <Button key="cancel" variant="link" onClick={() => setConfirmDelete(false)}>
             Cancel
-          </Button>,
-        ]}
-      >
-        This will permanently delete <strong>{name}</strong> from namespace <strong>{namespace}</strong>.
+          </Button>
+        </ModalFooter>
       </Modal>
     </div>
   );

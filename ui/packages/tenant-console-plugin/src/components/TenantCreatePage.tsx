@@ -1,5 +1,6 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
-import { useHistory, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, PageSection } from '@patternfly/react-core';
 import {
   CreateResourceForm,
@@ -24,6 +25,7 @@ const LIST_PATH: Record<string, string> = {
   assignment: '/hybridsovereign/tenant/assignments',
   cloudoso: '/hybridsovereign/tenant/cloudoso',
   cloudaws: '/hybridsovereign/tenant/cloudaws',
+  cloudvirt: '/hybridsovereign/tenant/cloudvirt',
   platformopenshift: '/hybridsovereign/tenant/platforms',
   migration: '/hybridsovereign/tenant/migrations',
   persona: '/hybridsovereign/tenant/personas',
@@ -38,7 +40,7 @@ const LIST_PATH: Record<string, string> = {
 
 const TenantCreatePage: React.FC = () => {
   const { t } = useTranslation();
-  const history = useHistory();
+  const navigate = useNavigate();
   const { formType } = useParams<{ formType: string }>();
   const { namespace, entities, selectEntity, entity } = useEntityNamespace();
   const type = (formType ?? 'team') as SelfServiceFormType;
@@ -62,8 +64,8 @@ const TenantCreatePage: React.FC = () => {
             formType={type}
             namespace={namespace}
             listPath={listPath}
-            onSuccess={(path) => history.push(path)}
-            onCancel={() => history.push(listPath)}
+            onSuccess={(path) => navigate(path)}
+            onCancel={() => navigate(listPath)}
           />
         )}
       </div>

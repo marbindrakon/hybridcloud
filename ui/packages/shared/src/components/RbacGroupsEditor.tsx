@@ -6,10 +6,13 @@ import {
   FormSelectOption,
   Button,
   Modal,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
   ModalVariant,
   Alert,
-  ChipGroup,
-  Chip,
+  LabelGroup,
+  Label,
   Title,
 } from '@patternfly/react-core';
 
@@ -67,13 +70,17 @@ export function RbacGroupsEditor({
     <>
       <Form>
         <FormGroup label={label} fieldId="rbac-groups">
-          <ChipGroup>
+          <LabelGroup numLabels={12}>
             {selected.map((group) => (
-              <Chip key={group} onClick={() => removeGroup(group)} isReadOnly={disabled}>
+              <Label
+                key={group}
+                color="blue"
+                onClose={disabled ? undefined : () => removeGroup(group)}
+              >
                 {group}
-              </Chip>
+              </Label>
             ))}
-          </ChipGroup>
+          </LabelGroup>
           {!disabled && unselected.length > 0 && (
             <FormSelect
               aria-label="Add RBAC group"
@@ -100,31 +107,33 @@ export function RbacGroupsEditor({
 
       <Modal
         variant={ModalVariant.small}
-        title="Confirm tool RBAC change"
         isOpen={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        actions={[
+      >
+        <ModalHeader title="Confirm tool RBAC change" />
+        <ModalBody>
+          {error && (
+            <Alert variant="danger" title="Update failed" isInline style={{ marginBottom: '1rem' }}>
+              {error}
+            </Alert>
+          )}
+          <Title headingLevel="h4" size="md">
+            Groups to apply
+          </Title>
+          <ul>
+            {selected.map((g) => (
+              <li key={g}>{g}</li>
+            ))}
+          </ul>
+        </ModalBody>
+        <ModalFooter>
           <Button key="confirm" variant="primary" isLoading={saving} onClick={handleSave}>
             Confirm
-          </Button>,
+          </Button>
           <Button key="cancel" variant="link" onClick={() => setConfirmOpen(false)}>
             Cancel
-          </Button>,
-        ]}
-      >
-        {error && (
-          <Alert variant="danger" title="Update failed" isInline style={{ marginBottom: '1rem' }}>
-            {error}
-          </Alert>
-        )}
-        <Title headingLevel="h4" size="md">
-          Groups to apply
-        </Title>
-        <ul>
-          {selected.map((g) => (
-            <li key={g}>{g}</li>
-          ))}
-        </ul>
+          </Button>
+        </ModalFooter>
       </Modal>
     </>
   );

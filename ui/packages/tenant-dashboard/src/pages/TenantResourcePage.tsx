@@ -23,6 +23,7 @@ type FormType =
   | 'assignment'
   | 'cloudoso'
   | 'cloudaws'
+  | 'cloudvirt'
   | 'migration'
   | 'persona'
   | 'rbac'

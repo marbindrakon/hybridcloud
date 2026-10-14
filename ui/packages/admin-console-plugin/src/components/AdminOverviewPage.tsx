@@ -1,5 +1,6 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
-import { useMemo } from 'react';
+import { useMemo, Component, type ReactNode } from 'react';
 import {
   Title,
   Card,
@@ -21,7 +22,6 @@ import {
   ExternalLinkAltIcon,
   TopologyIcon,
 } from '@patternfly/react-icons';
-import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import {
   EntityTopology,
   PageHeader,
@@ -36,6 +36,29 @@ import {
 } from '@hybridsovereign/shared';
 import { overviewItemHref } from '../adminPaths';
 import '@hybridsovereign/shared/styles/openshift.css';
+
+/** Keep Overview usable if topology/subtree throws (React #306 / undefined element). */
+class SectionErrorBoundary extends Component<
+  { title: string; children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <Alert variant="warning" isInline title={this.props.title}>
+          {this.state.error.message || 'Section failed to render'}
+        </Alert>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function bucket(items: K8sResource[]) {
   let ready = 0;
@@ -170,7 +193,7 @@ const AdminOverviewPage: React.FC = () => {
                                 {p.metadata.name} <ExternalLinkAltIcon />
                               </a>
                             </FlexItem>
-                            <FlexItem align={{ default: 'alignRight' }}>
+                            <FlexItem align={{ default: 'alignEnd' }}>
                               <Label color={healthy ? 'green' : 'red'} icon={healthy ? <CheckCircleIcon /> : undefined}>
                                 {healthy ? 'Healthy' : 'Degraded'}
                               </Label>
@@ -208,29 +231,29 @@ const AdminOverviewPage: React.FC = () => {
                         Failed custom resources <Label color="orange">{overall.failed}</Label>
                       </CardTitle>
                     </FlexItem>
-                    <FlexItem align={{ default: 'alignRight' }}>
+                    <FlexItem align={{ default: 'alignEnd' }}>
                       <a href="/hybridsovereign/operators">View all</a>
                     </FlexItem>
                   </Flex>
                 </CardHeader>
                 <CardBody>
                   <div className="sc-table-wrap">
-                    <Table variant="compact" aria-label="Failed resources">
-                      <Thead>
-                        <Tr>
-                          <Th>Kind</Th>
-                          <Th>Name</Th>
-                          <Th>Namespace</Th>
-                          <Th>Message</Th>
-                        </Tr>
-                      </Thead>
-                      <Tbody>
+                    <table className="pf-v5-c-table pf-m-compact" role="grid" aria-label="Failed resources">
+                      <thead>
+                        <tr>
+                          <th>Kind</th>
+                          <th>Name</th>
+                          <th>Namespace</th>
+                          <th>Message</th>
+                        </tr>
+                      </thead>
+                      <tbody>
                         {failedItems.map((item) => {
                           const href = overviewItemHref(item);
                           return (
-                            <Tr key={`${item.kind}/${item.metadata.namespace}/${item.metadata.name}`}>
-                              <Td dataLabel="Kind">{item.kind}</Td>
-                              <Td dataLabel={t('common.name')}>
+                            <tr key={`${item.kind}/${item.metadata.namespace}/${item.metadata.name}`}>
+                              <td data-label="Kind">{item.kind}</td>
+                              <td data-label={t('common.name')}>
                                 {href ? (
                                   <a className="sc-resource-link" href={href}>
                                     <KindIcon kind={item.kind || 'Unknown'} size="sm" />
@@ -239,20 +262,20 @@ const AdminOverviewPage: React.FC = () => {
                                 ) : (
                                   item.metadata.name
                                 )}
-                              </Td>
-                              <Td dataLabel={t('common.namespace')}>{item.metadata.namespace ?? '—'}</Td>
-                              <Td dataLabel="Message">
+                              </td>
+                              <td data-label={t('common.namespace')}>{item.metadata.namespace ?? '—'}</td>
+                              <td data-label="Message">
                                 <StatusBadge
                                   status={item.status?.status}
                                   ready={item.status?.ready}
                                   message={item.status?.message}
                                 />
-                              </Td>
-                            </Tr>
+                              </td>
+                            </tr>
                           );
                         })}
-                      </Tbody>
-                    </Table>
+                      </tbody>
+                    </table>
                   </div>
                 </CardBody>
               </Card>
@@ -267,9 +290,26 @@ const AdminOverviewPage: React.FC = () => {
             </Flex>
             <Card className="sc-panel">
               <CardBody>
-                <EntityTopology />
+                <SectionErrorBoundary title="Live topology unavailable">
+                  <EntityTopology
+                    resources={items}
+                    resourcesLoading={loading}
+                    resourcesError={error}
+                  />
+                </SectionErrorBoundary>
               </CardBody>
             </Card>
+
+            <div className="sc-inventory-grid" style={{ marginTop: '1rem' }}>
+              <InventoryCard
+                title={t('nav.cloudInfrastructure')}
+                count={(byKind.get('CloudInfrastructure') ?? []).length}
+                hint={`${bucket(byKind.get('CloudInfrastructure') ?? []).ready} ready`}
+                kind="CloudInfrastructure"
+                href="/hybridsovereign/clouds/infrastructure"
+                status={bucket(byKind.get('CloudInfrastructure') ?? []).failed ? 'danger' : 'default'}
+              />
+            </div>
           </>
         )}
       </div>

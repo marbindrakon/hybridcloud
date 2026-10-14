@@ -2,7 +2,7 @@
   "name": "@hybridsovereign/ui",
   "private": true,
   "version": "0.1.0",
-  "description": "PatternFly 5 UI monorepo for Hybrid Sovereign Cloud dashboards and console plugins",
+  "description": "PatternFly 6 UI monorepo for Hybrid Sovereign Cloud dashboards and console plugins",
   "workspaces": [
     "packages/*"
   ],

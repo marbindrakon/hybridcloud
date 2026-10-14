@@ -66,7 +66,7 @@ app.use("/api/", (_req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "16kb" }));
+app.use(express.json({ limit: "256kb" }));
 
 function requireAuth(req, res, next) {
   const raw = req.headers["x-forwarded-access-token"];
@@ -184,6 +184,13 @@ app.get("/api/cloudawss/:name", requireAuth, k8s.getCloudAWS);
 app.post("/api/cloudawss", requireAuth, mutationLimiter, k8s.createCloudAWS);
 app.patch("/api/cloudawss/:name", requireAuth, mutationLimiter, k8s.patchCloudAWS);
 app.delete("/api/cloudawss/:name", requireAuth, mutationLimiter, k8s.deleteCloudAWS);
+
+// CloudVirt CRUD
+app.get("/api/cloudvirts", requireAuth, k8s.listCloudVirts);
+app.get("/api/cloudvirts/:name", requireAuth, k8s.getCloudVirt);
+app.post("/api/cloudvirts", requireAuth, mutationLimiter, k8s.createCloudVirt);
+app.patch("/api/cloudvirts/:name", requireAuth, mutationLimiter, k8s.patchCloudVirt);
+app.delete("/api/cloudvirts/:name", requireAuth, mutationLimiter, k8s.deleteCloudVirt);
 
 // Project CRUD
 app.get("/api/projects/:name", requireAuth, k8s.getProject);

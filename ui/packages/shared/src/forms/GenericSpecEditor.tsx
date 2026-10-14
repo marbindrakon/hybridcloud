@@ -13,7 +13,7 @@ import {
 import { updateDashboardResource } from '../hooks/k8s';
 import { HybridSovereignKind, K8sResource } from '../types';
 import { useTranslation } from '../i18n';
-import { getAtPath, KIND_SPEC_META, setAtPath, SpecFieldMeta } from './specFieldMeta';
+import { getAtPath, isSpecFieldVisible, KIND_SPEC_META, setAtPath, SpecFieldMeta } from './specFieldMeta';
 
 export interface GenericSpecEditorProps {
   kind: HybridSovereignKind;
@@ -35,6 +35,34 @@ function textToList(val: string): string[] {
     .filter(Boolean);
 }
 
+function namedRefsToText(val: unknown): string {
+  if (Array.isArray(val)) {
+    return val
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && 'name' in item) {
+          return String((item as { name?: string }).name ?? '');
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (val == null) return '';
+  return String(val);
+}
+
+function textToNamedRefs(val: string): Array<{ name: string }> {
+  return textToList(val).map((name) => ({ name }));
+}
+
+function namedRefToText(val: unknown): string {
+  if (val && typeof val === 'object' && 'name' in val) {
+    return String((val as { name?: string }).name ?? '');
+  }
+  return '';
+}
+
 export function GenericSpecEditor({
   kind,
   namespace,
@@ -53,9 +81,13 @@ export function GenericSpecEditor({
     setDraft({ ...((item.spec as Record<string, unknown>) ?? {}) });
   }, [item]);
 
-  const fields = useMemo(() => meta?.fields ?? [], [meta]);
+  const allFields = useMemo(() => meta?.fields ?? [], [meta]);
+  const fields = useMemo(
+    () => allFields.filter((f) => isSpecFieldVisible(f, draft)),
+    [allFields, draft],
+  );
 
-  if (!meta || fields.length === 0) {
+  if (!meta || allFields.length === 0) {
     return (
       <p className="sc-text-muted">{t('form.noEditableFields')}</p>
     );
@@ -63,7 +95,9 @@ export function GenericSpecEditor({
 
   const setField = (field: SpecFieldMeta, value: unknown) => {
     if (field.immutable) return;
-    setDraft((prev) => setAtPath(prev, field.path, value));
+    // null removes the key on a merge patch (and is pruned on a full-spec replace).
+    const next = field.omitWhenEmpty && value === '' ? null : value;
+    setDraft((prev) => setAtPath(prev, field.path, next));
   };
 
   const save = async () => {
@@ -195,6 +229,46 @@ export function GenericSpecEditor({
                 value={listToText(raw)}
                 isDisabled={field.immutable}
                 onChange={(_e, v) => setField(field, textToList(v))}
+                rows={2}
+              />
+              <p className="sc-text-muted" style={{ marginTop: '0.25rem' }}>
+                {help || t('form.commaSeparated')}
+              </p>
+            </FormGroup>
+          );
+        }
+
+        if (field.widget === 'namedRef') {
+          const current = namedRefToText(raw);
+          return (
+            <FormGroup key={field.path} label={label} fieldId={id}>
+              <TextInput
+                id={id}
+                value={current}
+                isDisabled={field.immutable}
+                onChange={(_e, v) => {
+                  const nextName = v.trim();
+                  if (!nextName) {
+                    setField(field, null);
+                    return;
+                  }
+                  const prev = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+                  setField(field, { ...prev, name: v });
+                }}
+              />
+              {hint}
+            </FormGroup>
+          );
+        }
+
+        if (field.widget === 'namedRefList') {
+          return (
+            <FormGroup key={field.path} label={label} fieldId={id}>
+              <TextArea
+                id={id}
+                value={namedRefsToText(raw)}
+                isDisabled={field.immutable}
+                onChange={(_e, v) => setField(field, textToNamedRefs(v))}
                 rows={2}
               />
               <p className="sc-text-muted" style={{ marginTop: '0.25rem' }}>

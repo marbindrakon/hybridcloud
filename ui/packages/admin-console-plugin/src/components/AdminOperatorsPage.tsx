@@ -1,3 +1,4 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
 import { PageSection } from '@patternfly/react-core';
 import { useTranslation } from '@hybridsovereign/shared';
@@ -17,6 +18,7 @@ const AdminOperatorsPage: React.FC = () => {
           secondaryKind="RbacConfig"
           listPath="/hybridsovereign/operators/rbacs"
           secondaryListPath="/hybridsovereign/operators/rbacconfigs"
+          createPath="/hybridsovereign/create/rbac"
         />
       </div>
     </PageSection>

@@ -61,7 +61,7 @@ export function StatusBadge({
   const health = normalizeHealth(ready, status);
   const Icon = HEALTH_ICON[health];
   const label = (
-    <Label color={COLOR[health]} icon={<Icon />} className="sc-status-badge">
+    <Label color={COLOR[health]} icon={<Icon />} className={`sc-status-badge sc-status-badge--${health}`}>
       {t(`status.${health}`)}
     </Label>
   );

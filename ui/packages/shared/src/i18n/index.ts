@@ -1,4 +1,4 @@
-import i18n from 'i18next';
+import i18n, { createInstance, type i18n as I18nInstance } from 'i18next';
 import {
   initReactI18next,
   useTranslation as useI18nextTranslation,
@@ -28,24 +28,45 @@ export function isEmbeddedConsolePlugin(): boolean {
   return window.location.pathname.startsWith('/hybridsovereign');
 }
 
+/**
+ * OpenShift Console sets SERVER_FLAGS and shares `react-i18next` with plugins.
+ * Calling initReactI18next / i18n.init on that shared module replaces the host
+ * i18n singleton → raw keys like `console-app~Core platform` in the nav.
+ */
+export function isOpenShiftConsoleHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  return !!(window as Window & { SERVER_FLAGS?: unknown }).SERVER_FLAGS;
+}
+
 const GLOBAL_I18N_KEY = '__HYBRIDSOVEREIGN_I18N__';
 
 type SovereignWindow = Window & {
-  [GLOBAL_I18N_KEY]?: typeof i18n;
+  [GLOBAL_I18N_KEY]?: I18nInstance;
 };
 
-function getGlobalI18n(): typeof i18n | undefined {
+function getGlobalI18n(): I18nInstance | undefined {
   if (typeof window === 'undefined') return undefined;
   return (window as SovereignWindow)[GLOBAL_I18N_KEY];
 }
 
-function setGlobalI18n(instance: typeof i18n): void {
+function setGlobalI18n(instance: I18nInstance): void {
   if (typeof window === 'undefined') return;
   (window as SovereignWindow)[GLOBAL_I18N_KEY] = instance;
 }
 
-/** Idempotent i18n bootstrap — safe to call from dashboards and console plugins. */
-export function initI18n(locale?: AppLocale): typeof i18n {
+function buildResources() {
+  return {
+    en: { translation: en },
+    fr: { translation: fr },
+  };
+}
+
+/**
+ * Idempotent i18n bootstrap.
+ * Standalone dashboards: default i18next + initReactI18next.
+ * Console plugins: isolated createInstance() — never touch shared initReactI18next.
+ */
+export function initI18n(locale?: AppLocale): I18nInstance {
   const lng = locale ?? getStoredLocale();
   const existing = getGlobalI18n();
   if (existing) {
@@ -55,11 +76,25 @@ export function initI18n(locale?: AppLocale): typeof i18n {
     return existing;
   }
 
+  if (isOpenShiftConsoleHost()) {
+    // Isolated instance — do NOT call initReactI18next (shared with host).
+    const isolated = createInstance();
+    void isolated.init({
+      resources: buildResources(),
+      lng,
+      fallbackLng: 'en',
+      interpolation: { escapeValue: false },
+      returnNull: false,
+      react: {
+        useSuspense: false,
+      },
+    });
+    setGlobalI18n(isolated);
+    return isolated;
+  }
+
   i18n.use(initReactI18next).init({
-    resources: {
-      en: { translation: en },
-      fr: { translation: fr },
-    },
+    resources: buildResources(),
     lng,
     fallbackLng: 'en',
     interpolation: { escapeValue: false },
@@ -81,7 +116,8 @@ export function useTranslation(ns?: string, options?: UseTranslationOptions<stri
   return useI18nextTranslation(ns, { ...options, i18n: i18nInstance });
 }
 
-if (typeof window !== 'undefined') {
+// Auto-init only for standalone dashboards — never on console host load.
+if (typeof window !== 'undefined' && !isOpenShiftConsoleHost()) {
   initI18n();
 }
 

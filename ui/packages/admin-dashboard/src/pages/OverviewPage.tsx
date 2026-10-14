@@ -44,6 +44,8 @@ const KIND_LIST_PATH: Partial<Record<string, string>> = {
   PlatformOpenshift: '/platforms',
   CloudOSO: '/clouds/cloudoso',
   CloudAWS: '/clouds/cloudaws',
+  CloudVirt: '/clouds/cloudvirt',
+  CloudInfrastructure: '/clouds/infrastructure',
   Persona: '/personas',
   Rbac: '/operators/rbacs',
   RbacConfig: '/operators/rbacconfigs',
@@ -158,6 +160,14 @@ export function OverviewPage(): React.ReactElement {
                 href="/teams"
               />
               <InventoryCard
+                title={t('nav.cloudInfrastructure')}
+                count={(byKind.get('CloudInfrastructure') ?? []).length}
+                hint={`${bucket(byKind.get('CloudInfrastructure') ?? []).ready} ready`}
+                kind="CloudInfrastructure"
+                href="/clouds/infrastructure"
+                status={bucket(byKind.get('CloudInfrastructure') ?? []).failed ? 'danger' : 'default'}
+              />
+              <InventoryCard
                 title="Platforms"
                 count={platforms.length}
                 hint={`${bucket(platforms).ready} ready`}
@@ -202,7 +212,7 @@ export function OverviewPage(): React.ReactElement {
                               {p.metadata.name} <ExternalLinkAltIcon />
                             </Link>
                           </FlexItem>
-                          <FlexItem align={{ default: 'alignRight' }}>
+                          <FlexItem align={{ default: 'alignEnd' }}>
                             <Label color={healthy ? 'green' : 'red'} icon={healthy ? <CheckCircleIcon /> : undefined}>
                               {healthy ? 'Healthy' : 'Degraded'}
                             </Label>
@@ -241,7 +251,7 @@ export function OverviewPage(): React.ReactElement {
                       <Label color="orange">{overall.failed}</Label>
                     </CardTitle>
                   </FlexItem>
-                  <FlexItem align={{ default: 'alignRight' }}>
+                  <FlexItem align={{ default: 'alignEnd' }}>
                     <Link to="/operators">View all</Link>
                   </FlexItem>
                 </Flex>
@@ -300,7 +310,11 @@ export function OverviewPage(): React.ReactElement {
           </Flex>
           <Card className="sc-panel">
             <CardBody>
-              <EntityTopology />
+              <EntityTopology
+                resources={items}
+                resourcesLoading={loading}
+                resourcesError={error}
+              />
             </CardBody>
           </Card>
         </>

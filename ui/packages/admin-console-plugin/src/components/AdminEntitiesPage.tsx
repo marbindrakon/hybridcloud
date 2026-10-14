@@ -1,5 +1,6 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
-import { useHistory } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { PageSection, Button } from '@patternfly/react-core';
 import { PlusCircleIcon } from '@patternfly/react-icons';
 import {
@@ -12,19 +13,11 @@ import {
   KIND_PLURALS,
   useK8sResourceList,
   K8sResource,
-  configureK8sClient,
   ResourceListTable,
   filterResourcesByQuery,
   useTranslation,
 } from '@hybridsovereign/shared';
-import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
 import '@hybridsovereign/shared/styles/openshift.css';
-
-configureK8sClient({
-  baseUrl: '/api/kubernetes',
-  fetchFn: consoleFetch as unknown as typeof fetch,
-  apiStyle: 'raw',
-});
 
 type SovereignResource = K8sResource & {
   status?: OperatorStatus;
@@ -34,7 +27,7 @@ const ENTITY_NS = 'sovereign-cloud';
 
 const AdminEntitiesPage: React.FC = () => {
   const { t } = useTranslation();
-  const history = useHistory();
+  const navigate = useNavigate();
   const [search, setSearch] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>('all');
   const { items, loading, error, refresh } = useK8sResourceList<SovereignResource>('Entity', {
@@ -59,7 +52,7 @@ const AdminEntitiesPage: React.FC = () => {
             <Button
               variant="primary"
               icon={<PlusCircleIcon />}
-              onClick={() => history.push('/hybridsovereign/create/entity')}
+              onClick={() => navigate('/hybridsovereign/create/entity')}
             >
               {t('common.create')}
             </Button>
@@ -83,6 +76,8 @@ const AdminEntitiesPage: React.FC = () => {
           detailHref={(item) =>
             `/hybridsovereign/entities/${encodeURIComponent(item.metadata?.name ?? '')}`
           }
+          enableDelete
+          onDeleted={refresh}
         />
       </div>
     </PageSection>
@@ -95,16 +90,16 @@ export default AdminEntitiesPage;
 export const makeKindListPage = (
   kind: HybridSovereignKind,
   title: string,
-  opts?: { createKind?: string; listPath?: string },
+  opts?: { createKind?: string; listPath?: string; namespace?: string },
 ): React.FC => {
   const listPath = opts?.listPath ?? `/hybridsovereign/${KIND_PLURALS[kind] ?? kind.toLowerCase()}`;
   const Page: React.FC = () => {
     const { t } = useTranslation();
-    const history = useHistory();
+    const navigate = useNavigate();
     const [search, setSearch] = React.useState('');
     const [statusFilter, setStatusFilter] = React.useState<StatusFilter>('all');
     const { items, loading, error, refresh } = useK8sResourceList<SovereignResource>(kind, {
-      ...(kind === 'Entity' ? { namespace: ENTITY_NS } : {}),
+      ...(kind === 'Entity' ? { namespace: ENTITY_NS } : opts?.namespace ? { namespace: opts.namespace } : {}),
     });
     const kindTitle = t(`kinds.${kind}`, { defaultValue: title });
 
@@ -122,7 +117,7 @@ export const makeKindListPage = (
         return `/hybridsovereign/entities/${encodeURIComponent(n)}`;
       }
       if (
-        kind === 'HybridFabric' ||
+        kind === 'CloudInfrastructure' || kind === 'HybridFabric' ||
         kind === 'CloudGateway' ||
         kind === 'TransportLink' ||
         kind === 'UIHealthChecker'
@@ -143,7 +138,7 @@ export const makeKindListPage = (
                 <Button
                   variant="primary"
                   icon={<PlusCircleIcon />}
-                  onClick={() => history.push(`/hybridsovereign/create/${opts.createKind}`)}
+                  onClick={() => navigate(`/hybridsovereign/create/${opts.createKind}`)}
                 >
                   {t('common.create')}
                 </Button>
@@ -166,6 +161,8 @@ export const makeKindListPage = (
             showNamespace
             linkMode="anchor"
             detailHref={detailHref}
+            enableDelete
+            onDeleted={refresh}
           />
         </div>
       </PageSection>

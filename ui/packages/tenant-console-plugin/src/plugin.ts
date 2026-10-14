@@ -1,18 +1,6 @@
-import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
-import { configureK8sClient, configurePermissionsClient, initI18n } from '@hybridsovereign/shared';
+import './consoleK8sBootstrap';
 
-initI18n();
-
-configureK8sClient({
-  baseUrl: '/api/kubernetes',
-  fetchFn: consoleFetch as unknown as typeof fetch,
-  apiStyle: 'raw',
-});
-
-configurePermissionsClient('/api/kubernetes', {
-  style: 'ssar',
-  fetchFn: consoleFetch as unknown as typeof fetch,
-});
+// Do not call initI18n() here — shared react-i18next would stomp console i18n.
 
 export { default as TenantOverviewPage } from './components/TenantOverviewPage';
 export { default as TenantTeamsPage } from './components/TenantTeamsPage';
@@ -21,6 +9,7 @@ export { default as TenantPlatformsPage } from './components/TenantPlatformsPage
 export { default as TenantAssignmentsPage } from './components/TenantAssignmentsPage';
 export { default as TenantCloudOSOPage } from './components/TenantCloudOSOPage';
 export { default as TenantCloudAWSPage } from './components/TenantCloudAWSPage';
+export { default as TenantCloudVirtPage } from './components/TenantCloudVirtPage';
 export { default as TenantMigrationsPage } from './components/TenantMigrationsPage';
 export { default as TenantPersonasPage } from './components/TenantPersonasPage';
 export { default as TenantRbacPage } from './components/TenantRbacPage';
@@ -37,6 +26,7 @@ export { default as TenantPlatformDetailPage } from './components/TenantPlatform
 export { default as TenantAssignmentDetailPage } from './components/TenantAssignmentDetailPage';
 export { default as TenantCloudOSODetailPage } from './components/TenantCloudOSODetailPage';
 export { default as TenantCloudAWSDetailPage } from './components/TenantCloudAWSDetailPage';
+export { default as TenantCloudVirtDetailPage } from './components/TenantCloudVirtDetailPage';
 export { default as TenantMigrationDetailPage } from './components/TenantMigrationDetailPage';
 export { default as TenantPersonaDetailPage } from './components/TenantPersonaDetailPage';
 export { default as TenantRbacDetailPage } from './components/TenantRbacDetailPage';
@@ -44,3 +34,5 @@ export { default as TenantVaultDetailPage } from './components/TenantVaultDetail
 export { default as TenantVaultKVDetailPage } from './components/TenantVaultKVDetailPage';
 export { default as TenantAAPOrgDetailPage } from './components/TenantAAPOrgDetailPage';
 export { default as TenantQuayOrgDetailPage } from './components/TenantQuayOrgDetailPage';
+export { default as TenantHybridNetworkDetailPage } from './components/TenantHybridNetworkDetailPage';
+export { default as TenantNetworkPlacementDetailPage } from './components/TenantNetworkPlacementDetailPage';

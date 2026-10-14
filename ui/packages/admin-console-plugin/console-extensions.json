@@ -5,7 +5,7 @@
       "id": "hybridsovereign",
       "name": "Sovereign Cloud",
       "icon": {
-        "$codeRef": "PerspectiveIcon"
+        "$codeRef": "perspective.icon"
       },
       "landingPageURL": {
         "$codeRef": "perspective.getLandingPageURL"
@@ -20,7 +20,7 @@
     "properties": {
       "id": "hybridsovereign-admin-section",
       "perspective": "hybridsovereign",
-      "name": "Sovereign Cloud"
+      "name": "Admin"
     }
   },
   {
@@ -39,7 +39,7 @@
       "id": "hybridsovereign-entities",
       "section": "hybridsovereign-admin-section",
       "perspective": "hybridsovereign",
-      "name": "Entities",
+      "name": "Entity",
       "href": "/hybridsovereign/entities"
     }
   },
@@ -54,96 +54,31 @@
     }
   },
   {
-    "type": "console.navigation/href",
-    "properties": {
-      "id": "hybridsovereign-services",
-      "section": "hybridsovereign-admin-section",
-      "perspective": "hybridsovereign",
-      "name": "Service URLs",
-      "href": "/hybridsovereign/services"
-    }
-  },
-  {
-    "type": "console.navigation/href",
-    "properties": {
-      "id": "hybridsovereign-operators",
-      "section": "hybridsovereign-admin-section",
-      "perspective": "hybridsovereign",
-      "name": "Operators",
-      "href": "/hybridsovereign/operators"
-    }
-  },
-  {
     "type": "console.navigation/section",
     "properties": {
-      "id": "hybridsovereign-tenancy-read-section",
+      "id": "hybridsovereign-admin-networks-section",
       "perspective": "hybridsovereign",
-      "name": "Tenancy"
+      "name": "Admin Networks"
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-teams",
-      "section": "hybridsovereign-tenancy-read-section",
+      "id": "hybridsovereign-network-overview",
+      "section": "hybridsovereign-admin-networks-section",
       "perspective": "hybridsovereign",
-      "name": "Teams",
-      "href": "/hybridsovereign/teams"
-    }
-  },
-  {
-    "type": "console.navigation/href",
-    "properties": {
-      "id": "hybridsovereign-projects",
-      "section": "hybridsovereign-tenancy-read-section",
-      "perspective": "hybridsovereign",
-      "name": "Projects",
-      "href": "/hybridsovereign/projects"
-    }
-  },
-  {
-    "type": "console.navigation/href",
-    "properties": {
-      "id": "hybridsovereign-platforms",
-      "section": "hybridsovereign-tenancy-read-section",
-      "perspective": "hybridsovereign",
-      "name": "Platform Openshift",
-      "href": "/hybridsovereign/platforms"
-    }
-  },
-  {
-    "type": "console.navigation/href",
-    "properties": {
-      "id": "hybridsovereign-clouds",
-      "section": "hybridsovereign-tenancy-read-section",
-      "perspective": "hybridsovereign",
-      "name": "Cloud Environments",
-      "href": "/hybridsovereign/clouds"
-    }
-  },
-  {
-    "type": "console.navigation/href",
-    "properties": {
-      "id": "hybridsovereign-assignments",
-      "section": "hybridsovereign-tenancy-read-section",
-      "perspective": "hybridsovereign",
-      "name": "Assignments",
-      "href": "/hybridsovereign/assignments"
-    }
-  },
-  {
-    "type": "console.navigation/section",
-    "properties": {
-      "id": "hybridsovereign-networking-section",
-      "perspective": "hybridsovereign",
-      "name": "Hybrid VPC"
+      "name": "Network Overview",
+      "href": "/hybridsovereign/networking/overview",
+      "dataAttributes": {
+        "data-quickstart-id": "hs-network-overview"
+      }
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
       "id": "hybridsovereign-fabrics",
-      "section": "hybridsovereign-networking-section",
+      "section": "hybridsovereign-admin-networks-section",
       "perspective": "hybridsovereign",
       "name": "Hybrid Fabrics",
       "href": "/hybridsovereign/networking/fabrics"
@@ -152,8 +87,18 @@
   {
     "type": "console.navigation/href",
     "properties": {
+      "id": "hybridsovereign-cloud-infrastructure",
+      "section": "hybridsovereign-admin-networks-section",
+      "perspective": "hybridsovereign",
+      "name": "Cloud Infrastructure",
+      "href": "/hybridsovereign/clouds/infrastructure"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
       "id": "hybridsovereign-gateways",
-      "section": "hybridsovereign-networking-section",
+      "section": "hybridsovereign-admin-networks-section",
       "perspective": "hybridsovereign",
       "name": "Cloud Gateways",
       "href": "/hybridsovereign/networking/gateways"
@@ -163,20 +108,126 @@
     "type": "console.navigation/href",
     "properties": {
       "id": "hybridsovereign-transport",
-      "section": "hybridsovereign-networking-section",
+      "section": "hybridsovereign-admin-networks-section",
       "perspective": "hybridsovereign",
       "name": "Transport Links",
       "href": "/hybridsovereign/networking/transport"
     }
   },
   {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-admin-monitor-section",
+      "perspective": "hybridsovereign",
+      "name": "Admin Monitor"
+    }
+  },
+  {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-uihealth",
-      "section": "hybridsovereign-networking-section",
+      "id": "hybridsovereign-services",
+      "section": "hybridsovereign-admin-monitor-section",
       "perspective": "hybridsovereign",
-      "name": "UI Health",
-      "href": "/hybridsovereign/networking/uihealth"
+      "name": "Service URLs",
+      "href": "/hybridsovereign/services"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-operators",
+      "section": "hybridsovereign-admin-monitor-section",
+      "perspective": "hybridsovereign",
+      "name": "Operators",
+      "href": "/hybridsovereign/operators"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-team-section",
+      "perspective": "hybridsovereign",
+      "name": "Team"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-teams",
+      "section": "hybridsovereign-team-section",
+      "perspective": "hybridsovereign",
+      "name": "Teams",
+      "href": "/hybridsovereign/teams"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-projects",
+      "section": "hybridsovereign-team-section",
+      "perspective": "hybridsovereign",
+      "name": "Project",
+      "href": "/hybridsovereign/projects"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-assignments",
+      "section": "hybridsovereign-team-section",
+      "perspective": "hybridsovereign",
+      "name": "Assignment",
+      "href": "/hybridsovereign/assignments"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-iaas-platform-section",
+      "perspective": "hybridsovereign",
+      "name": "IAAS Platform"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-iaas-networking-section",
+      "perspective": "hybridsovereign",
+      "name": "IAAS Networking"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-app-platform-section",
+      "perspective": "hybridsovereign",
+      "name": "APP Platform"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-platforms",
+      "section": "hybridsovereign-app-platform-section",
+      "perspective": "hybridsovereign",
+      "name": "Openshift Platform",
+      "href": "/hybridsovereign/platforms"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-services-section",
+      "perspective": "hybridsovereign",
+      "name": "Services"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-access-section",
+      "perspective": "hybridsovereign",
+      "name": "Access Controls"
     }
   },
   {
@@ -422,6 +473,26 @@
   {
     "type": "console.page/route",
     "properties": {
+      "path": "/hybridsovereign/clouds/infrastructure",
+      "component": {
+        "$codeRef": "AdminCloudInfrastructuresPage"
+      },
+      "exact": true
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clouds/infrastructure/:name",
+      "component": {
+        "$codeRef": "AdminCloudInfrastructureDetailPage"
+      },
+      "exact": false
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
       "path": "/hybridsovereign/clouds/cloudoso/:namespace/:name",
       "component": {
         "$codeRef": "AdminCloudOSODetailPage"
@@ -435,6 +506,16 @@
       "path": "/hybridsovereign/clouds/cloudaws/:namespace/:name",
       "component": {
         "$codeRef": "AdminCloudAWSDetailPage"
+      },
+      "exact": false
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clouds/cloudvirt/:namespace/:name",
+      "component": {
+        "$codeRef": "AdminCloudVirtDetailPage"
       },
       "exact": false
     }
@@ -457,6 +538,16 @@
         "$codeRef": "AdminAssignmentDetailPage"
       },
       "exact": false
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": true,
+      "path": "/hybridsovereign/networking/overview",
+      "component": {
+        "$codeRef": "AdminNetworkOverviewPage"
+      }
     }
   },
   {

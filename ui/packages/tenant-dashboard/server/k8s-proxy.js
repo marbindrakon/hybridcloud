@@ -69,6 +69,19 @@ const ENTITY_NS_LABEL_SELECTOR = "hybridsovereign.redhat/entity";
 
 const PLUGINS_NS = "sovereign-cloud-plugins";
 const RECONCILE_ANNOTATION = "ansible.sdk.operatorframework.io/reconcileNow";
+/**
+ * spec.cloudRef of a tenant cloud project: a CloudInfrastructure in sovereign-cloud. Returns the
+ * sanitized reference, null when absent, or false when present but invalid.
+ */
+function sanitizeCloudRef(raw) {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || typeof raw.name !== "string") return false;
+  const name = raw.name.trim();
+  if (!name || name.length > 253 || !NAME_PATTERN.test(name)) return false;
+  if (raw.kind != null && raw.kind !== "CloudInfrastructure") return false;
+  return { kind: "CloudInfrastructure", name };
+}
+
 const KIND_PLURALS = {
   Entity: "entities",
   Team: "teams",
@@ -77,6 +90,7 @@ const KIND_PLURALS = {
   PlatformOpenshift: "platformopenshifts",
   CloudOSO: "cloudosos",
   CloudAWS: "cloudawss",
+  CloudVirt: "cloudvirts",
   OpenStackMigration: "openstackmigrations",
   Rbac: "rbacs",
   RbacConfig: "rbacconfigs",
@@ -150,6 +164,10 @@ export function createK8sHandlers(apiServer) {
   const MTV_CATALOG_PATH = "/api/v1/namespaces/sovereign-cloud/configmaps/mtv-migration-catalog";
   function cloudawssCollectionPath(namespace) {
     return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/cloudawss`;
+  }
+
+  function cloudvirtsCollectionPath(namespace) {
+    return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/cloudvirts`;
   }
   function personasCollectionPath(namespace) {
     return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/personas`;
@@ -778,13 +796,33 @@ export function createK8sHandlers(apiServer) {
         return res.status(400).json({ message: "spec is required" });
       }
       const { type } = spec;
-      if (type !== "aws" && type !== "openstack") {
-        return res.status(400).json({ message: "spec.type must be aws or openstack" });
+      if (type !== "aws" && type !== "openstack" && type !== "hosted") {
+        return res.status(400).json({ message: "spec.type must be aws, openstack, or hosted" });
       }
 
       function toPositiveInt(raw, fallback) {
         const n = typeof raw === "number" ? raw : Number.parseInt(String(raw), 10);
         return Number.isFinite(n) && n >= 1 ? n : fallback;
+      }
+
+      function sanitizeToolRbac(raw) {
+        if (!raw || typeof raw !== "object") return undefined;
+        const out = {};
+        for (const key of [
+          "clusterAdminRbac",
+          "clusterOperatorRbac",
+          "clusterDeveloperRbac",
+          "clusterViewerRbac",
+        ]) {
+          const list = raw[key];
+          if (!Array.isArray(list)) continue;
+          const cleaned = list
+            .filter((v) => typeof v === "string")
+            .map((v) => v.trim())
+            .filter(Boolean);
+          if (cleaned.length) out[key] = cleaned;
+        }
+        return Object.keys(out).length ? out : undefined;
       }
 
       let platformSpec;
@@ -818,6 +856,18 @@ export function createK8sHandlers(apiServer) {
                 : "m5.large",
           },
         };
+      } else if (type === "hosted") {
+        const hosted = spec.hosted;
+        if (!hosted || typeof hosted.environment !== "string" || !hosted.environment.trim()) {
+          return res.status(400).json({ message: "spec.hosted.environment is required" });
+        }
+        platformSpec = {
+          type: "hosted",
+          hosted: {
+            environment: hosted.environment.trim(),
+            nodePoolReplicas: toPositiveInt(hosted.nodePoolReplicas, 2),
+          },
+        };
       } else {
         const os = spec.openstack;
         if (!os || typeof os.environment !== "string" || !os.environment.trim()) {
@@ -843,6 +893,31 @@ export function createK8sHandlers(apiServer) {
                 : "ext-net",
           },
         };
+      }
+
+      const toolRbac = sanitizeToolRbac(spec.toolRbac);
+      if (toolRbac) platformSpec.toolRbac = toolRbac;
+
+      // Explicit address plan; omitted CIDRs are allocated from the CloudInfrastructure defaults.
+      // Clusters do not join a fabric: spec.fabric and networking.allocateFromFabric/fabricRef are dropped.
+      if (spec.networking != null) {
+        if (typeof spec.networking !== "object") {
+          return res.status(400).json({ message: "spec.networking must be an object" });
+        }
+        const networking = {};
+        for (const key of ["clusterNetwork", "serviceNetwork"]) {
+          const list = spec.networking[key];
+          if (list == null) continue;
+          if (!Array.isArray(list) || !list.every((v) => typeof v === "string")) {
+            return res.status(400).json({ message: `spec.networking.${key} must be a list of CIDRs` });
+          }
+          const cleaned = list.map((v) => v.trim()).filter(Boolean);
+          if (cleaned.length) networking[key] = cleaned;
+        }
+        if (typeof spec.networking.allowConflict === "boolean") {
+          networking.allowConflict = spec.networking.allowConflict;
+        }
+        if (Object.keys(networking).length) platformSpec.networking = networking;
       }
 
       const platform = {
@@ -946,56 +1021,42 @@ export function createK8sHandlers(apiServer) {
       }
       const {
         project,
-        vaultPath,
         baseDomain,
         projectDomain,
         externalNetwork,
         route53VaultPath,
         landingzone,
-        enableVRF,
-        vrfId,
+        designateZoneId,
+        designateProjectId,
       } = spec;
+      // Credentials and site settings come from the CloudInfrastructure named by spec.cloudRef.
+      const cloudRef = sanitizeCloudRef(spec.cloudRef);
+      if (!cloudRef) {
+        return res.status(400).json({ message: "spec.cloudRef.name (a CloudInfrastructure of type openstack) is required" });
+      }
       if (!project || typeof project !== "string" || !project.trim()) {
         return res.status(400).json({ message: "spec.project is required" });
-      }
-      if (!vaultPath || typeof vaultPath !== "string" || !vaultPath.trim()) {
-        return res.status(400).json({ message: "spec.vaultPath is required" });
       }
       if (!baseDomain || typeof baseDomain !== "string" || !baseDomain.trim()) {
         return res.status(400).json({ message: "spec.baseDomain is required" });
       }
-      if (!projectDomain || typeof projectDomain !== "string" || !projectDomain.trim()) {
-        return res.status(400).json({ message: "spec.projectDomain is required" });
-      }
-      if (!externalNetwork || typeof externalNetwork !== "string" || !externalNetwork.trim()) {
-        return res.status(400).json({ message: "spec.externalNetwork is required" });
-      }
-      if (
-        !route53VaultPath ||
-        typeof route53VaultPath !== "string" ||
-        !route53VaultPath.trim()
-      ) {
-        return res.status(400).json({ message: "spec.route53VaultPath is required" });
-      }
-      if (enableVRF === true && (!vrfId || typeof vrfId !== "string" || !vrfId.trim())) {
-        return res.status(400).json({ message: "spec.vrfId is required when enableVRF is true" });
-      }
+      // Optional: unset values fall back to the CloudInfrastructure.
+      const optional = (key, value) =>
+        value && typeof value === "string" && value.trim() ? { [key]: value.trim() } : {};
       const cloudoso = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "CloudOSO",
         metadata: { name, namespace },
         spec: {
+          cloudRef,
           project: project.trim(),
-          vaultPath: vaultPath.trim(),
           baseDomain: baseDomain.trim(),
-          projectDomain: projectDomain.trim(),
-          externalNetwork: externalNetwork.trim(),
-          route53VaultPath: route53VaultPath.trim(),
-          ...(landingzone && typeof landingzone === "string" && landingzone.trim()
-            ? { landingzone: landingzone.trim() }
-            : {}),
-          enableVRF: enableVRF === true,
-          ...(enableVRF === true && vrfId ? { vrfId: vrfId.trim() } : {}),
+          ...optional("projectDomain", projectDomain),
+          ...optional("externalNetwork", externalNetwork),
+          ...optional("route53VaultPath", route53VaultPath),
+          ...optional("landingzone", landingzone),
+          ...optional("designateZoneId", designateZoneId),
+          ...optional("designateProjectId", designateProjectId),
         },
       };
       try {
@@ -1228,8 +1289,22 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
-      if (!spec?.account || !spec?.vaultPath || !spec?.baseDomain) {
-        return res.status(400).json({ message: "spec.account, spec.vaultPath, and spec.baseDomain are required" });
+      // With spec.cloudRef the credentials come from the CloudInfrastructure (type aws).
+      const cloudRef = sanitizeCloudRef(spec?.cloudRef);
+      if (cloudRef === false) {
+        return res.status(400).json({ message: "spec.cloudRef.name is invalid" });
+      }
+      const hasCredRef =
+        spec?.credentialsSecretRef &&
+        typeof spec.credentialsSecretRef === "object" &&
+        typeof spec.credentialsSecretRef.name === "string" &&
+        spec.credentialsSecretRef.name.trim();
+      const hasVault = spec?.vaultPath && typeof spec.vaultPath === "string" && spec.vaultPath.trim();
+      if (!spec?.account || !spec?.baseDomain || (!cloudRef && !hasCredRef && !hasVault)) {
+        return res.status(400).json({
+          message:
+            "spec.account, spec.baseDomain, and spec.cloudRef.name (or credentialsSecretRef.name / vaultPath) are required",
+        });
       }
       const cloudaws = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
@@ -1237,8 +1312,12 @@ export function createK8sHandlers(apiServer) {
         metadata: { name, namespace },
         spec: {
           account: spec.account,
-          vaultPath: spec.vaultPath,
           baseDomain: spec.baseDomain,
+          ...(cloudRef
+            ? { cloudRef }
+            : hasCredRef
+              ? { credentialsSecretRef: { name: spec.credentialsSecretRef.name.trim() } }
+              : { vaultPath: spec.vaultPath }),
           ...(spec?.landingzone ? { landingzone: spec.landingzone } : {}),
         },
       };
@@ -1315,6 +1394,132 @@ export function createK8sHandlers(apiServer) {
         res.json({ message: `CloudAWS '${name}' deleted` });
       } catch (err) {
         console.error("CloudAWS delete error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+
+    async listCloudVirts(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const namespace = req.query.namespace;
+      if (!namespace || !NS_PATTERN.test(namespace)) {
+        return res.status(400).json({ message: "namespace query parameter required" });
+      }
+      try {
+        const resp = await k8sRequest(apiServer, cloudvirtsCollectionPath(namespace), "GET", token);
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list CloudVirts" });
+        res.json(resp.body?.items || []);
+      } catch (err) {
+        console.error("CloudVirt list error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async createCloudVirt(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name, namespace, spec } = req.body || {};
+      if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
+      if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      // Credentials and site settings come from the CloudInfrastructure named by spec.cloudRef.
+      const cloudRef = sanitizeCloudRef(spec?.cloudRef);
+      if (!cloudRef || !spec?.baseDomain) {
+        return res.status(400).json({
+          message: "spec.cloudRef.name (a CloudInfrastructure of type openshift) and spec.baseDomain are required",
+        });
+      }
+      const quotaHard = spec?.vmNamespaceQuota?.hard;
+      if (quotaHard != null && (typeof quotaHard !== "object" || Array.isArray(quotaHard))) {
+        return res.status(400).json({ message: "spec.vmNamespaceQuota.hard must be an object" });
+      }
+      const cloudvirt = {
+        apiVersion: "hybridsovereign.redhat/v1alpha1",
+        kind: "CloudVirt",
+        metadata: { name, namespace },
+        spec: {
+          cloudRef,
+          baseDomain: spec.baseDomain,
+          ...(spec?.storageClass ? { storageClass: spec.storageClass } : {}),
+          ...(spec?.networkAttachment ? { networkAttachment: spec.networkAttachment } : {}),
+          ...(quotaHard ? { vmNamespaceQuota: { hard: quotaHard } } : {}),
+        },
+      };
+      try {
+        const resp = await k8sRequest(apiServer, cloudvirtsCollectionPath(namespace), "POST", token, cloudvirt);
+        if (resp.status === 409) return res.status(409).json({ message: `CloudVirt '${name}' already exists` });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) {
+          return res.status(502).json({ message: resp.body?.message || "Failed to create CloudVirt" });
+        }
+        res.status(201).json(resp.body);
+      } catch (err) {
+        console.error("CloudVirt create error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async getCloudVirt(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${cloudvirtsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "GET", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get CloudVirt" });
+        res.json(resp.body);
+      } catch (err) {
+        console.error("CloudVirt get error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async patchCloudVirt(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      const { spec } = req.body || {};
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      if (!spec) return res.status(400).json({ message: "spec is required" });
+      try {
+        const urlPath = `${cloudvirtsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const patch = [{ op: "replace", path: "/spec", value: spec }];
+        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch CloudVirt" });
+        res.json(resp.body);
+      } catch (err) {
+        console.error("CloudVirt patch error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async deleteCloudVirt(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${cloudvirtsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete CloudVirt" });
+        res.json({ message: `CloudVirt '${name}' deleted` });
+      } catch (err) {
+        console.error("CloudVirt delete error:", err.message);
         res.status(502).json({ message: "Failed to communicate with cluster API" });
       }
     },
@@ -2129,6 +2334,7 @@ export function createK8sHandlers(apiServer) {
       const RESOURCE_TYPES = [
         { resource: "cloudosos",           group: "hybridsovereign.redhat" },
         { resource: "cloudawss",           group: "hybridsovereign.redhat" },
+        { resource: "cloudvirts",          group: "hybridsovereign.redhat" },
         { resource: "platformopenshifts",  group: "hybridsovereign.redhat" },
         { resource: "vaultkvs",            group: "hybridsovereign.redhat" },
         { resource: "vaults",              group: "hybridsovereign.redhat" },

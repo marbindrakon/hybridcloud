@@ -57,6 +57,24 @@ function boolFlag(v: unknown): boolean {
   return v === true;
 }
 
+/** spec.cloudRef.name (CloudInfrastructure reference) */
+function cloudRefName(item: K8sResource): string {
+  const ref = specOf(item).cloudRef;
+  if (ref && typeof ref === 'object') return asString((ref as Record<string, unknown>).name);
+  return '';
+}
+
+function cloudRefColumn(): ListColumnDef {
+  return {
+    id: 'cloudRef',
+    labelKey: 'list.cloudInfrastructure',
+    sortable: true,
+    getSortValue: (i) => cloudRefName(i),
+    getSearchText: (i) => cloudRefName(i),
+    render: (i) => cloudRefName(i) || '—',
+  };
+}
+
 function chip(label: string, color = 'grey'): CellMarker {
   return { __kind: 'chip', label: label || '—', color };
 }
@@ -247,11 +265,21 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       render: (i) => chip(asString(specOf(i).type) || '—', 'blue'),
     },
     {
-      id: 'cloudRef',
-      labelKey: 'list.cloudRef',
+      id: 'environment',
+      labelKey: 'list.environment',
       sortable: true,
-      getSortValue: (i) => asString(specOf(i).cloudRef),
-      render: (i) => asString(specOf(i).cloudRef) || '—',
+      getSortValue: (i) => {
+        const sec = (specOf(i)[asString(specOf(i).type)] ?? {}) as Record<string, unknown>;
+        return asString(sec.environment);
+      },
+      getSearchText: (i) => {
+        const sec = (specOf(i)[asString(specOf(i).type)] ?? {}) as Record<string, unknown>;
+        return asString(sec.environment);
+      },
+      render: (i) => {
+        const sec = (specOf(i)[asString(specOf(i).type)] ?? {}) as Record<string, unknown>;
+        return asString(sec.environment) || '—';
+      },
     },
     {
       id: 'topology',
@@ -281,6 +309,7 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
     },
   ],
   CloudOSO: [
+    cloudRefColumn(),
     {
       id: 'baseDomain',
       labelKey: 'list.baseDomain',
@@ -305,6 +334,7 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
     },
   ],
   CloudAWS: [
+    cloudRefColumn(),
     {
       id: 'account',
       labelKey: 'list.account',
@@ -326,6 +356,24 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       sortable: true,
       getSortValue: (i) => asString(specOf(i).landingzone),
       render: (i) => asString(specOf(i).landingzone) || '—',
+    },
+  ],
+  CloudVirt: [
+    cloudRefColumn(),
+    {
+      id: 'baseDomain',
+      labelKey: 'list.baseDomain',
+      sortable: true,
+      getSortValue: (i) => asString(specOf(i).baseDomain),
+      getSearchText: (i) => asString(specOf(i).baseDomain),
+      render: (i) => asString(specOf(i).baseDomain) || '—',
+    },
+    {
+      id: 'storageClass',
+      labelKey: 'list.storageClass',
+      sortable: true,
+      getSortValue: (i) => asString(specOf(i).storageClass),
+      render: (i) => asString(specOf(i).storageClass) || '—',
     },
   ],
   OpenStackMigration: [
@@ -531,6 +579,53 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       render: (i) => asString(specOf(i).rbacConfig) || '—',
     },
   ],
+  CloudInfrastructure: [
+    {
+      id: 'type',
+      labelKey: 'list.provider',
+      sortable: true,
+      getSortValue: (i) => asString(specOf(i).type),
+      getSearchText: (i) => asString(specOf(i).type),
+      render: (i) => chip(asString(specOf(i).type) || '—', 'blue'),
+    },
+    {
+      id: 'displayName',
+      labelKey: 'list.displayName',
+      sortable: true,
+      getSortValue: (i) => asString(specOf(i).displayName),
+      getSearchText: (i) => asString(specOf(i).displayName),
+      render: (i) => truncate(asString(specOf(i).displayName)),
+    },
+    {
+      id: 'entities',
+      labelKey: 'list.entities',
+      sortable: true,
+      getSortValue: (i) => (Array.isArray(specOf(i).entityRefs) ? (specOf(i).entityRefs as unknown[]).length : 0),
+      getSearchText: (i) =>
+        (Array.isArray(specOf(i).entityRefs) ? (specOf(i).entityRefs as Array<{ name?: string }>) : [])
+          .map((r) => asString(r?.name))
+          .join(' '),
+      render: (i) => {
+        const refs = (Array.isArray(specOf(i).entityRefs) ? (specOf(i).entityRefs as Array<{ name?: string }>) : [])
+          .map((r) => asString(r?.name))
+          .filter(Boolean);
+        return refs.length ? countChip(refs.length, refs.join(', '), 'entities') : chip('all', 'grey');
+      },
+    },
+    {
+      id: 'capabilities',
+      labelKey: 'list.capabilities',
+      getSortValue: (i) => Object.values((statusOf(i).capabilities ?? {}) as Record<string, unknown>).filter(boolFlag).length,
+      getSearchText: (i) => Object.keys((statusOf(i).capabilities ?? {}) as Record<string, unknown>).join(' '),
+      render: (i) => {
+        const caps = Object.entries((statusOf(i).capabilities ?? {}) as Record<string, unknown>)
+          .filter(([, v]) => boolFlag(v))
+          .map(([k]) => k);
+        if (!caps.length) return '—';
+        return chips(caps.slice(0, 3).map((c) => ({ label: c, color: 'green' })), Math.max(0, caps.length - 3));
+      },
+    },
+  ],
   HybridFabric: [
     {
       id: 'enabled',
@@ -561,21 +656,34 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         return `${p.start}–${p.end ?? '?'}`;
       },
     },
+    {
+      id: 'underlay',
+      labelKey: 'list.underlay',
+      sortable: true,
+      getSortValue: (i) => asString(((specOf(i).underlay ?? {}) as Record<string, unknown>).cidr),
+      getSearchText: (i) => {
+        const u = (specOf(i).underlay ?? {}) as Record<string, unknown>;
+        return `${asString(u.type)} ${asString(u.cidr)}`;
+      },
+      render: (i) => {
+        const u = (specOf(i).underlay ?? {}) as Record<string, unknown>;
+        if (!u.cidr && !u.type) return '—';
+        return chips([
+          { label: asString(u.type) || 'ovn-layer2', color: 'purple' },
+          u.cidr ? { label: asString(u.cidr), color: 'grey' } : null,
+        ]);
+      },
+    },
   ],
   CloudGateway: [
+    cloudRefColumn(),
     {
-      id: 'cloud',
-      labelKey: 'list.provider',
+      id: 'transport',
+      labelKey: 'list.tunnel',
       sortable: true,
-      getSortValue: (i) => asString(specOf(i).cloud),
-      render: (i) => chip(asString(specOf(i).cloud) || '—', 'blue'),
-    },
-    {
-      id: 'region',
-      labelKey: 'list.region',
-      sortable: true,
-      getSortValue: (i) => asString(specOf(i).region),
-      render: (i) => asString(specOf(i).region) || '—',
+      getSortValue: (i) => asString(((specOf(i).transport ?? {}) as Record<string, unknown>).type),
+      render: (i) =>
+        chip(asString(((specOf(i).transport ?? {}) as Record<string, unknown>).type) || 'default', 'purple'),
     },
     {
       id: 'fabric',
@@ -629,6 +737,13 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         ),
     },
     {
+      id: 'overlayMtu',
+      labelKey: 'list.overlayMtu',
+      sortable: true,
+      getSortValue: (i) => Number(statusOf(i).overlayMtu ?? specOf(i).overlayMtu ?? 0),
+      render: (i) => asString(statusOf(i).overlayMtu ?? specOf(i).overlayMtu) || '—',
+    },
+    {
       id: 'networkId',
       labelKey: 'list.networkId',
       sortable: true,
@@ -675,12 +790,17 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         countChip(asStringArray(specOf(i).prefixes).length, asStringArray(specOf(i).prefixes).join(', '), 'CIDRs'),
     },
     {
-      id: 'state',
-      labelKey: 'list.state',
+      id: 'vmNamespaces',
+      labelKey: 'list.vmNamespaces',
       sortable: true,
-      getSortValue: (i) => asString(specOf(i).state) || 'present',
-      render: (i) =>
-        chip(asString(specOf(i).state) || 'present', asString(specOf(i).state) === 'absent' ? 'orange' : 'green'),
+      getSortValue: (i) => asStringArray(specOf(i).vmNamespaces).length,
+      getSearchText: (i) => asStringArray(specOf(i).vmNamespaces).join(' '),
+      render: (i) => {
+        const b = (specOf(i).backend ?? {}) as Record<string, unknown>;
+        if (asString(b.kind) !== 'CloudVirt') return '—';
+        const ns = asStringArray(specOf(i).vmNamespaces);
+        return ns.length ? countChip(ns.length, ns.join(', '), 'namespaces') : chip('default', 'grey');
+      },
     },
   ],
   UIHealthChecker: [

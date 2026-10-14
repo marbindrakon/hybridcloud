@@ -1,3 +1,4 @@
+import '../consoleK8sBootstrap';
 import * as React from 'react';
 import { PageSection, Title, Card, CardBody } from '@patternfly/react-core';
 import {
@@ -8,17 +9,10 @@ import {
   useK8sResourceList,
   useEntityNamespace,
   K8sResource,
-  configureK8sClient,
   useTranslation,
 } from '@hybridsovereign/shared';
-import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
 import '@hybridsovereign/shared/styles/openshift.css';
 
-configureK8sClient({
-  baseUrl: '/api/kubernetes',
-  fetchFn: consoleFetch as unknown as typeof fetch,
-  apiStyle: 'raw',
-});
 
 const TenantOverviewPage: React.FC = () => {
   const { t } = useTranslation();

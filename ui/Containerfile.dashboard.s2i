@@ -1,0 +1,43 @@
+# Multi-stage dashboard build for OpenShift BuildConfig (no prebuilt dist required)
+ARG APP_PACKAGE=admin-dashboard
+FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS build
+ARG APP_PACKAGE
+USER 0
+WORKDIR /opt/app-root/src
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY packages/shared/package.json ./packages/shared/package.json
+COPY packages/admin-dashboard/package.json ./packages/admin-dashboard/package.json
+COPY packages/tenant-dashboard/package.json ./packages/tenant-dashboard/package.json
+COPY packages/admin-console-plugin/package.json ./packages/admin-console-plugin/package.json
+COPY packages/tenant-console-plugin/package.json ./packages/tenant-console-plugin/package.json
+# Include optional native rollup bindings (npm omit=optional breaks vite on linux)
+RUN npm ci
+COPY packages/shared ./packages/shared
+COPY packages/${APP_PACKAGE} ./packages/${APP_PACKAGE}
+RUN npm run build -w @hybridsovereign/shared && \
+    npm run build -w @hybridsovereign/${APP_PACKAGE}
+
+FROM registry.access.redhat.com/ubi9/nodejs-20:latest
+ARG APP_PACKAGE
+USER 0
+WORKDIR /opt/app-root/src
+COPY --from=build /opt/app-root/src/packages/${APP_PACKAGE}/dist ./dist
+COPY --from=build /opt/app-root/src/packages/${APP_PACKAGE}/server ./server
+RUN printf '%s\n' \
+  '{' \
+  '  "name": "sovereign-dashboard",' \
+  '  "private": true,' \
+  '  "type": "module",' \
+  '  "dependencies": {' \
+  '    "express": "^5.2.1",' \
+  '    "express-rate-limit": "^8.5.1",' \
+  '    "helmet": "^8.1.0"' \
+  '  }' \
+  '}' > package.json && \
+  npm install --omit=dev && \
+  chown -R 1001:0 /opt/app-root/src && \
+  chmod -R g+rwX /opt/app-root/src
+USER 1001
+ENV PORT=8080
+EXPOSE 8080
+CMD ["node", "server/index.js"]

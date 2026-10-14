@@ -27,7 +27,9 @@ import {
   UsersIcon,
   ClusterIcon,
   LayerGroupIcon,
+  NetworkIcon,
   AwsIcon,
+  ServerIcon,
   TopologyIcon,
   OutlinedBellIcon,
   QuestionCircleIcon,
@@ -37,10 +39,8 @@ import {
   KeyIcon,
   ProcessAutomationIcon,
   SecurityIcon,
-  UserEditIcon,
   LockIcon,
   BundleIcon,
-  MigrationIcon,
 } from '@patternfly/react-icons';
 import { NavLink, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -54,6 +54,7 @@ import {
   HybridSovereignKind,
 } from '@hybridsovereign/shared';
 import { TenantOverviewPage } from './pages/TenantOverviewPage';
+import { TenantNetworkOverviewPage } from './pages/TenantNetworkOverviewPage';
 import { TenantResourcePage } from './pages/TenantResourcePage';
 import { TenantResourceDetailPage } from './pages/TenantResourceDetailPage';
 import { SelfServiceFormPage } from './pages/SelfServiceFormPage';
@@ -75,27 +76,9 @@ type NavEntry =
 /** Static sidebar — all links always visible; pages fetch K8s only on navigate/refresh */
 const NAV: NavEntry[] = [
   { type: 'link', path: '/', labelKey: 'nav.overview', icon: TachometerAltIcon, end: true },
-  { type: 'sep', labelKey: 'nav.tenancy' },
+  { type: 'sep', labelKey: 'nav.team' },
   { type: 'link', path: '/teams', labelKey: 'nav.teams', icon: UsersIcon, kind: 'Team', form: 'team' },
   { type: 'link', path: '/projects', labelKey: 'nav.projects', icon: FolderOpenIcon, kind: 'Project', form: 'project' },
-  {
-    type: 'link',
-    path: '/platforms',
-    labelKey: 'nav.platformOpenshift',
-    icon: ClusterIcon,
-    kind: 'PlatformOpenshift',
-    form: 'platformopenshift',
-  },
-  { type: 'link', path: '/cloudoso', labelKey: 'nav.cloudOso', icon: LayerGroupIcon, kind: 'CloudOSO', form: 'cloudoso' },
-  { type: 'link', path: '/cloudaws', labelKey: 'nav.cloudAws', icon: AwsIcon, kind: 'CloudAWS', form: 'cloudaws' },
-  {
-    type: 'link',
-    path: '/migrations',
-    labelKey: 'nav.migrateOpenStack',
-    icon: MigrationIcon,
-    kind: 'OpenStackMigration',
-    form: 'migration',
-  },
   {
     type: 'link',
     path: '/assignments',
@@ -104,7 +87,17 @@ const NAV: NavEntry[] = [
     kind: 'Assignment',
     form: 'assignment',
   },
-  { type: 'sep', labelKey: 'nav.hybridVpc' },
+  { type: 'sep', labelKey: 'nav.iaasPlatform' },
+  { type: 'link', path: '/cloudoso', labelKey: 'nav.cloudOso', icon: LayerGroupIcon, kind: 'CloudOSO', form: 'cloudoso' },
+  { type: 'link', path: '/cloudaws', labelKey: 'nav.cloudAws', icon: AwsIcon, kind: 'CloudAWS', form: 'cloudaws' },
+  { type: 'link', path: '/cloudvirt', labelKey: 'nav.cloudVirt', icon: ServerIcon, kind: 'CloudVirt', form: 'cloudvirt' },
+  { type: 'sep', labelKey: 'nav.iaasNetworking' },
+  {
+    type: 'link',
+    path: '/network-overview',
+    labelKey: 'nav.networkOverview',
+    icon: NetworkIcon,
+  },
   {
     type: 'link',
     path: '/networks',
@@ -121,13 +114,22 @@ const NAV: NavEntry[] = [
     kind: 'NetworkPlacement',
     form: 'networkplacement',
   },
-  { type: 'sep', labelKey: 'nav.accessControl' },  { type: 'link', path: '/personas', labelKey: 'nav.personas', icon: UserEditIcon, kind: 'Persona', form: 'persona' },
-  { type: 'link', path: '/rbac', labelKey: 'nav.rbac', icon: LockIcon, kind: 'Rbac', form: 'rbac' },
-  { type: 'sep', labelKey: 'nav.integrations' },
+  { type: 'sep', labelKey: 'nav.appPlatform' },
+  {
+    type: 'link',
+    path: '/platforms',
+    labelKey: 'nav.platformOpenshift',
+    icon: ClusterIcon,
+    kind: 'PlatformOpenshift',
+    form: 'platformopenshift',
+  },
+  { type: 'sep', labelKey: 'nav.services' },
   { type: 'link', path: '/vaults', labelKey: 'nav.vaults', icon: SecurityIcon, kind: 'Vault', form: 'vault' },
   { type: 'link', path: '/vaultkvs', labelKey: 'nav.vaultKvs', icon: KeyIcon, kind: 'VaultKV', form: 'vaultkv' },
   { type: 'link', path: '/aaporgs', labelKey: 'nav.aapOrgs', icon: ProcessAutomationIcon, kind: 'AAPOrg', form: 'aaporg' },
   { type: 'link', path: '/quayorgs', labelKey: 'nav.quayOrgs', icon: BundleIcon, kind: 'QuayOrg', form: 'quayorg' },
+  { type: 'sep', labelKey: 'nav.accessControl' },
+  { type: 'link', path: '/rbac', labelKey: 'nav.rbac', icon: LockIcon, kind: 'Rbac', form: 'rbac' },
 ];
 
 function ThemeToggle(): React.ReactElement {
@@ -163,6 +165,7 @@ function TenantLayout(): React.ReactElement {
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation();
+  const { mode } = useTheme();
   const [isSidebarOpen, setSidebarOpen] = React.useState(true);
   const {
     namespace: tenantNamespace,
@@ -201,7 +204,7 @@ function TenantLayout(): React.ReactElement {
       <MastheadContent>
         <Toolbar id="tenant-masthead-toolbar" isFullHeight isStatic>
           <ToolbarContent>
-            <ToolbarGroup align={{ default: 'alignRight' }}>
+            <ToolbarGroup align={{ default: 'alignEnd' }}>
               <ToolbarItem>
                 <LanguageToggle isCompact />
               </ToolbarItem>
@@ -227,10 +230,10 @@ function TenantLayout(): React.ReactElement {
   );
 
   const sidebar = (
-    <PageSidebar theme="dark" isSidebarOpen={isSidebarOpen} id="tenant-sidebar">
+    <PageSidebar theme={mode} isSidebarOpen={isSidebarOpen} id="tenant-sidebar">
       <PageSidebarBody>
         <div className="sc-sidebar-title">{t('nav.sovereignCloud')}</div>
-        <Nav theme="dark" aria-label={t('nav.tenantNav')}>
+        <Nav theme={mode} aria-label={t('nav.tenantNav')}>
           {navGroups.map((group, gi) => (
             <NavList key={group.titleKey ?? `group-${gi}`}>
               {group.titleKey ? (
@@ -267,7 +270,7 @@ function TenantLayout(): React.ReactElement {
   );
 
   return (
-    <Page header={header} sidebar={sidebar} isManagedSidebar>
+    <Page className="sc-standalone-shell" header={header} sidebar={sidebar} isManagedSidebar>
       <PageSection padding={{ default: 'noPadding' }} className="sc-ns-section">
         <div className="sc-page">
           <NamespaceContextBar
@@ -284,6 +287,10 @@ function TenantLayout(): React.ReactElement {
         <div className="sc-page">
           <Routes>
             <Route path="/" element={<TenantOverviewPage namespace={tenantNamespace} />} />
+            <Route
+              path="/network-overview"
+              element={<TenantNetworkOverviewPage namespace={tenantNamespace} />}
+            />
             {resourceRoutes.flatMap((item) => [
               <Route
                 key={`${item.path}-detail`}

@@ -20,15 +20,19 @@ interface ResourceListPageProps {
   title: string;
   subtitle?: string;
   secondaryKind?: HybridSovereignKind;
+  tertiaryKind?: HybridSovereignKind;
   /** Base path for primary kind detail links (e.g. /teams) */
   listPath: string;
   /** Base path for secondary kind detail links */
   secondaryListPath?: string;
+  tertiaryListPath?: string;
   createPath?: string;
   /** When false, skip the API fetch (e.g. inactive service tab) */
   enabled?: boolean;
   /** Hide page header when embedded in a parent tab strip */
   hideHeader?: boolean;
+  /** List the primary kind in this namespace only (platform kinds live in sovereign-cloud) */
+  namespace?: string;
 }
 
 function matchesStatus(item: K8sResource, statusFilter: StatusFilter): boolean {
@@ -45,6 +49,7 @@ export function adminDetailHref(
   const name = encodeURIComponent(item.metadata.name);
   if (
     kind === 'Entity' ||
+    kind === 'CloudInfrastructure' ||
     kind === 'HybridFabric' ||
     kind === 'CloudGateway' ||
     kind === 'TransportLink' ||
@@ -61,20 +66,26 @@ export function ResourceListPage({
   title,
   subtitle,
   secondaryKind,
+  tertiaryKind,
   listPath,
   secondaryListPath,
+  tertiaryListPath,
   createPath,
   enabled = true,
   hideHeader = false,
+  namespace,
 }: ResourceListPageProps): React.ReactElement {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
-  const primary = useK8sResourceList<K8sResource>(kind, { enabled });
+  const primary = useK8sResourceList<K8sResource>(kind, { enabled, namespace });
   const secondary = useK8sResourceList<K8sResource>(secondaryKind ?? kind, {
     enabled: enabled && !!secondaryKind,
+  });
+  const tertiary = useK8sResourceList<K8sResource>(tertiaryKind ?? kind, {
+    enabled: enabled && !!tertiaryKind,
   });
 
   const primaryFiltered = useMemo(() => {
@@ -90,12 +101,21 @@ export function ResourceListPage({
     );
   }, [secondary.items, secondaryKind, search, statusFilter]);
 
+  const tertiaryFiltered = useMemo(() => {
+    if (!tertiaryKind) return [];
+    return filterResourcesByQuery(tertiary.items, tertiaryKind, search, true).filter((i) =>
+      matchesStatus(i, statusFilter),
+    );
+  }, [tertiary.items, tertiaryKind, search, statusFilter]);
+
   const refresh = () => {
     primary.refresh();
     if (secondaryKind) secondary.refresh();
+    if (tertiaryKind) tertiary.refresh();
   };
 
   const secondaryPath = secondaryListPath ?? listPath;
+  const tertiaryPath = tertiaryListPath ?? listPath;
 
   return (
     <>
@@ -145,6 +165,23 @@ export function ResourceListPage({
             showNamespace
             linkMode="router"
             detailHref={(item) => adminDetailHref(secondaryPath, secondaryKind, item)}
+          />
+        </div>
+      )}
+      {tertiaryKind && (
+        <div style={{ marginTop: '1rem' }}>
+          <PageHeader
+            title={t(`kinds.${tertiaryKind}`, { defaultValue: tertiaryKind })}
+            showLanguageToggle={false}
+          />
+          <ResourceListTable
+            kind={tertiaryKind}
+            items={tertiaryFiltered}
+            loading={tertiary.loading}
+            error={tertiary.error}
+            showNamespace
+            linkMode="router"
+            detailHref={(item) => adminDetailHref(tertiaryPath, tertiaryKind, item)}
           />
         </div>
       )}

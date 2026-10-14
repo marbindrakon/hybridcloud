@@ -1,3 +1,4 @@
+import '../consoleK8sBootstrap';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -8,7 +9,7 @@ import {
 } from '@patternfly/react-core';
 import { PlusCircleIcon, SyncIcon } from '@patternfly/react-icons';
 import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
-import { useHistory } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
 import {
   K8sResource,
@@ -39,7 +40,7 @@ type ProbeApiRow = {
 
 const AdminUIHealthPage: React.FC = () => {
   const { t } = useTranslation();
-  const history = useHistory();
+  const navigate = useNavigate();
   const { items, loading, error, refresh } = useK8sResourceList<K8sResource>('UIHealthChecker', {
     namespace: 'sovereign-cloud',
   });
@@ -147,7 +148,7 @@ const AdminUIHealthPage: React.FC = () => {
               <Button
                 variant="secondary"
                 icon={<PlusCircleIcon />}
-                onClick={() => history.push('/hybridsovereign/create/uihealthchecker')}
+                onClick={() => navigate('/hybridsovereign/create/uihealthchecker')}
               >
                 {t('common.create')}
               </Button>

@@ -58,6 +58,7 @@ const DASHBOARD_LIST_PATH: Partial<Record<HybridSovereignKind, string>> = {
   PlatformOpenshift: '/api/platformopenshifts',
   CloudOSO: '/api/cloudosos',
   CloudAWS: '/api/cloudawss',
+  CloudVirt: '/api/cloudvirts',
   OpenStackMigration: '/api/openstackmigrations',
   Persona: '/api/personas',
   Rbac: '/api/rbacs',
@@ -161,6 +162,7 @@ const UPDATE_METHOD: Partial<Record<HybridSovereignKind, 'PUT' | 'PATCH'>> = {
   PlatformOpenshift: 'PATCH',
   CloudOSO: 'PATCH',
   CloudAWS: 'PATCH',
+  CloudVirt: 'PATCH',
   Persona: 'PATCH',
 };
 
@@ -264,15 +266,60 @@ async function k8sFetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(`K8s API error ${response.status}: ${detail}`);
   }
-  return response.json() as Promise<T>;
+  // DELETE / some PATCHes return 200 with body, 202 Accepted, or 204 No Content.
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
+  const text = await response.text();
+  if (!text) return undefined as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return undefined as T;
+  }
 }
 
 function normalizeListPayload<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === 'object' && Array.isArray((data as { items?: T[] }).items)) {
-    return (data as { items: T[] }).items;
+  let items: unknown[] = [];
+  if (Array.isArray(data)) items = data;
+  else if (data && typeof data === 'object' && Array.isArray((data as { items?: unknown[] }).items)) {
+    items = (data as { items: unknown[] }).items;
   }
-  return [];
+  // Drop holes / non-objects / entries without metadata.name (dashboard proxies sometimes emit sparse lists).
+  return items.filter((item): item is T => {
+    if (!item || typeof item !== 'object') return false;
+    const name = (item as { metadata?: { name?: unknown } }).metadata?.name;
+    return typeof name === 'string' && name.length > 0;
+  });
+}
+
+/** Create a core/v1 Secret in a namespace (credentials for CloudAWS / CloudOSO). */
+export async function createNamespaceSecret(
+  namespace: string,
+  opts: {
+    name: string;
+    stringData: Record<string, string>;
+    labels?: Record<string, string>;
+  },
+): Promise<unknown> {
+  const base = globalK8sConfig.baseUrl ?? '/api/k8s';
+  const url = `${base}/api/v1/namespaces/${encodeURIComponent(namespace)}/secrets`;
+  const body = {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: {
+      name: opts.name,
+      namespace,
+      ...(opts.labels ? { labels: opts.labels } : {}),
+    },
+    type: 'Opaque',
+    stringData: opts.stringData,
+  };
+  return k8sFetchJson(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 /** Create a Hybrid Sovereign CR via curated dashboard API when available */
