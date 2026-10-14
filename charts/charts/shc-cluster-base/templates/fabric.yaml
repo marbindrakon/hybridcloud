@@ -92,6 +92,12 @@ spec:
           next-hop-interface: {{ $vif }}
           table-id: 254
         {{- end }}
+        {{- /* NMState leaves routes that drop out of the desired state in place: list them here to remove them */}}
+        {{- range $dst := $f.absentRoutes }}
+        - destination: {{ $dst }}
+          next-hop-interface: {{ $vif }}
+          state: absent
+        {{- end }}
 {{- end }}
 ---
 # Cluster singleton, patch-only: FRR routing capability and OVN-K route advertisements.

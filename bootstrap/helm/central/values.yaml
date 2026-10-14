@@ -2167,7 +2167,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.9"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts; 0.3.8: EVPN SVI MTU; 0.3.9: fabric.gateways (BFD)
+    chartVersion: "0.3.10"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts; 0.3.8: EVPN SVI MTU; 0.3.9: fabric.gateways (BFD); 0.3.10: fabric.absentRoutes
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -2298,6 +2298,7 @@ iaasClusters:
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.236.1
           routes: []   # P7.3.6 (10-14): VTEPs only talk to their CloudGateways on this VLAN; the P7.2 inter-site routes are gone
+          absentRoutes: [172.18.234.0/24, 172.18.235.0/24, 172.18.237.0/24, 172.18.239.0/24]   # NMState removes only routes listed absent
           nodes:
             - {name: iaas1-blade1, vtepIP: 172.18.236.11}
             - {name: iaas1-blade2, vtepIP: 172.18.236.12}
@@ -2323,6 +2324,7 @@ iaasClusters:
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.239.1
           routes: []   # P7.3.6 (10-14): VTEPs only talk to their CloudGateways on this VLAN; the P7.2 inter-site routes are gone
+          absentRoutes: [172.18.234.0/24, 172.18.235.0/24, 172.18.236.0/24, 172.18.237.0/24]
           nodes:
             - {name: edge1-node1, vtepIP: 172.18.239.21}
             - {name: edge1-node2, vtepIP: 172.18.239.22}
