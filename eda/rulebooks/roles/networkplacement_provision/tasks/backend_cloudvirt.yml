@@ -41,33 +41,22 @@
         msg: "{{ fab_fail_msg }}"
       when: fab_check_result.errors | length > 0
 
+    # one expression: numbers stay numbers (templated scalars inside a YAML definition become strings)
     - name: "ClusterUserDefinedNetwork {{ np_names.cudn }}"
       kubernetes.core.k8s:
         kubeconfig: "{{ site_kubeconfig }}"
         state: present
-        definition:
-          apiVersion: k8s.ovn.org/v1
-          kind: ClusterUserDefinedNetwork
-          metadata:
-            name: "{{ np_names.cudn }}"
-            labels: "{{ np_names.labels }}"
-            annotations:
-              hybridsovereign.redhat/networkplacement: "{{ fab_namespace }}/{{ fab_name }}"
-          spec:
-            namespaceSelector:
-              matchLabels: "{{ np_ns_selector }}"
-            network:
-              topology: Layer2
-              transport: EVPN
-              evpn:
-                vtep: "{{ np_gateway.status.site.vtep }}"
-                ipVRF: {vni: "{{ np_real.l3Vni | int }}", routeTarget: "{{ np_asn }}:{{ np_real.l3Vni }}"}
-                macVRF: {vni: "{{ np_real.l2Vni | int }}", routeTarget: "{{ np_asn }}:{{ np_real.l2Vni }}"}
-              layer2:
-                role: Primary
-                mtu: "{{ np_real.mtu | int }}"
-                subnets: "{{ fab_spec.prefixes }}"
-                ipam: {lifecycle: Persistent}
+        definition: >-
+          {{ {'apiVersion': 'k8s.ovn.org/v1', 'kind': 'ClusterUserDefinedNetwork',
+              'metadata': {'name': np_names.cudn, 'labels': np_names.labels,
+                           'annotations': {'hybridsovereign.redhat/networkplacement': fab_namespace ~ '/' ~ fab_name}},
+              'spec': {'namespaceSelector': {'matchLabels': np_ns_selector},
+                       'network': {'topology': 'Layer2', 'transport': 'EVPN',
+                                   'evpn': {'vtep': np_gateway.status.site.vtep,
+                                            'ipVRF': {'vni': np_real.l3Vni | int, 'routeTarget': np_asn ~ ':' ~ np_real.l3Vni},
+                                            'macVRF': {'vni': np_real.l2Vni | int, 'routeTarget': np_asn ~ ':' ~ np_real.l2Vni}},
+                                   'layer2': {'role': 'Primary', 'mtu': np_real.mtu | int, 'subnets': fab_spec.prefixes,
+                                              'ipam': {'lifecycle': 'Persistent'}}}}} }}
       register: _np_cudn
 
     - name: "RouteAdvertisements {{ np_names.routeAdvertisement }}"

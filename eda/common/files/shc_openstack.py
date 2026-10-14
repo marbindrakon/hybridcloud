@@ -425,7 +425,7 @@ def placement_network(req):
                                             ip_version=4, cidr=cidr, enable_dhcp=True)
             created.append(f"subnet {cidr}")
         subnets[cidr] = sn.id
-    if router is not None and req.get("recreateRouter"):
+    if router is not None and str(req.get("recreateRouter", "")).lower() in ("true", "1", "yes"):
         _delete_router(conn, router)
         router = None
         changed.append("router recreated")
