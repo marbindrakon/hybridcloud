@@ -126,6 +126,32 @@ Rules:
   zone with everything in it.
 - Names are public; private addresses are allowed in them.
 
+## In the console and the dashboards
+
+The OpenShift console's **Sovereign Cloud** perspective and the standalone dashboards (tenant and admin) show the
+same pages. Members of an entity sign in with the tenant identity provider; the Entity's `namespaceRbac` maps its Rbac
+groups to what they may do in the entity namespace.
+
+Tenants:
+- **IaaS Networking → Network Overview:** the entity's networks against its environments. A cell is one
+  NetworkPlacement (state and prefixes); each network shows its MTU and internet egress (state and source addresses).
+- **Hybrid Networks:** create and edit (description, MTU, internet egress, viewer RBAC); the detail page shows the
+  effective MTU, placements ready, egress and the informational realization.
+- **Network Placements:** create (network, environment, prefixes); read-only afterwards, since all three fields are
+  immutable.
+- **IaaS Platform → OpenShift Virt:** environments with their site, VM namespaces (network, ready), quota, DNS zone and
+  API endpoint. Where the site list isn't readable, type the site's name as given by the platform team.
+- Platform objects aren't shown to tenants; the console hides the admin sections.
+
+Platform team (Admin Networks):
+- **Network Overview:** each fabric (ASN, overlay MTU, border gateway nodes ready, pool use), a map of the sites
+  attached through Cloud Gateways (site type, transport, BGP sessions per node, tunnel state for remote sites), and every
+  entity's networks.
+- **Hybrid Fabrics, Cloud Infrastructure, Cloud Gateways:** list, detail, create and edit. Forms show only the section
+  for the chosen site type or transport. A gateway's detail page lists each node's sessions and, for WireGuard, each
+  node's public key and each peer's endpoint and last handshake.
+- **Hybrid Networks / Network Placements (all entities):** read-only.
+
 ## Status
 
 | `status.status` | Meaning |
