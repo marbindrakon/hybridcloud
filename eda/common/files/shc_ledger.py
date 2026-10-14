@@ -7,7 +7,7 @@ exit 1 on failure. The token arrives on stdin, never in argv.
 Ledger: ConfigMap fabric-ledger-<fabric> (key ledger.json) in the fabric's namespace, owned by the HybridFabric.
   {"version": 1, "fabric": <name>, "pools": {kind: [start, end]}, "alloc": {kind: {owner: value}}}
   kinds: vni, l2vni (per NetworkPlacement), vpnTarget (per HybridNetwork), peIndex (per provider edge: 1 is the
-  border gateway root). Writes replace the ConfigMap at the resourceVersion read (optimistic concurrency, retried).
+  border gateway root), egress (per HybridNetwork with internet egress: its index in the nodes' NAT pools). Writes replace the ConfigMap at the resourceVersion read (optimistic concurrency, retried).
   ledger-ensure   {fabric, fabric_uid, pools, reserve: {kind: {owner: value}}}   create/update the pools; refused
                   when an allocated value would fall outside its new pool
   ledger-allocate {fabric, kind, owner}   the owner's value (lowest free one the first time)
@@ -27,7 +27,7 @@ import requests
 import urllib3
 
 urllib3.disable_warnings()
-KINDS = ("vni", "l2vni", "vpnTarget", "peIndex")
+KINDS = ("vni", "l2vni", "vpnTarget", "peIndex", "egress")
 
 
 class Api:

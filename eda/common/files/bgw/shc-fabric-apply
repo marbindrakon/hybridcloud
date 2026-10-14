@@ -8,6 +8,12 @@
 #   otherwise takes a port's MAC whenever ports change, and IS-IS on it keeps the old one: prints bridge-mac=changed
 #   when it had to set it, so FRR can be restarted), the provider-edge loopback on lo; other addresses from the
 #   fabric's core prefixes are removed.
+#   egress {vrf, table, parent, mtu, address, gateway, deny, allow, networks: [{vrf, table, zone, xe, xo, xeAddr, xoAddr,
+#   nat}]} (provider internet egress; absent = none): a VRF <vrf> with a macvlan egress0 on <parent> (the site network
+#   the hand-off uses) holding <address>; per network a VRF e<n> (FRR imports the network's VPN routes into it) and a
+#   veth xe<n> (in e<n>) / xo<n> (in <vrf>), proxy ARP on egress0 for each network's NAT address, and the nftables
+#   table ip shc_egress: conntrack zone per network, source NAT on xe<n>, nothing to deny destinations, nothing
+#   unsolicited into a network. VRFs e<digits> no longer listed go with their veth. Routes are FRR's (staticd).
 # instance type "gateway" (a CloudGateway, network namespace <netns>):
 #   the namespace (forwarding, MPLS), the provider-edge loopback, the site's underlay VLAN on the trunk moved into
 #   the namespace with the gateway's site address, and a veth from the namespace's core0 (link address) to the core
@@ -40,7 +46,110 @@ snapshot() {
     ip -o link show "$BR" 2>/dev/null | grep -o 'mtu [0-9]*\|state [A-Z]*' || true
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
-    sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true; } | sha1sum
+    sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
+    egress_state; } | sha1sum
+}
+
+# provider internet egress (root): devices, addresses, proxy ARP entries and the nftables table (no counters)
+egress_state() {
+  ip -o link show 2>/dev/null | grep -E '^[0-9]+: (egress0|e[0-9]+|x[eo][0-9]+)[@:]' | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|master [a-z0-9-]*\|state [A-Z]*' || true
+  ip -br -4 addr show 2>/dev/null | grep -E '^(egress0|x[eo][0-9]+)[@ ]' || true
+  ip -4 neigh show proxy dev egress0 2>/dev/null || true
+  nft -s list table ip shc_egress 2>/dev/null || true
+}
+
+egress_down() {
+  local m v
+  nft delete table ip shc_egress 2>/dev/null || true
+  for v in $(ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$' || true); do
+    ip link del "xe${v#e}" 2>/dev/null || true
+    ip link del "$v"
+  done
+  m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty')
+  ip link del egress0 2>/dev/null || true
+  if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then ip link del "$m"; fi
+}
+
+# the nftables table for the listed networks (replaced as a whole)
+egress_nft() {
+  python3 - "$CONF" <<'PY'
+import json, sys
+e = json.load(open(sys.argv[1]))["egress"]
+nets = e.get("networks") or []
+def elements(xs):
+    return ", ".join(xs)
+out = ["table ip shc_egress", "delete table ip shc_egress", "table ip shc_egress {"]
+if e.get("deny"):
+    out.append(f"  set deny {{ type ipv4_addr; flags interval; elements = {{ {elements(e['deny'])} }}; }}")
+if e.get("allow"):
+    out.append(f"  set allow {{ type ipv4_addr; flags interval; elements = {{ {elements(e['allow'])} }}; }}")
+zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
+nats = elements(f'"{n["xe"]}" : {n["nat"]}' for n in nets)
+# a network's traffic reaches the veth through the VRF's output path; the rules go on output and forward alike
+for hook in ("output", "prerouting"):
+    out.append(f"  chain zone_{hook} {{")
+    out.append(f"    type filter hook {hook} priority raw; policy accept;")
+    if nets:
+        out.append(f"    ct zone set {'oifname' if hook == 'output' else 'iifname'} map {{ {zones} }}")
+    out.append("  }")
+for hook in ("output", "forward"):
+    out.append(f"  chain filter_{hook} {{")
+    out.append(f"    type filter hook {hook} priority filter; policy accept;")
+    if e.get("allow"):
+        out.append('    oifname "xe*" ip daddr @allow accept')
+    if e.get("deny"):
+        out.append('    oifname "xe*" ip daddr @deny counter drop comment "destination not reachable through egress"')
+    out.append("  }")
+out.append("  chain inbound {")
+out.append("    type filter hook prerouting priority filter; policy accept;")
+out.append('    iifname "xe*" ct state new counter drop comment "nothing unsolicited into a network"')
+out.append("  }")
+out.append("  chain source_nat {")
+out.append("    type nat hook postrouting priority srcnat; policy accept;")
+if nets:
+    out.append(f"    snat ip to oifname map {{ {nats} }}")
+out.append("  }")
+out.append("}")
+print("\n".join(out))
+PY
+}
+
+egress_up() {
+  local ev et par emtu eaddr want nat n v t z xe xo xea xoa a
+  ev=$(q .egress.vrf); et=$(q .egress.table); par=$(q .egress.parent); emtu=$(q .egress.mtu); eaddr=$(q .egress.address)
+  ip link show "$par" >/dev/null 2>&1 || { echo "egress parent interface $par missing" >&2; exit 3; }
+  modprobe vrf
+  ip link show "$ev" >/dev/null 2>&1 || ip link add "$ev" type vrf table "$et"
+  ip link set "$ev" up
+  ip link show egress0 >/dev/null 2>&1 || ip link add egress0 link "$par" type macvlan mode bridge
+  ip link set egress0 master "$ev" mtu "$emtu" up
+  for a in $(stray egress0 0.0.0.0/0 "$eaddr"); do ip addr del "$a" dev egress0; done
+  ip addr show dev egress0 | grep -q " ${eaddr} " || ip addr add "$eaddr" dev egress0
+  sysctl -qw net.ipv4.neigh.egress0.proxy_delay=0
+  want=$(jq -r '.egress.networks // [] | .[].vrf' "$CONF")
+  for n in $(jq -r '.egress.networks // [] | .[] | [.vrf, .table, .xe, .xo, .xeAddr, .xoAddr] | join(":")' "$CONF"); do
+    IFS=: read -r v t xe xo xea xoa <<<"$n"
+    ip link show "$v" >/dev/null 2>&1 || ip link add "$v" type vrf table "$t"
+    ip link set "$v" up
+    ip link show "$xe" >/dev/null 2>&1 || ip link add "$xe" mtu "$emtu" type veth peer name "$xo" mtu "$emtu"
+    ip link set "$xe" master "$v" mtu "$emtu" up
+    ip link set "$xo" master "$ev" mtu "$emtu" up
+    for a in $(stray "$xe" 0.0.0.0/0 "$xea"); do ip addr del "$a" dev "$xe"; done
+    ip addr show dev "$xe" | grep -q " ${xea} " || ip addr add "$xea" dev "$xe"
+    for a in $(stray "$xo" 0.0.0.0/0 "$xoa"); do ip addr del "$a" dev "$xo"; done
+    ip addr show dev "$xo" | grep -q " ${xoa} " || ip addr add "$xoa" dev "$xo"
+  done
+  for v in $(ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$' || true); do
+    echo "$want" | grep -qx "$v" && continue
+    ip link del "xe${v#e}" 2>/dev/null || true
+    ip link del "$v"
+  done
+  nat=$(jq -r '.egress.networks // [] | .[].nat' "$CONF")
+  for a in $(ip -4 neigh show proxy dev egress0 | awk '{print $1}'); do
+    echo "$nat" | grep -qx "$a" || ip neigh del proxy "$a" dev egress0
+  done
+  for a in $nat; do ip -4 neigh show proxy dev egress0 | grep -q "^$a " || ip neigh add proxy "$a" dev egress0; done
+  egress_nft | nft -f -
 }
 
 # After the gateway's FRR starts with VRFs in its configuration, zebra's VRF setup can recreate bgpd's listen
@@ -83,7 +192,9 @@ root)
     for a in $(stray lo "$LOPOOL" "$LO"); do ip addr del "$a" dev lo; done
     ip addr show dev lo | grep -q " ${LO} " || ip addr add "$LO" dev lo
     sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
+    if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
   else
+    egress_down
     ip link show "$BR" >/dev/null 2>&1 && ip link del "$BR"
     for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
   fi

@@ -43,3 +43,24 @@ fabric_realization_defaults:
   placement:
     # how long a placement job waits for the gateways to hold the site's routes for its prefixes (s)
     routeWait: 180
+  # provider internet egress for HybridNetworks with spec.egress.internet: each node's root holds a VRF that hands
+  # traffic to a network with internet access (a macvlan on parentInterface, default route via gateway); per network
+  # a VRF e<vpnTarget> imports the network's routes, exports a default route into its VPN and source-NATs its traffic
+  # to one address per node (natPool + the network's egress index from the ledger). Destinations in
+  # denyDestinations (unless in allowDestinations) aren't reachable this way; nothing reaches a network unsolicited.
+  egress:
+    enabled: false
+    vrf: {name: egress, table: 9000}
+    # Linux table of a network's VRF = networkTableBase + vpnTarget
+    networkTableBase: 100000
+    # veth /31s between a network's VRF and the egress VRF, by egress index
+    linkPool: 169.254.0.0/16
+    parentInterface: ""       # an existing interface on every node (e.g. a VLAN device of the trunk)
+    gateway: ""               # the next hop on that network
+    prefixLength: 24
+    mtu: 9000
+    # per node (borderGateway.nodes[].name): {address, natPool}; natPool inside address/prefixLength
+    nodes: {}
+    denyDestinations: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12,
+                       192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3]
+    allowDestinations: []

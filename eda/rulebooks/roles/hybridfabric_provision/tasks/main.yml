@@ -5,6 +5,10 @@
 # 3. Under the lease fabric-config-<fabric>, one node at a time: the root instance (shc-fabric-apply root: MPLS,
 #    the node-local core bridge, the loopback; FRR: VPNv4 route reflector for the core's loopback range, IS-IS
 #    with segment routing). A failure stops before the next node.
+# 4. Provider internet egress (realization egress.enabled): the HybridNetworks holding an egress index in the
+#    ledger that still want it (spec.egress.internet, not being deleted) get a VRF on every node's root with a
+#    default route into their VPN and source NAT (status.realization.egress); the job is the only writer of it and
+#    wakes the networks it added or removed.
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -88,6 +92,8 @@
             l2vni: ["{{ fab_spec.l2vniPool.start }}", "{{ fab_spec.l2vniPool.end }}"]
             vpnTarget: ["{{ fab_real.vpnTargetPool.start }}", "{{ fab_real.vpnTargetPool.end }}"]
             peIndex: [1, "{{ hf_pe_max }}"]
+            # empty when egress is off: the ledger refuses that while networks hold an index
+            egress: [0, "{{ (hf_pools.egressPool | int) - 1 }}"]
           # (dict keys are not templated: build the owner key in an expression)
           reserve: "{{ {'peIndex': {'HybridFabric/' ~ fab_namespace ~ '/' ~ fab_name: 1}} }}"
 
@@ -114,6 +120,67 @@
         hf_node_results: []
         hf_changed_nodes: []
 
+    # provider internet egress: the ledger's egress holders that still want it
+    - name: Read the ledger
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-get, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}"}
+
+    - name: List the HybridNetworks
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridNetwork
+      register: _hf_networks
+
+    - name: Set the networks with internet egress
+      vars:
+        _alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
+      ansible.builtin.set_fact:
+        hf_egress_networks: >-
+          {%- set out = [] -%}
+          {%- for n in _hf_networks.resources | default([]) -%}
+            {%- set owner = 'HybridNetwork/' ~ n.metadata.namespace ~ '/' ~ n.metadata.name -%}
+            {%- if (n.status | default({}, true)).fabric | default('') == fab_name
+                  and ((n.spec | default({})).egress | default({})).internet | default(false) | bool
+                  and n.metadata.deletionTimestamp is not defined
+                  and owner in (_alloc.egress | default({})) and owner in (_alloc.vpnTarget | default({})) -%}
+              {%- set _ = out.append({'network': n.metadata.namespace ~ '/' ~ n.metadata.name,
+                                      'vpnTarget': _alloc.vpnTarget[owner] | int, 'index': _alloc.egress[owner] | int}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out if fab_real.egress.enabled | default(false) | bool else [] }}
+        hf_egress_before: >-
+          {{ ((fab_st.realization | default({}, true)).egress | default({}, true)).networks | default([], true)
+             | map(attribute='network') | list }}
+
+    - name: Plan the egress on the nodes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: egress-plan
+          egress: "{{ fab_real.egress | default({}) }}"
+          nodes: "{{ fab_spec.borderGateway.nodes | map(attribute='name') | list }}"
+          networks: "{{ hf_egress_networks }}"
+          domainAsn: "{{ fab_spec.domainAsn }}"
+
+    - name: Refuse an unusable egress plan
+      ansible.builtin.set_fact:
+        fab_fail_reason: InvalidSpec
+        fab_fail_msg: "HybridFabric {{ fab_name }}: egress: {{ fab_check_result.errors | join('; ') }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Stop on an unusable egress plan
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Keep the egress plan
+      ansible.builtin.set_fact:
+        hf_egress: "{{ fab_check_result }}"
+
     - name: Take the border gateway configuration lease
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
       vars:
@@ -137,6 +204,15 @@
           vars:
             fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}"}
 
+    - name: Set the egress status
+      ansible.builtin.set_fact:
+        hf_egress_status: >-
+          {%- set out = [] -%}
+          {%- for k, v in hf_egress.networks | dictsort -%}
+            {%- set _ = out.append({'network': k, 'vpnTarget': v.vpnTarget, 'sourceAddresses': v.sourceAddresses}) -%}
+          {%- endfor -%}
+          {{ out }}
+
     - name: Report the fabric ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -144,14 +220,28 @@
         fab_reason: Ready
         fab_message: >-
           Ledger fabric-ledger-{{ fab_name }}; root instance on {{ hf_node_results | map(attribute='name') | join(', ') }}
-          ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }})
+          ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }}){{
+          ('; internet egress for ' ~ hf_egress.networks | length ~ ' network(s)') if fab_real.egress.enabled | default(false) | bool else '' }}
         fab_status: >-
           {{ {'ledger': 'fabric-ledger-' ~ fab_name,
               'allocated': hf_ledger.allocated,
               'available': hf_ledger.available,
               'nodes': hf_node_results,
               'realization': {'model': fab_real.model, 'routeReflector': hf_pe.loopbackIp, 'nodeSid': hf_pe.sid,
-                              'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet}} }}
+                              'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet,
+                              'egress': {'enabled': fab_real.egress.enabled | default(false) | bool,
+                                         'networks': hf_egress_status}}} }}
+
+    # the networks this run added to or removed from the egress wait for it: wake them
+    - name: Wake the networks whose egress changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for k in (hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before) -%}
+            {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
+          {%- endfor -%}
+          {{ out }}
 
   rescue:
     - name: Remove the SSH key

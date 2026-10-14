@@ -19,6 +19,10 @@ actions:
                   labels; selector = all of the environment's namespaces, networkSelector = those naming network
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
   orphan-report   {crs, ledgers, sites, nodes}  the fabric orphan check's findings (see orphan_report)
+  egress-plan     {egress: realization egress, nodes: [node names], networks: [{network, vpnTarget, index}],
+                  domainAsn}  provider internet egress per node: the hand-off (egress VRF on the node's site network)
+                  and per network a VRF e<vpnTarget>, a veth pair xe/xo into the egress VRF and one source NAT address
+                  per node (the node's natPool + the network's egress index); errors for an unusable configuration
 """
 import hashlib
 import ipaddress
@@ -84,7 +88,96 @@ def check_fabric(req):
         pe_max = max(0, min(lo_size - 2, link_size - 2, srgb["end"] - srgb["start"]))
     except ValueError:
         pass
+    eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []])
+    errors += eg["errors"]
+    size["egressPool"] = eg["poolSize"]
     return {"errors": errors, "poolSize": size, "peIndexMax": pe_max}
+
+
+EGRESS_RESERVED_TABLES = {253, 254, 255}
+
+
+def egress_check(eg, node_names):
+    """Validate the realization's egress settings for the fabric's nodes. poolSize = networks with egress (0 when
+    egress is off): the smallest node NAT pool, and no more than the link pool's /31s."""
+    if not eg.get("enabled"):
+        return {"errors": [], "poolSize": 0}
+    errors, sizes = [], []
+    for k in ("parentInterface", "gateway"):
+        if not eg.get(k):
+            errors.append(f"realization egress.{k} is required when egress is enabled")
+    try:
+        gw = ipaddress.ip_address(str(eg.get("gateway")))
+    except ValueError:
+        gw = None
+    plen = int(eg.get("prefixLength") or 24)
+    taken = []
+    for name in node_names:
+        n = (eg.get("nodes") or {}).get(name) or {}
+        try:
+            addr = ipaddress.ip_interface(f"{n.get('address')}/{plen}")
+            pool = ipaddress.ip_network(str(n.get("natPool")), strict=True)
+        except ValueError as e:
+            errors.append(f"realization egress.nodes.{name}: address and natPool required ({e})")
+            continue
+        if gw is not None and gw not in addr.network:
+            errors.append(f"realization egress.nodes.{name}.address {addr} is not on the gateway {gw}'s network")
+        if pool.version != addr.version or not pool.subnet_of(addr.network):
+            errors.append(f"realization egress.nodes.{name}.natPool {pool} is not inside {addr.network}")
+        for other, o in taken:
+            if overlaps(pool, o):
+                errors.append(f"realization egress.nodes.{name}.natPool {pool} overlaps {other}")
+        if addr.ip in pool or (gw is not None and gw in pool):
+            errors.append(f"realization egress.nodes.{name}.natPool {pool} holds the node's address or the gateway")
+        taken.append((f"egress.nodes.{name}.natPool", pool))
+        sizes.append(pool.num_addresses)
+    try:
+        link = ipaddress.ip_network(str(eg.get("linkPool") or "169.254.0.0/16"), strict=True)
+        sizes.append(link.num_addresses // 2)
+    except ValueError as e:
+        errors.append(f"realization egress.linkPool: {e}")
+    vrf = eg.get("vrf") or {}
+    if int(vrf.get("table") or 0) in EGRESS_RESERVED_TABLES or not vrf.get("name"):
+        errors.append("realization egress.vrf needs a name and a table other than 253-255")
+    return {"errors": errors, "poolSize": min(sizes) if sizes and not errors else 0}
+
+
+def egress_plan(req):
+    eg, node_names = req.get("egress") or {}, req.get("nodes") or []
+    chk = egress_check(eg, node_names)
+    if chk["errors"]:
+        return {"errors": chk["errors"], "poolSize": 0, "nodes": {}, "networks": {}}
+    if not eg.get("enabled"):
+        return {"errors": [], "poolSize": 0, "nodes": {}, "networks": {}}
+    asn = int(req.get("domainAsn") or 0)
+    link = ipaddress.ip_network(str(eg.get("linkPool") or "169.254.0.0/16"), strict=True)
+    base = int(eg.get("networkTableBase") or 100000)
+    plen = int(eg.get("prefixLength") or 24)
+    errors, nodes, networks = [], {}, {}
+    for name in node_names:
+        n = eg["nodes"][name]
+        pool = ipaddress.ip_network(str(n["natPool"]), strict=True)
+        out = []
+        for w in sorted(req.get("networks") or [], key=lambda x: int(x["vpnTarget"])):
+            t, i = int(w["vpnTarget"]), int(w["index"])
+            if not 0 <= i < chk["poolSize"]:
+                errors.append(f"{w['network']}: egress index {i} is outside the pool (0-{chk['poolSize'] - 1})")
+                continue
+            xo, xe = link.network_address + 2 * i, link.network_address + 2 * i + 1
+            nat = str(pool.network_address + i)
+            out.append({"network": w["network"], "vpnTarget": t, "vrf": f"e{t}", "table": base + t, "zone": i + 1,
+                        "xe": f"xe{t}", "xo": f"xo{t}", "xeAddr": f"{xe}/31", "xoAddr": f"{xo}/31",
+                        "xeIp": str(xe), "xoIp": str(xo), "nat": nat,
+                        # RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback form at render
+                        "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""})
+            networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": []})["sourceAddresses"].append(nat)
+        nodes[name] = {"vrf": (eg.get("vrf") or {}).get("name", "egress"), "table": int((eg.get("vrf") or {}).get("table", 9000)),
+                       "parent": eg["parentInterface"], "mtu": int(eg.get("mtu") or 9000),
+                       "address": f"{n['address']}/{plen}", "gateway": str(eg["gateway"]),
+                       "deny": [str(c) for c in eg.get("denyDestinations") or []],
+                       "allow": [str(c) for c in eg.get("allowDestinations") or []],
+                       "networks": out}
+    return {"errors": errors, "poolSize": chk["poolSize"], "nodes": nodes, "networks": networks}
 
 
 def pe_addresses(req):
@@ -295,8 +388,16 @@ def orphan_report(req):
                     if extra:
                         findings.append(f"{where}: network {o['name']} is also shared to {', '.join(extra)}")
     gws = {g["metadata"]["name"]: g for g in crs.get("gateways") or []}
+    fabs = {f["metadata"]["name"]: f for f in crs.get("fabrics") or []}
     for n in req.get("nodes") or []:
         for ns, vrfs in (n.get("netns") or {}).items():
+            if ns == "root":
+                eg = (((fabs.get(n.get("fabric")) or {}).get("status") or {}).get("realization") or {}).get("egress") or {}
+                want = {f"e{x.get('vpnTarget')}" for x in eg.get("networks") or []}
+                for v in vrfs:
+                    if re.fullmatch(r"e\d+", v) and v not in want:
+                        findings.append(f"node {n['node']}: egress VRF {v} belongs to no network with internet egress")
+                continue
             g = gws.get(ns[3:]) if ns.startswith("gw-") else None
             if g is None:
                 findings.append(f"node {n['node']}: namespace {ns} belongs to no CloudGateway")
@@ -311,7 +412,7 @@ def orphan_report(req):
 
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
-           "placement-names": placement_names, "orphan-report": orphan_report}
+           "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan}
 
 
 def main():

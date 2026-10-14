@@ -3,7 +3,10 @@
 # one recorded earlier, else the platform's only fabric), checks the Entity may use it and the MTU, and records
 # entity, fabric, MTU and the placement counts; ends pending while the fabric isn't ready. Then allocates the
 # network's VPN route target from the fabric's ledger (P7.3.8): the gateways of the sites the network is placed on
-# exchange its routes under it.
+# exchange its routes under it. Internet egress (spec.egress.internet, P7.4): the network holds an egress index in
+# the ledger while it wants egress; the HybridFabric job realizes it on the border gateway nodes (default route into
+# the network, source NAT) and wakes the network when it did; status.egress {internet: pending|ready|removing|
+# unavailable, sourceAddresses}. Turning it off: the fabric removes it first, then the index goes back.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -149,6 +152,76 @@
           kind: vpnTarget
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
 
+    - name: Keep the route target
+      ansible.builtin.set_fact:
+        hn_vpn_target: "{{ fab_ledger_result.value | int }}"
+
+    # internet egress: the fabric is the only writer of it on the nodes
+    - name: What the fabric realizes for the network's egress
+      vars:
+        _eg: "{{ ((hn_fabric.status | default({}, true)).realization | default({}, true)).egress | default({}, true) }}"
+      ansible.builtin.set_fact:
+        hn_egress_want: "{{ (fab_spec.egress | default({})).internet | default(false) | bool }}"
+        hn_egress_offered: "{{ _eg.enabled | default(false) | bool }}"
+        hn_egress_carried: >-
+          {{ (_eg.networks | default([], true) | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list
+              + [{}]) | first }}
+
+    - name: Hold an egress index
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger:
+          action: ledger-allocate
+          namespace: "{{ fabric_platform_namespace }}"
+          fabric: "{{ hn_fabric_name }}"
+          kind: egress
+          owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+      when: hn_egress_want | bool and hn_egress_offered | bool
+
+    # off, and the fabric no longer carries it: the index goes back
+    - name: Give the egress index back
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger:
+          action: ledger-release
+          namespace: "{{ fabric_platform_namespace }}"
+          fabric: "{{ hn_fabric_name }}"
+          kind: egress
+          owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+      when: not (hn_egress_want | bool and hn_egress_offered | bool) and hn_egress_carried | length == 0
+
+    - name: Set the egress state
+      ansible.builtin.set_fact:
+        hn_egress: >-
+          {%- if hn_egress_want | bool and not hn_egress_offered | bool -%}
+            {{ {'internet': 'unavailable'} }}
+          {%- elif hn_egress_want | bool and hn_egress_carried | length > 0 -%}
+            {{ {'internet': 'ready', 'sourceAddresses': hn_egress_carried.sourceAddresses} }}
+          {%- elif hn_egress_want | bool -%}
+            {{ {'internet': 'pending'} }}
+          {%- elif hn_egress_carried | length > 0 -%}
+            {{ {'internet': 'removing'} }}
+          {%- else -%}
+            {{ {} }}
+          {%- endif -%}
+        hn_egress_note: >-
+          {{ {'unavailable': '; internet egress unavailable (HybridFabric ' ~ hn_fabric_name ~ ' offers none)',
+              'ready': '; internet egress',
+              'pending': '; internet egress being added',
+              'removing': '; internet egress being removed'}.get(hn_egress_state | default(''), '') }}
+      vars:
+        hn_egress_state: >-
+          {{ 'unavailable' if (hn_egress_want | bool and not hn_egress_offered | bool)
+             else ('ready' if (hn_egress_want | bool and hn_egress_carried | length > 0)
+             else ('pending' if hn_egress_want | bool else ('removing' if hn_egress_carried | length > 0 else ''))) }}
+
+    # the fabric adds or removes the network's egress and wakes it again when it did
+    - name: Wake the fabric
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ hn_fabric_name }}"}]
+      when: hn_egress.internet | default('') in ['pending', 'removing']
+
     - name: Report the network ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -156,10 +229,11 @@
         fab_reason: Ready
         fab_message: >-
           On HybridFabric {{ hn_fabric_name }}, MTU {{ hn_status.mtu }};
-          {{ hn_status.placementsReady }}/{{ hn_status.placementCount }} placements ready
+          {{ hn_status.placementsReady }}/{{ hn_status.placementCount }} placements ready{{ hn_egress_note }}
         fab_status: >-
-          {{ hn_status | combine({'realization': {'vpnTarget': fab_ledger_result.value | int,
-                                                  'routeTarget': hn_fabric.spec.domainAsn ~ ':' ~ fab_ledger_result.value}}) }}
+          {{ hn_status | combine({'realization': {'vpnTarget': hn_vpn_target | int,
+                                                  'routeTarget': hn_fabric.spec.domainAsn ~ ':' ~ hn_vpn_target}})
+             | combine({'egress': hn_egress if hn_egress | length > 0 else none}) }}
 
   rescue:
     - name: Mark the HybridNetwork failed

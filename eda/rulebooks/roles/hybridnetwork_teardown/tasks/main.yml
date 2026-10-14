@@ -1,10 +1,71 @@
 ---
 # shc (design/P7-PLAN.md P7.3.8): HybridNetwork teardown. The operator's finalizer has already waited for the
-# network's placements and the CloudVirt namespaces naming it. Releases the network's VPN route target in its fabric's
-# ledger, then marks deletionComplete.
+# network's placements and the CloudVirt namespaces naming it. With internet egress, the fabric removes it from the
+# border gateway nodes first (the deletion waits; the fabric wakes the network when it did). Then the egress index
+# and the VPN route target go back to the fabric's ledger, and the job marks deletionComplete.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: Read the fabric
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ fab_st.fabric }}"
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _hnd_fabric
+      when: fab_st.fabric | default('', true) | length > 0
+
+    - name: Does the fabric still carry the network's egress
+      vars:
+        _eg: >-
+          {{ ((((_hnd_fabric.resources | default([], true) + [{}]) | first).status | default({}, true)).realization
+              | default({}, true)).egress | default({}, true) }}
+      ansible.builtin.set_fact:
+        hnd_egress_carried: >-
+          {{ _eg.networks | default([], true) | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list
+             | length > 0 }}
+
+    - name: Remove the egress first
+      when: hnd_egress_carried | bool
+      block:
+        # status pending (not partial) completes the delete event, so the fabric's wake-up publishes a new one
+        - name: Mark the network waiting
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: hybridnetworks
+            cr_name: "{{ fab_name }}"
+            cr_namespace: "{{ fab_namespace }}"
+            patch_ignore_not_found: true
+            cr_status_body:
+              status: pending
+              ready: false
+              message: "Deletion waits for HybridFabric {{ fab_st.fabric }} to remove the network's internet egress"
+              deletionBlockedBy: ["HybridFabric {{ fabric_platform_namespace }}/{{ fab_st.fabric }} (internet egress)"]
+              lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+        - name: Wake the fabric
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+          vars:
+            nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ fab_st.fabric }}"}]
+
+        - name: End the job until the fabric removed it
+          ansible.builtin.meta: end_play
+
+    - name: Release the egress index
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger:
+          action: ledger-release
+          namespace: "{{ fabric_platform_namespace }}"
+          fabric: "{{ fab_st.fabric }}"
+          kind: egress
+          owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+      when: fab_st.fabric | default('', true) | length > 0
 
     - name: Release the VPN route target
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"

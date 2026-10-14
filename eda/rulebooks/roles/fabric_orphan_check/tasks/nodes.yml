@@ -1,5 +1,6 @@
 ---
-# one fabric's border gateway nodes, read only (no lease): the gw-* network namespaces and the VRFs in each
+# one fabric's border gateway nodes, read only (no lease): the gw-* network namespaces and the VRFs in each, and the
+# root's VRFs (key "root": the egress VRFs e<vpnTarget>)
 - name: The platform's realization parameters
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
   vars:
@@ -25,6 +26,8 @@
             links = json.loads(subprocess.run(["ip", "netns", "exec", ns, "ip", "-j", "link", "show", "type", "vrf"],
                                               capture_output=True, text=True).stdout or "[]")
             out[ns] = sorted(l["ifname"] for l in links)
+        root = json.loads(subprocess.run(["ip", "-j", "link", "show", "type", "vrf"], capture_output=True, text=True).stdout or "[]")
+        out["root"] = sorted(l["ifname"] for l in root)
         print(json.dumps(out))
         PY
       args:

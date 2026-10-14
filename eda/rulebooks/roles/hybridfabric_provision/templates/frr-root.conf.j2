@@ -33,6 +33,46 @@ router bgp {{ fab_spec.domainAsn }}
  exit-address-family
 exit
 !
+{% if hf_node_egress.networks is defined %}
+! provider internet egress: the hand-off's default route, and each network's NAT address back to its VRF
+vrf {{ hf_node_egress.vrf }}
+ ip route 0.0.0.0/0 {{ hf_node_egress.gateway }}
+{% for n in hf_node_egress.networks %}
+ ip route {{ n.nat }}/32 {{ n.xeIp }}
+{% endfor %}
+exit-vrf
+!
+{% for n in hf_node_egress.networks %}
+vrf {{ n.vrf }}
+ ip route 0.0.0.0/0 {{ n.xoIp }}
+exit-vrf
+!
+{% endfor %}
+ip prefix-list SHC-EGRESS-DEFAULT seq 5 permit 0.0.0.0/0
+!
+route-map SHC-EGRESS-DEFAULT permit 10
+ match ip address prefix-list SHC-EGRESS-DEFAULT
+exit
+!
+{% for n in hf_node_egress.networks %}
+! HybridNetwork {{ n.network }}: internet egress (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}, source NAT {{ n.nat }} on this node)
+router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
+ bgp router-id {{ hf_pe.loopbackIp }}
+ no bgp default ipv4-unicast
+ !
+ address-family ipv4 unicast
+  redistribute static route-map SHC-EGRESS-DEFAULT
+  label vpn export auto
+  rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
+  rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
+  nexthop vpn export {{ hf_pe.loopbackIp }}
+  export vpn
+  import vpn
+ exit-address-family
+exit
+!
+{% endfor %}
+{% endif %}
 router isis CORE
  is-type level-2-only
  net {{ hf_pe.net }}

@@ -3975,6 +3975,19 @@ spec:
                   description: Rbac CR names whose groups can view this network and its placements.
                   items:
                     type: string
+                egress:
+                  type: object
+                  description: Traffic from the network to destinations outside it.
+                  properties:
+                    internet:
+                      type: boolean
+                      default: false
+                      description: >-
+                        Outbound internet access through the platform, like attaching a NAT gateway: the platform
+                        advertises a default route into the network and translates its traffic to platform source
+                        addresses (status.egress.sourceAddresses). Connections can only be opened from inside the
+                        network, and the platform's private address ranges are not reachable this way. Leave it off
+                        when the network's default route comes from your own edge router. Can be changed at any time.
               x-kubernetes-validations:
                 - rule: has(self.fabricRef) || !has(oldSelf.fabricRef)
                   message: spec.fabricRef cannot be removed
@@ -3990,6 +4003,20 @@ spec:
                   type: object
                   description: How the platform realized the network (informational; depends on the platform).
                   x-kubernetes-preserve-unknown-fields: true
+                egress:
+                  type: object
+                  description: State of the network's egress.
+                  properties:
+                    internet:
+                      type: string
+                      description: >-
+                        Internet egress: pending (being added), ready, removing, or unavailable (the fabric offers
+                        none).
+                    sourceAddresses:
+                      type: array
+                      description: The source addresses the network's internet traffic leaves with.
+                      items:
+                        type: string
                 mtu:
                   type: integer
                   description: Effective MTU.

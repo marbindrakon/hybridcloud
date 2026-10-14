@@ -3,6 +3,10 @@
 # Input: bgw_node {name, address}, hf_root (instance config), hf_pe (provider-edge addresses), fab_spec.
 # Appends {name, ready, message, lastAppliedAt} to hf_node_results and the node's name to hf_changed_nodes when
 # anything on it changed.
+- name: "{{ bgw_node.name }}: the node's egress plan"
+  ansible.builtin.set_fact:
+    hf_node_egress: "{{ (hf_egress.nodes | default({})).get(bgw_node.name, {}) }}"
+
 - name: "{{ bgw_node.name }}: require FRR"
   ansible.builtin.command: rpm -q frr
   changed_when: false
@@ -41,7 +45,7 @@
 - name: "{{ bgw_node.name }}: root instance config"
   ansible.builtin.copy:
     dest: /etc/shc-fabric/root.json
-    content: "{{ hf_root | to_nice_json }}\n"
+    content: "{{ hf_root | combine({'egress': hf_node_egress} if hf_node_egress | length > 0 else {}) | to_nice_json }}\n"
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_rootconf
@@ -121,6 +125,16 @@
     ss -Hltn 'sport = :179' | grep -q LISTEN
     ip -br addr show dev {{ hf_root.bridge }} | grep -q ' {{ hf_root.link }} '
     [ "$(sysctl -n net.mpls.platform_labels)" = 1048575 ]
+    {% if hf_node_egress | length > 0 %}
+    # egress: the hand-off answers, the table is loaded, every network's VRF has its default route and exports it
+    ip -br addr show dev egress0 | grep -q ' {{ hf_node_egress.address }}'
+    ping -c 2 -W 2 -I {{ hf_node_egress.vrf }} {{ hf_node_egress.gateway }} >/dev/null
+    nft list table ip shc_egress >/dev/null
+    {% for n in hf_node_egress.networks %}
+    ip route show vrf {{ n.vrf }} | grep -q '^default via {{ n.xoIp }} '
+    vtysh -c 'show bgp vrf {{ n.vrf }} ipv4 unicast 0.0.0.0/0' | grep -q 'Local'
+    {% endfor %}
+    {% endif %}
   register: _hf_verify
   retries: 12
   delay: 5
@@ -135,7 +149,9 @@
            'name': bgw_node.name,
            'ready': true,
            'message': 'root instance: VPNv4 route reflector, IS-IS SR (SID ' ~ hf_pe.sid ~ '), ' ~ hf_root.bridge ~ ' '
-                      ~ hf_root.link ~ ', loopback ' ~ hf_pe.loopbackIp,
+                      ~ hf_root.link ~ ', loopback ' ~ hf_pe.loopbackIp
+                      ~ ((', internet egress via ' ~ hf_node_egress.address ~ ' for ' ~ hf_node_egress.networks | length
+                          ~ ' network(s)') if hf_node_egress | length > 0 else ''),
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}] }}
     hf_changed_nodes: >-
       {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_unit, _hf_apply,
