@@ -1,10 +1,48 @@
 ---
-# shc (design/P7-PLAN.md P7.3.3): HybridFabric teardown. The operator's finalizer has already waited for the objects that
-# depend on this one. Nothing is realized yet, so the job confirms the CR and marks deletionComplete; removing
-# the ledger and the border gateway root instance (P7.3.4) comes with the step that creates it.
+# shc (design/P7-PLAN.md P7.3.4): HybridFabric teardown. The operator's finalizer waited for the fabric's
+# CloudGateways and HybridNetworks. Under the configuration lease, one node at a time: the root instance comes off
+# (FRR stopped and disabled, the core bridge and loopback removed). The ledger ConfigMap goes with the HybridFabric
+# (owner reference); the lease is deleted here.
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: Set the lease holder
+      ansible.builtin.set_fact:
+        hft_holder: "HybridFabric/{{ fab_name }} teardown job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
+
+    - name: Take the border gateway configuration lease
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hft_holder }}"}
+
+    - name: Remove the root instance, one node at a time
+      block:
+        - name: Connect to the border gateway nodes
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
+          vars:
+            bgw_fabric_spec: "{{ fab_spec }}"
+
+        - name: Remove the root instance from each node
+          ansible.builtin.include_tasks: node_root_down.yml
+          loop: "{{ fab_spec.borderGateway.nodes }}"
+          loop_control:
+            loop_var: bgw_node
+            label: "{{ bgw_node.name }}"
+      always:
+        - name: Remove the SSH key
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+
+    - name: Delete the configuration lease
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "fabric-config-{{ fab_name }}"
+        namespace: "{{ fab_namespace }}"
+        state: absent
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -18,10 +56,17 @@
           status: ready
           ready: false
           deletionComplete: true
-          message: Deleted
+          message: Deleted; root instance removed from {{ fab_spec.borderGateway.nodes | map(attribute='name') | join(', ') }}
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
   rescue:
+    - name: Release the lease
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hft_holder }}"}
+      when: hft_holder is defined
+      ignore_errors: true
+
     - name: Mark the HybridFabric teardown failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:

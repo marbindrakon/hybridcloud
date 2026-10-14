@@ -1,0 +1,54 @@
+#!/bin/bash
+# shc-fabric-apply: realize one fabric instance on a border gateway node from /etc/shc-fabric/<instance>.json.
+# Installed and run by the platform's HybridFabric/CloudGateway jobs, and at boot by shc-fabric-apply@<instance>
+# before FRR starts. Idempotent; the last line says whether anything changed ("changed=yes|no").
+#   shc-fabric-apply <instance> [up|down]
+# instance type "root" (the border gateway's own instance, root namespace):
+#   MPLS (modules, platform_labels), the node-local core bridge with the link address, the provider-edge loopback
+#   on lo; other addresses from the fabric's core prefixes are removed.
+set -euo pipefail
+I=${1:?usage: shc-fabric-apply <instance> [up|down]}; ACT=${2:-up}
+CONF=/etc/shc-fabric/$I.json
+[ -r "$CONF" ] || { echo "no $CONF" >&2; exit 2; }
+q() { jq -er "$1" "$CONF"; }
+TYPE=$(q .type)
+
+# addresses on <dev> inside <cidr> other than <keep>
+stray() { ip -j -4 addr show dev "$1" | python3 -c '
+import ipaddress, json, sys
+net, keep = ipaddress.ip_network(sys.argv[1]), sys.argv[2]
+for i in json.load(sys.stdin):
+    for a in i.get("addr_info", []):
+        s = "%s/%s" % (a["local"], a["prefixlen"])
+        if ipaddress.ip_address(a["local"]) in net and s != keep:
+            print(s)' "$2" "$3"; }
+
+snapshot() {
+  { ip -br -4 addr show dev lo; ip -br -4 addr show dev "$BR" 2>/dev/null || true
+    ip -o link show "$BR" 2>/dev/null | grep -o 'mtu [0-9]*\|state [A-Z]*' || true
+    sysctl -n net.mpls.platform_labels 2>/dev/null || true
+    sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true; } | sha1sum
+}
+
+case "$TYPE" in
+root)
+  BR=$(q .bridge); MTU=$(q .mtu); LO=$(q .loopback); LOPOOL=$(q .loopbackPool); LINK=$(q .link)
+  before=$(snapshot)
+  if [ "$ACT" = up ]; then
+    modprobe mpls_router; modprobe mpls_iptunnel
+    sysctl -qw net.mpls.platform_labels=1048575
+    ip link show "$BR" >/dev/null 2>&1 || ip link add "$BR" type bridge
+    ip link set "$BR" mtu "$MTU" up
+    for a in $(stray "$BR" 0.0.0.0/0 "$LINK"); do ip addr del "$a" dev "$BR"; done
+    ip addr show dev "$BR" | grep -q " ${LINK} " || ip addr add "$LINK" dev "$BR"
+    for a in $(stray lo "$LOPOOL" "$LO"); do ip addr del "$a" dev lo; done
+    ip addr show dev lo | grep -q " ${LO} " || ip addr add "$LO" dev lo
+    sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
+  else
+    ip link show "$BR" >/dev/null 2>&1 && ip link del "$BR"
+    for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
+  fi
+  ;;
+*) echo "unknown instance type $TYPE" >&2; exit 2 ;;
+esac
+[ "$before" = "$(snapshot)" ] && echo "changed=no" || echo "changed=yes"

@@ -4878,11 +4878,10 @@ hybridsovereignPrimaryOperator:
             storageClass: ocs-external-storagecluster-ceph-rbd
           dns: {mode: platform}
     # P7.3 (P7-PLAN §12.3, H2 = gateway as PE): the fabric and a gateway per EVPN site on the BGW blades bgw-1/2
-    # (blades 5/8). Staged disabled: the jobs realize them from P7.3.4 (fabric) and P7.3.5 (gateways), and these
-    # are switched on then. SSH key and BGP password: central Vault fabric/bgw, fabric/bgp (seed-fabric-hosts).
+    # (blades 5/8). The fabric is realized from P7.3.4 (ledger + root instance on both blades); the gateways stay
+    # disabled until P7.3.5. SSH key and BGP password: central Vault fabric/bgw, fabric/bgp (seed-fabric-hosts).
     hybridFabrics:
       lab:
-        enabled: false
         spec:
           domainAsn: 65010
           overlayMtu: 9000

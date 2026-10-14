@@ -1,7 +1,10 @@
 ---
-# shc (design/P7-PLAN.md P7.3.3, §12.3): HybridFabric provision. Validates the fabric and checks that its
-# credentials resolve. Realizing it (the allocation ledger, the border gateway root instance on every node) is
-# P7.3.4; until then the fabric ends pending with reason NotImplemented.
+# shc (design/P7-PLAN.md P7.3.4, §12.3 + H2): HybridFabric provision.
+# 1. Validate the fabric and its credentials (SSH key for the border gateway nodes, BGP password).
+# 2. Ledger: ConfigMap fabric-ledger-<fabric> (pools; provider-edge index 1 = the border gateway root).
+# 3. Under the lease fabric-config-<fabric>, one node at a time: the root instance (shc-fabric-apply root: MPLS,
+#    the node-local core bridge, the loopback; FRR: VPNv4 route reflector for the core's loopback range, IS-IS
+#    with segment routing). A failure stops before the next node.
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -22,6 +25,11 @@
         msg: "{{ fab_fail_msg }}"
       when: fab_check_result.errors | length > 0
 
+    - name: Keep the pool sizes
+      ansible.builtin.set_fact:
+        hf_pools: "{{ fab_check_result.poolSize }}"
+        hf_pe_max: "{{ fab_check_result.peIndexMax | int }}"
+
     - name: Expect the border gateway SSH key
       ansible.builtin.set_fact:
         fab_fail_reason: CredentialsMissing
@@ -29,16 +37,10 @@
           HybridFabric {{ fab_name }}: borderGateway.credentialsRef {{ fab_spec.borderGateway.credentialsRef.vaultPath }}
           is not readable or has no ssh_private_key
 
-    - name: Read the border gateway SSH key
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+    - name: Connect to the border gateway nodes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
       vars:
-        vault_kv_path: "{{ fab_spec.borderGateway.credentialsRef.vaultPath }}"
-
-    - name: Require ssh_private_key
-      ansible.builtin.assert:
-        that: (vault_kv_data.ssh_private_key | default('')) | length > 0
-        quiet: true
-      no_log: true
+        bgw_fabric_spec: "{{ fab_spec }}"
 
     - name: Read the BGP session password
       when: (fab_spec.bgp | default({})).passwordRef is defined
@@ -67,28 +69,87 @@
         fab_fail_msg: ""
       no_log: true
 
-    - name: List the nodes (not configured yet)
-      ansible.builtin.set_fact:
-        hf_nodes: "{{ hf_nodes | default([]) + [{'name': item.name, 'ready': false, 'message': 'not configured'}] }}"
-      loop: "{{ fab_spec.borderGateway.nodes }}"
-      loop_control:
-        label: "{{ item.name }}"
+    - name: Ensure the ledger
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger:
+          action: ledger-ensure
+          namespace: "{{ fab_namespace }}"
+          fabric: "{{ fab_name }}"
+          fabric_uid: "{{ fab_obj.metadata.uid }}"
+          pools:
+            vni: ["{{ fab_spec.vniPool.start }}", "{{ fab_spec.vniPool.end }}"]
+            l2vni: ["{{ fab_spec.l2vniPool.start }}", "{{ fab_spec.l2vniPool.end }}"]
+            vpnTarget: ["{{ fab_spec.vpnTargetPool.start }}", "{{ fab_spec.vpnTargetPool.end }}"]
+            peIndex: [1, "{{ hf_pe_max }}"]
+          reserve:
+            peIndex: {"HybridFabric/{{ fab_namespace }}/{{ fab_name }}": 1}
 
-    # P7.3.4 replaces this with the ledger and the border gateway root instance
-    - name: Report the fabric validated, not realized
+    - name: Keep the ledger counts
+      ansible.builtin.set_fact:
+        hf_ledger: "{{ fab_ledger_result }}"
+
+    - name: The root's provider-edge addresses (index 1)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check: {action: pe-addresses, core: "{{ fab_spec.core }}", index: 1}
+
+    - name: Set the root instance
+      ansible.builtin.set_fact:
+        hf_pe: "{{ fab_check_result }}"
+        hf_root:
+          type: root
+          bridge: br-core
+          mtu: "{{ fab_spec.overlayMtu | int + 100 }}"
+          loopback: "{{ fab_check_result.loopback }}"
+          loopbackPool: "{{ fab_spec.core.loopbackPool }}"
+          link: "{{ fab_check_result.link }}"
+        hf_holder: "HybridFabric/{{ fab_name }} job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
+        hf_node_results: []
+        hf_changed_nodes: []
+
+    - name: Take the border gateway configuration lease
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}"}
+
+    - name: Configure the nodes, one at a time
+      block:
+        - name: Configure the root instance on each node
+          ansible.builtin.include_tasks: node_root.yml
+          loop: "{{ fab_spec.borderGateway.nodes }}"
+          loop_control:
+            loop_var: bgw_node
+            label: "{{ bgw_node.name }}"
+
+      always:
+        - name: Remove the SSH key
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+
+        - name: Release the lease
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+          vars:
+            fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}"}
+
+    - name: Report the fabric ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
-        fab_outcome: pending
-        fab_reason: NotImplemented
-        fab_message: Spec and credentials valid; configuring the border gateway nodes is not implemented yet
-        fab_waiting_for: [implementation]
+        fab_outcome: ready
+        fab_reason: Ready
+        fab_message: >-
+          Ledger fabric-ledger-{{ fab_name }}; root instance on {{ hf_node_results | map(attribute='name') | join(', ') }}
+          ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }})
         fab_status: >-
-          {{ {'available': {'vni': fab_check_result.poolSize.vniPool | int,
-                            'l2vni': fab_check_result.poolSize.l2vniPool | int,
-                            'vpnTarget': fab_check_result.poolSize.vpnTargetPool | int},
-              'nodes': hf_nodes} }}
+          {{ {'ledger': 'fabric-ledger-' ~ fab_name,
+              'allocated': hf_ledger.allocated,
+              'available': hf_ledger.available,
+              'nodes': hf_node_results} }}
 
   rescue:
+    - name: Remove the SSH key
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+      ignore_errors: true
+
     - name: Mark the HybridFabric failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -96,6 +157,7 @@
         fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
         fab_message: >-
           {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('HybridFabric provision failed') }}
+        fab_status: "{{ {'nodes': hf_node_results} if hf_node_results | default([]) | length > 0 else {} }}"
       when: fab_name is defined and services_api_host is defined
       ignore_errors: true
 

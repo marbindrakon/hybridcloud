@@ -1,0 +1,137 @@
+---
+# shc (design/P7-PLAN.md P7.3.4): the border gateway root instance on one node (delegated over SSH, become).
+# Input: bgw_node {name, address}, hf_root (instance config), hf_pe (provider-edge addresses), fab_spec.
+# Appends {name, ready, message, lastAppliedAt} to hf_node_results and the node's name to hf_changed_nodes when
+# anything on it changed.
+- name: "{{ bgw_node.name }}: require FRR"
+  ansible.builtin.command: rpm -q frr
+  changed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: install the fabric apply script and unit"
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../common/files/bgw/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode }}"
+    owner: root
+    group: root
+  loop:
+    - {src: shc-fabric-apply, dest: /usr/local/sbin/shc-fabric-apply, mode: "0755"}
+    - {src: shc-fabric-apply@.service, dest: /etc/systemd/system/shc-fabric-apply@.service, mode: "0644"}
+  loop_control:
+    label: "{{ item.dest }}"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_files
+
+- name: "{{ bgw_node.name }}: load the MPLS modules at boot"
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/shc-fabric.conf
+    content: "# shc fabric: MPLS for the provider-edge core\nmpls_router\nmpls_iptunnel\n"
+    mode: "0644"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_modules
+
+- name: "{{ bgw_node.name }}: instance config directory"
+  ansible.builtin.file:
+    path: /etc/shc-fabric
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: root instance config"
+  ansible.builtin.copy:
+    dest: /etc/shc-fabric/root.json
+    content: "{{ hf_root | to_nice_json }}\n"
+    mode: "0644"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_rootconf
+
+- name: "{{ bgw_node.name }}: run the root instance at boot"
+  ansible.builtin.systemd:
+    name: shc-fabric-apply@root.service
+    enabled: true
+    daemon_reload: "{{ _hf_files is changed }}"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_unit
+
+- name: "{{ bgw_node.name }}: apply the root instance"
+  ansible.builtin.command: /usr/local/sbin/shc-fabric-apply root up
+  register: _hf_apply
+  changed_when: "'changed=yes' in _hf_apply.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: FRR daemons"
+  ansible.builtin.lineinfile:
+    path: /etc/frr/daemons
+    regexp: "^{{ item }}="
+    line: "{{ item }}=yes"
+  loop: [bgpd, isisd]
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_daemons
+
+- name: "{{ bgw_node.name }}: FRR configuration"
+  ansible.builtin.template:
+    src: frr-root.conf.j2
+    dest: /etc/frr/frr.conf
+    owner: frr
+    group: frr
+    mode: "0640"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_frrconf
+
+- name: "{{ bgw_node.name }}: is FRR running"
+  ansible.builtin.command: systemctl is-active frr
+  register: _hf_frr_active
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: start FRR (enabled at boot)"
+  ansible.builtin.systemd:
+    name: frr
+    enabled: true
+    state: "{{ 'started' if _hf_frr_active.stdout != 'active' else ('restarted' if _hf_daemons is changed else omit) }}"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_frr_state
+
+# a running FRR with the same daemons takes a new configuration through frr-reload (no session reset)
+- name: "{{ bgw_node.name }}: reload the FRR configuration"
+  ansible.builtin.systemd:
+    name: frr
+    state: reloaded
+  when:
+    - _hf_frr_active.stdout == 'active'
+    - _hf_daemons is not changed
+    - _hf_frrconf is changed
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: wait for BGP and IS-IS"
+  ansible.builtin.shell: |
+    set -e
+    run=$(vtysh -c 'show running-config')
+    echo "$run" | grep -q '^router bgp {{ fab_spec.domainAsn }}$'
+    echo "$run" | grep -q 'bgp listen range {{ fab_spec.core.loopbackPool }} peer-group PE'
+    echo "$run" | grep -q '^router isis CORE$'
+    vtysh -c 'show isis summary' | grep -q 'Area CORE'
+    ss -Hltn 'sport = :179' | grep -q LISTEN
+    ip -br addr show dev {{ hf_root.bridge }} | grep -q ' {{ hf_root.link }} '
+    [ "$(sysctl -n net.mpls.platform_labels)" = 1048575 ]
+  register: _hf_verify
+  retries: 12
+  delay: 5
+  until: _hf_verify.rc == 0
+  changed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: record the node"
+  ansible.builtin.set_fact:
+    hf_node_results: >-
+      {{ hf_node_results | default([]) + [{
+           'name': bgw_node.name,
+           'ready': true,
+           'message': 'root instance: VPNv4 route reflector, IS-IS SR (SID ' ~ hf_pe.sid ~ '), ' ~ hf_root.bridge ~ ' '
+                      ~ hf_root.link ~ ', loopback ' ~ hf_pe.loopbackIp,
+           'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}] }}
+    hf_changed_nodes: >-
+      {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_unit, _hf_apply,
+         _hf_daemons, _hf_frrconf, _hf_frr_state] | select('changed') | list | length > 0 else []) }}

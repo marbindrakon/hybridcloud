@@ -1,0 +1,49 @@
+---
+# shc (design/P7-PLAN.md P7.3.4): reach a fabric's border gateway nodes over SSH. Reads the key from Vault into a
+# private temporary directory (never logged) and adds every node to the inventory (become, accept-new host keys
+# into a per-job known_hosts). Included from a role (paths are role_path-relative).
+# Input: bgw_fabric_spec (the HybridFabric spec). Sets bgw_keydir. Remove the key with bgw_disconnect.yml.
+- name: Read the border gateway SSH key
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ bgw_fabric_spec.borderGateway.credentialsRef.vaultPath }}"
+
+- name: Require ssh_private_key
+  ansible.builtin.assert:
+    that: (vault_kv_data.ssh_private_key | default('')) | length > 0
+    quiet: true
+  no_log: true
+
+- name: Make a private directory for the SSH key
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: bgw
+  register: bgw_keydir
+
+- name: Write the SSH key
+  ansible.builtin.copy:
+    dest: "{{ bgw_keydir.path }}/id"
+    content: "{{ vault_kv_data.ssh_private_key | trim }}\n"
+    mode: "0600"
+  no_log: true
+
+- name: Drop the key from the facts
+  ansible.builtin.set_fact:
+    vault_kv_data: {}
+  no_log: true
+
+- name: Reach the border gateway nodes over SSH
+  ansible.builtin.add_host:
+    name: "{{ item.name }}"
+    ansible_host: "{{ item.address }}"
+    ansible_user: "{{ bgw_fabric_spec.borderGateway.sshUser | default('root') }}"
+    ansible_connection: ssh
+    ansible_ssh_private_key_file: "{{ bgw_keydir.path }}/id"
+    ansible_ssh_common_args: >-
+      -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={{ bgw_keydir.path }}/known_hosts
+      -o ConnectTimeout=15 -o ServerAliveInterval=15
+    ansible_become: true
+    ansible_python_interpreter: /usr/bin/python3
+  loop: "{{ bgw_fabric_spec.borderGateway.nodes }}"
+  loop_control:
+    label: "{{ item.name }}"

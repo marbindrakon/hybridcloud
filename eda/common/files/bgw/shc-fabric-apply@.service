@@ -1,0 +1,16 @@
+# shc: fabric instance on a border gateway node (installed by the platform's fabric jobs). The root instance has
+# no network dependency (a bridge and loopback addresses) and runs before FRR.
+[Unit]
+Description=shc fabric instance %i
+DefaultDependencies=no
+After=systemd-modules-load.service systemd-sysctl.service network-pre.target
+Wants=network-pre.target
+Before=frr.service network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/shc-fabric-apply %i up
+
+[Install]
+WantedBy=multi-user.target

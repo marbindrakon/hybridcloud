@@ -1,0 +1,27 @@
+---
+# shc (design/P7-PLAN.md P7.3.4): run one files/shc_ledger.py action (fabric ledger or config lease) against the
+# services API. Included from a role (paths are role_path-relative). Input: fab_ledger (dict with action, fabric,
+# namespace, ...); the API connection and token are added here and passed on stdin. Sets fab_ledger_result; fails
+# with the helper's error.
+- name: "Fabric {{ fab_ledger.action }}"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../../../common/files/shc_ledger.py"
+    stdin: "{{ fab_ledger | combine({'api': services_api_host | trim, 'token': services_bearer_token | trim}) | to_json }}"
+  register: _fab_ledger
+  changed_when: >-
+    (_fab_ledger.stdout | default('')) is search('"(new|created)": true|"released": [0-9]')
+  failed_when: false
+  no_log: true
+
+- name: "Fabric {{ fab_ledger.action }}: parse the result"
+  ansible.builtin.set_fact:
+    fab_ledger_result: >-
+      {{ (_fab_ledger.stdout | from_json) if (_fab_ledger.stdout | default('') | trim).startswith('{')
+         else {'error': 'shc_ledger.py rc ' ~ _fab_ledger.rc} }}
+
+- name: "Fabric {{ fab_ledger.action }}: fail on error"
+  ansible.builtin.fail:
+    msg: "Fabric {{ fab_ledger.action }} failed: {{ fab_ledger_result.error }}"
+  when: _fab_ledger.rc != 0 or 'error' in fab_ledger_result

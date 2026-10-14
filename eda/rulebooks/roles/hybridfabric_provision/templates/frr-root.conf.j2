@@ -1,0 +1,39 @@
+! Managed by the platform: HybridFabric {{ fab_name }}, border gateway root instance. Changes here are overwritten.
+frr version 8.5
+frr defaults traditional
+hostname {{ bgw_node.name }}
+log syslog informational
+service integrated-vtysh-config
+!
+interface {{ hf_root.bridge }}
+ ip router isis CORE
+exit
+!
+interface lo
+ ip router isis CORE
+ isis passive
+exit
+!
+router bgp {{ fab_spec.domainAsn }}
+ bgp router-id {{ hf_pe.loopbackIp }}
+ bgp cluster-id {{ hf_pe.loopbackIp }}
+ no bgp default ipv4-unicast
+ neighbor PE peer-group
+ neighbor PE remote-as {{ fab_spec.domainAsn }}
+ neighbor PE update-source lo
+ bgp listen range {{ fab_spec.core.loopbackPool }} peer-group PE
+ !
+ address-family ipv4 vpn
+  neighbor PE activate
+  neighbor PE route-reflector-client
+ exit-address-family
+exit
+!
+router isis CORE
+ is-type level-2-only
+ net {{ hf_pe.net }}
+ segment-routing on
+ segment-routing global-block {{ (fab_spec.core.srgb | default({'start': 16000})).start }} {{ (fab_spec.core.srgb | default({'end': 23999})).end }}
+ segment-routing prefix {{ hf_pe.loopback }} index {{ hf_pe.index }}
+exit
+!

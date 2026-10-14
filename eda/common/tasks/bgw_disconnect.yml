@@ -1,0 +1,7 @@
+---
+# shc (design/P7-PLAN.md P7.3.4): remove the SSH key written by bgw_connect.yml.
+- name: Remove the border gateway SSH key
+  ansible.builtin.file:
+    path: "{{ bgw_keydir.path }}"
+    state: absent
+  when: bgw_keydir.path is defined

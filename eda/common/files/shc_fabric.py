@@ -11,6 +11,8 @@ actions:
                   site subnet clear of the core prefixes
   check-placement {prefixes, siblings: [{name, prefixes}], reserved: [cidr]}
                   prefixes disjoint among themselves, from the network's other placements and from reserved
+  pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
+                  (index 1 is the border gateway root; the same addresses on every node)
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}]}
                   the site namespace of each CloudVirt namespace: <entity>-<cloudvirt>-<name>, cut to 54 characters
                   plus a hash when longer than 63 (namespace names are global on the site's cluster)
@@ -65,7 +67,27 @@ def check_fabric(req):
         errors.append(f"core.srgb {srgb['start']}-{srgb['end']} is smaller than core.loopbackPool ({lo_size} addresses)")
     pools = {k: spec.get(k) or {} for k in ("vniPool", "l2vniPool", "vpnTargetPool")}
     size = {k: (p.get("end", 0) - p.get("start", 1) + 1) for k, p in pools.items()}
-    return {"errors": errors, "poolSize": size}
+    pe_max = 0
+    try:
+        link_size = ipaddress.ip_network(str(core.get("linkSubnet")), strict=True).num_addresses
+        # host indexes 1..size-2 in both prefixes, and node SID labels within the SRGB
+        pe_max = max(0, min(lo_size - 2, link_size - 2, srgb["end"] - srgb["start"]))
+    except ValueError:
+        pass
+    return {"errors": errors, "poolSize": size, "peIndexMax": pe_max}
+
+
+def pe_addresses(req):
+    core, i = req.get("core") or {}, int(req["index"])
+    lo = ipaddress.ip_network(str(core["loopbackPool"]), strict=True)
+    link = ipaddress.ip_network(str(core["linkSubnet"]), strict=True)
+    srgb = core.get("srgb") or {"start": 16000, "end": 23999}
+    if not 1 <= i <= min(lo.num_addresses - 2, link.num_addresses - 2, srgb["end"] - srgb["start"]):
+        return {"errors": [f"provider-edge index {i} does not fit the core prefixes or the SRGB"]}
+    area = core.get("isisArea") or "49.0001"
+    return {"errors": [], "index": i, "loopback": f"{lo.network_address + i}/32", "loopbackIp": str(lo.network_address + i),
+            "link": f"{link.network_address + i}/{link.prefixlen}", "linkIp": str(link.network_address + i),
+            "net": f"{area}.0000.0000.{i:04x}.00", "sid": srgb["start"] + i}
 
 
 def check_gateway(req):
@@ -167,7 +189,7 @@ def cloudvirt_namespaces(req):
 
 
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
-           "cloudvirt-namespaces": cloudvirt_namespaces}
+           "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses}
 
 
 def main():

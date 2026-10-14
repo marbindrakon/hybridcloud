@@ -1,0 +1,53 @@
+---
+# shc (design/P7-PLAN.md P7.3.4): remove the border gateway root instance from one node (delegated, become).
+# The fabric's delete waited for its gateways and networks, so nothing else uses the core here.
+- name: "{{ bgw_node.name }}: stop FRR and keep it off at boot"
+  ansible.builtin.systemd:
+    name: frr
+    state: stopped
+    enabled: false
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: FRR daemons off"
+  ansible.builtin.lineinfile:
+    path: /etc/frr/daemons
+    regexp: "^{{ item }}="
+    line: "{{ item }}=no"
+  loop: [bgpd, isisd]
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: FRR configuration without the fabric"
+  ansible.builtin.copy:
+    dest: /etc/frr/frr.conf
+    content: "! The platform's fabric instance was removed from this node.\nhostname {{ bgw_node.name }}\n"
+    owner: frr
+    group: frr
+    mode: "0640"
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: is the root instance installed"
+  ansible.builtin.stat:
+    path: /etc/shc-fabric/root.json
+  register: _hft_rootconf
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: remove the root instance (core bridge, loopback)"
+  ansible.builtin.command: /usr/local/sbin/shc-fabric-apply root down
+  register: _hft_down
+  changed_when: "'changed=yes' in _hft_down.stdout"
+  when: _hft_rootconf.stat.exists
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: no root instance at boot"
+  ansible.builtin.systemd:
+    name: shc-fabric-apply@root.service
+    enabled: false
+  failed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: remove the root instance config"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: [/etc/shc-fabric/root.json, /etc/modules-load.d/shc-fabric.conf]
+  delegate_to: "{{ bgw_node.name }}"
