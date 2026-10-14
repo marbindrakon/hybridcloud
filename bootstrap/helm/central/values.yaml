@@ -1965,19 +1965,6 @@ fabricHosts:
               link: bond1.237
               ip_address: 172.18.237.11
               netmask: 255.255.255.0
-              routes:
-              - network: 172.18.234.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
-              - network: 172.18.235.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
-              - network: 172.18.236.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
-              - network: 172.18.239.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
             services:
             - type: dns
               address: 172.18.42.20
@@ -2134,19 +2121,6 @@ fabricHosts:
               link: bond1.237
               ip_address: 172.18.237.12
               netmask: 255.255.255.0
-              routes:
-              - network: 172.18.234.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
-              - network: 172.18.235.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
-              - network: 172.18.236.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
-              - network: 172.18.239.0
-                netmask: 255.255.255.0
-                gateway: 172.18.237.1
             services:
             - type: dns
               address: 172.18.42.20
