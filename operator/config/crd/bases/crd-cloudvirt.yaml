@@ -1,0 +1,193 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cloudvirts.hybridsovereign.redhat
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  group: hybridsovereign.redhat
+  names:
+    kind: CloudVirt
+    listKind: CloudVirtList
+    plural: cloudvirts
+    singular: cloudvirt
+    shortNames:
+      - cvirt
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: >-
+            A tenant's virtual machine environment on a platform OpenShift Virtualization site (a CloudInfrastructure
+            of type openshift). VMs run in namespaces that the environment's NetworkPlacements create, one per
+            network, with the limits and access given here. Tenants sign in to the site's console with their
+            platform identity and see only their own VM namespaces.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [cloudRef]
+              properties:
+                description:
+                  type: string
+                  maxLength: 512
+                cloudRef:
+                  type: object
+                  description: >-
+                    The CloudInfrastructure (type openshift, platform namespace) that hosts the VMs. The site must
+                    allow this Entity and offer virtualization. Immutable.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.cloudRef is immutable
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                storageClass:
+                  type: string
+                  maxLength: 253
+                  description: StorageClass for VM disks. Default the site's storageClass.
+                quota:
+                  type: object
+                  description: Limits for each VM namespace of this environment (a ResourceQuota per namespace).
+                  properties:
+                    cpu:
+                      x-kubernetes-int-or-string: true
+                      description: Total CPU requests, e.g. 16 or 16000m.
+                    memory:
+                      x-kubernetes-int-or-string: true
+                      description: Total memory requests, e.g. 64Gi.
+                    storage:
+                      x-kubernetes-int-or-string: true
+                      description: Total storage requests of persistent volume claims (VM disks), e.g. 1Ti.
+                    virtualMachines:
+                      type: integer
+                      minimum: 0
+                      description: Number of VirtualMachines.
+                toolRbac:
+                  type: object
+                  description: Who gets access to the VM namespaces on the site (Rbac CR names in this namespace).
+                  properties:
+                    editRbac:
+                      type: array
+                      description: >-
+                        Rbac CRs whose groups can create, change and delete VMs and their disks and use the VM
+                        consoles. They cannot change the namespaces' network attachment.
+                      items:
+                        type: string
+                    viewRbac:
+                      type: array
+                      description: Rbac CRs whose groups get read-only access to the VM namespaces.
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                entity:
+                  type: string
+                site:
+                  type: object
+                  description: The resolved site.
+                  properties:
+                    name:
+                      type: string
+                    endpoint:
+                      type: string
+                      description: The cluster's API endpoint.
+                    console:
+                      type: string
+                      description: The cluster's web console.
+                  x-kubernetes-preserve-unknown-fields: true
+                storageClass:
+                  type: string
+                  description: Effective StorageClass.
+                namespaces:
+                  type: array
+                  description: VM namespaces of this environment (from its NetworkPlacements).
+                  items:
+                    type: string
+                status:
+                  type: string
+                  description: Lifecycle status (reconciling, pending, ready, failed)
+                message:
+                  type: string
+                ready:
+                  type: boolean
+                waitingFor:
+                  type: array
+                  items:
+                    type: string
+                deletionComplete:
+                  type: boolean
+                deletionBlockedBy:
+                  type: array
+                  items:
+                    type: string
+                lastReconciledAt:
+                  type: string
+                  format: date-time
+                observedGeneration:
+                  type: integer
+                  format: int64
+                edaJobs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      jobId:
+                        type: string
+                      url:
+                        type: string
+                      timestamp:
+                        type: string
+                      status:
+                        type: string
+                        enum: [running, waiting, success, failed]
+                    x-kubernetes-preserve-unknown-fields: true
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Site
+          type: string
+          jsonPath: .spec.cloudRef.name
+        - name: Status
+          type: string
+          jsonPath: .status.status
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

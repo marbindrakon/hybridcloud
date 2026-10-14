@@ -18,8 +18,15 @@ CR_TYPES = [
     "platformopenshift", "cloudoso", "cloudaws",
     "rbac", "rbacconfig", "vault", "vaultkv",
     "aapconfig", "aaporg", "quayconfig", "quayorg",
-    "hybridfabric", "cloudgateway", "transportlink",
-    "hybridnetwork", "networkplacement", "uihealthchecker",
+    "transportlink", "uihealthchecker",
+    # shc (P7.1, tenant DNS D1)
+    "cloudinfrastructure", "dnsconfig",
+]
+
+# shc (design/P7-PLAN.md P7.3.3): rulebooks that serve several kinds with one activation
+# (name, rulebook, decision environment)
+SHARED_ACTIVATIONS = [
+    ("fabric-events-activation", "fabric-events.yml", "de-cloudoso"),
 ]
 
 DE_MAP = {
@@ -39,12 +46,10 @@ DE_MAP = {
     "aaporg": "de-plugin-aap",
     "quayconfig": "de-plugin-quay",
     "quayorg": "de-plugin-quay",
-    "hybridfabric": "de-hybridvpc",
-    "cloudgateway": "de-hybridvpc",
     "transportlink": "de-hybridvpc",
-    "hybridnetwork": "de-hybridvpc",
-    "networkplacement": "de-hybridvpc",
     "uihealthchecker": "de-hybridvpc",
+    "cloudinfrastructure": "de-cloudoso",
+    "dnsconfig": "de-cloudoso",
 }
 
 
@@ -115,6 +120,14 @@ def cmd_create(args):
                 print(f"  SKIP: DE {de_name} not found for {cr}")
                 continue
             activations_to_create.append((act_name, rb_map[rb_name], de_ids[de_name]))
+    for act_name, rb_name, de_name in SHARED_ACTIVATIONS:
+        if rb_name not in rb_map:
+            print(f"  SKIP: rulebook {rb_name} not found")
+            continue
+        if de_name not in de_ids:
+            print(f"  SKIP: DE {de_name} not found for {act_name}")
+            continue
+        activations_to_create.append((act_name, rb_map[rb_name], de_ids[de_name]))
 
     print(f"Creating {len(activations_to_create)} activations...")
     ok = fail = 0

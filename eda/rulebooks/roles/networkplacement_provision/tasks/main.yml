@@ -1,137 +1,259 @@
 ---
+# shc (design/P7-PLAN.md P7.3.3, §12.3): NetworkPlacement provision. Resolves the network, the backend (CloudOSO
+# or CloudVirt), the backend's site and the site's CloudGateway; records site and gateway as soon as they are known
+# (the CloudGateway's delete waits on status.cloudGateway); checks the prefixes against the network's other
+# placements. Realizing it (VNIs from the ledger, the backend network, the gateway VRF) is P7.3.8; until then it
+# ends pending: on the network, backend or gateway while those aren't ready, else with reason NotImplemented.
 - block:
-    - name: Parse event payload
-      ansible.builtin.set_fact:
-        networkplacement_cr_name: "{{ event_payload.regarding.name }}"
-        networkplacement_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        networkplacement_spec: "{{ event_payload.note | from_json }}"
-
-    - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
-
-    - name: Stub debug for NetworkPlacement
-      ansible.builtin.debug:
-        msg: "Stub provision NetworkPlacement/{{ networkplacement_cr_name }} in {{ networkplacement_cr_namespace }}"
-
-    - name: Read CR generation
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: NetworkPlacement
-        name: "{{ networkplacement_cr_name }}"
-        namespace: "{{ networkplacement_cr_namespace }}"
-      register: networkplacement_cr_lookup
-
-    - name: Set generation fact
-      ansible.builtin.set_fact:
-        networkplacement_generation: "{{ networkplacement_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
-
-    - name: Read NetworkPlacement CR
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: NetworkPlacement
-        name: "{{ networkplacement_cr_name }}"
-        namespace: "{{ networkplacement_cr_namespace }}"
-      register: np_cr_lookup
-
-    - name: Resolve placement stub facts
-      ansible.builtin.set_fact:
-        np_spec: "{{ np_cr_lookup.resources[0].spec | default({}) }}"
-        np_entity: "{{ networkplacement_cr_namespace | regex_replace('^entity-', '') | regex_replace('^sovereign-', '') }}"
-        np_prefixes: "{{ (np_cr_lookup.resources[0].spec.prefixes | default([])) }}"
-        np_target_backend: >-
-          {{
-            'aws' if (np_cr_lookup.resources[0].spec.backend.kind | default('')) == 'CloudAWS'
-            else ('openstack' if (np_cr_lookup.resources[0].spec.backend.kind | default('')) == 'CloudOSO'
-            else 'openshift')
-          }}
-
-    - name: Read referenced HybridNetwork for numbering
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: HybridNetwork
-        name: "{{ np_spec.network | default('') }}"
-        namespace: "{{ networkplacement_cr_namespace }}"
-      register: hn_lookup
-      when: (np_spec.network | default('')) | length > 0
-
-    - name: Copy numbering from HybridNetwork when present
-      ansible.builtin.set_fact:
-        np_network_id: "{{ hn_lookup.resources[0].status.networkId | default('stub-network') }}"
-        np_vni: "{{ hn_lookup.resources[0].status.vni | default(50001) }}"
-        np_vrf: "{{ hn_lookup.resources[0].status.vrfName | default(np_spec.network) }}"
-        np_rt: "{{ hn_lookup.resources[0].status.canonicalRt | default('65000:50001') }}"
-      when: hn_lookup.resources | default([]) | length > 0
-
-    - name: Get timestamp
-      ansible.builtin.set_fact:
-        networkplacement_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-
-    - name: Mark NetworkPlacement ready (stub)
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+    - name: Read the NetworkPlacement
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: networkplacements
-        cr_name: "{{ networkplacement_cr_name }}"
-        cr_namespace: "{{ networkplacement_cr_namespace }}"
-        cr_status_body:
-          status: ready
-          ready: true
-          message: "Stub provisioned by EDA hybridvpc (no infra changes)"
-          lastReconciledAt: "{{ networkplacement_status_transition_time }}"
-          observedGeneration: "{{ networkplacement_generation }}"
-          entity: "{{ np_entity | default('') }}"
-          networkId: "{{ np_network_id | default('stub-network') }}"
-          targetBackend: "{{ np_target_backend }}"
-          vni: "{{ np_vni | default(50001) }}"
-          vrfName: "{{ np_vrf | default(networkplacement_cr_name) }}"
-          canonicalRt: "{{ np_rt | default('65000:50001') }}"
-          backendRt: "{{ np_rt | default('65000:50001') }}"
-          rtStrategy: native
-          domainAsn: 65000
-          backendReady: true
-          prerequisiteReady: true
-          fabricApplied: true
-          backendApplied: true
-          validated: true
-          realizedPrefixes: "{{ np_prefixes }}"
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ networkplacement_status_transition_time }}"
-              reason: EDASucceeded
-              message: Stub provision complete
+        fab_read_entity: true
+
+    - name: Start with nothing to wait for
+      ansible.builtin.set_fact:
+        np_waiting: []
+        np_reason: WaitingForDependencies
+        np_status: {entity: "{{ fab_entity }}"}
+        np_backend_kind: "{{ fab_spec.backend.kind }}"
+        np_backend_name: "{{ fab_spec.backend.name }}"
+
+    - name: Read the network and the backend
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ fab_namespace }}"
+      loop:
+        - {kind: HybridNetwork, name: "{{ fab_spec.network }}"}
+        - {kind: "{{ np_backend_kind }}", name: "{{ np_backend_name }}"}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      register: _np_refs
+
+    - name: Set the network and backend facts
+      ansible.builtin.set_fact:
+        np_network: "{{ (_np_refs.results[0].resources | default([], true) + [{}]) | first }}"
+        np_backend: "{{ (_np_refs.results[1].resources | default([], true) + [{}]) | first }}"
+
+    - name: Refuse references that are being deleted
+      ansible.builtin.set_fact:
+        fab_fail_reason: ReferenceDeleting
+        fab_fail_msg: >-
+          NetworkPlacement {{ fab_name }}: {{ [np_network, np_backend] | selectattr('metadata.deletionTimestamp', 'defined')
+          | map(attribute='kind') | join(' and ') }} being deleted
+      when: >-
+        [np_network, np_backend] | selectattr('metadata', 'defined') | selectattr('metadata.deletionTimestamp', 'defined')
+        | list | length > 0
+
+    - name: Stop on a deleting reference
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_reason | default('') == 'ReferenceDeleting'
+
+    - name: Wait for missing references
+      ansible.builtin.set_fact:
+        np_waiting: >-
+          {{ np_waiting
+             + ([] if np_network else ['HybridNetwork ' ~ fab_spec.network ~ ' (not found)'])
+             + ([] if np_backend else [np_backend_kind ~ ' ' ~ np_backend_name ~ ' (not found)']) }}
+
+    # the backend's site: a CloudVirt names it; a CloudOSO records the site it took (its cloudRef or the default)
+    - name: Find the backend's site
+      ansible.builtin.set_fact:
+        np_site: >-
+          {{ (((np_backend.spec | default({}, true)).cloudRef | default({}, true)).name | default('', true))
+             or ((np_backend.status | default({}, true)).cloudInfrastructure | default('', true)) }}
+
+    - name: Wait for the backend to choose its site
+      ansible.builtin.set_fact:
+        np_waiting: "{{ np_waiting + [np_backend_kind ~ ' ' ~ np_backend_name ~ ' (no site yet)'] }}"
+      when: np_backend and np_site | length == 0
+
+    - name: Resolve the site and its gateway
+      when: np_site | length > 0
+      block:
+        - name: Resolve the site
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+          vars:
+            ci_ref_name: "{{ np_site }}"
+            ci_ref_namespace: "{{ fabric_platform_namespace }}"
+
+        - name: List the platform's gateways
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: CloudGateway
+            namespace: "{{ fabric_platform_namespace }}"
+          register: _np_gateways
+
+        - name: Find the site's gateway
+          ansible.builtin.set_fact:
+            np_gateway: >-
+              {{ (_np_gateways.resources | default([]) | selectattr('spec.cloudRef.name', 'equalto', np_site)
+                  | list + [{}]) | first }}
+            np_status: "{{ np_status | combine({'site': np_site}) }}"
+
+        - name: Record the gateway
+          ansible.builtin.set_fact:
+            np_status: "{{ np_status | combine({'cloudGateway': np_gateway.metadata.name}) }}"
+          when: np_gateway | length > 0
+
+        - name: Wait for an EVPN site with a gateway
+          ansible.builtin.set_fact:
+            np_waiting: >-
+              {{ np_waiting
+                 + ([ci_error | trim] if ci_error | trim | length > 0 else [])
+                 + (['CloudInfrastructure ' ~ np_site ~ ': evpn capability']
+                    if ci_error | trim | length == 0 and not (ci_capabilities.evpn | default(false) | bool) else [])
+                 + ([] if np_gateway else ['a CloudGateway for site ' ~ np_site]) }}
+            np_reason: >-
+              {{ 'SiteNotEvpnCapable' if ci_error | trim | length == 0 and not (ci_capabilities.evpn | default(false) | bool)
+                 else np_reason }}
+
+    - name: Refuse a gateway on another fabric
+      ansible.builtin.set_fact:
+        fab_fail_reason: FabricMismatch
+        fab_fail_msg: >-
+          NetworkPlacement {{ fab_name }}: site {{ np_site }} is on HybridFabric {{ np_gateway.spec.fabricRef.name }},
+          network {{ fab_spec.network }} on {{ (np_network.status | default({}, true)).fabric }}
+      when:
+        - np_gateway | default({}) | length > 0
+        - (np_network.status | default({}, true)).fabric | default('', true) | length > 0
+        - np_gateway.spec.fabricRef.name != np_network.status.fabric
+
+    - name: List the network's other placements
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: NetworkPlacement
+        namespace: "{{ fab_namespace }}"
+      register: _np_all
+
+    - name: Check the prefixes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: check-placement
+          prefixes: "{{ fab_spec.prefixes }}"
+          siblings: >-
+            {%- set out = [] -%}
+            {%- for p in _np_all.resources | default([]) -%}
+              {%- if p.metadata.name != fab_name and p.spec.network == fab_spec.network
+                    and p.metadata.deletionTimestamp is not defined -%}
+                {%- set _ = out.append({'name': p.metadata.name, 'prefixes': p.spec.prefixes | default([])}) -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ out }}
+
+    - name: Refuse overlapping prefixes
+      ansible.builtin.set_fact:
+        fab_fail_reason: PrefixOverlap
+        fab_fail_msg: "NetworkPlacement {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+      when:
+        - fab_fail_msg | default('', true) | length == 0
+        - fab_check_result.errors | length > 0
+
+    - name: Stop on a refused placement
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_msg | default('', true) | length > 0
+
+    # namespace names are global on the site's cluster: the default carries the Entity
+    - name: Default the VM namespace (CloudVirt)
+      ansible.builtin.set_fact:
+        np_status: >-
+          {{ np_status | combine({'namespaces': fab_spec.vmNamespaces | default([
+               ((fab_entity ~ '-' ~ np_backend_name ~ '-' ~ fab_spec.network) | lower
+                | regex_replace('[^a-z0-9-]', '-'))[:63] | regex_replace('-+$', '')], true)}) }}
+      when: np_backend_kind == 'CloudVirt'
+
+    - name: Refuse a VM namespace another placement uses
+      vars:
+        _taken: >-
+          {%- set out = [] -%}
+          {%- for p in _np_all.resources | default([]) if p.metadata.name != fab_name -%}
+            {%- for n in (p.status | default({}, true)).namespaces | default(p.spec.vmNamespaces | default([]), true) -%}
+              {%- if n in np_status.namespaces -%}{%- set _ = out.append(n ~ ' (placement ' ~ p.metadata.name ~ ')') -%}{%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+      ansible.builtin.set_fact:
+        fab_fail_reason: NamespaceTaken
+        fab_fail_msg: "NetworkPlacement {{ fab_name }}: VM namespace already used: {{ _taken | join(', ') }}"
+      when:
+        - np_backend_kind == 'CloudVirt'
+        - _taken | length > 0
+
+    - name: Stop on a taken namespace
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_reason | default('') == 'NamespaceTaken'
+
+    - name: Record the readiness of the backend and the gateway
+      ansible.builtin.set_fact:
+        np_status: >-
+          {{ np_status | combine({'backendReady': (np_backend.status | default({}, true)).ready | default(false) | bool,
+                                  'gatewayReady': ((np_gateway | default({})).status | default({}, true)).ready | default(false) | bool}) }}
+
+    - name: Wait for the network, backend and gateway to be ready
+      vars:
+        _deps:
+          - {what: "HybridNetwork {{ fab_spec.network }}", obj: "{{ np_network }}"}
+          - {what: "{{ np_backend_kind }} {{ np_backend_name }}", obj: "{{ np_backend }}"}
+          - {what: "CloudGateway {{ (np_gateway | default({})).metadata.name | default('') }}", obj: "{{ np_gateway | default({}) }}"}
+      ansible.builtin.set_fact:
+        np_waiting: "{{ np_waiting + [item.what ~ ' (' ~ ((item.obj.status | default({}, true)).status | default('not provisioned', true)) ~ ')'] }}"
+      loop: "{{ _deps }}"
+      loop_control:
+        label: "{{ item.what }}"
+      when:
+        - item.obj | length > 0
+        - not ((item.obj.status | default({}, true)).ready | default(false) | bool)
+
+    - name: Report what the placement waits for
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: "{{ np_reason | trim }}"
+        fab_message: "Waiting for {{ np_waiting | join('; ') }}"
+        fab_waiting_for: "{{ np_waiting }}"
+        fab_status: "{{ np_status }}"
+      when: np_waiting | length > 0
+
+    - name: End the job while waiting
+      ansible.builtin.meta: end_play
+      when: np_waiting | length > 0
+
+    # P7.3.8 replaces this with the VNIs, the backend network and the gateway VRFs
+    - name: Report the placement validated, not realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: NotImplemented
+        fab_message: Spec valid, network, backend and gateway ready; realizing the placement is not implemented yet
+        fab_waiting_for: [implementation]
+        fab_status: "{{ np_status }}"
 
   rescue:
-    - name: Mark NetworkPlacement failed
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+    - name: Mark the NetworkPlacement failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: networkplacements
-        cr_name: "{{ networkplacement_cr_name }}"
-        cr_namespace: "{{ networkplacement_cr_namespace }}"
-        cr_status_body:
-          status: failed
-          ready: false
-          message: "{{ ansible_failed_result.msg | default('EDA stub provision failed') }}"
-          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          conditions:
-            - type: Ready
-              status: "False"
-              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
-              message: "{{ ansible_failed_result.msg | default('EDA stub provision failed') }}"
+        fab_outcome: failed
+        fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
+        fab_message: >-
+          {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('NetworkPlacement provision failed') }}
+        fab_status: "{{ np_status | default({}) }}"
+      when: fab_name is defined and services_api_host is defined
       ignore_errors: true
-      when: services_api_host is defined and services_bearer_token is defined
 
     - name: Re-raise
       ansible.builtin.fail:
-        msg: "NetworkPlacement {{ networkplacement_cr_name | default('unknown') }} stub provision failed"
+        msg: "NetworkPlacement {{ fab_name | default('unknown') }} provision failed: {{ fab_fail_reason | default('ProvisionFailed') }}"

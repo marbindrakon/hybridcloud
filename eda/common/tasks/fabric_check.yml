@@ -1,0 +1,23 @@
+---
+# shc (design/P7-PLAN.md P7.3): run one files/shc_fabric.py check. Input: fab_check (dict with `action`).
+# Sets fab_check_result ({errors: [...], ...}); fails only when the helper itself fails.
+- name: "Fabric {{ fab_check.action }}"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../../../common/files/shc_fabric.py"
+    stdin: "{{ fab_check | to_json }}"
+  register: _fab_check
+  changed_when: false
+  failed_when: false
+
+- name: "Fabric {{ fab_check.action }}: parse the result"
+  ansible.builtin.set_fact:
+    fab_check_result: >-
+      {{ (_fab_check.stdout | from_json) if (_fab_check.stdout | default('') | trim).startswith('{')
+         else {'error': (_fab_check.stderr | default('') | trim)[-600:]} }}
+
+- name: "Fabric {{ fab_check.action }}: fail when the helper failed"
+  ansible.builtin.fail:
+    msg: "Fabric {{ fab_check.action }} failed: {{ fab_check_result.error | default('rc ' ~ _fab_check.rc) }}"
+  when: _fab_check.rc != 0 or 'error' in fab_check_result

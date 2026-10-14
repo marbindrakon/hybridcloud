@@ -21,8 +21,14 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
-          description: Cloud landing-zone gateway for Hybrid VPC.
+          description: >-
+            Attaches one cloud site (a CloudInfrastructure with EVPN) to a HybridFabric. The gateway runs an
+            instance on every border gateway node: on the site side it is the route reflector of the site's EVPN
+            domain and a VTEP for each tenant network placed there; on the fabric side it is a provider edge of the
+            fabric's MPLS core. One CloudGateway per site.
           type: object
+          required:
+            - spec
           properties:
             apiVersion:
               type: string
@@ -32,53 +38,172 @@ spec:
               type: object
             spec:
               type: object
+              required: [fabricRef, cloudRef, siteUnderlay]
               properties:
-                enabled:
-                  type: boolean
-                  default: false
-                cloud:
-                  type: string
-                  enum: [aws, openstack, openshift]
-                region:
-                  type: string
-                domainAsn:
-                  type: integer
-                landingZoneTemplate:
-                  type: string
-                  default: default
                 fabricRef:
-                  type: string
-                transport:
                   type: object
+                  description: The HybridFabric (same namespace) the gateway joins. Immutable.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.fabricRef is immutable
                   properties:
-                    type:
+                    name:
                       type: string
-                      enum: [wireguard, ipsec, macsec, none]
-                    vaultPeerConfigRef:
+                      minLength: 1
+                      maxLength: 253
+                cloudRef:
+                  type: object
+                  description: >-
+                    The CloudInfrastructure (same namespace) whose EVPN domain the gateway terminates. The site must
+                    report the evpn capability. Immutable.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.cloudRef is immutable
+                  properties:
+                    name:
                       type: string
-                awsAccountId:
+                      minLength: 1
+                      maxLength: 253
+                transport:
                   type: string
-                openstackCloudOSORef:
-                  type: string
+                  enum: [none, wireguard]
+                  default: none
+                  description: >-
+                    How the site's underlay reaches the border gateway nodes. none: the site's underlay VLAN is
+                    trunked to the nodes directly. wireguard: a remote site over an encrypted tunnel (not supported
+                    yet; such a gateway fails with TransportNotSupported).
+                siteUnderlay:
+                  type: object
+                  description: The gateway's attachment to the site's EVPN underlay.
+                  required: [vlan, cidr, addresses]
+                  x-kubernetes-validations:
+                    - rule: >-
+                        !isCIDR(self.cidr) || self.addresses.all(a, isIP(a.address) && cidr(self.cidr).containsIP(a.address))
+                      message: every address must be an IP address inside cidr
+                  properties:
+                    vlan:
+                      type: integer
+                      minimum: 1
+                      maximum: 4094
+                      description: VLAN of the site's underlay on the border gateway trunk interface.
+                    cidr:
+                      type: string
+                      maxLength: 43
+                      description: >-
+                        The site's VTEP subnet. The gateway accepts the site's BGP sessions from this range.
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4
+                          message: cidr must be an IPv4 prefix
+                    addresses:
+                      type: array
+                      description: >-
+                        The gateway's address on the site underlay on each border gateway node (one per node, inside
+                        cidr). The site's VTEPs peer with every one of them.
+                      minItems: 1
+                      maxItems: 8
+                      x-kubernetes-list-type: map
+                      x-kubernetes-list-map-keys: [node]
+                      items:
+                        type: object
+                        required: [node, address]
+                        properties:
+                          node:
+                            type: string
+                            maxLength: 63
+                            description: Border gateway node name (HybridFabric spec.borderGateway.nodes).
+                          address:
+                            type: string
+                            maxLength: 39
+                            description: IPv4 address of the gateway instance on that node.
+                    mtu:
+                      type: integer
+                      minimum: 1280
+                      maximum: 9216
+                      description: >-
+                        MTU of the gateway's underlay interface. Default: the trunk interface's MTU. Must carry the
+                        fabric's overlayMtu + 50 bytes.
+                bfd:
+                  type: boolean
+                  default: true
+                  description: >-
+                    Bidirectional Forwarding Detection on the site's BGP sessions, so the site stops using a failed
+                    node within about a second.
+                bgp:
+                  type: object
+                  description: Overrides of the fabric's BGP settings for this site.
+                  properties:
+                    passwordRef:
+                      type: object
+                      description: Vault KV path holding the site's TCP MD5 session password (key password).
+                      required: [vaultPath]
+                      properties:
+                        vaultPath:
+                          type: string
+                          minLength: 1
+                          maxLength: 512
             status:
               type: object
               properties:
-                landingZoneReady:
-                  type: boolean
-                gatewayAddress:
-                  type: string
-                transportReady:
-                  type: boolean
-                peerCount:
+                site:
+                  type: object
+                  description: The attached site as resolved by the last provision.
+                  properties:
+                    name:
+                      type: string
+                    type:
+                      type: string
+                    evpn:
+                      type: boolean
+                  x-kubernetes-preserve-unknown-fields: true
+                peIndex:
                   type: integer
+                  description: >-
+                    The gateway's index in the fabric core (its loopback is loopbackPool + index; its node SID
+                    label is srgb.start + index).
+                loopback:
+                  type: string
+                  description: The gateway's provider-edge loopback address.
+                nodes:
+                  type: array
+                  description: State of the gateway instance on each border gateway node.
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      address:
+                        type: string
+                      ready:
+                        type: boolean
+                      siteSessions:
+                        type: integer
+                        description: Site BGP sessions established.
+                      coreSessions:
+                        type: integer
+                        description: VPNv4 sessions established.
+                      message:
+                        type: string
+                    x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
+                  description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
                   type: string
                 ready:
                   type: boolean
+                waitingFor:
+                  type: array
+                  description: What a pending gateway waits for.
+                  items:
+                    type: string
                 deletionComplete:
                   type: boolean
+                deletionBlockedBy:
+                  type: array
+                  items:
+                    type: string
                 lastReconciledAt:
                   type: string
                   format: date-time
@@ -100,7 +225,7 @@ spec:
                         type: string
                       status:
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   type: array
@@ -118,17 +243,22 @@ spec:
                         type: string
                       message:
                         type: string
-
               x-kubernetes-preserve-unknown-fields: true
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Cloud
+        - name: Fabric
           type: string
-          jsonPath: .spec.cloud
-        - name: Region
+          jsonPath: .spec.fabricRef.name
+        - name: Site
           type: string
-          jsonPath: .spec.region
+          jsonPath: .spec.cloudRef.name
+        - name: VLAN
+          type: integer
+          jsonPath: .spec.siteUnderlay.vlan
+        - name: Status
+          type: string
+          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready

@@ -49,6 +49,10 @@ CR_KINDS = [
     "hybridnetworks.hybridsovereign.redhat",
     "networkplacements.hybridsovereign.redhat",
     "uihealthcheckers.hybridsovereign.redhat",
+    # shc (P7.1, tenant DNS D1, P7.3.3)
+    "cloudinfrastructures.hybridsovereign.redhat",
+    "dnsconfigs.hybridsovereign.redhat",
+    "cloudvirts.hybridsovereign.redhat",
 ]
 
 

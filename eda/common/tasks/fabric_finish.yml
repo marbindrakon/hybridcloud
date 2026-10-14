@@ -1,0 +1,38 @@
+---
+# shc (design/P7-PLAN.md P7.3): final status of a fabric job (HybridFabric, CloudGateway, HybridNetwork,
+# NetworkPlacement, CloudVirt) through patch_cr_status.
+#   ready    the object is realized
+#   pending  it waits for something else (fab_waiting_for); the event completes and the operator publishes
+#            again on its reconcilePeriod
+#   failed   its spec can't be realized as written (fab_reason says why)
+# Included from a role (paths are role_path-relative).
+# inputs: fab_kind, fab_name, fab_namespace, fab_generation, fab_outcome (ready|pending|failed), fab_reason,
+#         fab_message; optional fab_waiting_for (list), fab_status (extra status fields, merged in)
+- name: "Set the {{ fab_kind }} status body"
+  ansible.builtin.set_fact:
+    _fab_now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+- name: "Write {{ fab_kind }} {{ fab_namespace }}/{{ fab_name }} status ({{ fab_outcome }})"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: "{{ fab_kind | lower | regex_replace('y$', 'ie') }}s"
+    cr_name: "{{ fab_name }}"
+    cr_namespace: "{{ fab_namespace }}"
+    patch_ignore_not_found: true
+    cr_status_body: >-
+      {{ {
+           'status': fab_outcome,
+           'ready': fab_outcome == 'ready',
+           'message': fab_message | string,
+           'waitingFor': (fab_waiting_for | default([])) if fab_outcome == 'pending' else [],
+           'lastReconciledAt': _fab_now,
+           'conditions': [{
+             'type': 'Ready',
+             'status': 'True' if fab_outcome == 'ready' else 'False',
+             'lastTransitionTime': _fab_now,
+             'reason': fab_reason,
+             'message': (fab_message | string)[:1000]
+           }]
+         } | combine({'observedGeneration': fab_generation | int} if fab_generation is defined else {})
+           | combine(fab_status | default({})) }}

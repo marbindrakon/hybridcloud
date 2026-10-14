@@ -50,7 +50,7 @@ spec:
                   description: URL to the entity's external website
                   type: string
                 namespaceRbac:
-                  description: Maps each named RBAC role to a list of Rbac CR names (14-role matrix)
+                  description: Maps each named RBAC role to a list of Rbac CR names
                   type: object
                   properties:
                     entityAdmin:
@@ -75,6 +75,26 @@ spec:
                         type: string
                     cloudOSOView:
                       description: View CloudOSO CRs and Rbac CRs
+                      type: array
+                      items:
+                        type: string
+                    cloudVirtAdmin:
+                      description: Create/edit/delete CloudVirt CRs; view Rbac CRs
+                      type: array
+                      items:
+                        type: string
+                    cloudVirtView:
+                      description: View CloudVirt CRs and Rbac CRs
+                      type: array
+                      items:
+                        type: string
+                    networkAdmin:
+                      description: Create/edit/delete HybridNetwork and NetworkPlacement CRs; view CloudOSO, CloudVirt and Rbac CRs
+                      type: array
+                      items:
+                        type: string
+                    networkView:
+                      description: View HybridNetwork, NetworkPlacement and Rbac CRs
                       type: array
                       items:
                         type: string

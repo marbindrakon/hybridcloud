@@ -1,0 +1,3 @@
+---
+# shc (design/P7-PLAN.md P7.3): namespace of the platform objects (HybridFabric, CloudGateway, CloudInfrastructure)
+fabric_platform_namespace: sovereign-cloud

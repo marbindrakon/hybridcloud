@@ -1,5 +1,26 @@
 ---
 - block:
+    # shc (P7.3.3): a fabric is deleted only after its gateways and the networks on it are gone
+    - name: Wait for the gateways and networks on this fabric to be deleted first
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: block_on_dependents
+      vars:
+        dependents_namespace: "{{ ansible_operator_meta.namespace }}"
+        dependents_all_namespaces: true
+        dependents_status:
+          apiVersion: hybridsovereign.redhat/v1alpha1
+          kind: HybridFabric
+          name: "{{ ansible_operator_meta.name }}"
+        dependent_checks:
+          - kind: CloudGateway
+            match: {"metadata.namespace": "{{ ansible_operator_meta.namespace }}", "spec.fabricRef.name": "{{ ansible_operator_meta.name }}"}
+          - kind: HybridNetwork
+            match: {"spec.fabricRef.name": "{{ ansible_operator_meta.name }}"}
+          # a network without fabricRef records the fabric it took by default
+          - kind: HybridNetwork
+            match: {"status.fabric": "{{ ansible_operator_meta.name }}"}
+
     - name: Get current timestamp
       ansible.builtin.set_fact:
         hybridfabric_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"

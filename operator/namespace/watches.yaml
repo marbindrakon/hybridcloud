@@ -165,3 +165,16 @@
   finalizer:
     name: hybridsovereign.redhat/networkplacement-cleanup
     role: networkplacement_delete
+
+# shc (P7.3.3): tenant VM environment on an OpenShift Virtualization site
+- version: v1alpha1
+  group: hybridsovereign.redhat
+  kind: CloudVirt
+  role: cloudvirt
+  maxConcurrentReconciles: 20
+  reconcilePeriod: 300s
+  watchDependentResources: false
+  watchAnnotationsChanges: true
+  finalizer:
+    name: hybridsovereign.redhat/cloudvirt-cleanup
+    role: cloudvirt_delete

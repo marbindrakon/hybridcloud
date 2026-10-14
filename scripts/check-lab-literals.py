@@ -22,6 +22,12 @@ SCOPE = [
     # P7.1: CloudInfrastructure
     "eda/rulebooks/roles/cloudinfrastructure_*/**/*.yml",
     "eda/rulebooks/roles/dnsconfig_*/**/*.yml",
+    # P7.3.3: fabric kinds
+    "eda/rulebooks/roles/hybridfabric_*/**/*.yml",
+    "eda/rulebooks/roles/cloudgateway_*/**/*.yml",
+    "eda/rulebooks/roles/hybridnetwork_*/**/*.yml",
+    "eda/rulebooks/roles/networkplacement_*/**/*.yml",
+    "eda/rulebooks/roles/cloudvirt_*/**/*.yml",
     "eda/rulebooks/roles/platformopenshift_teardown/**/*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/defaults/*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/tasks/openstack*.yml",

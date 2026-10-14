@@ -165,6 +165,98 @@ controller_templates:
     ask_variables_on_launch: true
     credentials:
       - sovereign-vault-admin-credential
+  # shc (design/P7-PLAN.md P7.3.3): fabric kinds, launched by the fabric-events activation; de-cloudoso has
+  # kubernetes.core, openstacksdk and an SSH client for the border gateway nodes
+  - name: hybridfabric-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/hybridfabric-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: hybridfabric-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/hybridfabric-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: cloudgateway-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudgateway-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: cloudgateway-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudgateway-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: hybridnetwork-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/hybridnetwork-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: hybridnetwork-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/hybridnetwork-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: networkplacement-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/networkplacement-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: networkplacement-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/networkplacement-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: cloudvirt-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudvirt-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: cloudvirt-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudvirt-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
   - name: platformopenshift-provision
     organization: sovereign
     project: sovereign-eda-project

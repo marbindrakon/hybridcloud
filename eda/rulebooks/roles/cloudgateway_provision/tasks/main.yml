@@ -1,83 +1,157 @@
 ---
+# shc (design/P7-PLAN.md P7.3.3, §12.3): CloudGateway provision. Resolves the fabric and the site, validates the
+# gateway against them and the fabric's other gateways, and records the site. Realizing it (the gateway instance
+# on every border gateway node, the site's VTEP side) is P7.3.5; until then it ends pending: on the fabric or the
+# site while those aren't ready, else with reason NotImplemented.
 - block:
-    - name: Parse event payload
+    - name: Read the CloudGateway
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: Start with nothing to wait for
       ansible.builtin.set_fact:
-        cloudgateway_cr_name: "{{ event_payload.regarding.name }}"
-        cloudgateway_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        cloudgateway_spec: "{{ event_payload.note | from_json }}"
+        cg_waiting: []
+        cg_reason: WaitingForDependencies
+        cg_fabric_name: "{{ fab_spec.fabricRef.name }}"
+        cg_site_name: "{{ fab_spec.cloudRef.name }}"
 
-    - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+    - name: Refuse transports other than none
+      ansible.builtin.set_fact:
+        fab_fail_reason: TransportNotSupported
+        fab_fail_msg: >-
+          CloudGateway {{ fab_name }}: transport {{ fab_spec.transport }} is not supported yet (only none, a site
+          underlay trunked to the border gateway nodes)
+      when: (fab_spec.transport | default('none')) != 'none'
 
-    - name: Stub debug for CloudGateway
-      ansible.builtin.debug:
-        msg: "Stub provision CloudGateway/{{ cloudgateway_cr_name }} in {{ cloudgateway_cr_namespace }}"
+    - name: Stop on an unsupported transport
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: (fab_spec.transport | default('none')) != 'none'
 
-    - name: Read CR generation
+    - name: Read the fabric
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ cg_fabric_name }}"
+        namespace: "{{ fab_namespace }}"
+      register: _cg_fabric
+
+    - name: Set the fabric facts
+      ansible.builtin.set_fact:
+        cg_fabric: "{{ (_cg_fabric.resources | default([{}], true))[0] }}"
+        cg_fabric_found: "{{ _cg_fabric.resources | default([]) | length > 0 }}"
+
+    - name: Wait for a missing fabric
+      ansible.builtin.set_fact:
+        cg_waiting: "{{ cg_waiting + ['HybridFabric ' ~ cg_fabric_name ~ ' (not found)'] }}"
+      when: not cg_fabric_found
+
+    - name: Resolve the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ cg_site_name }}"
+        ci_ref_namespace: "{{ fab_namespace }}"
+
+    - name: Wait for a missing or unusable site
+      ansible.builtin.set_fact:
+        cg_waiting: "{{ cg_waiting + [ci_error | trim] }}"
+      when: ci_error | trim | length > 0
+
+    - name: Wait for the site's EVPN capability
+      ansible.builtin.set_fact:
+        cg_waiting: "{{ cg_waiting + ['CloudInfrastructure ' ~ cg_site_name ~ ': evpn capability'] }}"
+        cg_reason: SiteNotEvpnCapable
+      when:
+        - ci_error | trim | length == 0
+        - not (ci_capabilities.evpn | default(false) | bool)
+
+    - name: List the platform's gateways
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
         api_version: hybridsovereign.redhat/v1alpha1
         kind: CloudGateway
-        name: "{{ cloudgateway_cr_name }}"
-        namespace: "{{ cloudgateway_cr_namespace }}"
-      register: cloudgateway_cr_lookup
+        namespace: "{{ fab_namespace }}"
+      register: _cg_all
 
-    - name: Set generation fact
-      ansible.builtin.set_fact:
-        cloudgateway_generation: "{{ cloudgateway_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
-
-    - name: Get timestamp
-      ansible.builtin.set_fact:
-        cloudgateway_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-
-    - name: Mark CloudGateway ready (stub)
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+    - name: Check the gateway against the fabric and the other gateways
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: cloudgateways
-        cr_name: "{{ cloudgateway_cr_name }}"
-        cr_namespace: "{{ cloudgateway_cr_namespace }}"
-        cr_status_body:
-          status: ready
-          ready: true
-          message: "Stub provisioned by EDA hybridvpc (no infra changes)"
-          lastReconciledAt: "{{ cloudgateway_status_transition_time }}"
-          observedGeneration: "{{ cloudgateway_generation }}"
-          landingZoneReady: true
-          transportReady: true
-          peerCount: 0
-          gatewayAddress: "127.0.0.1"
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ cloudgateway_status_transition_time }}"
-              reason: EDASucceeded
-              message: Stub provision complete
+        fab_check:
+          action: check-gateway
+          fabric: "{{ cg_fabric.spec | default({}) }}"
+          gateway: "{{ fab_spec }}"
+          others: >-
+            {{ _cg_all.resources | default([]) | rejectattr('metadata.name', 'equalto', fab_name)
+               | rejectattr('metadata.deletionTimestamp', 'defined') | list }}
+      when: cg_fabric_found
+
+    - name: Refuse an invalid gateway
+      ansible.builtin.set_fact:
+        fab_fail_reason: InvalidSpec
+        fab_fail_msg: "CloudGateway {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+      when: cg_fabric_found and fab_check_result.errors | length > 0
+
+    - name: Stop on an invalid gateway
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: cg_fabric_found and fab_check_result.errors | length > 0
+
+    - name: Wait for the fabric to be ready
+      ansible.builtin.set_fact:
+        cg_waiting: >-
+          {{ cg_waiting + ['HybridFabric ' ~ cg_fabric_name ~ ' (' ~ ((cg_fabric.status | default({}, true)).status
+             | default('not provisioned', true)) ~ ')'] }}
+      when:
+        - cg_fabric_found
+        - not ((cg_fabric.status | default({}, true)).ready | default(false) | bool)
+
+    - name: Set the site status
+      ansible.builtin.set_fact:
+        cg_status:
+          site:
+            name: "{{ cg_site_name }}"
+            type: "{{ ci_type }}"
+            evpn: "{{ ci_capabilities.evpn | default(false) | bool }}"
+
+    - name: Report what the gateway waits for
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: "{{ cg_reason }}"
+        fab_message: "Waiting for {{ cg_waiting | join('; ') }}"
+        fab_waiting_for: "{{ cg_waiting }}"
+        fab_status: "{{ cg_status }}"
+      when: cg_waiting | length > 0
+
+    - name: End the job while waiting
+      ansible.builtin.meta: end_play
+      when: cg_waiting | length > 0
+
+    # P7.3.5 replaces this with the gateway instances on the border gateway nodes
+    - name: Report the gateway validated, not realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: NotImplemented
+        fab_message: Spec valid, fabric and site ready; configuring the gateway instances is not implemented yet
+        fab_waiting_for: [implementation]
+        fab_status: "{{ cg_status }}"
 
   rescue:
-    - name: Mark CloudGateway failed
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+    - name: Mark the CloudGateway failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: cloudgateways
-        cr_name: "{{ cloudgateway_cr_name }}"
-        cr_namespace: "{{ cloudgateway_cr_namespace }}"
-        cr_status_body:
-          status: failed
-          ready: false
-          message: "{{ ansible_failed_result.msg | default('EDA stub provision failed') }}"
-          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          conditions:
-            - type: Ready
-              status: "False"
-              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
-              message: "{{ ansible_failed_result.msg | default('EDA stub provision failed') }}"
+        fab_outcome: failed
+        fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
+        fab_message: >-
+          {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('CloudGateway provision failed') }}
+      when: fab_name is defined and services_api_host is defined
       ignore_errors: true
-      when: services_api_host is defined and services_bearer_token is defined
 
     - name: Re-raise
       ansible.builtin.fail:
-        msg: "CloudGateway {{ cloudgateway_cr_name | default('unknown') }} stub provision failed"
+        msg: "CloudGateway {{ fab_name | default('unknown') }} provision failed: {{ fab_fail_reason | default('ProvisionFailed') }}"

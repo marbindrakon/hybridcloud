@@ -21,7 +21,10 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
-          description: Tenant hybrid network identity for Hybrid VPC.
+          description: >-
+            A tenant's routed private network across cloud sites: one isolated routing domain (VRF) on the
+            platform's HybridFabric. NetworkPlacements put it on cloud environments (CloudOSO, CloudVirt); every
+            placement's subnets can reach every other placement's subnets of the same network, and nothing else.
           type: object
           properties:
             apiVersion:
@@ -36,43 +39,71 @@ spec:
                 description:
                   type: string
                   maxLength: 512
+                fabricRef:
+                  type: object
+                  description: >-
+                    The HybridFabric (platform namespace) the network uses. Default: the platform's only fabric.
+                    Immutable once set.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.fabricRef is immutable
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                mtu:
+                  type: integer
+                  minimum: 1280
+                  maximum: 9216
+                  description: >-
+                    MTU of the network as its workloads see it. Default and maximum: the fabric's overlayMtu. A site
+                    whose networks cannot reach it gets that site's maximum instead (shown on the placement).
                 networkViewerRbac:
                   type: array
+                  description: Rbac CR names whose groups can view this network and its placements.
                   items:
                     type: string
+              x-kubernetes-validations:
+                - rule: has(self.fabricRef) || !has(oldSelf.fabricRef)
+                  message: spec.fabricRef cannot be removed
             status:
               type: object
               properties:
                 entity:
                   type: string
-                billingId:
-                  type: string
-                networkId:
-                  type: string
-                vni:
-                  type: integer
-                vrfName:
-                  type: string
-                canonicalRt:
-                  type: string
                 fabric:
                   type: string
+                  description: The HybridFabric in use.
+                vpnTarget:
+                  type: string
+                  description: The network's VPN route target between the gateways (asn:value).
+                mtu:
+                  type: integer
+                  description: Effective MTU.
                 placementCount:
                   type: integer
                 placementsReady:
                   type: integer
-                allocated:
-                  type: boolean
-                fabricVniReady:
-                  type: boolean
                 status:
                   type: string
+                  description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
                   type: string
                 ready:
                   type: boolean
+                waitingFor:
+                  type: array
+                  description: What a pending network waits for.
+                  items:
+                    type: string
                 deletionComplete:
                   type: boolean
+                deletionBlockedBy:
+                  type: array
+                  items:
+                    type: string
                 lastReconciledAt:
                   type: string
                   format: date-time
@@ -94,7 +125,7 @@ spec:
                         type: string
                       status:
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   type: array
@@ -112,17 +143,22 @@ spec:
                         type: string
                       message:
                         type: string
-
               x-kubernetes-preserve-unknown-fields: true
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Entity
+        - name: Fabric
           type: string
-          jsonPath: .status.entity
-        - name: VNI
+          jsonPath: .status.fabric
+        - name: MTU
           type: integer
-          jsonPath: .status.vni
+          jsonPath: .status.mtu
+        - name: Placements
+          type: integer
+          jsonPath: .status.placementCount
+        - name: Status
+          type: string
+          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready

@@ -62,3 +62,8 @@ pluginConfigs:
 # shc (design/P7-PLAN.md P7.1): platform cloud sites (templates/cloud-infrastructures.yaml), keyed by name,
 # each {spec: <CloudInfrastructure spec>} (enabled: false skips one). Registered in `namespace`.
 cloudInfrastructures: {}
+
+# shc (design/P7-PLAN.md P7.3.3): the platform's network fabric (templates/hybrid-fabrics.yaml) and its site
+# gateways (templates/cloud-gateways.yaml), keyed by name, each {spec: ...} (enabled: false skips one).
+hybridFabrics: {}
+cloudGateways: {}

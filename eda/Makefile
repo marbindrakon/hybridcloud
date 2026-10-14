@@ -22,7 +22,7 @@ help: ## Show this help
 # ─── Activation Management ────────────────────────────────────────────────────
 
 .PHONY: activations-create
-activations-create: ## Create all 34 EDA rulebook activations
+activations-create: ## Create all EDA rulebook activations
 	$(MANAGE) create $(MANAGE_ARGS) --event-stream $(EVENT_STREAM_NAME)
 
 .PHONY: activations-delete

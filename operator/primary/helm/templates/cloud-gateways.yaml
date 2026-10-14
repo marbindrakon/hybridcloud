@@ -1,0 +1,20 @@
+{{- /*
+shc (design/P7-PLAN.md P7.3.3): the platform's CloudGateways (one per EVPN site) in the platform namespace, keyed
+by name, each {spec: <CloudGateway spec>} (enabled: false skips one). Removing one deletes it; its finalizer
+waits until no NetworkPlacement uses it.
+*/}}
+{{- range $name, $g := .Values.cloudGateways }}
+{{- if ne (toString $g.enabled) "false" }}
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudGateway
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  {{- toYaml $g.spec | nindent 2 }}
+{{- end }}
+{{- end }}

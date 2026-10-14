@@ -1,0 +1,11 @@
+# Sample CloudVirt: a VM environment of acme-corp on the OpenShift Virtualization site "virt-site".
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudVirt
+metadata:
+  name: dev
+  namespace: entity-acme-corp
+spec:
+  cloudRef: {name: virt-site}
+  quota: {cpu: 16, memory: 64Gi, storage: 1Ti, virtualMachines: 20}
+  toolRbac:
+    editRbac: [acme-platform-admins]

@@ -1,0 +1,111 @@
+---
+# shc (design/P7-PLAN.md P7.3.3): one activation for the fabric kinds instead of a create and a delete activation
+# per kind. Each operator event goes to its kind's provision or teardown job template. run_job_template waits for
+# its job, and a sequential ruleset would queue every fabric event behind the slowest job: the ruleset runs its
+# actions in parallel. Changes to the border gateway nodes are serialized by the jobs themselves.
+- name: Fabric Events Rulebook
+  hosts: all
+  execution_strategy: parallel
+  sources:
+    - ansible.eda.kafka:
+        host: "{{ KAFKA_HOST }}"
+        port: "{{ KAFKA_PORT }}"
+        topic: hybridsovereign-events
+        group_id: eda-fabric-events
+        security_protocol: SASL_SSL
+        sasl_mechanism: SCRAM-SHA-512
+        sasl_plain_username: "{{ KAFKA_USERNAME }}"
+        sasl_plain_password: "{{ KAFKA_PASSWORD }}"
+        check_hostname: true
+        verify_mode: CERT_REQUIRED
+  rules:
+    - name: HybridFabric create or reconcile
+      condition: event.body.payload.regarding.kind == "HybridFabric" and event.body.payload.reason in ["HybridFabricCreateRequested", "HybridFabricReconcileRequested"]
+      action:
+        run_job_template:
+          name: hybridfabric-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: HybridFabric delete
+      condition: event.body.payload.regarding.kind == "HybridFabric" and event.body.payload.reason == "HybridFabricDeleteRequested"
+      action:
+        run_job_template:
+          name: hybridfabric-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: CloudGateway create or reconcile
+      condition: event.body.payload.regarding.kind == "CloudGateway" and event.body.payload.reason in ["CloudGatewayCreateRequested", "CloudGatewayReconcileRequested"]
+      action:
+        run_job_template:
+          name: cloudgateway-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: CloudGateway delete
+      condition: event.body.payload.regarding.kind == "CloudGateway" and event.body.payload.reason == "CloudGatewayDeleteRequested"
+      action:
+        run_job_template:
+          name: cloudgateway-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: HybridNetwork create or reconcile
+      condition: event.body.payload.regarding.kind == "HybridNetwork" and event.body.payload.reason in ["HybridNetworkCreateRequested", "HybridNetworkReconcileRequested"]
+      action:
+        run_job_template:
+          name: hybridnetwork-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: HybridNetwork delete
+      condition: event.body.payload.regarding.kind == "HybridNetwork" and event.body.payload.reason == "HybridNetworkDeleteRequested"
+      action:
+        run_job_template:
+          name: hybridnetwork-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: NetworkPlacement create or reconcile
+      condition: event.body.payload.regarding.kind == "NetworkPlacement" and event.body.payload.reason in ["NetworkPlacementCreateRequested", "NetworkPlacementReconcileRequested"]
+      action:
+        run_job_template:
+          name: networkplacement-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: NetworkPlacement delete
+      condition: event.body.payload.regarding.kind == "NetworkPlacement" and event.body.payload.reason == "NetworkPlacementDeleteRequested"
+      action:
+        run_job_template:
+          name: networkplacement-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: CloudVirt create or reconcile
+      condition: event.body.payload.regarding.kind == "CloudVirt" and event.body.payload.reason in ["CloudVirtCreateRequested", "CloudVirtReconcileRequested"]
+      action:
+        run_job_template:
+          name: cloudvirt-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: CloudVirt delete
+      condition: event.body.payload.regarding.kind == "CloudVirt" and event.body.payload.reason == "CloudVirtDeleteRequested"
+      action:
+        run_job_template:
+          name: cloudvirt-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"

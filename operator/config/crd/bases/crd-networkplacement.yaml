@@ -21,8 +21,14 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
-          description: Places a HybridNetwork onto a cloud backend.
+          description: >-
+            Places a HybridNetwork on one cloud environment of the same Entity: a CloudOSO (an OpenStack project)
+            or a CloudVirt (OpenShift Virtualization). The platform creates the network there with the given
+            subnets and connects it, through the site's CloudGateway, to the network's other placements. The
+            environment's site must offer EVPN and have a CloudGateway.
           type: object
+          required:
+            - spec
           properties:
             apiVersion:
               type: string
@@ -32,78 +38,123 @@ spec:
               type: object
             spec:
               type: object
+              required: [network, backend, prefixes]
+              x-kubernetes-validations:
+                - rule: "!has(self.vmNamespaces) || self.backend.kind == 'CloudVirt'"
+                  message: vmNamespaces applies to CloudVirt placements only
               properties:
                 network:
                   type: string
+                  minLength: 1
+                  maxLength: 253
+                  description: The HybridNetwork (this namespace) to place. Immutable.
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.network is immutable
                 backend:
                   type: object
+                  description: The cloud environment (this namespace) the network is placed on. Immutable.
                   required: [kind, name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.backend is immutable
                   properties:
                     kind:
                       type: string
-                      enum: [CloudAWS, CloudOSO, PlatformOpenshift]
+                      enum: [CloudOSO, CloudVirt]
                     name:
                       type: string
+                      minLength: 1
+                      maxLength: 253
                 prefixes:
                   type: array
+                  description: >-
+                    IPv4 subnets of the network at this placement. They must not overlap the network's other
+                    placements or the site's own networks. The first usable address of each is the gateway.
+                    Immutable.
+                  minItems: 1
+                  maxItems: 16
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.prefixes is immutable
                   items:
                     type: string
-                state:
-                  type: string
-                  enum: [present, absent]
-                  default: present
+                    maxLength: 43
+                    x-kubernetes-validations:
+                      - rule: isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked()
+                        message: each prefix must be an IPv4 network prefix (host bits zero)
+                      - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 29)"
+                        message: prefix length must be between 8 and 29
+                vmNamespaces:
+                  type: array
+                  description: >-
+                    CloudVirt only: namespaces created for VMs on this network on the CloudVirt's cluster; each
+                    namespace is on exactly one network. Default: one namespace named <entity>-<cloudvirt>-<network>
+                    (cut to 63 characters).
+                  maxItems: 8
+                  x-kubernetes-list-type: set
+                  items:
+                    type: string
+                    maxLength: 63
+                    pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
             status:
               type: object
               properties:
                 entity:
                   type: string
-                networkId:
+                site:
                   type: string
-                targetBackend:
+                  description: The CloudInfrastructure the backend runs on.
+                cloudGateway:
                   type: string
-                vni:
+                  description: The CloudGateway that connects this placement.
+                l3Vni:
                   type: integer
-                vrfName:
-                  type: string
-                canonicalRt:
-                  type: string
-                backendRt:
-                  type: string
-                rtStrategy:
-                  type: string
-                domainAsn:
+                  description: The placement's IP-VRF VNI inside its site.
+                l2Vni:
                   type: integer
+                  description: The placement's MAC-VRF VNI inside its site (CloudVirt).
+                vpnTarget:
+                  type: string
+                mtu:
+                  type: integer
+                  description: Effective MTU at this placement.
+                realizedPrefixes:
+                  type: array
+                  items:
+                    type: string
+                namespaces:
+                  type: array
+                  description: CloudVirt VM namespaces of this placement.
+                  items:
+                    type: string
                 backendReady:
                   type: boolean
-                prerequisiteReady:
-                  type: boolean
-                fabricApplied:
-                  type: boolean
-                backendApplied:
+                gatewayReady:
                   type: boolean
                 validated:
                   type: boolean
                 lastValidatedAt:
                   type: string
                   format: date-time
-                realizedPrefixes:
-                  type: array
-                  items:
-                    type: string
-                microNvaName:
-                  type: string
-                cloudGatewayRef:
-                  type: string
-                transportLinkRef:
-                  type: string
                 status:
                   type: string
+                  description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
                   type: string
                 ready:
                   type: boolean
+                waitingFor:
+                  type: array
+                  description: What a pending placement waits for.
+                  items:
+                    type: string
                 deletionComplete:
                   type: boolean
+                deletionBlockedBy:
+                  type: array
+                  items:
+                    type: string
                 lastReconciledAt:
                   type: string
                   format: date-time
@@ -125,7 +176,7 @@ spec:
                         type: string
                       status:
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   type: array
@@ -143,7 +194,6 @@ spec:
                         type: string
                       message:
                         type: string
-
               x-kubernetes-preserve-unknown-fields: true
       subresources:
         status: {}
@@ -154,6 +204,15 @@ spec:
         - name: Backend
           type: string
           jsonPath: .spec.backend.kind
+        - name: Name
+          type: string
+          jsonPath: .spec.backend.name
+        - name: Site
+          type: string
+          jsonPath: .status.site
+        - name: Status
+          type: string
+          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready

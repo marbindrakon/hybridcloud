@@ -40,7 +40,10 @@
         nudge_targets:
           - kind: "{{ _hybridsovereign_redhat_networkplacement.spec.backend.kind | default('CloudOSO') }}"
             name: "{{ _hybridsovereign_redhat_networkplacement.spec.backend.name | default('') }}"
+          - kind: HybridNetwork
+            name: "{{ _hybridsovereign_redhat_networkplacement.spec.network | default('') }}"
       when: _hybridsovereign_redhat_networkplacement.status.deletionComplete | default(false) | bool
+
     - name: Exit cleanly when EDA completed deletion
       ansible.builtin.meta: end_host
       when: _hybridsovereign_redhat_networkplacement.status.deletionComplete | default(false) | bool

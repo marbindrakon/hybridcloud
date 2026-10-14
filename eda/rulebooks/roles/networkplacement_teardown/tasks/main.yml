@@ -1,46 +1,43 @@
 ---
+# shc (design/P7-PLAN.md P7.3.3): NetworkPlacement teardown. The operator's finalizer has already waited for the objects that
+# depend on this one. Nothing is realized yet, so the job confirms the CR and marks deletionComplete; removing
+# the backend network, the gateway VRFs and the VNIs (P7.3.8) comes with the step that creates it.
 - block:
-    - name: Parse event payload
-      ansible.builtin.set_fact:
-        networkplacement_cr_name: "{{ event_payload.regarding.name }}"
-        networkplacement_cr_namespace: "{{ event_payload.regarding.namespace }}"
-
-    - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
-
-    - name: Stub debug teardown for NetworkPlacement
-      ansible.builtin.debug:
-        msg: "Stub teardown NetworkPlacement/{{ networkplacement_cr_name }}"
+    - name: Read the NetworkPlacement
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: networkplacements
-        cr_name: "{{ networkplacement_cr_name }}"
-        cr_namespace: "{{ networkplacement_cr_namespace }}"
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
         cr_status_body:
           status: ready
-          ready: true
+          ready: false
           deletionComplete: true
-          message: "Stub deleted by EDA hybridvpc"
+          message: Deleted
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
   rescue:
-    - name: Mark teardown failed
+    - name: Mark the NetworkPlacement teardown failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: networkplacements
-        cr_name: "{{ networkplacement_cr_name }}"
-        cr_namespace: "{{ networkplacement_cr_namespace }}"
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
         cr_status_body:
           status: failed
           ready: false
-          message: "{{ ansible_failed_result.msg | default('EDA stub teardown failed') }}"
+          message: "{{ ansible_failed_result.msg | default('NetworkPlacement teardown failed') }}"
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+      when: fab_name is defined and services_api_host is defined
       ignore_errors: true
-      when: services_api_host is defined
 
     - name: Re-raise
       ansible.builtin.fail:
-        msg: "NetworkPlacement teardown stub failed"
+        msg: "NetworkPlacement {{ fab_name | default('unknown') }} teardown failed"

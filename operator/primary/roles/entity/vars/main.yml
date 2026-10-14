@@ -1,5 +1,5 @@
 ---
-# Canonical 14-role permission matrix for entity namespace RBAC.
+# Canonical permission matrix (18 roles) for entity namespace RBAC.
 # Each entry maps a spec.namespaceRbac key to a K8s Role name and its rules.
 # crud_resources: get/list/watch/create/update/patch/delete + status read
 # read_resources: get/list/watch + status read only
@@ -12,6 +12,9 @@ entity_named_roles:
     role_name: entity-admin
     crud_resources:
       - cloudosos
+      - cloudvirts
+      - hybridnetworks
+      - networkplacements
       - cloudawss
       - platformopenshifts
       - vaultkvs
@@ -29,6 +32,9 @@ entity_named_roles:
     crud_resources: []
     read_resources:
       - cloudosos
+      - cloudvirts
+      - hybridnetworks
+      - networkplacements
       - cloudawss
       - platformopenshifts
       - vaultkvs
@@ -45,6 +51,9 @@ entity_named_roles:
     crud_resources: []
     read_resources:
       - cloudosos
+      - cloudvirts
+      - hybridnetworks
+      - networkplacements
       - cloudawss
       - platformopenshifts
       - vaultkvs
@@ -65,6 +74,26 @@ entity_named_roles:
     role_name: cloudoso-view
     crud_resources: []
     read_resources: [cloudosos, rbacs]
+
+  - spec_key: cloudVirtAdmin
+    role_name: cloudvirt-admin
+    crud_resources: [cloudvirts]
+    read_resources: [rbacs]
+
+  - spec_key: cloudVirtView
+    role_name: cloudvirt-view
+    crud_resources: []
+    read_resources: [cloudvirts, rbacs]
+
+  - spec_key: networkAdmin
+    role_name: network-admin
+    crud_resources: [hybridnetworks, networkplacements]
+    read_resources: [cloudosos, cloudvirts, rbacs]
+
+  - spec_key: networkView
+    role_name: network-view
+    crud_resources: []
+    read_resources: [hybridnetworks, networkplacements, rbacs]
 
   - spec_key: cloudAWSAdmin
     role_name: cloudaws-admin

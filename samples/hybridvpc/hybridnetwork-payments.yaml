@@ -1,3 +1,4 @@
+# Sample HybridNetwork: a routed private network of the Entity acme-corp on the platform's fabric.
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: HybridNetwork
 metadata:
@@ -5,3 +6,4 @@ metadata:
   namespace: entity-acme-corp
 spec:
   description: Application payments tier hybrid network
+  mtu: 9000

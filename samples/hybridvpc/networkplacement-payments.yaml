@@ -1,0 +1,21 @@
+# Sample NetworkPlacements: payments-vpc on a VM environment (CloudVirt) and on an OpenStack project (CloudOSO).
+# VMs on 10.50.0.0/24 and 10.50.1.0/24 reach each other through the sites' CloudGateways.
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: NetworkPlacement
+metadata:
+  name: payments-dev-virt
+  namespace: entity-acme-corp
+spec:
+  network: payments-vpc
+  backend: {kind: CloudVirt, name: dev}
+  prefixes: [10.50.0.0/24]
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: NetworkPlacement
+metadata:
+  name: payments-dev-openstack
+  namespace: entity-acme-corp
+spec:
+  network: payments-vpc
+  backend: {kind: CloudOSO, name: acme-dev-openstack}
+  prefixes: [10.50.1.0/24]

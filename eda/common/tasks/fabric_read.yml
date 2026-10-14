@@ -1,0 +1,64 @@
+---
+# shc (design/P7-PLAN.md P7.3): start of a fabric job. Parses the event, connects to the services API and reads
+# the live CR (the event's spec copy can be stale). Ends the job when the CR is gone. With fab_read_entity, also
+# reads the namespace's Entity label (tenant kinds). Included from a role (paths are role_path-relative).
+# Sets: fab_kind, fab_name, fab_namespace, fab_obj, fab_spec, fab_st (current status), fab_generation,
+#       fab_deleting, fab_entity ('' for platform kinds).
+- name: Parse the event
+  ansible.builtin.set_fact:
+    fab_kind: "{{ event_payload.regarding.kind }}"
+    fab_name: "{{ event_payload.regarding.name }}"
+    fab_namespace: "{{ event_payload.regarding.namespace }}"
+    fab_entity: ""
+
+- name: Resolve services cluster API connection from Vault
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+  when: services_api_host is not defined or services_bearer_token is not defined
+
+- name: "Read {{ fab_kind }} {{ fab_namespace }}/{{ fab_name }}"
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ fab_kind }}"
+    name: "{{ fab_name }}"
+    namespace: "{{ fab_namespace }}"
+  register: _fab_read
+
+- name: "End the job: {{ fab_kind }} {{ fab_namespace }}/{{ fab_name }} no longer exists"
+  ansible.builtin.meta: end_play
+  when: _fab_read.resources | default([]) | length == 0
+
+- name: Set the CR facts
+  ansible.builtin.set_fact:
+    fab_obj: "{{ _fab_read.resources[0] }}"
+    fab_spec: "{{ _fab_read.resources[0].spec | default({}, true) }}"
+    fab_st: "{{ _fab_read.resources[0].status | default({}, true) }}"
+    fab_generation: "{{ _fab_read.resources[0].metadata.generation | default(0) | int }}"
+    fab_deleting: "{{ _fab_read.resources[0].metadata.deletionTimestamp is defined }}"
+
+- name: Read the Entity of the namespace
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: v1
+    kind: Namespace
+    name: "{{ fab_namespace }}"
+  register: _fab_ns
+  when: fab_read_entity | default(false) | bool
+
+- name: Require an Entity namespace
+  ansible.builtin.set_fact:
+    fab_entity: >-
+      {{ ((((_fab_ns.resources | default([{}], true))[0].metadata | default({}, true)).labels | default({}, true))
+          .get('hybridsovereign.redhat/entity', '')) }}
+  when: fab_read_entity | default(false) | bool
+
+- name: Fail outside an Entity namespace
+  ansible.builtin.fail:
+    msg: "{{ fab_kind }} {{ fab_name }}: namespace {{ fab_namespace }} has no hybridsovereign.redhat/entity label"
+  when:
+    - fab_read_entity | default(false) | bool
+    - fab_entity | length == 0

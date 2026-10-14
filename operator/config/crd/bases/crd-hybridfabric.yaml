@@ -21,8 +21,15 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
-          description: Platform EVPN fabric configuration for Hybrid VPC.
+          description: >-
+            Platform-owned network fabric that connects tenant networks across cloud sites. Every site keeps its
+            own EVPN-VXLAN domain; a CloudGateway per site terminates it on the border gateway nodes, and the
+            gateways exchange tenant routes as an MPLS L3VPN (VPNv4) over a core that is local to each node. The
+            fabric holds the numbering (VNI and route target pools), the border gateway nodes and the core
+            settings; tenants reference it from their HybridNetworks.
           type: object
+          required:
+            - spec
           properties:
             apiVersion:
               type: string
@@ -32,76 +39,261 @@ spec:
               type: object
             spec:
               type: object
+              required: [domainAsn, overlayMtu, vniPool, l2vniPool, vpnTargetPool, borderGateway, core]
+              x-kubernetes-validations:
+                - rule: >-
+                    self.vniPool.end < self.l2vniPool.start || self.l2vniPool.end < self.vniPool.start
+                  message: vniPool and l2vniPool must not overlap
+                - rule: >-
+                    (self.vpnTargetPool.end < self.vniPool.start || self.vniPool.end < self.vpnTargetPool.start)
+                    && (self.vpnTargetPool.end < self.l2vniPool.start || self.l2vniPool.end < self.vpnTargetPool.start)
+                  message: vpnTargetPool must not overlap vniPool or l2vniPool
               properties:
-                enabled:
-                  type: boolean
-                  default: false
                 domainAsn:
                   type: integer
                   minimum: 1
                   maximum: 4294967295
-                routeReflectors:
-                  type: array
-                  items:
-                    type: object
-                    required: [name, address]
-                    properties:
-                      name:
-                        type: string
-                      address:
-                        type: string
+                  description: >-
+                    BGP AS number of the fabric: the sites' EVPN sessions, the cloud gateways and the border
+                    gateway all use it. Immutable.
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.domainAsn is immutable
+                overlayMtu:
+                  type: integer
+                  minimum: 1280
+                  maximum: 9216
+                  description: >-
+                    Largest MTU a tenant network on this fabric can offer its workloads, and the default for new
+                    networks. Every site underlay and the border gateway trunk must carry overlayMtu + 50 bytes
+                    (VXLAN encapsulation).
                 vniPool:
                   type: object
+                  description: >-
+                    VNIs for the IP-VRFs (layer 3 VNI) of network placements, one per placement. A VNI is only
+                    meaningful inside its site's EVPN domain. A pool change that would drop allocated numbers is
+                    refused.
                   required: [start, end]
+                  x-kubernetes-validations:
+                    - rule: self.start <= self.end
+                      message: start must not exceed end
                   properties:
                     start:
                       type: integer
+                      minimum: 1
+                      maximum: 16777215
                     end:
                       type: integer
+                      minimum: 1
+                      maximum: 16777215
+                l2vniPool:
+                  type: object
+                  description: >-
+                    VNIs for the MAC-VRFs (layer 2 VNI) of network placements that need one (OpenShift
+                    Virtualization sites), one per placement.
+                  required: [start, end]
+                  x-kubernetes-validations:
+                    - rule: self.start <= self.end
+                      message: start must not exceed end
+                  properties:
+                    start:
+                      type: integer
+                      minimum: 1
+                      maximum: 16777215
+                    end:
+                      type: integer
+                      minimum: 1
+                      maximum: 16777215
+                vpnTargetPool:
+                  type: object
+                  description: >-
+                    Values for the VPN route targets (domainAsn:value) between the gateways, one per HybridNetwork.
+                    Kept apart from the VNI pools so a network's VPN route target never equals a site route
+                    target.
+                  required: [start, end]
+                  x-kubernetes-validations:
+                    - rule: self.start <= self.end
+                      message: start must not exceed end
+                  properties:
+                    start:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
+                    end:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
                 borderGateway:
                   type: object
+                  description: >-
+                    The border gateway nodes: Linux hosts that run the platform's routing instances. Each
+                    CloudGateway runs one instance on every node, and every node is a complete path between the
+                    sites, so the fabric keeps working while a node is down.
+                  required: [nodes, trunkInterface, credentialsRef]
                   properties:
-                    name:
+                    nodes:
+                      type: array
+                      minItems: 1
+                      maxItems: 8
+                      x-kubernetes-list-type: map
+                      x-kubernetes-list-map-keys: [name]
+                      items:
+                        type: object
+                        required: [name, address]
+                        properties:
+                          name:
+                            type: string
+                            maxLength: 63
+                            pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                            description: Node name, referenced by the CloudGateway site addresses.
+                          address:
+                            type: string
+                            maxLength: 253
+                            description: Management address or host name the platform reaches the node at (SSH).
+                    trunkInterface:
                       type: string
-                    loopback:
+                      maxLength: 15
+                      description: Host interface (bond or NIC) on every node that carries the sites' underlay VLANs.
+                    sshUser:
                       type: string
-                    vaultCredentialRef:
-                      type: string
-                transportDefaults:
+                      maxLength: 32
+                      default: root
+                      description: Login user on the nodes (needs passwordless sudo when not root).
+                    credentialsRef:
+                      type: object
+                      description: Vault KV path holding the SSH private key for the nodes (key ssh_private_key).
+                      required: [vaultPath]
+                      properties:
+                        vaultPath:
+                          type: string
+                          minLength: 1
+                          maxLength: 512
+                core:
                   type: object
+                  description: >-
+                    The MPLS core between the cloud gateways and the border gateway on each node: IS-IS with
+                    segment routing for the transport labels and iBGP VPNv4 for tenant routes, with the border
+                    gateway as route reflector. Each node's core is local to it, so every node uses the same
+                    addresses.
+                  required: [loopbackPool, linkSubnet]
                   properties:
-                    mtu:
-                      type: integer
-                      default: 9000
-                    innerMssClamp:
-                      type: integer
-                      default: 1360
-                    defaultTunnelType:
+                    loopbackPool:
                       type: string
-                      enum: [wireguard, ipsec, macsec, none]
-                      default: wireguard
-                numberingAuthority:
+                      maxLength: 43
+                      description: >-
+                        IPv4 prefix for the provider-edge loopbacks (one /32 each for the border gateway and every
+                        cloud gateway). Must not overlap any site's addresses.
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked()
+                          message: loopbackPool must be an IPv4 network prefix (host bits zero)
+                    linkSubnet:
+                      type: string
+                      maxLength: 43
+                      description: IPv4 subnet of the node-local core segment that the provider edges share.
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked()
+                          message: linkSubnet must be an IPv4 network prefix (host bits zero)
+                    isisArea:
+                      type: string
+                      default: "49.0001"
+                      maxLength: 41
+                      pattern: '^[0-9a-fA-F]{2}(\.[0-9a-fA-F]{4}){0,6}$'
+                      description: IS-IS area address of the core (the area part of each node's NET).
+                    srgb:
+                      type: object
+                      description: Segment routing global block; a provider edge's node SID label is start + its index.
+                      default: {start: 16000, end: 23999}
+                      x-kubernetes-validations:
+                        - rule: self.start < self.end
+                          message: start must be below end
+                      properties:
+                        start:
+                          type: integer
+                          minimum: 16
+                          maximum: 1048575
+                        end:
+                          type: integer
+                          minimum: 16
+                          maximum: 1048575
+                bgp:
                   type: object
-                  x-kubernetes-preserve-unknown-fields: true
+                  description: BGP settings for the sessions between the sites' VTEPs and their cloud gateways.
+                  properties:
+                    passwordRef:
+                      type: object
+                      description: >-
+                        Vault KV path holding the TCP MD5 session password (key password). Without it the
+                        sessions have no password. A CloudGateway can override it.
+                      required: [vaultPath]
+                      properties:
+                        vaultPath:
+                          type: string
+                          minLength: 1
+                          maxLength: 512
+                entityRefs:
+                  type: array
+                  description: Entities whose HybridNetworks may use this fabric. Empty means every Entity.
+                  maxItems: 256
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [name]
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        maxLength: 63
+                        description: Entity name
             status:
               type: object
               properties:
-                fabricBaseReady:
-                  type: boolean
-                borderBgwReady:
-                  type: boolean
-                allocatedVniCount:
-                  type: integer
-                availableVniCount:
-                  type: integer
+                ledger:
+                  type: string
+                  description: ConfigMap (same namespace) that records the fabric's allocations.
+                allocated:
+                  type: object
+                  description: Allocated numbers per pool (vni, l2vni, vpnTarget).
+                  additionalProperties:
+                    type: integer
+                available:
+                  type: object
+                  description: Free numbers per pool (vni, l2vni, vpnTarget).
+                  additionalProperties:
+                    type: integer
+                nodes:
+                  type: array
+                  description: State per border gateway node.
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      ready:
+                        type: boolean
+                      message:
+                        type: string
+                      lastAppliedAt:
+                        type: string
+                        format: date-time
+                    x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
+                  description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
                   type: string
                 ready:
                   type: boolean
+                waitingFor:
+                  type: array
+                  description: What a pending fabric waits for.
+                  items:
+                    type: string
                 deletionComplete:
                   type: boolean
+                deletionBlockedBy:
+                  type: array
+                  items:
+                    type: string
                 lastReconciledAt:
                   type: string
                   format: date-time
@@ -123,7 +315,7 @@ spec:
                         type: string
                       status:
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   type: array
@@ -141,17 +333,19 @@ spec:
                         type: string
                       message:
                         type: string
-
               x-kubernetes-preserve-unknown-fields: true
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Enabled
-          type: boolean
-          jsonPath: .spec.enabled
         - name: ASN
           type: integer
           jsonPath: .spec.domainAsn
+        - name: MTU
+          type: integer
+          jsonPath: .spec.overlayMtu
+        - name: Status
+          type: string
+          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready

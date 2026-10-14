@@ -1,95 +1,162 @@
 ---
+# shc (design/P7-PLAN.md P7.3.3, §12.3): HybridNetwork provision. Resolves the fabric (spec.fabricRef, else the
+# one recorded earlier, else the platform's only fabric), checks the Entity may use it and the MTU, and records
+# entity, fabric, MTU and the placement counts. Allocating the network's VPN route target from the fabric's ledger
+# is P7.3.8; until then it ends pending: on the fabric while that isn't ready, else with reason NotImplemented.
 - block:
-    - name: Parse event payload
-      ansible.builtin.set_fact:
-        hybridnetwork_cr_name: "{{ event_payload.regarding.name }}"
-        hybridnetwork_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        hybridnetwork_spec: "{{ event_payload.note | from_json }}"
+    - name: Read the HybridNetwork
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
 
-    - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
-
-    - name: Stub debug for HybridNetwork
-      ansible.builtin.debug:
-        msg: "Stub provision HybridNetwork/{{ hybridnetwork_cr_name }} in {{ hybridnetwork_cr_namespace }}"
-
-    - name: Read CR generation
+    - name: List the platform's fabrics
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
         api_version: hybridsovereign.redhat/v1alpha1
-        kind: HybridNetwork
-        name: "{{ hybridnetwork_cr_name }}"
-        namespace: "{{ hybridnetwork_cr_namespace }}"
-      register: hybridnetwork_cr_lookup
+        kind: HybridFabric
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _hn_fabrics
 
-    - name: Set generation fact
+    - name: Choose the fabric
       ansible.builtin.set_fact:
-        hybridnetwork_generation: "{{ hybridnetwork_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
+        hn_waiting: []
+        hn_fabric_name: >-
+          {{ (fab_spec.fabricRef | default({})).name | default('', true)
+             or fab_st.fabric | default('', true)
+             or ((_hn_fabrics.resources | map(attribute='metadata.name') | list | first)
+                 if _hn_fabrics.resources | length == 1 else '') }}
 
-    - name: Stub allocate numbering
+    - name: Refuse a fabric change
       ansible.builtin.set_fact:
-        hn_entity: "{{ hybridnetwork_cr_namespace | regex_replace('^entity-', '') | regex_replace('^sovereign-', '') }}"
-        hn_network_id: "net-{{ hybridnetwork_cr_name }}"
-        hn_vni: "{{ 50000 + (hybridnetwork_cr_name | length % 400) }}"
+        fab_fail_reason: InvalidSpec
+        fab_fail_msg: >-
+          HybridNetwork {{ fab_name }}: it uses HybridFabric {{ fab_st.fabric }}; spec.fabricRef
+          {{ fab_spec.fabricRef.name }} cannot move it
+      when:
+        - (fab_spec.fabricRef | default({})).name | default('', true) | length > 0
+        - fab_st.fabric | default('', true) | length > 0
+        - fab_spec.fabricRef.name != fab_st.fabric
 
-    - name: Get timestamp
+    - name: Refuse an ambiguous default
       ansible.builtin.set_fact:
-        hybridnetwork_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+        fab_fail_reason: FabricAmbiguous
+        fab_fail_msg: >-
+          HybridNetwork {{ fab_name }}: the platform has {{ _hn_fabrics.resources | length }} fabrics; set
+          spec.fabricRef
+      when:
+        - fab_fail_msg | default('', true) | length == 0
+        - hn_fabric_name | length == 0
+        - _hn_fabrics.resources | length > 1
 
-    - name: Mark HybridNetwork ready (stub)
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+    - name: Stop on an invalid network
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_msg | default('', true) | length > 0
+
+    - name: Set the fabric facts
+      ansible.builtin.set_fact:
+        hn_fabric: >-
+          {{ (_hn_fabrics.resources | selectattr('metadata.name', 'equalto', hn_fabric_name) | list
+              + [{}]) | first }}
+
+    - name: Wait for a fabric
+      ansible.builtin.set_fact:
+        hn_waiting: >-
+          {{ [('HybridFabric ' ~ hn_fabric_name ~ ' (not found)') if hn_fabric_name else 'a HybridFabric (the platform has none)'] }}
+      when: hn_fabric | length == 0
+
+    - name: Check the fabric allows the Entity and the MTU
+      when: hn_fabric | length > 0
+      block:
+        - name: Refuse an Entity the fabric does not allow
+          ansible.builtin.set_fact:
+            fab_fail_reason: EntityNotAllowed
+            fab_fail_msg: "Entity {{ fab_entity }} may not use HybridFabric {{ hn_fabric_name }} (spec.entityRefs)"
+          when:
+            - hn_fabric.spec.entityRefs | default([]) | length > 0
+            - fab_entity not in (hn_fabric.spec.entityRefs | map(attribute='name') | list)
+
+        - name: Refuse an MTU above the fabric's
+          ansible.builtin.set_fact:
+            fab_fail_reason: InvalidSpec
+            fab_fail_msg: >-
+              HybridNetwork {{ fab_name }}: mtu {{ fab_spec.mtu }} is above HybridFabric {{ hn_fabric_name }}'s
+              overlayMtu {{ hn_fabric.spec.overlayMtu }}
+          when:
+            - fab_fail_msg | default('', true) | length == 0
+            - fab_spec.mtu is defined
+            - fab_spec.mtu | int > hn_fabric.spec.overlayMtu | int
+
+        - name: Stop on a refused network
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_fail_msg | default('', true) | length > 0
+
+        - name: Wait for the fabric to be ready
+          ansible.builtin.set_fact:
+            hn_waiting: >-
+              {{ ['HybridFabric ' ~ hn_fabric_name ~ ' (' ~ ((hn_fabric.status | default({}, true)).status
+                  | default('not provisioned', true)) ~ ')'] }}
+          when: not ((hn_fabric.status | default({}, true)).ready | default(false) | bool)
+
+    - name: List the network's placements
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: NetworkPlacement
+        namespace: "{{ fab_namespace }}"
+      register: _hn_placements
+
+    - name: Set the network status
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: hybridnetworks
-        cr_name: "{{ hybridnetwork_cr_name }}"
-        cr_namespace: "{{ hybridnetwork_cr_namespace }}"
-        cr_status_body:
-          status: ready
-          ready: true
-          message: "Stub provisioned by EDA hybridvpc (no infra changes)"
-          lastReconciledAt: "{{ hybridnetwork_status_transition_time }}"
-          observedGeneration: "{{ hybridnetwork_generation }}"
-          entity: "{{ hn_entity | default('') }}"
-          networkId: "{{ hn_network_id }}"
-          vni: "{{ hn_vni }}"
-          vrfName: "{{ hybridnetwork_cr_name }}"
-          canonicalRt: "65000:{{ hn_vni }}"
-          fabric: lab-fabric
-          placementCount: 0
-          placementsReady: 0
-          allocated: true
-          fabricVniReady: true
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ hybridnetwork_status_transition_time }}"
-              reason: EDASucceeded
-              message: Stub provision complete
+        _mine: "{{ _hn_placements.resources | default([]) | selectattr('spec.network', 'equalto', fab_name) | list }}"
+      ansible.builtin.set_fact:
+        hn_status: >-
+          {{ {'entity': fab_entity,
+              'placementCount': _mine | length,
+              'placementsReady': _mine | selectattr('status.ready', 'defined') | selectattr('status.ready') | list | length}
+             | combine({'fabric': hn_fabric_name} if hn_fabric | length > 0 else {})
+             | combine({'mtu': (fab_spec.mtu | default(hn_fabric.spec.overlayMtu)) | int} if hn_fabric | length > 0 else {}) }}
+
+    - name: Report what the network waits for
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: WaitingForDependencies
+        fab_message: "Waiting for {{ hn_waiting | join('; ') }}"
+        fab_waiting_for: "{{ hn_waiting }}"
+        fab_status: "{{ hn_status }}"
+      when: hn_waiting | length > 0
+
+    - name: End the job while waiting
+      ansible.builtin.meta: end_play
+      when: hn_waiting | length > 0
+
+    # P7.3.8 replaces this with the VPN route target allocation
+    - name: Report the network validated, not realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: NotImplemented
+        fab_message: Spec valid, fabric ready; allocating the network's route target is not implemented yet
+        fab_waiting_for: [implementation]
+        fab_status: "{{ hn_status }}"
 
   rescue:
-    - name: Mark HybridNetwork failed
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+    - name: Mark the HybridNetwork failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: hybridnetworks
-        cr_name: "{{ hybridnetwork_cr_name }}"
-        cr_namespace: "{{ hybridnetwork_cr_namespace }}"
-        cr_status_body:
-          status: failed
-          ready: false
-          message: "{{ ansible_failed_result.msg | default('EDA stub provision failed') }}"
-          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          conditions:
-            - type: Ready
-              status: "False"
-              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
-              message: "{{ ansible_failed_result.msg | default('EDA stub provision failed') }}"
+        fab_outcome: failed
+        fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
+        fab_message: >-
+          {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('HybridNetwork provision failed') }}
+      when: fab_name is defined and services_api_host is defined
       ignore_errors: true
-      when: services_api_host is defined and services_bearer_token is defined
 
     - name: Re-raise
       ansible.builtin.fail:
-        msg: "HybridNetwork {{ hybridnetwork_cr_name | default('unknown') }} stub provision failed"
+        msg: "HybridNetwork {{ fab_name | default('unknown') }} provision failed: {{ fab_fail_reason | default('ProvisionFailed') }}"

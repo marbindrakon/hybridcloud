@@ -3950,7 +3950,7 @@ sovereignJobs:
               property: root_token
       env:
         - name: RUN_ID
-          value: "2026-10-13-aap-config-v15"  # v13: cloudinfrastructure JTs + activations, CLOUDOSO_DEFAULTS cloudRef; v14: dnsconfig; v15: glanceImage
+          value: "2026-10-14-aap-config-v16"  # v13: cloudinfrastructure JTs + activations, CLOUDOSO_DEFAULTS cloudRef; v14: dnsconfig; v15: glanceImage; v16: fabric JTs + fabric-events (P7.3.3)
         - name: AAP_CONFIG_PATH
           value: "/runner/project/aap-config"
         - name: AAP_CONTROLLER_HOST
@@ -4807,7 +4807,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.5"  # shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1)
+  chartVersion: "0.1.22-shc.6"  # shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3)
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
@@ -4818,11 +4818,11 @@ hybridsovereignPrimaryOperator:
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.28"  # img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2)
+      tag: "img-0.1.29"  # img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.29: fabric delete guards (P7.3.3)
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.16"  # img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2)
+        tag: "img-0.1.17"  # img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3)
     amqKafka:
       enabled: true
       vaultPath: amq-producer
@@ -4877,6 +4877,56 @@ hybridsovereignPrimaryOperator:
             clusterRef: edge1
             storageClass: ocs-external-storagecluster-ceph-rbd
           dns: {mode: platform}
+    # P7.3 (P7-PLAN §12.3, H2 = gateway as PE): the fabric and a gateway per EVPN site on the BGW blades bgw-1/2
+    # (blades 5/8). Staged disabled: the jobs realize them from P7.3.4 (fabric) and P7.3.5 (gateways), and these
+    # are switched on then. SSH key and BGP password: central Vault fabric/bgw, fabric/bgp (seed-fabric-hosts).
+    hybridFabrics:
+      lab:
+        enabled: false
+        spec:
+          domainAsn: 65010
+          overlayMtu: 9000
+          vniPool: {start: 51000, end: 52127}
+          l2vniPool: {start: 151000, end: 152127}
+          vpnTargetPool: {start: 10000, end: 10999}
+          borderGateway:
+            nodes:
+              - {name: bgw-1, address: 172.18.0.61}
+              - {name: bgw-2, address: 172.18.0.62}
+            trunkInterface: bond1
+            sshUser: cloud-user
+            credentialsRef: {vaultPath: fabric/bgw}
+          core: {loopbackPool: 10.255.0.0/24, linkSubnet: 10.255.1.0/24}
+          bgp:
+            passwordRef: {vaultPath: fabric/bgp}
+    cloudGateways:
+      iaas1:
+        enabled: false
+        spec:
+          fabricRef: {name: lab}
+          cloudRef: {name: iaas1}
+          siteUnderlay:
+            vlan: 236
+            cidr: 172.18.236.0/24
+            addresses: [{node: bgw-1, address: 172.18.236.4}, {node: bgw-2, address: 172.18.236.5}]
+      edge1:
+        enabled: false
+        spec:
+          fabricRef: {name: lab}
+          cloudRef: {name: edge1}
+          siteUnderlay:
+            vlan: 239
+            cidr: 172.18.239.0/24
+            addresses: [{node: bgw-1, address: 172.18.239.4}, {node: bgw-2, address: 172.18.239.5}]
+      rhoso-bm:
+        enabled: false
+        spec:
+          fabricRef: {name: lab}
+          cloudRef: {name: rhoso-bm}
+          siteUnderlay:
+            vlan: 235
+            cidr: 172.18.235.0/24
+            addresses: [{node: bgw-1, address: 172.18.235.4}, {node: bgw-2, address: 172.18.235.5}]
     # TENANT-DNS D1: the platform's tenant DNS namespace (DNSConfig in sovereign-cloud-plugins). The global zone
     # tenants.shc.signal9.gg lives in Atuin Designate (project shc-tenant-dns); credential = the DNS-only account
     # shc-tenant-dns (p7/tenant-dns-account.sh, bootstrap.sh seed-tenant-dns).

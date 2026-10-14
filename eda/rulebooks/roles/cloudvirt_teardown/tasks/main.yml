@@ -1,0 +1,43 @@
+---
+# shc (design/P7-PLAN.md P7.3.3): CloudVirt teardown. The operator's finalizer has already waited for the objects that
+# depend on this one. Nothing is realized yet, so the job confirms the CR and marks deletionComplete; removing
+# the site-side access for the environment (P7.3.7) comes with the step that creates it.
+- block:
+    - name: Read the CloudVirt
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: Mark deletion complete
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudvirts
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: ready
+          ready: false
+          deletionComplete: true
+          message: Deleted
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+  rescue:
+    - name: Mark the CloudVirt teardown failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudvirts
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: failed
+          ready: false
+          message: "{{ ansible_failed_result.msg | default('CloudVirt teardown failed') }}"
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+      when: fab_name is defined and services_api_host is defined
+      ignore_errors: true
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "CloudVirt {{ fab_name | default('unknown') }} teardown failed"
