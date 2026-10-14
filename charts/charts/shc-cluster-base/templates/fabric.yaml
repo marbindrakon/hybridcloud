@@ -155,6 +155,15 @@ spec:
     matchLabels:
       kubernetes.io/hostname: {{ $n.name }}
   bgp:
+    {{- if $f.gateways }}
+    # the fabric's CloudGateways (the site's route reflectors on the border gateway nodes): on-link, with BFD so a
+    # failed node is left within a second
+    bfdProfiles:
+      - name: fabric
+        receiveInterval: {{ $f.bfd.receiveInterval }}
+        transmitInterval: {{ $f.bfd.transmitInterval }}
+        detectMultiplier: {{ $f.bfd.detectMultiplier }}
+    {{- end }}
     routers:
       - asn: {{ $f.asn }}
         neighbors:
@@ -167,12 +176,22 @@ spec:
               name: fabric-bgp
               namespace: openshift-frr-k8s
           {{- end }}
+          {{- range $gw := $f.gateways }}
+          - address: {{ $gw }}
+            asn: {{ $f.asn }}
+            sourceaddress: {{ $n.vtepIP }}
+            enableGracefulRestart: true
+            bfdProfile: fabric
+            passwordSecret:
+              name: fabric-bgp
+              namespace: openshift-frr-k8s
+          {{- end }}
   raw:
     priority: 5
     rawConfig: |
       router bgp {{ $f.asn }}
        address-family l2vpn evpn
-      {{- range $rr := $f.routeReflectors }}
+      {{- range $rr := concat $f.routeReflectors $f.gateways }}
         neighbor {{ $rr }} activate
       {{- end }}
        exit-address-family

@@ -2167,7 +2167,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.8"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts
+    chartVersion: "0.3.9"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts; 0.3.8: EVPN SVI MTU; 0.3.9: fabric.gateways (BFD)
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -2293,6 +2293,7 @@ iaasClusters:
         fabric:
           enabled: true
           routeReflectors: [172.18.234.11, 172.18.234.12]
+          gateways: [172.18.236.4, 172.18.236.5]   # P7.3.6: CloudGateway iaas1 on bgw-1/2 (BFD); then the RRs go
           vtepInterface: {base: bond0, vlan: 236, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.236.1
@@ -2317,6 +2318,7 @@ iaasClusters:
         fabric:
           enabled: true
           routeReflectors: [172.18.234.11, 172.18.234.12]
+          gateways: [172.18.239.4, 172.18.239.5]   # P7.3.6: CloudGateway edge1 on bgw-1/2 (BFD); then the RRs go
           vtepInterface: {base: bond1, vlan: 239, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.239.1

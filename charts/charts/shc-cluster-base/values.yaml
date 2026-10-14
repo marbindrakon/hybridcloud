@@ -182,7 +182,9 @@ ops:
 fabric:
   enabled: false
   asn: 65010
-  routeReflectors: []        # e.g. [172.18.234.11, 172.18.234.12]
+  routeReflectors: []        # standalone route reflectors, e.g. [172.18.234.11, 172.18.234.12]
+  gateways: []               # the fabric's CloudGateway addresses on this site's underlay (with BFD)
+  bfd: {receiveInterval: 300, transmitInterval: 300, detectMultiplier: 3}
   password:
     secretStoreName: vault-backend
     vaultKey: fabric/bgp     # property "password"
