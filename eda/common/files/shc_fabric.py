@@ -5,8 +5,8 @@ Reads one JSON request on stdin, prints one JSON result: {"errors": [...]} plus 
 unless the request itself is malformed. Pure computation: no API calls, nothing secret in or out.
 
 actions:
-  check-fabric    {spec}                                   core prefixes, node names
-  check-gateway   {fabric: spec, gateway: spec, others: [CloudGateway objects or {name, spec}]}
+  check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names
+  check-gateway   {fabric: spec, core: realization core, gateway: spec, others: [CloudGateway objects or {name, spec}]}
                   nodes match the fabric's, one gateway per site, VLAN and site subnet unique on the fabric,
                   site subnet clear of the core prefixes
   check-placement {prefixes, siblings: [{name, prefixes}], reserved: [cidr]}
@@ -40,23 +40,24 @@ def overlaps(a, b):
 
 def check_fabric(req):
     spec = req.get("spec") or {}
+    real = req.get("realization") or {}
     errors = []
-    core = spec.get("core") or {}
+    core = real.get("core") or {}
     try:
         lo, link = nets([core.get("loopbackPool"), core.get("linkSubnet")])
         if overlaps(lo, link):
-            errors.append(f"core.loopbackPool {lo} overlaps core.linkSubnet {link}")
+            errors.append(f"realization core.loopbackPool {lo} overlaps core.linkSubnet {link}")
         nodes = (spec.get("borderGateway") or {}).get("nodes") or []
         # the border gateway takes index 0 and every cloud gateway one more; the link needs one address each
         if lo.num_addresses < 2:
-            errors.append(f"core.loopbackPool {lo} is too small (at least a /31)")
+            errors.append(f"realization core.loopbackPool {lo} is too small (at least a /31)")
         if link.num_addresses < 4:
-            errors.append(f"core.linkSubnet {link} is too small (at least a /30)")
+            errors.append(f"realization core.linkSubnet {link} is too small (at least a /30)")
         names = [n.get("name") for n in nodes]
         if len(set(names)) != len(names):
             errors.append("borderGateway.nodes has duplicate names")
     except (ValueError, TypeError) as e:
-        errors.append(f"core: {e}")
+        errors.append(f"realization core: {e}")
     srgb = core.get("srgb") or {"start": 16000, "end": 23999}
     lo_size = 0
     try:
@@ -64,9 +65,15 @@ def check_fabric(req):
     except ValueError:
         pass
     if lo_size and srgb["end"] - srgb["start"] + 1 < lo_size:
-        errors.append(f"core.srgb {srgb['start']}-{srgb['end']} is smaller than core.loopbackPool ({lo_size} addresses)")
-    pools = {k: spec.get(k) or {} for k in ("vniPool", "l2vniPool", "vpnTargetPool")}
+        errors.append(f"realization core.srgb {srgb['start']}-{srgb['end']} is smaller than core.loopbackPool ({lo_size} addresses)")
+    pools = {"vniPool": spec.get("vniPool") or {}, "l2vniPool": spec.get("l2vniPool") or {},
+             "vpnTargetPool": real.get("vpnTargetPool") or {}}
     size = {k: (p.get("end", 0) - p.get("start", 1) + 1) for k, p in pools.items()}
+    vt = pools["vpnTargetPool"]
+    for k in ("vniPool", "l2vniPool"):
+        p = pools[k]
+        if vt and p and not (vt.get("end", 0) < p.get("start", 0) or p.get("end", 0) < vt.get("start", 0)):
+            errors.append(f"the realization's VPN route target pool {vt.get('start')}-{vt.get('end')} overlaps {k}")
     pe_max = 0
     try:
         link_size = ipaddress.ip_network(str(core.get("linkSubnet")), strict=True).num_addresses
@@ -111,12 +118,15 @@ def check_gateway(req):
         site = ipaddress.ip_network(str(under.get("cidr")), strict=False)
     except ValueError as e:
         return {"errors": errors + [f"siteUnderlay.cidr: {e}"]}
-    core = fabric.get("core") or {}
+    # upstream route reflectors outside the site subnet are reached through siteUnderlay.gateway
+    upstream_remote = [r for r in under.get("upstreamRouteReflectors") or []
+                       if ipaddress.ip_address(r) not in site]
+    core = req.get("core") or {}
     for key in ("loopbackPool", "linkSubnet"):
         try:
             c = ipaddress.ip_network(str(core.get(key)), strict=True)
             if overlaps(site, c):
-                errors.append(f"siteUnderlay.cidr {site} overlaps the fabric's core.{key} {c}")
+                errors.append(f"siteUnderlay.cidr {site} overlaps the border gateway's core prefix {c}")
         except ValueError:
             pass
     cloud = (gw.get("cloudRef") or {}).get("name")
@@ -137,7 +147,7 @@ def check_gateway(req):
                 errors.append(f"siteUnderlay.cidr {site} overlaps CloudGateway {o.get('name')} ({on})")
         except ValueError:
             pass
-    return {"errors": errors}
+    return {"errors": errors, "upstreamRemote": upstream_remote}
 
 
 def check_placement(req):

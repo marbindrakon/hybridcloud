@@ -1,0 +1,56 @@
+---
+# shc (design/P7-PLAN.md P7.3.5): the site side of a gateway on an OpenShift site: the VTEP named after the fabric
+# (mode Unmanaged: the nodes' VTEP addresses on the site underlay are set by the site's own network config), which
+# the placements' networks reference. Uses the site's fabric credential (CloudInfrastructure
+# spec.openshift.fabricCredentialsRef, default credentialsRef). Sets cg_site_extra.
+- name: Read the site's fabric credential
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ ((ci_spec.openshift | default({})).fabricCredentialsRef | default(ci_spec.credentialsRef)).vaultPath }}"
+
+- name: Require a kubeconfig
+  ansible.builtin.assert:
+    that: (vault_kv_data.kubeconfig | default('')) | length > 0
+    fail_msg: "the site's fabric credential has no kubeconfig"
+    quiet: true
+
+- name: Write the site kubeconfig (temp, 0600)
+  ansible.builtin.copy:
+    content: "{{ vault_kv_data.kubeconfig }}"
+    dest: "/tmp/eda-cg-{{ fab_name }}-kubeconfig"
+    mode: "0600"
+  no_log: true
+
+- name: Drop the credential from the facts
+  ansible.builtin.set_fact:
+    vault_kv_data: {}
+  no_log: true
+
+- name: Ensure the VTEP
+  block:
+    - name: "VTEP {{ cg_fabric_name }} on {{ cg_site_name }}"
+      kubernetes.core.k8s:
+        kubeconfig: "/tmp/eda-cg-{{ fab_name }}-kubeconfig"
+        state: present
+        definition:
+          apiVersion: k8s.ovn.org/v1
+          kind: VTEP
+          metadata:
+            name: "{{ cg_fabric_name }}"
+            labels:
+              hybridsovereign.redhat/fabric: "{{ cg_fabric_name }}"
+              hybridsovereign.redhat/cloudgateway: "{{ fab_name }}"
+          spec:
+            cidrs: ["{{ fab_spec.siteUnderlay.cidr }}"]
+            mode: Unmanaged
+      register: _cg_vtep
+  always:
+    - name: Remove the site kubeconfig
+      ansible.builtin.file:
+        path: "/tmp/eda-cg-{{ fab_name }}-kubeconfig"
+        state: absent
+
+- name: Record the site side
+  ansible.builtin.set_fact:
+    cg_site_extra: {vtep: "{{ cg_fabric_name }}"}
+    cg_site_changed: "{{ _cg_vtep is changed }}"

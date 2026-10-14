@@ -1,0 +1,16 @@
+---
+# shc (design/P7-PLAN.md §12.3): the platform's realization parameters for one fabric (common/vars defaults,
+# then the installation's fabric_realization, then fabric_realization.fabrics.<fabric>). Included from a role.
+# Input: fab_real_fabric (HybridFabric name). Sets fab_real.
+- name: Load the realization defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: Set the realization for HybridFabric {{ fab_real_fabric }}
+  vars:
+    _inst: "{{ fabric_realization | default({}, true) }}"
+  ansible.builtin.set_fact:
+    fab_real: >-
+      {{ fabric_realization_defaults
+         | combine(_inst | dict2items | rejectattr('key', 'equalto', 'fabrics') | items2dict, recursive=True)
+         | combine((_inst.fabrics | default({})).get(fab_real_fabric, {}), recursive=True) }}

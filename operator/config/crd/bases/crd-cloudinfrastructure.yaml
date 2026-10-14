@@ -132,6 +132,18 @@ spec:
                       type: string
                       maxLength: 253
                       description: StorageClass for VM disks.
+                    fabricCredentialsRef:
+                      type: object
+                      description: >-
+                        Vault KV path holding a kubeconfig (key kubeconfig) allowed to manage the platform's network
+                        objects on the cluster (the fabric attachment, tenant networks, VM namespaces). Default
+                        credentialsRef.
+                      required: [vaultPath]
+                      properties:
+                        vaultPath:
+                          type: string
+                          minLength: 1
+                          maxLength: 512
                 dns:
                   type: object
                   description: >-

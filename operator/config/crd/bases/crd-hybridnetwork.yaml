@@ -76,9 +76,10 @@ spec:
                 fabric:
                   type: string
                   description: The HybridFabric in use.
-                vpnTarget:
-                  type: string
-                  description: The network's VPN route target between the gateways (asn:value).
+                realization:
+                  type: object
+                  description: How the platform realized the network (informational; depends on the platform).
+                  x-kubernetes-preserve-unknown-fields: true
                 mtu:
                   type: integer
                   description: Effective MTU.

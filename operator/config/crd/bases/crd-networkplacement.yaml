@@ -101,8 +101,10 @@ spec:
                 l2Vni:
                   type: integer
                   description: The placement's MAC-VRF VNI inside its site (CloudVirt).
-                vpnTarget:
-                  type: string
+                realization:
+                  type: object
+                  description: How the platform realized the placement (informational; depends on the platform).
+                  x-kubernetes-preserve-unknown-fields: true
                 mtu:
                   type: integer
                   description: Effective MTU at this placement.

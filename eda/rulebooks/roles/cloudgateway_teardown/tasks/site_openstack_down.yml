@@ -1,0 +1,19 @@
+---
+# shc (design/P7-PLAN.md P7.3.5): delete the platform project on the OpenStack site; refused while it still holds
+# networks, routers, ports or RBAC policies (another gateway of the same realization would share it).
+- name: The site's OpenStack account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ ci_spec.credentialsRef.vaultPath }}"
+    os_account_tag: "cgt-{{ fab_name }}"
+
+- name: Delete the platform project when it is empty
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_request:
+      action: platform-project
+      state: absent
+      region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
+      domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
+      name: "{{ fab_real.openstack.platformProject }}"

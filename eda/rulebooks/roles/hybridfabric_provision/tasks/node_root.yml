@@ -111,7 +111,7 @@
     set -e
     run=$(vtysh -c 'show running-config')
     echo "$run" | grep -q '^router bgp {{ fab_spec.domainAsn }}$'
-    echo "$run" | grep -q 'bgp listen range {{ fab_spec.core.loopbackPool }} peer-group PE'
+    echo "$run" | grep -q 'bgp listen range {{ fab_real.core.loopbackPool }} peer-group PE'
     echo "$run" | grep -q '^router isis CORE$'
     vtysh -c 'show isis summary' | grep -q 'Area CORE'
     ss -Hltn 'sport = :179' | grep -q LISTEN

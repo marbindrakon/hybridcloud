@@ -2,7 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.4): reach a fabric's border gateway nodes over SSH. Reads the key from Vault into a
 # private temporary directory (never logged) and adds every node to the inventory (become, accept-new host keys
 # into a per-job known_hosts). Included from a role (paths are role_path-relative).
-# Input: bgw_fabric_spec (the HybridFabric spec). Sets bgw_keydir. Remove the key with bgw_disconnect.yml.
+# Inputs: bgw_fabric_spec (the HybridFabric spec), bgw_ssh_user (realization nodes.sshUser). Sets bgw_keydir.
+# Remove the key with bgw_disconnect.yml.
 - name: Read the border gateway SSH key
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
   vars:
@@ -36,7 +37,7 @@
   ansible.builtin.add_host:
     name: "{{ item.name }}"
     ansible_host: "{{ item.address }}"
-    ansible_user: "{{ bgw_fabric_spec.borderGateway.sshUser | default('root') }}"
+    ansible_user: "{{ bgw_ssh_user | default('root', true) }}"
     ansible_connection: ssh
     ansible_ssh_private_key_file: "{{ bgw_keydir.path }}/id"
     ansible_ssh_common_args: >-

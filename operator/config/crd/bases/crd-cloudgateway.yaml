@@ -22,10 +22,10 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            Attaches one cloud site (a CloudInfrastructure with EVPN) to a HybridFabric. The gateway runs an
-            instance on every border gateway node: on the site side it is the route reflector of the site's EVPN
-            domain and a VTEP for each tenant network placed there; on the fabric side it is a provider edge of the
-            fabric's MPLS core. One CloudGateway per site.
+            Attaches one cloud site (a CloudInfrastructure with EVPN) to a HybridFabric. The gateway runs on every
+            border gateway node: on the site side it is the route reflector of the site's EVPN domain and the
+            endpoint for each tenant network placed there; on the fabric side it connects those networks to the
+            same networks on the other sites. One CloudGateway per site.
           type: object
           required:
             - spec
@@ -82,6 +82,12 @@ spec:
                     - rule: >-
                         !isCIDR(self.cidr) || self.addresses.all(a, isIP(a.address) && cidr(self.cidr).containsIP(a.address))
                       message: every address must be an IP address inside cidr
+                    - rule: "!has(self.gateway) || !isCIDR(self.cidr) || (isIP(self.gateway) && cidr(self.cidr).containsIP(self.gateway))"
+                      message: gateway must be an IP address inside cidr
+                    - rule: >-
+                        !has(self.upstreamRouteReflectors) || !isCIDR(self.cidr)
+                        || self.upstreamRouteReflectors.all(r, cidr(self.cidr).containsIP(r)) || has(self.gateway)
+                      message: upstream route reflectors outside cidr need a gateway
                   properties:
                     vlan:
                       type: integer
@@ -124,6 +130,27 @@ spec:
                       description: >-
                         MTU of the gateway's underlay interface. Default: the trunk interface's MTU. Must carry the
                         fabric's overlayMtu + 50 bytes.
+                    gateway:
+                      type: string
+                      maxLength: 39
+                      description: >-
+                        IPv4 next hop on the underlay VLAN for destinations outside cidr. Needed only to reach
+                        upstream route reflectors outside cidr.
+                    upstreamRouteReflectors:
+                      type: array
+                      description: >-
+                        Existing BGP route reflectors of the site's EVPN domain that the gateway joins as a client:
+                        for a site that keeps its own route reflectors, or while its VTEPs move to the gateway.
+                        The gateway also accepts the site's VTEPs directly in either case. Empty: the gateway is the
+                        site's only route reflector.
+                      maxItems: 4
+                      x-kubernetes-list-type: set
+                      items:
+                        type: string
+                        maxLength: 39
+                        x-kubernetes-validations:
+                          - rule: isIP(self) && ip(self).family() == 4
+                            message: each upstream route reflector must be an IPv4 address
                 bfd:
                   type: boolean
                   default: true
@@ -157,14 +184,10 @@ spec:
                     evpn:
                       type: boolean
                   x-kubernetes-preserve-unknown-fields: true
-                peIndex:
-                  type: integer
-                  description: >-
-                    The gateway's index in the fabric core (its loopback is loopbackPool + index; its node SID
-                    label is srgb.start + index).
-                loopback:
-                  type: string
-                  description: The gateway's provider-edge loopback address.
+                realization:
+                  type: object
+                  description: How the platform realized the gateway (informational; depends on the platform).
+                  x-kubernetes-preserve-unknown-fields: true
                 nodes:
                   type: array
                   description: State of the gateway instance on each border gateway node.
@@ -182,7 +205,10 @@ spec:
                         description: Site BGP sessions established.
                       coreSessions:
                         type: integer
-                        description: VPNv4 sessions established.
+                        description: Sessions established toward the border gateway.
+                      upstreamSessions:
+                        type: integer
+                        description: Sessions established with upstream route reflectors.
                       message:
                         type: string
                     x-kubernetes-preserve-unknown-fields: true

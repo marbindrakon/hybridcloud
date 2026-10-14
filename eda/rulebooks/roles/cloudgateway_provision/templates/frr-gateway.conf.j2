@@ -1,0 +1,90 @@
+! Managed by the platform: CloudGateway {{ fab_name }} (site {{ cg_site_name }}) on {{ bgw_node.name }}. Changes here are overwritten.
+frr version 8.5
+frr defaults datacenter
+hostname {{ bgw_node.name }}-gw-{{ fab_name }}
+log syslog informational
+service integrated-vtysh-config
+!
+{% for rr in cg_upstream_remote %}
+ip route {{ rr }}/32 {{ fab_spec.siteUnderlay.gateway }}
+{% endfor %}
+!
+interface lo
+ ip router isis CORE
+ isis passive
+exit
+!
+interface core0
+ ip router isis CORE
+exit
+!
+! routes the gateways originate into the site carry this community; a gateway never takes them back from the site
+bgp community-list standard GW-ORIG seq 5 permit {{ cg_fabric.spec.domainAsn }}:{{ fab_real.gatewayCommunity }}
+!
+route-map FROM-SITE deny 10
+ match community GW-ORIG
+exit
+route-map FROM-SITE permit 20
+exit
+!
+route-map GW-T5 permit 10
+ set community {{ cg_fabric.spec.domainAsn }}:{{ fab_real.gatewayCommunity }} additive
+exit
+!
+! the site's route targets and router MAC stay out of the core
+route-map TO-VPN permit 10
+ set extcommunity none
+exit
+!
+router bgp {{ cg_fabric.spec.domainAsn }}
+ bgp router-id {{ cg_node_addr }}
+ no bgp default ipv4-unicast
+ bgp graceful-restart
+ neighbor SITE peer-group
+ neighbor SITE remote-as {{ cg_fabric.spec.domainAsn }}
+{% if cg_bgp_password %}
+ neighbor SITE password {{ cg_bgp_password }}
+{% endif %}
+{% if fab_spec.bfd | default(true) %}
+ neighbor SITE bfd
+{% endif %}
+ bgp listen range {{ fab_spec.siteUnderlay.cidr }} peer-group SITE
+{% if fab_spec.siteUnderlay.upstreamRouteReflectors | default([]) %}
+ neighbor UPSTREAM peer-group
+ neighbor UPSTREAM remote-as {{ cg_fabric.spec.domainAsn }}
+ neighbor UPSTREAM update-source {{ cg_node_addr }}
+{% if cg_bgp_password %}
+ neighbor UPSTREAM password {{ cg_bgp_password }}
+{% endif %}
+{% for rr in fab_spec.siteUnderlay.upstreamRouteReflectors %}
+ neighbor {{ rr }} peer-group UPSTREAM
+{% endfor %}
+{% endif %}
+ neighbor {{ cg_root_pe.loopbackIp }} remote-as {{ cg_fabric.spec.domainAsn }}
+ neighbor {{ cg_root_pe.loopbackIp }} description border gateway route reflector
+ neighbor {{ cg_root_pe.loopbackIp }} update-source lo
+ !
+ address-family l2vpn evpn
+  neighbor SITE activate
+  neighbor SITE route-reflector-client
+  neighbor SITE route-map FROM-SITE in
+{% if fab_spec.siteUnderlay.upstreamRouteReflectors | default([]) %}
+  neighbor UPSTREAM activate
+  neighbor UPSTREAM route-map FROM-SITE in
+{% endif %}
+  advertise-all-vni
+ exit-address-family
+ !
+ address-family ipv4 vpn
+  neighbor {{ cg_root_pe.loopbackIp }} activate
+ exit-address-family
+exit
+!
+router isis CORE
+ is-type level-2-only
+ net {{ cg_pe.net }}
+ segment-routing on
+ segment-routing global-block {{ fab_real.core.srgb.start }} {{ fab_real.core.srgb.end }}
+ segment-routing prefix {{ cg_pe.loopback }} index {{ cg_pe.index }}
+exit
+!

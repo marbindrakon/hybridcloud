@@ -9,10 +9,15 @@
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
 
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ fab_name }}"
+
     - name: Check the numbering and the core
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
-        fab_check: {action: check-fabric, spec: "{{ fab_spec }}"}
+        fab_check: {action: check-fabric, spec: "{{ fab_spec }}", realization: "{{ fab_real }}"}
 
     - name: Refuse an invalid fabric
       ansible.builtin.set_fact:
@@ -41,6 +46,7 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
       vars:
         bgw_fabric_spec: "{{ fab_spec }}"
+        bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
     - name: Read the BGP session password
       when: (fab_spec.bgp | default({})).passwordRef is defined
@@ -80,7 +86,7 @@
           pools:
             vni: ["{{ fab_spec.vniPool.start }}", "{{ fab_spec.vniPool.end }}"]
             l2vni: ["{{ fab_spec.l2vniPool.start }}", "{{ fab_spec.l2vniPool.end }}"]
-            vpnTarget: ["{{ fab_spec.vpnTargetPool.start }}", "{{ fab_spec.vpnTargetPool.end }}"]
+            vpnTarget: ["{{ fab_real.vpnTargetPool.start }}", "{{ fab_real.vpnTargetPool.end }}"]
             peIndex: [1, "{{ hf_pe_max }}"]
           # (dict keys are not templated: build the owner key in an expression)
           reserve: "{{ {'peIndex': {'HybridFabric/' ~ fab_namespace ~ '/' ~ fab_name: 1}} }}"
@@ -92,17 +98,17 @@
     - name: The root's provider-edge addresses (index 1)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
-        fab_check: {action: pe-addresses, core: "{{ fab_spec.core }}", index: 1}
+        fab_check: {action: pe-addresses, core: "{{ fab_real.core }}", index: 1}
 
     - name: Set the root instance
       ansible.builtin.set_fact:
         hf_pe: "{{ fab_check_result }}"
         hf_root:
           type: root
-          bridge: br-core
+          bridge: "{{ fab_real.core.bridge }}"
           mtu: "{{ fab_spec.overlayMtu | int + 100 }}"
           loopback: "{{ fab_check_result.loopback }}"
-          loopbackPool: "{{ fab_spec.core.loopbackPool }}"
+          loopbackPool: "{{ fab_real.core.loopbackPool }}"
           link: "{{ fab_check_result.link }}"
         hf_holder: "HybridFabric/{{ fab_name }} job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
         hf_node_results: []
@@ -143,7 +149,9 @@
           {{ {'ledger': 'fabric-ledger-' ~ fab_name,
               'allocated': hf_ledger.allocated,
               'available': hf_ledger.available,
-              'nodes': hf_node_results} }}
+              'nodes': hf_node_results,
+              'realization': {'model': 'linux-pe', 'routeReflector': hf_pe.loopbackIp, 'nodeSid': hf_pe.sid,
+                              'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet}} }}
 
   rescue:
     - name: Remove the SSH key

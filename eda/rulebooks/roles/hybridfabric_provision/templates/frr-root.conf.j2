@@ -21,7 +21,7 @@ router bgp {{ fab_spec.domainAsn }}
  neighbor PE peer-group
  neighbor PE remote-as {{ fab_spec.domainAsn }}
  neighbor PE update-source lo
- bgp listen range {{ fab_spec.core.loopbackPool }} peer-group PE
+ bgp listen range {{ fab_real.core.loopbackPool }} peer-group PE
  !
  address-family ipv4 vpn
   neighbor PE activate
@@ -33,7 +33,7 @@ router isis CORE
  is-type level-2-only
  net {{ hf_pe.net }}
  segment-routing on
- segment-routing global-block {{ (fab_spec.core.srgb | default({'start': 16000})).start }} {{ (fab_spec.core.srgb | default({'end': 23999})).end }}
+ segment-routing global-block {{ fab_real.core.srgb.start }} {{ fab_real.core.srgb.end }}
  segment-routing prefix {{ hf_pe.loopback }} index {{ hf_pe.index }}
 exit
 !

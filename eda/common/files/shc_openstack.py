@@ -21,6 +21,9 @@ Actions (request["action"]):
                 extensions (evpn) and the external network; ensures the tenant project domain (created
                 only when asked) with the account's admin role on it, and the site's DNS project (created
                 only when asked) with the account's member role on it.
+  platform-project  a platform-owned project (CloudGateway, design/P7-PLAN.md §12.3.2) in a domain, with
+                `member` for the account: state present ensures it; state absent deletes it only when it holds
+                no networks, routers, ports or RBAC policies (refused otherwise).
 """
 import json
 import sys
@@ -321,8 +324,40 @@ def site_probe(req):
     return out
 
 
+def platform_project(req):
+    """The account's own scope (cloud admin): ensure or remove a platform-owned project."""
+    acct = Account(req)
+    conn = acct.own_scope()
+    access = conn.session.auth.get_access(conn.session)
+    dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
+    proj = conn.identity.find_project(req["name"], domain_id=dom.id)
+    if req.get("state", "present") == "absent":
+        if proj is None:
+            return {"name": req["name"], "deleted": False, "found": False}
+        left = [f"network {describe(n, 'name')}" for n in conn.network.networks(project_id=proj.id)]
+        left += [f"router {describe(r, 'name')}" for r in conn.network.routers(project_id=proj.id)]
+        left += [f"port {describe(p, 'name', 'device_owner')}" for p in conn.network.ports(project_id=proj.id)]
+        left += [f"rbac {r.id}" for r in conn.network.rbac_policies(project_id=proj.id)]
+        if left:
+            raise RuntimeError(f"project {req['name']} still holds: {', '.join(left[:10])}")
+        conn.identity.delete_project(proj)
+        return {"name": req["name"], "id": proj.id, "deleted": True}
+    created = False
+    if proj is None:
+        proj = conn.identity.create_project(name=req["name"], domain_id=dom.id,
+                                            description=req.get("description", ""))
+        created = True
+    member = conn.identity.find_role("member", ignore_missing=False)
+    granted = False
+    if not conn.identity.validate_user_has_project_role(proj, access.user_id, member):
+        conn.identity.assign_project_role_to_user(proj, access.user_id, member)
+        granted = True
+    return {"name": proj.name, "id": proj.id, "domain_id": dom.id, "created": created, "member_granted": granted}
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
-           "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe}
+           "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
+           "platform-project": platform_project}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

@@ -1,10 +1,86 @@
 ---
-# shc (design/P7-PLAN.md P7.3.3): CloudGateway teardown. The operator's finalizer has already waited for the objects that
-# depend on this one. Nothing is realized yet, so the job confirms the CR and marks deletionComplete; removing
-# the gateway instances on the border gateway nodes (P7.3.5) comes with the step that creates it.
+# shc (design/P7-PLAN.md P7.3.5): CloudGateway teardown. The operator's finalizer waited for the network
+# placements that use the gateway. Under the fabric's lease, one node at a time: the gateway instance comes off.
+# Then the site side (OpenShift: the VTEP when this gateway created it; OpenStack: the platform project, refused
+# while it still holds networks) and the gateway's provider-edge index in the ledger.
 - block:
     - name: Read the CloudGateway
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: Set the facts
+      ansible.builtin.set_fact:
+        cg_fabric_name: "{{ fab_spec.fabricRef.name }}"
+        cg_site_name: "{{ fab_spec.cloudRef.name }}"
+        cgt_holder: "CloudGateway/{{ fab_name }} teardown job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
+
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ cg_fabric_name }}"
+
+    - name: Read the fabric
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ cg_fabric_name }}"
+        namespace: "{{ fab_namespace }}"
+      register: _cgt_fabric
+
+    - name: Remove the gateway from the nodes
+      when: _cgt_fabric.resources | default([]) | length > 0
+      vars:
+        cg_fabric: "{{ _cgt_fabric.resources[0] }}"
+      block:
+        - name: Take the border gateway configuration lease
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+          vars:
+            fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cgt_holder }}"}
+
+        - name: One node at a time
+          block:
+            - name: Connect to the border gateway nodes
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
+              vars:
+                bgw_fabric_spec: "{{ cg_fabric.spec }}"
+                bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
+
+            - name: Remove the gateway instance from each node
+              ansible.builtin.include_tasks: node_gateway_down.yml
+              loop: "{{ cg_fabric.spec.borderGateway.nodes }}"
+              loop_control:
+                loop_var: bgw_node
+                label: "{{ bgw_node.name }}"
+          always:
+            - name: Remove the SSH key
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+
+            - name: Release the lease
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+              vars:
+                fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cgt_holder }}"}
+
+        - name: Release the gateway's provider-edge index
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+          vars:
+            fab_ledger:
+              action: ledger-release
+              namespace: "{{ fab_namespace }}"
+              fabric: "{{ cg_fabric_name }}"
+              kind: peIndex
+              owner: "CloudGateway/{{ fab_namespace }}/{{ fab_name }}"
+
+    - name: Resolve the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ cg_site_name }}"
+        ci_ref_namespace: "{{ fab_namespace }}"
+
+    - name: The site side ({{ ci_type }})
+      ansible.builtin.include_tasks: "site_{{ ci_type }}_down.yml"
+      when: ci_found and ci_type in ['openshift', 'openstack']
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -18,10 +94,14 @@
           status: ready
           ready: false
           deletionComplete: true
-          message: Deleted
+          message: Deleted; gateway instance and site side removed
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
   rescue:
+    - name: Remove the SSH key
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+      ignore_errors: true
+
     - name: Mark the CloudGateway teardown failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:

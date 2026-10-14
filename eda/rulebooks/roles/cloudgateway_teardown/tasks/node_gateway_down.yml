@@ -1,0 +1,30 @@
+---
+# shc (design/P7-PLAN.md P7.3.5): remove a gateway instance from one node (delegated, become). The gateway's
+# delete waited for its placements, so the instance carries no tenant network.
+- name: "{{ bgw_node.name }}: stop the gateway instance and keep it off at boot"
+  ansible.builtin.systemd:
+    name: "shc-gw@{{ fab_name }}.service"
+    state: stopped
+    enabled: false
+  failed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: is the instance installed"
+  ansible.builtin.stat:
+    path: "/etc/shc-fabric/gw-{{ fab_name }}.json"
+  register: _cgt_conf
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: remove the namespace and the core leg"
+  ansible.builtin.command: "/usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} down"
+  register: _cgt_down
+  changed_when: "'changed=yes' in _cgt_down.stdout"
+  when: _cgt_conf.stat.exists
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: remove the instance's configuration"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/var/run/frr/gw-{{ fab_name }}"]
+  delegate_to: "{{ bgw_node.name }}"

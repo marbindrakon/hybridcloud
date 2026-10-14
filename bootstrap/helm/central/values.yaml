@@ -3950,7 +3950,7 @@ sovereignJobs:
               property: root_token
       env:
         - name: RUN_ID
-          value: "2026-10-14-aap-config-v16"  # v13: cloudinfrastructure JTs + activations, CLOUDOSO_DEFAULTS cloudRef; v14: dnsconfig; v15: glanceImage; v16: fabric JTs + fabric-events (P7.3.3)
+          value: "2026-10-14-aap-config-v17"  # v13: cloudinfrastructure JTs + activations, CLOUDOSO_DEFAULTS cloudRef; v14: dnsconfig; v15: glanceImage; v16: fabric JTs + fabric-events (P7.3.3); v17: FABRIC_REALIZATION
         - name: AAP_CONFIG_PATH
           value: "/runner/project/aap-config"
         - name: AAP_CONTROLLER_HOST
@@ -3978,6 +3978,11 @@ sovereignJobs:
         # build: rhcos-9.8.20260715-1-openstack = OCP 4.22.16 (design/CENTRAL-ETCD-LATENCY.md).
         - name: PLATFORMOPENSHIFT_DEFAULTS
           value: '{"ocpImageSet":"img4.22.16-x86-64-appsub","pullSecretVaultPath":"oso/ocp-pull-secret","pullSecretVaultProperty":".dockerconfigjson","sshKeyVaultPath":"oso/ocp-ssh-key","controlPlaneFlavor":"b1.3xlarge","workerFlavor":"b1.3xlarge","mceClusterBuildChart":"oci://quay.signal9.gg/shc/mce-cluster-build","mceClusterBuildChartVersion":"0.2.1-shc.3","externalDNS":["172.18.42.20"],"glanceImage":"rhcos-9.8.20260715-1-openstack"}'
+        # P7.3 (owner 10-14: CRs generic, the Ansible realizes): the fabric realization's installation overrides
+        # (defaults in eda/common/vars/fabric_realization.yml). The BGW blades are RHEL hosts with cloud-user + sudo;
+        # the platform project for rhoso-bm placements lives in the tenant domain.
+        - name: FABRIC_REALIZATION
+          value: '{"nodes":{"sshUser":"cloud-user","trunkInterface":"bond1"},"openstack":{"projectDomain":"shc-tenants"}}'
         - name: AAP_ADMIN_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -4807,7 +4812,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.7"  # shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces
+  chartVersion: "0.1.22-shc.8"  # shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
@@ -4867,6 +4872,7 @@ hybridsovereignPrimaryOperator:
           openshift:
             clusterRef: iaas1
             storageClass: ocs-external-storagecluster-ceph-rbd
+            fabricCredentialsRef: {vaultPath: cloudinfra/iaas1-fabric}   # P7.3.2: write MSA shc-fabric
           dns: {mode: platform}   # CloudVirt zones held by the platform (TENANT-DNS D3)
       edge1:
         spec:
@@ -4876,6 +4882,7 @@ hybridsovereignPrimaryOperator:
           openshift:
             clusterRef: edge1
             storageClass: ocs-external-storagecluster-ceph-rbd
+            fabricCredentialsRef: {vaultPath: cloudinfra/edge1-fabric}   # P7.3.2: write MSA shc-fabric
           dns: {mode: platform}
     # P7.3 (P7-PLAN §12.3, H2 = gateway as PE): the fabric and a gateway per EVPN site on the BGW blades bgw-1/2
     # (blades 5/8). The fabric is realized from P7.3.4 (ledger + root instance on both blades); the gateways stay
@@ -4887,15 +4894,11 @@ hybridsovereignPrimaryOperator:
           overlayMtu: 9000
           vniPool: {start: 51000, end: 52127}
           l2vniPool: {start: 151000, end: 152127}
-          vpnTargetPool: {start: 10000, end: 10999}
           borderGateway:
             nodes:
               - {name: bgw-1, address: 172.18.0.61}
               - {name: bgw-2, address: 172.18.0.62}
-            trunkInterface: bond1
-            sshUser: cloud-user
             credentialsRef: {vaultPath: fabric/bgw}
-          core: {loopbackPool: 10.255.0.0/24, linkSubnet: 10.255.1.0/24}
           bgp:
             passwordRef: {vaultPath: fabric/bgp}
     cloudGateways:

@@ -1,0 +1,25 @@
+---
+# shc (design/P7-PLAN.md §12.3, H2): how this platform realizes a HybridFabric. The CRs state intent; these are
+# the realization's own parameters: border gateway nodes are Linux hosts reached over SSH, each node runs the
+# fabric root (VPNv4 route reflector) and one network namespace per CloudGateway (a provider edge: EVPN-VXLAN on
+# the site side, IS-IS segment routing + MPLS L3VPN over a node-local core bridge on the fabric side).
+# An installation overrides any of it with the sovereign-localhost inventory variable `fabric_realization`
+# (aap-config env FABRIC_REALIZATION, JSON), and per fabric under fabric_realization.fabrics.<name>.
+fabric_realization_defaults:
+  # route target values per HybridNetwork between the gateways (<domainAsn>:<value>); must stay clear of the
+  # fabric's VNI pools so a VPN route target never equals a site route target
+  vpnTargetPool: {start: 10000, end: 10999}
+  # standard community <domainAsn>:<value> on the routes gateways originate into a site; never taken back
+  gatewayCommunity: 999
+  core:
+    bridge: br-core
+    loopbackPool: 10.255.0.0/24
+    linkSubnet: 10.255.1.0/24
+    isisArea: "49.0001"
+    srgb: {start: 16000, end: 23999}
+  nodes:
+    trunkInterface: bond1
+    sshUser: root
+  openstack:
+    # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
+    platformProject: hybrid-fabric

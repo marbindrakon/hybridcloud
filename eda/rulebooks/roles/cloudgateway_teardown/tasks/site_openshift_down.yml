@@ -1,0 +1,39 @@
+---
+# shc (design/P7-PLAN.md P7.3.5): remove the VTEP this gateway created on the OpenShift site (labelled with it).
+- name: Read the site's fabric credential
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ ((ci_spec.openshift | default({})).fabricCredentialsRef | default(ci_spec.credentialsRef)).vaultPath }}"
+
+- name: Write the site kubeconfig (temp, 0600)
+  ansible.builtin.copy:
+    content: "{{ vault_kv_data.kubeconfig }}"
+    dest: "/tmp/eda-cgt-{{ fab_name }}-kubeconfig"
+    mode: "0600"
+  no_log: true
+
+- name: Remove the VTEP
+  block:
+    - name: Find the VTEP this gateway created
+      kubernetes.core.k8s_info:
+        kubeconfig: "/tmp/eda-cgt-{{ fab_name }}-kubeconfig"
+        api_version: k8s.ovn.org/v1
+        kind: VTEP
+        label_selectors: ["hybridsovereign.redhat/cloudgateway={{ fab_name }}"]
+      register: _cgt_vteps
+
+    - name: Delete it
+      kubernetes.core.k8s:
+        kubeconfig: "/tmp/eda-cgt-{{ fab_name }}-kubeconfig"
+        api_version: k8s.ovn.org/v1
+        kind: VTEP
+        name: "{{ item.metadata.name }}"
+        state: absent
+      loop: "{{ _cgt_vteps.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+  always:
+    - name: Remove the site kubeconfig
+      ansible.builtin.file:
+        path: "/tmp/eda-cgt-{{ fab_name }}-kubeconfig"
+        state: absent

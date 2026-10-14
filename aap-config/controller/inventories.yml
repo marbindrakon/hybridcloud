@@ -9,6 +9,9 @@ controller_inventories:
       # shc (§11.6 phase C): installation defaults for CloudOSO / PlatformOpenshift (JSON objects)
       cloudoso_defaults: "{{ lookup('env', 'CLOUDOSO_DEFAULTS') | default('{}', true) | from_json }}"
       platformopenshift_defaults: "{{ lookup('env', 'PLATFORMOPENSHIFT_DEFAULTS') | default('{}', true) | from_json }}"
+      # shc (design/P7-PLAN.md §12.3): how this installation realizes HybridFabrics (overrides of
+      # eda/common/vars/fabric_realization.yml; per fabric under fabrics.<name>)
+      fabric_realization: "{{ lookup('env', 'FABRIC_REALIZATION') | default('{}', true) | from_json }}"
 
 controller_hosts:
   - name: localhost

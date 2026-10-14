@@ -1,0 +1,25 @@
+---
+# shc (design/P7-PLAN.md P7.3.5, §12.3.2): the site side of a gateway on an OpenStack site: the platform-owned
+# project that will hold the placements' networks and routers (shared with the tenant projects through Neutron
+# RBAC), with the site account (cloud admin) as member. Sets cg_site_extra.
+- name: The site's OpenStack account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ ci_spec.credentialsRef.vaultPath }}"
+    os_account_tag: "cg-{{ fab_name }}"
+
+- name: Ensure the platform project
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_request:
+      action: platform-project
+      region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
+      domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
+      name: "{{ fab_real.openstack.platformProject }}"
+      description: "Platform networks for fabric placements (CloudGateway {{ fab_name }})"
+
+- name: Record the site side
+  ansible.builtin.set_fact:
+    cg_site_extra: {project: {name: "{{ os_result.name }}", id: "{{ os_result.id }}"}}
+    cg_site_changed: "{{ os_result.created | default(false) or os_result.member_granted | default(false) }}"

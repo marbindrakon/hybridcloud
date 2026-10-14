@@ -7,6 +7,11 @@
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
 
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ fab_name }}"
+
     - name: Set the lease holder
       ansible.builtin.set_fact:
         hft_holder: "HybridFabric/{{ fab_name }} teardown job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
@@ -22,6 +27,7 @@
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
           vars:
             bgw_fabric_spec: "{{ fab_spec }}"
+            bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
         - name: Remove the root instance from each node
           ansible.builtin.include_tasks: node_root_down.yml
