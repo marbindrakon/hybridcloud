@@ -3928,7 +3928,7 @@ sovereignJobs:
               property: root_token
       env:
         - name: RUN_ID
-          value: "2026-10-14-aap-config-v18"  # v13: cloudinfrastructure JTs + activations, CLOUDOSO_DEFAULTS cloudRef; v14: dnsconfig; v15: glanceImage; v16: fabric JTs + fabric-events (P7.3.3); v17: FABRIC_REALIZATION; v18: FABRIC_REALIZATION openshift.frrConfigurationSelector (P7.3.8)
+          value: "2026-10-14-aap-config-v19"  # v19: fabric-orphan-check JT (P7.3.9); v13: cloudinfrastructure JTs + activations, CLOUDOSO_DEFAULTS cloudRef; v14: dnsconfig; v15: glanceImage; v16: fabric JTs + fabric-events (P7.3.3); v17: FABRIC_REALIZATION; v18: FABRIC_REALIZATION openshift.frrConfigurationSelector (P7.3.8)
         - name: AAP_CONFIG_PATH
           value: "/runner/project/aap-config"
         - name: AAP_CONTROLLER_HOST
