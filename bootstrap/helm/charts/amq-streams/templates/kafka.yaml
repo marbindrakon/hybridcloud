@@ -54,6 +54,30 @@ spec:
         size: {{ .Values.kafka.storage }}
         deleteClaim: false
     kraftMetadata: shared
+  {{- with .Values.kafka.nodePool.antiAffinity }}
+  # shc: one broker per node (all three had landed on one central node, a single point of failure)
+  template:
+    pod:
+      affinity:
+        podAntiAffinity:
+          {{- if eq . "required" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  strimzi.io/cluster: {{ $.Values.kafka.name }}
+                  strimzi.io/pool-name: {{ $.Values.kafka.nodePool.name }}
+              topologyKey: kubernetes.io/hostname
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    strimzi.io/cluster: {{ $.Values.kafka.name }}
+                    strimzi.io/pool-name: {{ $.Values.kafka.nodePool.name }}
+                topologyKey: kubernetes.io/hostname
+          {{- end }}
+  {{- end }}
 ---
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka

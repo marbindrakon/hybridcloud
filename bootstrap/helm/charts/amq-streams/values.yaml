@@ -18,6 +18,8 @@ kafka:
     roles:
       - controller
       - broker
+    # shc: spread the brokers over the nodes: "required" (one per node; replicas <= nodes), "preferred", or "" (none)
+    antiAffinity: required
   authorization:
     enabled: true
   # shc (review D3): JMX exporter + PodMonitor + alerts (user-workload monitoring)

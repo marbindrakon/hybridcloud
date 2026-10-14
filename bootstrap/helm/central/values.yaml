@@ -4808,7 +4808,7 @@ acmBasechart:
 # ─── AMQ Streams (central cluster) ───────────────────────────────────────────
 amqStreams:
   enabled: true
-  chartVersion: "0.2.4-shc.3"
+  chartVersion: "0.2.4-shc.4"  # shc: brokers spread one per node (anti-affinity), before the central-1 move
   syncWave: "13"
   destinationNamespace: amq-streams
   values:
