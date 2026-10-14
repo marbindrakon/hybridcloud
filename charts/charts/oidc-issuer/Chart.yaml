@@ -2,5 +2,5 @@ apiVersion: v2
 name: oidc-issuer
 description: Self-hosted service-account OIDC issuer documents for platform clusters (shc LAB-PLAN D17/§9)
 type: application
-version: 0.1.3
+version: 0.1.4
 appVersion: "0.1.0"

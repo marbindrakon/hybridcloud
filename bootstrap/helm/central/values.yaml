@@ -460,7 +460,7 @@ rhacm:
 # ─── shc: cluster OIDC issuer (LAB-PLAN D17/§9) ──────────────────────────────
 oidcIssuer:
   enabled: true
-  chartVersion: "0.1.3"
+  chartVersion: "0.1.4"
   syncWave: "8"
   values:
     host: oidc.shc.signal9.gg
@@ -477,6 +477,10 @@ oidcIssuer:
           source: acm
         - name: edge1
           source: acm
+        # P8 SPIFFE spike: SPIRE's JWT-SVID issuer (SpireServer jwtIssuer https://oidc.shc.signal9.gg/spire)
+        - name: spire
+          source: url
+          url: https://spire-spiffe-oidc-discovery-provider.zero-trust-workload-identity-manager.svc
 
 # ─── shc: bare-metal node inventory (LAB-PLAN D19, §7 item 3) ───────────────────────────────
 # charts/charts/metal-node-assignment on central: BareMetalHosts (ipmi://, legacy boot, converged

@@ -23,6 +23,9 @@ tls:
 sync:
   schedule: "*/15 * * * *"
   image: registry.redhat.io/openshift4/ose-tools-rhel9:latest  # has oc + jq (ose-cli lacks jq)
+  # Issuers published under baseURL/<name>: source local (this cluster's API), acm (a ManagedCluster through
+  # cluster-proxy) or url (an HTTPS OIDC discovery endpoint in this cluster, verified with the service CA; keysPath
+  # defaults to /keys), e.g. {name: spire, source: url, url: https://spire-spiffe-oidc-discovery-provider.<ns>.svc}
   clusters:
     - name: central
       source: local
