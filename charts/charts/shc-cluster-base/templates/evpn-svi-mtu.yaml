@@ -1,0 +1,59 @@
+{{- /*
+EVPN SVI MTU (shc P7.3, design/P7-PLAN.md §12.9). OVN-Kubernetes creates the per-network EVPN SVIs (svl2-* and svl3-* devices,
+on the VTEP bridge) without an MTU, so they start at the bridge's MTU of that moment (1500), and every new EVPN
+network briefly drops the bridge to 1500 while its port joins, which shrinks every SVI for good (a VLAN device
+shrinks with its parent but never grows back). Routed traffic between sites then caps at 1500. OVN-K treats the
+SVI MTU as "don't care", so a small service that raises them on every link event does not fight its reconcile.
+Rendered with the fabric section (certs layer); a MachineConfig change reboots the pool once.
+*/}}
+{{- if and .Values.layers.certs .Values.fabric.enabled .Values.fabric.sviMtu.enabled }}
+{{- $m := .Values.fabric.sviMtu }}
+{{- $script := printf `#!/bin/bash
+# shc: keep the OVN-Kubernetes EVPN SVIs (svl2*/svl3*) at the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml).
+TARGET=%v
+fix() {
+  for d in /sys/class/net/svl2* /sys/class/net/svl3*; do
+    [ -e "$d/mtu" ] || continue
+    # fails while the bridge itself is below TARGET; the bridge's own link event retries it
+    [ "$(cat "$d/mtu")" -lt "$TARGET" ] && ip link set dev "${d##*/}" mtu "$TARGET" 2>/dev/null
+  done
+  return 0
+}
+fix
+ip -o monitor link | while read -r _; do fix; done
+` $m.mtu }}
+{{- range $m.roles }}
+---
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-{{ . }}-shc-evpn-svi-mtu
+  labels:
+    machineconfiguration.openshift.io/role: {{ . }}
+spec:
+  config:
+    ignition:
+      version: {{ $.Values.timesync.ignitionVersion }}
+    storage:
+      files:
+        - path: /usr/local/bin/shc-evpn-svi-mtu.sh
+          mode: 493
+          overwrite: true
+          contents:
+            source: data:text/plain;charset=utf-8;base64,{{ $script | b64enc }}
+    systemd:
+      units:
+        - name: shc-evpn-svi-mtu.service
+          enabled: true
+          contents: |
+            [Unit]
+            Description=shc: keep the OVN-Kubernetes EVPN SVIs at the overlay MTU
+            After=network-online.target
+            [Service]
+            ExecStart=/usr/local/bin/shc-evpn-svi-mtu.sh
+            Restart=always
+            RestartSec=5
+            [Install]
+            WantedBy=multi-user.target
+{{- end }}
+{{- end }}

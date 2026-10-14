@@ -196,3 +196,9 @@ fabric:
   gateway: ""                # the site's fabric gateway (.1)
   routes: []                 # the other fabric subnets, via the gateway
   nodes: []                  # [{name: <node>, vtepIP: <address>}]
+  # OVN-K creates the EVPN SVIs at 1500 and shrinks them whenever a network is added (templates/evpn-svi-mtu.yaml):
+  # a node service keeps them at the overlay MTU. MachineConfig per pool (one reboot when first enabled).
+  sviMtu:
+    enabled: false
+    mtu: 9000
+    roles: [master, worker]
