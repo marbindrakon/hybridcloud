@@ -23,6 +23,14 @@ import { HybridSovereignKind, K8sResource } from '../types';
 import { GenericSpecEditor } from '../forms/GenericSpecEditor';
 import { PageHeader } from './PageHeader';
 import { StatusBadge } from './StatusBadge';
+import {
+  COMMON_STATUS_KEYS,
+  KIND_STATUS_KEYS,
+  KindStatusDetails,
+  RealizationBlock,
+  StatusWaitBlocks,
+  redactForTenant,
+} from './KindStatusDetails';
 
 export interface ResourceDetailProps {
   kind: HybridSovereignKind;
@@ -32,6 +40,10 @@ export interface ResourceDetailProps {
   parentPath: string;
   onBack: () => void;
   onDeleted?: () => void;
+  /** Show the object without edit, reconcile or delete actions */
+  readOnly?: boolean;
+  /** tenant pages hide platform credentials and platform-only fields (default tenant) */
+  audience?: 'admin' | 'tenant';
 }
 
 function formatValue(val: unknown): React.ReactNode {
@@ -121,6 +133,8 @@ function SpecEditor(props: {
   namespace: string;
   item: K8sResource;
   onSaved: () => void;
+  readOnly?: boolean;
+  audience?: 'admin' | 'tenant';
 }): React.ReactElement {
   return <GenericSpecEditor {...props} />;
 }
@@ -133,6 +147,8 @@ export function ResourceDetail({
   parentPath,
   onBack,
   onDeleted,
+  readOnly = false,
+  audience = 'tenant',
 }: ResourceDetailProps): React.ReactElement {
   const [activeTab, setActiveTab] = useState<string | number>(0);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -149,18 +165,25 @@ export function ResourceDetail({
     resource?.status?.status ||
     (resource?.status?.ready === true ? 'ready' : resource?.status?.ready === false ? 'failed' : 'pending');
 
+  /** What this page shows: tenant pages never see platform credential references. */
+  const shown = useMemo(
+    () => (resource && audience === 'tenant' ? redactForTenant(kind, resource) : resource),
+    [resource, audience, kind],
+  );
+
   const overviewFields = useMemo(() => {
     if (!resource) return {};
     const statusRaw = { ...(resource.status ?? {}) } as Record<string, unknown>;
-    delete statusRaw.conditions;
-    delete statusRaw.edaJobs;
+    for (const key of [...COMMON_STATUS_KEYS, ...(KIND_STATUS_KEYS[kind] ?? [])]) {
+      delete statusRaw[key];
+    }
     return {
       Name: resource.metadata.name,
       Namespace: resource.metadata.namespace ?? namespace,
       ...(resource.metadata.labels ? { Labels: resource.metadata.labels } : {}),
       ...statusRaw,
     };
-  }, [resource, namespace]);
+  }, [resource, namespace, kind]);
 
   const handleReconcile = async () => {
     if (reconciling || cooldown || !namespace || !name) return;
@@ -228,20 +251,24 @@ export function ResourceDetail({
             <Button variant="link" icon={<ArrowLeftIcon />} onClick={onBack}>
               Back to {parentTitle}
             </Button>
-            <Button
-              variant="secondary"
-              icon={reconciling ? <Spinner size="md" /> : <SyncAltIcon />}
-              isDisabled={reconciling || cooldown}
-              onClick={handleReconcile}
-            >
-              {cooldown ? 'Reconcile queued' : 'Reconcile now'}
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="secondary"
+                icon={reconciling ? <Spinner size="md" /> : <SyncAltIcon />}
+                isDisabled={reconciling || cooldown}
+                onClick={handleReconcile}
+              >
+                {cooldown ? 'Reconcile queued' : 'Reconcile now'}
+              </Button>
+            )}
             <Button variant="secondary" icon={<SyncAltIcon />} onClick={refresh}>
               Refresh
             </Button>
-            <Button variant="danger" icon={<TrashIcon />} onClick={() => setConfirmDelete(true)}>
-              Delete
-            </Button>
+            {!readOnly && (
+              <Button variant="danger" icon={<TrashIcon />} onClick={() => setConfirmDelete(true)}>
+                Delete
+              </Button>
+            )}
           </>
         }
       />
@@ -278,35 +305,6 @@ export function ResourceDetail({
         </Alert>
       )}
 
-      {kind === 'PlatformOpenshift' &&
-        (() => {
-          const net = (resource.status as { networking?: Record<string, unknown> } | undefined)?.networking;
-          if (!net || typeof net !== 'object') return null;
-          const conflict = String(net.conflictCheck ?? '');
-          const conflictMsg = String(net.conflictMessage ?? '');
-          const cidrs = [
-            ...(Array.isArray(net.clusterNetwork) ? net.clusterNetwork : []),
-            ...(Array.isArray(net.serviceNetwork) ? net.serviceNetwork : []),
-            ...(Array.isArray(net.machineNetwork) ? net.machineNetwork : []),
-          ].map(String);
-          return (
-            <div style={{ marginBottom: '1rem', display: 'grid', gap: '0.5rem' }}>
-              {conflict === 'failed' || conflictMsg ? (
-                <Alert variant="danger" title="Fabric IPAM conflict" isInline>
-                  {conflictMsg || `conflictCheck=${conflict}`}
-                </Alert>
-              ) : null}
-              {cidrs.length > 0 ? (
-                <Alert variant="info" title="Allocated cluster CIDRs (status.networking)" isInline>
-                  {cidrs.join(' · ')}
-                  {net.fabricRef ? ` · fabricRef=${String(net.fabricRef)}` : ''}
-                  {conflict ? ` · conflictCheck=${conflict}` : ''}
-                </Alert>
-              ) : null}
-            </div>
-          );
-        })()}
-
       <Tabs
         activeKey={activeTab}
         onSelect={(_e, k) => setActiveTab(k)}
@@ -314,12 +312,22 @@ export function ResourceDetail({
       >
         <Tab eventKey={0} title={<TabTitleText>Overview</TabTitleText>}>
           <div style={{ paddingTop: '1rem' }}>
+            <StatusWaitBlocks item={resource} />
+            {shown && <KindStatusDetails kind={kind} item={shown} />}
+            <RealizationBlock item={resource} />
             <FieldGrid data={overviewFields} />
           </div>
         </Tab>
         <Tab eventKey={1} title={<TabTitleText>Configuration</TabTitleText>}>
           <div style={{ paddingTop: '1rem' }}>
-            <SpecEditor kind={kind} namespace={namespace} item={resource} onSaved={refresh} />
+            <SpecEditor
+              kind={kind}
+              namespace={namespace}
+              item={resource}
+              onSaved={refresh}
+              readOnly={readOnly}
+              audience={audience}
+            />
           </div>
         </Tab>
         <Tab eventKey={2} title={<TabTitleText>Events / Conditions</TabTitleText>}>
@@ -329,7 +337,7 @@ export function ResourceDetail({
         </Tab>
         <Tab eventKey={3} title={<TabTitleText>YAML</TabTitleText>}>
           <div style={{ paddingTop: '1rem' }}>
-            <pre className="sc-yaml">{JSON.stringify(resource, null, 2)}</pre>
+            <pre className="sc-yaml">{JSON.stringify(shown, null, 2)}</pre>
           </div>
         </Tab>
       </Tabs>

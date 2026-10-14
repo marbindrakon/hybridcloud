@@ -43,4 +43,8 @@ export { default as AdminHybridFabricDetailPage } from './components/AdminHybrid
 export { default as AdminCloudGatewayDetailPage } from './components/AdminCloudGatewayDetailPage';
 export { default as AdminTransportLinkDetailPage } from './components/AdminTransportLinkDetailPage';
 export { default as AdminUIHealthCheckerDetailPage } from './components/AdminUIHealthCheckerDetailPage';
+export { default as AdminHybridNetworksPage } from './components/AdminHybridNetworksPage';
+export { default as AdminNetworkPlacementsPage } from './components/AdminNetworkPlacementsPage';
+export { default as AdminHybridNetworkDetailPage } from './components/AdminHybridNetworkDetailPage';
+export { default as AdminNetworkPlacementDetailPage } from './components/AdminNetworkPlacementDetailPage';
 export { icon, getLandingPageURL, getImportRedirectURL } from './perspective';

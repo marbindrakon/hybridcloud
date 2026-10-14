@@ -48,3 +48,14 @@ export { ListTextArea } from './ListTextArea';
 export type { ListTextAreaProps } from './ListTextArea';
 export { ObjectListEditor } from './ObjectListEditor';
 export type { ObjectListEditorProps, ObjectListColumn, ObjectListRow } from './ObjectListEditor';
+export {
+  KindStatusDetails,
+  StatusWaitBlocks,
+  RealizationBlock,
+  EgressStateLabel,
+  PoolBar,
+  redactForTenant,
+  KIND_STATUS_KEYS,
+  TENANT_HIDDEN_SPEC_PATHS,
+} from './KindStatusDetails';
+export type { KindStatusDetailsProps } from './KindStatusDetails';

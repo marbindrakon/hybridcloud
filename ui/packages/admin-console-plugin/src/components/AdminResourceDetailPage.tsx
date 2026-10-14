@@ -12,6 +12,7 @@ export function makeAdminDetailPage(
   title: string,
   listPath: string,
   fixedNamespace?: string,
+  opts?: { readOnly?: boolean },
 ): React.FC {
   const Page: React.FC = () => {
     const navigate = useNavigate();
@@ -46,6 +47,8 @@ export function makeAdminDetailPage(
             parentPath={listPath}
             onBack={() => navigate(listPath)}
             onDeleted={() => navigate(listPath)}
+            audience="admin"
+            readOnly={opts?.readOnly}
           />
         </div>
       </PageSection>

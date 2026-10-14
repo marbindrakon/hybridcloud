@@ -41,6 +41,7 @@ import {
   UserEditIcon,
   InfrastructureIcon,
   NetworkIcon,
+  LayerGroupIcon,
 } from '@patternfly/react-icons';
 import { NavLink, Routes, Route, useLocation } from 'react-router-dom';
 import {
@@ -103,6 +104,20 @@ const NAV: NavEntry[] = [
     labelKey: 'nav.cloudGateways',
     icon: GlobeIcon,
     kind: 'CloudGateway',
+  },
+  {
+    type: 'link',
+    path: '/networking/networks',
+    labelKey: 'nav.hybridNetworksAll',
+    icon: NetworkIcon,
+    kind: 'HybridNetwork',
+  },
+  {
+    type: 'link',
+    path: '/networking/placements',
+    labelKey: 'nav.networkPlacementsAll',
+    icon: LayerGroupIcon,
+    kind: 'NetworkPlacement',
   },
   {
     type: 'link',
@@ -403,7 +418,12 @@ function AdminLayout(): React.ReactElement {
             <Route
               path="/clouds/cloudvirt/:namespace/:name"
               element={
-                <AdminResourceDetailPage kind="CloudVirt" title={t('nav.cloudEnvironments')} listPath="/clouds" />
+                <AdminResourceDetailPage
+                  kind="CloudVirt"
+                  title={t('nav.cloudEnvironments')}
+                  listPath="/clouds"
+                  readOnly
+                />
               }
             />
             <Route
@@ -496,6 +516,50 @@ function AdminLayout(): React.ReactElement {
                   title={t('nav.cloudGateways')}
                   listPath="/networking/gateways"
                   fixedNamespace="sovereign-cloud"
+                />
+              }
+            />
+            <Route
+              path="/networking/networks"
+              element={
+                <ResourceListPage
+                  kind="HybridNetwork"
+                  title={t('nav.hybridNetworksAll')}
+                  subtitle={t('pages.allEntitiesReadOnly')}
+                  listPath="/networking/networks"
+                />
+              }
+            />
+            <Route
+              path="/networking/networks/:namespace/:name"
+              element={
+                <AdminResourceDetailPage
+                  kind="HybridNetwork"
+                  title={t('nav.hybridNetworksAll')}
+                  listPath="/networking/networks"
+                  readOnly
+                />
+              }
+            />
+            <Route
+              path="/networking/placements"
+              element={
+                <ResourceListPage
+                  kind="NetworkPlacement"
+                  title={t('nav.networkPlacementsAll')}
+                  subtitle={t('pages.allEntitiesReadOnly')}
+                  listPath="/networking/placements"
+                />
+              }
+            />
+            <Route
+              path="/networking/placements/:namespace/:name"
+              element={
+                <AdminResourceDetailPage
+                  kind="NetworkPlacement"
+                  title={t('nav.networkPlacementsAll')}
+                  listPath="/networking/placements"
+                  readOnly
                 />
               }
             />

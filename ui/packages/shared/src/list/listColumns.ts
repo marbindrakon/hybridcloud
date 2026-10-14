@@ -75,6 +75,19 @@ function cloudRefColumn(): ListColumnDef {
   };
 }
 
+/** `{ name }` reference at spec[key] */
+function refName(item: K8sResource, key: string): string {
+  const ref = specOf(item)[key];
+  if (ref && typeof ref === 'object') return asString((ref as Record<string, unknown>).name);
+  return '';
+}
+
+/** "ready/total" of status.nodes[] */
+function nodesReady(item: K8sResource): { ready: number; total: number } {
+  const nodes = Array.isArray(statusOf(item).nodes) ? (statusOf(item).nodes as Array<Record<string, unknown>>) : [];
+  return { ready: nodes.filter((n) => n?.ready === true).length, total: nodes.length };
+}
+
 function chip(label: string, color = 'grey'): CellMarker {
   return { __kind: 'chip', label: label || '—', color };
 }
@@ -334,7 +347,6 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
     },
   ],
   CloudAWS: [
-    cloudRefColumn(),
     {
       id: 'account',
       labelKey: 'list.account',
@@ -361,19 +373,43 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
   CloudVirt: [
     cloudRefColumn(),
     {
-      id: 'baseDomain',
-      labelKey: 'list.baseDomain',
+      id: 'namespaces',
+      labelKey: 'list.namespaces',
       sortable: true,
-      getSortValue: (i) => asString(specOf(i).baseDomain),
-      getSearchText: (i) => asString(specOf(i).baseDomain),
-      render: (i) => asString(specOf(i).baseDomain) || '—',
+      getSortValue: (i) => (Array.isArray(specOf(i).namespaces) ? (specOf(i).namespaces as unknown[]).length : 0),
+      getSearchText: (i) =>
+        (Array.isArray(specOf(i).namespaces) ? (specOf(i).namespaces as Array<Record<string, unknown>>) : [])
+          .map((n) => `${asString(n?.name)} ${asString(n?.network)}`)
+          .join(' '),
+      render: (i) => {
+        const ns = Array.isArray(specOf(i).namespaces) ? (specOf(i).namespaces as Array<Record<string, unknown>>) : [];
+        if (!ns.length) return '—';
+        const st = Array.isArray(statusOf(i).namespaces) ? (statusOf(i).namespaces as Array<Record<string, unknown>>) : [];
+        const ready = st.filter((n) => n?.ready === true).length;
+        return countChip(
+          ns.length,
+          ns.map((n) => (n?.network ? `${asString(n.name)} → ${asString(n.network)}` : asString(n?.name))).join(', '),
+          st.length ? `${ready}/${ns.length} ready` : 'namespaces',
+        );
+      },
+    },
+    {
+      id: 'dns',
+      labelKey: 'list.dnsZone',
+      sortable: true,
+      getSortValue: (i) => asString(((statusOf(i).dns ?? {}) as Record<string, unknown>).zone),
+      getSearchText: (i) => asString(((statusOf(i).dns ?? {}) as Record<string, unknown>).zone),
+      render: (i) => {
+        const zone = asString(((statusOf(i).dns ?? {}) as Record<string, unknown>).zone);
+        return zone ? mono(zone) : '—';
+      },
     },
     {
       id: 'storageClass',
       labelKey: 'list.storageClass',
       sortable: true,
-      getSortValue: (i) => asString(specOf(i).storageClass),
-      render: (i) => asString(specOf(i).storageClass) || '—',
+      getSortValue: (i) => asString(statusOf(i).storageClass) || asString(specOf(i).storageClass),
+      render: (i) => asString(statusOf(i).storageClass) || asString(specOf(i).storageClass) || '—',
     },
   ],
   OpenStackMigration: [
@@ -628,19 +664,18 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
   ],
   HybridFabric: [
     {
-      id: 'enabled',
-      labelKey: 'list.enabled',
-      sortable: true,
-      getSortValue: (i) => (boolFlag(specOf(i).enabled) ? 1 : 0),
-      render: (i) =>
-        chip(boolFlag(specOf(i).enabled) ? 'enabled' : 'disabled', boolFlag(specOf(i).enabled) ? 'green' : 'grey'),
-    },
-    {
       id: 'asn',
       labelKey: 'list.asn',
       sortable: true,
       getSortValue: (i) => Number(specOf(i).domainAsn ?? 0),
       render: (i) => asString(specOf(i).domainAsn) || '—',
+    },
+    {
+      id: 'overlayMtu',
+      labelKey: 'list.overlayMtu',
+      sortable: true,
+      getSortValue: (i) => Number(specOf(i).overlayMtu ?? 0),
+      render: (i) => asString(specOf(i).overlayMtu) || '—',
     },
     {
       id: 'vni',
@@ -657,40 +692,63 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       },
     },
     {
-      id: 'underlay',
-      labelKey: 'list.underlay',
+      id: 'l2vni',
+      labelKey: 'list.l2vniPool',
       sortable: true,
-      getSortValue: (i) => asString(((specOf(i).underlay ?? {}) as Record<string, unknown>).cidr),
-      getSearchText: (i) => {
-        const u = (specOf(i).underlay ?? {}) as Record<string, unknown>;
-        return `${asString(u.type)} ${asString(u.cidr)}`;
+      getSortValue: (i) => {
+        const p = (specOf(i).l2vniPool ?? {}) as Record<string, unknown>;
+        return Number(p.start ?? 0);
       },
       render: (i) => {
-        const u = (specOf(i).underlay ?? {}) as Record<string, unknown>;
-        if (!u.cidr && !u.type) return '—';
-        return chips([
-          { label: asString(u.type) || 'ovn-layer2', color: 'purple' },
-          u.cidr ? { label: asString(u.cidr), color: 'grey' } : null,
-        ]);
+        const p = (specOf(i).l2vniPool ?? {}) as Record<string, unknown>;
+        if (p.start == null) return '—';
+        return `${p.start}–${p.end ?? '?'}`;
+      },
+    },
+    {
+      id: 'nodes',
+      labelKey: 'list.nodesReady',
+      sortable: true,
+      getSortValue: (i) => nodesReady(i).ready,
+      render: (i) => {
+        const specNodes = Array.isArray(((specOf(i).borderGateway ?? {}) as Record<string, unknown>).nodes)
+          ? (((specOf(i).borderGateway ?? {}) as Record<string, unknown>).nodes as unknown[]).length
+          : 0;
+        const n = nodesReady(i);
+        const total = Math.max(specNodes, n.total);
+        if (!total) return '—';
+        return chip(`${n.ready}/${total}`, n.ready === total ? 'green' : 'orange');
       },
     },
   ],
   CloudGateway: [
     cloudRefColumn(),
     {
-      id: 'transport',
-      labelKey: 'list.tunnel',
-      sortable: true,
-      getSortValue: (i) => asString(((specOf(i).transport ?? {}) as Record<string, unknown>).type),
-      render: (i) =>
-        chip(asString(((specOf(i).transport ?? {}) as Record<string, unknown>).type) || 'default', 'purple'),
-    },
-    {
       id: 'fabric',
       labelKey: 'list.fabric',
       sortable: true,
-      getSortValue: (i) => asString(specOf(i).fabricRef),
-      render: (i) => asString(specOf(i).fabricRef) || '—',
+      getSortValue: (i) => refName(i, 'fabricRef'),
+      getSearchText: (i) => refName(i, 'fabricRef'),
+      render: (i) => refName(i, 'fabricRef') || '—',
+    },
+    {
+      id: 'transport',
+      labelKey: 'list.transport',
+      sortable: true,
+      getSortValue: (i) => asString(specOf(i).transport) || 'none',
+      getSearchText: (i) => asString(specOf(i).transport) || 'none',
+      render: (i) => chip(asString(specOf(i).transport) || 'none', 'purple'),
+    },
+    {
+      id: 'nodes',
+      labelKey: 'list.nodesReady',
+      sortable: true,
+      getSortValue: (i) => nodesReady(i).ready,
+      render: (i) => {
+        const n = nodesReady(i);
+        if (!n.total) return '—';
+        return chip(`${n.ready}/${n.total}`, n.ready === n.total ? 'green' : 'orange');
+      },
     },
   ],
   TransportLink: [
@@ -725,6 +783,39 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       render: (i) => truncate(asString(specOf(i).description)),
     },
     {
+      id: 'mtu',
+      labelKey: 'list.mtu',
+      sortable: true,
+      getSortValue: (i) => Number(statusOf(i).mtu ?? specOf(i).mtu ?? 0),
+      render: (i) => asString(statusOf(i).mtu ?? specOf(i).mtu) || '—',
+    },
+    {
+      id: 'egress',
+      labelKey: 'list.egress',
+      sortable: true,
+      getSortValue: (i) => asString(((statusOf(i).egress ?? {}) as Record<string, unknown>).internet),
+      getSearchText: (i) => asString(((statusOf(i).egress ?? {}) as Record<string, unknown>).internet),
+      render: (i) => {
+        const wanted = ((specOf(i).egress ?? {}) as Record<string, unknown>).internet === true;
+        const state = asString(((statusOf(i).egress ?? {}) as Record<string, unknown>).internet);
+        if (!wanted && !state) return chip('off', 'grey');
+        const color = state === 'ready' ? 'green' : state === 'unavailable' ? 'red' : state ? 'orange' : 'grey';
+        return chip(state || (wanted ? 'requested' : 'off'), color);
+      },
+    },
+    {
+      id: 'placements',
+      labelKey: 'list.placements',
+      sortable: true,
+      getSortValue: (i) => Number(statusOf(i).placementCount ?? 0),
+      render: (i) => {
+        const total = statusOf(i).placementCount;
+        if (total == null) return '—';
+        const ready = Number(statusOf(i).placementsReady ?? 0);
+        return chip(`${ready}/${Number(total)}`, ready === Number(total) ? 'green' : 'orange');
+      },
+    },
+    {
       id: 'viewers',
       labelKey: 'list.viewers',
       sortable: true,
@@ -735,20 +826,6 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
           asStringArray(specOf(i).networkViewerRbac).join(', '),
           'viewers',
         ),
-    },
-    {
-      id: 'overlayMtu',
-      labelKey: 'list.overlayMtu',
-      sortable: true,
-      getSortValue: (i) => Number(statusOf(i).overlayMtu ?? specOf(i).overlayMtu ?? 0),
-      render: (i) => asString(statusOf(i).overlayMtu ?? specOf(i).overlayMtu) || '—',
-    },
-    {
-      id: 'networkId',
-      labelKey: 'list.networkId',
-      sortable: true,
-      getSortValue: (i) => asString(statusOf(i).networkId),
-      render: (i) => mono(asString(statusOf(i).networkId)),
     },
   ],
   NetworkPlacement: [
@@ -790,17 +867,12 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         countChip(asStringArray(specOf(i).prefixes).length, asStringArray(specOf(i).prefixes).join(', '), 'CIDRs'),
     },
     {
-      id: 'vmNamespaces',
-      labelKey: 'list.vmNamespaces',
+      id: 'site',
+      labelKey: 'list.site',
       sortable: true,
-      getSortValue: (i) => asStringArray(specOf(i).vmNamespaces).length,
-      getSearchText: (i) => asStringArray(specOf(i).vmNamespaces).join(' '),
-      render: (i) => {
-        const b = (specOf(i).backend ?? {}) as Record<string, unknown>;
-        if (asString(b.kind) !== 'CloudVirt') return '—';
-        const ns = asStringArray(specOf(i).vmNamespaces);
-        return ns.length ? countChip(ns.length, ns.join(', '), 'namespaces') : chip('default', 'grey');
-      },
+      getSortValue: (i) => asString(statusOf(i).site),
+      getSearchText: (i) => asString(statusOf(i).site),
+      render: (i) => asString(statusOf(i).site) || '—',
     },
   ],
   UIHealthChecker: [

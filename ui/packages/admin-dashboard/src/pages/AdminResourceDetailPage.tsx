@@ -9,6 +9,8 @@ interface AdminResourceDetailPageProps {
   listPath: string;
   /** Fixed namespace when the URL has no :namespace segment (e.g. Entity) */
   fixedNamespace?: string;
+  /** Tenant objects seen by the platform admin: no edit, reconcile or delete */
+  readOnly?: boolean;
 }
 
 export function AdminResourceDetailPage({
@@ -16,6 +18,7 @@ export function AdminResourceDetailPage({
   title,
   listPath,
   fixedNamespace,
+  readOnly,
 }: AdminResourceDetailPageProps): React.ReactElement {
   const navigate = useNavigate();
   const { namespace: nsParam, name } = useParams<{ namespace?: string; name: string }>();
@@ -47,6 +50,8 @@ export function AdminResourceDetailPage({
       parentPath={listPath}
       onBack={() => navigate(listPath)}
       onDeleted={() => navigate(listPath)}
+      audience="admin"
+      readOnly={readOnly}
     />
   );
 }

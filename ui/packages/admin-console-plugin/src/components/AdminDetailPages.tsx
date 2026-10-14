@@ -36,6 +36,8 @@ export const AdminCloudVirtDetailPage = makeAdminDetailPage(
   'CloudVirt',
   'Cloud Environments',
   '/hybridsovereign/clouds',
+  undefined,
+  { readOnly: true },
 );
 export const AdminRbacDetailPage = makeAdminDetailPage('Rbac', 'Operators', '/hybridsovereign/operators');
 export const AdminRbacConfigDetailPage = makeAdminDetailPage(

@@ -58,8 +58,8 @@ const KIND_LIST_PATH: Partial<Record<string, string>> = {
   HybridFabric: '/networking/fabrics',
   CloudGateway: '/networking/gateways',
   TransportLink: '/networking/transport',
-  HybridNetwork: '/networks',
-  NetworkPlacement: '/placements',
+  HybridNetwork: '/networking/networks',
+  NetworkPlacement: '/networking/placements',
   UIHealthChecker: '/networking/uihealth',
 };
 

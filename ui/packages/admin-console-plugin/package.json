@@ -54,7 +54,11 @@
       "AdminTransportLinkDetailPage": "./src/components/AdminTransportLinkDetailPage.tsx",
       "AdminUIHealthCheckerDetailPage": "./src/components/AdminUIHealthCheckerDetailPage.tsx",
       "perspective": "./src/perspective.tsx",
-      "AdminRbacConfigDetailPage": "./src/components/AdminRbacConfigDetailPage.tsx"
+      "AdminRbacConfigDetailPage": "./src/components/AdminRbacConfigDetailPage.tsx",
+      "AdminHybridNetworksPage": "./src/components/AdminHybridNetworksPage.tsx",
+      "AdminNetworkPlacementsPage": "./src/components/AdminNetworkPlacementsPage.tsx",
+      "AdminHybridNetworkDetailPage": "./src/components/AdminHybridNetworkDetailPage.tsx",
+      "AdminNetworkPlacementDetailPage": "./src/components/AdminNetworkPlacementDetailPage.tsx"
     }
   },
   "dependencies": {

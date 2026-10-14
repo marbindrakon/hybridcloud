@@ -90,7 +90,7 @@ export default AdminEntitiesPage;
 export const makeKindListPage = (
   kind: HybridSovereignKind,
   title: string,
-  opts?: { createKind?: string; listPath?: string; namespace?: string },
+  opts?: { createKind?: string; listPath?: string; namespace?: string; readOnly?: boolean; subtitleKey?: string },
 ): React.FC => {
   const listPath = opts?.listPath ?? `/hybridsovereign/${KIND_PLURALS[kind] ?? kind.toLowerCase()}`;
   const Page: React.FC = () => {
@@ -132,6 +132,7 @@ export const makeKindListPage = (
         <div className="sc-page">
           <PageHeader
             title={kindTitle}
+            subtitle={opts?.subtitleKey ? t(opts.subtitleKey) : undefined}
             breadcrumbs={[{ label: t('nav.sovereignCloud') }, { label: kindTitle }]}
             actions={
               opts?.createKind ? (
@@ -161,7 +162,7 @@ export const makeKindListPage = (
             showNamespace
             linkMode="anchor"
             detailHref={detailHref}
-            enableDelete
+            enableDelete={!opts?.readOnly}
             onDeleted={refresh}
           />
         </div>

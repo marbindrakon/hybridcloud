@@ -50,7 +50,6 @@ function cloudRefOf(item: K8sResource): string {
 
 /** PlatformOpenshift type → kind of the cloud project named by spec.<type>.environment */
 const PLATFORM_ENV_KIND: Record<string, HybridSovereignKind> = {
-  hosted: 'CloudVirt',
   openstack: 'CloudOSO',
   aws: 'CloudAWS',
 };
@@ -306,7 +305,7 @@ export function EntityTopology({
 
     // HybridFabric → CloudInfrastructure through each CloudGateway (fabricRef + cloudRef)
     for (const g of gatewayItems) {
-      const fabricName = (g.spec as { fabricRef?: string } | undefined)?.fabricRef;
+      const fabricName = (g.spec as { fabricRef?: { name?: string } } | undefined)?.fabricRef?.name;
       const infraName = cloudRefOf(g);
       if (!fabricName || !infraName) continue;
       edgePairs.push({

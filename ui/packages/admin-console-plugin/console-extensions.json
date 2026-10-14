@@ -107,6 +107,26 @@
   {
     "type": "console.navigation/href",
     "properties": {
+      "id": "hybridsovereign-hybrid-networks",
+      "section": "hybridsovereign-admin-networks-section",
+      "perspective": "hybridsovereign",
+      "name": "Hybrid Networks (all entities)",
+      "href": "/hybridsovereign/networking/networks"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-network-placements",
+      "section": "hybridsovereign-admin-networks-section",
+      "perspective": "hybridsovereign",
+      "name": "Network Placements (all entities)",
+      "href": "/hybridsovereign/networking/placements"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
       "id": "hybridsovereign-transport",
       "section": "hybridsovereign-admin-networks-section",
       "perspective": "hybridsovereign",
@@ -606,6 +626,46 @@
       "path": "/hybridsovereign/networking/transport/:name",
       "component": {
         "$codeRef": "AdminTransportLinkDetailPage"
+      },
+      "exact": false
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networking/networks",
+      "component": {
+        "$codeRef": "AdminHybridNetworksPage"
+      },
+      "exact": true
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networking/networks/:namespace/:name",
+      "component": {
+        "$codeRef": "AdminHybridNetworkDetailPage"
+      },
+      "exact": false
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networking/placements",
+      "component": {
+        "$codeRef": "AdminNetworkPlacementsPage"
+      },
+      "exact": true
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networking/placements/:namespace/:name",
+      "component": {
+        "$codeRef": "AdminNetworkPlacementDetailPage"
       },
       "exact": false
     }

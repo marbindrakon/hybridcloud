@@ -25,6 +25,8 @@ export const ADMIN_LIST_PATH: Partial<Record<HybridSovereignKind, string>> = {
   HybridFabric: `${PREFIX}/networking/fabrics`,
   CloudGateway: `${PREFIX}/networking/gateways`,
   TransportLink: `${PREFIX}/networking/transport`,
+  HybridNetwork: `${PREFIX}/networking/networks`,
+  NetworkPlacement: `${PREFIX}/networking/placements`,
   UIHealthChecker: `${PREFIX}/networking/uihealth`,
 };
 

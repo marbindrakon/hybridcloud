@@ -3,6 +3,7 @@ import * as React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { PageSection } from '@patternfly/react-core';
 import { HybridSovereignKind, ResourceDetail } from '@hybridsovereign/shared';
+import { makeAdminDetailPage } from './AdminResourceDetailPage';
 import '@hybridsovereign/shared/styles/openshift.css';
 
 const ENTITY_NS = 'sovereign-cloud';
@@ -28,6 +29,7 @@ function makeClusterDetailPage(
             parentPath={listPath}
             onBack={() => navigate(listPath)}
             onDeleted={() => navigate(listPath)}
+            audience="admin"
           />
         </div>
       </PageSection>
@@ -62,4 +64,20 @@ export const AdminUIHealthCheckerDetailPage = makeClusterDetailPage(
   'UIHealthChecker',
   'UI Health',
   '/hybridsovereign/networking/uihealth',
+);
+
+/** Tenant networks across all entities: read-only for the platform admin. */
+export const AdminHybridNetworkDetailPage = makeAdminDetailPage(
+  'HybridNetwork',
+  'Hybrid Networks',
+  '/hybridsovereign/networking/networks',
+  undefined,
+  { readOnly: true },
+);
+export const AdminNetworkPlacementDetailPage = makeAdminDetailPage(
+  'NetworkPlacement',
+  'Network Placements',
+  '/hybridsovereign/networking/placements',
+  undefined,
+  { readOnly: true },
 );

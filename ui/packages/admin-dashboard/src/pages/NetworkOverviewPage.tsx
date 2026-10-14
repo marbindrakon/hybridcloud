@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, PageSection } from '@patternfly/react-core';
 import { SyncIcon } from '@patternfly/react-icons';
 import { useNavigate } from 'react-router-dom';
+import { adminDetailHref } from './ResourceListPage';
 import {
   NetworkOverview,
   PageHeader,
@@ -15,6 +16,11 @@ import {
 const DETAIL_PATH: Partial<Record<HybridSovereignKind, string>> = {
   CloudGateway: '/networking/gateways',
   HybridFabric: '/networking/fabrics',
+  CloudInfrastructure: '/clouds/infrastructure',
+  HybridNetwork: '/networking/networks',
+  NetworkPlacement: '/networking/placements',
+  CloudVirt: '/clouds/cloudvirt',
+  CloudOSO: '/clouds/cloudoso',
 };
 
 export default function NetworkOverviewPage(): React.ReactElement {
@@ -24,9 +30,8 @@ export default function NetworkOverviewPage(): React.ReactElement {
 
   const onSelect = (kind: HybridSovereignKind, item: K8sResource) => {
     const base = DETAIL_PATH[kind];
-    // HybridNetwork has no standalone detail route; only drill into what exists.
     if (!base) return;
-    navigate(`${base}/${encodeURIComponent(item.metadata.name)}`);
+    navigate(adminDetailHref(base, kind, item));
   };
 
   return (
