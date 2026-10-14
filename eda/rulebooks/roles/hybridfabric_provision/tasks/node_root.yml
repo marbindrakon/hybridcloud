@@ -46,10 +46,11 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_rootconf
 
-- name: "{{ bgw_node.name }}: run the root instance at boot"
+- name: "{{ bgw_node.name }}: run the root instance at boot (and now)"
   ansible.builtin.systemd:
     name: shc-fabric-apply@root.service
     enabled: true
+    state: started
     daemon_reload: "{{ _hf_files is changed }}"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_unit

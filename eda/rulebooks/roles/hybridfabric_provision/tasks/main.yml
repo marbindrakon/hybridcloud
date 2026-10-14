@@ -82,8 +82,8 @@
             l2vni: ["{{ fab_spec.l2vniPool.start }}", "{{ fab_spec.l2vniPool.end }}"]
             vpnTarget: ["{{ fab_spec.vpnTargetPool.start }}", "{{ fab_spec.vpnTargetPool.end }}"]
             peIndex: [1, "{{ hf_pe_max }}"]
-          reserve:
-            peIndex: {"HybridFabric/{{ fab_namespace }}/{{ fab_name }}": 1}
+          # (dict keys are not templated: build the owner key in an expression)
+          reserve: "{{ {'peIndex': {'HybridFabric/' ~ fab_namespace ~ '/' ~ fab_name: 1}} }}"
 
     - name: Keep the ledger counts
       ansible.builtin.set_fact:
