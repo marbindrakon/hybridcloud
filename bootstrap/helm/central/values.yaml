@@ -2297,7 +2297,7 @@ iaasClusters:
           vtepInterface: {base: bond0, vlan: 236, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.236.1
-          routes: [172.18.235.0/24, 172.18.237.0/24, 172.18.239.0/24]   # 172.18.234.0/24 (the Atuin RRs) dropped at the cutover
+          routes: []   # P7.3.6 (10-14): VTEPs only talk to their CloudGateways on this VLAN; the P7.2 inter-site routes are gone
           nodes:
             - {name: iaas1-blade1, vtepIP: 172.18.236.11}
             - {name: iaas1-blade2, vtepIP: 172.18.236.12}
@@ -2322,7 +2322,7 @@ iaasClusters:
           vtepInterface: {base: bond1, vlan: 239, mtu: 9100, prefixLength: 24}  # underlay 9100 (P7-PLAN §12.6)
           sviMtu: {enabled: true, mtu: 9000}  # P7.3: OVN-K EVPN SVIs to the overlay MTU (shc-cluster-base templates/evpn-svi-mtu.yaml)
           gateway: 172.18.239.1
-          routes: [172.18.235.0/24, 172.18.236.0/24, 172.18.237.0/24]   # 172.18.234.0/24 (the Atuin RRs) dropped at the cutover
+          routes: []   # P7.3.6 (10-14): VTEPs only talk to their CloudGateways on this VLAN; the P7.2 inter-site routes are gone
           nodes:
             - {name: edge1-node1, vtepIP: 172.18.239.21}
             - {name: edge1-node2, vtepIP: 172.18.239.22}
