@@ -58,7 +58,8 @@
       "AdminHybridNetworksPage": "./src/components/AdminHybridNetworksPage.tsx",
       "AdminNetworkPlacementsPage": "./src/components/AdminNetworkPlacementsPage.tsx",
       "AdminHybridNetworkDetailPage": "./src/components/AdminHybridNetworkDetailPage.tsx",
-      "AdminNetworkPlacementDetailPage": "./src/components/AdminNetworkPlacementDetailPage.tsx"
+      "AdminNetworkPlacementDetailPage": "./src/components/AdminNetworkPlacementDetailPage.tsx",
+      "platformAdminFlag": "./src/platformAdminFlag.ts"
     }
   },
   "dependencies": {

@@ -26,10 +26,12 @@ function PerspectiveIcon(): React.ReactElement {
 
 export const icon = { default: PerspectiveIcon };
 
+/** Platform admins land on the admin overview, everyone else (tenants) on their own overview. */
 export const getLandingPageURL = (
-  _flags: { [key: string]: boolean },
+  flags: { [key: string]: boolean },
   _isFirstVisit: boolean,
-): string => '/hybridsovereign/overview';
+): string =>
+  flags?.HYBRIDSOVEREIGN_PLATFORM_ADMIN ? '/hybridsovereign/overview' : '/hybridsovereign/tenant/overview';
 
 export const getImportRedirectURL = (_namespace: string): string =>
   '/hybridsovereign/overview';

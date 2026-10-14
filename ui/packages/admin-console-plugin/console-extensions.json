@@ -1,5 +1,13 @@
 [
   {
+    "type": "console.flag/hookProvider",
+    "properties": {
+      "handler": {
+        "$codeRef": "platformAdminFlag.usePlatformAdminFlag"
+      }
+    }
+  },
+  {
     "type": "console.perspective",
     "properties": {
       "id": "hybridsovereign",
@@ -21,6 +29,11 @@
       "id": "hybridsovereign-admin-section",
       "perspective": "hybridsovereign",
       "name": "Admin"
+    },
+    "flags": {
+      "required": [
+        "HYBRIDSOVEREIGN_PLATFORM_ADMIN"
+      ]
     }
   },
   {
@@ -59,6 +72,11 @@
       "id": "hybridsovereign-admin-networks-section",
       "perspective": "hybridsovereign",
       "name": "Admin Networks"
+    },
+    "flags": {
+      "required": [
+        "HYBRIDSOVEREIGN_PLATFORM_ADMIN"
+      ]
     }
   },
   {
@@ -140,6 +158,11 @@
       "id": "hybridsovereign-admin-monitor-section",
       "perspective": "hybridsovereign",
       "name": "Admin Monitor"
+    },
+    "flags": {
+      "required": [
+        "HYBRIDSOVEREIGN_PLATFORM_ADMIN"
+      ]
     }
   },
   {
