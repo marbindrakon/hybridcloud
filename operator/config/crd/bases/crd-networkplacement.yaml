@@ -24,8 +24,10 @@ spec:
           description: >-
             Places a HybridNetwork on one cloud environment of the same Entity: a CloudOSO (an OpenStack project)
             or a CloudVirt (OpenShift Virtualization). The platform creates the network there with the given
-            subnets and connects it, through the site's CloudGateway, to the network's other placements. The
-            environment's site must offer EVPN and have a CloudGateway.
+            subnets and connects it, through the site's CloudGateway, to the network's other placements. On a
+            CloudVirt, the network serves every namespace of the environment that names it (CloudVirt
+            spec.namespaces). The environment's site must offer EVPN and have a CloudGateway. A CloudVirt placement
+            is deleted only after no namespace of the environment names the network.
           type: object
           required:
             - spec
@@ -39,9 +41,6 @@ spec:
             spec:
               type: object
               required: [network, backend, prefixes]
-              x-kubernetes-validations:
-                - rule: "!has(self.vmNamespaces) || self.backend.kind == 'CloudVirt'"
-                  message: vmNamespaces applies to CloudVirt placements only
               properties:
                 network:
                   type: string
@@ -85,18 +84,6 @@ spec:
                         message: each prefix must be an IPv4 network prefix (host bits zero)
                       - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 29)"
                         message: prefix length must be between 8 and 29
-                vmNamespaces:
-                  type: array
-                  description: >-
-                    CloudVirt only: namespaces created for VMs on this network on the CloudVirt's cluster; each
-                    namespace is on exactly one network. Default: one namespace named <entity>-<cloudvirt>-<network>
-                    (cut to 63 characters).
-                  maxItems: 8
-                  x-kubernetes-list-type: set
-                  items:
-                    type: string
-                    maxLength: 63
-                    pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
             status:
               type: object
               properties:
@@ -125,7 +112,7 @@ spec:
                     type: string
                 namespaces:
                   type: array
-                  description: CloudVirt VM namespaces of this placement.
+                  description: CloudVirt site namespaces the network serves (the environment's namespaces that name it).
                   items:
                     type: string
                 backendReady:

@@ -2,7 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.3, §12.3): NetworkPlacement provision. Resolves the network, the backend (CloudOSO
 # or CloudVirt), the backend's site and the site's CloudGateway; records site and gateway as soon as they are known
 # (the CloudGateway's delete waits on status.cloudGateway); checks the prefixes against the network's other
-# placements. Realizing it (VNIs from the ledger, the backend network, the gateway VRF) is P7.3.8; until then it
+# placements. On a CloudVirt it serves the environment's namespaces that name the network (status.namespaces).
+# Realizing it (VNIs from the ledger, the backend network, the gateway VRF) is P7.3.8; until then it
 # ends pending: on the network, backend or gateway while those aren't ready, else with reason NotImplemented.
 - block:
     - name: Read the NetworkPlacement
@@ -166,36 +167,22 @@
         msg: "{{ fab_fail_msg }}"
       when: fab_fail_msg | default('', true) | length > 0
 
-    # namespace names are global on the site's cluster: the default carries the Entity
-    - name: Default the VM namespace (CloudVirt)
-      ansible.builtin.set_fact:
-        np_status: >-
-          {{ np_status | combine({'namespaces': fab_spec.vmNamespaces | default([
-               ((fab_entity ~ '-' ~ np_backend_name ~ '-' ~ fab_spec.network) | lower
-                | regex_replace('[^a-z0-9-]', '-'))[:63] | regex_replace('-+$', '')], true)}) }}
-      when: np_backend_kind == 'CloudVirt'
-
-    - name: Refuse a VM namespace another placement uses
+    - name: Map the CloudVirt's namespaces on this network
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
-        _taken: >-
-          {%- set out = [] -%}
-          {%- for p in _np_all.resources | default([]) if p.metadata.name != fab_name -%}
-            {%- for n in (p.status | default({}, true)).namespaces | default(p.spec.vmNamespaces | default([]), true) -%}
-              {%- if n in np_status.namespaces -%}{%- set _ = out.append(n ~ ' (placement ' ~ p.metadata.name ~ ')') -%}{%- endif -%}
-            {%- endfor -%}
-          {%- endfor -%}
-          {{ out }}
-      ansible.builtin.set_fact:
-        fab_fail_reason: NamespaceTaken
-        fab_fail_msg: "NetworkPlacement {{ fab_name }}: VM namespace already used: {{ _taken | join(', ') }}"
-      when:
-        - np_backend_kind == 'CloudVirt'
-        - _taken | length > 0
+        fab_check:
+          action: cloudvirt-namespaces
+          entity: "{{ fab_entity }}"
+          cloudvirt: "{{ np_backend_name }}"
+          namespaces: >-
+            {{ ((np_backend.spec | default({}, true)).namespaces | default([], true))
+               | selectattr('network', 'defined') | selectattr('network', 'equalto', fab_spec.network) | list }}
+      when: np_backend_kind == 'CloudVirt' and np_backend | length > 0
 
-    - name: Stop on a taken namespace
-      ansible.builtin.fail:
-        msg: "{{ fab_fail_msg }}"
-      when: fab_fail_reason | default('') == 'NamespaceTaken'
+    - name: Record the namespaces the network serves (CloudVirt)
+      ansible.builtin.set_fact:
+        np_status: "{{ np_status | combine({'namespaces': fab_check_result.namespaces | map(attribute='namespace') | list}) }}"
+      when: np_backend_kind == 'CloudVirt' and np_backend | length > 0
 
     - name: Record the readiness of the backend and the gateway
       ansible.builtin.set_fact:

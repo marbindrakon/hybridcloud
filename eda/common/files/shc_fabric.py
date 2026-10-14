@@ -11,9 +11,14 @@ actions:
                   site subnet clear of the core prefixes
   check-placement {prefixes, siblings: [{name, prefixes}], reserved: [cidr]}
                   prefixes disjoint among themselves, from the network's other placements and from reserved
+  cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}]}
+                  the site namespace of each CloudVirt namespace: <entity>-<cloudvirt>-<name>, cut to 54 characters
+                  plus a hash when longer than 63 (namespace names are global on the site's cluster)
 """
+import hashlib
 import ipaddress
 import json
+import re
 import sys
 
 
@@ -143,7 +148,26 @@ def check_placement(req):
     return {"errors": errors}
 
 
-ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement}
+def site_namespace(entity, cloudvirt, name):
+    base = re.sub(r"[^a-z0-9-]", "-", f"{entity}-{cloudvirt}-{name}".lower())
+    if len(base) <= 63:
+        return base
+    return base[:54].rstrip("-") + "-" + hashlib.sha1(base.encode()).hexdigest()[:8]
+
+
+def cloudvirt_namespaces(req):
+    out, errors, seen = [], [], {}
+    for n in req.get("namespaces") or []:
+        ns = site_namespace(req.get("entity", ""), req.get("cloudvirt", ""), n.get("name", ""))
+        if ns in seen:
+            errors.append(f"namespaces {seen[ns]} and {n.get('name')} map to the same site namespace {ns}")
+        seen[ns] = n.get("name")
+        out.append({"name": n.get("name"), "namespace": ns, "network": n.get("network") or ""})
+    return {"errors": errors, "namespaces": out}
+
+
+ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
+           "cloudvirt-namespaces": cloudvirt_namespaces}
 
 
 def main():

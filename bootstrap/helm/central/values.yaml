@@ -4807,7 +4807,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.6"  # shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3)
+  chartVersion: "0.1.22-shc.7"  # shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
@@ -4818,11 +4818,11 @@ hybridsovereignPrimaryOperator:
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.30"  # img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.29: fabric delete guards (P7.3.3); img-0.1.30: a waiting delete is not marked failed
+      tag: "img-0.1.31"  # img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.29: fabric delete guards (P7.3.3); img-0.1.30: a waiting delete is not marked failed; img-0.1.31: CloudVirt-owned namespaces (guards)
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.18"  # img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed
+        tag: "img-0.1.19"  # img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
     amqKafka:
       enabled: true
       vaultPath: amq-producer

@@ -4148,8 +4148,10 @@ spec:
           description: >-
             Places a HybridNetwork on one cloud environment of the same Entity: a CloudOSO (an OpenStack project)
             or a CloudVirt (OpenShift Virtualization). The platform creates the network there with the given
-            subnets and connects it, through the site's CloudGateway, to the network's other placements. The
-            environment's site must offer EVPN and have a CloudGateway.
+            subnets and connects it, through the site's CloudGateway, to the network's other placements. On a
+            CloudVirt, the network serves every namespace of the environment that names it (CloudVirt
+            spec.namespaces). The environment's site must offer EVPN and have a CloudGateway. A CloudVirt placement
+            is deleted only after no namespace of the environment names the network.
           type: object
           required:
             - spec
@@ -4163,9 +4165,6 @@ spec:
             spec:
               type: object
               required: [network, backend, prefixes]
-              x-kubernetes-validations:
-                - rule: "!has(self.vmNamespaces) || self.backend.kind == 'CloudVirt'"
-                  message: vmNamespaces applies to CloudVirt placements only
               properties:
                 network:
                   type: string
@@ -4209,18 +4208,6 @@ spec:
                         message: each prefix must be an IPv4 network prefix (host bits zero)
                       - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 29)"
                         message: prefix length must be between 8 and 29
-                vmNamespaces:
-                  type: array
-                  description: >-
-                    CloudVirt only: namespaces created for VMs on this network on the CloudVirt's cluster; each
-                    namespace is on exactly one network. Default: one namespace named <entity>-<cloudvirt>-<network>
-                    (cut to 63 characters).
-                  maxItems: 8
-                  x-kubernetes-list-type: set
-                  items:
-                    type: string
-                    maxLength: 63
-                    pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
             status:
               type: object
               properties:
@@ -4249,7 +4236,7 @@ spec:
                     type: string
                 namespaces:
                   type: array
-                  description: CloudVirt VM namespaces of this placement.
+                  description: CloudVirt site namespaces the network serves (the environment's namespaces that name it).
                   items:
                     type: string
                 backendReady:
@@ -4368,9 +4355,10 @@ spec:
         openAPIV3Schema:
           description: >-
             A tenant's virtual machine environment on a platform OpenShift Virtualization site (a CloudInfrastructure
-            of type openshift). VMs run in namespaces that the environment's NetworkPlacements create, one per
-            network, with the limits and access given here. Tenants sign in to the site's console with their
-            platform identity and see only their own VM namespaces.
+            of type openshift). VMs run in the environment's namespaces on the site, with the limits and access given
+            here. A namespace either uses the site's default network or is bound to one HybridNetwork (its VMs' only
+            network on the fabric); the network is fixed when the namespace is created. Tenants sign in to the site's
+            console with their platform identity and see only their own VM namespaces.
           type: object
           required:
             - spec
@@ -4402,13 +4390,44 @@ spec:
                       type: string
                       minLength: 1
                       maxLength: 253
+                namespaces:
+                  type: array
+                  description: >-
+                    The environment's VM namespaces. Each becomes the site namespace <entity>-<cloudvirt>-<name>
+                    (shortened with a hash past 63 characters). A namespace with a network gets that HybridNetwork as
+                    its VMs' network once a NetworkPlacement puts the network on this environment; until then its VMs
+                    don't start. A namespace's network cannot change: add a namespace, move the VMs, remove the old
+                    one. A namespace is removed only when it has no VMs.
+                  default: [{name: vms}]
+                  minItems: 1
+                  maxItems: 16
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [name]
+                  items:
+                    type: object
+                    required: [name]
+                    x-kubernetes-validations:
+                      - rule: has(self.network) == has(oldSelf.network) && (!has(self.network) || self.network == oldSelf.network)
+                        message: a namespace's network is fixed when it is created
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 30
+                        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                        description: Namespace name within the environment.
+                      network:
+                        type: string
+                        minLength: 1
+                        maxLength: 253
+                        description: HybridNetwork (this namespace) the VMs use. Omitted means the site's default network.
                 storageClass:
                   type: string
                   maxLength: 253
                   description: StorageClass for VM disks. Default the site's storageClass.
                 quota:
                   type: object
-                  description: Limits for each VM namespace of this environment (a ResourceQuota per namespace).
+                  description: Limits for each namespace of this environment (a ResourceQuota per namespace).
                   properties:
                     cpu:
                       x-kubernetes-int-or-string: true
@@ -4462,9 +4481,22 @@ spec:
                   description: Effective StorageClass.
                 namespaces:
                   type: array
-                  description: VM namespaces of this environment (from its NetworkPlacements).
+                  description: The environment's namespaces on the site.
                   items:
-                    type: string
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                        description: Namespace on the site.
+                      network:
+                        type: string
+                      ready:
+                        type: boolean
+                      message:
+                        type: string
+                    x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)

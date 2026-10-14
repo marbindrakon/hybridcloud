@@ -8,8 +8,9 @@
 #   dependents_namespace  namespace to search (and of the CR being deleted)
 #   dependents_all_namespaces  true: search every namespace (platform CRs used by tenant CRs, e.g. a
 #                         HybridFabric by HybridNetworks); dependents are then named Kind ns/name
-#   dependent_checks      list of {kind, match: {"dotted.path": value, ...}}; a CR matches when every
-#                         path equals its value
+#   dependent_checks      list of {kind, match: {"dotted.path": value, ...}, contains: {path, key, value}};
+#                         a CR matches when every match path equals its value and, with contains, the list at
+#                         path has an item whose key equals value (e.g. a CloudVirt namespace naming a network)
 #   dependents_status     {apiVersion, kind, name} of the CR being deleted (for the status message)
 - name: List CRs that may depend on this one
   kubernetes.core.k8s_info:
@@ -28,13 +29,23 @@
       {%- for r in _dependents_lists.results -%}
         {%- for o in r.resources | default([]) -%}
           {%- set ns = namespace(ok=true) -%}
-          {%- for path, want in r.item.match.items() -%}
+          {%- for path, want in (r.item.match | default({})).items() -%}
             {%- set cur = namespace(v=o) -%}
             {%- for k in path.split('.') -%}
               {%- set cur.v = (cur.v if cur.v is mapping else {}).get(k) -%}
             {%- endfor -%}
             {%- if cur.v != want -%}{%- set ns.ok = false -%}{%- endif -%}
           {%- endfor -%}
+          {%- if r.item.contains is defined -%}
+            {%- set cur = namespace(v=o) -%}
+            {%- for k in r.item.contains.path.split('.') -%}
+              {%- set cur.v = (cur.v if cur.v is mapping else {}).get(k) -%}
+            {%- endfor -%}
+            {%- set items = cur.v if (cur.v is iterable and cur.v is not string and cur.v is not mapping) else [] -%}
+            {%- if items | selectattr(r.item.contains.key, 'defined') | selectattr(r.item.contains.key, 'equalto', r.item.contains.value) | list | length == 0 -%}
+              {%- set ns.ok = false -%}
+            {%- endif -%}
+          {%- endif -%}
           {#- a dependent whose deletion completed is about to go: don't wait for it -#}
           {%- set done = ((o.status | default({}, true)).deletionComplete | default(false)) | bool -%}
           {%- set label = (r.item.kind ~ ' ' ~ o.metadata.namespace ~ '/' ~ o.metadata.name)

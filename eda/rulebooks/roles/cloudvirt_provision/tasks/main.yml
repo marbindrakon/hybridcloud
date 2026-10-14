@@ -1,8 +1,9 @@
 ---
 # shc (design/P7-PLAN.md P7.3.3, §12.3): CloudVirt provision. Resolves the site (type openshift, the Entity
-# allowed, virtualization offered), checks the Rbac CRs it grants access to, and records the site, the effective
-# StorageClass and the VM namespaces of its placements. Realizing it (tenant sign-in on the site, the VM namespace
-# role and the admission policy) is P7.3.7; until then it ends pending: on the site or the Rbac CRs while those
+# allowed, virtualization offered), checks the Rbac CRs it grants access to, maps its namespaces to site
+# namespaces (<entity>-<cloudvirt>-<name>; none may clash with another environment's) and records per namespace
+# whether its network is placed here. Realizing it (the namespaces with quota and access, tenant sign-in on the
+# site, the admission policy) is P7.3.7; until then it ends pending: on the site or the Rbac CRs while those
 # aren't there, else with reason NotImplemented.
 - block:
     - name: Read the CloudVirt
@@ -70,29 +71,93 @@
       ansible.builtin.set_fact:
         cv_waiting: "{{ cv_waiting + (_wanted | unique | difference(_have) | map('regex_replace', '^(.*)$', 'Rbac \\1 (not found)') | list) }}"
 
-    - name: List the placements on this environment
+    - name: Map the namespaces to site namespaces
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: cloudvirt-namespaces
+          entity: "{{ fab_entity }}"
+          cloudvirt: "{{ fab_name }}"
+          namespaces: "{{ fab_spec.namespaces | default([{'name': 'vms'}], true) }}"
+
+    - name: Set the namespace facts
+      ansible.builtin.set_fact:
+        cv_namespaces: "{{ fab_check_result.namespaces }}"
+        cv_ns_errors: "{{ fab_check_result.errors }}"
+
+    - name: List the Entity's other environments, networks and placements
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
         api_version: hybridsovereign.redhat/v1alpha1
-        kind: NetworkPlacement
+        kind: "{{ item }}"
         namespace: "{{ fab_namespace }}"
-      register: _cv_placements
+      loop: [CloudVirt, HybridNetwork, NetworkPlacement]
+      register: _cv_lists
+
+    - name: Collect the site namespaces other environments use
+      vars:
+        _others: "{{ _cv_lists.results[0].resources | default([]) | rejectattr('metadata.name', 'equalto', fab_name) | list }}"
+      ansible.builtin.set_fact:
+        cv_taken: >-
+          {%- set out = [] -%}
+          {%- for o in _others -%}
+            {%- for n in (o.status | default({}, true)).namespaces | default([], true) if n is mapping -%}
+              {%- if n.namespace | default('') in (cv_namespaces | map(attribute='namespace') | list) -%}
+                {%- set _ = out.append(n.namespace ~ ' (CloudVirt ' ~ o.metadata.name ~ ')') -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ cv_ns_errors + out }}
+
+    - name: Refuse clashing namespaces
+      ansible.builtin.set_fact:
+        fab_fail_reason: NamespaceTaken
+        fab_fail_msg: "CloudVirt {{ fab_name }}: site namespace already used: {{ cv_taken | join('; ') }}"
+      when: cv_taken | length > 0
+
+    - name: Stop on clashing namespaces
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: cv_taken | length > 0
+
+    # a namespace with a network is usable once a NetworkPlacement puts that network on this environment
+    - name: Set the namespace states
+      vars:
+        _nets: "{{ _cv_lists.results[1].resources | default([]) | map(attribute='metadata.name') | list }}"
+        _placed: >-
+          {{ _cv_lists.results[2].resources | default([]) | selectattr('spec.backend.kind', 'equalto', 'CloudVirt')
+             | selectattr('spec.backend.name', 'equalto', fab_name) | list }}
+      ansible.builtin.set_fact:
+        cv_ns_status: >-
+          {%- set out = [] -%}
+          {%- for n in cv_namespaces -%}
+            {%- set p = _placed | selectattr('spec.network', 'equalto', n.network) | list -%}
+            {%- if not n.network -%}
+              {%- set st = {'ready': true, 'message': "site's default network"} -%}
+            {%- elif n.network not in _nets -%}
+              {%- set st = {'ready': false, 'message': 'waiting for HybridNetwork ' ~ n.network ~ ' (not found)'} -%}
+            {%- elif p | length == 0 -%}
+              {%- set st = {'ready': false, 'message': 'waiting for a NetworkPlacement of ' ~ n.network ~ ' on this environment'} -%}
+            {%- elif not ((p[0].status | default({}, true)).ready | default(false)) -%}
+              {%- set st = {'ready': false, 'message': 'waiting for NetworkPlacement ' ~ p[0].metadata.name ~ ' ('
+                            ~ ((p[0].status | default({}, true)).status | default('not provisioned', true)) ~ ')'} -%}
+            {%- else -%}
+              {%- set st = {'ready': true, 'message': 'network ' ~ n.network ~ ' via NetworkPlacement ' ~ p[0].metadata.name} -%}
+            {%- endif -%}
+            {%- set _ = out.append(n | combine(st)) -%}
+          {%- endfor -%}
+          {{ out }}
 
     - name: Set the environment status
-      vars:
-        _mine: >-
-          {{ _cv_placements.resources | default([]) | selectattr('spec.backend.kind', 'equalto', 'CloudVirt')
-             | selectattr('spec.backend.name', 'equalto', fab_name) | list }}
       ansible.builtin.set_fact:
         cv_status: >-
           {{ {'entity': fab_entity,
               'site': {'name': cv_site_name,
                        'endpoint': ((ci_obj.status | default({}, true)).site | default({}, true)).endpoint | default('', true)},
               'storageClass': fab_spec.storageClass | default((ci_spec.openshift | default({})).storageClass | default(''), true),
-              'namespaces': _mine | map(attribute='status') | select('mapping') | map(attribute='namespaces', default=[])
-                            | flatten | unique | list} }}
+              'namespaces': cv_ns_status} }}
 
     - name: Report what the environment waits for
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
