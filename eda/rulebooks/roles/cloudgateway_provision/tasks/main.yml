@@ -4,10 +4,11 @@
 # isn't ready. Then realizes it with this platform's realization (common/vars/fabric_realization.yml +
 # fabric_realization):
 # 1. a provider-edge index from the fabric ledger (loopback, core link address, node SID);
-# 2. the site side: OpenShift = the VTEP named after the fabric; OpenStack = the platform project;
+# 2. the site side: OpenShift = the VTEP named after the fabric; OpenStack = the platform project; external = none;
 # 3. under the fabric's lease, one border gateway node at a time: network namespace gw-<name> with the site's
-#    underlay VLAN and a core leg, and its FRR instance (site route reflector over the site subnet, client of any
-#    upstream route reflectors, VPNv4 to the root, IS-IS segment routing), verified before the next node.
+#    underlay (transport none: the VLAN; wireguard: a tunnel to the remote site's peers, the node's key generated
+#    and kept on the node) and a core leg, and its FRR instance (site route reflector over the site subnet, client of
+#    any upstream route reflectors, VPNv4 to the root, IS-IS segment routing), verified before the next node.
 - block:
     - name: Read the CloudGateway
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -19,18 +20,16 @@
         cg_fabric_name: "{{ fab_spec.fabricRef.name }}"
         cg_site_name: "{{ fab_spec.cloudRef.name }}"
 
-    - name: Refuse transports other than none
+    - name: Refuse transports this platform does not realize
       ansible.builtin.set_fact:
         fab_fail_reason: TransportNotSupported
-        fab_fail_msg: >-
-          CloudGateway {{ fab_name }}: transport {{ fab_spec.transport }} is not supported yet (only none, a site
-          underlay trunked to the border gateway nodes)
-      when: (fab_spec.transport | default('none')) != 'none'
+        fab_fail_msg: "CloudGateway {{ fab_name }}: transport {{ fab_spec.transport }} is not supported"
+      when: (fab_spec.transport | default('none')) not in ['none', 'wireguard']
 
     - name: Stop on an unsupported transport
       ansible.builtin.fail:
         msg: "{{ fab_fail_msg }}"
-      when: (fab_spec.transport | default('none')) != 'none'
+      when: (fab_spec.transport | default('none')) not in ['none', 'wireguard']
 
     - name: The platform's realization parameters
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
@@ -177,15 +176,25 @@
         fab_check: {action: pe-addresses, core: "{{ fab_real.core }}", index: "{{ cg_pe_index }}"}
 
     - name: Set the gateway instance
+      vars:
+        # the site leg's MTU: siteUnderlay.mtu, else the trunk's (VLAN) or the realization's tunnel MTU (wireguard)
+        _cg_mtu: >-
+          {{ fab_spec.siteUnderlay.mtu | default(fab_real.wireguard.mtu
+             if (fab_spec.transport | default('none')) == 'wireguard' else '') }}
       ansible.builtin.set_fact:
         cg_pe: "{{ fab_check_result }}"
         cg_instance: >-
-          {{ {'type': 'gateway', 'netns': 'gw-' ~ fab_name, 'trunk': fab_real.nodes.trunkInterface,
-              'vlan': fab_spec.siteUnderlay.vlan | int, 'loopback': fab_check_result.loopback,
+          {{ {'type': 'gateway', 'netns': 'gw-' ~ fab_name, 'loopback': fab_check_result.loopback,
               'loopbackPool': fab_real.core.loopbackPool, 'coreBridge': fab_real.core.bridge,
               'coreVeth': 'pe' ~ fab_check_result.index, 'link': fab_check_result.link,
               'coreMtu': cg_fabric.spec.overlayMtu | int + 100}
-             | combine({'mtu': fab_spec.siteUnderlay.mtu | int} if fab_spec.siteUnderlay.mtu is defined else {}) }}
+             | combine({'trunk': fab_real.nodes.trunkInterface, 'vlan': fab_spec.siteUnderlay.vlan | int}
+                       if (fab_spec.transport | default('none')) == 'none' else
+                       {'wireguard': {'device': 'wg' ~ fab_check_result.index,
+                                      'listenPort': (fab_spec.wireguard.listenPort | default(fab_real.wireguard.listenPort)) | int,
+                                      'keepalive': fab_real.wireguard.persistentKeepalive | int,
+                                      'peers': fab_spec.wireguard.peers | map('combine', {}) | list}})
+             | combine({'mtu': _cg_mtu | int} if _cg_mtu | string | length > 0 else {}) }}
         cg_holder: "CloudGateway/{{ fab_name }} job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
         cg_node_results: []
         cg_changed_nodes: []
@@ -289,9 +298,11 @@
           Gateway on {{ cg_node_results | map(attribute='name') | join(', ') }}; site sessions
           {{ cg_node_results | map(attribute='siteSessions') | map('string') | join('/') }}, upstream
           {{ cg_node_results | map(attribute='upstreamSessions') | map('string') | join('/') }}
-          ({{ ('changed on ' ~ cg_changed_nodes | join(', ')) if cg_changed_nodes or cg_site_changed | bool else 'no change' }})
+          ({{ ('changed on ' ~ cg_changed_nodes | join(', ')) if cg_changed_nodes or cg_site_changed | bool else 'no change' }}){{
+          ('; tunnel ' ~ cg_node_results | map(attribute='tunnel') | join('/')) if cg_instance.wireguard is defined else '' }}
         fab_status: >-
-          {{ cg_status | combine({'site': cg_status.site | combine(cg_site_extra),
+          {{ cg_status | combine({'wireguard': {'nodes': cg_wg_nodes | default([])}} if cg_instance.wireguard is defined else {})
+             | combine({'site': cg_status.site | combine(cg_site_extra),
                                    'nodes': cg_node_results,
                                    'realization': {'model': fab_real.model, 'peIndex': cg_pe.index, 'loopback': cg_pe.loopbackIp,
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,

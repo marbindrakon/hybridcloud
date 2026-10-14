@@ -1,0 +1,14 @@
+---
+# shc (design/P7-PLAN.md §12.19): an external site. Its network is run outside the platform (a remote data center, a
+# partner's EVPN fabric), so there is nothing to probe or credential to check: the site's EVPN capability is what
+# spec.external says. A CloudGateway attaches it (usually over transport wireguard).
+- name: Record the external site
+  ansible.builtin.set_fact:
+    ci_capabilities_out:
+      api: true
+      evpn: "{{ (ci_cr_spec.external | default({})).evpn | default(true) | bool }}"
+    ci_site_out: {managed: false}
+    ci_type_message: the platform does not manage this site
+    ci_credentials_message: no credential (the platform does not manage this site)
+    ci_evpn_reason: Declared
+    ci_evpn_message: spec.external.evpn

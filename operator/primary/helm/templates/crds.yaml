@@ -3401,6 +3401,11 @@ spec:
             spec:
               type: object
               required: [fabricRef, cloudRef, siteUnderlay]
+              x-kubernetes-validations:
+                - rule: "(has(self.transport) && self.transport == 'wireguard') || has(self.siteUnderlay.vlan)"
+                  message: siteUnderlay.vlan is required with transport none
+                - rule: "(has(self.transport) && self.transport == 'wireguard') == has(self.wireguard)"
+                  message: spec.wireguard is required with transport wireguard, and only then
               properties:
                 fabricRef:
                   type: object
@@ -3434,12 +3439,55 @@ spec:
                   default: none
                   description: >-
                     How the site's underlay reaches the border gateway nodes. none: the site's underlay VLAN is
-                    trunked to the nodes directly. wireguard: a remote site over an encrypted tunnel (not supported
-                    yet; such a gateway fails with TransportNotSupported).
+                    trunked to the nodes directly (siteUnderlay.vlan). wireguard: a remote site over an encrypted
+                    tunnel from every node (spec.wireguard); siteUnderlay.cidr is then the tunnel's subnet, holding
+                    the nodes' tunnel addresses and the site's VTEPs.
+                wireguard:
+                  type: object
+                  description: >-
+                    The tunnel to a remote site (transport wireguard). Every border gateway node keeps its own key
+                    pair (public keys in status.wireguard) and tunnels to each peer listed here.
+                  required: [peers]
+                  properties:
+                    listenPort:
+                      type: integer
+                      minimum: 1024
+                      maximum: 65535
+                      description: The nodes' UDP port. Default 51820.
+                    peers:
+                      type: array
+                      minItems: 1
+                      description: The remote site's tunnel endpoints.
+                      items:
+                        type: object
+                        required: [publicKey, allowedIPs]
+                        properties:
+                          publicKey:
+                            type: string
+                            pattern: '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$'
+                            description: The peer's WireGuard public key (base64).
+                          endpoint:
+                            type: string
+                            maxLength: 261
+                            description: >-
+                              host:port the nodes connect to. Without it the peer must connect first (the nodes then
+                              answer from where it came).
+                          allowedIPs:
+                            type: array
+                            minItems: 1
+                            description: The peer's tunnel addresses (CIDRs inside siteUnderlay.cidr).
+                            items:
+                              type: string
+                              maxLength: 43
+                          persistentKeepalive:
+                            type: integer
+                            minimum: 0
+                            maximum: 3600
+                            description: Seconds between keepalives (keeps NAT state open). Default 25; 0 turns it off.
                 siteUnderlay:
                   type: object
                   description: The gateway's attachment to the site's EVPN underlay.
-                  required: [vlan, cidr, addresses]
+                  required: [cidr, addresses]
                   x-kubernetes-validations:
                     - rule: >-
                         !isCIDR(self.cidr) || self.addresses.all(a, isIP(a.address) && cidr(self.cidr).containsIP(a.address))
@@ -3550,6 +3598,17 @@ spec:
                   type: object
                   description: How the platform realized the gateway (informational; depends on the platform).
                   x-kubernetes-preserve-unknown-fields: true
+                wireguard:
+                  type: object
+                  description: The tunnel (transport wireguard).
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    nodes:
+                      type: array
+                      description: Per border gateway node, its public key and listen port, and each peer's last handshake.
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                 nodes:
                   type: array
                   description: State of the gateway instance on each border gateway node.
@@ -4602,11 +4661,13 @@ spec:
                   message: spec.openshift must be set if and only if spec.type is openshift
                 - rule: has(self.aws) == (self.type == 'aws')
                   message: spec.aws must be set if and only if spec.type is aws
+                - rule: has(self.external) == (self.type == 'external')
+                  message: spec.external must be set if and only if spec.type is external
               properties:
                 type:
                   type: string
                   description: Cloud type. Selects the typed section below. Immutable.
-                  enum: [openstack, openshift, aws]
+                  enum: [openstack, openshift, aws, external]
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.type is immutable
@@ -4739,6 +4800,17 @@ spec:
                       description: >-
                         native: the DNS service's zone quota ensured for dns.project (at least this many); every
                         environment zone on this site counts against it.
+                external:
+                  type: object
+                  description: >-
+                    A site whose network the platform does not manage, for example a remote data center or a
+                    partner's EVPN fabric: the site's own operator runs its VTEPs, and the platform only attaches it
+                    to a HybridFabric through a CloudGateway. Required when type is external.
+                  properties:
+                    evpn:
+                      type: boolean
+                      default: true
+                      description: The site's VTEPs speak EVPN-VXLAN to the gateway.
                 aws:
                   type: object
                   description: AWS account. Required when type is aws.

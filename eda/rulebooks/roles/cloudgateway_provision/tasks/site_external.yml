@@ -1,0 +1,7 @@
+---
+# shc (design/P7-PLAN.md §12.19): an external site's VTEPs are run by the site's own operator; the platform has
+# nothing to set up there. Sets cg_site_extra.
+- name: Nothing to realize on an external site
+  ansible.builtin.set_fact:
+    cg_site_extra: {managed: false}
+    cg_site_changed: false

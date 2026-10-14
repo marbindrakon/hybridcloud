@@ -22,6 +22,11 @@
 #   vrfs [{name, vni, mtu}]: one Linux VRF per network placed at the site (table = VNI) with its layer 3 VNI: a
 #   bridge br<vni> in the VRF and a VXLAN device vx<vni> from the gateway's site address; VRFs named t<digits> that
 #   are no longer listed are removed with their devices.
+#   wireguard {device, listenPort, keepalive, peers: [{publicKey, endpoint?, allowedIPs, persistentKeepalive?}]}
+#   (transport wireguard, instead of trunk/vlan): the site leg is a WireGuard device, created in the root namespace
+#   (its UDP socket follows the node's own routing) and moved into the namespace, with the gateway's site address.
+#   The node's private key is generated here once (/etc/shc-fabric/<instance>.wgkey) and never leaves the node;
+#   peers not listed are removed. down also deletes the key.
 #   shc-fabric-apply <instance> post   (gateway, after FRR started: see post_start below)
 set -euo pipefail
 NSX=""
@@ -201,7 +206,12 @@ root)
   ;;
 gateway)
   if [ "$ACT" = post ]; then post_start; exit 0; fi
-  NS=$(q .netns); TRUNK=$(q .trunk); VLAN=$(q .vlan); VDEV="$TRUNK.$VLAN"; ADDR=$(q .address)
+  NS=$(q .netns); ADDR=$(q .address)
+  if jq -e '.wireguard' "$CONF" >/dev/null 2>&1; then
+    WG=1; VDEV=$(q .wireguard.device); WGKEY=/etc/shc-fabric/$I.wgkey
+  else
+    WG=""; TRUNK=$(q .trunk); VLAN=$(q .vlan); VDEV="$TRUNK.$VLAN"
+  fi
   LO=$(q .loopback); LOPOOL=$(q .loopbackPool); BR=$(q .coreBridge); CV=$(q .coreVeth); LINK=$(q .link)
   CMTU=$(q .coreMtu); MTU=$(jq -r '.mtu // empty' "$CONF"); X="ip netns exec $NS"
   snapshot() {
@@ -210,7 +220,34 @@ gateway)
         $X ip -br -4 addr show; $X ip -o link show | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|state [A-Z]*' || true
         $X sysctl -n net.ipv4.ip_forward net.mpls.platform_labels net.mpls.conf.lo.input 2>/dev/null || true
         $X sysctl -n net.mpls.conf.core0.input 2>/dev/null || true
+        if [ -n "$WG" ] && $X ip link show "$VDEV" >/dev/null 2>&1; then
+          $X wg show "$VDEV" public-key; $X wg show "$VDEV" listen-port
+          $X wg show "$VDEV" allowed-ips | sort; $X wg show "$VDEV" persistent-keepalive | sort
+        fi
       fi; } | sha1sum
+  }
+  # the site leg over WireGuard (transport wireguard)
+  wg_leg() {
+    local port keep want peer p ep
+    port=$(jq -r '.wireguard.listenPort // 51820' "$CONF"); keep=$(jq -r '.wireguard.keepalive // 25' "$CONF")
+    [ -s "$WGKEY" ] || (umask 077; wg genkey > "$WGKEY")
+    if ! $X ip link show "$VDEV" >/dev/null 2>&1; then
+      ip link show "$VDEV" >/dev/null 2>&1 || ip link add "$VDEV" type wireguard
+      ip link set "$VDEV" netns "$NS"
+    fi
+    $X wg set "$VDEV" private-key "$WGKEY" listen-port "$port"
+    want=$(jq -r '.wireguard.peers[].publicKey' "$CONF")
+    for peer in $($X wg show "$VDEV" peers); do
+      echo "$want" | grep -qxF -- "$peer" || $X wg set "$VDEV" peer "$peer" remove
+    done
+    while read -r p; do
+      set -- peer "$(jq -r .publicKey <<<"$p")" allowed-ips "$(jq -r '.allowedIPs | join(",")' <<<"$p")" \
+        persistent-keepalive "$(jq -r --arg k "$keep" '.persistentKeepalive // ($k | tonumber)' <<<"$p")"
+      ep=$(jq -r '.endpoint // empty' <<<"$p"); [ -z "$ep" ] || set -- "$@" endpoint "$ep"
+      $X wg set "$VDEV" "$@"
+    done < <(jq -c '.wireguard.peers[]' "$CONF")
+    [ -n "$MTU" ] || MTU=1420
+    $X ip link set "$VDEV" mtu "$MTU" up
   }
   before=$(snapshot)
   if [ "$ACT" = up ]; then
@@ -222,12 +259,16 @@ gateway)
     NSX=$X
     for a in $(stray lo "$LOPOOL" "$LO"); do $X ip addr del "$a" dev lo; done
     $X ip addr show dev lo | grep -q " ${LO} " || $X ip addr add "$LO" dev lo
-    if ! $X ip link show "$VDEV" >/dev/null 2>&1; then
-      ip link show "$VDEV" >/dev/null 2>&1 || ip link add link "$TRUNK" name "$VDEV" type vlan id "$VLAN"
-      ip link set "$VDEV" netns "$NS"
+    if [ -n "$WG" ]; then
+      wg_leg
+    else
+      if ! $X ip link show "$VDEV" >/dev/null 2>&1; then
+        ip link show "$VDEV" >/dev/null 2>&1 || ip link add link "$TRUNK" name "$VDEV" type vlan id "$VLAN"
+        ip link set "$VDEV" netns "$NS"
+      fi
+      [ -n "$MTU" ] || MTU=$(cat "/sys/class/net/$TRUNK/mtu")
+      $X ip link set "$VDEV" mtu "$MTU" up
     fi
-    [ -n "$MTU" ] || MTU=$(cat "/sys/class/net/$TRUNK/mtu")
-    $X ip link set "$VDEV" mtu "$MTU" up
     for a in $(stray "$VDEV" 0.0.0.0/0 "$ADDR"); do $X ip addr del "$a" dev "$VDEV"; done
     $X ip addr show dev "$VDEV" | grep -q " ${ADDR} " || $X ip addr add "$ADDR" dev "$VDEV"
     if ! ip link show "$CV" >/dev/null 2>&1; then
@@ -270,6 +311,7 @@ gateway)
   else
     ip link show "$CV" >/dev/null 2>&1 && ip link del "$CV"
     ip netns list | grep -qw "^$NS" && ip netns del "$NS"
+    [ -z "$WG" ] || rm -f "$WGKEY"
   fi
   ;;
 *) echo "unknown instance type $TYPE" >&2; exit 2 ;;

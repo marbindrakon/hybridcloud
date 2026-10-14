@@ -43,6 +43,13 @@ fabric_realization_defaults:
   placement:
     # how long a placement job waits for the gateways to hold the site's routes for its prefixes (s)
     routeWait: 180
+  # CloudGateways over transport wireguard (remote sites): each node's tunnel listens on listenPort (unless the
+  # gateway sets one); the tunnel's MTU is the site leg's MTU unless siteUnderlay.mtu says otherwise (1420 = a 1500
+  # path minus WireGuard over IPv4); keepalives keep NAT state open
+  wireguard:
+    listenPort: 51820
+    mtu: 1420
+    persistentKeepalive: 25
   # provider internet egress for HybridNetworks with spec.egress.internet: each node's root holds a VRF that hands
   # traffic to a network with internet access (a macvlan on parentInterface, default route via gateway); per network
   # a VRF e<vpnTarget> imports the network's routes, exports a default route into its VPN and source-NATs its traffic

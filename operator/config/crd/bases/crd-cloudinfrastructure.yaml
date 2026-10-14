@@ -46,11 +46,13 @@ spec:
                   message: spec.openshift must be set if and only if spec.type is openshift
                 - rule: has(self.aws) == (self.type == 'aws')
                   message: spec.aws must be set if and only if spec.type is aws
+                - rule: has(self.external) == (self.type == 'external')
+                  message: spec.external must be set if and only if spec.type is external
               properties:
                 type:
                   type: string
                   description: Cloud type. Selects the typed section below. Immutable.
-                  enum: [openstack, openshift, aws]
+                  enum: [openstack, openshift, aws, external]
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.type is immutable
@@ -183,6 +185,17 @@ spec:
                       description: >-
                         native: the DNS service's zone quota ensured for dns.project (at least this many); every
                         environment zone on this site counts against it.
+                external:
+                  type: object
+                  description: >-
+                    A site whose network the platform does not manage, for example a remote data center or a
+                    partner's EVPN fabric: the site's own operator runs its VTEPs, and the platform only attaches it
+                    to a HybridFabric through a CloudGateway. Required when type is external.
+                  properties:
+                    evpn:
+                      type: boolean
+                      default: true
+                      description: The site's VTEPs speak EVPN-VXLAN to the gateway.
                 aws:
                   type: object
                   description: AWS account. Required when type is aws.

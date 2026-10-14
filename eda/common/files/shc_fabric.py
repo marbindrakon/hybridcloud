@@ -8,7 +8,8 @@ actions:
   check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names
   check-gateway   {fabric: spec, core: realization core, gateway: spec, others: [CloudGateway objects or {name, spec}]}
                   nodes match the fabric's, one gateway per site, VLAN and site subnet unique on the fabric,
-                  site subnet clear of the core prefixes
+                  site subnet clear of the core prefixes; transport wireguard: the peers' addresses inside the
+                  site subnet and clear of the nodes' tunnel addresses
   check-placement {prefixes, siblings: [{name, prefixes}], reserved: [cidr]}
                   prefixes disjoint among themselves, from the network's other placements and from reserved
   pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
@@ -214,6 +215,20 @@ def check_gateway(req):
         site = ipaddress.ip_network(str(under.get("cidr")), strict=False)
     except ValueError as e:
         return {"errors": errors + [f"siteUnderlay.cidr: {e}"]}
+    if (gw.get("transport") or "none") == "wireguard":
+        for i, peer in enumerate((gw.get("wireguard") or {}).get("peers") or []):
+            for a in peer.get("allowedIPs") or []:
+                try:
+                    n = ipaddress.ip_network(str(a), strict=False)
+                except ValueError as e:
+                    errors.append(f"wireguard.peers[{i}].allowedIPs {a}: {e}")
+                    continue
+                if n.version != site.version or not n.subnet_of(site):
+                    errors.append(f"wireguard.peers[{i}].allowedIPs {a} is outside siteUnderlay.cidr {site}")
+                elif any(ipaddress.ip_address(x) in n for x in ips if x):
+                    errors.append(f"wireguard.peers[{i}].allowedIPs {a} holds a node's tunnel address")
+    elif under.get("vlan") is None:
+        errors.append("siteUnderlay.vlan is required with transport none")
     # upstream route reflectors outside the site subnet are reached through siteUnderlay.gateway
     upstream_remote = [r for r in under.get("upstreamRouteReflectors") or []
                        if ipaddress.ip_address(r) not in site]
@@ -235,7 +250,8 @@ def check_gateway(req):
         if (ospec.get("fabricRef") or {}).get("name") != (gw.get("fabricRef") or {}).get("name"):
             continue
         ou = ospec.get("siteUnderlay") or {}
-        if ou.get("vlan") == under.get("vlan"):
+        # a gateway over a tunnel has no VLAN on the trunk
+        if under.get("vlan") is not None and ou.get("vlan") == under.get("vlan"):
             errors.append(f"VLAN {under.get('vlan')} is already used by CloudGateway {o.get('name')}")
         try:
             on = ipaddress.ip_network(str(ou.get("cidr")), strict=False)

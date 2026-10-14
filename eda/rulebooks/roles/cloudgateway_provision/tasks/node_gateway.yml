@@ -34,7 +34,7 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf
 
-- name: "{{ bgw_node.name }}: apply the gateway instance (namespace, VLAN leg, core leg)"
+- name: "{{ bgw_node.name }}: apply the gateway instance (namespace, site leg, core leg)"
   ansible.builtin.command: "/usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up"
   register: _cg_apply
   changed_when: "'changed=yes' in _cg_apply.stdout"
@@ -151,6 +151,29 @@
   changed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# transport wireguard: the node's public key and each peer's last handshake (never the private key: no `wg show dump`)
+- name: "{{ bgw_node.name }}: read the tunnel"
+  ansible.builtin.shell: |
+    D={{ cg_instance.wireguard.device }}; X="ip netns exec gw-{{ fab_name }}"
+    python3 - "$($X wg show $D public-key)" "$($X wg show $D listen-port)" <<EOF
+    import json, subprocess, sys, time
+    def show(what):
+        out = subprocess.run(["ip", "netns", "exec", "gw-{{ fab_name }}", "wg", "show", "$D", what],
+                             capture_output=True, text=True).stdout.split("\n")
+        return dict(l.split("\t", 1) for l in out if "\t" in l)
+    hs, ep = show("latest-handshakes"), show("endpoints")
+    now = int(time.time())
+    peers = [{"publicKey": k, "endpoint": ep.get(k, "(none)"), "latestHandshake": int(v),
+              "up": int(v) > 0 and now - int(v) < 180} for k, v in sorted(hs.items())]
+    print(json.dumps({"publicKey": sys.argv[1], "listenPort": int(sys.argv[2]), "peers": peers}))
+    EOF
+  args:
+    executable: /bin/bash
+  register: _cg_tunnel
+  changed_when: false
+  when: cg_instance.wireguard is defined
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: read the VRFs' routes"
   ansible.builtin.shell: |
     for v in {{ cg_vrfs | map(attribute='vrf') | join(' ') }}; do
@@ -164,6 +187,9 @@
 - name: "{{ bgw_node.name }}: record the node"
   vars:
     _s: "{{ _cg_sessions.stdout | from_json }}"
+    _tun: "{{ (_cg_tunnel.stdout | from_json) if (_cg_tunnel.stdout | default('', true) | length > 0) else {} }}"
+    # a tunnel is up while at least one peer handshook within the last 3 minutes
+    _tun_state: "{{ ('up' if _tun.peers | default([]) | selectattr('up') | list | length > 0 else 'down') if _tun | length > 0 else '' }}"
     _vr: >-
       {%- set out = {} -%}
       {%- for l in _cg_vrf_routes.stdout_lines | default([]) if l.split() | length == 2 -%}
@@ -177,8 +203,12 @@
            'siteSessions': _s.site | int, 'upstreamSessions': _s.upstream | int, 'coreSessions': 1,
            'vrfs': cg_vrfs | length, 'vrfRoutes': _vr,
            'message': 'gateway instance gw-' ~ fab_name ~ ': VPNv4 to ' ~ cg_root_pe.loopbackIp ~ ', IS-IS SR SID '
-                      ~ cg_pe.sid ~ ', loopback ' ~ cg_pe.loopbackIp,
-           'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}] }}
+                      ~ cg_pe.sid ~ ', loopback ' ~ cg_pe.loopbackIp
+                      ~ ((', tunnel ' ~ _tun_state) if _tun | length > 0 else ''),
+           'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
+           | combine({'tunnel': _tun_state} if _tun | length > 0 else {})] }}
+    cg_wg_nodes: >-
+      {{ (cg_wg_nodes | default([])) + ([_tun | combine({'name': bgw_node.name})] if _tun | length > 0 else []) }}
     cg_changed_nodes: >-
       {{ cg_changed_nodes + ([bgw_node.name] if [_cg_files, _cg_conf, _cg_apply, _cg_daemons, _cg_frrconf, _cg_state]
          | select('changed') | list | length > 0 else []) }}

@@ -26,5 +26,5 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
-  loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/var/run/frr/gw-{{ fab_name }}"]
+  loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/etc/shc-fabric/gw-{{ fab_name }}.wgkey", "/var/run/frr/gw-{{ fab_name }}"]
   delegate_to: "{{ bgw_node.name }}"
