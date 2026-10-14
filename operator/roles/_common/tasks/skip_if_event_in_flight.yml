@@ -1,0 +1,41 @@
+---
+# shc (design/P7-PLAN.md §12.2 item 2, P7.3.2): the create path re-publishes on every reconcile while a CR is not
+# ready, and every new eventId supersedes the job still working on the previous one. With a real reconcilePeriod
+# (watches.yaml) that would supersede any job longer than the period. This ends the reconcile, without touching
+# status, while the CR's last create/reconcile event is still in flight:
+#   published and not completed, and either
+#     - not acknowledged yet, for at most in_flight_ack_minutes (a lost event is published again), or
+#     - acknowledged, and its job started less than the kind's job timeout ago (a stalled job is replaced).
+# A forced reconcile (reconcileNow) always publishes. Delete events have their own guard (publish_operator_event).
+# Vars: in_flight_kind (required), in_flight_api_version, in_flight_force (the role's reconcile_now),
+#       in_flight_ack_minutes (10), in_flight_job_timeout_minutes ({kind: minutes}; default 30).
+- name: Read the CR's delivery state
+  kubernetes.core.k8s_info:
+    api_version: "{{ in_flight_api_version | default('hybridsovereign.redhat/v1alpha1') }}"
+    kind: "{{ in_flight_kind }}"
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _in_flight_cr
+  when: not (in_flight_force | default(false) | bool)
+
+- name: Decide whether the last event is still in flight
+  ansible.builtin.set_fact:
+    _event_in_flight: >-
+      {%- set d = (((_in_flight_cr.resources | default([]) | first | default({})).get('status') or {}).get('delivery') or {}) -%}
+      {%- set timeouts = in_flight_job_timeout_minutes | default({'PlatformOpenshift': 150, 'CloudOSO': 150}) -%}
+      {%- set job_minutes = timeouts.get(in_flight_kind, 30) | int -%}
+      {%- set ack_minutes = in_flight_ack_minutes | default(10) | int -%}
+      {%- set fmt = '%Y-%m-%dT%H:%M:%SZ' -%}
+      {%- set event = d.get('eventId') or '' -%}
+      {%- if (in_flight_force | default(false) | bool) or not event or not (d.get('publishedAt') or '')
+             or (d.get('reason') or '') is search('DeleteRequested$') or (d.get('completedEventId') or '') == event -%}
+        False
+      {%- elif (d.get('acknowledgedEventId') or '') == event and (d.get('jobStartedAt') or '') -%}
+        {{ ((now(utc=true) - (d.jobStartedAt | to_datetime(fmt))).total_seconds() / 60) < job_minutes }}
+      {%- else -%}
+        {{ ((now(utc=true) - (d.publishedAt | to_datetime(fmt))).total_seconds() / 60) < ack_minutes }}
+      {%- endif -%}
+
+- name: End the reconcile while the last event is in flight (no new event, status untouched)
+  ansible.builtin.meta: end_host
+  when: _event_in_flight | bool

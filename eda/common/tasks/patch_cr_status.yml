@@ -25,8 +25,10 @@
           tower_job_id = os.environ.get("TOWER_JOB_ID", "").strip()
           tower_url = (os.environ.get("TOWER_URL") or os.environ.get("AWX_URL") or "").rstrip("/")
 
+          # shc P7.3.2: "pending" = the job finished but the CR waits for a prerequisite; the event is complete
+          # and the operator publishes again on its reconcilePeriod (status.waitingFor says what for).
           job_status_map = {"ready": "success", "success": "success", "failed": "failed",
-                            "reconciling": "running"}
+                            "reconciling": "running", "pending": "waiting"}
           job_status = job_status_map.get(cr_action, "running")
 
           job_name = activation_name or f"{cr_kind}-{cr_action}"
@@ -55,18 +57,25 @@
           # current one was superseded (re-drive, reconcileNow, resync): it must not write status.
           event_id = os.environ.get("EVENT_ID", "").strip()
           headers = {"Authorization": f"Bearer {token}"}
+          # shc P7.3.2: CR_PARTIAL=1 merges only the given status fields (a mid-run update): no delivery change
+          # (the event is neither acknowledged again nor completed) and edaJobs is left as it is.
+          partial = os.environ.get("CR_PARTIAL", "").lower() in ("1", "true", "yes")
+          cur_delivery = {}
           if event_id:
               cur = requests.get(url, headers=headers, verify=False, timeout=30)
               if cur.status_code == 200:
-                  cur_id = ((cur.json().get("status") or {}).get("delivery") or {}).get("eventId", "")
+                  cur_delivery = (cur.json().get("status") or {}).get("delivery") or {}
+                  cur_id = cur_delivery.get("eventId", "")
                   if cur_id and cur_id != event_id:
                       print(json.dumps({"superseded": True, "eventId": event_id, "currentEventId": cur_id}))
                       sys.exit(0)
 
           status_body = json.loads(os.environ["CR_STATUS_BODY"])
-          if event_id:
+          if event_id and not partial:
               if cr_action == "reconciling":
-                  status_body["delivery"] = {"acknowledgedEventId": event_id, "jobId": str(job_id), "jobStartedAt": now}
+                  # a second "reconciling" patch for the same event keeps jobStartedAt (eda-redrive's stall timer)
+                  if cur_delivery.get("acknowledgedEventId") != event_id:
+                      status_body["delivery"] = {"acknowledgedEventId": event_id, "jobId": str(job_id), "jobStartedAt": now}
               else:
                   status_body["delivery"] = {"completedEventId": event_id, "completedAt": now}
           if "observedGeneration" in status_body:
@@ -75,7 +84,8 @@
               for cond in status_body["conditions"]:
                   if isinstance(cond, dict) and "status" in cond and not isinstance(cond["status"], str):
                       cond["status"] = str(cond["status"])
-          status_body["edaJobs"] = all_jobs
+          if not partial:
+              status_body["edaJobs"] = all_jobs
           body = json.dumps({"status": status_body})
 
           resp = requests.patch(url, data=body,
@@ -133,6 +143,7 @@
     TOWER_JOB_ID: "{{ tower_job_id | default(awx_job_id | default('')) | string }}"
     TOWER_URL: "{{ aap_ui_url | default('') }}"
     PATCH_IGNORE_NOT_FOUND: "{{ patch_ignore_not_found | default(false) | bool | ternary('1', '0') }}"
+    CR_PARTIAL: "{{ cr_status_partial | default(false) | bool | ternary('1', '0') }}"
     EVENT_ID: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
   register: _patch_cr_status_result
   changed_when: true

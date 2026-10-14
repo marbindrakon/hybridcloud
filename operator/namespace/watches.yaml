@@ -4,7 +4,7 @@
   kind: Team
   role: team
   maxConcurrentReconciles: 20
-  reconcileInterval: 120s
+  reconcilePeriod: 120s
   watchAnnotationsChanges: true
   finalizer:
     name: hybridsovereign.redhat/team-cleanup
@@ -15,7 +15,7 @@
   kind: Assignment
   role: assignment
   maxConcurrentReconciles: 10
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
     name: hybridsovereign.redhat/assignment-cleanup
@@ -29,7 +29,7 @@
     name: projects.hybridsovereign.redhat/finalizer
     role: project_finalizer
   maxConcurrentReconciles: 10
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
 - version: v1alpha1
@@ -40,7 +40,7 @@
     name: personas.hybridsovereign.redhat/finalizer
     role: persona_finalizer
   maxConcurrentReconciles: 10
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
 - version: v1alpha1
@@ -48,7 +48,7 @@
   kind: PlatformOpenshift
   role: platformopenshift
   maxConcurrentReconciles: 20
-  reconcileInterval: 600s
+  reconcilePeriod: 600s
   watchDependentResources: false
   watchAnnotationsChanges: true
   finalizer:
@@ -60,7 +60,7 @@
   kind: CloudOSO
   role: cloudoso
   maxConcurrentReconciles: 20
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchDependentResources: false
   watchAnnotationsChanges: true
   finalizer:
@@ -72,7 +72,7 @@
   kind: CloudAWS
   role: cloudaws
   maxConcurrentReconciles: 20
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchDependentResources: false
   watchAnnotationsChanges: true
   finalizer:
@@ -93,7 +93,7 @@
   group: hybridsovereign.redhat
   kind: Rbac
   role: rbac
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
     name: rbacs.hybridsovereign.redhat/finalizer
@@ -104,7 +104,7 @@
   group: hybridsovereign.redhat
   kind: AAPOrg
   role: aaporg
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   finalizer:
     name: aaporg.hybridsovereign.redhat/finalizer
     role: aaporg_finalizer
@@ -119,7 +119,7 @@
     name: quayorg.hybridsovereign.redhat/finalizer
     role: quayorg_finalizer
   maxConcurrentReconciles: 10
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
 - version: v1alpha1
@@ -131,7 +131,7 @@
     name: vaults.hybridsovereign.redhat/finalizer
     role: vault_finalizer
   maxConcurrentReconciles: 20
-  reconcileInterval: 600s
+  reconcilePeriod: 600s
 
 - version: v1alpha1
   group: hybridsovereign.redhat
@@ -142,14 +142,14 @@
     name: vaultkvs.hybridsovereign.redhat/finalizer
     role: vaultkv_finalizer
   maxConcurrentReconciles: 20
-  reconcileInterval: 600s
+  reconcilePeriod: 600s
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: HybridNetwork
   role: hybridnetwork
   maxConcurrentReconciles: 20
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
     name: hybridsovereign.redhat/hybridnetwork-cleanup
@@ -160,7 +160,7 @@
   kind: NetworkPlacement
   role: networkplacement
   maxConcurrentReconciles: 20
-  reconcileInterval: 300s
+  reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
     name: hybridsovereign.redhat/networkplacement-cleanup

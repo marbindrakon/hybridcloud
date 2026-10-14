@@ -3051,6 +3051,10 @@ shcClusterBaseServices:
       # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md); the CRs live on services
       edaRedrive:
         enabled: true
+        config:
+          # P7.3.2: + CloudInfrastructure/DNSConfig probes and the fabric kinds (their jobs are idempotent by design)
+          redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment,
+                         CloudInfrastructure, DNSConfig, HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt]
       # §11.6 phase D (design/TENANT-TEARDOWN.md §3.5): report-only orphan check of the tenant
       # Keystone domain and DNS zone against the CloudOSO/PlatformOpenshift CRs (owner: domain only)
       tenantOrphanCheck:
@@ -4812,11 +4816,11 @@ hybridsovereignPrimaryOperator:
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.27"  # img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1)
+      tag: "img-0.1.28"  # img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2)
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.15"
+        tag: "img-0.1.16"  # img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2)
     amqKafka:
       enabled: true
       vaultPath: amq-producer

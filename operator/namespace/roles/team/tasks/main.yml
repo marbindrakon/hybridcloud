@@ -60,6 +60,15 @@
       ansible.builtin.meta: end_host
       when: team_skip_reconcile | bool
 
+    # shc P7.3.2: no new event while the last one is in flight (operator/roles/_common/tasks/skip_if_event_in_flight.yml)
+    - name: Skip while the last event is in flight
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: skip_if_event_in_flight
+      vars:
+        in_flight_kind: Team
+        in_flight_force: "{{ reconcile_now | bool }}"
+
     - name: Get current timestamp
       ansible.builtin.set_fact:
         team_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
