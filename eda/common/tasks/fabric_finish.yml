@@ -16,7 +16,7 @@
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
     cr_api_version: hybridsovereign.redhat/v1alpha1
-    cr_plural: "{{ fab_kind | lower | regex_replace('y$', 'ie') }}s"
+    cr_plural: "{{ fab_kind | lower | regex_replace('(?<=[^aeiou])y$', 'ie') }}s"
     cr_name: "{{ fab_name }}"
     cr_namespace: "{{ fab_namespace }}"
     patch_ignore_not_found: true

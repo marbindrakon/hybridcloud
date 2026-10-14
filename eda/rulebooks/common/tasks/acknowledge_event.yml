@@ -19,8 +19,8 @@
       ansible.builtin.include_tasks: patch_cr_status.yml
       vars:
         cr_api_version: "{{ event_payload.regarding.apiVersion }}"
-        # CRD plurals in this group: kind lowercased + s (Entity -> entities)
-        cr_plural: "{{ event_payload.regarding.kind | lower | regex_replace('y$', 'ie') }}s"
+        # CRD plurals in this group: kind lowercased + s, a consonant + y -> ies (Entity -> entities, CloudGateway -> cloudgateways)
+        cr_plural: "{{ event_payload.regarding.kind | lower | regex_replace('(?<=[^aeiou])y$', 'ie') }}s"
         cr_name: "{{ event_payload.regarding.name }}"
         cr_namespace: "{{ event_payload.regarding.namespace }}"
         patch_ignore_not_found: true
