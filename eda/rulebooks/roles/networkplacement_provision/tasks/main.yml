@@ -212,7 +212,10 @@
         label: "{{ item.what }}"
       when:
         - item.obj | length > 0
-        - not ((item.obj.status | default({}, true)).ready | default(false) | bool)
+        # usable: ready, or realized and not failed (a CloudOSO: has its project); a dependency that re-runs or
+        # waits on its own dependencies keeps working
+        - not (((item.obj.status | default({}, true)).ready | default(false) | bool) or (((item.obj.status | default({}, true)).realized | default(false) | bool) and (item.obj.status | default({}, true)).status | default('') != 'failed') or ((item.obj.status | default({}, true)).projectId | default('', true) | length > 0
+               and (item.obj.status | default({}, true)).status | default('') != 'failed'))
 
     - name: Report what the placement waits for
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"

@@ -143,7 +143,9 @@
               {%- set st = {'ready': false, 'message': 'waiting for HybridNetwork ' ~ n.network ~ ' (not found)'} -%}
             {%- elif p | length == 0 -%}
               {%- set st = {'ready': false, 'message': 'waiting for a NetworkPlacement of ' ~ n.network ~ ' on this environment'} -%}
-            {%- elif not ((p[0].status | default({}, true)).ready | default(false)) -%}
+            {%- elif not (((p[0].status | default({}, true)).ready | default(false))
+                          or (((p[0].status | default({}, true)).realized | default(false))
+                              and (p[0].status | default({}, true)).status | default('') != 'failed')) -%}
               {%- set st = {'ready': false, 'message': 'waiting for NetworkPlacement ' ~ p[0].metadata.name ~ ' ('
                             ~ ((p[0].status | default({}, true)).status | default('not provisioned', true)) ~ ')'} -%}
             {%- else -%}

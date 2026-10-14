@@ -100,7 +100,8 @@
             hn_waiting: >-
               {{ ['HybridFabric ' ~ hn_fabric_name ~ ' (' ~ ((hn_fabric.status | default({}, true)).status
                   | default('not provisioned', true)) ~ ')'] }}
-          when: not ((hn_fabric.status | default({}, true)).ready | default(false) | bool)
+          # usable: ready, or realized and not failed
+          when: not (((hn_fabric.status | default({}, true)).ready | default(false) | bool) or (((hn_fabric.status | default({}, true)).realized | default(false) | bool) and (hn_fabric.status | default({}, true)).status | default('') != 'failed'))
 
     - name: List the network's placements
       kubernetes.core.k8s_info:

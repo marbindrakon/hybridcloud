@@ -1,6 +1,6 @@
 # shc: a CloudGateway instance on a border gateway node (installed by the platform's CloudGateway job).
 # %i = the gateway name: network namespace and FRR pathspace gw-%i, config /etc/shc-fabric/gw-%i.json and
-# /etc/frr/gw-%i/. The namespace is (re)built before FRR starts; FRR's daemons run inside it (watchfrr --netns).
+# /etc/frr/gw-%i/ (frr.conf.shc = the desired FRR configuration). The namespace is (re)built before FRR starts; FRR's daemons run inside it (watchfrr --netns).
 [Unit]
 Description=shc fabric gateway %i
 After=network-online.target shc-fabric-apply@root.service frr.service
@@ -13,10 +13,13 @@ NotifyAccess=all
 PIDFile=/var/run/frr/gw-%i/watchfrr.pid
 ExecStartPre=/usr/local/sbin/shc-fabric-apply gw-%i up
 ExecStartPre=/usr/bin/install -d -o frr -g frr -m 0755 /var/run/frr /var/run/frr/gw-%i
+# the platform renders the desired configuration to frr.conf.shc; FRR rewrites frr.conf after every reload (vtysh
+# write, frr-reload.py does that for any file but /etc/frr/frr.conf), so a start loads the desired file
+ExecStartPre=/bin/sh -c 'test ! -f /etc/frr/gw-%i/frr.conf.shc || install -o frr -g frr -m 0640 /etc/frr/gw-%i/frr.conf.shc /etc/frr/gw-%i/frr.conf'
 ExecStart=/usr/libexec/frr/frrinit.sh start gw-%i
 ExecStartPost=/usr/local/sbin/shc-fabric-apply gw-%i post
 ExecStop=/usr/libexec/frr/frrinit.sh stop gw-%i
-ExecReload=/usr/libexec/frr/frr-reload.py --pathspace gw-%i --reload /etc/frr/gw-%i/frr.conf
+ExecReload=/usr/libexec/frr/frr-reload.py --pathspace gw-%i --reload /etc/frr/gw-%i/frr.conf.shc
 Restart=always
 RestartSec=5
 TimeoutSec=2m

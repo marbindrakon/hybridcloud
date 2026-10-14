@@ -5,6 +5,9 @@
 #   pending  it waits for something else (fab_waiting_for); the event completes and the operator publishes
 #            again on its reconcilePeriod
 #   failed   its spec can't be realized as written (fab_reason says why)
+# status.realized: true from the first ready until a failure. A dependent treats a dependency as usable when it is
+# ready, or realized and not failed: a dependency that re-runs (or waits on its own dependencies) keeps working, so
+# its dependents need not wait for it (fabric_usable in the roles).
 # Included from a role (paths are role_path-relative).
 # inputs: fab_kind, fab_name, fab_namespace, fab_generation, fab_outcome (ready|pending|failed), fab_reason,
 #         fab_message; optional fab_waiting_for (list), fab_status (extra status fields, merged in)
@@ -35,4 +38,5 @@
              'message': (fab_message | string)[:1000]
            }]
          } | combine({'observedGeneration': fab_generation | int} if fab_generation is defined else {})
+           | combine({'realized': true} if fab_outcome == 'ready' else ({'realized': false} if fab_outcome == 'failed' else {}))
            | combine(fab_status | default({})) }}

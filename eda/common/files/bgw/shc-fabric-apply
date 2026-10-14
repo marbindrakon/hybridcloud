@@ -49,7 +49,7 @@ snapshot() {
 # printed). Harmless when nothing was lost: there are no site sessions yet right after a start.
 post_start() {
   local ns conf asn pw i want have
-  ns=$(q .netns); conf=/etc/frr/$ns/frr.conf
+  ns=$(q .netns); conf=/etc/frr/$ns/frr.conf.shc; [ -f "$conf" ] || conf=/etc/frr/$ns/frr.conf
   want=$(jq -r '.vrfs // [] | .[].name' "$CONF" | sort | tr '\n' ' ')
   for i in $(seq 1 30); do
     have=$(vtysh -N "$ns" -c 'show vrf' 2>/dev/null | awk '$1 == "vrf" {print $2}' | sort | tr '\n' ' ')

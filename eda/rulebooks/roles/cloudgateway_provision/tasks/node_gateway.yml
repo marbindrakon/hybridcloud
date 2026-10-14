@@ -71,11 +71,12 @@
     mode: "0640"
   delegate_to: "{{ bgw_node.name }}"
 
-# the file holds the BGP session password: never shown
+# the file holds the BGP session password: never shown. The desired configuration (frr.conf.shc): FRR rewrites its
+# frr.conf after every reload, so comparing against that would always see a change
 - name: "{{ bgw_node.name }}: FRR configuration"
   ansible.builtin.template:
     src: frr-gateway.conf.j2
-    dest: "/etc/frr/gw-{{ fab_name }}/frr.conf"
+    dest: "/etc/frr/gw-{{ fab_name }}/frr.conf.shc"
     owner: frr
     group: frr
     mode: "0640"
