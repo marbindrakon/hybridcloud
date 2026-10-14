@@ -5,13 +5,17 @@ hostname {{ bgw_node.name }}
 log syslog informational
 service integrated-vtysh-config
 !
+! mpls enable mirrors the kernel's MPLS input (set by shc-fabric-apply): zebra shows it in the running config, so
+! without it here a configuration reload would turn MPLS input off
 interface {{ hf_root.bridge }}
  ip router isis CORE
+ mpls enable
 exit
 !
 interface lo
  ip router isis CORE
  isis passive
+ mpls enable
 exit
 !
 router bgp {{ fab_spec.domainAsn }}

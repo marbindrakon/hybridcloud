@@ -114,6 +114,8 @@
   ansible.builtin.shell: |
     set -e
     V="vtysh -N gw-{{ fab_name }}"
+    # MPLS input on the core leg (a reload that disagreed with the kernel turned it off once)
+    [ "$(ip netns exec gw-{{ fab_name }} sysctl -n net.mpls.conf.core0.input)" = 1 ]
     $V -c 'show isis neighbor' | grep -q ' Up '
     $V -c 'show bgp ipv4 vpn summary json' | python3 -c '
     import json, sys

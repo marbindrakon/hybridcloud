@@ -15,15 +15,25 @@ exit-vrf
 ip route {{ rr }}/32 {{ fab_spec.siteUnderlay.gateway }}
 {% endfor %}
 !
+! mpls enable mirrors the kernel's MPLS input (set by shc-fabric-apply): zebra shows it in the running config, so
+! without it here a configuration reload would turn MPLS input off (labelled packets from the core then drop)
 interface lo
  ip router isis CORE
  isis passive
+ mpls enable
 exit
 !
 interface core0
  ip router isis CORE
+ mpls enable
 exit
 !
+{% for v in cg_vrfs %}
+interface {{ v.vrf }}
+ mpls enable
+exit
+!
+{% endfor %}
 ! routes the gateways originate into the site carry this community; a gateway never takes them back from the site
 bgp community-list standard GW-ORIG seq 5 permit {{ cg_fabric.spec.domainAsn }}:{{ fab_real.gatewayCommunity }}
 !
