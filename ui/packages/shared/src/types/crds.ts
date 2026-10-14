@@ -13,6 +13,21 @@ export interface OperatorStatus {
   conditions?: StatusCondition[];
   /** Entity CR: provisioned tenant namespace (e.g. entity-acme-corp) */
   entity?: string;
+  /** What a pending object waits for */
+  waitingFor?: string[];
+  /** What a requested delete waits for */
+  deletionBlockedBy?: string[];
+  deletionComplete?: boolean;
+  edaJobs?: EdaJobStatus[];
+}
+
+/** One automation job run recorded on the object */
+export interface EdaJobStatus {
+  name?: string;
+  jobId?: string;
+  url?: string;
+  timestamp?: string;
+  status?: 'running' | 'waiting' | 'success' | 'failed' | string;
 }
 
 export interface StatusCondition {
@@ -98,15 +113,23 @@ export type Persona = K8sResource<PersonaSpec>;
 
 /** PlatformOpenshift — managed OCP cluster */
 export interface PlatformOpenshiftOpenstackSpec {
-  environment: string;
+  /** CloudOSO name providing the OpenStack environment */
+  environment?: string;
   controlPlaneCount?: number;
   workerCount?: number;
   controlPlaneFlavor?: string;
   workerFlavor?: string;
   externalNetwork?: string;
+  ocpImageSet?: string;
+  pullSecretVaultPath?: string;
+  pullSecretVaultProperty?: string;
+  sshKeyVaultPath?: string;
+  glanceImageOverride?: string;
+  trustBundle?: string;
 }
 
 export interface PlatformOpenshiftAwsSpec {
+  /** CloudAWS name providing the AWS environment */
   environment: string;
   region?: string;
   clusterType?: 'standalone' | 'ha';
@@ -116,86 +139,49 @@ export interface PlatformOpenshiftAwsSpec {
   workerFlavor?: string;
 }
 
-export interface PlatformOpenshiftHostedSpec {
-  /** CloudVirt CR name providing the virt environment */
-  environment: string;
-  releaseImage?: string;
-  nodePoolReplicas?: number;
-  workerCores?: number;
-  workerMemory?: string;
-}
-
-/**
- * Cluster address plan. Explicit CIDRs are used as given; omitted ones are allocated from the
- * CloudInfrastructure's hostedClusterCidrDefaults (CG-NAT). Clusters do not join a HybridFabric.
- */
-export interface PlatformOpenshiftNetworkingSpec {
-  clusterNetwork?: string[];
-  serviceNetwork?: string[];
-  allowConflict?: boolean;
+export interface PlatformOpenshiftToolRbac {
+  clusterAdminRbac?: string[];
+  clusterOperatorRbac?: string[];
+  clusterDeveloperRbac?: string[];
+  clusterViewerRbac?: string[];
 }
 
 export interface PlatformOpenshiftSpec {
-  type: 'openstack' | 'aws' | 'hosted';
+  type?: 'openstack' | 'aws';
   openstack?: PlatformOpenshiftOpenstackSpec;
   aws?: PlatformOpenshiftAwsSpec;
-  hosted?: PlatformOpenshiftHostedSpec;
-  cloudRef?: string;
-  networking?: PlatformOpenshiftNetworkingSpec;
+  toolRbac?: PlatformOpenshiftToolRbac;
+  clusterViewerRbac?: string[];
 }
 
-/** Observed cluster CIDR plan; used for hub-overlap checks. */
-export interface PlatformOpenshiftNetworkingStatus {
-  clusterNetwork?: string[];
-  serviceNetwork?: string[];
-  machineNetwork?: string[];
-  legacyClusterCidrs?: boolean;
-  ipamCondition?: 'DefaultRange' | 'LegacyClusterCidrs' | string;
-  conflictCheck?: 'passed' | 'failed' | string;
-  conflictMessage?: string;
+export type PlatformOpenshift = K8sResource<PlatformOpenshiftSpec>;
+
+/** Vault KV reference held by platform objects (never the secret itself) */
+export interface VaultPathRef {
+  vaultPath: string;
 }
 
-export interface PlatformOpenshiftStatus extends OperatorStatus {
-  networking?: PlatformOpenshiftNetworkingStatus;
+/** Reference to an object by name */
+export interface NameRef {
+  name: string;
 }
 
-export type PlatformOpenshift = K8sResource<PlatformOpenshiftSpec, PlatformOpenshiftStatus>;
-
-/** CloudInfrastructure — platform-owned cloud site (sovereign-cloud, shortName cinfra) */
-export type CloudInfrastructureType = 'openstack' | 'openshift' | 'aws';
-
-/** Exactly one of vaultPath or secretRef. */
-export interface CloudInfrastructureCredentialsRef {
-  vaultPath?: string;
-  secretRef?: { name: string };
-}
-
-export interface CidrPool {
-  cidr?: string;
-  blockPrefixLength?: number;
-}
+/** CloudInfrastructure — platform-owned cloud site (sovereign-cloud) */
+export type CloudInfrastructureType = 'openstack' | 'openshift' | 'aws' | 'external';
 
 export interface CloudInfrastructureOpenstackSpec {
   region?: string;
-  managementClusterKubeconfigRef?: string;
-  netConfigRef?: string;
-  /** Ordered: rolled out one NodeSet at a time */
-  dataplaneNodeSetRefs?: string[];
-  externalNetwork?: string;
-  baseDomain?: string;
   projectDomain?: string;
-  designate?: { zoneId?: string; projectId?: string };
-  route53VaultPath?: string;
+  createProjectDomain?: boolean;
+  externalNetwork?: string;
 }
 
 export interface CloudInfrastructureOpenshiftSpec {
+  /** local is the services cluster itself (CRD default) */
   clusterRef?: string;
   bootImage?: string;
   storageClass?: string;
-  hostedClusterCidrDefaults?: {
-    clusterNetworkPool?: CidrPool;
-    serviceNetworkPool?: CidrPool;
-  };
+  fabricCredentialsRef?: VaultPathRef;
 }
 
 export interface CloudInfrastructureAwsSpec {
@@ -204,92 +190,128 @@ export interface CloudInfrastructureAwsSpec {
   baseDomain?: string;
 }
 
+export interface CloudInfrastructureExternalSpec {
+  /** CRD default true */
+  evpn?: boolean;
+}
+
+export interface CloudInfrastructureDnsSpec {
+  /** CRD default platform */
+  mode?: 'native' | 'platform';
+  project?: string;
+  projectDomain?: string;
+  createProject?: boolean;
+  zoneQuota?: number;
+}
+
 export interface CloudInfrastructureSpec {
   /** Immutable; selects the typed section */
   type: CloudInfrastructureType;
   displayName?: string;
-  credentialsRef?: CloudInfrastructureCredentialsRef;
+  credentialsRef?: VaultPathRef;
   /** Entities allowed to reference this site; empty means every Entity */
-  entityRefs?: Array<{ name: string }>;
+  entityRefs?: NameRef[];
   openstack?: CloudInfrastructureOpenstackSpec;
   openshift?: CloudInfrastructureOpenshiftSpec;
   aws?: CloudInfrastructureAwsSpec;
+  external?: CloudInfrastructureExternalSpec;
+  dns?: CloudInfrastructureDnsSpec;
 }
 
 export interface CloudInfrastructureStatus extends OperatorStatus {
-  /** Known keys: evpn, virtualization, frrK8s, dataplane, openstackApi */
+  /** Known keys: evpn, api, virtualization, dns */
   capabilities?: Record<string, boolean>;
+  /** Observed site details (informational) */
   site?: {
     endpoint?: string;
     region?: string;
     version?: string;
-    dataplaneNodeSets?: Array<{ name?: string; ready?: boolean }>;
+    [key: string]: unknown;
   };
 }
 
 export type CloudInfrastructure = K8sResource<CloudInfrastructureSpec, CloudInfrastructureStatus>;
 
-/** Reference from a tenant cloud project or CloudGateway to a CloudInfrastructure in sovereign-cloud. */
-export interface CloudInfrastructureRef {
-  kind?: 'CloudInfrastructure';
-  name: string;
-}
-
-/** CloudOSO — tenant OpenStack project on a CloudInfrastructure (type openstack) */
+/** CloudOSO — tenant OpenStack project, on a CloudInfrastructure (type openstack) when cloudRef is in effect */
 export interface CloudOSOSpec {
-  cloudRef?: CloudInfrastructureRef;
+  /** Immutable once set; default: the installation's default site */
+  cloudRef?: NameRef;
   project?: string;
+  /** Ignored with a cloudRef in effect */
+  vaultPath?: string;
   baseDomain?: string;
-  /** Unset falls back to the CloudInfrastructure value */
   projectDomain?: string;
-  /** Unset falls back to the CloudInfrastructure value */
   externalNetwork?: string;
+  regionName?: string;
+  dnsProvider?: 'designate' | 'route53' | 'none';
   route53VaultPath?: string;
   landingzone?: string;
   designateZoneId?: string;
   designateProjectId?: string;
+  enableVRF?: boolean;
+  vrfId?: string;
 }
 
 export type CloudOSO = K8sResource<CloudOSOSpec>;
 
 /** CloudAWS — AWS account environment */
-export interface CloudAWSToolRbac {
-  accountAdminRbac?: string[];
-  accountPoweruserRbac?: string[];
-  accountViewerRbac?: string[];
-}
-
 export interface CloudAWSSpec {
-  cloudRef?: CloudInfrastructureRef;
-  account?: string;
-  /** Ignored when cloudRef is set */
-  vaultPath?: string;
-  credentialsSecretRef?: { name: string };
-  baseDomain?: string;
+  account: string;
+  vaultPath: string;
+  baseDomain: string;
   landingzone?: string;
-  toolRbac?: CloudAWSToolRbac;
 }
 
 export type CloudAWS = K8sResource<CloudAWSSpec>;
 
-/** CloudVirt — tenant project on a CloudInfrastructure (type openshift) */
+/** CloudVirt — tenant VM environment on a CloudInfrastructure (type openshift) */
+export interface CloudVirtNamespace {
+  name: string;
+  /** HybridNetwork in the same namespace; omitted = the site's default network. Fixed once created. */
+  network?: string;
+}
+
+export interface CloudVirtQuota {
+  cpu?: string | number;
+  memory?: string | number;
+  storage?: string | number;
+  virtualMachines?: number;
+}
+
 export interface CloudVirtToolRbac {
-  environmentAdminRbac?: string[];
-  environmentPoweruserRbac?: string[];
-  environmentViewerRbac?: string[];
+  editRbac?: string[];
+  viewRbac?: string[];
 }
 
 export interface CloudVirtSpec {
-  cloudRef?: CloudInfrastructureRef;
-  /** ResourceQuota spec.hard applied to every VM namespace a NetworkPlacement creates */
-  vmNamespaceQuota?: { hard?: Record<string, string | number> };
-  baseDomain?: string;
+  description?: string;
+  /** Immutable */
+  cloudRef: NameRef;
+  /** CRD default [{name: vms}] */
+  namespaces?: CloudVirtNamespace[];
   storageClass?: string;
-  networkAttachment?: string;
+  quota?: CloudVirtQuota;
   toolRbac?: CloudVirtToolRbac;
 }
 
-export type CloudVirt = K8sResource<CloudVirtSpec>;
+export interface CloudVirtNamespaceStatus {
+  name?: string;
+  /** Namespace on the site */
+  namespace?: string;
+  network?: string;
+  ready?: boolean;
+  message?: string;
+}
+
+export interface CloudVirtStatus extends OperatorStatus {
+  site?: { name?: string; endpoint?: string; console?: string; [key: string]: unknown };
+  storageClass?: string;
+  namespaces?: CloudVirtNamespaceStatus[];
+  /** The environment's DNS zone */
+  dns?: { zone?: string; nameservers?: string[]; [key: string]: unknown };
+}
+
+export type CloudVirt = K8sResource<CloudVirtSpec, CloudVirtStatus>;
 
 /** OpenStackMigration — VMware to CloudOSO migration */
 export interface OpenStackMigrationSpec {
@@ -388,148 +410,192 @@ export interface VaultKVSpec {
 
 export type VaultKV = K8sResource<VaultKVSpec>;
 
-/** Transport between a site and the border gateway */
-export type FabricTransportType = 'none' | 'wireguard';
+/** HybridFabric — platform network fabric (sovereign-cloud) */
+export interface VniPool {
+  start: number;
+  end: number;
+}
 
-/** HybridFabric — platform EVPN fabric (one per hub) */
+export interface BorderGatewayNode {
+  /** DNS label; referenced by CloudGateway siteUnderlay.addresses[].node */
+  name: string;
+  /** Management address or host name */
+  address: string;
+}
+
 export interface HybridFabricSpec {
-  enabled?: boolean;
-  domainAsn?: number;
-  /** Entities that may place HybridNetworks on this fabric — tagged via EntityMultiSelect. */
-  entityRefs?: Array<{ name: string }>;
-  vniPool?: { start: number; end: number };
-  underlay?: {
-    /** How the border gateway's underlay NIC attaches on the hub */
-    type?: 'ovn-layer2' | 'localnet';
-    /** localnet only — OVN bridge mapping name */
-    physicalNetworkName?: string;
-    nadName?: string;
-    cidr?: string;
-    /** ovn-layer2 only */
-    gatewayAddress?: string;
-    /** localnet only — CIDR inside cidr for hub node VTEPs and the gateway's hub leg */
-    hubVtepBlock?: string;
-    /** localnet only — border gateway address with prefix length */
-    hubLegAddress?: string;
-    /** ovn-layer2 only */
-    dhcpRange?: { start?: string; end?: string; leaseTime?: string };
-    mtu?: number;
+  /** Immutable */
+  domainAsn: number;
+  overlayMtu: number;
+  vniPool: VniPool;
+  l2vniPool: VniPool;
+  borderGateway: {
+    nodes: BorderGatewayNode[];
+    credentialsRef: VaultPathRef;
   };
-  borderGateway?: {
-    name?: string;
-    loopback?: string;
-    vaultCredentialRef?: string;
-    wireguard?: { address?: string; listenPort?: number; mtu?: number };
-    ingressHost?: string;
-    vmSize?: { cpu?: number; memory?: string };
-    image?: string;
-    storageClass?: string;
-  };
-  bgp?: { authentication?: { secretRef?: { name: string } } };
-  transportDefaults?: {
-    mtu?: number;
-    defaultTunnelType?: FabricTransportType;
-  };
+  bgp?: { passwordRef?: VaultPathRef };
+  /** Entities whose HybridNetworks may use this fabric; empty means every Entity */
+  entityRefs?: NameRef[];
+}
+
+export interface HybridFabricNodeStatus {
+  name?: string;
+  ready?: boolean;
+  message?: string;
+  lastAppliedAt?: string;
 }
 
 export interface HybridFabricStatus extends OperatorStatus {
-  bgwEndpoint?: string;
-  bgwAddress?: string;
-  bgwPeerCount?: number;
-  peers?: Array<{ address?: string; site?: string; state?: string; prefixesReceived?: number }>;
-  allocatedVniCount?: number;
-  availableVniCount?: number;
+  ledger?: string;
+  /** Allocated numbers per pool */
+  allocated?: Record<string, number>;
+  /** Free numbers per pool */
+  available?: Record<string, number>;
+  nodes?: HybridFabricNodeStatus[];
+  /** Informational; depends on the platform */
+  realization?: Record<string, unknown>;
 }
+
 export type HybridFabric = K8sResource<HybridFabricSpec, HybridFabricStatus>;
 
-/** CloudGateway — one per site attached to the fabric (sovereign-cloud) */
+/** How a site's underlay reaches the border gateway nodes */
+export type GatewayTransport = 'none' | 'wireguard';
+
+export interface WireguardPeer {
+  publicKey: string;
+  endpoint?: string;
+  allowedIPs: string[];
+  persistentKeepalive?: number;
+}
+
+/** CloudGateway — attaches one site (CloudInfrastructure) to a HybridFabric (sovereign-cloud) */
 export interface CloudGatewaySpec {
-  enabled?: boolean;
-  fabricRef?: string;
-  /** CloudInfrastructure in sovereign-cloud; its type selects the gateway flavour */
-  cloudRef?: CloudInfrastructureRef;
-  /** Unset type falls back to the fabric's transportDefaults.defaultTunnelType */
-  transport?: { type?: FabricTransportType; vaultPeerConfigRef?: string };
-  /** Site gateway tunnel address; allocated when omitted */
-  wireguard?: { address?: string };
-  /** OpenStack sites only */
-  siteUnderlay?: {
-    interface?: string;
-    computeInterface?: string;
-    nodeSetInterfaces?: Record<string, string>;
-    cidr?: string;
-    gatewayAddress?: string;
-    mtu?: number;
+  /** Immutable */
+  fabricRef: NameRef;
+  /** Immutable */
+  cloudRef: NameRef;
+  /** CRD default none */
+  transport?: GatewayTransport;
+  /** Required with transport wireguard, and only then */
+  wireguard?: {
+    listenPort?: number;
+    peers: WireguardPeer[];
   };
-  /** Test environments only (hypervisor source-MAC filtering) */
-  macNatShim?: { enabled?: boolean; interface?: string };
+  siteUnderlay: {
+    /** Required with transport none */
+    vlan?: number;
+    cidr: string;
+    addresses: Array<{ node: string; address: string }>;
+    mtu?: number;
+    gateway?: string;
+    upstreamRouteReflectors?: string[];
+  };
+  /** CRD default true */
+  bfd?: boolean;
+  bgp?: { passwordRef?: VaultPathRef };
+}
+
+export interface CloudGatewayNodeStatus {
+  name?: string;
+  address?: string;
+  ready?: boolean;
+  siteSessions?: number;
+  coreSessions?: number;
+  upstreamSessions?: number;
+  message?: string;
+  /** transport wireguard only */
+  tunnel?: 'up' | 'down' | string;
+}
+
+export interface CloudGatewayWireguardPeerStatus {
+  publicKey?: string;
+  endpoint?: string;
+  /** Unix time (seconds) of the last handshake; 0 = never */
+  latestHandshake?: number;
+  up?: boolean;
+}
+
+export interface CloudGatewayWireguardNodeStatus {
+  name?: string;
+  publicKey?: string;
+  listenPort?: number;
+  address?: string;
+  peers?: CloudGatewayWireguardPeerStatus[];
 }
 
 export interface CloudGatewayStatus extends OperatorStatus {
-  landingZoneReady?: boolean;
-  gatewayAddress?: string;
-  transportReady?: boolean;
-  peerCount?: number;
-  peerState?: string;
-  vtep?: string;
-  importedRts?: string[];
-  edpmNodeSets?: Array<{
-    name?: string;
-    fingerprint?: string;
-    deployment?: string;
-    state?: 'Converged' | 'Ready' | 'Failed' | 'NotAttempted';
-  }>;
+  site?: { name?: string; type?: string; evpn?: boolean; [key: string]: unknown };
+  nodes?: CloudGatewayNodeStatus[];
+  wireguard?: { nodes?: CloudGatewayWireguardNodeStatus[] };
+  /** Informational; depends on the platform */
+  realization?: Record<string, unknown>;
 }
+
 export type CloudGateway = K8sResource<CloudGatewaySpec, CloudGatewayStatus>;
 
-/** TransportLink — border gateway ↔ CloudGateway tunnel (operator-generated, one per CloudGateway) */
+/** TransportLink — fabric ↔ cloud gateway tunnel */
 export interface TransportLinkSpec {
   enabled?: boolean;
   fabricRef?: string;
   cloudGatewayRef?: string;
-  /** Copied from CloudGateway.spec.transport.type */
-  tunnelType?: FabricTransportType;
+  tunnelType?: 'wireguard' | 'ipsec' | 'macsec' | 'none';
+  vaultConfigRef?: string;
 }
 export type TransportLink = K8sResource<TransportLinkSpec>;
 
-/** HybridNetwork — tenant network identity (VRF: VNI + RT) */
+/** HybridNetwork — a tenant's routed private network across cloud sites */
 export interface HybridNetworkSpec {
   description?: string;
-  /** Disambiguates fabric when Entity is tagged on >1 Ready HybridFabric */
-  fabricRef?: string;
-  /** Overlay MTU (CUDN mtu, Neutron network MTU); defaults from the fabric transport MTU */
-  overlayMtu?: number;
+  /** Default: the platform's only fabric. Immutable once set; cannot be removed. */
+  fabricRef?: NameRef;
+  /** Default and maximum: the fabric's overlayMtu */
+  mtu?: number;
   networkViewerRbac?: string[];
+  egress?: { internet?: boolean };
 }
+
+export type EgressState = 'pending' | 'ready' | 'removing' | 'unavailable';
 
 export interface HybridNetworkStatus extends OperatorStatus {
-  overlayMtu?: number;
-  placements?: Array<{
-    name?: string;
-    backendKind?: string;
-    backendName?: string;
-    prefixes?: string[];
-    ready?: boolean;
-  }>;
+  fabric?: string;
+  mtu?: number;
+  placementCount?: number;
+  placementsReady?: number;
+  egress?: { internet?: EgressState | string; sourceAddresses?: string[] | null };
+  /** Informational; depends on the platform */
+  realization?: Record<string, unknown>;
 }
+
 export type HybridNetwork = K8sResource<HybridNetworkSpec, HybridNetworkStatus>;
 
-/** NetworkPlacement backends (decision 6: no PlatformOpenshift attachment) */
-export type NetworkPlacementBackendKind = 'CloudOSO' | 'CloudAWS' | 'CloudVirt';
+/** NetworkPlacement backends */
+export type NetworkPlacementBackendKind = 'CloudOSO' | 'CloudVirt';
 
-/** NetworkPlacement — places a HybridNetwork on one tenant cloud project */
+/** NetworkPlacement — puts a HybridNetwork on one cloud environment (all of spec is immutable) */
 export interface NetworkPlacementSpec {
   network: string;
   backend: { kind: NetworkPlacementBackendKind; name: string };
-  prefixes?: string[];
-  /** Backend kind CloudVirt only — hub namespaces the operator creates (DNS labels) */
-  vmNamespaces?: string[];
+  prefixes: string[];
 }
 
 export interface NetworkPlacementStatus extends OperatorStatus {
-  vmNamespaces?: string[];
-  backendIds?: Record<string, string>;
+  /** CloudInfrastructure the backend runs on */
+  site?: string;
+  cloudGateway?: string;
+  l3Vni?: number;
+  l2Vni?: number;
+  mtu?: number;
+  realizedPrefixes?: string[];
+  /** CloudVirt site namespaces the network serves */
+  namespaces?: string[];
+  backendReady?: boolean;
+  gatewayReady?: boolean;
+  validated?: boolean;
+  lastValidatedAt?: string;
+  /** Informational; depends on the platform */
+  realization?: Record<string, unknown>;
 }
+
 export type NetworkPlacement = K8sResource<NetworkPlacementSpec, NetworkPlacementStatus>;
 
 /** UIHealthChecker — URL probe target (dashboard pod HTTP check) */
