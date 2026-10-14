@@ -4,7 +4,7 @@ import type { MenuToggleElement } from '@patternfly/react-core';
 import type { K8sResource } from '../types';
 import { useTranslation } from '../i18n';
 
-/** Placement backends offered in the UI (PlatformOpenshift no longer attaches to the fabric). */
+/** NetworkPlacement backends (spec.backend.kind). */
 export type BackendKind = 'CloudOSO' | 'CloudVirt';
 
 export interface BackendSelectOption {
@@ -35,11 +35,7 @@ const decode = (v: string): BackendSelectValue => {
   return { kind: kind ?? '', name: name ?? '' };
 };
 
-/**
- * Build BackendSelect options from CloudOSO / CloudVirt lists (tenant cloud projects).
- * PlatformOpenshift is not a placement backend: hosted clusters do not join the fabric; their
- * workloads attach through a CloudVirt placement instead.
- */
+/** Build BackendSelect options from the entity's CloudOSO / CloudVirt environments. */
 export function buildBackendOptions(sources: {
   cloudosos?: K8sResource<object, { ready?: boolean }>[] | null;
   cloudvirts?: K8sResource<object, { ready?: boolean }>[] | null;

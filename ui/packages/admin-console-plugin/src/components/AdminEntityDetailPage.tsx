@@ -26,6 +26,7 @@ const AdminEntityDetailPage: React.FC = () => {
           parentPath={listPath}
           onBack={() => navigate(listPath)}
           onDeleted={() => navigate(listPath)}
+          audience="admin"
         />
       </div>
     </PageSection>

@@ -19,10 +19,8 @@ export interface CloudGatewaySelectProps {
 }
 
 /**
- * Single-select dropdown of `CloudGateway` CRs for the currently selected Fabric — Ready
- * landing zone. Writes `TransportLink.spec.cloudGatewayRef` (design/fabric.md §18.2 / §18.5).
- * Options should be pre-filtered by the caller to gateways whose `spec.fabricRef` matches the
- * selected FabricSelect value; re-filter when Fabric changes (§18.11).
+ * Single-select dropdown of `CloudGateway` names. Writes `TransportLink.spec.cloudGatewayRef`.
+ * Callers pass the gateways of the selected fabric and re-filter when the fabric changes.
  */
 export function CloudGatewaySelect({
   id = 'cloudgateway-select',

@@ -172,8 +172,8 @@ export function ResourceDetail({
   );
 
   const overviewFields = useMemo(() => {
-    if (!resource) return {};
-    const statusRaw = { ...(resource.status ?? {}) } as Record<string, unknown>;
+    if (!resource || !shown) return {};
+    const statusRaw = { ...(shown.status ?? {}) } as Record<string, unknown>;
     for (const key of [...COMMON_STATUS_KEYS, ...(KIND_STATUS_KEYS[kind] ?? [])]) {
       delete statusRaw[key];
     }
@@ -183,7 +183,7 @@ export function ResourceDetail({
       ...(resource.metadata.labels ? { Labels: resource.metadata.labels } : {}),
       ...statusRaw,
     };
-  }, [resource, namespace, kind]);
+  }, [resource, shown, namespace, kind]);
 
   const handleReconcile = async () => {
     if (reconciling || cooldown || !namespace || !name) return;

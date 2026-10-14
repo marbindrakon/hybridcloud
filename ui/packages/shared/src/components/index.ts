@@ -56,6 +56,6 @@ export {
   PoolBar,
   redactForTenant,
   KIND_STATUS_KEYS,
-  TENANT_HIDDEN_SPEC_PATHS,
+  TENANT_HIDDEN_PATHS,
 } from './KindStatusDetails';
 export type { KindStatusDetailsProps } from './KindStatusDetails';

@@ -29,7 +29,7 @@ export interface EntityMultiSelectProps {
 
 /**
  * Multi-select dropdown of Ready `Entity` CR names (chip + checkbox PatternFly Select).
- * Writes `HybridFabric.spec.entityRefs[].name` — never a free-text entity field (design/fabric.md §18.3).
+ * Writes `spec.entityRefs[].name` (HybridFabric, CloudInfrastructure) — never a free-text entity field.
  */
 export function EntityMultiSelect({
   id = 'entity-multiselect',

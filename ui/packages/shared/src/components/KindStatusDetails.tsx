@@ -49,25 +49,35 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
 /** Status keys shown by the common blocks on every kind. */
 export const COMMON_STATUS_KEYS = ['waitingFor', 'deletionBlockedBy', 'realization', 'conditions', 'edaJobs'];
 
-/** Spec paths never shown on tenant pages (platform credentials and platform account references). */
-export const TENANT_HIDDEN_SPEC_PATHS: Partial<Record<HybridSovereignKind, string[]>> = {
-  CloudOSO: ['vaultPath', 'route53VaultPath'],
-  CloudInfrastructure: ['credentialsRef', 'openshift.fabricCredentialsRef'],
-  HybridFabric: ['borderGateway.credentialsRef', 'bgp'],
-  CloudGateway: ['bgp'],
-  TransportLink: ['vaultConfigRef'],
+/**
+ * Paths never shown on tenant pages: platform credentials and Vault path references (spec and
+ * status). Tenant-supplied required inputs (CloudAWS spec.vaultPath) stay visible.
+ */
+export const TENANT_HIDDEN_PATHS: Partial<Record<HybridSovereignKind, string[]>> = {
+  CloudOSO: ['spec.vaultPath', 'spec.route53VaultPath'],
+  PlatformOpenshift: [
+    'spec.openstack.pullSecretVaultPath',
+    'spec.openstack.sshKeyVaultPath',
+    'status.adminPasswordVaultPath',
+    'status.kubeconfigVaultPath',
+    'status.secretsVaultPath',
+  ],
+  CloudInfrastructure: ['spec.credentialsRef', 'spec.openshift.fabricCredentialsRef'],
+  HybridFabric: ['spec.borderGateway.credentialsRef', 'spec.bgp'],
+  CloudGateway: ['spec.bgp'],
+  TransportLink: ['spec.vaultConfigRef'],
 };
 
-/** Copy of the object without the spec paths tenants must not see. */
+/** Copy of the object without the paths tenants must not see. */
 export function redactForTenant<T extends K8sResource>(kind: HybridSovereignKind, item: T): T {
-  const paths = TENANT_HIDDEN_SPEC_PATHS[kind];
-  if (!paths?.length || !item.spec) return item;
+  const paths = TENANT_HIDDEN_PATHS[kind];
+  if (!paths?.length) return item;
   const copy = JSON.parse(JSON.stringify(item)) as T;
   for (const path of paths) {
     const parts = path.split('.');
-    let cur = copy.spec as Record<string, unknown> | undefined;
+    let cur: Record<string, unknown> | undefined = copy as unknown as Record<string, unknown>;
     for (let i = 0; i < parts.length - 1 && cur; i += 1) {
-      const next = cur[parts[i]];
+      const next: unknown = cur[parts[i]];
       cur = next && typeof next === 'object' ? (next as Record<string, unknown>) : undefined;
     }
     if (cur) delete cur[parts[parts.length - 1]];

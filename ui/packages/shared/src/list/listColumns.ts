@@ -381,7 +381,7 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         (Array.isArray(specOf(i).namespaces) ? (specOf(i).namespaces as Array<Record<string, unknown>>) : [])
           .map((n) => `${asString(n?.name)} ${asString(n?.network)}`)
           .join(' '),
-      render: (i) => {
+      render: (i, ctx) => {
         const ns = Array.isArray(specOf(i).namespaces) ? (specOf(i).namespaces as Array<Record<string, unknown>>) : [];
         if (!ns.length) return '—';
         const st = Array.isArray(statusOf(i).namespaces) ? (statusOf(i).namespaces as Array<Record<string, unknown>>) : [];
@@ -389,7 +389,9 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         return countChip(
           ns.length,
           ns.map((n) => (n?.network ? `${asString(n.name)} → ${asString(n.network)}` : asString(n?.name))).join(', '),
-          st.length ? `${ready}/${ns.length} ready` : 'namespaces',
+          st.length
+            ? ctx.t('list.namespacesReady', { ready, total: ns.length })
+            : ctx.t('list.namespaces'),
         );
       },
     },
@@ -795,12 +797,15 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       sortable: true,
       getSortValue: (i) => asString(((statusOf(i).egress ?? {}) as Record<string, unknown>).internet),
       getSearchText: (i) => asString(((statusOf(i).egress ?? {}) as Record<string, unknown>).internet),
-      render: (i) => {
+      render: (i, ctx) => {
         const wanted = ((specOf(i).egress ?? {}) as Record<string, unknown>).internet === true;
         const state = asString(((statusOf(i).egress ?? {}) as Record<string, unknown>).internet);
-        if (!wanted && !state) return chip('off', 'grey');
+        if (!wanted && !state) return chip(ctx.t('list.egressOff'), 'grey');
         const color = state === 'ready' ? 'green' : state === 'unavailable' ? 'red' : state ? 'orange' : 'grey';
-        return chip(state || (wanted ? 'requested' : 'off'), color);
+        return chip(
+          state ? ctx.t(`detail.egress_${state}`, { defaultValue: state }) : ctx.t('list.egressRequested'),
+          color,
+        );
       },
     },
     {
