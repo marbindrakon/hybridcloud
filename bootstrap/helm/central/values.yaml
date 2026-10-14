@@ -4885,8 +4885,8 @@ hybridsovereignPrimaryOperator:
             fabricCredentialsRef: {vaultPath: cloudinfra/edge1-fabric}   # P7.3.2: write MSA shc-fabric
           dns: {mode: platform}
     # P7.3 (P7-PLAN §12.3, H2 = gateway as PE): the fabric and a gateway per EVPN site on the BGW blades bgw-1/2
-    # (blades 5/8). The fabric is realized from P7.3.4 (ledger + root instance on both blades); the gateways stay
-    # disabled until P7.3.5. SSH key and BGP password: central Vault fabric/bgw, fabric/bgp (seed-fabric-hosts).
+    # (blades 5/8). The fabric is realized from P7.3.4 (ledger + root instance on both blades), the gateways from
+    # P7.3.5 (one site at a time). SSH key and BGP password: central Vault fabric/bgw, fabric/bgp (seed-fabric-hosts).
     hybridFabrics:
       lab:
         spec:
@@ -4903,7 +4903,6 @@ hybridsovereignPrimaryOperator:
             passwordRef: {vaultPath: fabric/bgp}
     cloudGateways:
       iaas1:
-        enabled: false
         spec:
           fabricRef: {name: lab}
           cloudRef: {name: iaas1}
@@ -4911,6 +4910,9 @@ hybridsovereignPrimaryOperator:
             vlan: 236
             cidr: 172.18.236.0/24
             addresses: [{node: bgw-1, address: 172.18.236.4}, {node: bgw-2, address: 172.18.236.5}]
+            # P7.3.5: clients of the Atuin RRs until the cutover (P7.3.6); the HSC SVI .1 routes to VLAN 234
+            gateway: 172.18.236.1
+            upstreamRouteReflectors: [172.18.234.11, 172.18.234.12]
       edge1:
         enabled: false
         spec:
@@ -4920,6 +4922,9 @@ hybridsovereignPrimaryOperator:
             vlan: 239
             cidr: 172.18.239.0/24
             addresses: [{node: bgw-1, address: 172.18.239.4}, {node: bgw-2, address: 172.18.239.5}]
+            # P7.3.5: clients of the Atuin RRs until the cutover (P7.3.6); the HSC SVI .1 routes to VLAN 234
+            gateway: 172.18.239.1
+            upstreamRouteReflectors: [172.18.234.11, 172.18.234.12]
       rhoso-bm:
         enabled: false
         spec:
@@ -4929,6 +4934,9 @@ hybridsovereignPrimaryOperator:
             vlan: 235
             cidr: 172.18.235.0/24
             addresses: [{node: bgw-1, address: 172.18.235.4}, {node: bgw-2, address: 172.18.235.5}]
+            # P7.3.5: clients of the Atuin RRs until the cutover (P7.3.6); the HSC SVI .1 routes to VLAN 234
+            gateway: 172.18.235.1
+            upstreamRouteReflectors: [172.18.234.11, 172.18.234.12]
     # TENANT-DNS D1: the platform's tenant DNS namespace (DNSConfig in sovereign-cloud-plugins). The global zone
     # tenants.shc.signal9.gg lives in Atuin Designate (project shc-tenant-dns); credential = the DNS-only account
     # shc-tenant-dns (p7/tenant-dns-account.sh, bootstrap.sh seed-tenant-dns).
