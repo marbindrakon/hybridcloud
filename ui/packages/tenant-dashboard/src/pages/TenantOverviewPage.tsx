@@ -124,7 +124,11 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
   );
   const overall = bucket(all);
   const loading = TENANT_OVERVIEW_KINDS.some((k) => hookByKind[k]?.loading);
-  const firstError = TENANT_OVERVIEW_KINDS.map((k) => hookByKind[k]?.error).find(Boolean) ?? null;
+  // A kind the user's role doesn't cover answers 403: that kind is simply not theirs, not a proxy failure.
+  const firstError =
+    TENANT_OVERVIEW_KINDS.map((k) => hookByKind[k]?.error).find(
+      (e) => !!e && !/K8s API error 403\b/.test(e.message),
+    ) ?? null;
   const failedItems = all
     .filter((i) => normalizeHealth(i.status?.ready, i.status?.status) === 'failed')
     .slice(0, 12);
