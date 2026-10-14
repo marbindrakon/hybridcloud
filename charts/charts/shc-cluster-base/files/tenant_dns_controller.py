@@ -35,6 +35,7 @@ import time
 
 import openstack
 import yaml
+from openstack.dns.v2.recordset import Recordset
 from kubernetes import client, config, watch
 
 NS_LABEL = "hybridsovereign.redhat/cloudvirt"
@@ -91,6 +92,18 @@ class Controller:
             self.conn = openstack.connect(auth=c["auth"], region_name=c.get("region_name"),
                                           interface=c.get("interface", "public"), identity_api_version="3")
         return self.conn
+
+    def owned(self, conn):
+        """This cluster's recordsets in all the project's zones: one filtered listing (GET /v2/recordsets; the SDK's
+        recordsets() without a zone builds a per-zone URL in some releases)."""
+        url, params = "/recordsets", {"description": self.prefix + "*", "limit": 500}
+        while url:
+            r = conn.dns.get(url, params=params)
+            openstack.exceptions.raise_from_response(r)
+            body = r.json()
+            for d in body.get("recordsets") or []:
+                yield Recordset.existing(connection=conn, **d)
+            url, params = (body.get("links") or {}).get("next"), None
 
     def description(self, owner):
         d = f"{self.prefix}owner={owner}"
@@ -239,7 +252,7 @@ class Controller:
         conn = self.dns()
         zones = {z.name: z for z in conn.dns.zones()}
         actual = {}
-        for rs in conn.dns.recordsets(description=self.prefix + "*"):
+        for rs in self.owned(conn):
             if rs.type in ("NS", "SOA") or not (rs.description or "").startswith(self.prefix):
                 continue
             actual[(rs.name, rs.type)] = rs
