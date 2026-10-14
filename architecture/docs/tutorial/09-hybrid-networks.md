@@ -75,6 +75,34 @@ touch it.
    - OpenStack VMs attach to the shared network.
    - Every placement reaches every other one of the same network at the network's MTU.
 
+## DNS names in the environment zone
+
+A CloudVirt environment's zone `<cloudvirt>.<entity>.<tenant domain>` (`status.dns.zone`) is held by the platform.
+Tenants publish names in it from their VM namespaces, without a second identity:
+
+- a **`DNSEndpoint`** (`externaldns.k8s.io/v1alpha1`, the external-dns schema):
+  ```yaml
+  apiVersion: externaldns.k8s.io/v1alpha1
+  kind: DNSEndpoint
+  metadata: {name: web, namespace: acme-corp-virt1-vms}
+  spec:
+    endpoints:
+      - {dnsName: www.virt1.acme-corp.tenants.shc.signal9.gg, recordType: A, targets: [10.110.1.10], recordTTL: 300}
+  ```
+- or the annotation `external-dns.alpha.kubernetes.io/hostname` (comma-separated names) on a **Service** or a
+  **Route**. The targets come from `external-dns.alpha.kubernetes.io/target`, else the Service's load balancer
+  address or the Route's router (CNAME). `external-dns.alpha.kubernetes.io/ttl` sets the TTL.
+
+Rules:
+- Names must be in the namespace's environment zone (or be its apex, not for CNAME). Types: A, AAAA, CNAME, TXT,
+  MX, SRV and CAA.
+- A name and type belongs to one object: the one that holds it keeps it, otherwise the oldest object gets it.
+- The result is in the object's annotation `hybridsovereign.redhat/dns-status` (`ok: …` or `refused: …`, plus
+  what was published) and in Events (`DNSRecordsPublished`, `DNSRecordRefused`).
+- A record goes away with its object, or when its name leaves the object. Deleting the environment deletes the
+  zone with everything in it.
+- Names are public; private addresses are allowed in them.
+
 ## Status
 
 | `status.status` | Meaning |
@@ -123,3 +151,8 @@ Deleting everything at once works: the guards order it.
   RouteAdvertisements.
 - **OpenStack sites:** a network, subnets and a router with the placement's EVPN VNI in a platform project,
   shared to the tenant project.
+- **Tenant DNS on OpenShift sites:** a controller per site (`shc-tenant-dns`, from the cluster base layer) watches
+  the CloudVirt namespaces and writes the records into the environment zone in the platform's DNS project
+  (Designate). It trusts only what the platform sets: the namespace label `hybridsovereign.redhat/cloudvirt` and
+  its zone annotation `hybridsovereign.redhat/dns-zone`. It marks its recordsets as its own (description
+  `shc-tenant-dns cluster=<site> owner=<namespace>/<kind>/<name>`) and never changes others.
