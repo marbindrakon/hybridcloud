@@ -174,6 +174,13 @@ Deleting everything at once works: the guards order it.
   RouteAdvertisements.
 - **OpenStack sites:** a network, subnets and a router with the placement's EVPN VNI in a platform project,
   shared to the tenant project.
+- **Remote sites** (`CloudGateway.spec.transport: wireguard`): the gateway's site leg on every node is a WireGuard
+  tunnel to the site's peers (`spec.wireguard`), and `siteUnderlay.cidr` is the tunnel's subnet. Each node
+  generates its key pair once and keeps the private key; the public keys and each peer's last handshake are in
+  `status.wireguard`, and a node's tunnel shows `up`/`down` in `status.nodes`. A site whose network the platform
+  doesn't run (a remote data center, a partner's EVPN fabric) is a `CloudInfrastructure` of type `external`; its
+  own operator configures its VTEPs with the gateway's public keys and tunnel addresses. The tunnel's MTU (default
+  1420, for a 1500 path) caps what networks placed there can use.
 - **Internet egress:** each border gateway node's root holds an egress VRF that hands traffic to the site network
   (a macvlan; default route via the network's router, whose own NAT reaches the internet). Per network with
   egress: a VRF `e<vpnTarget>` that imports the network's VPN routes and exports a default route into it, a veth
