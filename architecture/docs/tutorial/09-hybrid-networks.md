@@ -75,6 +75,29 @@ touch it.
    - OpenStack VMs attach to the shared network.
    - Every placement reaches every other one of the same network at the network's MTU.
 
+## Internet egress
+
+A network has no route to the internet unless it asks for one. Two ways:
+
+- **The platform's egress**, like attaching a NAT gateway in a public cloud:
+  ```yaml
+  spec:
+    egress: {internet: true}
+  ```
+  - The platform advertises a default route into the network at every site it is placed on.
+  - The network's traffic leaves with platform source addresses (`status.egress.sourceAddresses`; there may be
+    more than one, for the platform's redundant paths).
+  - Connections can only be opened from inside the network. The platform's private address ranges are not
+    reachable this way.
+  - `status.egress.internet`:
+    - `pending` while the platform adds it, `ready` once it is in place;
+    - `removing` after you turn it off;
+    - `unavailable` if the platform offers no internet egress.
+  - It can be turned on and off at any time. A connection in progress may break when the platform moves it to
+    another path, e.g. after a failure.
+- **Your own edge**: leave `egress.internet` off and bring the default route through your own edge router (for
+  example one that backhauls to your premises). Then the platform never adds a default route of its own.
+
 ## DNS names in the environment zone
 
 A CloudVirt environment's zone `<cloudvirt>.<entity>.<tenant domain>` (`status.dns.zone`) is held by the platform.
@@ -151,6 +174,13 @@ Deleting everything at once works: the guards order it.
   RouteAdvertisements.
 - **OpenStack sites:** a network, subnets and a router with the placement's EVPN VNI in a platform project,
   shared to the tenant project.
+- **Internet egress:** each border gateway node's root holds an egress VRF that hands traffic to the site network
+  (a macvlan; default route via the network's router, whose own NAT reaches the internet). Per network with
+  egress: a VRF `e<vpnTarget>` that imports the network's VPN routes and exports a default route into it, a veth
+  into the egress VRF, and source NAT to one address per node from that node's NAT pool (nftables table
+  `shc_egress`: a conntrack zone per network, so overlapping tenant prefixes don't collide; no private
+  destinations; nothing unsolicited inbound). The HybridFabric job is the only writer. Settings: realization
+  `egress` (hand-off interface, gateway, per-node address and NAT pool, deny/allow lists).
 - **Tenant DNS on OpenShift sites:** a controller per site (`shc-tenant-dns`, from the cluster base layer) watches
   the CloudVirt namespaces and writes the records into the environment zone in the platform's DNS project
   (Designate). It trusts only what the platform sets: the namespace label `hybridsovereign.redhat/cloudvirt` and
