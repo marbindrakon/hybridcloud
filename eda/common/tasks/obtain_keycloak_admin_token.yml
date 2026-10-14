@@ -2,7 +2,7 @@
 # Keycloak admin access token (password grant against the master realm), after
 # obtain_keycloak_admin_credentials.yml. Upstream included this file but never committed it
 # (.gitignore `*token*`). Inputs: keycloak_url, keycloak_admin_user, keycloak_admin_password;
-# optional keycloak_url_http_headers. Sets keycloak_admin_token.
+# optional keycloak_url_http_headers, keycloak_token_output_fact (also set that fact). Sets keycloak_admin_token.
 - name: Request Keycloak admin token
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
@@ -25,4 +25,12 @@
 - name: Expose Keycloak admin token
   ansible.builtin.set_fact:
     keycloak_admin_token: "{{ _kc_token_resp.json.access_token }}"
+  no_log: true
+
+# shc: callers that name their token fact (keycloak_token_output_fact, e.g. the Rbac job's svc_access_token) get it
+# under that name too; the Rbac job failed on an undefined svc_access_token before
+- name: Expose the token under the caller's fact name
+  ansible.builtin.set_fact:
+    "{{ keycloak_token_output_fact }}": "{{ keycloak_admin_token }}"
+  when: keycloak_token_output_fact | default('') | length > 0
   no_log: true
