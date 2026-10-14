@@ -342,10 +342,11 @@ class Controller:
     def report(self, r):
         kind, o = r["kind"], r["obj"]
         m = o["metadata"]
+        published = f"{len(r['records'])} record(s)" + (": " + ", ".join(sorted(r["records"])) if r["records"] else "")
         if r["refused"]:
-            status = "refused: " + "; ".join(r["refused"])
+            status = "refused: " + "; ".join(r["refused"]) + (f"; published {published}" if r["records"] else "")
         else:
-            status = f"ok: {len(r['records'])} record(s)" + (": " + ", ".join(sorted(r["records"])) if r["records"] else "")
+            status = f"ok: {published}"
         status = status[:1000]
         if (m.get("annotations") or {}).get(STATUS_ANNOTATION) == status:
             return
