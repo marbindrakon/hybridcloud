@@ -1,0 +1,23 @@
+---
+# shc (design/P8-PLAN.md §1): which AWS identity does this job get? No credentials are passed: boto3 reads
+# AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE, set by the job's container group, whose sidecar keeps a JWT-SVID
+# (audience sts.amazonaws.com) from the SPIFFE Workload API in that file.
+- name: AWS identity check
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The web identity configuration
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'AWS_ROLE_ARN') | length > 0
+          - lookup('env', 'AWS_WEB_IDENTITY_TOKEN_FILE') | length > 0
+        fail_msg: "the job's container group sets no AWS web identity"
+
+    - name: Ask STS who we are
+      amazon.aws.aws_caller_info:
+      register: aws_identity
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "AWS identity {{ aws_identity.arn }} (account {{ aws_identity.account }})"
