@@ -87,11 +87,14 @@
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# a new core bridge MAC is only seen by IS-IS after a restart
 - name: "{{ bgw_node.name }}: start FRR (enabled at boot)"
   ansible.builtin.systemd:
     name: frr
     enabled: true
-    state: "{{ 'started' if _hf_frr_active.stdout != 'active' else ('restarted' if _hf_daemons is changed else omit) }}"
+    state: >-
+      {{ 'started' if _hf_frr_active.stdout != 'active'
+         else ('restarted' if (_hf_daemons is changed or 'bridge-mac=changed' in _hf_apply.stdout) else omit) }}
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_frr_state
 
@@ -103,6 +106,7 @@
   when:
     - _hf_frr_active.stdout == 'active'
     - _hf_daemons is not changed
+    - "'bridge-mac=changed' not in _hf_apply.stdout"
     - _hf_frrconf is changed
   delegate_to: "{{ bgw_node.name }}"
 

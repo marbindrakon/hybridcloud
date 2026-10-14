@@ -4,8 +4,10 @@
 # before FRR starts. Idempotent; the last line says whether anything changed ("changed=yes|no").
 #   shc-fabric-apply <instance> [up|down]
 # instance type "root" (the border gateway's own instance, root namespace):
-#   MPLS (modules, platform_labels), the node-local core bridge with the link address, the provider-edge loopback
-#   on lo; other addresses from the fabric's core prefixes are removed.
+#   MPLS (modules, platform_labels), the node-local core bridge with the link address and a fixed MAC (a Linux bridge
+#   otherwise takes a port's MAC whenever ports change, and IS-IS on it keeps the old one: prints bridge-mac=changed
+#   when it had to set it, so FRR can be restarted), the provider-edge loopback on lo; other addresses from the
+#   fabric's core prefixes are removed.
 # instance type "gateway" (a CloudGateway, network namespace <netns>):
 #   the namespace (forwarding, MPLS), the provider-edge loopback, the site's underlay VLAN on the trunk moved into
 #   the namespace with the gateway's site address, and a veth from the namespace's core0 (link address) to the core
@@ -32,6 +34,7 @@ for i in json.load(sys.stdin):
 snapshot() {
   { ip -br -4 addr show dev lo; ip -br -4 addr show dev "$BR" 2>/dev/null || true
     ip -o link show "$BR" 2>/dev/null | grep -o 'mtu [0-9]*\|state [A-Z]*' || true
+    cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true; } | sha1sum
 }
@@ -43,7 +46,9 @@ root)
   if [ "$ACT" = up ]; then
     modprobe mpls_router; modprobe mpls_iptunnel
     sysctl -qw net.mpls.platform_labels=1048575
-    ip link show "$BR" >/dev/null 2>&1 || ip link add "$BR" type bridge
+    MAC=$(printf '02:fa:%02x:%02x:%02x:%02x' $(echo "${LINK%/*}" | tr . ' '))
+    ip link show "$BR" >/dev/null 2>&1 || ip link add "$BR" address "$MAC" type bridge
+    if [ "$(cat "/sys/class/net/$BR/address")" != "$MAC" ]; then ip link set "$BR" address "$MAC"; echo "bridge-mac=changed"; fi
     ip link set "$BR" mtu "$MTU" up
     for a in $(stray "$BR" 0.0.0.0/0 "$LINK"); do ip addr del "$a" dev "$BR"; done
     ip addr show dev "$BR" | grep -q " ${LINK} " || ip addr add "$LINK" dev "$BR"
