@@ -2141,7 +2141,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.11"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts; 0.3.8: EVPN SVI MTU; 0.3.9: fabric.gateways (BFD); 0.3.10: fabric.absentRoutes; 0.3.11: tenantAccess
+    chartVersion: "0.3.12"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts; 0.3.8: EVPN SVI MTU; 0.3.9: fabric.gateways (BFD); 0.3.10: fabric.absentRoutes; 0.3.11: tenantAccess; 0.3.12: tenantDns
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -2183,6 +2183,13 @@ iaasClusterDefaults:
         identityProvider:
           name: sovereign-tenants
           issuer: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants
+      # TENANT-DNS D3 (owner 10-14: the cluster's Vault policy reads dns/tenant-designate): tenants publish names in
+      # their CloudVirt environment zone with DNSEndpoints and Service/Route hostname annotations
+      tenantDns:
+        enabled: true
+        image: quay.signal9.gg/shc/de-cloudoso:0.1.7
+        config:
+          domain: tenants.shc.signal9.gg
   secretStore:
     chartVersion: "0.3.3-shc.2"
     values:

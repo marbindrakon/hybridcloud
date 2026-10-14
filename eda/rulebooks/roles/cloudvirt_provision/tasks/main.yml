@@ -7,6 +7,8 @@
 # the primary-network label at creation; the network's placement selects it by label), a ResourceQuota from
 # spec.quota, removal of namespaces that left the spec once they hold no VMs, and tenant access (access.yml: the
 # Rbac CRs' Keycloak groups get client roles <entity>.<rbac> of the site's sign-in client, RoleBindings edit/view).
+# The environment zone (dns_zone.yml, TENANT-DNS D3) comes before the namespaces, which carry it in the annotation
+# hybridsovereign.redhat/dns-zone: the tenant DNS controller on the site publishes their names there.
 - block:
     - name: Read the CloudVirt
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -178,6 +180,12 @@
       ansible.builtin.meta: end_play
       when: cv_waiting | length > 0
 
+    # before the namespaces: they carry the zone (the tenant DNS controller trusts only that annotation), and a
+    # taken environment name stops the job before anything exists on the site
+    - name: The environment zone (site DNS mode platform)
+      ansible.builtin.include_tasks: dns_zone.yml
+      when: ((ci_spec.dns | default({})).mode | default('platform')) == 'platform'
+
     - name: Realize the namespaces on the site
       block:
         - name: The site's fabric credential
@@ -194,11 +202,13 @@
               kind: Namespace
               metadata:
                 name: "{{ item.namespace }}"
-                annotations:
-                  openshift.io/display-name: "{{ fab_entity }} / {{ fab_name }} / {{ item.name }}"
-                  openshift.io/description: >-
-                    VM namespace {{ item.name }} of CloudVirt {{ fab_namespace }}/{{ fab_name }}{{ (', network '
-                    ~ item.network) if item.network else '' }} (managed by the platform)
+                # the environment zone: where the tenant DNS controller publishes this namespace's names
+                annotations: >-
+                  {{ {'openshift.io/display-name': fab_entity ~ ' / ' ~ fab_name ~ ' / ' ~ item.name,
+                      'openshift.io/description': 'VM namespace ' ~ item.name ~ ' of CloudVirt ' ~ fab_namespace ~ '/'
+                        ~ fab_name ~ ((', network ' ~ item.network) if item.network else '') ~ ' (managed by the platform)'}
+                     | combine({'hybridsovereign.redhat/dns-zone': cv_dns.zone | regex_replace('[.]$', '')}
+                               if (cv_dns | default({})).zone | default('') | length > 0 else {}) }}
                 # a namespace with a network takes it as its primary network: the label has to be there from the start
                 labels: >-
                   {{ item.labels | combine({'k8s.ovn.org/primary-user-defined-network': ''} if item.network else {}) }}
@@ -285,10 +295,6 @@
           ansible.builtin.file:
             path: "{{ site_kubeconfig | default('/tmp/eda-cv-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
             state: absent
-
-    - name: The environment zone (site DNS mode platform)
-      ansible.builtin.include_tasks: dns_zone.yml
-      when: ((ci_spec.dns | default({})).mode | default('platform')) == 'platform'
 
     - name: Report the environment ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"

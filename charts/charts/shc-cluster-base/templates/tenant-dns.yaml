@@ -1,0 +1,275 @@
+{{- /*
+Tenant DNS controller (shc design/TENANT-DNS.md D3): tenants publish names in their CloudVirt environment's zone
+<cloudvirt>.<entity>.<domain> (platform-held, Designate) with DNSEndpoint objects and external-dns hostname
+annotations on Services and Routes in their VM namespaces (files/tenant_dns_controller.py). Only namespaces labelled
+hybridsovereign.redhat/cloudvirt count, and the zone comes from their platform-set annotation
+hybridsovereign.redhat/dns-zone. Certs layer: the DNS-only account comes from Vault through the cluster's
+ClusterSecretStore.
+*/}}
+{{- if and .Values.layers.certs .Values.tenantDns.enabled }}
+{{- $t := .Values.tenantDns }}
+{{- $name := required "cluster.name is required" .Values.cluster.name }}
+{{- $cfg := merge (dict "cluster" $name) (deepCopy $t.config) }}
+{{- $_ := required "tenantDns.config.domain is required" $t.config.domain }}
+# the external-dns DNSEndpoint schema (externaldns.k8s.io/v1alpha1); not the external-dns controller. Kept when the
+# layer is switched off, so tenants' objects survive.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dnsendpoints.externaldns.k8s.io
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/external-dns/pull/2007
+    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  group: externaldns.k8s.io
+  names:
+    kind: DNSEndpoint
+    listKind: DNSEndpointList
+    plural: dnsendpoints
+    singular: dnsendpoint
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: DNS
+          type: string
+          jsonPath: .metadata.annotations.hybridsovereign\.redhat/dns-status
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion: {type: string}
+            kind: {type: string}
+            metadata: {type: object}
+            spec:
+              description: DNSEndpointSpec defines the desired state of DNSEndpoint
+              type: object
+              properties:
+                endpoints:
+                  type: array
+                  items:
+                    description: Endpoint is a high-level way of a connection between a service and an IP
+                    type: object
+                    properties:
+                      dnsName:
+                        description: The hostname of the DNS record
+                        type: string
+                      labels:
+                        description: Labels stores labels defined for the Endpoint
+                        type: object
+                        additionalProperties: {type: string}
+                      providerSpecific:
+                        description: ProviderSpecific stores provider specific config
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name: {type: string}
+                            value: {type: string}
+                      recordTTL:
+                        description: TTL for the record
+                        type: integer
+                        format: int64
+                      recordType:
+                        description: RecordType type of record, e.g. CNAME, A, AAAA, SRV, TXT etc
+                        type: string
+                      setIdentifier:
+                        description: Identifier to distinguish multiple records with the same name and type
+                        type: string
+                      targets:
+                        description: The targets the DNS record points to
+                        type: array
+                        items: {type: string}
+            status:
+              description: DNSEndpointStatus defines the observed state of DNSEndpoint
+              type: object
+              properties:
+                observedGeneration:
+                  description: The generation observed by the controller
+                  type: integer
+                  format: int64
+---
+# tenants manage DNSEndpoints wherever they have edit/admin, and see them with view
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shc-dnsendpoints-edit
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+  - apiGroups: [externaldns.k8s.io]
+    resources: [dnsendpoints]
+    verbs: [get, list, watch, create, update, patch, delete, deletecollection]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shc-dnsendpoints-view
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: [externaldns.k8s.io]
+    resources: [dnsendpoints]
+    verbs: [get, list, watch]
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $t.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-dns-controller
+  namespace: {{ $t.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shc-tenant-dns-controller
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  # the status annotation on the tenants' objects
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [externaldns.k8s.io]
+    resources: [dnsendpoints]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [externaldns.k8s.io]
+    resources: [dnsendpoints/status]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shc-tenant-dns-controller
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: shc-tenant-dns-controller
+subjects:
+  - kind: ServiceAccount
+    name: tenant-dns-controller
+    namespace: {{ $t.namespace }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: tenant-dns-account
+  namespace: {{ $t.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $t.account.secretStoreName }}
+  target:
+    name: tenant-dns-account
+    creationPolicy: Owner
+  data:
+    - secretKey: clouds.yaml
+      remoteRef:
+        key: {{ required "tenantDns.account.vaultKey is required" $t.account.vaultKey }}
+        property: clouds.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-dns-controller
+  namespace: {{ $t.namespace }}
+data:
+  tenant_dns_controller.py: |
+    {{- $.Files.Get "files/tenant_dns_controller.py" | nindent 4 }}
+  config.yaml: |
+    {{- toYaml $cfg | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-dns-controller
+  namespace: {{ $t.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # one writer at a time
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tenant-dns-controller
+  template:
+    metadata:
+      labels:
+        app: tenant-dns-controller
+      annotations:
+        # the script and its config come from the ConfigMap: roll the pod when they change
+        shc/config-hash: {{ printf "%s%s" ($.Files.Get "files/tenant_dns_controller.py") (toYaml $cfg) | sha256sum | trunc 16 | quote }}
+    spec:
+      serviceAccountName: tenant-dns-controller
+      containers:
+        - name: controller
+          image: {{ required "tenantDns.image is required" $t.image }}
+          command: [python3, -u, /etc/tenant-dns/tenant_dns_controller.py,
+                    --config, /etc/tenant-dns/config.yaml, --clouds, /etc/tenant-dns-account/clouds.yaml]
+          env:
+            - name: HOME
+              value: /tmp
+          livenessProbe:
+            exec:
+              command: [python3, -c, "import os, sys, time; sys.exit(time.time() - os.path.getmtime('/tmp/healthy') > {{ mul 3 (int $t.config.resyncSeconds) }})"]
+            initialDelaySeconds: {{ add 60 (int $t.config.resyncSeconds) }}
+            periodSeconds: 60
+          resources:
+            {{- toYaml $t.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tenant-dns
+              readOnly: true
+            - name: account
+              mountPath: /etc/tenant-dns-account
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: tenant-dns-controller
+        - name: account
+          secret:
+            secretName: tenant-dns-account
+        - name: tmp
+          emptyDir: {}
+{{- end }}

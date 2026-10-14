@@ -225,3 +225,26 @@ tenantAccess:
   # admission policy: in namespaces labelled hybridsovereign.redhat/cloudvirt, only system identities and
   # cluster admins may manage NetworkAttachmentDefinitions and UserDefinedNetworks
   networkGuard: true
+
+# ─── Tenant DNS controller (TENANT-DNS D3) — layer "certs" ───────────────────
+# Tenants publish names in their CloudVirt environment's zone with DNSEndpoint objects and external-dns hostname
+# annotations on Services/Routes (templates/tenant-dns.yaml, files/tenant_dns_controller.py). Installs the
+# DNSEndpoint CRD (schema only).
+tenantDns:
+  enabled: false
+  namespace: shc-tenant-dns
+  # python3 + openstacksdk + kubernetes client + PyYAML
+  image: ""
+  account:
+    secretStoreName: vault-backend
+    # central Vault key with the DNS-only account's clouds.yaml (property clouds.yaml), scoped to the zones' project
+    vaultKey: dns/tenant-designate
+  config:
+    domain: ""              # the global tenant domain; environment zones are zoneDepth labels below it
+    zoneDepth: 2            # <cloudvirt>.<entity>.<domain>
+    defaultTTL: 300
+    resyncSeconds: 300
+    types: [A, AAAA, CNAME, TXT, MX, SRV, CAA]
+  resources:
+    requests: {cpu: 10m, memory: 96Mi}
+    limits: {memory: 256Mi}
