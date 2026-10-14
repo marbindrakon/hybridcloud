@@ -4914,7 +4914,6 @@ hybridsovereignPrimaryOperator:
             gateway: 172.18.236.1
             upstreamRouteReflectors: [172.18.234.11, 172.18.234.12]
       edge1:
-        enabled: false
         spec:
           fabricRef: {name: lab}
           cloudRef: {name: edge1}
@@ -4926,7 +4925,6 @@ hybridsovereignPrimaryOperator:
             gateway: 172.18.239.1
             upstreamRouteReflectors: [172.18.234.11, 172.18.234.12]
       rhoso-bm:
-        enabled: false
         spec:
           fabricRef: {name: lab}
           cloudRef: {name: rhoso-bm}
