@@ -104,11 +104,10 @@ spec:
                       && test "$(jq -r .issuer "new/${n}__openid-configuration")" = "{{ $.Values.baseURL }}/$n" \
                       && jq -e '.keys | length > 0' "new/${n}__keys.json" >/dev/null
                   }
-                  publish_url() {  # <name> <base URL> <keys path> [Host header]: an HTTPS discovery endpoint (service CA)
-                    local n=$1 u=$2 k=$3 ca=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt h=()
-                    [ -n "$4" ] && h=(-H "Host: $4")   # e.g. SPIRE's discovery provider answers only its configured domain
-                    curl -sf --max-time 20 --cacert "$ca" "${h[@]}" "$u$k" > "new/${n}__keys.json" \
-                      && curl -sf --max-time 20 --cacert "$ca" "${h[@]}" "$u/.well-known/openid-configuration" \
+                  publish_url() {  # <name> <base URL> <keys path>: an HTTPS discovery endpoint (service CA), e.g. SPIRE's
+                    local n=$1 u=$2 k=$3 ca=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+                    curl -sf --max-time 20 --cacert "$ca" "$u$k" > "new/${n}__keys.json" \
+                      && curl -sf --max-time 20 --cacert "$ca" "$u/.well-known/openid-configuration" \
                         | jq --arg iss "{{ $.Values.baseURL }}/$n" '.issuer = $iss | .jwks_uri = ($iss + "/keys.json")' \
                           > "new/${n}__openid-configuration" \
                       && test "$(jq -r .issuer "new/${n}__openid-configuration")" = "{{ $.Values.baseURL }}/$n" \
@@ -131,7 +130,7 @@ spec:
                   unset T
                   {{- else if eq .source "url" }}
                   # {{ .name }}: an OIDC discovery endpoint inside the cluster; its keys are republished unchanged
-                  publish_url {{ .name }} {{ .url | quote }} {{ .keysPath | default "/keys" | quote }} {{ .hostHeader | default "" | quote }} || { echo "{{ .name }}: fetch failed"; rc=1; }
+                  publish_url {{ .name }} {{ .url | quote }} {{ .keysPath | default "/keys" | quote }} || { echo "{{ .name }}: fetch failed"; rc=1; }
                   {{- end }}
                   {{- end }}
                   args=(); published=""
