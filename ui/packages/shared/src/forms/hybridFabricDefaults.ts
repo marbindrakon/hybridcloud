@@ -1,81 +1,121 @@
 /**
- * Lab-aligned HybridFabric and CloudInfrastructure defaults.
- * HybridFabric values mirror gitops/apps/platform-fabric/templates/fabrics.yaml (localnet underlay);
- * CloudInfrastructure values mirror the CRD defaults.
+ * Network form constants: only the CRDs' own `default:` values, enums and validation rules.
+ * Nothing here describes a particular installation.
  */
-import type { CloudInfrastructureType, FabricTransportType } from '../types';
+import type { CloudInfrastructureType, GatewayTransport, NetworkPlacementBackendKind } from '../types';
 
-/** Site ↔ border gateway transport. Only none and wireguard are offered. */
-export type FabricTunnelType = FabricTransportType;
+/** CloudGateway.spec.transport (CRD default none) */
+export const GATEWAY_TRANSPORTS: GatewayTransport[] = ['none', 'wireguard'];
+export const DEFAULT_GATEWAY_TRANSPORT: GatewayTransport = 'none';
+/** CloudGateway.spec.bfd (CRD default true) */
+export const DEFAULT_GATEWAY_BFD = true;
 
-export const FABRIC_TUNNEL_TYPES: FabricTunnelType[] = ['none', 'wireguard'];
+/** CloudInfrastructure.spec.type */
+export const CLOUD_INFRASTRUCTURE_TYPES: CloudInfrastructureType[] = ['openstack', 'openshift', 'aws', 'external'];
+/** CloudInfrastructure.spec.openshift.clusterRef (CRD default local) */
+export const DEFAULT_OPENSHIFT_CLUSTER_REF = 'local';
+/** CloudInfrastructure.spec.dns defaults */
+export const DEFAULT_SITE_DNS = { mode: 'platform' as const, createProject: false, zoneQuota: 1000 };
+/** CloudInfrastructure.spec.openstack.createProjectDomain (CRD default false) */
+export const DEFAULT_CREATE_PROJECT_DOMAIN = false;
+/** CloudInfrastructure.spec.external.evpn (CRD default true) */
+export const DEFAULT_EXTERNAL_EVPN = true;
 
-/** How the border gateway's underlay NIC attaches on the hub (HybridFabric.spec.underlay.type). */
-export type FabricUnderlayType = 'ovn-layer2' | 'localnet';
+/** NetworkPlacement.spec.backend.kind */
+export const PLACEMENT_BACKEND_KINDS: NetworkPlacementBackendKind[] = ['CloudVirt', 'CloudOSO'];
 
-/** Hub underlay (HybridFabric.spec.underlay), localnet flavour. */
-export interface FabricUnderlayDefaults {
-  type: FabricUnderlayType;
-  physicalNetworkName: string;
-  nadName: string;
-  cidr: string;
-  hubVtepBlock: string;
-  hubLegAddress: string;
-  mtu: number;
+/** CloudVirt.spec.namespaces (CRD default [{name: vms}]) */
+export const DEFAULT_CLOUDVIRT_NAMESPACES = [{ name: 'vms' }];
+
+/** CloudOSO / CloudAWS spec.landingzone (CRD default) */
+export const DEFAULT_LANDING_ZONE = 'default';
+
+/** MTU range shared by HybridFabric.overlayMtu, HybridNetwork.mtu and CloudGateway.siteUnderlay.mtu */
+export const MTU_MIN = 1280;
+export const MTU_MAX = 9216;
+export const VNI_MIN = 1;
+export const VNI_MAX = 16777215;
+export const ASN_MIN = 1;
+export const ASN_MAX = 4294967295;
+
+/**
+ * Whether spec.credentialsRef is needed: openstack and aws always, openshift unless the cluster is the
+ * services cluster itself (clusterRef local), external never.
+ */
+export function cloudInfrastructureNeedsCredentials(
+  type: CloudInfrastructureType | string,
+  clusterRef?: string,
+): boolean {
+  if (type === 'openstack' || type === 'aws') return true;
+  if (type === 'openshift') return !!clusterRef && clusterRef !== DEFAULT_OPENSHIFT_CLUSTER_REF;
+  return false;
 }
 
-export const DEFAULT_FABRIC_UNDERLAY: FabricUnderlayDefaults = {
-  type: 'localnet',
-  physicalNetworkName: 'physnet',
-  nadName: 'fabric-localnet',
-  cidr: '192.168.64.0/18',
-  hubVtepBlock: '192.168.65.0/24',
-  hubLegAddress: '192.168.65.1/24',
-  mtu: 1400,
-};
-
-export const DEFAULT_FABRIC_TRANSPORT: { mtu: number; defaultTunnelType: FabricTunnelType } = {
-  mtu: 1442,
-  defaultTunnelType: 'none',
-};
-
-export const DEFAULT_FABRIC_BORDER_GATEWAY = {
-  name: 'fabric-bgw',
-  loopback: '10.255.10.10',
-  wireguardAddress: '10.254.254.1/24',
-  wireguardListenPort: 51820,
-  cpu: 2,
-  memory: '4Gi',
-  image: 'docker://quay.io/containerdisks/centos-stream:9',
-};
-
-export const DEFAULT_FABRIC_VNI = { start: 51000, end: 52127 };
-export const DEFAULT_FABRIC_DOMAIN_ASN = 65010;
-
-export const CLOUD_INFRASTRUCTURE_TYPES: CloudInfrastructureType[] = ['openstack', 'openshift', 'aws'];
-
-/** credentialsRef is required for these types; openshift (clusterRef local) needs none. */
-export function cloudInfrastructureNeedsCredentials(type: CloudInfrastructureType | string): boolean {
-  return type === 'openstack' || type === 'aws';
-}
-
-export const DEFAULT_CLOUD_INFRA_OPENSTACK = {
-  region: 'regionOne',
-  netConfigRef: 'openstacknetconfig',
-  externalNetwork: 'public',
-  projectDomain: 'Default',
-};
-
-export const DEFAULT_CLOUD_INFRA_OPENSHIFT = {
-  clusterRef: 'local',
-  bootImage: 'docker://quay.io/containerdisks/centos-stream:9',
-  clusterNetworkPool: { cidr: '100.64.0.0/11', blockPrefixLength: 14 },
-  serviceNetworkPool: { cidr: '100.96.0.0/11', blockPrefixLength: 16 },
-};
-
+/** Split a comma- or newline-separated list. */
 export function parseCidrList(text: string): string[] {
   return text
     .split(/[,\n]/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** Kubernetes DNS label (namespace names, node names). */
+export const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+/** WireGuard public key (base64 of 32 bytes), as the CRD pattern requires. */
+export const WIREGUARD_KEY = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=$/;
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null;
+    const v = Number(p);
+    if (v > 255) return null;
+    n = n * 256 + v;
+  }
+  return n;
+}
+
+export function isIpv4(text: string): boolean {
+  return ipv4ToInt(text.trim()) !== null;
+}
+
+/** Parse an IPv4 prefix: network address, prefix length, and whether host bits are zero. */
+export function parseIpv4Cidr(text: string): { base: number; length: number; masked: boolean } | null {
+  const m = /^([0-9.]+)\/(\d{1,2})$/.exec(text.trim());
+  if (!m) return null;
+  const base = ipv4ToInt(m[1]);
+  const length = Number(m[2]);
+  if (base === null || length > 32) return null;
+  const size = 2 ** (32 - length);
+  return { base, length, masked: base % size === 0 };
+}
+
+export function isIpv4Cidr(text: string): boolean {
+  return parseIpv4Cidr(text) !== null;
+}
+
+/** NetworkPlacement prefix: IPv4 network prefix with host bits zero, length 8 to 29. */
+export function isPlacementPrefix(text: string): boolean {
+  const c = parseIpv4Cidr(text);
+  return !!c && c.masked && c.length >= 8 && c.length <= 29;
+}
+
+/** Whether an IPv4 address lies inside an IPv4 prefix. */
+export function cidrContains(cidr: string, ip: string): boolean {
+  const c = parseIpv4Cidr(cidr);
+  const a = ipv4ToInt(ip.trim());
+  if (!c || a === null) return false;
+  const size = 2 ** (32 - c.length);
+  const start = c.base - (c.base % size);
+  return a >= start && a < start + size;
+}
+
+/** Integer inside [min, max]. */
+export function isIntInRange(text: string, min: number, max: number): boolean {
+  if (!/^\d+$/.test(text.trim())) return false;
+  const n = Number(text);
+  return n >= min && n <= max;
 }

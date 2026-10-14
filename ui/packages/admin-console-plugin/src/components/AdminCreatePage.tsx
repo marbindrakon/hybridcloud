@@ -91,6 +91,7 @@ const AdminCreatePage: React.FC = () => {
             listPath={listPath}
             onSuccess={(path) => navigate(path)}
             onCancel={() => navigate(listPath)}
+            audience="admin"
           />
         )}
       </div>

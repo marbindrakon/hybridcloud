@@ -44,3 +44,7 @@ export { CloudVirtSelect } from './CloudVirtSelect';
 export type { CloudVirtSelectProps, CloudVirtSelectOption } from './CloudVirtSelect';
 export { CloudGatewaySelect } from './CloudGatewaySelect';
 export type { CloudGatewaySelectProps, CloudGatewaySelectOption } from './CloudGatewaySelect';
+export { ListTextArea } from './ListTextArea';
+export type { ListTextAreaProps } from './ListTextArea';
+export { ObjectListEditor } from './ObjectListEditor';
+export type { ObjectListEditorProps, ObjectListColumn, ObjectListRow } from './ObjectListEditor';

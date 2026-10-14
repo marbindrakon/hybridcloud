@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { FormGroup, Select, SelectList, SelectOption, MenuToggle } from '@patternfly/react-core';
 import type { MenuToggleElement } from '@patternfly/react-core';
+import { useTranslation } from '../i18n';
 
 export interface FabricSelectOption {
   value: string;
   label: string;
   /** HybridFabric CR readiness — options not Ready are shown but flagged */
   ready?: boolean;
-  /** Entity not tagged on this fabric — shown greyed with tooltip per §18.4 */
+  /** Entity not allowed on this fabric (spec.entityRefs) — shown greyed */
   isDisabled?: boolean;
 }
 
@@ -23,9 +24,8 @@ export interface FabricSelectProps {
 }
 
 /**
- * Single-select dropdown of Ready `HybridFabric` CR names (PatternFly Select).
- * Writes `HybridNetwork.spec.fabricRef`, gateway `fabricRef`, link `fabricRef` — never a free-text
- * fabric name.
+ * Single-select dropdown of `HybridFabric` names (PatternFly Select). Writes HybridNetwork and
+ * CloudGateway `spec.fabricRef.name` and TransportLink `spec.fabricRef`.
  */
 export function FabricSelect({
   id = 'fabric-select',
@@ -37,6 +37,7 @@ export function FabricSelect({
   placeholder = 'Select fabric…',
   emptyStateMessage = 'Ask platform admin to tag your Entity on a HybridFabric',
 }: FabricSelectProps): React.ReactElement {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const selectedOption = options.find((o) => o.value === value);
 
@@ -82,9 +83,9 @@ export function FabricSelect({
                 isDisabled={o.isDisabled}
                 description={
                   o.isDisabled
-                    ? 'Entity not tagged on this fabric'
+                    ? t('form.fabricEntityNotAllowed')
                     : o.ready === false
-                      ? 'Not Ready'
+                      ? t('form.notReady')
                       : undefined
                 }
               >

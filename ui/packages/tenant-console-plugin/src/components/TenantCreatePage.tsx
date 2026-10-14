@@ -45,6 +45,7 @@ const TenantCreatePage: React.FC = () => {
   const { namespace, entities, selectEntity, entity } = useEntityNamespace();
   const type = (formType ?? 'team') as SelfServiceFormType;
   const listPath = LIST_PATH[type] ?? '/hybridsovereign/tenant/overview';
+  const supported = type in LIST_PATH;
 
   return (
     <PageSection className="sc-console-page">
@@ -55,7 +56,11 @@ const TenantCreatePage: React.FC = () => {
           entities={entities}
           onSelectEntity={selectEntity}
         />
-        {!namespace ? (
+        {!supported ? (
+          <Alert variant="danger" isInline title={t('common.pageNotFound')}>
+            {formType}
+          </Alert>
+        ) : !namespace ? (
           <Alert variant="info" title="Select an entity" isInline>
             Choose an entity namespace before creating a resource.
           </Alert>

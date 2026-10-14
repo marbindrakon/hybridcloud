@@ -42,12 +42,16 @@ export interface CloudInfrastructureSelectProps extends CloudInfrastructureFilte
   placeholder?: string;
   /** Called with the selected object when the list is readable (e.g. to derive the site type) */
   onSelectInfrastructure?: (item: CloudInfrastructure | undefined) => void;
+  /** Flag sites whose status.capabilities reports this capability as false (e.g. evpn) */
+  capability?: string;
+  /** Offer an explicit empty choice (optional references) */
+  allowEmpty?: boolean;
 }
 
 /**
  * Single-select of CloudInfrastructure sites in sovereign-cloud, filtered by type and entityRefs.
- * Writes `spec.cloudRef.name` on CloudGateway / CloudOSO / CloudVirt / CloudAWS. Tenants usually
- * cannot list the platform namespace (403): the picker then degrades to a text input.
+ * Writes `spec.cloudRef.name` on CloudGateway / CloudOSO / CloudVirt. Tenants usually cannot list
+ * the platform namespace (403): the picker then degrades to a text input.
  */
 export function CloudInfrastructureSelect({
   id = 'cloudinfrastructure-select',
@@ -59,6 +63,8 @@ export function CloudInfrastructureSelect({
   types,
   entityName,
   onSelectInfrastructure,
+  capability,
+  allowEmpty,
 }: CloudInfrastructureSelectProps): React.ReactElement {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -68,6 +74,8 @@ export function CloudInfrastructureSelect({
   const fieldLabel = label ?? t('fields.cloudRef');
   const options = filterCloudInfrastructures(list.items, { types, entityName });
   const selected = options.find((o) => o.metadata.name === value);
+  const lacksCapability = (item: CloudInfrastructure): boolean =>
+    !!capability && item.status?.capabilities?.[capability] === false;
 
   const optionLabel = (item: CloudInfrastructure) =>
     item.spec.displayName
@@ -123,6 +131,11 @@ export function CloudInfrastructureSelect({
         shouldFocusToggleOnSelect={false}
       >
         <SelectList>
+          {allowEmpty && options.length > 0 && (
+            <SelectOption value="" isSelected={!value}>
+              {placeholder || t('form.cloudInfraSelectPlaceholder')}
+            </SelectOption>
+          )}
           {options.length === 0 ? (
             <SelectOption isDisabled value="">
               {list.loading ? t('common.loading') : t('form.cloudInfraNone')}
@@ -133,7 +146,13 @@ export function CloudInfrastructureSelect({
                 key={o.metadata.name}
                 value={o.metadata.name}
                 isSelected={o.metadata.name === value}
-                description={o.status?.ready === false ? t('form.notReady') : undefined}
+                description={
+                  lacksCapability(o)
+                    ? t('form.capabilityMissing', { capability })
+                    : o.status?.ready === false
+                      ? t('form.notReady')
+                      : undefined
+                }
               >
                 {optionLabel(o)}
               </SelectOption>

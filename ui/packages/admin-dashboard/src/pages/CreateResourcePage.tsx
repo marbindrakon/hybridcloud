@@ -35,6 +35,7 @@ export function CreateResourcePage(): React.ReactElement {
       listPath={listPath}
       onSuccess={(path) => navigate(path)}
       onCancel={() => navigate(listPath)}
+      audience="admin"
     />
   );
 }

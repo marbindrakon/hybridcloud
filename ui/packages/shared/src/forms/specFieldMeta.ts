@@ -8,9 +8,11 @@ export type SpecFieldWidget =
   | 'stringList'
   | 'cidrList'
   | 'namedRefList'
-  /** `{ name }` object reference edited as one text input; empty removes the reference */
+  /** `{ name }` (or `{ <refKey> }`) object reference edited as one text input; empty removes it */
   | 'namedRef'
   | 'select'
+  /** Array of small objects, one row per item (see columns) */
+  | 'objectList'
   | 'json';
 
 /** Show a field only when another spec path matches (type-keyed sections). */
@@ -22,47 +24,81 @@ export interface SpecFieldVisibleWhen {
   isSet?: boolean;
 }
 
+/** One input of an objectList row */
+export interface SpecFieldColumn {
+  key: string;
+  labelKey: string;
+  type?: 'text' | 'number' | 'list' | 'select';
+  options?: Array<{ value: string; labelKey: string }>;
+  /** select of the names of this kind (object namespace; platform kinds: the platform namespace) */
+  refKind?: HybridSovereignKind;
+  /** Label of the empty choice of a refKind select (the key is omitted when chosen) */
+  emptyLabelKey?: string;
+  /** Disabled on items that existed before editing (list-map items whose field is fixed) */
+  lockedOnExisting?: boolean;
+}
+
 export interface SpecFieldMeta {
   /** Dot path under spec, e.g. features.istio or backend.name */
   path: string;
   labelKey: string;
   widget: SpecFieldWidget;
+  /** Cannot change after create (CRD rule self == oldSelf) */
   immutable?: boolean;
+  /** Can be set once, then cannot change (CRD rule on an optional field) */
+  immutableWhenSet?: boolean;
   options?: Array<{ value: string; labelKey: string }>;
   helpKey?: string;
   visibleWhen?: SpecFieldVisibleWhen;
   /** Empty input removes the key (sent as null) instead of storing '' */
   omitWhenEmpty?: boolean;
+  /** When the field is hidden by visibleWhen, saving removes this path (default: the field's own) */
+  clearWhenHidden?: boolean | string;
+  /** Platform-only field (e.g. a Vault path): not shown on tenant pages */
+  adminOnly?: boolean;
+  /** namedRef: the key inside the reference object (default name) */
+  refKey?: string;
+  /** number bounds */
+  min?: number;
+  max?: number;
+  /** objectList */
+  columns?: SpecFieldColumn[];
+  keyField?: string;
+  maxItems?: number;
 }
 
 export interface KindSpecMeta {
   fields: SpecFieldMeta[];
 }
 
-/** Only none and wireguard are offered (ipsec/macsec are being removed from the API). */
-const tunnelOptions = [
-  { value: 'none', labelKey: 'fields.tunnelNone' },
-  { value: 'wireguard', labelKey: 'fields.tunnelWireguard' },
+const transportOptions = [
+  { value: 'none', labelKey: 'fields.transportNone' },
+  { value: 'wireguard', labelKey: 'fields.transportWireguard' },
 ];
 
-const cloudRefField: SpecFieldMeta = {
-  path: 'cloudRef',
-  labelKey: 'fields.cloudRef',
-  widget: 'namedRef',
-  helpKey: 'fields.cloudRefHelp',
-};
+const transportLinkTunnelOptions = [
+  { value: 'wireguard', labelKey: 'fields.tunnelWireguard' },
+  { value: 'ipsec', labelKey: 'fields.tunnelIpsec' },
+  { value: 'macsec', labelKey: 'fields.tunnelMacsec' },
+  { value: 'none', labelKey: 'fields.tunnelNone' },
+];
 
 const whenType = (path: string, equals: string | string[]): SpecFieldVisibleWhen => ({ path, equals });
 
 const cinfraOpenstack = whenType('type', 'openstack');
 const cinfraOpenshift = whenType('type', 'openshift');
 const cinfraAws = whenType('type', 'aws');
-const cinfraCreds = whenType('type', ['openstack', 'aws']);
+const cinfraExternal = whenType('type', 'external');
+const cinfraCreds = whenType('type', ['openstack', 'openshift', 'aws']);
+const cinfraDns = whenType('type', ['openstack', 'openshift']);
+const dnsNative = whenType('dns.mode', 'native');
 const poOpenstack = whenType('type', 'openstack');
 const poAws = whenType('type', 'aws');
-const poHosted = whenType('type', 'hosted');
-const underlayLocalnet = whenType('underlay.type', 'localnet');
-const underlayLayer2 = whenType('underlay.type', ['ovn-layer2', '']);
+const gwNone = whenType('transport', ['none', '']);
+const gwWireguard = whenType('transport', 'wireguard');
+
+const MTU = { min: 1280, max: 9216 };
+const VNI = { min: 1, max: 16777215 };
 
 /** Editable / immutable field registry for tenancy + admin detail editors */
 export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> = {
@@ -106,7 +142,6 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         options: [
           { value: 'openstack', labelKey: 'fields.platformOpenstack' },
           { value: 'aws', labelKey: 'fields.platformAws' },
-          { value: 'hosted', labelKey: 'fields.platformHosted' },
         ],
       },
       { path: 'openstack.environment', labelKey: 'fields.cloudOsoEnv', widget: 'text', immutable: true, visibleWhen: poOpenstack },
@@ -131,29 +166,6 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'aws.workerCount', labelKey: 'fields.workerCount', widget: 'number', visibleWhen: poAws },
       { path: 'aws.controllerFlavor', labelKey: 'fields.controllerFlavor', widget: 'text', visibleWhen: poAws },
       { path: 'aws.workerFlavor', labelKey: 'fields.workerFlavor', widget: 'text', visibleWhen: poAws },
-      { path: 'hosted.environment', labelKey: 'fields.cloudVirtEnv', widget: 'text', immutable: true, visibleWhen: poHosted },
-      { path: 'hosted.releaseImage', labelKey: 'fields.releaseImage', widget: 'text', visibleWhen: poHosted, omitWhenEmpty: true },
-      { path: 'hosted.nodePoolReplicas', labelKey: 'fields.nodePoolReplicas', widget: 'number', visibleWhen: poHosted },
-      { path: 'hosted.workerCores', labelKey: 'fields.workerCores', widget: 'number', visibleWhen: poHosted },
-      { path: 'hosted.workerMemory', labelKey: 'fields.workerMemory', widget: 'text', visibleWhen: poHosted },
-      {
-        path: 'networking.clusterNetwork',
-        labelKey: 'fields.clusterNetwork',
-        widget: 'cidrList',
-        helpKey: 'fields.clusterCidrsHelp',
-      },
-      {
-        path: 'networking.serviceNetwork',
-        labelKey: 'fields.serviceNetwork',
-        widget: 'cidrList',
-        helpKey: 'fields.clusterCidrsHelp',
-      },
-      {
-        path: 'networking.allowConflict',
-        labelKey: 'fields.allowConflict',
-        widget: 'boolean',
-        helpKey: 'fields.allowConflictHelp',
-      },
       { path: 'toolRbac.clusterAdminRbac', labelKey: 'fields.clusterAdminRbac', widget: 'stringList' },
       { path: 'toolRbac.clusterOperatorRbac', labelKey: 'fields.clusterOperatorRbac', widget: 'stringList' },
       { path: 'toolRbac.clusterDeveloperRbac', labelKey: 'fields.clusterDeveloperRbac', widget: 'stringList' },
@@ -184,23 +196,18 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
           { value: 'openstack', labelKey: 'fields.cloudTypeOpenstack' },
           { value: 'openshift', labelKey: 'fields.cloudTypeOpenshift' },
           { value: 'aws', labelKey: 'fields.cloudTypeAws' },
+          { value: 'external', labelKey: 'fields.cloudTypeExternal' },
         ],
       },
-      { path: 'displayName', labelKey: 'fields.displayName', widget: 'text' },
+      { path: 'displayName', labelKey: 'fields.displayName', widget: 'text', omitWhenEmpty: true },
       {
-        path: 'credentialsRef.vaultPath',
+        path: 'credentialsRef',
         labelKey: 'fields.credentialsVaultPath',
-        widget: 'text',
-        helpKey: 'fields.credentialsRefHelp',
-        visibleWhen: cinfraCreds,
-        omitWhenEmpty: true,
-      },
-      {
-        path: 'credentialsRef.secretRef',
-        labelKey: 'fields.credentialsSecretName',
         widget: 'namedRef',
-        helpKey: 'fields.credentialsRefHelp',
+        refKey: 'vaultPath',
+        helpKey: 'fields.credentialsRefEditHelp',
         visibleWhen: cinfraCreds,
+        adminOnly: true,
       },
       {
         path: 'entityRefs',
@@ -208,107 +215,117 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         widget: 'namedRefList',
         helpKey: 'fields.cloudInfraEntityRefsHelp',
       },
-      { path: 'openstack.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraOpenstack },
+      { path: 'openstack.region', labelKey: 'fields.region', widget: 'text', helpKey: 'fields.openstackRegionHelp', visibleWhen: cinfraOpenstack, omitWhenEmpty: true },
+      { path: 'openstack.projectDomain', labelKey: 'fields.projectDomain', widget: 'text', helpKey: 'fields.siteProjectDomainHelp', visibleWhen: cinfraOpenstack, omitWhenEmpty: true },
+      { path: 'openstack.createProjectDomain', labelKey: 'fields.createProjectDomain', widget: 'boolean', helpKey: 'fields.createProjectDomainHelp', visibleWhen: cinfraOpenstack },
+      { path: 'openstack.externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', helpKey: 'fields.siteExternalNetworkHelp', visibleWhen: cinfraOpenstack, omitWhenEmpty: true },
+      { path: 'openshift.clusterRef', labelKey: 'fields.clusterRef', widget: 'text', helpKey: 'fields.clusterRefHelp', visibleWhen: cinfraOpenshift, omitWhenEmpty: true },
+      { path: 'openshift.bootImage', labelKey: 'fields.bootImage', widget: 'text', helpKey: 'fields.bootImageHelp', visibleWhen: cinfraOpenshift, omitWhenEmpty: true },
+      { path: 'openshift.storageClass', labelKey: 'fields.storageClass', widget: 'text', helpKey: 'fields.siteStorageClassHelp', visibleWhen: cinfraOpenshift, omitWhenEmpty: true },
       {
-        path: 'openstack.managementClusterKubeconfigRef',
-        labelKey: 'fields.managementClusterKubeconfigRef',
-        widget: 'text',
-        helpKey: 'fields.managementClusterKubeconfigRefHelp',
-        visibleWhen: cinfraOpenstack,
-        omitWhenEmpty: true,
-      },
-      { path: 'openstack.netConfigRef', labelKey: 'fields.netConfigRef', widget: 'text', visibleWhen: cinfraOpenstack },
-      {
-        path: 'openstack.dataplaneNodeSetRefs',
-        labelKey: 'fields.dataplaneNodeSetRefs',
-        widget: 'stringList',
-        helpKey: 'fields.dataplaneNodeSetRefsHelp',
-        visibleWhen: cinfraOpenstack,
-      },
-      { path: 'openstack.externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', visibleWhen: cinfraOpenstack },
-      { path: 'openstack.baseDomain', labelKey: 'fields.baseDomain', widget: 'text', visibleWhen: cinfraOpenstack },
-      { path: 'openstack.projectDomain', labelKey: 'fields.projectDomain', widget: 'text', visibleWhen: cinfraOpenstack },
-      { path: 'openstack.designate.zoneId', labelKey: 'fields.designateZoneId', widget: 'text', visibleWhen: cinfraOpenstack },
-      { path: 'openstack.designate.projectId', labelKey: 'fields.designateProjectId', widget: 'text', visibleWhen: cinfraOpenstack },
-      {
-        path: 'openstack.route53VaultPath',
-        labelKey: 'fields.route53VaultPath',
-        widget: 'text',
-        visibleWhen: cinfraOpenstack,
-        omitWhenEmpty: true,
-      },
-      { path: 'openshift.clusterRef', labelKey: 'fields.clusterRef', widget: 'text', helpKey: 'fields.clusterRefHelp', visibleWhen: cinfraOpenshift },
-      { path: 'openshift.bootImage', labelKey: 'fields.bootImage', widget: 'text', visibleWhen: cinfraOpenshift },
-      { path: 'openshift.storageClass', labelKey: 'fields.storageClass', widget: 'text', visibleWhen: cinfraOpenshift },
-      {
-        path: 'openshift.hostedClusterCidrDefaults.clusterNetworkPool.cidr',
-        labelKey: 'fields.clusterNetworkPoolCidr',
-        widget: 'text',
-        helpKey: 'fields.hostedClusterCidrDefaultsHelp',
+        path: 'openshift.fabricCredentialsRef',
+        labelKey: 'fields.fabricCredentialsVaultPath',
+        widget: 'namedRef',
+        refKey: 'vaultPath',
+        helpKey: 'fields.fabricCredentialsHelp',
         visibleWhen: cinfraOpenshift,
-      },
-      {
-        path: 'openshift.hostedClusterCidrDefaults.clusterNetworkPool.blockPrefixLength',
-        labelKey: 'fields.clusterNetworkPoolBlock',
-        widget: 'number',
-        visibleWhen: cinfraOpenshift,
-      },
-      {
-        path: 'openshift.hostedClusterCidrDefaults.serviceNetworkPool.cidr',
-        labelKey: 'fields.serviceNetworkPoolCidr',
-        widget: 'text',
-        visibleWhen: cinfraOpenshift,
-      },
-      {
-        path: 'openshift.hostedClusterCidrDefaults.serviceNetworkPool.blockPrefixLength',
-        labelKey: 'fields.serviceNetworkPoolBlock',
-        widget: 'number',
-        visibleWhen: cinfraOpenshift,
+        adminOnly: true,
       },
       { path: 'aws.accountId', labelKey: 'fields.awsAccountId', widget: 'text', visibleWhen: cinfraAws },
       { path: 'aws.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraAws },
-      { path: 'aws.baseDomain', labelKey: 'fields.baseDomain', widget: 'text', visibleWhen: cinfraAws },
+      { path: 'aws.baseDomain', labelKey: 'fields.baseDomain', widget: 'text', helpKey: 'fields.awsBaseDomainHelp', visibleWhen: cinfraAws, omitWhenEmpty: true },
+      { path: 'external.evpn', labelKey: 'fields.externalEvpn', widget: 'boolean', helpKey: 'fields.externalEvpnHelp', visibleWhen: cinfraExternal },
+      {
+        path: 'dns.mode',
+        labelKey: 'fields.dnsMode',
+        widget: 'select',
+        helpKey: 'fields.siteDnsHelp',
+        visibleWhen: cinfraDns,
+        options: [
+          { value: 'platform', labelKey: 'fields.dnsModePlatform' },
+          { value: 'native', labelKey: 'fields.dnsModeNative' },
+        ],
+      },
+      { path: 'dns.project', labelKey: 'fields.dnsProject', widget: 'text', helpKey: 'fields.dnsProjectHelp', visibleWhen: dnsNative, omitWhenEmpty: true },
+      { path: 'dns.projectDomain', labelKey: 'fields.dnsProjectDomain', widget: 'text', helpKey: 'fields.dnsProjectDomainHelp', visibleWhen: dnsNative, omitWhenEmpty: true },
+      { path: 'dns.createProject', labelKey: 'fields.dnsCreateProject', widget: 'boolean', visibleWhen: dnsNative },
+      { path: 'dns.zoneQuota', labelKey: 'fields.dnsZoneQuota', widget: 'number', helpKey: 'fields.dnsZoneQuotaHelp', visibleWhen: dnsNative, min: 1, omitWhenEmpty: true },
     ],
   },
   CloudOSO: {
     fields: [
-      cloudRefField,
+      {
+        path: 'cloudRef',
+        labelKey: 'fields.site',
+        widget: 'namedRef',
+        immutableWhenSet: true,
+        helpKey: 'fields.cloudOsoSiteHelp',
+      },
       { path: 'project', labelKey: 'fields.osoProject', widget: 'text' },
-      { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text' },
-      { path: 'projectDomain', labelKey: 'fields.projectDomain', widget: 'text', helpKey: 'fields.inheritsFromCloudInfra' },
-      { path: 'externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', helpKey: 'fields.inheritsFromCloudInfra' },
-      { path: 'route53VaultPath', labelKey: 'fields.route53VaultPath', widget: 'text' },
       { path: 'landingzone', labelKey: 'fields.landingzone', widget: 'text' },
-      { path: 'designateZoneId', labelKey: 'fields.designateZoneId', widget: 'text', helpKey: 'fields.inheritsFromCloudInfra' },
-      { path: 'designateProjectId', labelKey: 'fields.designateProjectId', widget: 'text', helpKey: 'fields.inheritsFromCloudInfra' },
+      { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
+      { path: 'projectDomain', labelKey: 'fields.projectDomain', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
+      { path: 'externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
+      { path: 'regionName', labelKey: 'fields.regionName', widget: 'text', omitWhenEmpty: true },
+      {
+        path: 'dnsProvider',
+        labelKey: 'fields.dnsProvider',
+        widget: 'select',
+        helpKey: 'fields.osoLegacyFieldHelp',
+        omitWhenEmpty: true,
+        options: [
+          { value: '', labelKey: 'form.installationDefault' },
+          { value: 'designate', labelKey: 'fields.dnsProviderDesignate' },
+          { value: 'route53', labelKey: 'fields.dnsProviderRoute53' },
+          { value: 'none', labelKey: 'fields.dnsProviderNone' },
+        ],
+      },
+      { path: 'designateZoneId', labelKey: 'fields.designateZoneId', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
+      { path: 'designateProjectId', labelKey: 'fields.designateProjectId', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
+      { path: 'vaultPath', labelKey: 'fields.vaultPath', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', adminOnly: true, omitWhenEmpty: true },
+      { path: 'route53VaultPath', labelKey: 'fields.route53VaultPath', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', adminOnly: true, omitWhenEmpty: true },
+      { path: 'enableVRF', labelKey: 'fields.enableVRF', widget: 'boolean' },
+      { path: 'vrfId', labelKey: 'fields.vrfId', widget: 'text', omitWhenEmpty: true },
     ],
   },
   CloudAWS: {
     fields: [
-      cloudRefField,
       { path: 'account', labelKey: 'fields.account', widget: 'text' },
-      {
-        path: 'vaultPath',
-        labelKey: 'fields.vaultPath',
-        widget: 'text',
-        visibleWhen: { path: 'cloudRef.name', isSet: false },
-      },
+      { path: 'vaultPath', labelKey: 'fields.vaultPath', widget: 'text' },
       { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text' },
       { path: 'landingzone', labelKey: 'fields.landingzone', widget: 'text' },
     ],
   },
   CloudVirt: {
     fields: [
-      cloudRefField,
-      { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text' },
-      { path: 'storageClass', labelKey: 'fields.storageClass', widget: 'text' },
-      { path: 'networkAttachment', labelKey: 'fields.networkAttachment', widget: 'text' },
+      { path: 'description', labelKey: 'fields.description', widget: 'textarea', omitWhenEmpty: true },
+      { path: 'cloudRef', labelKey: 'fields.site', widget: 'namedRef', immutable: true, helpKey: 'fields.cloudVirtSiteHelp' },
       {
-        path: 'vmNamespaceQuota.hard',
-        labelKey: 'fields.vmNamespaceQuotaHard',
-        widget: 'json',
-        helpKey: 'fields.vmNamespaceQuotaHardHelp',
+        path: 'namespaces',
+        labelKey: 'fields.vmNamespaces',
+        widget: 'objectList',
+        keyField: 'name',
+        maxItems: 16,
+        helpKey: 'fields.vmNamespacesHelp',
+        columns: [
+          { key: 'name', labelKey: 'fields.namespaceName', lockedOnExisting: true },
+          {
+            key: 'network',
+            labelKey: 'fields.namespaceNetwork',
+            type: 'select',
+            refKind: 'HybridNetwork',
+            emptyLabelKey: 'form.siteDefaultNetwork',
+            lockedOnExisting: true,
+          },
+        ],
       },
+      { path: 'quota.cpu', labelKey: 'fields.quotaCpu', widget: 'text', helpKey: 'fields.quotaHelp', omitWhenEmpty: true },
+      { path: 'quota.memory', labelKey: 'fields.quotaMemory', widget: 'text', omitWhenEmpty: true },
+      { path: 'quota.storage', labelKey: 'fields.quotaStorage', widget: 'text', omitWhenEmpty: true },
+      { path: 'quota.virtualMachines', labelKey: 'fields.quotaVirtualMachines', widget: 'number', min: 0, omitWhenEmpty: true },
+      { path: 'storageClass', labelKey: 'fields.storageClass', widget: 'text', helpKey: 'fields.cloudVirtStorageClassHelp', omitWhenEmpty: true },
+      { path: 'toolRbac.editRbac', labelKey: 'fields.editRbac', widget: 'stringList', helpKey: 'fields.editRbacHelp' },
+      { path: 'toolRbac.viewRbac', labelKey: 'fields.viewRbac', widget: 'stringList', helpKey: 'fields.viewRbacHelp' },
     ],
   },
   OpenStackMigration: {
@@ -353,14 +370,23 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
   },
   HybridNetwork: {
     fields: [
-      { path: 'description', labelKey: 'fields.description', widget: 'textarea' },
-      { path: 'fabricRef', labelKey: 'fields.fabricRef', widget: 'text', immutable: true },
+      { path: 'description', labelKey: 'fields.description', widget: 'textarea', omitWhenEmpty: true },
       {
-        path: 'overlayMtu',
-        labelKey: 'fields.overlayMtu',
-        widget: 'number',
-        helpKey: 'fields.overlayMtuHelp',
+        path: 'fabricRef',
+        labelKey: 'fields.fabricRef',
+        widget: 'namedRef',
+        immutableWhenSet: true,
+        helpKey: 'fields.networkFabricRefHelp',
       },
+      {
+        path: 'mtu',
+        labelKey: 'fields.networkMtu',
+        widget: 'number',
+        helpKey: 'fields.networkMtuHelp',
+        omitWhenEmpty: true,
+        ...MTU,
+      },
+      { path: 'egress.internet', labelKey: 'fields.egressInternet', widget: 'boolean', helpKey: 'fields.egressInternetHelp' },
       { path: 'networkViewerRbac', labelKey: 'fields.networkViewerRbac', widget: 'stringList' },
     ],
   },
@@ -369,174 +395,128 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'network', labelKey: 'fields.network', widget: 'text', immutable: true },
       { path: 'backend.kind', labelKey: 'fields.backendKind', widget: 'text', immutable: true },
       { path: 'backend.name', labelKey: 'fields.backendName', widget: 'text', immutable: true },
-      { path: 'prefixes', labelKey: 'fields.prefixes', widget: 'cidrList' },
-      {
-        path: 'vmNamespaces',
-        labelKey: 'fields.vmNamespaces',
-        widget: 'stringList',
-        helpKey: 'fields.vmNamespacesHelp',
-        visibleWhen: { path: 'backend.kind', equals: 'CloudVirt' },
-      },
+      { path: 'prefixes', labelKey: 'fields.prefixes', widget: 'cidrList', immutable: true },
     ],
   },
   HybridFabric: {
     fields: [
-      { path: 'enabled', labelKey: 'fields.enabled', widget: 'boolean' },
+      { path: 'domainAsn', labelKey: 'fields.domainAsn', widget: 'number', immutable: true },
+      { path: 'overlayMtu', labelKey: 'fields.overlayMtu', widget: 'number', helpKey: 'fields.overlayMtuHelp', ...MTU },
+      { path: 'vniPool.start', labelKey: 'fields.vniPoolStart', widget: 'number', helpKey: 'fields.vniPoolHelp', ...VNI },
+      { path: 'vniPool.end', labelKey: 'fields.vniPoolEnd', widget: 'number', ...VNI },
+      { path: 'l2vniPool.start', labelKey: 'fields.l2vniPoolStart', widget: 'number', helpKey: 'fields.l2vniPoolHelp', ...VNI },
+      { path: 'l2vniPool.end', labelKey: 'fields.l2vniPoolEnd', widget: 'number', ...VNI },
       {
-        path: 'domainAsn',
-        labelKey: 'fields.domainAsn',
-        widget: 'number',
-        immutable: true,
+        path: 'borderGateway.nodes',
+        labelKey: 'fields.borderGatewayNodes',
+        widget: 'objectList',
+        keyField: 'name',
+        maxItems: 8,
+        helpKey: 'fields.borderGatewayNodesHelp',
+        columns: [
+          { key: 'name', labelKey: 'fields.nodeName' },
+          { key: 'address', labelKey: 'fields.nodeAddress' },
+        ],
+      },
+      {
+        path: 'borderGateway.credentialsRef',
+        labelKey: 'fields.borderGatewayCredentialsVaultPath',
+        widget: 'namedRef',
+        refKey: 'vaultPath',
+        helpKey: 'fields.borderGatewayCredentialsHelp',
+        adminOnly: true,
+      },
+      {
+        path: 'bgp.passwordRef',
+        labelKey: 'fields.bgpPasswordVaultPath',
+        widget: 'namedRef',
+        refKey: 'vaultPath',
+        helpKey: 'fields.fabricBgpPasswordHelp',
+        adminOnly: true,
       },
       {
         path: 'entityRefs',
         labelKey: 'fields.entityRefs',
         widget: 'namedRefList',
-        helpKey: 'fields.entityRefsHelp',
-      },
-      { path: 'vniPool.start', labelKey: 'fields.vniStart', widget: 'number', immutable: true },
-      { path: 'vniPool.end', labelKey: 'fields.vniEnd', widget: 'number', immutable: true },
-      {
-        path: 'transportDefaults.defaultTunnelType',
-        labelKey: 'fields.defaultTunnelType',
-        widget: 'select',
-        options: tunnelOptions,
-        helpKey: 'fields.defaultTunnelTypeHelp',
-      },
-      { path: 'transportDefaults.mtu', labelKey: 'fields.mtu', widget: 'number' },
-      {
-        path: 'underlay.type',
-        labelKey: 'fields.underlayType',
-        widget: 'select',
-        helpKey: 'fields.underlayHelp',
-        options: [
-          { value: 'localnet', labelKey: 'fields.underlayLocalnet' },
-          { value: 'ovn-layer2', labelKey: 'fields.underlayLayer2' },
-        ],
-      },
-      {
-        path: 'underlay.physicalNetworkName',
-        labelKey: 'fields.underlayPhysicalNetwork',
-        widget: 'text',
-        visibleWhen: underlayLocalnet,
-      },
-      { path: 'underlay.nadName', labelKey: 'fields.underlayNadName', widget: 'text' },
-      { path: 'underlay.cidr', labelKey: 'fields.underlayCidr', widget: 'text', immutable: true },
-      {
-        path: 'underlay.hubVtepBlock',
-        labelKey: 'fields.underlayHubVtepBlock',
-        widget: 'text',
-        helpKey: 'fields.underlayHubVtepBlockHelp',
-        visibleWhen: underlayLocalnet,
-      },
-      {
-        path: 'underlay.hubLegAddress',
-        labelKey: 'fields.underlayHubLegAddress',
-        widget: 'text',
-        visibleWhen: underlayLocalnet,
-      },
-      {
-        path: 'underlay.gatewayAddress',
-        labelKey: 'fields.underlayGatewayAddress',
-        widget: 'text',
-        visibleWhen: underlayLayer2,
-      },
-      {
-        path: 'underlay.dhcpRange.start',
-        labelKey: 'fields.underlayDhcpStart',
-        widget: 'text',
-        visibleWhen: underlayLayer2,
-      },
-      {
-        path: 'underlay.dhcpRange.end',
-        labelKey: 'fields.underlayDhcpEnd',
-        widget: 'text',
-        visibleWhen: underlayLayer2,
-      },
-      { path: 'underlay.mtu', labelKey: 'fields.underlayMtu', widget: 'number' },
-      {
-        path: 'borderGateway.name',
-        labelKey: 'fields.borderGatewayName',
-        widget: 'text',
-        helpKey: 'fields.borderGatewayHelp',
-      },
-      {
-        path: 'borderGateway.loopback',
-        labelKey: 'fields.borderGatewayLoopback',
-        widget: 'text',
-        immutable: true,
-      },
-      {
-        path: 'borderGateway.vaultCredentialRef',
-        labelKey: 'fields.borderGatewayVaultRef',
-        widget: 'text',
-      },
-      { path: 'borderGateway.wireguard.address', labelKey: 'fields.bgwWireguardAddress', widget: 'text' },
-      { path: 'borderGateway.wireguard.listenPort', labelKey: 'fields.bgwWireguardPort', widget: 'number' },
-      { path: 'borderGateway.wireguard.mtu', labelKey: 'fields.bgwWireguardMtu', widget: 'number' },
-      { path: 'borderGateway.ingressHost', labelKey: 'fields.bgwIngressHost', widget: 'text', omitWhenEmpty: true },
-      { path: 'borderGateway.vmSize.cpu', labelKey: 'fields.bgwCpu', widget: 'number' },
-      { path: 'borderGateway.vmSize.memory', labelKey: 'fields.bgwMemory', widget: 'text' },
-      { path: 'borderGateway.image', labelKey: 'fields.bgwImage', widget: 'text' },
-      { path: 'borderGateway.storageClass', labelKey: 'fields.storageClass', widget: 'text', omitWhenEmpty: true },
-      {
-        path: 'bgp.authentication.secretRef',
-        labelKey: 'fields.bgpAuthSecret',
-        widget: 'namedRef',
-        helpKey: 'fields.bgpAuthSecretHelp',
+        helpKey: 'fields.fabricEntityRefsHelp',
       },
     ],
   },
   CloudGateway: {
     fields: [
-      { path: 'enabled', labelKey: 'fields.enabled', widget: 'boolean' },
-      { path: 'fabricRef', labelKey: 'fields.fabricRef', widget: 'text', immutable: true },
-      { ...cloudRefField, helpKey: 'fields.gatewayCloudRefHelp' },
+      { path: 'fabricRef', labelKey: 'fields.fabricRef', widget: 'namedRef', immutable: true },
+      { path: 'cloudRef', labelKey: 'fields.site', widget: 'namedRef', immutable: true, helpKey: 'fields.gatewayCloudRefHelp' },
       {
-        path: 'transport.type',
-        labelKey: 'fields.tunnelType',
+        path: 'transport',
+        labelKey: 'fields.transport',
         widget: 'select',
-        options: tunnelOptions,
+        options: transportOptions,
         helpKey: 'fields.gatewayTransportHelp',
       },
       {
-        path: 'transport.vaultPeerConfigRef',
-        labelKey: 'fields.vaultPeerConfigRef',
-        widget: 'text',
-        visibleWhen: { path: 'transport.type', equals: 'wireguard' },
+        path: 'siteUnderlay.vlan',
+        labelKey: 'fields.siteUnderlayVlan',
+        widget: 'number',
+        helpKey: 'fields.siteUnderlayVlanHelp',
+        visibleWhen: gwNone,
+        clearWhenHidden: true,
+        min: 1,
+        max: 4094,
+      },
+      {
+        path: 'wireguard.listenPort',
+        labelKey: 'fields.wireguardListenPort',
+        widget: 'number',
+        helpKey: 'fields.wireguardListenPortHelp',
+        visibleWhen: gwWireguard,
+        clearWhenHidden: 'wireguard',
         omitWhenEmpty: true,
+        min: 1024,
+        max: 65535,
       },
       {
-        path: 'wireguard.address',
-        labelKey: 'fields.gatewayWireguardAddress',
-        widget: 'text',
-        helpKey: 'fields.gatewayWireguardAddressHelp',
-        visibleWhen: { path: 'transport.type', equals: 'wireguard' },
-        omitWhenEmpty: true,
+        path: 'wireguard.peers',
+        labelKey: 'fields.wireguardPeers',
+        widget: 'objectList',
+        helpKey: 'fields.wireguardPeersHelp',
+        visibleWhen: gwWireguard,
+        clearWhenHidden: 'wireguard',
+        columns: [
+          { key: 'publicKey', labelKey: 'fields.wireguardPublicKey' },
+          { key: 'endpoint', labelKey: 'fields.wireguardEndpoint' },
+          { key: 'allowedIPs', labelKey: 'fields.wireguardAllowedIps', type: 'list' },
+          { key: 'persistentKeepalive', labelKey: 'fields.wireguardKeepalive', type: 'number' },
+        ],
       },
+      { path: 'siteUnderlay.cidr', labelKey: 'fields.siteUnderlayCidr', widget: 'text', helpKey: 'fields.siteUnderlayCidrEditHelp' },
       {
-        path: 'siteUnderlay.interface',
-        labelKey: 'fields.siteUnderlayInterface',
-        widget: 'text',
-        helpKey: 'fields.siteUnderlayHelp',
+        path: 'siteUnderlay.addresses',
+        labelKey: 'fields.siteUnderlayAddresses',
+        widget: 'objectList',
+        keyField: 'node',
+        maxItems: 8,
+        helpKey: 'fields.siteUnderlayAddressesHelp',
+        columns: [
+          { key: 'node', labelKey: 'fields.borderGatewayNode' },
+          { key: 'address', labelKey: 'fields.nodeUnderlayAddress' },
+        ],
       },
-      { path: 'siteUnderlay.computeInterface', labelKey: 'fields.siteUnderlayComputeInterface', widget: 'text' },
-      { path: 'siteUnderlay.nodeSetInterfaces', labelKey: 'fields.siteUnderlayNodeSetInterfaces', widget: 'json' },
-      { path: 'siteUnderlay.cidr', labelKey: 'fields.siteUnderlayCidr', widget: 'text' },
-      { path: 'siteUnderlay.gatewayAddress', labelKey: 'fields.siteUnderlayGatewayAddress', widget: 'text' },
-      { path: 'siteUnderlay.mtu', labelKey: 'fields.siteUnderlayMtu', widget: 'number' },
+      { path: 'siteUnderlay.mtu', labelKey: 'fields.siteUnderlayMtu', widget: 'number', helpKey: 'fields.siteUnderlayMtuHelp', omitWhenEmpty: true, ...MTU },
+      { path: 'siteUnderlay.gateway', labelKey: 'fields.siteUnderlayGateway', widget: 'text', helpKey: 'fields.siteUnderlayGatewayHelp', omitWhenEmpty: true },
       {
-        path: 'macNatShim.enabled',
-        labelKey: 'fields.macNatShim',
-        widget: 'boolean',
-        helpKey: 'fields.macNatShimHelp',
+        path: 'siteUnderlay.upstreamRouteReflectors',
+        labelKey: 'fields.upstreamRouteReflectors',
+        widget: 'stringList',
+        helpKey: 'fields.upstreamRouteReflectorsHelp',
       },
+      { path: 'bfd', labelKey: 'fields.bfd', widget: 'boolean', helpKey: 'fields.bfdHelp' },
       {
-        path: 'macNatShim.interface',
-        labelKey: 'fields.macNatShimInterface',
-        widget: 'text',
-        visibleWhen: { path: 'macNatShim.enabled', equals: 'true' },
-        omitWhenEmpty: true,
+        path: 'bgp.passwordRef',
+        labelKey: 'fields.bgpPasswordVaultPath',
+        widget: 'namedRef',
+        refKey: 'vaultPath',
+        helpKey: 'fields.gatewayBgpPasswordHelp',
+        adminOnly: true,
       },
     ],
   },
@@ -549,9 +529,9 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         path: 'tunnelType',
         labelKey: 'fields.tunnelType',
         widget: 'select',
-        options: tunnelOptions,
-        helpKey: 'fields.transportLinkTunnelHelp',
+        options: transportLinkTunnelOptions,
       },
+      { path: 'vaultConfigRef', labelKey: 'fields.vaultConfigRef', widget: 'text', adminOnly: true },
     ],
   },
   UIHealthChecker: {
