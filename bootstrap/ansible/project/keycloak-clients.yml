@@ -80,3 +80,23 @@
         status_code: [200, 204]
       when: keycloak_client_secrets is defined and keycloak_client_secrets | length > 0 and vault_root_token is defined
       no_log: true
+
+    # shc (P7.3.7): a client with vault_key also gets its own KV entry {clientSecret}, so a cluster whose
+    # Vault policy covers only its own keys (clusters/<name>/*) can read its sign-in client secret
+    - name: Write per-client secrets to Vault
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/central/data/{{ item.vault_key }}"
+        method: POST
+        validate_certs: false
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          data:
+            clientSecret: "{{ keycloak_client_secrets[item.client_id] }}"
+        status_code: [200, 204]
+      loop: "{{ keycloak_clients | selectattr('vault_key', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.client_id }} -> {{ item.vault_key }}"
+      when: keycloak_client_secrets is defined and vault_root_token is defined
+      no_log: true

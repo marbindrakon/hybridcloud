@@ -1,0 +1,120 @@
+{{- /*
+Tenant access (shc P7.3.7, design/P7-PLAN.md §12.4 e / §12.15). Tenants sign in to this cluster through the platform's
+tenant realm (OpenID; the client's roles become the user's groups, <entity>.<rbac>) and get access only through
+the RoleBindings the CloudVirt jobs put in their VM namespaces. Nobody else may create projects
+(self-provisioners emptied), and in CloudVirt namespaces only the platform may manage network attachments and
+user-defined networks (a namespace's network is the platform's choice). Certs layer: the client secret comes from
+Vault through the cluster's ClusterSecretStore.
+*/}}
+{{- if and .Values.layers.certs .Values.tenantAccess.enabled }}
+{{- $t := .Values.tenantAccess }}
+{{- $name := required "cluster.name is required" .Values.cluster.name }}
+{{- $client := default (printf "openshift-%s" $name) $t.clientId }}
+{{- $vaultKey := default (printf "clusters/%s/tenant-oidc" $name) $t.clientSecret.vaultKey }}
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ $t.clientSecret.name }}
+  namespace: openshift-config
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: {{ $t.clientSecret.secretStoreName }}
+  target:
+    name: {{ $t.clientSecret.name }}
+    creationPolicy: Owner
+  data:
+    - secretKey: clientSecret
+      remoteRef:
+        key: {{ $vaultKey }}
+        property: clientSecret
+---
+# the cluster's OAuth singleton: never pruned or deleted by Argo CD
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  identityProviders:
+    - name: {{ $t.identityProvider.name }}
+      type: OpenID
+      mappingMethod: claim
+      openID:
+        clientID: {{ $client }}
+        clientSecret:
+          name: {{ $t.clientSecret.name }}
+        issuer: {{ required "tenantAccess.identityProvider.issuer is required" $t.identityProvider.issuer }}
+        claims:
+          preferredUsername: [preferred_username]
+          name: [name]
+          email: [email]
+          groups: [groups]
+{{- if not $t.selfProvisioners }}
+---
+# nobody gets to create projects: the platform creates the tenants' namespaces (autoupdate false keeps the API
+# server from restoring the default subjects)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: self-provisioners
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "false"
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: self-provisioner
+subjects: []
+{{- end }}
+{{- if $t.networkGuard }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-cloudvirt-network-guard
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["k8s.cni.cncf.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["network-attachment-definitions"]
+      - apiGroups: ["k8s.ovn.org"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["userdefinednetworks"]
+  validations:
+    # system identities (OVN-Kubernetes creates the CUDN's attachments, the platform's service accounts) and
+    # cluster admins only
+    - expression: >-
+        request.userInfo.username.startsWith('system:')
+        || request.userInfo.groups.exists(g, g == 'system:cluster-admins')
+      message: In a CloudVirt namespace the platform manages the network attachments and user-defined networks
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-cloudvirt-network-guard
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+spec:
+  policyName: shc-cloudvirt-network-guard
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - {key: hybridsovereign.redhat/cloudvirt, operator: Exists}
+{{- end }}
+{{- end }}

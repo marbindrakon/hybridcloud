@@ -5,8 +5,8 @@
 # whether its network is placed here; ends pending on the site or the Rbac CRs while those aren't there. Then
 # (P7.3.7) realizes the namespaces on the site with the fabric credential: labels (a namespace with a network gets
 # the primary-network label at creation; the network's placement selects it by label), a ResourceQuota from
-# spec.quota, and removal of namespaces that left the spec once they hold no VMs. Tenant access to the namespaces
-# (sign-in on the site, RoleBindings for the Rbac CRs) is not realized yet.
+# spec.quota, removal of namespaces that left the spec once they hold no VMs, and tenant access (access.yml: the
+# Rbac CRs' Keycloak groups get client roles <entity>.<rbac> of the site's sign-in client, RoleBindings edit/view).
 - block:
     - name: Read the CloudVirt
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -272,6 +272,14 @@
           ansible.builtin.set_fact:
             cv_kept: >-
               {{ _cv_stale_vms.results | default([]) | rejectattr('resources', 'equalto', []) | map(attribute='item') | list }}
+
+        - name: The platform's realization parameters
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+          vars:
+            fab_real_fabric: ""
+
+        - name: Tenant access to the namespaces (sign-in groups, RoleBindings)
+          ansible.builtin.include_tasks: access.yml
       always:
         - name: Remove the site kubeconfig
           ansible.builtin.file:
@@ -291,9 +299,12 @@
           {{ cv_namespaces | length }} namespace(s) on {{ cv_site_name }}
           ({{ cv_ns_status | selectattr('ready') | list | length }} with their network){{ '; removed from spec but still
           holding VMs: ' ~ cv_kept | join(', ') if cv_kept | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
-          | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}{{ cv_dns_note | default('') }}
+          | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}{{ cv_dns_note | default('') }}{{
+          ('; access for ' ~ cv_access.groups | join(', ')) if cv_access.groups | default([]) | length > 0 else '; no tenant access granted' }}{{
+          ('; ' ~ cv_access_waiting | join('; ')) if cv_access_waiting | default([]) | length > 0 else '' }}
         fab_status: >-
-          {{ cv_status | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {})
+          {{ cv_status | combine({'access': cv_access})
+             | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {})
              | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {}) }}
 
   rescue:

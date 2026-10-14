@@ -205,3 +205,23 @@ fabric:
     enabled: false
     mtu: 9000
     roles: [master, worker]
+
+# ─── Tenant access (P7.3.7) — layer "certs" ──────────────────────────────────
+# Tenant sign-in through the platform's tenant realm, no self-provisioning, and the CloudVirt network guard
+# (templates/tenant-access.yaml).
+tenantAccess:
+  enabled: false
+  identityProvider:
+    # also the last path segment of the client's redirect URI (/oauth2callback/<name>)
+    name: sovereign-tenants
+    issuer: ""
+  clientId: ""              # default openshift-<cluster.name>
+  clientSecret:
+    name: tenant-oidc-client
+    secretStoreName: vault-backend
+    vaultKey: ""            # default clusters/<cluster.name>/tenant-oidc (property clientSecret)
+  # false: nobody may create projects (the self-provisioners binding is emptied)
+  selfProvisioners: false
+  # admission policy: in namespaces labelled hybridsovereign.redhat/cloudvirt, only system identities and
+  # cluster admins may manage NetworkAttachmentDefinitions and UserDefinedNetworks
+  networkGuard: true

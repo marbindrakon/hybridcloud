@@ -32,6 +32,14 @@ fabric_realization_defaults:
     # OpenShift sites: the FRRConfigurations (labels) whose BGP sessions to the site's gateway carry the placements'
     # routes; empty selects every FRRConfiguration of the site
     frrConfigurationSelector: {}
+    # tenant sign-in on OpenShift sites: the site's OIDC client in the tenant realm (the cluster's OAuth uses it).
+    # A CloudVirt's Rbac CRs become client roles <entity>.<rbac> of that client, mapped to the Rbac's Keycloak group;
+    # the client puts the user's roles into the groups claim, and the VM namespaces bind edit/view to those groups.
+    tenantSignIn:
+      realm: sovereign-tenants
+      clientId: "openshift-{cluster}"
+      editRole: edit
+      viewRole: view
   placement:
     # how long a placement job waits for the gateways to hold the site's routes for its prefixes (s)
     routeWait: 180

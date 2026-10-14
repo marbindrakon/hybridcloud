@@ -72,3 +72,35 @@
   loop: "{{ client_secrets_result.results }}"
   loop_control:
     label: "{{ item.item.item.client_id }}"
+
+# shc (P7.3.7): optional protocol mappers per client (item.protocol_mappers: Keycloak ProtocolMapperRepresentation
+# list), added when a mapper of that name is missing; existing mappers are left as they are.
+- name: Read the protocol mappers of clients that declare some
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.item.realm }}/clients/{{ item.json[0].id }}/protocol-mappers/models"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: client_mappers
+  loop: "{{ client_ids.results }}"
+  loop_control:
+    label: "{{ item.item.client_id }}"
+  when: item.item.protocol_mappers | default([]) | length > 0
+
+- name: Add missing protocol mappers
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.0.item.item.realm }}/clients/{{ item.0.item.json[0].id }}/protocol-mappers/models"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ item.1 }}"
+    validate_certs: false
+    status_code: [201, 409]
+  loop: "{{ client_mappers.results | default([]) | selectattr('json', 'defined') | subelements('item.item.protocol_mappers') }}"
+  loop_control:
+    label: "{{ item.0.item.item.client_id }}/{{ item.1.name }}"
+  when: item.1.name not in (item.0.json | map(attribute='name') | list)

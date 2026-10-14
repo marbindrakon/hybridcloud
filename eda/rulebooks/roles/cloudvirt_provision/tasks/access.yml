@@ -1,0 +1,183 @@
+---
+# shc (design/P7-PLAN.md P7.3.7, §12.4 e): tenant access to the environment's site namespaces. For each Rbac CR in
+# spec.toolRbac (editRbac -> edit, viewRbac -> view): the site's sign-in client (realization
+# openshift.tenantSignIn.clientId, "{cluster}" = the site's cluster) gets the client role <entity>.<rbac>, mapped to
+# the Rbac's Keycloak group, so a member's token lists the group <entity>.<rbac>; every site namespace gets a
+# RoleBinding to it. RoleBindings this environment no longer wants are removed. Runs inside the realization block
+# (site_kubeconfig set). Sets cv_access.
+- name: The sign-in settings
+  ansible.builtin.set_fact:
+    cv_signin: "{{ fab_real.openshift.tenantSignIn }}"
+    cv_cluster: "{{ (ci_spec.openshift | default({})).clusterRef | default(cv_site_name, true) }}"
+    cv_grants: >-
+      {%- set out = [] -%}
+      {%- for r in (fab_spec.toolRbac | default({})).editRbac | default([]) -%}{%- set _ = out.append({'rbac': r, 'role': fab_real.openshift.tenantSignIn.editRole}) -%}{%- endfor -%}
+      {%- for r in (fab_spec.toolRbac | default({})).viewRbac | default([]) -%}{%- set _ = out.append({'rbac': r, 'role': fab_real.openshift.tenantSignIn.viewRole}) -%}{%- endfor -%}
+      {{ out }}
+
+- name: The groups of the Rbac CRs
+  vars:
+    _rbacs: "{{ _cv_rbacs.resources | default([]) }}"
+  ansible.builtin.set_fact:
+    cv_grants: >-
+      {%- set out = [] -%}
+      {%- for g in cv_grants -%}
+        {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', g.rbac) | list + [{}]) | first -%}
+        {%- set path = ((r.status | default({}, true)).group | default('', true)) -%}
+        {%- set _ = out.append(g | combine({'path': path, 'group': fab_entity ~ '.' ~ g.rbac,
+                                             'binding': 'shc-' ~ g.role ~ '-' ~ g.rbac})) -%}
+      {%- endfor -%}
+      {{ out }}
+    cv_client_id: "{{ fab_real.openshift.tenantSignIn.clientId | replace('{cluster}', (ci_spec.openshift | default({})).clusterRef | default(cv_site_name, true)) }}"
+
+- name: Wait for Rbac CRs without a group yet
+  ansible.builtin.set_fact:
+    cv_access_waiting: "{{ cv_grants | rejectattr('path') | map(attribute='rbac') | map('regex_replace', '^(.*)$', 'Rbac \\1 (no Keycloak group yet)') | list }}"
+
+- name: Keycloak (services, tenant realm)
+  when: cv_grants | selectattr('path') | list | length > 0
+  block:
+    - name: Discover the Keycloak route on services
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: services-rhbk
+        label_selectors: ["app=keycloak"]
+      register: _cv_kc_route
+
+    - name: Keycloak URL
+      ansible.builtin.set_fact:
+        cv_kc: "https://{{ _cv_kc_route.resources[0].spec.host }}"
+
+    - name: Keycloak admin credentials
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+      vars:
+        keycloak_vault_path: rhbk-services-admin
+
+    - name: Keycloak admin token
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+      vars:
+        keycloak_url: "{{ cv_kc }}"
+
+    - name: Find the sign-in client
+      ansible.builtin.uri:
+        url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/clients?clientId={{ cv_client_id }}"
+        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        validate_certs: false
+      register: _cv_client
+
+    - name: Refuse a site without its sign-in client
+      ansible.builtin.fail:
+        msg: "CloudVirt {{ fab_name }}: the tenant realm has no sign-in client {{ cv_client_id }} for site {{ cv_site_name }}"
+      when: _cv_client.json | length == 0
+
+    - name: Ensure the client roles
+      ansible.builtin.uri:
+        url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/clients/{{ _cv_client.json[0].id }}/roles"
+        method: POST
+        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        body_format: json
+        body: {name: "{{ item }}", description: "Group {{ item }} on {{ cv_cluster }} (CloudVirt environments of {{ fab_entity }})"}
+        validate_certs: false
+        status_code: [201, 409]
+      loop: "{{ cv_grants | selectattr('path') | map(attribute='group') | unique | list }}"
+      changed_when: _cv_role.status == 201
+      register: _cv_role
+
+    - name: Read the client roles
+      ansible.builtin.uri:
+        url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/clients/{{ _cv_client.json[0].id }}/roles/{{ item | urlencode }}"
+        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        validate_certs: false
+      loop: "{{ cv_grants | selectattr('path') | map(attribute='group') | unique | list }}"
+      register: _cv_roles
+
+    - name: Find the Rbac groups
+      ansible.builtin.uri:
+        url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/group-by-path/{{ item.path | urlencode }}"
+        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        validate_certs: false
+      loop: "{{ cv_grants | selectattr('path') | list }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: _cv_groups
+
+    - name: Map the client role to the Rbac group
+      ansible.builtin.uri:
+        url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/groups/{{ item.json.id }}/role-mappings/clients/{{ _cv_client.json[0].id }}"
+        method: POST
+        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        body_format: json
+        body: "{{ [(_cv_roles.results | selectattr('item', 'equalto', item.item.group) | first).json] }}"
+        validate_certs: false
+        status_code: [204]
+      loop: "{{ _cv_groups.results }}"
+      loop_control:
+        label: "{{ item.item.path }} -> {{ item.item.group }}"
+      changed_when: false
+
+- name: The RoleBindings
+  ansible.builtin.set_fact:
+    cv_bindings: >-
+      {%- set out = [] -%}
+      {%- for n in cv_namespaces -%}
+        {%- for g in cv_grants | selectattr('path') -%}
+          {%- set _ = out.append({'namespace': n.namespace, 'name': g.binding, 'role': g.role, 'group': g.group}) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Ensure the RoleBindings
+  kubernetes.core.k8s:
+    kubeconfig: "{{ site_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+        labels: "{{ cv_selector | combine({'hybridsovereign.redhat/cloudvirt-access': 'true'}) }}"
+      roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "{{ item.role }}"}
+      subjects:
+        - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: "{{ item.group }}"}
+  loop: "{{ cv_bindings }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
+  register: _cv_rb
+
+- name: List the environment's RoleBindings
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ site_kubeconfig }}"
+    api_version: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    namespace: "{{ item.namespace }}"
+    label_selectors: ["hybridsovereign.redhat/cloudvirt-access=true"]
+  loop: "{{ cv_namespaces }}"
+  loop_control:
+    label: "{{ item.namespace }}"
+  register: _cv_rb_have
+
+- name: Remove RoleBindings the environment no longer grants
+  kubernetes.core.k8s:
+    kubeconfig: "{{ site_kubeconfig }}"
+    state: absent
+    api_version: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace }}"
+  loop: >-
+    {{ _cv_rb_have.results | map(attribute='resources') | flatten
+       | rejectattr('metadata.name', 'in', cv_bindings | map(attribute='name') | list) | list }}
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+
+- name: Record the access
+  ansible.builtin.set_fact:
+    cv_access:
+      signInClient: "{{ cv_client_id }}"
+      groups: "{{ cv_grants | selectattr('path') | map(attribute='group') | unique | list }}"
+      bindings: "{{ cv_grants | selectattr('path') | map(attribute='binding') | unique | list }}"

@@ -2141,7 +2141,7 @@ iaasClusterDefaults:
     odf: "3"
     cnv: "4"
   clusterBase:
-    chartVersion: "0.3.10"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts; 0.3.8: EVPN SVI MTU; 0.3.9: fabric.gateways (BFD); 0.3.10: fabric.absentRoutes
+    chartVersion: "0.3.11"  # 0.3.5: optional fabric underlay (P7.2); 0.3.6: FRRConfiguration label; 0.3.7: etcd alerts; 0.3.8: EVPN SVI MTU; 0.3.9: fabric.gateways (BFD); 0.3.10: fabric.absentRoutes; 0.3.11: tenantAccess
     values:
       cluster:
         baseDomain: shc.signal9.gg
@@ -2175,6 +2175,14 @@ iaasClusterDefaults:
                           port: 443
       monitoring:
         storageClass: ocs-external-storagecluster-ceph-rbd
+      # P7.3.7 (owner 10-14: IdP and cluster configuration changes allowed): tenant sign-in through the services
+      # tenant realm (client openshift-<cluster>, central job keycloakIaasClients), no self-provisioning, CloudVirt
+      # network guard
+      tenantAccess:
+        enabled: true
+        identityProvider:
+          name: sovereign-tenants
+          issuer: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants
   secretStore:
     chartVersion: "0.3.3-shc.2"
     values:
@@ -2245,7 +2253,7 @@ iaasClusterDefaults:
       - {apiGroups: [k8s.ovn.org], resources: [clusteruserdefinednetworks, routeadvertisements, vteps], verbs: [get, list, watch, create, update, patch, delete]}
       - {apiGroups: [""], resources: [namespaces, resourcequotas, limitranges], verbs: [get, list, watch, create, update, patch, delete]}
       - {apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, list, watch, create, update, patch, delete]}
-      - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], verbs: [bind], resourceNames: [edit]}
+      - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], verbs: [bind], resourceNames: [edit, view]}   # view: CloudVirt viewRbac (owner 10-14)
       - {apiGroups: [""], resources: [nodes], verbs: [get, list]}
       - {apiGroups: [config.openshift.io], resources: [networks, clusterversions], verbs: [get, list]}
       - {apiGroups: [operator.openshift.io], resources: [networks], verbs: [get, list]}
@@ -3555,6 +3563,31 @@ sovereignJobs:
           value: "sovereign-tenants"
         - name: KEYCLOAK_CLIENTS
           value: '[{"realm":"sovereign-tenants","client_id":"openshift-services","name":"OpenShift Services","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"quay-services","name":"Quay Services","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"]}]'
+        - name: SECRETS_NAMESPACE
+          value: "sovereign-cloud-jobs"
+    # shc (P7.3.7, design/P7-PLAN.md §12.4 e / §12.15; owner 10-14: IdP changes allowed): tenant sign-in on the IaaS
+    # clusters. One client per cluster in the tenant realm; its secret also goes to central Vault
+    # clusters/<cluster>/tenant-oidc (the cluster's ESO policy covers clusters/<cluster>/*). The site-groups mapper puts
+    # the user's roles of that client into the groups claim: the CloudVirt jobs give an Rbac CR's Keycloak group the
+    # client role <entity>.<rbac>, so OpenShift sees entity-qualified group names (full group paths contain "/").
+    keycloakIaasClients:
+      enabled: true
+      playbook: keycloak-clients.yml
+      activeDeadlineSeconds: 600
+      syncWave: "30"
+      env:
+        - name: VAULT_CLIENTS_KEY
+          value: "keycloak-clients-iaas"
+        - name: KEYCLOAK_URL
+          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+        - name: KEYCLOAK_ADMIN_SECRET
+          value: "rhbk-services-admin"
+        - name: KEYCLOAK_ADMIN_SECRET_NS
+          value: "sovereign-cloud-jobs"
+        - name: REALM_NAME
+          value: "sovereign-tenants"
+        - name: KEYCLOAK_CLIENTS
+          value: '[{"realm":"sovereign-tenants","client_id":"openshift-iaas1","name":"OpenShift iaas1","redirect_uris":["https://oauth-openshift.apps.iaas1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/iaas1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-iaas1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"openshift-edge1","name":"OpenShift edge1","redirect_uris":["https://oauth-openshift.apps.edge1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/edge1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-edge1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     vaultServicesInit:

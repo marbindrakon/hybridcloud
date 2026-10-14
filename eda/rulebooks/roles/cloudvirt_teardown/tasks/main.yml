@@ -96,6 +96,81 @@
             path: "{{ site_kubeconfig | default('/tmp/eda-cvd-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
             state: absent
 
+    # P7.3.7: the sign-in client roles this environment created, unless another environment of the Entity on the same
+    # site still grants them (the RoleBindings went with the namespaces)
+    - name: Remove unused sign-in client roles
+      when: (fab_st.access | default({}, true)).groups | default([], true) | length > 0
+      block:
+        - name: The Entity's other environments
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: CloudVirt
+            namespace: "{{ fab_namespace }}"
+          register: _cvd_others
+
+        - name: Roles still granted elsewhere
+          ansible.builtin.set_fact:
+            cvd_drop: >-
+              {%- set keep = [] -%}
+              {%- for o in _cvd_others.resources | default([]) if o.metadata.name != fab_name
+                    and o.spec.cloudRef.name == fab_spec.cloudRef.name -%}
+                {%- set _ = keep.extend(((o.status | default({}, true)).access | default({}, true)).groups | default([], true)) -%}
+              {%- endfor -%}
+              {{ fab_st.access.groups | difference(keep) }}
+
+        - name: Delete the roles
+          when: cvd_drop | length > 0
+          block:
+            - name: The platform's realization parameters
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+              vars:
+                fab_real_fabric: ""
+
+            - name: Discover the Keycloak route on services
+              kubernetes.core.k8s_info:
+                host: "{{ services_api_host }}"
+                api_key: "{{ services_bearer_token }}"
+                validate_certs: false
+                api_version: route.openshift.io/v1
+                kind: Route
+                namespace: services-rhbk
+                label_selectors: ["app=keycloak"]
+              register: _cvd_kc_route
+
+            - name: Keycloak admin credentials
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+              vars:
+                keycloak_vault_path: rhbk-services-admin
+
+            - name: Keycloak admin token
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+              vars:
+                keycloak_url: "https://{{ _cvd_kc_route.resources[0].spec.host }}"
+
+            - name: Find the sign-in client
+              ansible.builtin.uri:
+                url: >-
+                  https://{{ _cvd_kc_route.resources[0].spec.host }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
+                  }}/clients?clientId={{ fab_st.access.signInClient }}
+                headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+                validate_certs: false
+              register: _cvd_client
+
+            - name: Delete the client roles
+              ansible.builtin.uri:
+                url: >-
+                  https://{{ _cvd_kc_route.resources[0].spec.host }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
+                  }}/clients/{{ _cvd_client.json[0].id }}/roles/{{ item | urlencode }}
+                method: DELETE
+                headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+                validate_certs: false
+                status_code: [204, 404]
+              loop: "{{ cvd_drop }}"
+              when: _cvd_client.json | length > 0
+
     # TENANT-DNS D3 (T4): the environment zone goes with the environment, tenant records included
     - name: Delete the environment zone
       when: (fab_st.dns | default({}, true)).zoneId | default('', true) | length > 0
