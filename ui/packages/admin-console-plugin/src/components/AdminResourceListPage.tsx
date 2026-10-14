@@ -37,6 +37,8 @@ export interface AdminResourceListPageProps {
   createPath?: string;
   enabled?: boolean;
   hideHeader?: boolean;
+  /** Kinds listed without a delete action (tenant objects the admin only views) */
+  readOnlyKinds?: HybridSovereignKind[];
 }
 
 export const AdminResourceListPage: React.FC<AdminResourceListPageProps> = ({
@@ -51,6 +53,7 @@ export const AdminResourceListPage: React.FC<AdminResourceListPageProps> = ({
   createPath,
   enabled = true,
   hideHeader = false,
+  readOnlyKinds = [],
 }) => {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -136,7 +139,7 @@ export const AdminResourceListPage: React.FC<AdminResourceListPageProps> = ({
           showNamespace
           linkMode="anchor"
           detailHref={(item) => consoleAdminDetailHref(listPath, kind, item)}
-          enableDelete
+          enableDelete={!readOnlyKinds.includes(kind)}
           onDeleted={refresh}
         />
         {secondaryKind && (
@@ -153,7 +156,7 @@ export const AdminResourceListPage: React.FC<AdminResourceListPageProps> = ({
               showNamespace
               linkMode="anchor"
               detailHref={(item) => consoleAdminDetailHref(secondaryPath, secondaryKind, item)}
-              enableDelete
+              enableDelete={!readOnlyKinds.includes(secondaryKind)}
               onDeleted={refresh}
             />
           </div>
@@ -172,7 +175,7 @@ export const AdminResourceListPage: React.FC<AdminResourceListPageProps> = ({
               showNamespace
               linkMode="anchor"
               detailHref={(item) => consoleAdminDetailHref(tertiaryPath, tertiaryKind, item)}
-              enableDelete
+              enableDelete={!readOnlyKinds.includes(tertiaryKind)}
               onDeleted={refresh}
             />
           </div>

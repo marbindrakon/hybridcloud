@@ -28,6 +28,7 @@ const AdminCloudsPage: React.FC = () => {
             listPath="/hybridsovereign/clouds/cloudoso"
             secondaryListPath="/hybridsovereign/clouds/cloudaws"
             tertiaryListPath="/hybridsovereign/clouds/cloudvirt"
+            readOnlyKinds={['CloudVirt']}
             hideHeader
           />
         </div>
