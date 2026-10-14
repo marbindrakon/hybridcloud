@@ -112,8 +112,17 @@ export function usePermissions(
     [checks],
   );
 
+  // Callers usually pass a new array literal on every render, so the effect keys on the checks' content
+  // (checkKey), never on the array itself: depending on `checks` re-ran it after each render, and its
+  // setState calls re-rendered again (one can-i request per render, thousands per second).
   useEffect(() => {
-    if (!enabled || !namespace || checks.length === 0) {
+    const current = checkKey
+      ? checkKey.split(',').map((k) => {
+          const [resource, verb] = k.split('/');
+          return { resource, verb: verb as K8sVerb };
+        })
+      : [];
+    if (!enabled || !namespace || current.length === 0) {
       setLoading(false);
       return;
     }
@@ -122,7 +131,7 @@ export function usePermissions(
     setLoading(true);
 
     Promise.all(
-      checks.map(async (check) => {
+      current.map(async (check) => {
         const allowed = await fetchCanI(namespace, check.resource, check.verb, token);
         return [`${check.resource}/${check.verb}`, allowed] as const;
       }),
@@ -139,7 +148,7 @@ export function usePermissions(
     return () => {
       cancelled = true;
     };
-  }, [namespace, checkKey, enabled, token, checks]);
+  }, [namespace, checkKey, enabled, token]);
 
   const can = (resource: string, verb: K8sVerb): boolean =>
     permissions[`${resource}/${verb}`] ?? false;
