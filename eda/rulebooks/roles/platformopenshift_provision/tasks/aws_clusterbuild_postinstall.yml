@@ -61,15 +61,14 @@
         )
       }}
 
-# The hub's API isn't reachable from AWS, so the klusterlet runs in Hosted mode on the hub's hosting cluster
-# (AWS_REALIZATION acm.hostingCluster, default local-cluster) and reaches the cluster's public API; only add-ons with
-# a Hosted mode (policy framework, config policy, work manager) are usable. disable-auto-import keeps the import
-# controller's Hive path, which ignores the deploy mode, from installing a Default-mode klusterlet on the cluster;
-# the cluster's kubeconfig goes in as auto-import-secret (the import controller moves it to the hosting cluster).
-- name: Import the cluster into the hub with a hosted klusterlet
+# The cluster joins the hub like the OpenStack clusters: a ManagedCluster named after the build (= the
+# ClusterDeployment's namespace and name), and ACM's import controller installs the klusterlet with Hive's admin
+# kubeconfig. The klusterlet reaches the hub's API from AWS through the published hub endpoint (P8 §12.2: central
+# behind the lab's haproxy fleet, split-horizon DNS).
+- name: Import the cluster into the hub
   when: cb_cluster_installed | bool
   block:
-    - name: The ManagedCluster (Hosted klusterlet)
+    - name: The ManagedCluster
       kubernetes.core.k8s:
         host: "{{ central_api_host }}"
         api_key: "{{ central_bearer_token }}"
@@ -85,11 +84,6 @@
               vendor: OpenShift
               cluster.open-cluster-management.io/clusterset: default
               platformopenshift: "{{ ansible_operator_meta.name }}"
-            annotations:
-              import.open-cluster-management.io/klusterlet-deploy-mode: Hosted
-              import.open-cluster-management.io/hosting-cluster-name: "{{ cb_acm_hosting_cluster }}"
-              import.open-cluster-management.io/disable-auto-import: ""
-              addon.open-cluster-management.io/enable-hosted-mode-addons: "true"
           spec:
             hubAcceptsClient: true
             leaseDurationSeconds: 60
@@ -113,53 +107,7 @@
             applicationManager: {enabled: false}
             certPolicyController: {enabled: false}
             policyController: {enabled: true}
-            searchCollector: {enabled: false}
-
-    - name: Read the import state
-      kubernetes.core.k8s_info:
-        host: "{{ central_api_host }}"
-        api_key: "{{ central_bearer_token }}"
-        validate_certs: false
-        api_version: cluster.open-cluster-management.io/v1
-        kind: ManagedCluster
-        name: "{{ cb_cluster_name }}"
-      register: _cb_mc
-
-    - name: Hand the cluster's kubeconfig to the import (auto-import-secret)
-      when: >-
-        not ((_cb_mc.resources[0].status.conditions | default([])
-              | selectattr('type', 'equalto', 'ManagedClusterImportSucceeded')
-              | map(attribute='status') | first | default('')) == 'True')
-        and cb_admin_kubeconfig_secret | length > 0
-      block:
-        - name: Read Hive's admin kubeconfig
-          kubernetes.core.k8s_info:
-            host: "{{ central_api_host }}"
-            api_key: "{{ central_bearer_token }}"
-            validate_certs: false
-            api_version: v1
-            kind: Secret
-            name: "{{ cb_admin_kubeconfig_secret }}"
-            namespace: "{{ cb_cluster_name }}"
-          register: _cb_kc
-          no_log: true
-
-        - name: The auto-import secret
-          kubernetes.core.k8s:
-            host: "{{ central_api_host }}"
-            api_key: "{{ central_bearer_token }}"
-            validate_certs: false
-            state: present
-            definition:
-              apiVersion: v1
-              kind: Secret
-              type: Opaque
-              metadata:
-                name: auto-import-secret
-                namespace: "{{ cb_cluster_name }}"
-              data:
-                kubeconfig: "{{ _cb_kc.resources[0].data.kubeconfig }}"
-          no_log: true
+            searchCollector: {enabled: true}
 
     - name: Wait for the cluster to be available in the hub
       kubernetes.core.k8s_info:
@@ -174,8 +122,8 @@
         (_cb_mc.resources[0].status.conditions | default([])
          | selectattr('type', 'equalto', 'ManagedClusterConditionAvailable')
          | map(attribute='status') | first | default('')) == 'True'
-      retries: 30
-      delay: 10
+      retries: 40
+      delay: 15
       ignore_errors: true
 
 - name: Check ManagedCluster ACM status

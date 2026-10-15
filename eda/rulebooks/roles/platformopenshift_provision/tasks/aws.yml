@@ -141,7 +141,7 @@
             AWS OCP cluster build '{{ cb_app_name }}': {{ cb_provision_status | default('Unknown') }}.
             API: {{ cb_api_url }}
 
-# ACM policies need the cluster available in the hub (imported with a hosted klusterlet in the post-install)
+# ACM policies need the cluster available in the hub (imported in the post-install)
 - name: Configure Keycloak OIDC client and ACM OAuth policy for this cluster
   ansible.builtin.include_tasks: keycloak_oidc.yml
   vars:

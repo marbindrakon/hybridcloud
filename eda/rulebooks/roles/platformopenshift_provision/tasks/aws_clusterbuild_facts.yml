@@ -23,7 +23,6 @@
     cb_issuer_base: "{{ (aws_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
     cb_issuer_namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
     cb_member_role: "{{ aws_real.memberRoleName | default('shc-automation') }}"
-    cb_acm_hosting_cluster: "{{ (aws_real.acm | default({})).hostingCluster | default('local-cluster') }}"
 
 - name: Derive the build's paths and the account entry
   ansible.builtin.set_fact:
