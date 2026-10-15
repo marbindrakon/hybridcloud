@@ -100,6 +100,8 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_state
 
+# one retry: some changes take two passes (FRR 8.5 refuses `bgp graceful-restart` -> `bgp graceful-restart-disable` in
+# one reload, "not valid at this moment", yet ends in the new state; the second reload has nothing left to change)
 - name: "{{ bgw_node.name }}: reload the FRR configuration"
   ansible.builtin.systemd:
     name: "shc-gw@{{ fab_name }}.service"
@@ -109,6 +111,10 @@
     - _cg_daemons is not changed and _cg_files is not changed
     - _cg_frrconf is changed
   delegate_to: "{{ bgw_node.name }}"
+  register: _cg_reload
+  retries: 1
+  delay: 5
+  until: _cg_reload is succeeded
 
 # the core side must come up: IS-IS adjacency with the root and the VPNv4 session to the route reflector
 - name: "{{ bgw_node.name }}: wait for the core (IS-IS, VPNv4) and the upstream route reflectors"
