@@ -603,14 +603,30 @@ systemctl enable --now shc-edge-agent.timer
         self.write_config(conf)
         return {"vni": vni, "routeTable": rt_id, "connectAttachment": ca_id, "peers": connect}
 
+    def association(self, att_id):
+        """The route table an attachment is associated with (the route tables' own lists: DescribeTransitGateway-
+        Attachments leaves Association empty for some attachment types)."""
+        tgw_id = self.tgw()["TransitGatewayId"]
+        for rt in self.ec2.describe_transit_gateway_route_tables(Filters=[
+                {"Name": "transit-gateway-id", "Values": [tgw_id]}])["TransitGatewayRouteTables"]:
+            if rt["State"] in ("deleting", "deleted"):
+                continue
+            for a in self.ec2.get_transit_gateway_route_table_associations(
+                    TransitGatewayRouteTableId=rt["TransitGatewayRouteTableId"])["Associations"]:
+                if a["TransitGatewayAttachmentId"] == att_id and a["State"] in ("associated", "associating"):
+                    return rt["TransitGatewayRouteTableId"]
+        return None
+
     def associate(self, rt_id, att_id):
-        a = self.ec2.describe_transit_gateway_attachments(TransitGatewayAttachmentIds=[att_id])["TransitGatewayAttachments"][0]
-        cur = (a.get("Association") or {})
-        if cur.get("TransitGatewayRouteTableId") != rt_id or cur.get("State") not in ("associated", "associating"):
-            if cur.get("TransitGatewayRouteTableId") and cur.get("TransitGatewayRouteTableId") != rt_id:
-                self.ec2.disassociate_transit_gateway_route_table(TransitGatewayRouteTableId=cur["TransitGatewayRouteTableId"],
-                                                                  TransitGatewayAttachmentId=att_id)
-                time.sleep(10)
+        cur = self.association(att_id)
+        if cur != rt_id:
+            if cur:
+                self.ec2.disassociate_transit_gateway_route_table(TransitGatewayRouteTableId=cur, TransitGatewayAttachmentId=att_id)
+                self.changed.append("disassociated %s from %s" % (att_id, cur))
+                for _ in range(30):
+                    if self.association(att_id) is None:
+                        break
+                    time.sleep(5)
             self.ec2.associate_transit_gateway_route_table(TransitGatewayRouteTableId=rt_id, TransitGatewayAttachmentId=att_id)
             self.changed.append("associated %s" % att_id)
         props = self.ec2.get_transit_gateway_route_table_propagations(TransitGatewayRouteTableId=rt_id)["TransitGatewayRouteTablePropagations"]
@@ -668,7 +684,7 @@ systemctl enable --now shc-edge-agent.timer
                 self.ec2.delete_transit_gateway_connect(TransitGatewayAttachmentId=a["TransitGatewayAttachmentId"])
                 self.changed.append("deleted connect attachment " + a["TransitGatewayAttachmentId"])
                 self.wait_attachment(a["TransitGatewayAttachmentId"], states=("deleted",))
-            elif rts and (a.get("Association") or {}).get("TransitGatewayRouteTableId") == rts[0]["TransitGatewayRouteTableId"]:
+            elif rts and self.association(a["TransitGatewayAttachmentId"]) == rts[0]["TransitGatewayRouteTableId"]:
                 # a tenant's attachment: let go of it, the tenant's side deletes it
                 rt_id = rts[0]["TransitGatewayRouteTableId"]
                 try:
@@ -703,7 +719,7 @@ systemctl enable --now shc-edge-agent.timer
         for a in self.attachments(tgw["TransitGatewayId"]):
             out["attachments"].append({"id": a["TransitGatewayAttachmentId"], "type": a["ResourceType"],
                                        "owner": a["ResourceOwnerId"], "state": a["State"], "name": tagmap(a).get("Name"),
-                                       "routeTable": (a.get("Association") or {}).get("TransitGatewayRouteTableId")})
+                                       "routeTable": self.association(a["TransitGatewayAttachmentId"])})
         conf = self.read_config() or {}
         out["vrfs"] = [{k: v[k] for k in ("name", "vni")} for v in conf.get("vrfs", [])]
         out["gateways"] = [g["name"] for g in conf.get("gateways", [])]
