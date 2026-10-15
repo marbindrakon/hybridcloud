@@ -4005,7 +4005,7 @@ sovereignJobs:
               property: root_token
       env:
         - name: RUN_ID
-          value: "2026-10-15-aap-config-v22"  # v22: aws-account-bootstrap JT + account naming in AWS_REALIZATION; v21: shc-aws container group (P8 SPIFFE)
+          value: "2026-10-15-aap-config-v23"  # v23: aws-hub-network JT + AWS_REALIZATION.hub; v22: aws-account-bootstrap
         - name: AAP_CONFIG_PATH
           value: "/runner/project/aap-config"
         - name: AAP_CONTROLLER_HOST
@@ -4040,7 +4040,7 @@ sovereignJobs:
         # shc (design/P8-PLAN.md): AWS automation identity (installation config, no secrets). AAP jobs in the shc-aws
         # container group run as jobServiceAccount and assume automationRoleArn with their SPIFFE JWT-SVID.
         - name: AWS_REALIZATION
-          value: '{"managementAccountId":"128444554111","organizationalUnit":"ou-un3k-iqmdx857","automationRoleArn":"arn:aws:iam::128444554111:role/shc-platform-automation","region":"us-east-2","jobNamespace":"aap","jobServiceAccount":"shc-aws-automation","accountNamePrefix":"shc-","accountEmailPattern":"admin+shc-{name}@signal9.gg","memberRoleName":"shc-automation","memberPolicyArn":"arn:aws:iam::aws:policy/AdministratorAccess"}'
+          value: '{"managementAccountId":"128444554111","organizationalUnit":"ou-un3k-iqmdx857","automationRoleArn":"arn:aws:iam::128444554111:role/shc-platform-automation","region":"us-east-2","jobNamespace":"aap","jobServiceAccount":"shc-aws-automation","accountNamePrefix":"shc-","accountEmailPattern":"admin+shc-{name}@signal9.gg","memberRoleName":"shc-automation","memberPolicyArn":"arn:aws:iam::aws:policy/AdministratorAccess","hub":{"account":"597869553159","region":"us-east-2","memberRole":"shc-automation","vpc":{"name":"shc-hub-edge","cidr":"10.250.0.0/24","subnets":[{"name":"shc-hub-edge-a","az":"us-east-2a","cidr":"10.250.0.0/26"},{"name":"shc-hub-edge-b","az":"us-east-2b","cidr":"10.250.0.64/26"},{"name":"shc-hub-tgw-a","az":"us-east-2a","cidr":"10.250.0.224/28"},{"name":"shc-hub-tgw-b","az":"us-east-2b","cidr":"10.250.0.240/28"}]},"tgw":{"name":"shc-hub-tgw","asn":65020,"routeTables":["shc-hub-infra"],"share":{"name":"shc-hub-tgw","allowExternal":true,"principals":["arn:aws:organizations::128444554111:ou/o-nuyn74fx6f/ou-un3k-iqmdx857"]}}}}'
         - name: FABRIC_REALIZATION
           value: '{"nodes":{"sshUser":"cloud-user","trunkInterface":"bond1"},"openstack":{"projectDomain":"shc-tenants"},"openshift":{"frrConfigurationSelector":{"shc.signal9.gg/fabric":"route-reflectors"}},"egress":{"enabled":true,"parentInterface":"bond1.237","gateway":"172.18.237.1","nodes":{"bgw-1":{"address":"172.18.237.13","natPool":"172.18.237.64/26"},"bgw-2":{"address":"172.18.237.14","natPool":"172.18.237.128/26"}}}}'
         - name: AAP_ADMIN_PASSWORD

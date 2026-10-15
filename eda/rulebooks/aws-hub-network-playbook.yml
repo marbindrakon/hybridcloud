@@ -1,0 +1,30 @@
+---
+# shc (design/P8-PLAN.md §9): the hub account's network: VPC, subnets, Transit Gateway, its route tables, the RAM
+# share. Never attaches anything (attachments are billed per hour; made only while testing).
+# Runs in the shc-aws container group. Extra vars: dry_run (bool); shc_aws.hub (from the job template).
+- name: AWS hub network
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _hub: "{{ (shc_aws | default({})).hub | default({}) }}"
+  tasks:
+    - name: Inputs and the web identity
+      ansible.builtin.assert:
+        that:
+          - (_hub.account | default('')) is match('^[0-9]{12}$')
+          - _hub.vpc is defined and _hub.tgw is defined
+          - lookup('env', 'AWS_ROLE_ARN') | length > 0
+        fail_msg: "need shc_aws.hub (account, region, vpc, tgw) and the shc-aws container group"
+
+    - name: Ensure the hub network (no attachments)
+      ansible.builtin.command:
+        argv: "{{ ['python3', playbook_dir ~ '/../common/files/shc_aws_hub.py', '--config', _hub | to_json]
+                  + (['--dry-run'] if (dry_run | default(false) | bool) else []) }}"
+      register: _hubnet
+      changed_when: (_hubnet.stdout | from_json).changed | default([]) | length > 0
+      failed_when: _hubnet.rc != 0 or not ((_hubnet.stdout | from_json).ok | default(false))
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ _hubnet.stdout | from_json }}"

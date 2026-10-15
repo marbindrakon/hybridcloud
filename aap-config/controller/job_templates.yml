@@ -248,6 +248,19 @@ controller_templates:
         accountEmailPattern: "{{ shc_aws.accountEmailPattern | default('') }}"
         memberRoleName: "{{ shc_aws.memberRoleName | default('shc-automation') }}"
         memberPolicyArn: "{{ shc_aws.memberPolicyArn | default('arn:aws:iam::aws:policy/AdministratorAccess') }}"
+  # shc (design/P8-PLAN.md §9): the hub account's network (VPC, subnets, TGW, route tables, RAM share; no attachments)
+  - name: aws-hub-network
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/aws-hub-network-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudaws
+    instance_groups:
+      - shc-aws
+    ask_variables_on_launch: true
+    extra_vars:
+      shc_aws:
+        hub: "{{ shc_aws.hub | default({}) }}"
   - name: fabric-orphan-check
     organization: sovereign
     project: sovereign-eda-project
