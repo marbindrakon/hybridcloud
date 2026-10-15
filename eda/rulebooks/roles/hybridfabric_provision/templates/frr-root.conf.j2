@@ -6,9 +6,13 @@ log syslog informational
 service integrated-vtysh-config
 !
 ! mpls enable mirrors the kernel's MPLS input (set by shc-fabric-apply): zebra shows it in the running config, so
-! without it here a configuration reload would turn MPLS input off
+! without it here a configuration reload would turn MPLS input off.
+! The root is always the core LAN's designated IS (priority 127): a gateway that joined and won the election (equal
+! priority, higher MAC) left FRR 8.5's LSPs on every node without the LAN's pseudonode, so no core routes, until the
+! root restarted.
 interface {{ hf_root.bridge }}
  ip router isis CORE
+ isis priority 127
  mpls enable
 exit
 !
