@@ -4875,7 +4875,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.11"  # shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
+  chartVersion: "0.1.22-shc.12"  # shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
