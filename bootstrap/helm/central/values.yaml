@@ -2178,7 +2178,9 @@ iaasClusterDefaults:
       cluster:
         baseDomain: shc.signal9.gg
       certManager:
-        recursiveNameservers: "172.18.42.20:53"
+        # public recursors (P8 §12): split-horizon zones in the lab resolver (central.shc.signal9.gg in IPA) would hide
+        # the _acme-challenge records from the DNS-01 self-check
+        recursiveNameservers: "1.1.1.1:53,8.8.8.8:53"
       letsencrypt:
         dnsZones: [shc.signal9.gg]
         rfc2136:
@@ -3038,7 +3040,8 @@ shcClusterBaseServices:
       name: services
       baseDomain: shc.signal9.gg
     certManager:
-      recursiveNameservers: "172.18.42.20:53"
+      # public recursors (P8 §12): split-horizon zones in the lab resolver would hide the _acme-challenge records
+      recursiveNameservers: "1.1.1.1:53,8.8.8.8:53"
     letsencrypt:
       dnsZones: [shc.signal9.gg]
       rfc2136:
