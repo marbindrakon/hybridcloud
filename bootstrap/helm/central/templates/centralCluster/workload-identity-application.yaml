@@ -1,0 +1,42 @@
+{{- if and (include "sovereign-central.applicationsEnabled" .) .Values.workloadIdentity.enabled }}
+---
+# shc (design/P8-PLAN.md): SPIFFE workload identity (ZTWIM / SPIRE) for platform automation, JWT-SVIDs issued
+# as https://oidc.shc.signal9.gg/spire (published by oidc-issuer); e.g. AAP jobs into AWS without keys.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: workload-identity
+  namespace: {{ .Values.argocd.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+    app.kubernetes.io/component: identity
+    sovereign-cloud/target: central
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.workloadIdentity.syncWave | quote }}
+spec:
+  project: default
+  source:
+    repoURL: {{ printf "oci://%s/%s/workload-identity" .Values.oci.registry .Values.oci.repositoryBase | quote }}
+    chart: workload-identity
+    targetRevision: {{ .Values.workloadIdentity.chartVersion | quote }}
+    helm:
+      releaseName: workload-identity
+      valuesObject:
+        {{- toYaml .Values.workloadIdentity.values | nindent 8 }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.workloadIdentity.values.namespace | default "zero-trust-workload-identity-manager" }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+{{- end }}

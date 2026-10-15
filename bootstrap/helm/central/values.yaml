@@ -457,6 +457,28 @@ rhacm:
         - "fa:16:3e:0d:d1:dc"  # central-2-prov
       watchAllNamespaces: true
 
+# ─── shc: SPIFFE workload identity (design/P8-PLAN.md) ───────────────────────────
+# ZTWIM/SPIRE on central; JWT-SVID issuer https://oidc.shc.signal9.gg/spire, published by oidcIssuer (source url).
+# AAP jobs in the shc-aws container group run as aap/shc-aws-automation and reach AWS with it (no keys).
+workloadIdentity:
+  enabled: true
+  chartVersion: "0.1.0"
+  syncWave: "7"
+  values:
+    trustDomain: shc.signal9.gg
+    clusterName: central
+    jwtIssuer: https://oidc.shc.signal9.gg/spire
+    caSubject:
+      commonName: shc.signal9.gg SPIRE CA
+      organization: Sovereign Hybrid Cloud lab
+      country: US
+    persistence:
+      size: 1Gi
+      accessMode: ReadWriteOnce
+      storageClass: ocs-external-storagecluster-ceph-rbd
+    serviceAccounts:
+      - {namespace: aap, name: shc-aws-automation}
+
 # ─── shc: cluster OIDC issuer (LAB-PLAN D17/§9) ──────────────────────────────
 oidcIssuer:
   enabled: true

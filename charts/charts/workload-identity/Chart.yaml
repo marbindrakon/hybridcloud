@@ -1,0 +1,5 @@
+apiVersion: v2
+name: workload-identity
+description: SPIFFE workload identity (Red Hat Zero Trust Workload Identity Manager / SPIRE) with a public JWT issuer
+type: application
+version: 0.1.0

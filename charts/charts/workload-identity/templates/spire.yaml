@@ -1,0 +1,70 @@
+{{- $req := dict "trustDomain" .Values.trustDomain "clusterName" .Values.clusterName "jwtIssuer" .Values.jwtIssuer "persistence.storageClass" .Values.persistence.storageClass }}
+{{- range $k, $v := $req }}{{ if not $v }}{{ fail (printf "workload-identity: %s is required" $k) }}{{ end }}{{ end }}
+apiVersion: operator.openshift.io/v1alpha1
+kind: ZeroTrustWorkloadIdentityManager
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  trustDomain: {{ .Values.trustDomain }}
+  clusterName: {{ .Values.clusterName }}
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpireServer
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  jwtIssuer: {{ .Values.jwtIssuer }}
+  jwtKeyType: {{ .Values.jwtKeyType }}
+  caKeyType: {{ .Values.caKeyType }}
+  caSubject:
+    {{- toYaml .Values.caSubject | nindent 4 }}
+  defaultJWTValidity: {{ .Values.defaultJWTValidity }}
+  persistence:
+    {{- toYaml .Values.persistence | nindent 4 }}
+  datastore:
+    databaseType: sqlite3
+    connectionString: /run/spire/data/datastore.sqlite3
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpireAgent
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  nodeAttestor:
+    k8sPSATEnabled: "true"
+  workloadAttestors:
+    k8sEnabled: "true"
+    workloadAttestorsVerification:
+      type: auto
+---
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpiffeCSIDriver
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec: {}
+---
+# The discovery provider turns its jwtIssuer into its only allowed domain (host only, no path) and answers the
+# discovery document only for that Host: give it its in-cluster service name. The public issuer documents (iss =
+# .Values.jwtIssuer) are published from here by the platform's OIDC front end (oidc-issuer chart, url source).
+apiVersion: operator.openshift.io/v1alpha1
+kind: SpireOIDCDiscoveryProvider
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  jwtIssuer: https://spire-spiffe-oidc-discovery-provider.{{ .Values.namespace }}.svc
+  managedRoute: "false"

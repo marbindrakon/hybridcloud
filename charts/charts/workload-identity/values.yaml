@@ -1,0 +1,33 @@
+# Namespace of the operator and its operands (SPIRE server, agents, CSI driver, OIDC discovery provider).
+namespace: zero-trust-workload-identity-manager
+
+operator:
+  channel: stable-v1
+  source: redhat-operators
+  installPlanApproval: Automatic
+
+# SPIFFE trust domain and this cluster's name in it.
+trustDomain: ""
+clusterName: ""
+
+# Issuer of JWT-SVIDs (the tokens' iss). Its discovery documents must be published at this URL by something else
+# (the platform's OIDC front end); the discovery provider here only serves them inside the cluster.
+jwtIssuer: ""
+jwtKeyType: rsa-2048
+caKeyType: rsa-2048
+caSubject:
+  commonName: ""
+  organization: ""
+  country: ""
+# Lifetime of JWT-SVIDs; consumers refresh them (e.g. a sidecar) well before expiry.
+defaultJWTValidity: 1h
+
+# SPIRE server datastore volume (immutable once created).
+persistence:
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  storageClass: ""
+
+# Workload service accounts that jobs run as and that external trust (e.g. cloud roles) names by SPIFFE ID
+# spiffe://<trustDomain>/ns/<namespace>/sa/<name>.
+serviceAccounts: []
