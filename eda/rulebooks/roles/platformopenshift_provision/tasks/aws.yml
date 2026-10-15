@@ -1,17 +1,22 @@
 ---
-# PlatformOpenshift type:aws handler
-# Looks up the CloudAWS CR, extracts slug/domain info, then provisions
-# the OCP cluster on AWS via MCE/Hive on the central cluster.
-
+# shc (design/P8-PLAN.md §12): PlatformOpenshift type aws = an OpenShift cluster in a CloudAWS environment's account,
+# installed by Hive on central without AWS keys. Hive presents its own service-account token for the platform's
+# Hive role (HiveConfig service provider) and assumes the account's shc-automation role (ClusterDeployment
+# credentialsAssumeRole, external ID shc-<account>). The cluster runs in STS (Manual credentials) mode: its
+# service-account issuer <clusterIssuerBaseURL>/<build> is published from its own signing key before the install,
+# and its operators' IAM roles trust only that issuer (shc_aws_cluster.py; this job runs in the shc-aws container
+# group with the platform's web identity). The environment's Route53 zone (CloudAWS status.domain) is the install's
+# base domain: the installer writes its records there itself.
 - name: Set AWS spec facts
   ansible.builtin.set_fact:
     aws_env_name: "{{ platform_spec.aws.environment }}"
-    aws_region: "{{ platform_spec.aws.region | default('us-east-1') }}"
     aws_cluster_type: "{{ platform_spec.aws.clusterType | default('standalone') }}"
-    aws_control_plane_count: "{{ platform_spec.aws.controlPlaneCount | default(3) }}"
-    aws_worker_count: "{{ platform_spec.aws.workerCount | default(2) }}"
-    aws_controller_flavor: "{{ platform_spec.aws.controllerFlavor | default('m5.xlarge') }}"
-    aws_worker_flavor: "{{ platform_spec.aws.workerFlavor | default('m5.large') }}"
+    aws_control_plane_count: "{{ platform_spec.aws.controlPlaneCount | default(_awsd.controlPlaneCount | default(3)) }}"
+    aws_worker_count: "{{ platform_spec.aws.workerCount | default(_awsd.workerCount | default(2)) }}"
+    aws_controller_flavor: "{{ platform_spec.aws.controllerFlavor | default(_awsd.controlPlaneFlavor | default('m5.xlarge')) }}"
+    aws_worker_flavor: "{{ platform_spec.aws.workerFlavor | default(_awsd.workerFlavor | default('m5.large')) }}"
+  vars:
+    _awsd: "{{ platformopenshift_defaults.aws | default({}) }}"
 
 - name: Read CloudAWS CR via REST API
   ansible.builtin.uri:
@@ -27,16 +32,29 @@
   ansible.builtin.assert:
     that:
       - cloudaws_raw.json.status.ready | default(false) | bool
+      - (cloudaws_raw.json.status.awsAccountId | default('')) is match('^[0-9]{12}$')
+      - (cloudaws_raw.json.status.domain | default('')) | length > 0
     fail_msg: >-
-      CloudAWS '{{ aws_env_name }}' is not ready yet. Wait for environment preparation.
+      CloudAWS '{{ aws_env_name }}' is not ready yet (or has no account/zone in its status). Wait for environment
+      preparation.
 
 - name: Extract CloudAWS details
   ansible.builtin.set_fact:
-    aws_slug: "{{ cloudaws_raw.json.status.slug }}"
+    aws_account: "{{ cloudaws_raw.json.status.awsAccountId }}"
+    aws_region: "{{ cloudaws_raw.json.status.awsRegion }}"
     aws_domain: "{{ cloudaws_raw.json.status.domain }}"
-    aws_account: "{{ cloudaws_raw.json.spec.account }}"
-    aws_vault_path: "{{ cloudaws_raw.json.spec.vaultPath }}"
-    aws_base_domain: "{{ cloudaws_raw.json.spec.baseDomain }}"
+    aws_entity: "{{ cloudaws_raw.json.status.entity | default(resolved_entity, true) }}"
+
+- name: Refuse a region other than the environment's
+  ansible.builtin.assert:
+    that:
+      - (platform_spec.aws.region | default('', true)) in ['', aws_region]
+    fail_msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: region {{ platform_spec.aws.region }} differs from
+      CloudAWS {{ aws_env_name }}'s region {{ aws_region }}.
+
+- name: The installation's AWS realization and the job's AWS identity
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
 
 - name: Provision AWS cluster build on central cluster
   ansible.builtin.include_tasks: aws_clusterbuild.yml
@@ -64,8 +82,9 @@
         name: "{{ ansible_operator_meta.name }}"
         namespace: "{{ ansible_operator_meta.namespace }}"
       note: >-
-        PlatformOpenshift {{ ansible_operator_meta.name }} AWS cluster build provisioned.
-        App: {{ cb_app_name }}, Domain: {{ cb_base_domain }}
+        PlatformOpenshift {{ ansible_operator_meta.name }} AWS cluster build
+        {{ 'installed' if cb_cluster_installed | bool else 'not installed' }}. Build: {{ cb_app_name }},
+        domain: {{ cb_cluster_domain }}
       type: Normal
       action: Reconcile
       reason: ClusterBuildProvisioned
@@ -75,59 +94,68 @@
   ignore_errors: true
 
 - name: Update PlatformOpenshift status
-  ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
     cr_api_version: hybridsovereign.redhat/v1alpha1
     cr_plural: platformopenshifts
     cr_name: "{{ ansible_operator_meta.name }}"
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
     cr_status_body:
-      status: ready
-      ready: true
+      status: "{{ 'ready' if cb_cluster_installed | bool else 'failed' }}"
+      ready: "{{ cb_cluster_installed | bool }}"
       observedGeneration: "{{ platformopenshift_generation }}"
       lastReconciledAt: "{{ event_time }}"
+      message: >-
+        {{ ('AWS cluster ' ~ cb_ocp_name ~ ' installed (' ~ cb_api_url ~ ')') if cb_cluster_installed | bool
+           else ('AWS cluster build ' ~ cb_app_name ~ ' not installed: ' ~ cb_provision_status | default('Unknown')) }}
       name: "{{ ansible_operator_meta.name }}"
       namespace: "{{ ansible_operator_meta.namespace }}"
       entity: "{{ resolved_entity }}"
       billingId: "{{ resolved_billing_id }}"
       description: "{{ resolved_description }}"
       platformType: aws
-      slug: "{{ aws_slug }}"
-      domain: "{{ aws_domain }}"
+      domain: "{{ cb_cluster_domain }}"
+      buildName: "{{ cb_app_name }}"
+      awsAccountId: "{{ aws_account }}"
+      awsRegion: "{{ aws_region }}"
+      serviceAccountIssuer: "{{ cb_issuer }}"
       apiURL: "{{ cb_api_url }}"
       appsURL: "{{ cb_apps_url }}"
       consoleURL: "{{ cb_console_url | default('') }}"
       adminPasswordVaultPath: "{{ cb_admin_password_vault | default('') }}"
       kubeconfigVaultPath: "{{ cb_kubeconfig_vault | default('') }}"
       secretsVaultPath: "{{ cb_secrets_vault_path | default('') }}"
+      vaultPaths: "{{ cb_vault_paths }}"
       clusterVersion: "{{ cb_cluster_version | default('') }}"
       powerState: "{{ cb_power_state | default('Unknown') }}"
       clusterHealth: "{{ cb_cluster_health | default('Unknown') }}"
       provisionStatus: "{{ cb_provision_status | default('Unknown') }}"
-      acmAvailable: "{{ cb_acm_available | bool }}"
+      acmAvailable: "{{ cb_acm_available | default(false) | bool }}"
       clusterInstalled: "{{ cb_cluster_installed | default(false) | bool }}"
-      awsRegion: "{{ aws_region }}"
       conditions:
         - type: Available
-          status: "True"
+          status: "{{ 'True' if cb_cluster_installed | bool else 'False' }}"
           lastTransitionTime: "{{ transition_time }}"
-          reason: EDASucceeded
+          reason: "{{ 'EDASucceeded' if cb_cluster_installed | bool else 'InstallNotComplete' }}"
           message: >-
-            AWS OCP cluster build '{{ cb_app_name }}' provisioned.
+            AWS OCP cluster build '{{ cb_app_name }}': {{ cb_provision_status | default('Unknown') }}.
             API: {{ cb_api_url }}
 
+# ACM policies need the cluster joined to the hub (a cluster on AWS can't reach a private hub API yet)
 - name: Configure Keycloak OIDC client and ACM OAuth policy for this cluster
   ansible.builtin.include_tasks: keycloak_oidc.yml
   vars:
-    cluster_name: "{{ ansible_operator_meta.name }}"
+    cluster_name: "{{ cb_app_name }}"
     cluster_console_url: "{{ cb_console_url | default('') }}"
     cluster_api_url: "{{ cb_api_url | default('') }}"
     cluster_apps_url: "{{ cb_apps_url | default('') }}"
     cluster_namespace: "{{ ansible_operator_meta.namespace }}"
-  when: cb_cluster_installed | default(false) | bool
+  when:
+    - cb_cluster_installed | default(false) | bool
+    - cb_acm_available | default(false) | bool
 
 - name: Update PlatformOpenshift status with OIDC info
-  ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
     cr_api_version: hybridsovereign.redhat/v1alpha1
     cr_plural: platformopenshifts
@@ -136,4 +164,13 @@
     cr_status_body:
       oidcConfigured: "{{ oidc_configured | default(false) | bool }}"
       oidcClientId: "{{ oidc_client_id | default('') }}"
-  when: cb_cluster_installed | default(false) | bool
+  when:
+    - cb_cluster_installed | default(false) | bool
+    - cb_acm_available | default(false) | bool
+
+- name: Fail the job when the cluster did not install
+  ansible.builtin.fail:
+    msg: >-
+      AWS cluster build {{ cb_app_name }} is not installed ({{ cb_provision_status | default('Unknown') }}); see the
+      ClusterDeployment's provisions in namespace {{ cb_app_name }} on central.
+  when: not (cb_cluster_installed | bool)

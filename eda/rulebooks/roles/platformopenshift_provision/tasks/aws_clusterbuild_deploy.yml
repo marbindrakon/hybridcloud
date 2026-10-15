@@ -1,31 +1,76 @@
 ---
+# shc (design/P8-PLAN.md §12): the install-config (STS, the environment's zone as base domain) to Vault, then the
+# mce-cluster-build release in the build's namespace on central (as the OpenStack path: pull secret and SSH key from
+# the installation's Vault paths, the platform pull secret as Helm's registry config).
+- name: Read the OCP pull secret
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ cb_pull_secret_vault }}"
+
+- name: Keep the pull secret
+  ansible.builtin.set_fact:
+    cb_pull_secret_raw: "{{ vault_kv_data[cb_pull_secret_vault_property] | default('') }}"
+  no_log: true
+
+- name: Read the cluster SSH key
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+  vars:
+    vault_kv_path: "{{ cb_ssh_key_vault }}"
+
+- name: Keep the SSH public key
+  ansible.builtin.set_fact:
+    cb_ssh_public_key: "{{ vault_kv_data.ssh_public_key | default('') }}"
+    vault_kv_data: {}
+  no_log: true
+
+- name: Fail without a pull secret or SSH key
+  ansible.builtin.assert:
+    that:
+      - cb_pull_secret_raw | string | length > 0
+      - cb_ssh_public_key | length > 0
+    fail_msg: >-
+      Vault {{ cb_pull_secret_vault }} (property {{ cb_pull_secret_vault_property }}) or
+      {{ cb_ssh_key_vault }} (ssh_public_key) is missing.
+
+- name: Normalize pull secret to valid JSON
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import sys, ast, json
+        raw = sys.stdin.read().strip()
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            parsed = ast.literal_eval(raw)
+        print(json.dumps(parsed, separators=(',', ':')))
+    stdin: "{{ cb_pull_secret_raw if (cb_pull_secret_raw is string) else (cb_pull_secret_raw | to_json) }}"
+  register: _pull_secret_json_result
+  no_log: true
+  changed_when: false
+
+- name: Set normalized pull secret JSON
+  ansible.builtin.set_fact:
+    cb_pull_secret_json: "{{ _pull_secret_json_result.stdout | trim }}"
+    cb_pull_secret_raw: ""
+  no_log: true
+
 - name: Render install-config YAML
   ansible.builtin.set_fact:
     cb_install_config: "{{ lookup('template', 'install-config.yaml.j2') }}"
   no_log: true
 
-- name: Set Vault root token from job credential
-  ansible.builtin.set_fact:
-    vault_root_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
-  no_log: true
-
 - name: Write install-config to Vault
-  ansible.builtin.uri:
-    url: "{{ vault_init_addr }}/v1/central/data/{{ cb_install_config_vault }}"
-    method: POST
-    headers:
-      X-Vault-Token: "{{ vault_root_token }}"
-    body_format: json
-    body:
-      data:
-        install-config.yaml: "{{ cb_install_config }}"
-    status_code: [200, 204]
-    validate_certs: false
-  no_log: true
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
+  vars:
+    vault_kv_path: "{{ cb_install_config_vault }}"
+    vault_kv_write_data:
+      install-config.yaml: "{{ cb_install_config }}"
 
 - name: Render build-values YAML to tempfile
   ansible.builtin.copy:
-    content: "{{ lookup('template', 'build-values.yaml.j2') }}"
+    content: "{{ lookup('template', 'build-values-aws.yaml.j2') }}"
     dest: "/tmp/{{ cb_app_name }}-build-values.yaml"
     mode: '0600'
   changed_when: false
@@ -33,51 +78,34 @@
 - name: Write central cluster kubeconfig for Helm
   ansible.builtin.include_tasks: write_central_helm_kubeconfig.yml
 
+# the chart registry may be private; the platform pull secret is a Docker config.json, which Helm reads as its
+# registry config
+- name: Write the Helm registry config from the pull secret
+  ansible.builtin.copy:
+    content: "{{ cb_pull_secret_json }}"
+    dest: "/tmp/{{ cb_app_name }}-registry.json"
+    mode: "0600"
+  no_log: true
+
 - name: Check existing Helm release
   ansible.builtin.command:
-    argv:
-      - helm
-      - status
-      - "{{ cb_app_name }}"
-      - --namespace
-      - "{{ cb_cluster_name }}"
-      - --output
-      - json
-      - --kubeconfig
-      - "/tmp/{{ cb_app_name }}-kubeconfig"
+    argv: [helm, status, "{{ cb_app_name }}", --namespace, "{{ cb_cluster_name }}", --output, json,
+           --kubeconfig, "/tmp/{{ cb_app_name }}-kubeconfig"]
   register: helm_release_status
   failed_when: false
   changed_when: false
 
-- name: Set helm release exists flag
+- name: Set helm release flags
   ansible.builtin.set_fact:
     cb_helm_release_exists: "{{ helm_release_status.rc == 0 }}"
-
-- name: Set helm release failed flag
-  ansible.builtin.set_fact:
     cb_helm_release_failed: >-
-      {{ cb_helm_release_exists | bool and
+      {{ helm_release_status.rc == 0 and
          (helm_release_status.stdout | from_json).info.status | default('') == 'failed' }}
-  when: cb_helm_release_exists | bool
-
-- name: Set helm release failed flag (when release does not exist)
-  ansible.builtin.set_fact:
-    cb_helm_release_failed: false
-  when: not (cb_helm_release_exists | bool)
 
 - name: Get current Helm values for idempotency check
   ansible.builtin.command:
-    argv:
-      - helm
-      - get
-      - values
-      - "{{ cb_app_name }}"
-      - --namespace
-      - "{{ cb_cluster_name }}"
-      - --output
-      - yaml
-      - --kubeconfig
-      - "/tmp/{{ cb_app_name }}-kubeconfig"
+    argv: [helm, get, values, "{{ cb_app_name }}", --namespace, "{{ cb_cluster_name }}", --output, yaml,
+           --kubeconfig, "/tmp/{{ cb_app_name }}-kubeconfig"]
   register: helm_current_values
   failed_when: false
   changed_when: false
@@ -91,9 +119,9 @@
       - |
         import sys, yaml
         new = yaml.safe_load(open('/tmp/{{ cb_app_name }}-build-values.yaml').read()) or {}
-        cur_raw = """{{ helm_current_values.stdout | default('null') }}"""
-        cur = yaml.safe_load(cur_raw) or {}
+        cur = yaml.safe_load(sys.stdin.read()) or {}
         print("true" if new != cur else "false")
+    stdin: "{{ helm_current_values.stdout | default('null') }}"
   register: values_diff_result
   changed_when: false
   when: cb_helm_release_exists | bool
@@ -127,12 +155,17 @@
       - "10m"
       - --kubeconfig
       - "/tmp/{{ cb_app_name }}-kubeconfig"
+      - --registry-config
+      - "/tmp/{{ cb_app_name }}-registry.json"
   register: helm_deploy_result
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
 
-- name: Clean up temp values file
+- name: Clean up temp values and registry files
   ansible.builtin.file:
-    path: "/tmp/{{ cb_app_name }}-build-values.yaml"
+    path: "{{ item }}"
     state: absent
+  loop:
+    - "/tmp/{{ cb_app_name }}-build-values.yaml"
+    - "/tmp/{{ cb_app_name }}-registry.json"
   changed_when: false

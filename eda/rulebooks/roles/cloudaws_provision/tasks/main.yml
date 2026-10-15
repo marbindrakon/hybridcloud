@@ -1,8 +1,9 @@
 ---
 # shc (design/P8-PLAN.md §11): CloudAWS provision = an Entity's environment in an AWS site. No keys anywhere: the
 # job runs with the platform's workload identity (shc-aws container group). Resolves the site (type aws, the Entity
-# allowed); the Entity's account is the realization's (AWS_REALIZATION tenant.accounts.<entity>) and is entered
-# through its shc-automation role with external ID shc-<account> (shc_aws_tenant.py check). The environment's
+# allowed); the account is the realization's (AWS_REALIZATION tenant.environments.<entity>/<name>, else
+# tenant.accounts.<entity>) and is entered through its shc-automation role with external ID shc-<account>
+# (shc_aws_tenant.py check). The environment's
 # public zone <name>.<entity>.<tenant DNS domain> is created in Route53 in that account and delegated from the
 # platform's tenant zone (DNSConfig, shc_dns.py ensure-delegation). Networks come with NetworkPlacements (backend
 # CloudAWS: one VPC each). Ends pending while the site or the DNSConfig isn't usable.
@@ -72,15 +73,21 @@
     - name: The installation's AWS realization
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
 
-    - name: The Entity's account
+    # tenant.environments.<entity>/<environment> (e.g. an RHDP account outside the Organization) wins over the
+    # Entity's account tenant.accounts.<entity>
+    - name: The environment's account
       ansible.builtin.set_fact:
-        ca_account: "{{ ((aws_real.tenant | default({})).accounts | default({})).get(fab_entity, '') }}"
+        ca_account: >-
+          {{ ((aws_real.tenant | default({})).environments | default({})).get(fab_entity ~ '/' ~ fab_name, '')
+             or ((aws_real.tenant | default({})).accounts | default({})).get(fab_entity, '') }}
         ca_zone: "{{ fab_name }}.{{ fab_entity }}.{{ dnscfg_domain }}"
 
     - name: Refuse an Entity without an account in this installation
       ansible.builtin.set_fact:
         fab_fail_reason: NoAccount
-        fab_fail_msg: "CloudAWS {{ fab_name }}: Entity {{ fab_entity }} has no AWS account in this installation"
+        fab_fail_msg: >-
+          CloudAWS {{ fab_name }}: neither the environment nor Entity {{ fab_entity }} has an AWS account in this
+          installation
       when: ca_account | length == 0
 
     - name: Stop without an account

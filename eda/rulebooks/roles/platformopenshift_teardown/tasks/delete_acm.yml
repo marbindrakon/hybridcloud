@@ -8,7 +8,7 @@
     state: absent
     api_version: "{{ item.api_version }}"
     kind: "{{ item.kind }}"
-    name: "{{ platformopenshift_cr_name }}-{{ item.suffix }}"
+    name: "{{ po_build_name }}-{{ item.suffix }}"
     namespace: openshift-gitops
   loop:
     - {api_version: policy.open-cluster-management.io/v1, kind: Policy, suffix: keycloak-oidc}
@@ -18,7 +18,7 @@
     - {api_version: policy.open-cluster-management.io/v1, kind: PlacementBinding, suffix: cluster-rbac-binding}
     - {api_version: cluster.open-cluster-management.io/v1beta1, kind: Placement, suffix: cluster-rbac-placement}
   loop_control:
-    label: "{{ item.kind }}/{{ platformopenshift_cr_name }}-{{ item.suffix }}"
+    label: "{{ item.kind }}/{{ po_build_name }}-{{ item.suffix }}"
 
 - name: Delete the ManagedCluster
   kubernetes.core.k8s:
@@ -28,7 +28,7 @@
     state: absent
     api_version: cluster.open-cluster-management.io/v1
     kind: ManagedCluster
-    name: "{{ platformopenshift_cr_name }}"
+    name: "{{ po_build_name }}"
 
 # A cluster that never came up can hold its ManagedCluster finalizers; deprovision goes ahead
 # anyway and the final check (main.yml) fails the job if the ManagedCluster is still there.
@@ -39,7 +39,7 @@
     validate_certs: false
     api_version: cluster.open-cluster-management.io/v1
     kind: ManagedCluster
-    name: "{{ platformopenshift_cr_name }}"
+    name: "{{ po_build_name }}"
   register: mc_wait
   until: mc_wait.resources | length == 0
   retries: 60

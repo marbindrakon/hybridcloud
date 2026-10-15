@@ -29,6 +29,12 @@ sync:
   clusters:
     - name: central
       source: local
+  # Static issuers, published next to the clusters above: ConfigMaps in this namespace labelled <label>=true, the
+  # issuer name in label <nameLabel>, the key set (public keys) in data keys.json; the discovery document is generated.
+  # For issuers whose signing key exists before the cluster does (AWS STS clusters); deleting the ConfigMap unpublishes.
+  static:
+    label: shc.signal9.gg/oidc-static
+    nameLabel: shc.signal9.gg/oidc-name
   acm:
     managedServiceAccount: shc-oidc-sync
     # cluster-proxy addon user server; its serving certificate comes from the service CA

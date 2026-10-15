@@ -1699,8 +1699,7 @@ spec:
                       description: "CloudAWS CR name providing the AWS environment"
                     region:
                       type: string
-                      description: "AWS region (default: us-east-1)"
-                      default: us-east-1
+                      description: "AWS region; must be the environment's region (default: the environment's region)"
                     clusterType:
                       type: string
                       description: "Cluster topology type"

@@ -1,8 +1,11 @@
 apiVersion: v1
 metadata:
-  name: {{ cb_cluster_name }}
+  name: {{ cb_ocp_name }}
 baseDomain: {{ cb_install_base_domain }}
 publish: External
+# shc (design/P8-PLAN.md §12): STS - the operators' credentials come from the install's manifests (role ARNs and
+# projected service-account tokens of the cluster's own issuer); Hive's credentials are temporary and stay outside
+credentialsMode: Manual
 controlPlane:
   hyperthreading: Enabled
   name: master
@@ -35,5 +38,8 @@ networking:
 platform:
   aws:
     region: {{ cb_region }}
+    userTags:
+      shc-managed: "true"
+      shc-build: {{ cb_app_name }}
 pullSecret: '{{ cb_pull_secret_json | to_json }}'
 sshKey: '{{ cb_ssh_public_key | trim }}'

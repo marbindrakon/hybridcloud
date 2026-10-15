@@ -1,23 +1,67 @@
 ---
+# shc (design/P8-PLAN.md §12): the build name shc-aws-<entity>-<name> is the cluster's identity on the platform: Helm
+# release, central namespace, ClusterDeployment and ManagedCluster, issuer path, IAM role path and Vault prefix. Hive's
+# install and uninstall pods in that namespace are the ones the platform's Hive role trusts (namespaces shc-aws-*).
+# The OpenShift cluster itself is <name>.<environment's domain>.
 - name: Derive cluster identifiers
   ansible.builtin.set_fact:
-    cb_app_name: "{{ ansible_operator_meta.name }}"
-    cb_cluster_name: "{{ ansible_operator_meta.name }}"
-    cb_cluster_domain: "{{ ansible_operator_meta.name }}.{{ aws_slug }}.{{ aws_base_domain }}"
-    cb_install_base_domain: "{{ aws_slug }}.{{ aws_base_domain }}"
+    cb_app_name: "shc-aws-{{ aws_entity }}-{{ ansible_operator_meta.name }}"
+    cb_cluster_name: "shc-aws-{{ aws_entity }}-{{ ansible_operator_meta.name }}"
+    cb_ocp_name: "{{ ansible_operator_meta.name }}"
+    cb_cluster_domain: "{{ ansible_operator_meta.name }}.{{ aws_domain }}"
+    cb_install_base_domain: "{{ aws_domain }}"
     cb_region: "{{ aws_region }}"
-    cb_image_set: "{{ platform_spec.aws.ocpImageSet | default(default_ocp_image_set) }}"
+    cb_image_set: "{{ platform_spec.aws.ocpImageSet | default(default_ocp_image_set, true) }}"
     cb_controller_flavor: "{{ aws_controller_flavor }}"
     cb_worker_flavor: "{{ aws_worker_flavor }}"
     cb_control_plane_count: "{{ aws_control_plane_count }}"
     cb_worker_count: "{{ aws_worker_count }}"
-    cb_pull_secret_vault: "{{ platform_spec.aws.pullSecretVaultPath | default(default_pull_secret_vault_path) }}"
-    cb_ssh_key_vault: "{{ platform_spec.aws.sshKeyVaultPath | default(default_ssh_key_vault_path) }}"
-    cb_install_config_vault: "aws/accounts/{{ aws_account }}/{{ aws_slug }}/{{ ansible_operator_meta.name }}/install-config"
-    cb_provider_creds_vault: "{{ aws_vault_path }}"
+    cb_pull_secret_vault: "{{ default_pull_secret_vault_path }}"
+    cb_pull_secret_vault_property: "{{ default_pull_secret_vault_property }}"
+    cb_ssh_key_vault: "{{ default_ssh_key_vault_path }}"
     cb_type: "{{ aws_cluster_type }}"
-    cb_api_vip: ""
-    cb_ingress_vip: ""
-    cb_external_network: ""
-    cb_glance_image: ""
-    cb_trust_bundle: ""
+    cb_issuer_base: "{{ (aws_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
+    cb_issuer_namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+    cb_member_role: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+
+- name: Derive the build's paths and the account entry
+  ansible.builtin.set_fact:
+    cb_issuer: "{{ cb_issuer_base }}/{{ cb_app_name }}"
+    cb_vault_cluster_path: "cluster/aws/{{ cb_app_name }}"
+    cb_install_config_vault: "cluster/aws/{{ cb_app_name }}/build/install-config"
+    cb_signer_vault: "cluster/aws/{{ cb_app_name }}/build/sa-signer"
+    cb_manifests_vault: "cluster/aws/{{ cb_app_name }}/build/manifests"
+    cb_aws_cfg:
+      account: "{{ aws_account }}"
+      region: "{{ aws_region }}"
+      memberRole: "{{ cb_member_role }}"
+      entry: automation
+    cb_assume_role_arn: "arn:aws:iam::{{ aws_account }}:role/{{ cb_member_role }}"
+    cb_assume_external_id: "shc-{{ aws_account }}"
+
+- name: Record the Vault paths this cluster writes
+  ansible.builtin.set_fact:
+    cb_vault_paths:
+      - "{{ cb_install_config_vault }}"
+      - "{{ cb_signer_vault }}"
+      - "{{ cb_manifests_vault }}"
+      - "{{ cb_vault_cluster_path }}/admin-kubeconfig"
+      - "{{ cb_vault_cluster_path }}/admin-password"
+
+- name: Refuse a build name that can't serve as namespace, issuer path and IAM path
+  ansible.builtin.assert:
+    that:
+      - cb_app_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+      - cb_app_name | length <= 40
+      - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+    fail_msg: >-
+      Build name {{ cb_app_name }} (shc-aws-<entity>-<name>) must be at most 40 characters of [a-z0-9-]; shorten the
+      PlatformOpenshift name.
+
+- name: Fail without a cluster-build chart
+  ansible.builtin.assert:
+    that:
+      - (mce_cluster_build_chart | trim) is match('oci://[^/]+/')
+    fail_msg: >-
+      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
+      (got '{{ mce_cluster_build_chart | trim }}').

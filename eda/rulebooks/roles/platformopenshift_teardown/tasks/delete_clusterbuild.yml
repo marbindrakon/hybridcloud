@@ -5,21 +5,21 @@
 - name: Write central cluster kubeconfig for Helm
   ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/write_central_helm_kubeconfig.yml"
   vars:
-    cb_app_name: "{{ platformopenshift_cr_name }}"
+    cb_app_name: "{{ po_build_name }}"
 
 - name: Check for the mce-cluster-build release
   ansible.builtin.command:
-    argv: [helm, status, "{{ platformopenshift_cr_name }}", --namespace, "{{ platformopenshift_cr_name }}",
-           --kubeconfig, "/tmp/{{ platformopenshift_cr_name }}-kubeconfig"]
+    argv: [helm, status, "{{ po_build_name }}", --namespace, "{{ po_build_name }}",
+           --kubeconfig, "/tmp/{{ po_build_name }}-kubeconfig"]
   register: helm_status
   failed_when: false
   changed_when: false
 
 - name: Uninstall the release (its pre-delete hook runs the Hive deprovision)
   ansible.builtin.command:
-    argv: [helm, uninstall, "{{ platformopenshift_cr_name }}", --namespace, "{{ platformopenshift_cr_name }}",
+    argv: [helm, uninstall, "{{ po_build_name }}", --namespace, "{{ po_build_name }}",
            --wait, --timeout, "{{ clusterbuild_uninstall_timeout }}",
-           --kubeconfig, "/tmp/{{ platformopenshift_cr_name }}-kubeconfig"]
+           --kubeconfig, "/tmp/{{ po_build_name }}-kubeconfig"]
   register: helm_uninstall
   when: helm_status.rc == 0
   failed_when: helm_uninstall.rc != 0 and 'not found' not in (helm_uninstall.stderr | default(''))
@@ -31,8 +31,8 @@
     validate_certs: false
     api_version: hive.openshift.io/v1
     kind: ClusterDeployment
-    name: "{{ platformopenshift_cr_name }}"
-    namespace: "{{ platformopenshift_cr_name }}"
+    name: "{{ po_build_name }}"
+    namespace: "{{ po_build_name }}"
   register: cd_left
 
 - name: Delete a ClusterDeployment without a release (Hive deprovisions it)
@@ -43,8 +43,8 @@
     state: absent
     api_version: hive.openshift.io/v1
     kind: ClusterDeployment
-    name: "{{ platformopenshift_cr_name }}"
-    namespace: "{{ platformopenshift_cr_name }}"
+    name: "{{ po_build_name }}"
+    namespace: "{{ po_build_name }}"
     wait: true
     wait_timeout: 3600
   when: cd_left.resources | length > 0
@@ -58,14 +58,14 @@
     validate_certs: false
     api_version: hive.openshift.io/v1
     kind: ClusterDeployment
-    name: "{{ platformopenshift_cr_name }}"
-    namespace: "{{ platformopenshift_cr_name }}"
+    name: "{{ po_build_name }}"
+    namespace: "{{ po_build_name }}"
   register: cd_final
 
 - name: Fail when Hive did not deprovision the cluster
   ansible.builtin.fail:
     msg: >-
-      ClusterDeployment {{ platformopenshift_cr_name }} is still present after the deprovision
+      ClusterDeployment {{ po_build_name }} is still present after the deprovision
       (provisionStatus {{ cd_final.resources[0].status.provisionStatus | default('unknown') }});
-      check the uninstall job in namespace {{ platformopenshift_cr_name }} on central.
+      check the uninstall job in namespace {{ po_build_name }} on central.
   when: cd_final.resources | length > 0

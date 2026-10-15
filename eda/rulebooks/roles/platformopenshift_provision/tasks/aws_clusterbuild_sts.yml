@@ -1,0 +1,203 @@
+---
+# shc (design/P8-PLAN.md §12): the cluster's STS preparation, before Hive installs it.
+# 1. Its service-account signing key: generated once, kept in central Vault (<build>/build/sa-signer, read by the
+#    chart for the ClusterDeployment's boundServiceAccountSigningKeySecretRef); never printed.
+# 2. Its issuer <base>/<build>: the public key set as a static issuer ConfigMap in the issuer's namespace on central,
+#    published by the issuer's sync job (started now, then checked through the public URL).
+# 3. In the account: the IAM OIDC provider for the issuer and a role per CredentialsRequest of the release
+#    (shc_aws_cluster.py sts-up), and the credentials Secret manifests + the Authentication manifest (the issuer) in
+#    Vault (<build>/build/manifests, the chart's manifestsSecretRef).
+- name: Record the build on the status (a build that fails later still tears down cleanly)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      status: reconciling
+      ready: false
+      message: "AWS cluster build {{ cb_app_name }} in progress"
+      platformType: aws
+      buildName: "{{ cb_app_name }}"
+      awsAccountId: "{{ aws_account }}"
+      awsRegion: "{{ aws_region }}"
+      serviceAccountIssuer: "{{ cb_issuer }}"
+      domain: "{{ cb_cluster_domain }}"
+      vaultPaths: "{{ cb_vault_paths }}"
+
+- name: The cluster's STS preparation
+  block:
+    - name: Read the cluster's signing key from Vault
+      ansible.builtin.uri:
+        url: "{{ vault_init_addr }}/v1/central/data/{{ cb_signer_vault }}"
+        headers:
+          X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: _cb_signer
+      no_log: true
+
+    - name: Keep the signing key in a private file
+      ansible.builtin.copy:
+        content: "{{ _cb_signer.json.data.data['bound-service-account-signing-key.key'] }}"
+        dest: "/tmp/{{ cb_app_name }}-signer.pem"
+        mode: "0600"
+      when: _cb_signer.status == 200
+      no_log: true
+
+    - name: Generate the cluster's signing key
+      ansible.builtin.command:
+        argv: [python3, "{{ role_path }}/../../../common/files/shc_aws_cluster.py", genkey,
+               --key-file, "/tmp/{{ cb_app_name }}-signer.pem"]
+      when: _cb_signer.status == 404
+
+    - name: Store the new signing key in Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
+      vars:
+        vault_kv_path: "{{ cb_signer_vault }}"
+        vault_kv_write_data:
+          bound-service-account-signing-key.key: "{{ lookup('file', '/tmp/' ~ cb_app_name ~ '-signer.pem') }}"
+      when: _cb_signer.status == 404
+
+    - name: The signing key's public key set
+      ansible.builtin.command:
+        argv: [python3, "{{ role_path }}/../../../common/files/shc_aws_cluster.py", jwks,
+               --key-file, "/tmp/{{ cb_app_name }}-signer.pem"]
+      register: _cb_jwks
+      changed_when: false
+
+    - name: Keep the key set
+      ansible.builtin.set_fact:
+        cb_jwks: "{{ (_cb_jwks.stdout | from_json).result }}"
+        _cb_signer: {}
+
+    - name: Publish the key set as a static issuer on central
+      kubernetes.core.k8s:
+        host: "{{ central_api_host }}"
+        api_key: "{{ central_bearer_token }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "oidc-static-{{ cb_app_name }}"
+            namespace: "{{ cb_issuer_namespace }}"
+            labels:
+              shc.signal9.gg/oidc-static: "true"
+              shc.signal9.gg/oidc-name: "{{ cb_app_name }}"
+              app.kubernetes.io/managed-by: eda-platformopenshift
+          data:
+            keys.json: "{{ cb_jwks | to_json }}"
+
+    - name: Is the key set already public
+      ansible.builtin.uri:
+        url: "{{ cb_issuer }}/keys.json"
+        return_content: true
+        status_code: [200, 404]
+      register: _cb_pub
+      changed_when: false
+
+    - name: Start the issuer's sync job now
+      when: >-
+        _cb_pub.status != 200
+        or cb_jwks['keys'][0].kid not in ((_cb_pub.json | default({})).get('keys', []) | map(attribute='kid') | list)
+      block:
+        - name: Read the issuer's sync CronJob
+          kubernetes.core.k8s_info:
+            host: "{{ central_api_host }}"
+            api_key: "{{ central_bearer_token }}"
+            validate_certs: false
+            api_version: batch/v1
+            kind: CronJob
+            name: oidc-sync
+            namespace: "{{ cb_issuer_namespace }}"
+          register: _cb_cron
+
+        - name: Run it once
+          kubernetes.core.k8s:
+            host: "{{ central_api_host }}"
+            api_key: "{{ central_bearer_token }}"
+            validate_certs: false
+            state: present
+            definition:
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                generateName: "oidc-sync-{{ ansible_operator_meta.name }}-"
+                namespace: "{{ cb_issuer_namespace }}"
+                labels:
+                  app.kubernetes.io/managed-by: eda-platformopenshift
+              spec: "{{ _cb_cron.resources[0].spec.jobTemplate.spec | combine({'ttlSecondsAfterFinished': 3600}) }}"
+          when: _cb_cron.resources | length > 0
+
+    - name: Wait for the issuer's public key set
+      ansible.builtin.uri:
+        url: "{{ cb_issuer }}/keys.json"
+        return_content: true
+        status_code: [200, 404]
+      register: _cb_pub
+      until: >-
+        _cb_pub.status == 200
+        and cb_jwks['keys'][0].kid in ((_cb_pub.json | default({})).get('keys', []) | map(attribute='kid') | list)
+      retries: 60
+      delay: 15
+      changed_when: false
+
+    - name: The release image of the image set
+      kubernetes.core.k8s_info:
+        host: "{{ central_api_host }}"
+        api_key: "{{ central_bearer_token }}"
+        validate_certs: false
+        api_version: hive.openshift.io/v1
+        kind: ClusterImageSet
+        name: "{{ cb_image_set }}"
+      register: _cb_imageset
+
+    - name: Fail without the image set
+      ansible.builtin.assert:
+        that:
+          - _cb_imageset.resources | length > 0
+        fail_msg: "ClusterImageSet {{ cb_image_set }} does not exist on central"
+
+    - name: Manifests directory
+      ansible.builtin.file:
+        path: "/tmp/{{ cb_app_name }}-manifests"
+        state: directory
+        mode: "0700"
+
+    - name: The account's OIDC provider, the operators' roles and their credentials manifests
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+      vars:
+        aws_helper: shc_aws_cluster.py
+        aws_config: "{{ cb_aws_cfg }}"
+        aws_args: [sts-up, --cluster, "{{ cb_app_name }}", --issuer, "{{ cb_issuer }}",
+                   --release, "{{ _cb_imageset.resources[0].spec.releaseImage }}",
+                   --manifests-dir, "/tmp/{{ cb_app_name }}-manifests"]
+
+    - name: Keep the STS result
+      ansible.builtin.set_fact:
+        cb_sts: "{{ aws_result.result }}"
+
+    - name: The install's manifests (credentials Secrets and the cluster's issuer) to Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
+      vars:
+        vault_kv_path: "{{ cb_manifests_vault }}"
+        vault_kv_write_data: >-
+          {%- set out = {'cluster-authentication-02-config.yaml': {
+                'apiVersion': 'config.openshift.io/v1', 'kind': 'Authentication',
+                'metadata': {'name': 'cluster'}, 'spec': {'serviceAccountIssuer': cb_issuer}} | to_nice_yaml} -%}
+          {%- for f in cb_sts.manifests -%}
+            {%- set _ = out.update({f: lookup('file', '/tmp/' ~ cb_app_name ~ '-manifests/' ~ f)}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+  always:
+    - name: Remove the signing key file and the manifests
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/{{ cb_app_name }}-signer.pem"
+        - "/tmp/{{ cb_app_name }}-manifests"

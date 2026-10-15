@@ -108,3 +108,14 @@ provisioning:
   macAddresses: []
   interface: ""
   watchAllNamespaces: true
+
+# ─── Hive (shc P8) ────────────────────────────────────────────────────────────
+hive:
+  # Hive's target namespace (HiveConfig spec.targetNamespace, default "hive").
+  namespace: hive
+  # AWS service-provider identity without keys: a web-identity profile for roleArn, read by Hive's controllers and
+  # its install/uninstall pods with their own service-account token. Empty roleArn: not configured.
+  awsServiceProvider:
+    roleArn: ""
+    secretName: hive-aws-service-provider
+    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token

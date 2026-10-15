@@ -22,7 +22,7 @@ spec:
 {{ end }}
   manageDNS: false
   baseDomain: {{ .Values.cluster.baseDomain }}
-  clusterName: {{ .Values.cluster.name }}
+  clusterName: {{ .Values.cluster.clusterName | default .Values.cluster.name }}
   controlPlaneConfig:
     servingCertificates: {}
   installAttemptsLimit: 3

@@ -328,6 +328,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-platformopenshift
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §12): AWS clusters' IAM (STS roles, OIDC provider) with the platform's AWS identity
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: platformopenshift-teardown
@@ -337,6 +339,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-platformopenshift
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §12): AWS clusters' IAM (STS roles, OIDC provider) with the platform's AWS identity
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: rbacconfig-provision

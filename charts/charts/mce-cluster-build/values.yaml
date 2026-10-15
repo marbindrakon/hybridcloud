@@ -1,5 +1,8 @@
 cluster:
+  # Name of the ClusterDeployment, its namespace and the ManagedCluster.
   name: ocp
+  # The OpenShift cluster name (install-config metadata.name, DNS <clusterName>.<baseDomain>); default: name.
+  clusterName: ""
   baseDomain: ""
   importToHub: true
   createGitopsManifestWorks: false

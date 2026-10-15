@@ -5,7 +5,7 @@ description: >-
   Supports AWS (Mint and STS/Manual modes), OpenStack, vSphere, and Agent.
   Sovereign Cloud fork of marbindrakon/signal9-lab-gitops mce-cluster-build.
 type: application
-version: 0.2.1-shc.3
+version: 0.2.1-shc.4
 appVersion: "4.21"
 keywords:
   - openshift

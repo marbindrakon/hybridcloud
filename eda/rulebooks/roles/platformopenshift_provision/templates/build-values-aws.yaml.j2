@@ -1,0 +1,45 @@
+---
+# shc (design/P8-PLAN.md §12): mce-cluster-build values of an AWS cluster in STS mode, no keys. The ClusterDeployment
+# assumes the account's automation role with Hive's own identity, takes its signing key and install manifests from
+# Vault, and is not imported into the hub (its klusterlet couldn't reach the hub's private API).
+cluster:
+  name: {{ cb_app_name }}
+  clusterName: {{ cb_ocp_name }}
+  importToHub: false
+  useACM: false
+  createGitopsManifestWorks: false
+  createGitopsSyncSet: false
+  type: ocp
+  baseDomain: "{{ cb_install_base_domain }}"
+  clusterImageSet: "{{ cb_image_set }}"
+  controlPlaneCount: {{ cb_control_plane_count }}
+  workerCount: {{ cb_worker_count }}
+  infraCount: 0
+  apiVIP: ""
+  ingressVIP: ""
+  pullSecretVault: "{{ cb_pull_secret_vault }}"
+  pullSecretVaultProperty: "{{ cb_pull_secret_vault_property }}"
+  sshKeyVault: "{{ cb_ssh_key_vault }}"
+  trustedCAs: ""
+  sshPubKey: ""
+  dnsServers: []
+
+provider:
+  type: AWS
+  providerCredsVault: ""
+  providerCAs: ""
+  aws:
+    region: "{{ cb_region }}"
+    controlPlaneFlavor: "{{ cb_controller_flavor }}"
+    workerFlavor: "{{ cb_worker_flavor }}"
+    credentialsMode: Manual
+    publishMode: External
+    assumeRole:
+      roleARN: "{{ cb_assume_role_arn }}"
+      externalID: "{{ cb_assume_external_id }}"
+    serviceAccountSignerSecret: "{{ cb_signer_vault }}"
+    extraManifestsSecret: "{{ cb_manifests_vault }}"
+
+installConfigVault: "{{ cb_install_config_vault }}"
+
+secretStoreName: vault-backend

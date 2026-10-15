@@ -14,6 +14,10 @@ rules:
     resources: [configmaps]
     resourceNames: [oidc-documents]
     verbs: [get, patch, update]
+  # static issuers: ConfigMaps selected by label (public keys only)
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -133,8 +137,26 @@ spec:
                   publish_url {{ .name }} {{ .url | quote }} {{ .keysPath | default "/keys" | quote }} || { echo "{{ .name }}: fetch failed"; rc=1; }
                   {{- end }}
                   {{- end }}
+                  # static issuers: ConfigMaps labelled {{ .Values.sync.static.label }}=true in this namespace, issuer name in
+                  # label {{ .Values.sync.static.nameLabel }}, key set in data keys.json (an issuer whose signing key exists
+                  # before its cluster does, e.g. an AWS cluster in STS mode). Names of the clusters above are not taken.
+                  configured=" {{ range .Values.sync.clusters }}{{ .name }} {{ end }}"; static=""
+                  oc get configmap -n {{ $.Values.namespace }} -l {{ .Values.sync.static.label }}=true -o json \
+                    | jq -c '.items[] | {n: (.metadata.labels["{{ .Values.sync.static.nameLabel }}"] // ""), k: (.data["keys.json"] // "")}' \
+                    > static.jsonl || { echo "static: list failed"; rc=1; }
+                  while read -r e; do
+                    n=$(jq -r .n <<<"$e")
+                    if ! [[ "$n" =~ ^[a-z0-9-]+$ ]] || [[ "$configured" == *" $n "* ]]; then echo "static: skipping '$n'"; rc=1; continue; fi
+                    jq -r .k <<<"$e" > "new/${n}__keys.json"
+                    jq -n --arg iss "{{ $.Values.baseURL }}/$n" '{issuer: $iss, jwks_uri: ($iss + "/keys.json"),
+                      response_types_supported: ["id_token"], subject_types_supported: ["public"],
+                      id_token_signing_alg_values_supported: ["RS256"], claims_supported: ["aud", "exp", "sub", "iat", "iss"]}' \
+                      > "new/${n}__openid-configuration"
+                    if jq -e '.keys | length > 0' "new/${n}__keys.json" >/dev/null 2>&1; then static="$static $n"
+                    else echo "$n: static key set invalid"; rm -f "new/${n}__keys.json" "new/${n}__openid-configuration"; rc=1; fi
+                  done < static.jsonl
                   args=(); published=""
-                  for n in {{ range .Values.sync.clusters }}{{ .name }} {{ end }}; do
+                  for n in {{ range .Values.sync.clusters }}{{ .name }} {{ end }}$static; do
                     if [ -s "new/${n}__keys.json" ] && [ -s "new/${n}__openid-configuration" ]; then d=new; published="$published $n"
                     elif [ -s "old/${n}__keys.json" ] && [ -s "old/${n}__openid-configuration" ]; then d=old; echo "$n: keeping the last published documents"
                     else continue; fi

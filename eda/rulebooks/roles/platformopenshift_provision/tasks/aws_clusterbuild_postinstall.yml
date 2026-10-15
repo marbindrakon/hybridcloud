@@ -1,4 +1,6 @@
 ---
+# shc (design/P8-PLAN.md §12): Hive's outcome; the admin kubeconfig and password to Vault (PushSecrets in the build's
+# namespace). The cluster's DNS records live in the environment's zone, written and removed by the installer.
 - name: Check ClusterDeployment installation status
   kubernetes.core.k8s_info:
     host: "{{ central_api_host }}"
@@ -88,39 +90,6 @@
           | map(attribute='value') | first | default(''))
          if (mc_info.resources | default([]) | length > 0) else (cb_install_version | default('')) }}
 
-- name: Find and clean up duplicate subdomain zones after installation
-  when: cb_cluster_installed | bool and cb_install_zone_id != ''
-  block:
-    - name: List all subdomain zones (may have duplicates after installer run)
-      amazon.aws.route53_info:
-        query: hosted_zone
-      register: r53_zones_post_install
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
-        AWS_DEFAULT_REGION: "{{ cb_region }}"
-
-    - name: Identify duplicate subdomain zones sorted by record count
-      ansible.builtin.set_fact:
-        cb_duplicate_zones: >-
-          {{ (r53_zones_post_install.hosted_zones
-              | selectattr('name', 'equalto', cb_subdomain_zone_name)
-              | sort(attribute='resource_record_set_count')
-              | list) }}
-
-    - name: Delete duplicate subdomain zones with fewer records
-      amazon.aws.route53_zone:
-        zone: "{{ cb_cluster_domain }}"
-        hosted_zone_id: "{{ item.id | regex_replace('^/hostedzone/', '') }}"
-        state: absent
-      loop: "{{ cb_duplicate_zones[:-1] }}"
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key_id }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_access_key }}"
-        AWS_DEFAULT_REGION: "{{ cb_region }}"
-      when: cb_duplicate_zones | length > 1
-      ignore_errors: true
-
 - name: Create PushSecrets for cluster credentials
   when: cb_cluster_installed | bool
   block:
@@ -200,101 +169,6 @@
                     property: password
       when: cb_admin_password_secret != ''
 
-    - name: PushSecret — SSH private key
-      kubernetes.core.k8s:
-        host: "{{ central_api_host }}"
-        api_key: "{{ central_bearer_token }}"
-        validate_certs: false
-        state: present
-        definition:
-          apiVersion: external-secrets.io/v1alpha1
-          kind: PushSecret
-          metadata:
-            name: "{{ cb_app_name }}-push-ssh-key"
-            namespace: "{{ cb_cluster_name }}"
-            labels:
-              app.kubernetes.io/managed-by: eda-platformopenshift
-              platformopenshift: "{{ ansible_operator_meta.name }}"
-          spec:
-            refreshInterval: 1h
-            secretStoreRefs:
-              - name: vault-backend
-                kind: ClusterSecretStore
-            selector:
-              secret:
-                name: "{{ cb_cluster_name }}-ssh-key"
-            data:
-              - match:
-                  secretKey: ssh-privatekey
-                  remoteRef:
-                    remoteKey: "{{ cb_vault_cluster_path }}/ssh-key"
-                    property: ssh-privatekey
-
-    - name: PushSecret — install config
-      kubernetes.core.k8s:
-        host: "{{ central_api_host }}"
-        api_key: "{{ central_bearer_token }}"
-        validate_certs: false
-        state: present
-        definition:
-          apiVersion: external-secrets.io/v1alpha1
-          kind: PushSecret
-          metadata:
-            name: "{{ cb_app_name }}-push-install-config"
-            namespace: "{{ cb_cluster_name }}"
-            labels:
-              app.kubernetes.io/managed-by: eda-platformopenshift
-              platformopenshift: "{{ ansible_operator_meta.name }}"
-          spec:
-            refreshInterval: 1h
-            secretStoreRefs:
-              - name: vault-backend
-                kind: ClusterSecretStore
-            selector:
-              secret:
-                name: "{{ cb_cluster_name }}-install-config"
-            data:
-              - match:
-                  secretKey: install-config.yaml
-                  remoteRef:
-                    remoteKey: "{{ cb_vault_cluster_path }}/install-config"
-                    property: install-config.yaml
-
-    - name: PushSecret — provider credentials
-      kubernetes.core.k8s:
-        host: "{{ central_api_host }}"
-        api_key: "{{ central_bearer_token }}"
-        validate_certs: false
-        state: present
-        definition:
-          apiVersion: external-secrets.io/v1alpha1
-          kind: PushSecret
-          metadata:
-            name: "{{ cb_app_name }}-push-provider-creds"
-            namespace: "{{ cb_cluster_name }}"
-            labels:
-              app.kubernetes.io/managed-by: eda-platformopenshift
-              platformopenshift: "{{ ansible_operator_meta.name }}"
-          spec:
-            refreshInterval: 1h
-            secretStoreRefs:
-              - name: vault-backend
-                kind: ClusterSecretStore
-            selector:
-              secret:
-                name: "{{ cb_cluster_name }}-provider-creds"
-            data:
-              - match:
-                  secretKey: aws_access_key_id
-                  remoteRef:
-                    remoteKey: "{{ cb_vault_cluster_path }}/provider-creds"
-                    property: aws_access_key_id
-              - match:
-                  secretKey: aws_secret_access_key
-                  remoteRef:
-                    remoteKey: "{{ cb_vault_cluster_path }}/provider-creds"
-                    property: aws_secret_access_key
-
     - name: Update secrets pushed flag
       ansible.builtin.set_fact:
         cb_secrets_pushed: true
@@ -305,6 +179,7 @@
   when: not (cb_cluster_installed | bool)
 
 - name: Apply basechart:true label to ManagedCluster
+  when: cb_acm_available | default(false) | bool
   kubernetes.core.k8s:
     host: "{{ central_api_host }}"
     api_key: "{{ central_bearer_token }}"
