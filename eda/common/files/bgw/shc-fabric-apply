@@ -315,11 +315,15 @@ gateway)
       $X sysctl -qw "net.mpls.conf.$VRF.input=1" 2>/dev/null || true
     done
     # TCP towards a site never uses segments larger than its leg carries (rt mtu = the route's device MTU): the
-    # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole
+    # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole.
+    # Forwarded SYNs (from the site's leg) pass the forward hook on the bridge port; SYNs that arrive over the core
+    # (MPLS popped into the VRF, e.g. another site's gateway) leave through the output hook on the VRF's bridge.
     if [ -n "$WANT" ]; then
       printf '%s\n' 'add table inet shc_gw_mss' 'delete table inet shc_gw_mss' 'table inet shc_gw_mss {' \
         '  chain clamp {' '    type filter hook forward priority mangle; policy accept;' \
-        '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu' '  }' '}' | $X nft -f -
+        '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu' '  }' \
+        '  chain clamp_core {' '    type filter hook output priority mangle; policy accept;' \
+        '    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu' '  }' '}' | $X nft -f -
     else
       $X nft delete table inet shc_gw_mss 2>/dev/null || true
     fi
