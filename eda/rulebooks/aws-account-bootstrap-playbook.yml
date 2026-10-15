@@ -2,6 +2,8 @@
 # shc (design/P8-PLAN.md §7): create or adopt an SHC member account and bootstrap its automation role.
 # Runs in the shc-aws container group (AWS web identity of the management account's automation role, no keys).
 # Extra vars: account (short name, e.g. signal9-hub), purpose (e.g. network-hub, tenant), dry_run (bool);
+# or external_account (an account ID outside the Organization, e.g. RHDP, whose owner created shc-automation
+# trusting the automation role with external ID shc-<account>): check only, enter it and report.
 # shc_aws (from the job template: organizationalUnit, accountNamePrefix, accountEmailPattern, memberRoleName,
 # memberPolicyArn).
 - name: AWS account bootstrap
@@ -13,6 +15,33 @@
     _name: "{{ _aws.accountNamePrefix | default('shc-') }}{{ account }}"
     _email: "{{ (_aws.accountEmailPattern | default('')) | replace('{name}', account) }}"
   tasks:
+    - name: Check an account outside the Organization
+      when: external_account is defined
+      block:
+        - name: Inputs and the web identity
+          ansible.builtin.assert:
+            that:
+              - external_account | string is match('^[0-9]{12}$')
+              - lookup('env', 'AWS_ROLE_ARN') | length > 0
+              - lookup('env', 'AWS_WEB_IDENTITY_TOKEN_FILE') | length > 0
+            fail_msg: "need external_account (12 digits) and the shc-aws container group"
+
+        - name: Enter the account through its automation role
+          ansible.builtin.command:
+            argv: ['python3', "{{ playbook_dir ~ '/../common/files/shc_aws_account.py' }}",
+                   '--external-account', "{{ external_account | string }}",
+                   '--member-role', "{{ _aws.memberRoleName | default('shc-automation') }}"]
+          register: _ext
+          changed_when: false
+          failed_when: _ext.rc != 0 or not ((((_ext.stdout | default('', true)) or '{}') | from_json).ok | default(false))
+
+        - name: Result
+          ansible.builtin.debug:
+            msg: "{{ ((_ext.stdout | default('', true)) or '{}') | from_json }}"
+
+        - name: Done (check only)
+          ansible.builtin.meta: end_play
+
     - name: Inputs and the web identity
       ansible.builtin.assert:
         that:

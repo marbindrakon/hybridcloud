@@ -5,6 +5,9 @@ AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE). Idempotent; prints one JSON line.
 
   shc_aws_account.py --name NAME --email EMAIL --ou OU_ID --purpose PURPOSE
                      [--member-role shc-automation] [--member-policy POLICY_ARN] [--dry-run]
+  shc_aws_account.py --external-account ID [--member-role shc-automation]
+      check only: enter an account outside the Organization (e.g. RHDP) whose owner created the member role
+      trusting the automation role with external ID shc-<account>; changes nothing
 
 - An existing account (same name or email) is adopted only if it carries the tag shc-managed=true.
 - A new account is created with tags shc-managed=true, shc-purpose, Name, then moved into the OU.
@@ -76,13 +79,15 @@ def assume(sts, arn, session, external_id=None, tries=40):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--email", required=True)
-    ap.add_argument("--ou", required=True)
-    ap.add_argument("--purpose", required=True)
+    ap.add_argument("--name")
+    ap.add_argument("--email")
+    ap.add_argument("--ou")
+    ap.add_argument("--purpose")
     ap.add_argument("--member-role", default="shc-automation")
     ap.add_argument("--member-policy", default="arn:aws:iam::aws:policy/AdministratorAccess")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--external-account", help="check only: an account outside the Organization whose owner created "
+                                                "<member-role> trusting us; enter it and report, change nothing")
     a = ap.parse_args()
 
     sts = boto3.client("sts")
@@ -90,6 +95,20 @@ def main():
     mgmt = me["Account"]
     # arn:aws:sts::<acct>:assumed-role/<role>/<session> -> arn:aws:iam::<acct>:role/<role>
     caller_role = "arn:aws:iam::%s:role/%s" % (mgmt, me["Arn"].split("/")[1])
+    if a.external_account:
+        external_id = "shc-%s" % a.external_account
+        member = assume(sts, "arn:aws:iam::%s:role/%s" % (a.external_account, a.member_role), "shc-check",
+                        external_id, tries=1)
+        role = member.client("iam").get_role(RoleName=a.member_role)["Role"]
+        trusted = [p for st in role["AssumeRolePolicyDocument"]["Statement"]
+                   for p in ([st.get("Principal", {}).get("AWS")] if isinstance(st.get("Principal", {}).get("AWS"), str)
+                             else st.get("Principal", {}).get("AWS", []))]
+        print(json.dumps({"ok": True, "account": a.external_account, "external": True, "created": False,
+                          "memberRole": role["Arn"], "externalId": external_id, "trusts": trusted,
+                          "check": member.client("sts").get_caller_identity()["Arn"]}))
+        return
+    if not (a.name and a.email and a.ou and a.purpose):
+        fail("--name, --email, --ou and --purpose are required (or --external-account)")
     org = boto3.client("organizations")
 
     acct = find_account(org, a.name, a.email)
