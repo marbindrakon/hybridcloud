@@ -8,12 +8,15 @@
 #   otherwise takes a port's MAC whenever ports change, and IS-IS on it keeps the old one: prints bridge-mac=changed
 #   when it had to set it, so FRR can be restarted), the provider-edge loopback on lo; other addresses from the
 #   fabric's core prefixes are removed.
-#   egress {vrf, table, parent, mtu, address, gateway, deny, allow, networks: [{vrf, table, zone, xe, xo, xeAddr, xoAddr,
-#   nat}]} (provider internet egress; absent = none): a VRF <vrf> with a macvlan egress0 on <parent> (the site network
-#   the hand-off uses) holding <address>; per network a VRF e<n> (FRR imports the network's VPN routes into it) and a
-#   veth xe<n> (in e<n>) / xo<n> (in <vrf>), proxy ARP on egress0 for each network's NAT address, and the nftables
-#   table ip shc_egress: conntrack zone per network, source NAT on xe<n>, nothing to deny destinations, nothing
-#   unsolicited into a network. VRFs e<digits> no longer listed go with their veth. Routes are FRR's (staticd).
+#   egress {vrf, table, parent, mtu, address, gateway, deny, allow, platformSources, platformPorts, networks: [{vrf,
+#   table, zone, xe, xo, xeAddr, xoAddr, nat, platform}]} (provider internet egress and platform reach; absent =
+#   none): a VRF <vrf> with a macvlan egress0 on <parent> (the site network the hand-off uses) holding <address>; per
+#   network a VRF e<n> (FRR imports the network's VPN routes into it) and a veth xe<n> (in e<n>) / xo<n> (in <vrf>),
+#   proxy ARP on egress0 for each network's NAT address (networks with internet egress), and the nftables table ip
+#   shc_egress: conntrack zone per network, source NAT on xe<n>, nothing to deny destinations, nothing unsolicited
+#   into a network - except the platform's sources to a network's platform prefixes on platformPorts (and their
+#   replies, stateless: they may return through the other node), never source-NATed. VRFs e<digits> no longer listed
+#   go with their veth. Routes are FRR's (staticd).
 # instance type "gateway" (a CloudGateway, network namespace <netns>):
 #   the namespace (forwarding, MPLS), the provider-edge loopback, the site's underlay VLAN on the trunk moved into
 #   the namespace with the gateway's site address, and a veth from the namespace's core0 (link address) to the core
@@ -89,7 +92,10 @@ if e.get("deny"):
 if e.get("allow"):
     out.append(f"  set allow {{ type ipv4_addr; flags interval; elements = {{ {elements(e['allow'])} }}; }}")
 zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
-nats = elements(f'"{n["xe"]}" : {n["nat"]}' for n in nets)
+nats = elements(f'"{n["xe"]}" : {n["nat"]}' for n in nets if n.get("nat"))
+srcs = e.get("platformSources") or []
+ports = ", ".join(str(p) for p in e.get("platformPorts") or [6443, 443])
+reach = [n for n in nets if n.get("platform") and srcs]
 # a network's traffic reaches the veth through the VRF's output path; the rules go on output and forward alike
 for hook in ("output", "prerouting"):
     out.append(f"  chain zone_{hook} {{")
@@ -100,6 +106,9 @@ for hook in ("output", "prerouting"):
 for hook in ("output", "forward"):
     out.append(f"  chain filter_{hook} {{")
     out.append(f"    type filter hook {hook} priority filter; policy accept;")
+    for n in reach:  # replies to the platform (stateless: they may return through the other node)
+        out.append(f'    oifname "{n["xe"]}" ip saddr {{ {elements(n["platform"])} }} ip daddr {{ {elements(srcs)} }} '
+                   f'tcp sport {{ {ports} }} accept')
     if e.get("allow"):
         out.append('    oifname "xe*" ip daddr @allow accept')
     if e.get("deny"):
@@ -107,11 +116,16 @@ for hook in ("output", "forward"):
     out.append("  }")
 out.append("  chain inbound {")
 out.append("    type filter hook prerouting priority filter; policy accept;")
+for n in reach:  # the platform reaches the network's platform prefixes on its ports
+    out.append(f'    iifname "{n["xe"]}" ip saddr {{ {elements(srcs)} }} ip daddr {{ {elements(n["platform"])} }} '
+               f'tcp dport {{ {ports} }} accept')
 out.append('    iifname "xe*" ct state new counter drop comment "nothing unsolicited into a network"')
 out.append("  }")
 out.append("  chain source_nat {")
 out.append("    type nat hook postrouting priority srcnat; policy accept;")
-if nets:
+if srcs:
+    out.append(f'    oifname "xe*" ip daddr {{ {elements(srcs)} }} accept')
+if nats:
     out.append(f"    snat ip to oifname map {{ {nats} }}")
 out.append("  }")
 out.append("}")
@@ -149,7 +163,7 @@ egress_up() {
     ip link del "xe${v#e}" 2>/dev/null || true
     ip link del "$v"
   done
-  nat=$(jq -r '.egress.networks // [] | .[].nat' "$CONF")
+  nat=$(jq -r '.egress.networks // [] | .[].nat | select(. != null and . != "")' "$CONF")
   for a in $(ip -4 neigh show proxy dev egress0 | awk '{print $1}'); do
     echo "$nat" | grep -qx "$a" || ip neigh del proxy "$a" dev egress0
   done

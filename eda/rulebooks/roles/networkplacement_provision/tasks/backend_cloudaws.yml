@@ -5,7 +5,8 @@
 # route table at the hub (shc-net-<l3vni>, created with the network's Connect attachment to the site's edge routers
 # and the routers' VRF on first use), the VPC's default route to the transit gateway. The routers learn the VPC's
 # prefix from the transit gateway and advertise it to the gateway as EVPN Type-5 (checked by gateway_routes.yml).
-# Sets np_backend_status, np_backend_changed.
+# A network with internet egress gets a NAT egress VPC of its own at the hub when the realization says so
+# (AWS_REALIZATION edge.egress.mode nat-vpc). Sets np_backend_status, np_backend_changed.
 - name: The installation's AWS realization and the site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
   vars:
@@ -24,6 +25,14 @@
       tags: {shc-entity: "{{ fab_entity }}", shc-network: "{{ fab_spec.network }}"}
       edge: "{{ aws_edge_cfg }}"
 
+# the network's internet egress in AWS: its own NAT egress VPC at the hub (realization edge.egress.mode nat-vpc),
+# instead of the fabric's default route over the Connect attachment
+- name: The network's internet egress here
+  ansible.builtin.set_fact:
+    np_aws_nat_egress: >-
+      {{ (((np_network.spec | default({})).egress | default({})).internet | default(false) | bool)
+         and ((aws_real.edge.egress | default({})).mode | default('fabric')) == 'nat-vpc' }}
+
 - name: Refuse an environment without an account yet
   ansible.builtin.fail:
     msg: "CloudAWS {{ np_backend_name }} has no account in its status yet"
@@ -36,7 +45,8 @@
     aws_config: "{{ np_aws_cfg }}"
     aws_args: >-
       {{ ['place-up', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', np_l3vni | string]
-         + (fab_spec.prefixes | map('regex_replace', '^', '--prefix=') | list) }}
+         + (fab_spec.prefixes | map('regex_replace', '^', '--prefix=') | list)
+         + (['--egress'] if np_aws_nat_egress | bool else []) }}
 
 - name: Record the site side
   ansible.builtin.set_fact:
@@ -48,4 +58,5 @@
       attachment: "{{ aws_result.result.attachment }}"
       routeTable: "{{ aws_result.result.routeTable }}"
       connectAttachment: "{{ aws_result.result.connectAttachment }}"
+      egress: "{{ ('nat-vpc ' ~ aws_result.result.egress.publicIp) if aws_result.result.egress else 'none' }}"
     np_backend_changed: "{{ aws_result.changed | default([]) | length > 0 }}"

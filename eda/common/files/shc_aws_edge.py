@@ -12,14 +12,21 @@ while it exists, so the site and its networks are brought up for use and removed
     down                          everything of the site (networks first)
     gateways --gateways '<json>'  the border gateway nodes [{name, publicKey, address}]; BGP password from env
                                   SHC_EDGE_BGP_PASSWORD (never argv)
-    net-up --vni N [--test]       the network's route table, Connect attachment and peers; its VRF on the routers
+    net-up --vni N [--test] [--egress]   the network's route table, Connect attachment and peers; its VRF on the
+                                  routers; with --egress its NAT egress VPC (config egress), else none
     net-attach --vni N --attachment ID   accept a tenant VPC attachment into the network's route table
-    net-down --vni N              the network's Connect attachment, peers, route table; its VRF on the routers
+    net-down --vni N              the network's egress VPC, Connect attachment, peers, route table; its VRF on the routers
+    share-add --account ID        share the hub's transit gateway with an account outside the Organization
+    share-remove --account ID     stop sharing it with that account
 
 config: {"account", "region", "memberRole", "entry": "automation" | "org-access", "site", "vpcName", "tgwName",
          "tgwCidr", "edgeSubnets": [names], "transportSubnets": [names], "instanceType", "ami": {"owner", "name"},
          "asn", "tunnel": {"cidr", "mtu", "listenPort", "nodeAddresses": [..]}, "wireguardSources": [cidrs],
-         "insideCidrPool", "overlayMtu"}
+         "insideCidrPool", "overlayMtu", "egress": {"cidrPool", "az"}, "shareName"}
+A network's internet egress (net-up --egress): a NAT egress VPC of its own, shc-egress-<vni> (a /26 from
+egress.cidrPool): an attachment /28 (0/0 -> NAT gateway) and a public /28 (NAT gateway, 0/0 -> internet gateway,
+RFC 1918 -> transit gateway), its attachment associated with the network's route table (no propagation) and a static
+0/0 there (a static route wins over the fabric's propagated default). Per network, so overlapping prefixes stay apart.
 entry: automation = the job's identity assumes <memberRole> with external ID shc-<account> (AAP); org-access =
 the caller's management-account credentials assume OrganizationAccountAccessRole (one-off use by the owner).
 """
@@ -77,14 +84,14 @@ class Edge:
         # derived settings: router tunnel addresses from the tunnel subnet (host routerHostIndex onwards), the
         # overlay MTU of the site leg (tunnel MTU minus VXLAN)
         t = cfg.setdefault("tunnel", {})
-        if not t.get("nodeAddresses"):
+        if not t.get("nodeAddresses") and t.get("cidr"):
             net = ipaddress.ip_network(t["cidr"])
             t["nodeAddresses"] = [str(net[int(t.get("routerHostIndex", 10)) + i]) for i in range(len(cfg["edgeSubnets"]))]
         cfg.setdefault("overlayMtu", int(t.get("mtu", 1420)) - 50)
         self.cfg = cfg
         self.site = cfg["site"]
         s = session(cfg)
-        self.ec2, self.iam, self.ssm = s.client("ec2"), s.client("iam"), s.client("ssm")
+        self.ec2, self.iam, self.ssm, self.ram = s.client("ec2"), s.client("iam"), s.client("ssm"), s.client("ram")
         self.changed = []
         self.prefix = "shc-edge-" + self.site
         self.param = "/shc/edge/%s/config" % self.site
@@ -507,7 +514,7 @@ systemctl enable --now shc-edge-agent.timer
     def net_names(self, vni):
         return "shc-net-%d" % vni
 
-    def net_up(self, vni, test=False):
+    def net_up(self, vni, test=False, egress=False):
         c = self.cfg
         tgw = self.tgw()
         tgw_id = tgw["TransitGatewayId"]
@@ -601,7 +608,8 @@ systemctl enable --now shc-edge-agent.timer
             vrf["testAddress"] = {iid: str(base + i) for i, iid in enumerate(sorted(conf["nodes"], key=lambda k: conf["nodes"][k]["name"]))}
         conf["vrfs"] = sorted([v for v in conf["vrfs"] if v["vni"] != vni] + [vrf], key=lambda v: v["vni"])
         self.write_config(conf)
-        return {"vni": vni, "routeTable": rt_id, "connectAttachment": ca_id, "peers": connect}
+        eg = self.egress_up(vni, rt_id) if egress else self.egress_down(vni)
+        return {"vni": vni, "routeTable": rt_id, "connectAttachment": ca_id, "peers": connect, "egress": eg}
 
     def association(self, att_id):
         """The route table an attachment is associated with (the route tables' own lists: DescribeTransitGateway-
@@ -617,7 +625,7 @@ systemctl enable --now shc-edge-agent.timer
                     return rt["TransitGatewayRouteTableId"]
         return None
 
-    def associate(self, rt_id, att_id):
+    def associate(self, rt_id, att_id, propagate=True):
         cur = self.association(att_id)
         if cur != rt_id:
             if cur:
@@ -629,6 +637,8 @@ systemctl enable --now shc-edge-agent.timer
                     time.sleep(5)
             self.ec2.associate_transit_gateway_route_table(TransitGatewayRouteTableId=rt_id, TransitGatewayAttachmentId=att_id)
             self.changed.append("associated %s" % att_id)
+        if not propagate:
+            return
         props = self.ec2.get_transit_gateway_route_table_propagations(TransitGatewayRouteTableId=rt_id)["TransitGatewayRouteTablePropagations"]
         if not any(p["TransitGatewayAttachmentId"] == att_id and p["State"] in ("enabled", "enabling") for p in props):
             self.ec2.enable_transit_gateway_route_table_propagation(TransitGatewayRouteTableId=rt_id, TransitGatewayAttachmentId=att_id)
@@ -658,6 +668,7 @@ systemctl enable --now shc-edge-agent.timer
         return {"vni": vni, "attachment": att_id, "owner": a["ResourceOwnerId"]}
 
     def net_down(self, vni):
+        self.egress_down(vni)
         tgw_id = self.tgw()["TransitGatewayId"]
         name = self.net_names(vni)
         conf = self.read_config()
@@ -707,6 +718,206 @@ systemctl enable --now shc-edge-agent.timer
                     time.sleep(10)
         return {"vni": vni}
 
+    # ---- a network's NAT egress VPC
+    def egress_name(self, vni):
+        return "shc-egress-%d" % vni
+
+    def egress_vpc(self, vni):
+        v = [x for x in self.ec2.describe_vpcs(Filters=[{"Name": "tag:Name", "Values": [self.egress_name(vni)]}])["Vpcs"]]
+        return v[0] if v else None
+
+    def egress_attachments(self, vni):
+        tgw_id = self.tgw()["TransitGatewayId"]
+        return [a for a in self.attachments(tgw_id, **{"shc-vni": str(vni), "shc-role": "egress"}) if a["ResourceType"] == "vpc"]
+
+    def net_route_table(self, vni):
+        tgw_id = self.tgw()["TransitGatewayId"]
+        rts = [r for r in self.ec2.describe_transit_gateway_route_tables(Filters=[
+            {"Name": "transit-gateway-id", "Values": [tgw_id]}, {"Name": "tag:Name", "Values": [self.net_names(vni)]}])["TransitGatewayRouteTables"]
+            if r["State"] not in ("deleting", "deleted")]
+        return rts[0]["TransitGatewayRouteTableId"] if rts else None
+
+    def egress_up(self, vni, rt_id):
+        e = self.cfg.get("egress") or {}
+        if not e.get("cidrPool"):
+            fail("no egress settings (egress.cidrPool) for the NAT egress VPC")
+        name = self.egress_name(vni)
+        tgw_id = self.tgw()["TransitGatewayId"]
+        az = e.get("az") or self.cfg["region"] + "a"
+        extra = {"shc_edge_site": self.site, "shc_vni": vni, "shc_role": "egress"}
+        vpc = self.egress_vpc(vni)
+        if not vpc:
+            pool = ipaddress.ip_network(e["cidrPool"])
+            used = [ipaddress.ip_network(v["CidrBlock"]) for v in self.ec2.describe_vpcs()["Vpcs"]]
+            cidr = next((n for n in pool.subnets(new_prefix=26) if not any(n.overlaps(u) for u in used)), None)
+            if cidr is None:
+                fail("egress CIDR pool %s is exhausted" % pool)
+            vpc = self.ec2.create_vpc(CidrBlock=str(cidr), TagSpecifications=tagspec("vpc", name, **extra))["Vpc"]
+            self.ec2.get_waiter("vpc_available").wait(VpcIds=[vpc["VpcId"]])
+            self.changed.append("egress vpc %s %s" % (name, cidr))
+        vpc_id = vpc["VpcId"]
+        att_net, pub_net = list(ipaddress.ip_network(vpc["CidrBlock"]).subnets(new_prefix=28))[:2]
+        have = {tagmap(x).get("Name"): x for x in self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
+        sn = {}
+        for role, net in (("tgw", att_net), ("public", pub_net)):
+            n = "%s-%s" % (name, role)
+            if n not in have:
+                have[n] = self.ec2.create_subnet(VpcId=vpc_id, CidrBlock=str(net), AvailabilityZone=az,
+                                                 TagSpecifications=tagspec("subnet", n, **extra))["Subnet"]
+                self.changed.append("subnet " + n)
+            sn[role] = have[n]["SubnetId"]
+        igws = self.ec2.describe_internet_gateways(Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}])["InternetGateways"]
+        if igws:
+            igw_id = igws[0]["InternetGatewayId"]
+        else:
+            igw_id = self.ec2.create_internet_gateway(TagSpecifications=tagspec("internet-gateway", name, **extra))["InternetGateway"]["InternetGatewayId"]
+            self.ec2.attach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id)
+            self.changed.append("internet gateway " + igw_id)
+        rts = {tagmap(r).get("Name"): r for r in self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["RouteTables"]}
+
+        def table(role):
+            n = "%s-%s" % (name, role)
+            r = rts.get(n)
+            if not r:
+                r = self.ec2.create_route_table(VpcId=vpc_id, TagSpecifications=tagspec("route-table", n, **extra))["RouteTable"]
+                self.ec2.associate_route_table(RouteTableId=r["RouteTableId"], SubnetId=sn[role])
+                self.changed.append("route table " + n)
+                r = self.ec2.describe_route_tables(RouteTableIds=[r["RouteTableId"]])["RouteTables"][0]
+            return r
+
+        def route(r, dest, **target):
+            if not any(x.get("DestinationCidrBlock") == dest and x.get("State") == "active" for x in r["Routes"]):
+                if any(x.get("DestinationCidrBlock") == dest for x in r["Routes"]):
+                    self.ec2.replace_route(RouteTableId=r["RouteTableId"], DestinationCidrBlock=dest, **target)
+                else:
+                    self.ec2.create_route(RouteTableId=r["RouteTableId"], DestinationCidrBlock=dest, **target)
+                self.changed.append("route %s %s" % (dest, list(target.values())[0]))
+
+        pub = table("public")
+        route(pub, "0.0.0.0/0", GatewayId=igw_id)
+        nats = [n for n in self.ec2.describe_nat_gateways(Filters=[{"Name": "subnet-id", "Values": [sn["public"]]}])["NatGateways"]
+                if n["State"] in ("pending", "available")]
+        if nats:
+            nat = nats[0]
+        else:
+            eips = self.ec2.describe_addresses(Filters=[{"Name": "tag:Name", "Values": [name]}])["Addresses"]
+            alloc = eips[0]["AllocationId"] if eips else self.ec2.allocate_address(
+                Domain="vpc", TagSpecifications=tagspec("elastic-ip", name, **extra))["AllocationId"]
+            nat = self.ec2.create_nat_gateway(SubnetId=sn["public"], AllocationId=alloc,
+                                              TagSpecifications=tagspec("natgateway", name, **extra))["NatGateway"]
+            self.changed.append("nat gateway " + nat["NatGatewayId"])
+        self.ec2.get_waiter("nat_gateway_available").wait(NatGatewayIds=[nat["NatGatewayId"]])
+        nat = self.ec2.describe_nat_gateways(NatGatewayIds=[nat["NatGatewayId"]])["NatGateways"][0]
+        route(table("tgw"), "0.0.0.0/0", NatGatewayId=nat["NatGatewayId"])
+        att = self.egress_attachments(vni)
+        if att:
+            att_id = att[0]["TransitGatewayAttachmentId"]
+        else:
+            att_id = self.ec2.create_transit_gateway_vpc_attachment(
+                TransitGatewayId=tgw_id, VpcId=vpc_id, SubnetIds=[sn["tgw"]],
+                TagSpecifications=tagspec("transit-gateway-attachment", name, **extra))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
+            self.changed.append("egress attachment " + att_id)
+        self.wait_attachment(att_id)
+        self.associate(rt_id, att_id, propagate=False)
+        pub = self.ec2.describe_route_tables(RouteTableIds=[pub["RouteTableId"]])["RouteTables"][0]
+        for dest in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
+            route(pub, dest, TransitGatewayId=tgw_id)
+        static = [r for r in self.ec2.search_transit_gateway_routes(
+            TransitGatewayRouteTableId=rt_id, Filters=[{"Name": "type", "Values": ["static"]},
+                                                       {"Name": "route-search.exact-match", "Values": ["0.0.0.0/0"]}])["Routes"]]
+        if not any(a.get("TransitGatewayAttachmentId") == att_id for r in static for a in r.get("TransitGatewayAttachments", [])):
+            if static:
+                self.ec2.replace_transit_gateway_route(DestinationCidrBlock="0.0.0.0/0", TransitGatewayRouteTableId=rt_id,
+                                                       TransitGatewayAttachmentId=att_id)
+            else:
+                self.ec2.create_transit_gateway_route(DestinationCidrBlock="0.0.0.0/0", TransitGatewayRouteTableId=rt_id,
+                                                      TransitGatewayAttachmentId=att_id)
+            self.changed.append("static 0/0 -> egress in " + rt_id)
+        return {"vpc": vpc_id, "cidr": vpc["CidrBlock"], "attachment": att_id, "natGateway": nat["NatGatewayId"],
+                "publicIp": (nat.get("NatGatewayAddresses") or [{}])[0].get("PublicIp")}
+
+    def egress_down(self, vni):
+        vpc = self.egress_vpc(vni)
+        rt_id = self.net_route_table(vni)
+        if rt_id:
+            for r in self.ec2.search_transit_gateway_routes(
+                    TransitGatewayRouteTableId=rt_id, Filters=[{"Name": "type", "Values": ["static"]},
+                                                               {"Name": "route-search.exact-match", "Values": ["0.0.0.0/0"]}])["Routes"]:
+                self.ec2.delete_transit_gateway_route(TransitGatewayRouteTableId=rt_id, DestinationCidrBlock="0.0.0.0/0")
+                self.changed.append("deleted static 0/0 in " + rt_id)
+        for a in self.egress_attachments(vni):
+            self.ec2.delete_transit_gateway_vpc_attachment(TransitGatewayAttachmentId=a["TransitGatewayAttachmentId"])
+            self.changed.append("deleted egress attachment " + a["TransitGatewayAttachmentId"])
+            self.wait_attachment(a["TransitGatewayAttachmentId"], states=("deleted",))
+        if not vpc:
+            return None
+        vpc_id = vpc["VpcId"]
+        nats = [n for n in self.ec2.describe_nat_gateways(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["NatGateways"]
+                if n["State"] not in ("deleted",)]
+        for n in nats:
+            if n["State"] != "deleting":
+                self.ec2.delete_nat_gateway(NatGatewayId=n["NatGatewayId"])
+                self.changed.append("deleted nat gateway " + n["NatGatewayId"])
+        if nats:
+            self.ec2.get_waiter("nat_gateway_deleted").wait(NatGatewayIds=[n["NatGatewayId"] for n in nats])
+        for ad in self.ec2.describe_addresses(Filters=[{"Name": "tag:Name", "Values": [self.egress_name(vni)]}])["Addresses"]:
+            for _ in range(12):  # the NAT gateway lets go of its address shortly after deletion
+                try:
+                    self.ec2.release_address(AllocationId=ad["AllocationId"])
+                    self.changed.append("released " + ad.get("PublicIp", ad["AllocationId"]))
+                    break
+                except botocore.exceptions.ClientError as e:
+                    if "InvalidIPAddress.InUse" not in str(e) and "AuthFailure" not in str(e):
+                        raise
+                    time.sleep(10)
+        for g in self.ec2.describe_internet_gateways(Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}])["InternetGateways"]:
+            self.ec2.detach_internet_gateway(InternetGatewayId=g["InternetGatewayId"], VpcId=vpc_id)
+            self.ec2.delete_internet_gateway(InternetGatewayId=g["InternetGatewayId"])
+            self.changed.append("deleted internet gateway " + g["InternetGatewayId"])
+        for s in self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]:
+            for _ in range(20):
+                try:
+                    self.ec2.delete_subnet(SubnetId=s["SubnetId"])
+                    break
+                except botocore.exceptions.ClientError as e:
+                    if "DependencyViolation" not in str(e):
+                        raise
+                    time.sleep(10)
+        for r in self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["RouteTables"]:
+            if not any(a.get("Main") for a in r.get("Associations", [])):
+                self.ec2.delete_route_table(RouteTableId=r["RouteTableId"])
+        self.ec2.delete_vpc(VpcId=vpc_id)
+        self.changed.append("deleted egress vpc " + vpc_id)
+        return None
+
+    # ---- the transit gateway's RAM share with accounts outside the Organization
+    def share_arn(self):
+        name = self.cfg.get("shareName") or self.cfg["tgwName"]
+        sh = [x for x in self.ram.get_resource_shares(resourceOwner="SELF", name=name)["resourceShares"]
+              if x["status"] == "ACTIVE"]
+        if not sh:
+            fail("RAM share %s not found" % name)
+        return sh[0]["resourceShareArn"]
+
+    def share_principals(self, arn):
+        return {a["associatedEntity"]: a["status"] for a in self.ram.get_resource_share_associations(
+            associationType="PRINCIPAL", resourceShareArns=[arn])["resourceShareAssociations"]
+            if a["status"] in ("ASSOCIATED", "ASSOCIATING")}
+
+    def share_add(self, account):
+        arn = self.share_arn()
+        if account not in self.share_principals(arn):
+            self.ram.associate_resource_share(resourceShareArn=arn, principals=[account])
+            self.changed.append("shared with " + account)
+        return {"share": arn, "account": account}
+
+    def share_remove(self, account):
+        arn = self.share_arn()
+        if account in self.share_principals(arn):
+            self.ram.disassociate_resource_share(resourceShareArn=arn, principals=[account])
+            self.changed.append("unshared from " + account)
+        return {"share": arn, "account": account}
+
     # ---- status
     def status(self):
         tgw = self.tgw()
@@ -731,19 +942,24 @@ systemctl enable --now shc-edge-agent.timer
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
-    ap.add_argument("command", choices=["status", "up", "down", "replace", "gateways", "net-up", "net-attach", "net-down"])
+    ap.add_argument("command", choices=["status", "up", "down", "replace", "gateways", "net-up", "net-attach", "net-down",
+                                        "share-add", "share-remove"])
     ap.add_argument("--gateways")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--attachment")
     ap.add_argument("--test", action="store_true")
+    ap.add_argument("--egress", action="store_true")
+    ap.add_argument("--account")
     a = ap.parse_args()
     e = Edge(json.loads(a.config))
     if a.command in ("net-up", "net-attach", "net-down") and not a.vni:
         fail("--vni is required")
     r = {"status": e.status, "up": e.up, "down": e.down, "replace": e.replace,
          "gateways": lambda: e.set_gateways(json.loads(a.gateways or "[]")),
-         "net-up": lambda: e.net_up(a.vni, a.test), "net-attach": lambda: e.net_attach(a.vni, a.attachment),
-         "net-down": lambda: e.net_down(a.vni)}[a.command]()
+         "net-up": lambda: e.net_up(a.vni, a.test, a.egress), "net-attach": lambda: e.net_attach(a.vni, a.attachment),
+         "net-down": lambda: e.net_down(a.vni),
+         "share-add": lambda: e.share_add(a.account or fail("--account is required")),
+         "share-remove": lambda: e.share_remove(a.account or fail("--account is required"))}[a.command]()
     print(json.dumps({"ok": True, "changed": e.changed, "result": r}, default=str))
 
 

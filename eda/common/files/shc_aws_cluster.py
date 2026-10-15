@@ -14,6 +14,10 @@ that issuer and their service accounts. Runs with the job's AWS web identity and
       request into DIR (no secrets in them: role ARN + projected token path).
   shc_aws_cluster.py --config '<json>' sts-down --cluster ID --issuer URL
       the cluster's roles and its OIDC provider.
+  shc_aws_cluster.py --config '<json>' dns-alias --state up|down --zone ZONE --name NAME --vpc VPC [--wait-seconds N]
+      an Internal cluster's names in the environment's public zone: api.<name>.<zone> and *.apps.<name>.<zone> as
+      aliases of its internal API and ingress load balancers (found in the VPC by the installer's cluster tag), waiting
+      up to N seconds for them to appear (the API's comes early in the install, the ingress' after it); down removes them.
 
 config: {"account", "region", "memberRole", "entry"}
 
@@ -223,6 +227,61 @@ def issuer_hostpath(issuer):
     return re.sub(r"^https://", "", issuer).rstrip("/")
 
 
+def dns_alias(cfg, state, zone, name, vpc, wait=0):
+    """Public aliases of an Internal cluster's load balancers (they resolve to private addresses: the platform and
+    the cluster's network reach them; the installer only writes a private zone for Internal clusters)."""
+    import time
+    s = session(cfg)
+    r53, elb = s.client("route53"), s.client("elbv2")
+    zn = zone.rstrip(".") + "."
+    zs = [z for z in r53.list_hosted_zones_by_name(DNSName=zn, MaxItems="5")["HostedZones"]
+          if z["Name"] == zn and not z["Config"].get("PrivateZone")]
+    if not zs:
+        fail("public zone %s not found" % zone)
+    zid = zs[0]["Id"]
+    names = {"api": "api.%s.%s" % (name, zn), "apps": "\\052.apps.%s.%s" % (name, zn)}
+    if state == "down":
+        gone = []
+        for rr in r53.list_resource_record_sets(HostedZoneId=zid)["ResourceRecordSets"]:
+            if rr["Type"] == "A" and rr["Name"] in names.values() and rr.get("AliasTarget"):
+                r53.change_resource_record_sets(HostedZoneId=zid, ChangeBatch={"Changes": [
+                    {"Action": "DELETE", "ResourceRecordSet": rr}]})
+                gone.append(rr["Name"])
+        return {"zone": zone, "removed": gone}
+    prefix = "kubernetes.io/cluster/%s-" % name[:21]
+    deadline = time.time() + wait
+    done = {}
+    while True:
+        lbs = [l for p in elb.get_paginator("describe_load_balancers").paginate() for l in p["LoadBalancers"]
+               if l.get("VpcId") == vpc and l.get("Scheme") == "internal"]
+        tags = {}
+        for i in range(0, len(lbs), 20):
+            for d in elb.describe_tags(ResourceArns=[l["LoadBalancerArn"] for l in lbs[i:i + 20]])["TagDescriptions"]:
+                tags[d["ResourceArn"]] = {t["Key"]: t["Value"] for t in d["Tags"]}
+        for l in lbs:
+            t = tags.get(l["LoadBalancerArn"], {})
+            if not any(k.startswith(prefix) for k in t):
+                continue
+            if l["LoadBalancerName"].endswith("-int"):
+                kind = "api"
+            elif t.get("kubernetes.io/service-name") == "openshift-ingress/router-default":
+                kind = "apps"
+            else:
+                continue
+            if kind in done or l["State"]["Code"] not in ("active", "provisioning"):
+                continue
+            r53.change_resource_record_sets(HostedZoneId=zid, ChangeBatch={"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {
+                "Name": names[kind], "Type": "A", "AliasTarget": {"HostedZoneId": l["CanonicalHostedZoneId"],
+                                                                   "DNSName": l["DNSName"], "EvaluateTargetHealth": False}}}]})
+            done[kind] = l["DNSName"]
+        if len(done) == 2 or time.time() >= deadline:
+            break
+        time.sleep(20)
+    if "api" not in done:
+        fail("the cluster's internal API load balancer did not appear in %s" % vpc, aliases=done)
+    return {"zone": zone, "aliases": done, "complete": len(done) == 2}
+
+
 class Cluster:
     def __init__(self, cfg, cluster, issuer):
         if not re.match(r"^[a-z0-9-]{1,40}$", cluster):
@@ -343,18 +402,29 @@ class Cluster:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config")
-    ap.add_argument("command", choices=["genkey", "jwks", "sts-up", "sts-down"])
+    ap.add_argument("command", choices=["genkey", "jwks", "sts-up", "sts-down", "dns-alias"])
     ap.add_argument("--key-file")
     ap.add_argument("--cluster")
     ap.add_argument("--issuer")
     ap.add_argument("--release")
     ap.add_argument("--manifests-dir")
+    ap.add_argument("--state", choices=["up", "down"])
+    ap.add_argument("--zone")
+    ap.add_argument("--name")
+    ap.add_argument("--vpc")
+    ap.add_argument("--wait-seconds", type=int, default=0)
     a = ap.parse_args()
     if a.command in ("genkey", "jwks"):
         if not a.key_file:
             fail("--key-file is required")
         r = genkey(a.key_file) if a.command == "genkey" else jwks(a.key_file)
         print(json.dumps({"ok": True, "changed": a.command == "genkey", "result": r}))
+        return
+    if a.command == "dns-alias":
+        if not (a.config and a.state and a.zone and a.name and (a.vpc or a.state == "down")):
+            fail("--config, --state, --zone, --name and --vpc are required")
+        r = dns_alias(json.loads(a.config), a.state, a.zone, a.name, a.vpc, a.wait_seconds)
+        print(json.dumps({"ok": True, "changed": [], "result": r}, default=str))
         return
     if not (a.config and a.cluster and a.issuer):
         fail("--config, --cluster and --issuer are required")

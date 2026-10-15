@@ -162,6 +162,10 @@
         _eg: "{{ ((hn_fabric.status | default({}, true)).realization | default({}, true)).egress | default({}, true) }}"
       ansible.builtin.set_fact:
         hn_egress_want: "{{ (fab_spec.egress | default({})).internet | default(false) | bool }}"
+        # platform reach (annotation written by the platform's automation) needs the same root VRF and veth
+        hn_platform_reach: >-
+          {{ (fab_obj.metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach'] | default('[]', true) | from_json
+             | length > 0 }}
         hn_egress_offered: "{{ _eg.enabled | default(false) | bool }}"
         hn_egress_carried: >-
           {{ (_eg.networks | default([], true) | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list
@@ -176,7 +180,7 @@
           fabric: "{{ hn_fabric_name }}"
           kind: egress
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
-      when: hn_egress_want | bool and hn_egress_offered | bool
+      when: (hn_egress_want | bool or hn_platform_reach | bool) and hn_egress_offered | bool
 
     # off, and the fabric no longer carries it: the index goes back
     - name: Give the egress index back
@@ -188,7 +192,7 @@
           fabric: "{{ hn_fabric_name }}"
           kind: egress
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
-      when: not (hn_egress_want | bool and hn_egress_offered | bool) and hn_egress_carried | length == 0
+      when: not ((hn_egress_want | bool or hn_platform_reach | bool) and hn_egress_offered | bool) and hn_egress_carried | length == 0
 
     - name: Set the egress state
       ansible.builtin.set_fact:
@@ -221,7 +225,9 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ hn_fabric_name }}"}]
-      when: hn_egress.internet | default('') in ['pending', 'removing']
+      when: >-
+        hn_egress.internet | default('') in ['pending', 'removing']
+        or ((hn_platform_reach | bool) != ((hn_egress_carried.platform | default([])) | length > 0))
 
     - name: Report the network ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"

@@ -20,10 +20,12 @@ actions:
                   labels; selector = all of the environment's namespaces, networkSelector = those naming network
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
   orphan-report   {crs, ledgers, sites, nodes}  the fabric orphan check's findings (see orphan_report)
-  egress-plan     {egress: realization egress, nodes: [node names], networks: [{network, vpnTarget, index}],
-                  domainAsn}  provider internet egress per node: the hand-off (egress VRF on the node's site network)
-                  and per network a VRF e<vpnTarget>, a veth pair xe/xo into the egress VRF and one source NAT address
-                  per node (the node's natPool + the network's egress index); errors for an unusable configuration
+  egress-plan     {egress: realization egress, nodes: [node names], networks: [{network, vpnTarget, index,
+                  internet?, platform?}], domainAsn}  per node: the hand-off (egress VRF on the node's site network)
+                  and per network a VRF e<vpnTarget> with a veth pair xe/xo into the egress VRF; internet (default
+                  true): a default route and one source NAT address per node (the node's natPool + the network's
+                  egress index); platform: [CIDRs of the network] the platform's sources (egress.platformSources)
+                  may reach on egress.platformPorts (default 6443, 443); errors for an unusable configuration
 """
 import hashlib
 import ipaddress
@@ -155,6 +157,25 @@ def egress_plan(req):
     base = int(eg.get("networkTableBase") or 100000)
     plen = int(eg.get("prefixLength") or 24)
     errors, nodes, networks = [], {}, {}
+    sources = [str(ipaddress.ip_network(str(c), strict=True)) for c in eg.get("platformSources") or []]
+    ports = [int(x) for x in eg.get("platformPorts") or [6443, 443]]
+    seen = []
+    for w in req.get("networks") or []:
+        for c in w.get("platform") or []:
+            try:
+                net = ipaddress.ip_network(str(c), strict=True)
+            except ValueError as e:
+                errors.append(f"{w['network']}: platform prefix {c}: {e}")
+                continue
+            if not sources:
+                errors.append(f"{w['network']}: platform reach needs realization egress.platformSources")
+            for other, o in seen:
+                if net.overlaps(o):
+                    errors.append(f"{w['network']}: platform prefix {net} overlaps {other}'s {o}")
+            for src in sources:
+                if net.overlaps(ipaddress.ip_network(src)):
+                    errors.append(f"{w['network']}: platform prefix {net} overlaps the platform's sources {src}")
+            seen.append((w["network"], net))
     for name in node_names:
         n = eg["nodes"][name]
         pool = ipaddress.ip_network(str(n["natPool"]), strict=True)
@@ -165,18 +186,24 @@ def egress_plan(req):
                 errors.append(f"{w['network']}: egress index {i} is outside the pool (0-{chk['poolSize'] - 1})")
                 continue
             xo, xe = link.network_address + 2 * i, link.network_address + 2 * i + 1
-            nat = str(pool.network_address + i)
+            internet = bool(w.get("internet", True))
+            nat = str(pool.network_address + i) if internet else ""
+            platform = [str(ipaddress.ip_network(str(c), strict=True)) for c in w.get("platform") or []]
             out.append({"network": w["network"], "vpnTarget": t, "vrf": f"e{t}", "table": base + t, "zone": i + 1,
                         "xe": f"xe{t}", "xo": f"xo{t}", "xeAddr": f"{xe}/31", "xoAddr": f"{xo}/31",
-                        "xeIp": str(xe), "xoIp": str(xo), "nat": nat,
+                        "xeIp": str(xe), "xoIp": str(xo), "nat": nat, "internet": internet, "platform": platform,
                         # RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback form at render
                         "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""})
-            networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": []})["sourceAddresses"].append(nat)
+            entry = networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": [],
+                                                       "internet": internet, "platform": platform})
+            if nat:
+                entry["sourceAddresses"].append(nat)
         nodes[name] = {"vrf": (eg.get("vrf") or {}).get("name", "egress"), "table": int((eg.get("vrf") or {}).get("table", 9000)),
                        "parent": eg["parentInterface"], "mtu": int(eg.get("mtu") or 9000),
                        "address": f"{n['address']}/{plen}", "gateway": str(eg["gateway"]),
                        "deny": [str(c) for c in eg.get("denyDestinations") or []],
                        "allow": [str(c) for c in eg.get("allowDestinations") or []],
+                       "platformSources": sources, "platformPorts": ports,
                        "networks": out}
     return {"errors": errors, "poolSize": chk["poolSize"], "nodes": nodes, "networks": networks}
 

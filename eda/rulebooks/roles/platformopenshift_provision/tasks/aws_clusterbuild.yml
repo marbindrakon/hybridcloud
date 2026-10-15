@@ -4,6 +4,10 @@
 - name: Include clusterbuild fact derivation
   ansible.builtin.include_tasks: aws_clusterbuild_facts.yml
 
+- name: Include the cluster's network (a hybrid network's placement)
+  ansible.builtin.include_tasks: aws_clusterbuild_network.yml
+  when: aws_network | length > 0
+
 - name: Include the cluster's STS preparation
   ansible.builtin.include_tasks: aws_clusterbuild_sts.yml
 

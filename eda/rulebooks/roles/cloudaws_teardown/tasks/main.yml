@@ -56,6 +56,31 @@
               entry: automation
             aws_args: [zone-down, --zone, "{{ cad_dns.zone }}"]
 
+    # an account outside the Organization was added to the hub's transit gateway share by its first placement: take
+    # it off again (a no-op for Organization accounts, which the share reaches through the OU)
+    - name: Stop sharing the hub's transit gateway with the account
+      when: cad_account | length > 0
+      block:
+        - name: The installation's AWS realization
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
+
+        - name: Remove the account from the share
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+          vars:
+            aws_helper: shc_aws_tenant.py
+            aws_config:
+              account: "{{ cad_account }}"
+              region: "{{ cad_region }}"
+              memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+              entry: automation
+              azs: []
+              edge: >-
+                {{ aws_real.edge | combine({'account': aws_real.hub.account, 'region': aws_real.hub.region,
+                     'memberRole': aws_real.hub.memberRole | default('shc-automation'), 'entry': 'automation',
+                     'site': 'share', 'asn': 0, 'shareName': ((aws_real.hub.tgw | default({})).share | default({})).name
+                     | default(aws_real.edge.tgwName)}) }}
+            aws_args: [share-down]
+
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:

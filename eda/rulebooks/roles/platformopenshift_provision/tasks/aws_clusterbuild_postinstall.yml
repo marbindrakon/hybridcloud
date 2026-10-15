@@ -25,6 +25,21 @@
   delay: "{{ platformopenshift_hive_poll_delay_seconds | default(60) }}"
   ignore_errors: true
 
+- name: The cluster's published names (Internal)
+  ansible.builtin.async_status:
+    jid: "{{ cb_dns_alias_job.ansible_job_id }}"
+  register: _cb_dns_alias
+  until: _cb_dns_alias.finished
+  retries: 60
+  delay: 30
+  failed_when: false
+  when: cb_dns_alias_job.ansible_job_id is defined
+
+- name: Report the published names
+  ansible.builtin.debug:
+    msg: "{{ (_cb_dns_alias.stdout | default('{}', true)) | from_json }}"
+  when: cb_dns_alias_job.ansible_job_id is defined
+
 - name: Set cluster installed flag
   ansible.builtin.set_fact:
     cb_cluster_installed: "{{ cd_info.resources | default([]) | length > 0 and (cd_info.resources[0].spec.installed | default(false) | bool) }}"

@@ -1,0 +1,138 @@
+---
+# shc (design/P8-PLAN.md §13): a cluster on a hybrid network - its machines in the network's NetworkPlacement VPC in
+# the environment (install into existing subnets; machine network = the placement's prefix). External: the placement
+# gets public subnets and an internet gateway for the internet-facing load balancers (DMZ-like; the machines still
+# leave through the network). Internal: API and ingress on internal load balancers; the platform reaches them through
+# the fabric (platform reach: annotation shc.signal9.gg/platform-reach on the HybridNetwork, realized by the fabric on
+# the border gateways), and the cluster's names are published as aliases of the internal load balancers while it
+# installs (shc_aws_cluster.py dns-alias, below in the deploy).
+- name: The network's placements
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: NetworkPlacement
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _cb_nps
+
+- name: The placement in this environment
+  ansible.builtin.set_fact:
+    cb_placement: >-
+      {{ (_cb_nps.resources | default([])
+          | selectattr('spec.network', 'equalto', aws_network)
+          | selectattr('spec.backend.kind', 'equalto', 'CloudAWS')
+          | selectattr('spec.backend.name', 'equalto', aws_env_name) | list + [{}]) | first }}
+
+- name: Require a ready placement with subnets
+  ansible.builtin.assert:
+    that:
+      - cb_placement | length > 0
+      - (cb_placement.status | default({}, true)).ready | default(false) | bool
+      - ((((cb_placement.status | default({}, true)).realization | default({}, true)).site | default({}, true)).subnets
+         | default([])) | length > 0
+    fail_msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: HybridNetwork {{ aws_network }} has no ready NetworkPlacement
+      in CloudAWS {{ aws_env_name }}.
+
+- name: The placement's VPC
+  vars:
+    _site: "{{ cb_placement.status.realization.site }}"
+  ansible.builtin.set_fact:
+    cb_placement_ref: "{{ cb_placement.metadata.namespace }}/{{ cb_placement.metadata.name }}"
+    cb_machine_cidr: "{{ cb_placement.spec.prefixes[0] }}"
+    cb_vpc_id: "{{ _site.vpc }}"
+    cb_subnet_ids: "{{ _site.subnets | map(attribute='id') | list }}"
+    cb_tenant_cfg:
+      account: "{{ aws_account }}"
+      region: "{{ aws_region }}"
+      memberRole: "{{ cb_member_role }}"
+      entry: automation
+      azs: "{{ _site.subnets | map(attribute='az') | list }}"
+      tags: {shc-entity: "{{ aws_entity }}", shc-network: "{{ aws_network }}"}
+
+- name: Record the network on the status (teardown undoes what it asks for)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      network: "{{ aws_network }}"
+      placement: "{{ cb_placement_ref }}"
+      publish: "{{ aws_publish }}"
+      awsVpc: "{{ cb_vpc_id }}"
+      machineNetwork: "{{ cb_machine_cidr }}"
+
+- name: External - public subnets in the placement for the internet-facing load balancers
+  when: aws_publish == 'External'
+  block:
+    - name: The placement's public subnets
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+      vars:
+        aws_helper: shc_aws_tenant.py
+        aws_config: "{{ cb_tenant_cfg }}"
+        aws_args: [place-public, --placement, "{{ cb_placement_ref }}", --state, up]
+
+    - name: The public subnets
+      ansible.builtin.set_fact:
+        cb_public_subnet_ids: "{{ aws_result.result.public | map(attribute='id') | list }}"
+
+- name: Internal - platform reach to the placement's prefix
+  when: aws_publish == 'Internal'
+  block:
+    - name: Read the network
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridNetwork
+        name: "{{ aws_network }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: _cb_hn
+
+    - name: Ask for platform reach to the placement's prefix
+      vars:
+        _have: >-
+          {{ ((_cb_hn.resources[0].metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach']
+              | default('[]', true)) | from_json }}
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: patched
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridNetwork
+        name: "{{ aws_network }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        definition:
+          metadata:
+            annotations:
+              shc.signal9.gg/platform-reach: "{{ (_have + [cb_machine_cidr]) | unique | sort | to_json }}"
+      register: _cb_reach_patch
+
+    - name: Wake the network (it holds the fabric's egress index, then wakes the fabric)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridNetwork, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ aws_network }}"}]
+      when: _cb_reach_patch is changed
+
+    - name: Wait for the fabric to carry the platform reach
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ _cb_hn.resources[0].status.fabric }}"
+        namespace: "{{ fabric_platform_namespace | default('sovereign-cloud') }}"
+      register: _cb_fab
+      until: >-
+        cb_machine_cidr in ((((_cb_fab.resources[0].status | default({}, true)).realization | default({}, true)).egress
+          | default({}, true)).networks | default([], true)
+          | selectattr('network', 'equalto', ansible_operator_meta.namespace ~ '/' ~ aws_network)
+          | map(attribute='platform') | flatten | list)
+      retries: 60
+      delay: 20

@@ -46,6 +46,11 @@
         po_aws_account: "{{ _st.awsAccountId | default('', true) }}"
         po_aws_region: "{{ _st.awsRegion | default('', true) }}"
         po_issuer: "{{ _st.serviceAccountIssuer | default('', true) }}"
+        po_network: "{{ _st.network | default('', true) }}"
+        po_placement: "{{ _st.placement | default('', true) }}"
+        po_publish: "{{ _st.publish | default('', true) }}"
+        po_machine_network: "{{ _st.machineNetwork | default('', true) }}"
+        po_domain: "{{ _st.domain | default('', true) }}"
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -105,6 +110,34 @@
             aws_args: [sts-down, --cluster, "{{ po_build_name }}", --issuer, "{{ po_issuer }}"]
           when: po_issuer | length > 0
 
+        # a cluster on a hybrid network (P8 §13): its published names (Internal), the platform reach to its prefix,
+        # the placement's public subnets (External; their load balancers went with the deprovision)
+        - name: Remove the cluster's published names (Internal)
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+          vars:
+            aws_helper: shc_aws_cluster.py
+            aws_config:
+              account: "{{ po_aws_account }}"
+              region: "{{ po_aws_region }}"
+              memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+              entry: automation
+            aws_args: [dns-alias, --state, down, --zone, "{{ po_domain.split('.', 1)[1] }}", --name,
+                       "{{ po_domain.split('.', 1)[0] }}"]
+          when: po_publish == 'Internal' and po_domain | length > 0
+
+        - name: The placement's public subnets go (External)
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+          vars:
+            aws_helper: shc_aws_tenant.py
+            aws_config:
+              account: "{{ po_aws_account }}"
+              region: "{{ po_aws_region }}"
+              memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+              entry: automation
+              azs: []
+            aws_args: [place-public, --placement, "{{ po_placement }}", --state, down]
+          when: po_publish == 'External' and po_placement | length > 0
+
         - name: Unpublish the cluster's issuer (its static issuer ConfigMap on central)
           kubernetes.core.k8s:
             host: "{{ central_api_host }}"
@@ -115,6 +148,47 @@
             kind: ConfigMap
             name: "oidc-static-{{ po_build_name }}"
             namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+
+    - name: Take the cluster's prefix out of the network's platform reach
+      when: po_publish == 'Internal' and po_network | length > 0 and po_machine_network | length > 0
+      block:
+        - name: Read the network
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: HybridNetwork
+            name: "{{ po_network }}"
+            namespace: "{{ platformopenshift_cr_namespace }}"
+          register: _po_hn
+
+        - name: Remove the prefix from the annotation
+          vars:
+            _have: >-
+              {{ ((((_po_hn.resources | default([{}]) + [{}]) | first).metadata | default({})).annotations | default({}, true))
+                 ['shc.signal9.gg/platform-reach'] | default('[]', true) | from_json }}
+          kubernetes.core.k8s:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            state: patched
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: HybridNetwork
+            name: "{{ po_network }}"
+            namespace: "{{ platformopenshift_cr_namespace }}"
+            definition:
+              metadata:
+                annotations:
+                  shc.signal9.gg/platform-reach: >-
+                    {{ (_have | reject('equalto', po_machine_network) | list | to_json) if (_have | reject('equalto', po_machine_network) | list) else none }}
+          when: _po_hn.resources | default([]) | length > 0
+
+        - name: Wake the network (the fabric drops the reach)
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+          vars:
+            nudge_crs: [{kind: HybridNetwork, namespace: "{{ platformopenshift_cr_namespace }}", name: "{{ po_network }}"}]
+          when: _po_hn.resources | default([]) | length > 0
 
     - name: Note the step
       ansible.builtin.set_fact:

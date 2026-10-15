@@ -6,8 +6,12 @@ the hub through shc_aws_edge.py for the network's transit gateway side. Idempote
   shc_aws_tenant.py --config '<json>' check
   shc_aws_tenant.py --config '<json>' zone-up --zone FQDN           the environment's Route53 public zone
   shc_aws_tenant.py --config '<json>' zone-down --zone FQDN
-  shc_aws_tenant.py --config '<json>' place-up --placement NS/NAME --vni N --prefix CIDR [--prefix CIDR ...]
+  shc_aws_tenant.py --config '<json>' place-up --placement NS/NAME --vni N --prefix CIDR [--prefix CIDR ...] [--egress]
   shc_aws_tenant.py --config '<json>' place-down --placement NS/NAME --vni N
+  shc_aws_tenant.py --config '<json>' place-public --placement NS/NAME --state up|down
+      public /28s (one per AZ, below the attachment /28s) with an internet gateway, for internet-facing load
+      balancers of a DMZ-like workload; the workload subnets keep leaving through the network
+  shc_aws_tenant.py --config '<json>' share-down        stop sharing the hub's transit gateway with this account
 
 config: {"account", "region", "memberRole", "entry", "azs": [..], "tags": {..},
          "edge": <shc_aws_edge.py config of the region's edge site>}
@@ -16,7 +20,9 @@ A placement is one VPC in the tenant account: its prefixes (the first is the VPC
 workload subnet (the lower half of the prefix split per AZ) and a /28 for the transit gateway attachment (from the
 top of the prefix), the attachment accepted into the network's route table (shc-net-<vni>, its Connect attachment
 to the edge routers created on first use), and the VPC's default route to the transit gateway. Traffic leaves the
-VPC only through the network.
+VPC only through the network (--egress: the network's internet egress is its NAT egress VPC at the hub). An account
+outside the Organization is added to the hub's transit gateway share on first use (the invitation accepted here) and
+removed again with share-down.
 """
 import argparse
 import ipaddress
@@ -71,15 +77,16 @@ def layout(prefixes, azs):
     lower, upper = list(p.subnets(prefixlen_diff=1))
     bits = max(1, (len(azs) - 1).bit_length())
     work = list(lower.subnets(prefixlen_diff=bits))[:len(azs)]
-    tgw = list(upper.subnets(new_prefix=28))[-len(azs):]
-    return [{"az": az, "work": str(work[i]), "tgw": str(tgw[i])} for i, az in enumerate(azs)]
+    tops = list(upper.subnets(new_prefix=28))
+    tgw, public = tops[-len(azs):], tops[-2 * len(azs):-len(azs)]
+    return [{"az": az, "work": str(work[i]), "tgw": str(tgw[i]), "public": str(public[i])} for i, az in enumerate(azs)]
 
 
 class Tenant:
     def __init__(self, cfg):
         self.cfg = cfg
         s = session(cfg)
-        self.ec2, self.r53 = s.client("ec2"), s.client("route53")
+        self.ec2, self.r53, self.ram = s.client("ec2"), s.client("route53"), s.client("ram")
         self.changed = []
 
     # ---- the environment's zone
@@ -122,12 +129,41 @@ class Tenant:
         v = self.ec2.describe_vpcs(Filters=[{"Name": "tag:shc-placement", "Values": [placement]}])["Vpcs"]
         return v[0] if v else None
 
-    def place_up(self, placement, vni, prefixes):
+    def tgw_visible(self, tgw_id):
+        try:
+            return bool(self.ec2.describe_transit_gateways(TransitGatewayIds=[tgw_id])["TransitGateways"])
+        except botocore.exceptions.ClientError as e:
+            if "InvalidTransitGatewayID" not in str(e):
+                raise
+            return False
+
+    def share_up(self, edge, tgw_id):
+        """An account outside the Organization: the hub shares its transit gateway with it, this account accepts."""
+        arn = edge.share_add(self.cfg["account"])["share"]
+        self.changed += edge.changed
+        edge.changed = []
+        for _ in range(30):
+            for inv in self.ram.get_resource_share_invitations(resourceShareArns=[arn])["resourceShareInvitations"]:
+                if inv["status"] == "PENDING":
+                    self.ram.accept_resource_share_invitation(resourceShareInvitationArn=inv["resourceShareInvitationArn"])
+                    self.changed.append("accepted transit gateway share")
+            if self.tgw_visible(tgw_id):
+                return
+            time.sleep(10)
+        fail("the hub's transit gateway never became visible in account %s" % self.cfg["account"])
+
+    def share_down(self):
+        edge = shc_aws_edge.Edge(self.cfg["edge"])
+        r = edge.share_remove(self.cfg["account"])
+        self.changed += edge.changed
+        return r
+
+    def place_up(self, placement, vni, prefixes, egress=False):
         c = self.cfg
         edge = shc_aws_edge.Edge(c["edge"])
         tgw_id = edge.tgw()["TransitGatewayId"]
-        if not self.ec2.describe_transit_gateways(TransitGatewayIds=[tgw_id])["TransitGateways"]:
-            fail("the hub's transit gateway is not shared with account %s" % c["account"])
+        if not self.tgw_visible(tgw_id):
+            self.share_up(edge, tgw_id)
         extra = dict(c.get("tags", {}), **{"shc-placement": placement, "shc-vni": str(vni)})
         name = "shc-" + placement.replace("/", "-")
         lay = layout(prefixes, c["azs"])
@@ -169,7 +205,7 @@ class Tenant:
                 TransitGatewayId=tgw_id, VpcId=vpc_id, SubnetIds=[s["id"] for s in tgw_subnets],
                 TagSpecifications=tagspec("transit-gateway-attachment", name, extra))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
         # the hub: the network's route table, Connect attachment and router VRF; accept the attachment into it
-        net = edge.net_up(vni)
+        net = edge.net_up(vni, egress=egress)
         for _ in range(30):  # the attachment shows up on the hub side shortly after creation
             try:
                 acc = edge.net_attach(vni, att_id)
@@ -197,7 +233,67 @@ class Tenant:
                     time.sleep(10)
         return {"placement": placement, "account": c["account"], "vpcId": vpc_id, "prefixes": prefixes,
                 "subnets": work, "attachmentSubnets": tgw_subnets, "attachment": att_id,
-                "routeTable": net["routeTable"], "connectAttachment": net["connectAttachment"]}
+                "routeTable": net["routeTable"], "connectAttachment": net["connectAttachment"],
+                "egress": net.get("egress")}
+
+    def place_public(self, placement, state):
+        vpc = self.find_vpc(placement)
+        if not vpc:
+            fail("placement %s has no VPC" % placement)
+        vpc_id = vpc["VpcId"]
+        name = "shc-" + placement.replace("/", "-")
+        extra = dict(self.cfg.get("tags", {}), **{"shc-placement": placement, "shc-role": "public"})
+        subnets = {tagmap(x).get("Name"): x for x in self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
+        rt_name = name + "-public"
+        rts = [r for r in self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]},
+                                                                  {"Name": "tag:Name", "Values": [rt_name]}])["RouteTables"]]
+        igws = self.ec2.describe_internet_gateways(Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}])["InternetGateways"]
+        if state == "down":
+            for sn_name, s in subnets.items():
+                if (sn_name or "").startswith(name + "-public-"):
+                    for _ in range(30):  # load balancer ENIs go with the cluster's deprovision
+                        try:
+                            self.ec2.delete_subnet(SubnetId=s["SubnetId"])
+                            self.changed.append("deleted subnet " + s["SubnetId"])
+                            break
+                        except botocore.exceptions.ClientError as e:
+                            if "DependencyViolation" not in str(e):
+                                raise
+                            time.sleep(10)
+            for r in rts:
+                self.ec2.delete_route_table(RouteTableId=r["RouteTableId"])
+            for g in igws:
+                self.ec2.detach_internet_gateway(InternetGatewayId=g["InternetGatewayId"], VpcId=vpc_id)
+                self.ec2.delete_internet_gateway(InternetGatewayId=g["InternetGatewayId"])
+                self.changed.append("deleted internet gateway " + g["InternetGatewayId"])
+            return {"placement": placement, "public": []}
+        if igws:
+            igw_id = igws[0]["InternetGatewayId"]
+        else:
+            igw_id = self.ec2.create_internet_gateway(TagSpecifications=tagspec("internet-gateway", name, extra))["InternetGateway"]["InternetGatewayId"]
+            self.ec2.attach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id)
+            self.changed.append("internet gateway " + igw_id)
+        if rts:
+            rt = rts[0]
+        else:
+            rt = self.ec2.create_route_table(VpcId=vpc_id, TagSpecifications=tagspec("route-table", rt_name, extra))["RouteTable"]
+            self.changed.append("route table " + rt_name)
+        if not any(r.get("DestinationCidrBlock") == "0.0.0.0/0" for r in rt.get("Routes", [])):
+            self.ec2.create_route(RouteTableId=rt["RouteTableId"], DestinationCidrBlock="0.0.0.0/0", GatewayId=igw_id)
+        lay = layout([vpc["CidrBlock"]], self.cfg["azs"])
+        out = []
+        assoc = {a.get("SubnetId") for a in self.ec2.describe_route_tables(RouteTableIds=[rt["RouteTableId"]])["RouteTables"][0]["Associations"]}
+        for l in lay:
+            sn = "%s-public-%s" % (name, l["az"][-1])
+            s = subnets.get(sn)
+            if not s:
+                s = self.ec2.create_subnet(VpcId=vpc_id, CidrBlock=l["public"], AvailabilityZone=l["az"],
+                                           TagSpecifications=tagspec("subnet", sn, extra))["Subnet"]
+                self.changed.append("subnet " + sn)
+            if s["SubnetId"] not in assoc:
+                self.ec2.associate_route_table(RouteTableId=rt["RouteTableId"], SubnetId=s["SubnetId"])
+            out.append({"id": s["SubnetId"], "cidr": l["public"], "az": l["az"]})
+        return {"placement": placement, "public": out, "internetGateway": igw_id}
 
     def place_down(self, placement, vni):
         c = self.cfg
@@ -223,6 +319,7 @@ class Tenant:
                     if not x or x[0]["State"] == "deleted":
                         break
                     time.sleep(10)
+            self.place_public(placement, "down")
             for s in self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]:
                 for _ in range(20):  # attachment ENIs linger briefly
                     try:
@@ -254,21 +351,28 @@ class Tenant:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
-    ap.add_argument("command", choices=["check", "zone-up", "zone-down", "place-up", "place-down"])
+    ap.add_argument("command", choices=["check", "zone-up", "zone-down", "place-up", "place-down", "place-public",
+                                        "share-down"])
     ap.add_argument("--zone")
     ap.add_argument("--placement")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--prefix", action="append", default=[])
+    ap.add_argument("--egress", action="store_true")
+    ap.add_argument("--state", choices=["up", "down"])
     a = ap.parse_args()
     t = Tenant(json.loads(a.config))
     if a.command.startswith("zone") and not a.zone:
         fail("--zone is required")
-    if a.command.startswith("place") and not (a.placement and a.vni):
+    if a.command in ("place-up", "place-down") and not (a.placement and a.vni):
         fail("--placement and --vni are required")
+    if a.command == "place-public" and not (a.placement and a.state):
+        fail("--placement and --state are required")
     r = {"check": t.check,
          "zone-up": lambda: t.zone_up(a.zone), "zone-down": lambda: t.zone_down(a.zone),
-         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix or fail("--prefix is required")),
-         "place-down": lambda: t.place_down(a.placement, a.vni)}[a.command]()
+         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix or fail("--prefix is required"), a.egress),
+         "place-down": lambda: t.place_down(a.placement, a.vni),
+         "place-public": lambda: t.place_public(a.placement, a.state),
+         "share-down": t.share_down}[a.command]()
     print(json.dumps({"ok": True, "changed": t.changed, "result": r}, default=str))
 
 

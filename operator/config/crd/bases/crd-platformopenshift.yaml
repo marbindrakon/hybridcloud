@@ -88,6 +88,14 @@ spec:
                     environment:
                       type: string
                       description: "CloudAWS CR name providing the AWS environment"
+                    network:
+                      type: string
+                      description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a network of its own"
+                    publish:
+                      type: string
+                      description: "How the cluster's API and ingress are published: External (internet-facing load balancers) or Internal (reachable only from the cluster's network)"
+                      enum: [External, Internal]
+                      default: External
                     region:
                       type: string
                       description: "AWS region; must be the environment's region (default: the environment's region)"

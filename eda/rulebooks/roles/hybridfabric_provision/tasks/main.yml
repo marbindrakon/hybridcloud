@@ -135,7 +135,10 @@
         kind: HybridNetwork
       register: _hf_networks
 
-    - name: Set the networks with internet egress
+    # platform reach (P8 §13): annotation shc.signal9.gg/platform-reach on a HybridNetwork (a JSON list of the
+    # network's prefixes the platform's own sources must reach, e.g. a private cluster's API) is written by the
+    # platform's automation, never by tenants
+    - name: Set the networks with internet egress or platform reach
       vars:
         _alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
       ansible.builtin.set_fact:
@@ -143,12 +146,16 @@
           {%- set out = [] -%}
           {%- for n in _hf_networks.resources | default([]) -%}
             {%- set owner = 'HybridNetwork/' ~ n.metadata.namespace ~ '/' ~ n.metadata.name -%}
+            {%- set internet = ((n.spec | default({})).egress | default({})).internet | default(false) | bool -%}
+            {%- set platform = ((n.metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach']
+                                | default('[]', true) | from_json) -%}
             {%- if (n.status | default({}, true)).fabric | default('') == fab_name
-                  and ((n.spec | default({})).egress | default({})).internet | default(false) | bool
+                  and (internet or platform | length > 0)
                   and n.metadata.deletionTimestamp is not defined
                   and owner in (_alloc.egress | default({})) and owner in (_alloc.vpnTarget | default({})) -%}
               {%- set _ = out.append({'network': n.metadata.namespace ~ '/' ~ n.metadata.name,
-                                      'vpnTarget': _alloc.vpnTarget[owner] | int, 'index': _alloc.egress[owner] | int}) -%}
+                                      'vpnTarget': _alloc.vpnTarget[owner] | int, 'index': _alloc.egress[owner] | int,
+                                      'internet': internet, 'platform': platform}) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out if fab_real.egress.enabled | default(false) | bool else [] }}
@@ -209,7 +216,8 @@
         hf_egress_status: >-
           {%- set out = [] -%}
           {%- for k, v in hf_egress.networks | dictsort -%}
-            {%- set _ = out.append({'network': k, 'vpnTarget': v.vpnTarget, 'sourceAddresses': v.sourceAddresses}) -%}
+            {%- set _ = out.append({'network': k, 'vpnTarget': v.vpnTarget, 'sourceAddresses': v.sourceAddresses,
+                                    'internet': v.internet | default(true), 'platform': v.platform | default([])}) -%}
           {%- endfor -%}
           {{ out }}
 

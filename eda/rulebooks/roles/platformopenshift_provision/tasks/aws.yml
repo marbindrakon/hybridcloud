@@ -10,6 +10,8 @@
 - name: Set AWS spec facts
   ansible.builtin.set_fact:
     aws_env_name: "{{ platform_spec.aws.environment }}"
+    aws_network: "{{ platform_spec.aws.network | default('', true) }}"
+    aws_publish: "{{ platform_spec.aws.publish | default('External', true) }}"
     aws_cluster_type: "{{ platform_spec.aws.clusterType | default('standalone') }}"
     aws_control_plane_count: "{{ platform_spec.aws.controlPlaneCount | default(_awsd.controlPlaneCount | default(3)) }}"
     aws_worker_count: "{{ platform_spec.aws.workerCount | default(_awsd.workerCount | default(2)) }}"

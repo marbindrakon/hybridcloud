@@ -41,28 +41,44 @@ router bgp {{ fab_spec.domainAsn }}
 exit
 !
 {% if hf_node_egress.networks is defined %}
-! provider internet egress: the hand-off's default route, and each network's NAT address back to its VRF
+! provider internet egress: the hand-off's default route, and each network's NAT address back to its VRF;
+! platform reach: each network's platform prefixes towards its VRF, and the platform's sources back to the hand-off
 vrf {{ hf_node_egress.vrf }}
  ip route 0.0.0.0/0 {{ hf_node_egress.gateway }}
 {% for n in hf_node_egress.networks %}
+{% if n.nat | default('') %}
  ip route {{ n.nat }}/32 {{ n.xeIp }}
+{% endif %}
+{% for c in n.platform | default([]) %}
+ ip route {{ c }} {{ n.xeIp }}
+{% endfor %}
 {% endfor %}
 exit-vrf
 !
 {% for n in hf_node_egress.networks %}
 vrf {{ n.vrf }}
+{% if n.internet | default(true) %}
  ip route 0.0.0.0/0 {{ n.xoIp }}
+{% endif %}
+{% if n.platform | default([]) %}
+{% for c in hf_node_egress.platformSources | default([]) %}
+ ip route {{ c }} {{ n.xoIp }}
+{% endfor %}
+{% endif %}
 exit-vrf
 !
 {% endfor %}
 ip prefix-list SHC-EGRESS-DEFAULT seq 5 permit 0.0.0.0/0
+{% for c in hf_node_egress.platformSources | default([]) %}
+ip prefix-list SHC-EGRESS-DEFAULT seq {{ 10 + loop.index0 * 5 }} permit {{ c }}
+{% endfor %}
 !
 route-map SHC-EGRESS-DEFAULT permit 10
  match ip address prefix-list SHC-EGRESS-DEFAULT
 exit
 !
 {% for n in hf_node_egress.networks %}
-! HybridNetwork {{ n.network }}: internet egress (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}, source NAT {{ n.nat }} on this node)
+! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ' platform reach ' ~ n.platform | default([]) | join(',') if n.platform | default([]) else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
 router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  bgp router-id {{ hf_pe.loopbackIp }}
  no bgp default ipv4-unicast

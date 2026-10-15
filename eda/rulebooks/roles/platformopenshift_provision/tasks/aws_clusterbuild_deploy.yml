@@ -161,6 +161,19 @@
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
 
+# Internal: the installer writes only a private zone; the platform (Hive's installer on central, ACM) and the network
+# resolve the cluster through public aliases of its internal load balancers, published as soon as they exist
+- name: Publish the cluster's names while it installs (Internal)
+  ansible.builtin.command:
+    argv: [python3, "{{ role_path }}/../../../common/files/shc_aws_cluster.py", --config, "{{ cb_aws_cfg | to_json }}",
+           dns-alias, --state, up, --zone, "{{ aws_domain }}", --name, "{{ cb_ocp_name }}", --vpc, "{{ cb_vpc_id }}",
+           --wait-seconds, "6600"]
+  async: 7000
+  poll: 0
+  register: cb_dns_alias_job
+  changed_when: false
+  when: aws_network | default('') | length > 0 and aws_publish | default('External') == 'Internal'
+
 - name: Clean up temp values and registry files
   ansible.builtin.file:
     path: "{{ item }}"

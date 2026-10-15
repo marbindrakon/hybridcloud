@@ -23,6 +23,10 @@
     cb_issuer_base: "{{ (aws_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
     cb_issuer_namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
     cb_member_role: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+    cb_machine_cidr: "10.0.0.0/16"
+    cb_subnet_ids: []
+    cb_public_subnet_ids: []
+    cb_vpc_id: ""
 
 - name: Derive the build's paths and the account entry
   ansible.builtin.set_fact:
