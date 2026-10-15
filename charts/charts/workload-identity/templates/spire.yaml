@@ -53,7 +53,9 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
-spec: {}
+spec:
+  # explicit (the default): an empty spec reaches the API as null under server-side apply
+  agentSocketPath: /run/spire/agent-sockets
 ---
 # The discovery provider turns its jwtIssuer into its only allowed domain (host only, no path) and answers the
 # discovery document only for that Host: give it its in-cluster service name. The public issuer documents (iss =

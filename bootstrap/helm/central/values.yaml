@@ -462,7 +462,7 @@ rhacm:
 # AAP jobs in the shc-aws container group run as aap/shc-aws-automation and reach AWS with it (no keys).
 workloadIdentity:
   enabled: true
-  chartVersion: "0.1.0"
+  chartVersion: "0.1.1"
   syncWave: "7"
   values:
     trustDomain: shc.signal9.gg
