@@ -225,6 +225,12 @@
           lastReconciledAt: "{{ platformopenshift_delete_transition_time }}"
           message: PlatformOpenshift {{ platformopenshift_cr_name }} deleted by EDA
 
+    # the operator drops the finalizer the next time it looks at the CR: make that now
+    - name: Release the finalizer now
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: PlatformOpenshift, namespace: "{{ platformopenshift_cr_namespace }}", name: "{{ platformopenshift_cr_name }}"}]
+
   rescue:
     - name: Mark PlatformOpenshift delete as failed on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
