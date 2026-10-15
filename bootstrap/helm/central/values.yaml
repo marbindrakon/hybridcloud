@@ -2548,7 +2548,7 @@ mtv:
 # transit seal token check, cert-manager metrics, alert rules.
 shcClusterOpsCentral:
   enabled: true
-  chartVersion: "0.3.7"  # 0.3.7: etcd fsync / leader-change alerts
+  chartVersion: "0.3.15"  # 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
   syncWave: "24"
   values:
     layers:
@@ -2564,6 +2564,10 @@ shcClusterOpsCentral:
         enabled: true
         namespace: central-vault
         labVaultAddr: https://vault.lab.signal9.gg
+      # design/P8-PLAN.md: central watches services' issuer (services watches central's and SPIRE's)
+      issuerProbe:
+        enabled: true
+        issuers: [services]
 
 # shc (LAB-PLAN D9/D21): ODF external on central (charts/charts/odf-external). Adopts the day-1 objects
 # (p2/day1 40/50 + bootstrap.sh ceph-central); after the vault-backend store (wave 22).
@@ -3019,7 +3023,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.7"  # 0.3.7: etcd fsync / leader-change alerts
+  chartVersion: "0.3.15"  # 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
   syncWaves:
     base: "0"
     certs: "2"
@@ -3069,6 +3073,10 @@ shcClusterBaseServices:
         enabled: true
         namespace: services-vault
         labVaultAddr: https://vault.lab.signal9.gg
+      # design/P8-PLAN.md: the shared issuers AWS (and later other clouds) depend on, checked from outside central
+      issuerProbe:
+        enabled: true
+        issuers: [central, spire, services, iaas1, edge1]
       # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md); the CRs live on services
       edaRedrive:
         enabled: true
