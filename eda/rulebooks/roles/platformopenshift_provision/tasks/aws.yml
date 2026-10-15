@@ -141,11 +141,12 @@
             AWS OCP cluster build '{{ cb_app_name }}': {{ cb_provision_status | default('Unknown') }}.
             API: {{ cb_api_url }}
 
-# ACM policies need the cluster joined to the hub (a cluster on AWS can't reach a private hub API yet)
+# ACM policies need the cluster available in the hub (imported with a hosted klusterlet in the post-install)
 - name: Configure Keycloak OIDC client and ACM OAuth policy for this cluster
   ansible.builtin.include_tasks: keycloak_oidc.yml
   vars:
     cluster_name: "{{ cb_app_name }}"
+    cluster_ocp_name: "{{ cb_ocp_name }}"
     cluster_console_url: "{{ cb_console_url | default('') }}"
     cluster_api_url: "{{ cb_api_url | default('') }}"
     cluster_apps_url: "{{ cb_apps_url | default('') }}"

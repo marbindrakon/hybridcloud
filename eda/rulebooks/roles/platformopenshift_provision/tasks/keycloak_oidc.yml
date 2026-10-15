@@ -3,7 +3,8 @@
 # and push the OAuth configuration via ACM ConfigurationPolicy to the spoke.
 #
 # Inputs (must be set by caller):
-#   cluster_name       - PlatformOpenshift CR name (e.g. ocp-ses4)
+#   cluster_name       - PlatformOpenshift CR name (e.g. ocp-ses4); the ManagedCluster's name
+#   cluster_ocp_name   - optional: the OpenShift cluster name when it differs (shc AWS builds: shc-aws-<entity>-<name>)
 #   cluster_console_url - https://console-openshift-console.apps.<slug>.<domain>
 #   cluster_api_url     - https://api.<slug>.<domain>:6443
 #   cluster_apps_url    - https://apps.<slug>.<domain>
@@ -88,7 +89,7 @@
       rootUrl: "{{ cluster_console_url | regex_replace('/+$', '') }}"
       redirectUris:
         - "{{ cluster_console_url | regex_replace('/+$', '') }}/*"
-        - "https://oauth-openshift.apps.{{ cluster_name }}.*/*"
+        - "https://oauth-openshift.apps.{{ cluster_ocp_name | default(cluster_name) }}.*/*"
       webOrigins:
         - "{{ cluster_apps_url | regex_replace('/+$', '') }}"
       attributes:
