@@ -1,0 +1,28 @@
+---
+# shc (design/P8-PLAN.md §11): after the border gateway nodes are configured, give the aws site's routers the
+# nodes' WireGuard keys and tunnel addresses and the site's BGP key (written to the routers' SecureString config;
+# the key never goes on a command line). The routers apply it within half a minute; when it changed, the gateway is
+# reconciled once more so its status shows the sessions that come up.
+- name: The border gateway nodes as the routers see them
+  ansible.builtin.set_fact:
+    cg_aws_gateways: >-
+      {%- set out = [] -%}
+      {%- for n in cg_wg_nodes | default([]) -%}
+        {%- set a = fab_spec.siteUnderlay.addresses | selectattr('node', 'equalto', n.name) | map(attribute='address') | first -%}
+        {%- set _ = out.append({'name': n.name, 'publicKey': n.publicKey, 'address': a}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Hand them to the routers
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+  vars:
+    aws_helper: shc_aws_edge.py
+    aws_config: "{{ aws_edge_cfg }}"
+    aws_args: [gateways, --gateways, "{{ cg_aws_gateways | to_json }}"]
+    aws_env: {SHC_EDGE_BGP_PASSWORD: "{{ cg_bgp_password | default('') }}"}
+    aws_no_log: true
+
+- name: Note whether the routers' configuration changed
+  ansible.builtin.set_fact:
+    cg_site_changed: "{{ cg_site_changed | bool or aws_result.changed | default([]) | length > 0 }}"
+    cg_aws_recheck: "{{ aws_result.changed | default([]) | length > 0 }}"

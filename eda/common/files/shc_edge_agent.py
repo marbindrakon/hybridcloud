@@ -134,16 +134,22 @@ def apply(cfg, me):
     plen = ipaddress.ip_network(t["cidr"]).prefixlen
     eth = sh("ip -o route show default | awk '{print $5; exit}'").strip()
     local_ip = sh("ip -4 -o addr show dev %s | awk '{print $4; exit}'" % eth).strip().split("/")[0]
-    # WireGuard: the gateways dial in (no endpoints here); each may only use its own tunnel address
+    # WireGuard: the gateways dial in (no endpoints here); the site's other routers are dialled over the VPC (their
+    # routes reach the router through the gateways with the other router as next hop). Each peer may only use its
+    # own tunnel address.
     if not link_exists("wg0"):
         sh("ip link add wg0 type wireguard")
     args = ["wg", "set", "wg0", "private-key", KEY, "listen-port", str(t["listenPort"])]
-    want = {g["publicKey"] for g in cfg.get("gateways", [])}
+    mesh = [n for k, n in cfg["nodes"].items() if k != me and n.get("publicKey") and n.get("underlay")]
+    want = {g["publicKey"] for g in cfg.get("gateways", [])} | {n["publicKey"] for n in mesh}
     for line in sh(["wg", "show", "wg0", "peers"]).split():
         if line not in want:
             args += ["peer", line, "remove"]
     for g in cfg.get("gateways", []):
         args += ["peer", g["publicKey"], "allowed-ips", g["address"] + "/32"]
+    for n in mesh:
+        args += ["peer", n["publicKey"], "endpoint", "%s:%d" % (n["underlay"], t["listenPort"]),
+                 "allowed-ips", n["address"] + "/32", "persistent-keepalive", "25"]
     sh(args)
     sh("ip addr replace %s/%d dev wg0 && ip link set wg0 mtu %d up" % (node["address"], plen, t["mtu"]))
     # one VRF per network: L3VNI bridge + VXLAN over the tunnel, GRE to the transit gateway, a test loopback

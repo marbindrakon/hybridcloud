@@ -5,6 +5,7 @@
 # fabric_realization):
 # 1. a provider-edge index from the fabric ledger (loopback, core link address, node SID);
 # 2. the site side: OpenShift = the VTEP named after the fabric; OpenStack = the platform project; external = none;
+#    aws = the platform's edge routers (site_aws.yml; their keys handed over after the nodes, site_aws_post.yml);
 # 3. under the fabric's lease, one border gateway node at a time: network namespace gw-<name> with the site's
 #    underlay (transport none: the VLAN; wireguard: a tunnel to the remote site's peers, the node's key generated
 #    and kept on the node) and a core leg, and its FRR instance (site route reflector over the site subnet, client of
@@ -193,7 +194,7 @@
                        {'wireguard': {'device': 'wg' ~ fab_check_result.index,
                                       'listenPort': (fab_spec.wireguard.listenPort | default(fab_real.wireguard.listenPort)) | int,
                                       'keepalive': fab_real.wireguard.persistentKeepalive | int,
-                                      'peers': fab_spec.wireguard.peers | map('combine', {}) | list}})
+                                      'peers': fab_spec.wireguard.peers | default([]) | map('combine', {}) | list}})
              | combine({'mtu': _cg_mtu | int} if _cg_mtu | string | length > 0 else {}) }}
         cg_holder: "CloudGateway/{{ fab_name }} job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
         cg_node_results: []
@@ -289,6 +290,10 @@
           vars:
             fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}"}
 
+    - name: Give the platform-run edge the nodes' keys and the site key (aws)
+      ansible.builtin.include_tasks: site_aws_post.yml
+      when: ci_type == 'aws'
+
     - name: Report the gateway ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -309,6 +314,13 @@
                                                    'netns': 'gw-' ~ fab_name,
                                                    'vrfs': cg_vrfs | map('dict2items') | map('rejectattr', 'key', 'equalto', 'mtu')
                                                            | map('items2dict') | list}}) }}
+
+    # an aws site's routers got new keys: look again once they applied them, so the status shows their sessions
+    - name: Reconcile once more after the edge's configuration changed (aws)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: CloudGateway, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
+      when: ci_type == 'aws' and cg_aws_recheck | default(false) | bool
 
     # the placements this run added or removed wait for it (pending / deletion): wake them
     - name: Wake the placements whose VRF changed

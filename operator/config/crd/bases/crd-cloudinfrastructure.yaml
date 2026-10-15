@@ -66,7 +66,7 @@ spec:
                     The site's infrastructure credential, stored in the platform's Vault KV store.
                     openstack: a cloud-admin clouds.yaml (key clouds.yaml; key ca.crt when the API certificate
                     is not publicly trusted); openshift: key kubeconfig (not needed for clusterRef local);
-                    aws: keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+                    aws: not used (the platform's workload identity).
                   required: [vaultPath]
                   properties:
                     vaultPath:
@@ -198,21 +198,17 @@ spec:
                       description: The site's VTEPs speak EVPN-VXLAN to the gateway.
                 aws:
                   type: object
-                  description: AWS account. Required when type is aws.
-                  required: [accountId, region]
+                  description: >-
+                    An AWS region the platform reaches with its own workload identity (no stored keys). Tenant
+                    environments (CloudAWS) live in accounts the platform enters, and the site's CloudGateway runs
+                    the edge that joins the region to the fabric. Required when type is aws.
+                  required: [region]
                   properties:
-                    accountId:
-                      type: string
-                      pattern: '^[0-9]{12}$'
-                      description: AWS account ID.
                     region:
                       type: string
+                      minLength: 1
                       maxLength: 32
-                      description: AWS region, e.g. us-east-1.
-                    baseDomain:
-                      type: string
-                      maxLength: 253
-                      description: Parent Route53 domain for tenant projects.
+                      description: AWS region, e.g. us-east-2.
             status:
               type: object
               properties:

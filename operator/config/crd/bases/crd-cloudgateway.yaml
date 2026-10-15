@@ -84,8 +84,9 @@ spec:
                   type: object
                   description: >-
                     The tunnel to a remote site (transport wireguard). Every border gateway node keeps its own key
-                    pair (public keys in status.wireguard) and tunnels to each peer listed here.
-                  required: [peers]
+                    pair (public keys in status.wireguard) and tunnels to each peer listed here. For a site whose
+                    edge the platform runs (CloudInfrastructure type aws) the platform supplies the peers; leave
+                    peers empty.
                   properties:
                     listenPort:
                       type: integer
@@ -94,7 +95,6 @@ spec:
                       description: The nodes' UDP port. Default 51820.
                     peers:
                       type: array
-                      minItems: 1
                       description: The remote site's tunnel endpoints.
                       items:
                         type: object

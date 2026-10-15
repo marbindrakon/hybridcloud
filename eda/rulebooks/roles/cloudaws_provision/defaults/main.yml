@@ -3,3 +3,4 @@ cloudaws_operator_namespace: sovereign-cloud
 default_aws_region: "us-east-1"
 
 eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
+fabric_platform_namespace: sovereign-cloud

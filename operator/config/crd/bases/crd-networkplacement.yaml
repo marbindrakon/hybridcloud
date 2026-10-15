@@ -60,7 +60,7 @@ spec:
                   properties:
                     kind:
                       type: string
-                      enum: [CloudOSO, CloudVirt]
+                      enum: [CloudOSO, CloudVirt, CloudAWS]
                     name:
                       type: string
                       minLength: 1

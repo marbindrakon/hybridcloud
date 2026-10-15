@@ -8,7 +8,7 @@
 #                    project, which the CloudOSO jobs' domain-scoped calls need.
 #   type openshift : OpenShift Virtualization Available; capabilities.evpn = CNO FRR provider +
 #                    routeAdvertisements Enabled + fabric BGP sessions Established (read only).
-#   type aws       : not probed yet (P8); the site fails with TypeNotSupported.
+#   type aws       : ensures the hub's network in the region (design/P8-PLAN.md §11); evpn through the platform's edge.
 #   type external  : nothing to probe (the platform doesn't manage the site); capabilities.evpn = spec.external.evpn.
 - block:
     - name: Parse event payload
@@ -48,14 +48,14 @@
     - name: Set the unsupported-type failure reason
       ansible.builtin.set_fact:
         cloudinfrastructure_fail_reason: TypeNotSupported
-      when: ci_cr_type not in ['openstack', 'openshift', 'external']
+      when: ci_cr_type not in ['openstack', 'openshift', 'external', 'aws']
 
     - name: Refuse types without a probe
       ansible.builtin.fail:
         msg: >-
           CloudInfrastructure {{ cloudinfrastructure_cr_name }}: type {{ ci_cr_type }} is not supported yet
-          (openstack, openshift and external sites are).
-      when: ci_cr_type not in ['openstack', 'openshift', 'external']
+          (openstack, openshift, external and aws sites are).
+      when: ci_cr_type not in ['openstack', 'openshift', 'external', 'aws']
 
     - name: Set the credentials-missing failure reason
       ansible.builtin.set_fact:
@@ -81,6 +81,10 @@
     - name: Record an external site
       ansible.builtin.include_tasks: external.yml
       when: ci_cr_type == 'external'
+
+    - name: Realize an aws site
+      ansible.builtin.include_tasks: aws.yml
+      when: ci_cr_type == 'aws'
 
     - name: Get timestamp
       ansible.builtin.set_fact:

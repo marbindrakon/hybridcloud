@@ -1,121 +1,198 @@
 ---
+# shc (design/P8-PLAN.md §11): CloudAWS provision = an Entity's environment in an AWS site. No keys anywhere: the
+# job runs with the platform's workload identity (shc-aws container group). Resolves the site (type aws, the Entity
+# allowed); the Entity's account is the realization's (AWS_REALIZATION tenant.accounts.<entity>) and is entered
+# through its shc-automation role with external ID shc-<account> (shc_aws_tenant.py check). The environment's
+# public zone <name>.<entity>.<tenant DNS domain> is created in Route53 in that account and delegated from the
+# platform's tenant zone (DNSConfig, shc_dns.py ensure-delegation). Networks come with NetworkPlacements (backend
+# CloudAWS: one VPC each). Ends pending while the site or the DNSConfig isn't usable.
 - block:
-    - name: Parse event payload
+    - name: Read the CloudAWS
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
+
+    - name: Start with nothing to wait for
       ansible.builtin.set_fact:
-        cloudaws_cr_name: "{{ event_payload.regarding.name }}"
-        cloudaws_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        cloudaws_spec: "{{ event_payload.note | from_json }}"
-        ansible_operator_meta:
-          name: "{{ event_payload.regarding.name }}"
-          namespace: "{{ event_payload.regarding.namespace }}"
+        ca_waiting: []
+        ca_reason: WaitingForDependencies
+        ca_site_name: "{{ fab_spec.cloudRef.name }}"
 
-    - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+    - name: Resolve the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ ca_site_name }}"
+        ci_ref_namespace: "{{ fabric_platform_namespace }}"
+        ci_expected_type: aws
 
-    - name: Read CloudAWS CR from services cluster
+    - name: Refuse a site of another type or one the Entity may not use
+      ansible.builtin.set_fact:
+        fab_fail_reason: "{{ 'SiteTypeMismatch' if (ci_found and ci_type != 'aws') else 'EntityNotAllowed' }}"
+        fab_fail_msg: >-
+          {{ ('CloudAWS ' ~ fab_name ~ ': CloudInfrastructure ' ~ ca_site_name ~ ' has type ' ~ ci_type ~ ', not aws')
+             if (ci_found and ci_type != 'aws')
+             else ('Entity ' ~ fab_entity ~ ' may not use CloudInfrastructure ' ~ ca_site_name ~ ' (spec.entityRefs)') }}
+      when: >-
+        ci_found and (ci_type != 'aws'
+        or ((ci_spec.entityRefs | default([]) | length > 0)
+            and fab_entity not in (ci_spec.entityRefs | map(attribute='name') | list)))
+
+    - name: Stop on a refused site
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_msg | default('', true) | length > 0
+
+    - name: Wait for a missing or unusable site
+      ansible.builtin.set_fact:
+        ca_waiting: "{{ ca_waiting + [ci_error | trim] }}"
+      when: ci_error | trim | length > 0
+
+    - name: The platform's tenant DNS namespace
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+
+    - name: Wait for a usable DNSConfig
+      ansible.builtin.set_fact:
+        ca_waiting: "{{ ca_waiting + ['DNSConfig (none usable)'] }}"
+      when: not (dnscfg_usable | default(false) | bool)
+
+    - name: Report what the environment waits for
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: "{{ ca_reason }}"
+        fab_message: "Waiting for {{ ca_waiting | join('; ') }}"
+        fab_waiting_for: "{{ ca_waiting }}"
+        fab_status: {cloudInfrastructure: "{{ ca_site_name }}"}
+      when: ca_waiting | length > 0
+
+    - name: End the job while waiting
+      ansible.builtin.meta: end_play
+      when: ca_waiting | length > 0
+
+    - name: The installation's AWS realization
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
+
+    - name: The Entity's account
+      ansible.builtin.set_fact:
+        ca_account: "{{ ((aws_real.tenant | default({})).accounts | default({})).get(fab_entity, '') }}"
+        ca_zone: "{{ fab_name }}.{{ fab_entity }}.{{ dnscfg_domain }}"
+
+    - name: Refuse an Entity without an account in this installation
+      ansible.builtin.set_fact:
+        fab_fail_reason: NoAccount
+        fab_fail_msg: "CloudAWS {{ fab_name }}: Entity {{ fab_entity }} has no AWS account in this installation"
+      when: ca_account | length == 0
+
+    - name: Stop without an account
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: ca_account | length == 0
+
+    - name: The tenant helper's settings
+      ansible.builtin.set_fact:
+        ca_tenant_cfg:
+          account: "{{ ca_account }}"
+          region: "{{ ci_spec.aws.region }}"
+          memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+          entry: automation
+          tags: {shc-entity: "{{ fab_entity }}", shc-environment: "{{ fab_namespace }}/{{ fab_name }}"}
+
+    - name: Enter the account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+      vars:
+        aws_helper: shc_aws_tenant.py
+        aws_config: "{{ ca_tenant_cfg }}"
+        aws_args: [check]
+
+    - name: The environment's zone in the account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+      vars:
+        aws_helper: shc_aws_tenant.py
+        aws_config: "{{ ca_tenant_cfg }}"
+        aws_args: [zone-up, --zone, "{{ ca_zone }}"]
+
+    - name: Keep the zone
+      ansible.builtin.set_fact:
+        ca_dns: "{{ aws_result.result }}"
+
+    - name: Load the DNSConfig account for the delegation
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ dnscfg_secret }}"
+        os_account_tag: "cloudaws-dns-{{ fab_name }}"
+
+    - name: Delegate the environment zone from the tenant zone
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_request:
+          action: ensure-delegation
+          project_id: "{{ dnscfg_project_id }}"
+          zone_id: "{{ dnscfg_zone_id }}"
+          name: "{{ ca_zone }}"
+          nameservers: "{{ ca_dns.nameServers }}"
+          description: "Delegation of CloudAWS {{ fab_namespace }}/{{ fab_name }} (Route53, account {{ ca_account }})"
+
+    - name: Report the environment ready
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: ready
+        fab_reason: Ready
+        fab_message: >-
+          Account {{ ca_account }} in {{ ci_spec.aws.region }}; zone {{ ca_zone }} (Route53 {{ ca_dns.zoneId }}),
+          delegated from the tenant zone
+        fab_status:
+          cloudInfrastructure: "{{ ca_site_name }}"
+          entity: "{{ fab_entity }}"
+          awsAccountId: "{{ ca_account }}"
+          awsRegion: "{{ ci_spec.aws.region }}"
+          domain: "{{ ca_zone }}"
+          route53ZoneId: "{{ ca_dns.zoneId }}"
+          dns:
+            zone: "{{ ca_zone }}"
+            zoneId: "{{ ca_dns.zoneId }}"
+            mode: platform
+            provider: route53
+            owner: "{{ ca_account }}"
+            nameservers: "{{ ca_dns.nameServers }}"
+            delegated: true
+            dnsConfig: "{{ dnscfg_name }}"
+
+    # placements that waited for this environment
+    - name: List the namespace's placements
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
         api_version: hybridsovereign.redhat/v1alpha1
-        kind: CloudAWS
-        name: "{{ cloudaws_cr_name }}"
-        namespace: "{{ cloudaws_cr_namespace }}"
-      register: cloudaws_cr_lookup
+        kind: NetworkPlacement
+        namespace: "{{ fab_namespace }}"
+      register: _ca_placements
 
-    - name: Fail if CloudAWS CR is missing
-      ansible.builtin.fail:
-        msg: CloudAWS CR {{ cloudaws_cr_name }} not found
-      when: cloudaws_cr_lookup.resources | length == 0
-
-    - name: Read Namespace labels
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: v1
-        kind: Namespace
-        name: "{{ cloudaws_cr_namespace }}"
-      register: cloudaws_ns_lookup
-
-    - name: Extract entity and spec from CloudAWS CR
-      ansible.builtin.set_fact:
-        entity_name: "{{ cloudaws_ns_lookup.resources[0].metadata.labels['hybridsovereign.redhat/entity'] | default('') }}"
-        cloudaws_generation: "{{ cloudaws_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
-        cloudaws_spec: "{{ cloudaws_cr_lookup.resources[0].spec | default({}) }}"
-        aws_account: "{{ cloudaws_cr_lookup.resources[0].spec.account }}"
-        aws_vault_path: "{{ cloudaws_cr_lookup.resources[0].spec.vaultPath }}"
-        aws_base_domain: "{{ cloudaws_cr_lookup.resources[0].spec.baseDomain }}"
-        ep_existing_slug: "{{ cloudaws_cr_lookup.resources[0].status.slug | default('') }}"
-      when: cloudaws_ns_lookup.resources | length > 0
-
-    - name: Fail if entity label is missing
-      ansible.builtin.assert:
-        that:
-          - entity_name is defined
-          - entity_name | length > 0
-        fail_msg: >-
-          Namespace {{ cloudaws_cr_namespace }} is missing label
-          hybridsovereign.redhat/entity. Cannot provision CloudAWS.
-
-    - name: Include AWS environment preparation tasks
-      ansible.builtin.include_tasks: aws_environmentprep.yml
-
-    - name: Get reconciliation timestamp
-      ansible.builtin.set_fact:
-        cloudaws_status_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-
-    - name: Update CloudAWS status as ready on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+    - name: Wake the placements on this environment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: cloudawss
-        cr_name: "{{ cloudaws_cr_name }}"
-        cr_namespace: "{{ cloudaws_cr_namespace }}"
-        cr_status_body:
-          status: ready
-          ready: true
-          observedGeneration: "{{ cloudaws_generation }}"
-          lastReconciledAt: "{{ cloudaws_status_time }}"
-          name: "{{ cloudaws_cr_name }}"
-          namespace: "{{ cloudaws_cr_namespace }}"
-          entity: "{{ entity_name }}"
-          slug: "{{ ep_slug }}"
-          domain: "{{ ep_domain }}"
-          route53ZoneId: "{{ ep_subdomain_zone_id }}"
-          awsAccountId: "{{ aws_account_id }}"
-          awsRegion: "{{ ep_region }}"
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ cloudaws_status_time }}"
-              reason: EDASucceeded
-              message: >-
-                AWS environment prepared. Domain: {{ ep_domain }},
-                Route53 Zone: {{ ep_subdomain_zone_id }}
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for p in _ca_placements.resources | default([]) -%}
+            {%- if p.spec.backend.kind == 'CloudAWS' and p.spec.backend.name == fab_name -%}
+              {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': p.metadata.namespace, 'name': p.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
 
   rescue:
-    - name: Mark CloudAWS as failed on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+    - name: Mark the CloudAWS failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
-        cr_api_version: hybridsovereign.redhat/v1alpha1
-        cr_plural: cloudawss
-        cr_name: "{{ cloudaws_cr_name }}"
-        cr_namespace: "{{ cloudaws_cr_namespace }}"
-        cr_status_body:
-          status: failed
-          ready: false
-          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
-          conditions:
-            - type: Ready
-              status: "False"
-              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
-              message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+        fab_outcome: failed
+        fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
+        fab_message: >-
+          {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('CloudAWS provision failed') }}
+      when: fab_name is defined and services_api_host is defined
       ignore_errors: true
-      when: services_api_host is defined and services_bearer_token is defined
 
-    - name: Re-raise provisioning failure
+    - name: Re-raise
       ansible.builtin.fail:
-        msg: "CloudAWS {{ cloudaws_cr_name | default('unknown') }} EDA provisioning failed"
+        msg: "CloudAWS {{ fab_name | default('unknown') }} provision failed: {{ fab_fail_reason | default('ProvisionFailed') }}"

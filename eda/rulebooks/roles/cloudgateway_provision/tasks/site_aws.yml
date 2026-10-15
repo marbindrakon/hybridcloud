@@ -1,0 +1,95 @@
+---
+# shc (design/P8-PLAN.md §10-§11): an aws site's edge is run by the platform. The gateway's existence is the edge's
+# (billed while it exists): `shc_aws_edge.py up` brings the routers (one per edge subnet, Elastic IPs, a mesh between
+# them), the transport attachment and the transit gateway's CIDR block, and waits for the routers' published keys.
+# The routers are the gateway's WireGuard peers: the border gateway nodes dial their Elastic IPs (they may sit behind
+# NAT). site_aws_post.yml then gives the routers the nodes' keys and the site's BGP key. Sets cg_site_extra,
+# cg_site_changed and the instance's peers.
+- name: The installation's AWS realization and this site's edge settings
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
+  vars:
+    aws_edge_site: "{{ fab_name }}"
+    aws_edge_cidr: "{{ fab_spec.siteUnderlay.cidr }}"
+    aws_edge_asn: "{{ cg_fabric.spec.domainAsn }}"
+
+- name: Refuse a gateway without its own BGP key (the fabric's key never leaves the platform)
+  ansible.builtin.set_fact:
+    fab_fail_reason: InvalidSpec
+    fab_fail_msg: "CloudGateway {{ fab_name }}: an aws site needs its own spec.bgp.passwordRef"
+  when: ((fab_spec.bgp | default({})).passwordRef | default({})).vaultPath | default('') | length == 0
+
+- name: Stop on a missing site key
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: fab_fail_reason == 'InvalidSpec'
+
+- name: Refuse a tunnel MTU the instance doesn't carry
+  ansible.builtin.set_fact:
+    fab_fail_reason: InvalidSpec
+    fab_fail_msg: >-
+      CloudGateway {{ fab_name }}: the site's edge runs its tunnel at MTU {{ aws_edge_cfg.tunnel.mtu | default(1420) }},
+      siteUnderlay.mtu says {{ fab_spec.siteUnderlay.mtu }}
+  when: (fab_spec.siteUnderlay.mtu | default(aws_edge_cfg.tunnel.mtu | default(1420))) | int != (aws_edge_cfg.tunnel.mtu | default(1420)) | int
+
+- name: Stop on a mismatched tunnel MTU
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: fab_fail_reason == 'InvalidSpec'
+
+- name: Bring up the edge
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+  vars:
+    aws_helper: shc_aws_edge.py
+    aws_config: "{{ aws_edge_cfg }}"
+    aws_args: [up]
+
+- name: The routers
+  vars:
+    _r: "{{ aws_result.result }}"
+  ansible.builtin.set_fact:
+    cg_aws_routers: >-
+      {%- set out = [] -%}
+      {%- for i in _r.instances -%}
+        {%- set n = _r.nodes.get(i.id, {}) -%}
+        {%- set _ = out.append({'name': i.name, 'instance': i.id, 'publicIp': i.publicIp, 'privateIp': i.privateIp,
+                                'tunnelAddress': _r.tunnelAddresses.get(i.id, ''), 'publicKey': n.publicKey | default('')}) -%}
+      {%- endfor -%}
+      {{ out }}
+    cg_site_changed: "{{ aws_result.changed | default([]) | length > 0 }}"
+
+- name: Wait for routers that haven't published their keys
+  ansible.builtin.set_fact:
+    cg_waiting: "{{ cg_waiting + ['edge router ' ~ item.name ~ ' (no published key yet)'] }}"
+    cg_reason: WaitingForSiteEdge
+  loop: "{{ cg_aws_routers | selectattr('publicKey', 'equalto', '') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Report what the gateway waits for
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+  vars:
+    fab_outcome: pending
+    fab_reason: "{{ cg_reason }}"
+    fab_message: "Waiting for {{ cg_waiting | join('; ') }}"
+    fab_waiting_for: "{{ cg_waiting }}"
+    fab_status: "{{ cg_status }}"
+  when: cg_waiting | length > 0
+
+- name: End the job while waiting
+  ansible.builtin.meta: end_play
+  when: cg_waiting | length > 0
+
+- name: The routers are the gateway's WireGuard peers
+  ansible.builtin.set_fact:
+    cg_instance: >-
+      {%- set peers = [] -%}
+      {%- for r in cg_aws_routers -%}
+        {%- set _ = peers.append({'publicKey': r.publicKey, 'endpoint': r.publicIp ~ ':' ~ (aws_edge_cfg.tunnel.listenPort | default(51820)),
+                                  'allowedIPs': [r.tunnelAddress ~ '/32']}) -%}
+      {%- endfor -%}
+      {{ cg_instance | combine({'wireguard': cg_instance.wireguard | combine({'peers': peers})}) }}
+    cg_site_extra:
+      managed: true
+      account: "{{ aws_edge_cfg.account }}"
+      region: "{{ aws_edge_cfg.region }}"
+      routers: "{{ cg_aws_routers | map('dict2items') | map('rejectattr', 'key', 'equalto', 'privateIp') | map('items2dict') | list }}"

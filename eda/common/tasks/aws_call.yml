@@ -1,0 +1,31 @@
+---
+# shc (design/P8-PLAN.md §11): run one AWS helper command (common/files/<aws_helper>) with the job's AWS identity.
+# Inputs: aws_helper (shc_aws_edge.py | shc_aws_tenant.py | shc_aws_hub.py), aws_config (dict), aws_args (list),
+# aws_env (dict, optional; secrets go here, never in argv), aws_no_log (default false). Sets aws_result (the
+# helper's JSON line); fails with its error, or sets aws_error instead when aws_soft is true.
+- name: "AWS {{ aws_helper }} {{ aws_args | join(' ') }}"
+  ansible.builtin.command:
+    argv: "{{ ['python3', role_path ~ '/../../../common/files/' ~ aws_helper, '--config', aws_config | to_json] + aws_args }}"
+  environment: "{{ aws_env | default({}) }}"
+  register: _aws_call
+  changed_when: (((_aws_call.stdout | default('', true)) or '{}') | from_json).changed | default([]) | length > 0
+  failed_when: false
+  no_log: "{{ aws_no_log | default(false) }}"
+
+- name: "AWS {{ aws_helper }}: parse the result"
+  ansible.builtin.set_fact:
+    aws_result: >-
+      {{ ((_aws_call.stdout | default('', true)).splitlines() | last | default('{}', true)) | from_json
+         if (_aws_call.stdout | default('') | trim).startswith('{')
+         else {'ok': false, 'error': (_aws_call.stderr | default('') | trim)[-800:] or ('rc ' ~ _aws_call.rc)} }}
+    aws_error: ""
+
+- name: "AWS {{ aws_helper }}: the error"
+  ansible.builtin.set_fact:
+    aws_error: "{{ aws_result.error | default('rc ' ~ _aws_call.rc) }}"
+  when: _aws_call.rc != 0 or not (aws_result.ok | default(false))
+
+- name: "AWS {{ aws_helper }}: fail on error"
+  ansible.builtin.fail:
+    msg: "AWS {{ aws_args | first | default(aws_helper) }} failed: {{ aws_error }}"
+  when: aws_error | length > 0 and not (aws_soft | default(false) | bool)

@@ -96,8 +96,10 @@ controller_templates:
     project: sovereign-eda-project
     playbook: rulebooks/cloudaws-provision-playbook.yml
     inventory: sovereign-localhost
-    execution_environment: de-cloudaws
+    execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudaws-teardown
@@ -105,8 +107,10 @@ controller_templates:
     project: sovereign-eda-project
     playbook: rulebooks/cloudaws-teardown-playbook.yml
     inventory: sovereign-localhost
-    execution_environment: de-cloudaws
+    execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudoso-provision
@@ -135,6 +139,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudinfrastructure-teardown
@@ -144,6 +150,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   # shc (design/TENANT-DNS.md D1): DNSConfig probe (openstacksdk in de-cloudoso)
@@ -192,6 +200,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudgateway-teardown
@@ -201,6 +211,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: hybridnetwork-provision
@@ -276,6 +288,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: networkplacement-teardown
@@ -285,6 +299,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
+    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
+    instance_groups: "{{ shc_aws_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudvirt-provision

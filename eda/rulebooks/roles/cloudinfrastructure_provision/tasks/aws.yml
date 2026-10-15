@@ -1,0 +1,44 @@
+---
+# shc (design/P8-PLAN.md §11): an AWS site = a region the platform reaches with its own identity. Ensures the hub's
+# network in that region (VPC, transit gateway, its route table, the RAM share to the platform's accounts; free, no
+# attachments) and records what the site offers: the API (the role chain works), EVPN (through the edge routers a
+# CloudGateway runs), DNS (Route53 in the tenants' accounts). The region must be the one this installation
+# realizes.
+- name: The installation's AWS realization
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
+
+- name: Set the unsupported-region failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: RegionNotSupported
+  when: (ci_cr_spec.aws | default({})).region | default('') != aws_real.hub.region
+
+- name: Refuse a region the installation doesn't realize
+  ansible.builtin.fail:
+    msg: >-
+      CloudInfrastructure {{ cloudinfrastructure_cr_name }}: region {{ (ci_cr_spec.aws | default({})).region | default('') }}
+      is not realized here ({{ aws_real.hub.region }} is).
+  when: cloudinfrastructure_fail_reason == 'RegionNotSupported'
+
+- name: Ensure the hub network
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+  vars:
+    aws_helper: shc_aws_hub.py
+    aws_config: "{{ aws_real.hub }}"
+    aws_args: []
+
+- name: Record the AWS site
+  ansible.builtin.set_fact:
+    ci_capabilities_out:
+      api: true
+      evpn: true
+      dns: true
+    ci_site_out:
+      managed: true
+      region: "{{ aws_result.region }}"
+      account: "{{ aws_result.account }}"
+      transitGateway: "{{ aws_result.tgw.id }}"
+      vpc: "{{ aws_result.vpc.id }}"
+    ci_type_message: "hub {{ aws_result.account }} in {{ aws_result.region }}, transit gateway {{ aws_result.tgw.id }}{{ (' (' ~ aws_result.changed | join(', ') ~ ')') if aws_result.changed | default([]) | length > 0 else '' }};"
+    ci_credentials_message: "the platform's workload identity entered the hub account"
+    ci_evpn_reason: PlatformEdge
+    ci_evpn_message: the site's CloudGateway runs the edge routers

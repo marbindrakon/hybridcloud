@@ -1,0 +1,17 @@
+---
+# shc (design/P8-PLAN.md §11): an aws site's edge goes with its gateway: `shc_aws_edge.py down` removes the routers,
+# their Elastic IPs, the transport attachment, the internet gateway, the security group, the routers' role and their
+# parameters (and any network's Connect attachment left behind). The hub's VPC and transit gateway stay (free).
+- name: The installation's AWS realization and this site's edge settings
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
+  vars:
+    aws_edge_site: "{{ fab_name }}"
+    aws_edge_cidr: "{{ fab_spec.siteUnderlay.cidr }}"
+    aws_edge_asn: 65000
+
+- name: Take down the edge
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+  vars:
+    aws_helper: shc_aws_edge.py
+    aws_config: "{{ aws_edge_cfg }}"
+    aws_args: [down]

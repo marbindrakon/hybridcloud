@@ -1,0 +1,51 @@
+---
+# shc (design/P8-PLAN.md §11): the site side of a placement on a CloudAWS. One VPC in the environment's account
+# (shc_aws_tenant.py place-up): the placement's prefixes (the first is the VPC's primary CIDR, at least a /24), per
+# AZ a workload subnet and a /28 for the transit gateway attachment, the attachment accepted into the network's
+# route table at the hub (shc-net-<l3vni>, created with the network's Connect attachment to the site's edge routers
+# and the routers' VRF on first use), the VPC's default route to the transit gateway. The routers learn the VPC's
+# prefix from the transit gateway and advertise it to the gateway as EVPN Type-5 (checked by gateway_routes.yml).
+# Sets np_backend_status, np_backend_changed.
+- name: The installation's AWS realization and the site's edge settings
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
+  vars:
+    aws_edge_site: "{{ np_gateway.metadata.name }}"
+    aws_edge_cidr: "{{ np_gateway.spec.siteUnderlay.cidr }}"
+    aws_edge_asn: "{{ np_asn }}"
+
+- name: The environment's account
+  ansible.builtin.set_fact:
+    np_aws_cfg:
+      account: "{{ (np_backend.status | default({}, true)).awsAccountId | default('') }}"
+      region: "{{ (np_backend.status | default({}, true)).awsRegion | default('') }}"
+      memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+      entry: automation
+      azs: "{{ (aws_real.tenant | default({})).azs | default([aws_real.hub.region ~ 'a', aws_real.hub.region ~ 'b']) }}"
+      tags: {shc-entity: "{{ fab_entity }}", shc-network: "{{ fab_spec.network }}"}
+      edge: "{{ aws_edge_cfg }}"
+
+- name: Refuse an environment without an account yet
+  ansible.builtin.fail:
+    msg: "CloudAWS {{ np_backend_name }} has no account in its status yet"
+  when: np_aws_cfg.account | length == 0
+
+- name: The placement's VPC and its attachment to the network
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+  vars:
+    aws_helper: shc_aws_tenant.py
+    aws_config: "{{ np_aws_cfg }}"
+    aws_args: >-
+      {{ ['place-up', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', np_l3vni | string]
+         + (fab_spec.prefixes | map('regex_replace', '^', '--prefix=') | list) }}
+
+- name: Record the site side
+  ansible.builtin.set_fact:
+    np_backend_status:
+      account: "{{ aws_result.result.account }}"
+      region: "{{ np_aws_cfg.region }}"
+      vpc: "{{ aws_result.result.vpcId }}"
+      subnets: "{{ aws_result.result.subnets }}"
+      attachment: "{{ aws_result.result.attachment }}"
+      routeTable: "{{ aws_result.result.routeTable }}"
+      connectAttachment: "{{ aws_result.result.connectAttachment }}"
+    np_backend_changed: "{{ aws_result.changed | default([]) | length > 0 }}"

@@ -1,0 +1,30 @@
+---
+# shc (design/P8-PLAN.md §11): this installation's AWS realization (inventory variable aws_realization, from
+# AWS_REALIZATION) and the job's AWS identity (the shc-aws container group). Optional inputs: aws_edge_site,
+# aws_edge_cidr, aws_edge_asn (a CloudGateway's edge site). Sets aws_real, and aws_edge_cfg when aws_edge_site is
+# given: the shc_aws_edge.py config of that site.
+- name: The installation's AWS realization
+  ansible.builtin.set_fact:
+    aws_real: "{{ aws_realization | default({}, true) }}"
+
+- name: Require the AWS realization and the job's AWS identity
+  ansible.builtin.assert:
+    that:
+      - (aws_real.automationRoleArn | default('')) | length > 0
+      - aws_real.hub is defined and aws_real.edge is defined
+      - lookup('env', 'AWS_ROLE_ARN') | length > 0
+      - lookup('env', 'AWS_WEB_IDENTITY_TOKEN_FILE') | length > 0
+    fail_msg: >-
+      AWS is not realized here: the installation needs AWS_REALIZATION (automationRoleArn, hub, edge) and the job
+      must run in the shc-aws container group.
+    quiet: true
+
+- name: The edge site's settings
+  ansible.builtin.set_fact:
+    aws_edge_cfg: >-
+      {{ aws_real.edge | combine({
+           'account': aws_real.hub.account, 'region': aws_real.hub.region,
+           'memberRole': aws_real.hub.memberRole | default('shc-automation'), 'entry': 'automation',
+           'site': aws_edge_site, 'asn': aws_edge_asn | int,
+           'tunnel': (aws_real.edge.tunnel | default({})) | combine({'cidr': aws_edge_cidr})}) }}
+  when: aws_edge_site is defined

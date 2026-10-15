@@ -7,6 +7,8 @@
 shc_aws: "{{ lookup('env', 'AWS_REALIZATION') | default('{}', true) | from_json }}"
 
 controller_instance_groups: "{{ [shc_aws_instance_group] if (shc_aws.automationRoleArn | default('')) else [] }}"
+# the job templates that reach AWS when the installation has it (sites, environments, placements)
+shc_aws_job_instance_groups: "{{ ['shc-aws'] if (shc_aws.automationRoleArn | default('')) else [] }}"
 
 shc_aws_instance_group:
   name: shc-aws

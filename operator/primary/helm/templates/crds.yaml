@@ -504,8 +504,9 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            CloudAWS provisions an AWS environment (Route53 subdomain, slug)
-            by creating a helper AWSHelper CR on the central cluster.
+            An entity's environment in an AWS site: an account the platform assigns and enters with its own
+            identity (no stored keys), and the environment's public DNS zone, delegated from the tenant zone.
+            Networks are placed into it with NetworkPlacement (backend kind CloudAWS), one VPC per placement.
           type: object
           required:
             - spec
@@ -518,21 +519,22 @@ spec:
               type: object
             spec:
               type: object
-              required: [account, vaultPath, baseDomain]
+              required: [cloudRef]
               properties:
-                account:
-                  type: string
-                  description: "AWS account ID"
-                vaultPath:
-                  type: string
-                  description: "Vault KV path for AWS credentials (central cluster)"
-                baseDomain:
-                  type: string
-                  description: "Parent DNS domain (e.g. sandbox5530.opentlc.com)"
-                landingzone:
-                  type: string
-                  description: Landing Zone template name
-                  default: default
+                cloudRef:
+                  type: object
+                  description: >-
+                    The AWS site (a CloudInfrastructure of type aws) this environment lives in. The platform
+                    assigns the entity's account in that site and enters it with its own identity. Immutable.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.cloudRef is immutable
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
             status:
               type: object
               properties:
@@ -562,6 +564,13 @@ spec:
                   type: string
                 awsRegion:
                   type: string
+                cloudInfrastructure:
+                  type: string
+                  description: The AWS site this environment lives in.
+                dns:
+                  type: object
+                  description: "The environment's DNS zone: zone, zoneId, provider, owner, nameservers, delegated."
+                  x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
                   description: Lifecycle status (reconciling, ready, failed)
@@ -3446,8 +3455,9 @@ spec:
                   type: object
                   description: >-
                     The tunnel to a remote site (transport wireguard). Every border gateway node keeps its own key
-                    pair (public keys in status.wireguard) and tunnels to each peer listed here.
-                  required: [peers]
+                    pair (public keys in status.wireguard) and tunnels to each peer listed here. For a site whose
+                    edge the platform runs (CloudInfrastructure type aws) the platform supplies the peers; leave
+                    peers empty.
                   properties:
                     listenPort:
                       type: integer
@@ -3456,7 +3466,6 @@ spec:
                       description: The nodes' UDP port. Default 51820.
                     peers:
                       type: array
-                      minItems: 1
                       description: The remote site's tunnel endpoints.
                       items:
                         type: object
@@ -4225,7 +4234,7 @@ spec:
                   properties:
                     kind:
                       type: string
-                      enum: [CloudOSO, CloudVirt]
+                      enum: [CloudOSO, CloudVirt, CloudAWS]
                     name:
                       type: string
                       minLength: 1
@@ -4681,7 +4690,7 @@ spec:
                     The site's infrastructure credential, stored in the platform's Vault KV store.
                     openstack: a cloud-admin clouds.yaml (key clouds.yaml; key ca.crt when the API certificate
                     is not publicly trusted); openshift: key kubeconfig (not needed for clusterRef local);
-                    aws: keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+                    aws: not used (the platform's workload identity).
                   required: [vaultPath]
                   properties:
                     vaultPath:
@@ -4813,21 +4822,17 @@ spec:
                       description: The site's VTEPs speak EVPN-VXLAN to the gateway.
                 aws:
                   type: object
-                  description: AWS account. Required when type is aws.
-                  required: [accountId, region]
+                  description: >-
+                    An AWS region the platform reaches with its own workload identity (no stored keys). Tenant
+                    environments (CloudAWS) live in accounts the platform enters, and the site's CloudGateway runs
+                    the edge that joins the region to the fabric. Required when type is aws.
+                  required: [region]
                   properties:
-                    accountId:
-                      type: string
-                      pattern: '^[0-9]{12}$'
-                      description: AWS account ID.
                     region:
                       type: string
+                      minLength: 1
                       maxLength: 32
-                      description: AWS region, e.g. us-east-1.
-                    baseDomain:
-                      type: string
-                      maxLength: 253
-                      description: Parent Route53 domain for tenant projects.
+                      description: AWS region, e.g. us-east-2.
             status:
               type: object
               properties:

@@ -12,6 +12,9 @@ controller_inventories:
       # shc (design/P7-PLAN.md §12.3): how this installation realizes HybridFabrics (overrides of
       # eda/common/vars/fabric_realization.yml; per fabric under fabrics.<name>)
       fabric_realization: "{{ lookup('env', 'FABRIC_REALIZATION') | default('{}', true) | from_json }}"
+      # shc (design/P8-PLAN.md §11): how this installation realizes AWS sites and environments (hub, edge, tenant
+      # accounts; no secrets)
+      aws_realization: "{{ lookup('env', 'AWS_REALIZATION') | default('{}', true) | from_json }}"
 
 controller_hosts:
   - name: localhost

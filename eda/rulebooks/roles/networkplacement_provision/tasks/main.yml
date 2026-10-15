@@ -1,6 +1,6 @@
 ---
-# shc (design/P7-PLAN.md P7.3.3, §12.3): NetworkPlacement provision. Resolves the network, the backend (CloudOSO
-# or CloudVirt), the backend's site and the site's CloudGateway; records site and gateway as soon as they are known
+# shc (design/P7-PLAN.md P7.3.3, §12.3): NetworkPlacement provision. Resolves the network, the backend (CloudOSO,
+# CloudVirt or CloudAWS, design/P8-PLAN.md §11), the backend's site and the site's CloudGateway; records site and gateway as soon as they are known
 # (the CloudGateway's delete waits on status.cloudGateway); checks the prefixes against the network's other
 # placements. On a CloudVirt it serves the environment's namespaces that name the network (status.namespaces).
 # Ends pending on the network, backend or gateway while those aren't ready. Then (P7.3.8): VNIs from the fabric's
@@ -277,13 +277,20 @@
         fab_check: {action: placement-names, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}", entity: "{{ fab_entity }}",
                     network: "{{ fab_spec.network }}", l3Vni: "{{ np_l3vni }}"}
 
+    # a site over a tunnel carries less than the fabric: its leg's MTU minus VXLAN (the network's MTU elsewhere)
+    - name: The site leg's MTU
+      ansible.builtin.set_fact:
+        np_site_mtu: >-
+          {{ ((np_gateway.spec.siteUnderlay.mtu | default(fab_real.wireguard.mtu)) | int - 50)
+             if (np_gateway.spec.transport | default('none')) == 'wireguard' else 65535 }}
+
     - name: Set the placement's numbers
       ansible.builtin.set_fact:
         np_names: "{{ fab_check_result }}"
         np_real: >-
           {{ {'l3Vni': np_l3vni | int, 'vpnTarget': np_network.status.realization.vpnTarget | int,
               'routeTarget': np_asn ~ ':' ~ np_l3vni, 'vrf': fab_check_result.vrf,
-              'mtu': (np_network.status.mtu | default(np_fabric.spec.overlayMtu)) | int}
+              'mtu': [(np_network.status.mtu | default(np_fabric.spec.overlayMtu)) | int, np_site_mtu | int] | min}
              | combine({'l2Vni': fab_ledger_result.value | int} if np_backend_kind == 'CloudVirt' else {}) }}
         np_recreated: "{{ ((fab_st.realization | default({}, true)).routerRecreated | default(false)) | bool }}"
 
@@ -297,7 +304,7 @@
         cr_namespace: "{{ fab_namespace }}"
         cr_status_partial: true
         patch_ignore_not_found: true
-        cr_status_body: "{{ np_status | combine({'realization': np_real | combine({'gatewayRelease': false})}) }}"
+        cr_status_body: "{{ np_status | combine({'mtu': np_real.mtu, 'realization': np_real | combine({'gatewayRelease': false})}) }}"
 
     - name: The CloudVirt namespaces that name the network (selected by label)
       ansible.builtin.set_fact:

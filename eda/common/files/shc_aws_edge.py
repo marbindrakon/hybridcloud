@@ -74,6 +74,13 @@ def session(cfg):
 
 class Edge:
     def __init__(self, cfg):
+        # derived settings: router tunnel addresses from the tunnel subnet (host routerHostIndex onwards), the
+        # overlay MTU of the site leg (tunnel MTU minus VXLAN)
+        t = cfg.setdefault("tunnel", {})
+        if not t.get("nodeAddresses"):
+            net = ipaddress.ip_network(t["cidr"])
+            t["nodeAddresses"] = [str(net[int(t.get("routerHostIndex", 10)) + i]) for i in range(len(cfg["edgeSubnets"]))]
+        cfg.setdefault("overlayMtu", int(t.get("mtu", 1420)) - 50)
         self.cfg = cfg
         self.site = cfg["site"]
         s = session(cfg)
@@ -192,7 +199,10 @@ class Edge:
                                                    TagSpecifications=tagspec("security-group", self.prefix))["GroupId"]
         want = [{"IpProtocol": "udp", "FromPort": c["tunnel"]["listenPort"], "ToPort": c["tunnel"]["listenPort"],
                  "IpRanges": [{"CidrIp": x} for x in c["wireguardSources"]]},
-                {"IpProtocol": "47", "IpRanges": [{"CidrIp": c["tgwCidr"]}]}]
+                {"IpProtocol": "47", "IpRanges": [{"CidrIp": c["tgwCidr"]}]},
+                # the site's routers mesh with each other over the VPC
+                {"IpProtocol": "udp", "FromPort": c["tunnel"]["listenPort"], "ToPort": c["tunnel"]["listenPort"],
+                 "UserIdGroupPairs": [{"GroupId": sg_id}]}]
         for perm in want:
             try:
                 self.ec2.authorize_security_group_ingress(GroupId=sg_id, IpPermissions=[perm])
@@ -304,7 +314,26 @@ class Edge:
         rt = self.ec2.describe_route_tables(RouteTableIds=[rt_id])["RouteTables"][0]
         if not any(r.get("DestinationCidrBlock") == c["tgwCidr"] for r in rt["Routes"]):
             self.ec2.create_route(RouteTableId=rt_id, DestinationCidrBlock=c["tgwCidr"], TransitGatewayId=tgw_id)
+        self.sync_nodes(wait=True)
         return self.status()
+
+    def sync_nodes(self, wait=False, tries=24):
+        """Put each router's published public key and VPC address into the site config (the mesh between them).
+        With wait, give new routers a few minutes to publish their keys."""
+        for i in range(tries if wait else 1):
+            conf = self.read_config() or {}
+            reports = self.node_reports()
+            insts = {x["InstanceId"]: x for x in self.instances()}
+            missing = [k for k in conf.get("nodes", {}) if not (reports.get(k) or {}).get("publicKey")]
+            if not missing or i == (tries if wait else 1) - 1:
+                break
+            time.sleep(10)
+        for k, n in conf.get("nodes", {}).items():
+            if (reports.get(k) or {}).get("publicKey") and k in insts:
+                n["publicKey"] = reports[k]["publicKey"]
+                n["underlay"] = insts[k]["PrivateIpAddress"]
+        self.write_config(conf)
+        return missing
 
     def wait_attachment(self, att_id, states=("available",), tries=80):
         for _ in range(tries):
