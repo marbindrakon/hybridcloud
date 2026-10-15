@@ -256,6 +256,56 @@ spec:
                   [ "$TTL" -ge "$MIN_TTL" ] || { echo "below $((MIN_TTL / 86400)) days"; exit 1; }
 {{- end }}
 
+{{- if $o.issuerProbe.enabled }}
+{{- $p := $o.issuerProbe }}
+---
+# External check of the shared OIDC issuers (LAB-PLAN §9 Detection, design/P8-PLAN.md): through the public URL, each
+# issuer's discovery document must name itself and its JWKS must serve keys. Cloud token exchanges (AWS STS) depend on
+# them. Reads public URLs only (no RBAC). A failed run raises ShcOidcIssuerProbeFailed after 15 min. Run it on a
+# cluster other than the one that serves the issuers, so it can alert when that one is down.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: oidc-issuer-probe
+  namespace: {{ $o.namespace }}
+spec:
+  schedule: {{ $p.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          containers:
+            - name: probe
+              image: {{ $p.image }}
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  rc=0; B={{ $p.baseURL | quote }}
+                  for n in {{ join " " $p.issuers }}; do
+                    d=$(curl -sf --max-time 15 "$B/$n/.well-known/openid-configuration") || { echo "$n: discovery document unreachable"; rc=1; continue; }
+                    iss=$(echo "$d" | jq -r .issuer 2>/dev/null); ju=$(echo "$d" | jq -r .jwks_uri 2>/dev/null)
+                    [ "$iss" = "$B/$n" ] || { echo "$n: discovery names issuer '$iss'"; rc=1; continue; }
+                    k=$(curl -sf --max-time 15 "$ju") || { echo "$n: JWKS $ju unreachable"; rc=1; continue; }
+                    c=$(echo "$k" | jq '.keys | length' 2>/dev/null)
+                    [ "${c:-0}" -gt 0 ] || { echo "$n: JWKS has no keys"; rc=1; continue; }
+                    echo "$n: ok ($c keys)"
+                  done
+                  exit $rc
+              resources: {requests: {cpu: 10m, memory: 32Mi}}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+                runAsNonRoot: true
+                seccompProfile: {type: RuntimeDefault}
+{{- end }}
+
 {{- if $o.edaRedrive.enabled }}
 {{- $r := $o.edaRedrive }}
 ---
@@ -528,6 +578,26 @@ spec:
           annotations:
             summary: "{{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.cronjob {{ "}}" }}: the last run failed"
             description: "The most recent run of CronJob {{ "{{" }} $labels.cronjob {{ "}}" }} did not succeed. Check its Job logs."
+        - alert: ShcOidcIssuerProbeFailed
+          expr: >-
+            max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace="{{ $o.namespace }}", cronjob="oidc-issuer-probe"})
+            > max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{namespace="{{ $o.namespace }}", cronjob="oidc-issuer-probe"})
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Shared OIDC issuer check failing"
+            description: "oidc-issuer-probe fails: an issuer's public discovery document or JWKS is unreachable or wrong. Cloud token exchanges (AWS STS) fail once their caches expire. Check the issuer front end and the oidc-issuer sync."
+        - alert: ShcOidcSyncFailing
+          expr: >-
+            max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace="{{ $o.alerts.oidcSyncNamespace }}", cronjob="oidc-sync"})
+            > max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{namespace="{{ $o.alerts.oidcSyncNamespace }}", cronjob="oidc-sync"})
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "oidc-sync keeps failing: some issuer's published documents are stale"
+            description: "The issuer document sync fails on at least one source (it keeps the last published documents). Check its Job logs."
         - alert: ShcBackupJobNeverSucceeded
           expr: >-
             kube_cronjob_status_last_schedule_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}"}

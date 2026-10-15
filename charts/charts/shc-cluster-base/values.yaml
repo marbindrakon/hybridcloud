@@ -162,6 +162,14 @@ ops:
       ignoreProjects: []
       dnsZoneId: ""
       dnsProjectId: ""
+  # External check of the shared OIDC issuers through their public URL (LAB-PLAN §9 Detection). Enable it on a
+  # cluster other than the one that serves them.
+  issuerProbe:
+    enabled: false
+    schedule: "*/5 * * * *"
+    image: registry.redhat.io/openshift4/ose-tools-rhel9:latest   # curl + jq
+    baseURL: https://oidc.shc.signal9.gg
+    issuers: []                 # names under baseURL, e.g. [central, spire]
   certManagerMetrics:
     enabled: true
   alerts:
@@ -169,6 +177,7 @@ ops:
     staleHours: 26
     certExpiryDays: 14
     vaultNamespaces: "central-vault|services-vault"
+    oidcSyncNamespace: shc-oidc   # where the oidc-issuer sync CronJob runs (central)
     # etcd on virtual or network-backed disks: warns well before OpenShift's own etcd alerts
     # (fsync p99 > 0.5 s / 1 s for 10 min, more than 5 leader changes in 10 min)
     etcd:
