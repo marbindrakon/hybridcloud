@@ -231,6 +231,23 @@ controller_templates:
     execution_environment: de-cloudaws
     instance_groups:
       - shc-aws
+  # shc (design/P8-PLAN.md §7): create or adopt an SHC member account (extra vars: account, purpose, dry_run)
+  - name: aws-account-bootstrap
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/aws-account-bootstrap-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudaws
+    instance_groups:
+      - shc-aws
+    ask_variables_on_launch: true
+    extra_vars:
+      shc_aws:
+        organizationalUnit: "{{ shc_aws.organizationalUnit | default('') }}"
+        accountNamePrefix: "{{ shc_aws.accountNamePrefix | default('shc-') }}"
+        accountEmailPattern: "{{ shc_aws.accountEmailPattern | default('') }}"
+        memberRoleName: "{{ shc_aws.memberRoleName | default('shc-automation') }}"
+        memberPolicyArn: "{{ shc_aws.memberPolicyArn | default('arn:aws:iam::aws:policy/AdministratorAccess') }}"
   - name: fabric-orphan-check
     organization: sovereign
     project: sovereign-eda-project
