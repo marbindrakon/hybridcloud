@@ -102,7 +102,7 @@
     - name: Start the issuer's sync job now
       when: >-
         _cb_pub.status != 200
-        or cb_jwks['keys'][0].kid not in ((_cb_pub.json | default({})).get('keys', []) | map(attribute='kid') | list)
+        or cb_jwks['keys'][0].kid not in ((_cb_pub.content | from_json).get('keys', []) | map(attribute='kid') | list)
       block:
         - name: Read the issuer's sync CronJob
           kubernetes.core.k8s_info:
@@ -140,7 +140,7 @@
       register: _cb_pub
       until: >-
         _cb_pub.status == 200
-        and cb_jwks['keys'][0].kid in ((_cb_pub.json | default({})).get('keys', []) | map(attribute='kid') | list)
+        and cb_jwks['keys'][0].kid in ((_cb_pub.content | from_json).get('keys', []) | map(attribute='kid') | list)
       retries: 60
       delay: 15
       changed_when: false
