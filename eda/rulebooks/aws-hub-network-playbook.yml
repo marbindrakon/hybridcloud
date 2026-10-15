@@ -22,9 +22,14 @@
         argv: "{{ ['python3', playbook_dir ~ '/../common/files/shc_aws_hub.py', '--config', _hub | to_json]
                   + (['--dry-run'] if (dry_run | default(false) | bool) else []) }}"
       register: _hubnet
-      changed_when: (_hubnet.stdout | from_json).changed | default([]) | length > 0
-      failed_when: _hubnet.rc != 0 or not ((_hubnet.stdout | from_json).ok | default(false))
+      changed_when: (((_hubnet.stdout | default('', true)) or '{}') | from_json).changed | default([]) | length > 0
+      failed_when: _hubnet.rc != 0 or not ((((_hubnet.stdout | default('', true)) or '{}') | from_json).ok | default(false))
+
+    - name: The script's error output
+      ansible.builtin.debug:
+        msg: "{{ _hubnet.stderr[-2000:] }}"
+      when: (_hubnet.stderr | default('')) | length > 0
 
     - name: Result
       ansible.builtin.debug:
-        msg: "{{ _hubnet.stdout | from_json }}"
+        msg: "{{ ((_hubnet.stdout | default('', true)) or '{}') | from_json }}"

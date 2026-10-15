@@ -32,9 +32,14 @@
                    '--member-policy', _aws.memberPolicyArn | default('arn:aws:iam::aws:policy/AdministratorAccess')]
                   + (['--dry-run'] if (dry_run | default(false) | bool) else []) }}"
       register: _acct
-      changed_when: (_acct.stdout | from_json).created | default(false)
-      failed_when: _acct.rc != 0 or not ((_acct.stdout | from_json).ok | default(false))
+      changed_when: (((_acct.stdout | default('', true)) or '{}') | from_json).created | default(false)
+      failed_when: _acct.rc != 0 or not ((((_acct.stdout | default('', true)) or '{}') | from_json).ok | default(false))
+
+    - name: The script's error output
+      ansible.builtin.debug:
+        msg: "{{ _acct.stderr[-2000:] }}"
+      when: (_acct.stderr | default('')) | length > 0
 
     - name: Result
       ansible.builtin.debug:
-        msg: "{{ _acct.stdout | from_json }}"
+        msg: "{{ ((_acct.stdout | default('', true)) or '{}') | from_json }}"
