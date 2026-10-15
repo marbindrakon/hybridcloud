@@ -151,6 +151,7 @@
     cluster_api_url: "{{ cb_api_url | default('') }}"
     cluster_apps_url: "{{ cb_apps_url | default('') }}"
     cluster_namespace: "{{ ansible_operator_meta.namespace }}"
+    central_token: "{{ central_bearer_token }}"
   when:
     - cb_cluster_installed | default(false) | bool
     - cb_acm_available | default(false) | bool
