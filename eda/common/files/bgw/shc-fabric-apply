@@ -303,9 +303,9 @@ gateway)
     # TCP towards a site never uses segments larger than its leg carries (rt mtu = the route's device MTU): the
     # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole
     if [ -n "$WANT" ]; then
-      printf '%s\n' 'table inet shc_gw_mss' 'delete table inet shc_gw_mss' \
-        'table inet shc_gw_mss { chain fwd { type filter hook forward priority mangle; policy accept;' \
-        '  oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu; } }' | $X nft -f -
+      printf '%s\n' 'add table inet shc_gw_mss' 'delete table inet shc_gw_mss' 'table inet shc_gw_mss {' \
+        '  chain clamp {' '    type filter hook forward priority mangle; policy accept;' \
+        '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu' '  }' '}' | $X nft -f -
     else
       $X nft delete table inet shc_gw_mss 2>/dev/null || true
     fi
