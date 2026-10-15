@@ -52,10 +52,12 @@ route-map TO-VPN permit 10
  set extcommunity none
 exit
 !
+! no graceful restart: a removed listen-range peer (a site node, a gateway) left FRR 8.5 a restart timer that
+! crashed bgpd when it fired (design/P7-PLAN.md §12.22)
 router bgp {{ cg_fabric.spec.domainAsn }}
  bgp router-id {{ cg_node_addr }}
  no bgp default ipv4-unicast
- bgp graceful-restart
+ bgp graceful-restart-disable
  neighbor SITE peer-group
  neighbor SITE remote-as {{ cg_fabric.spec.domainAsn }}
 {% if cg_bgp_password %}

@@ -60,6 +60,12 @@
           message: CloudInfrastructure teardown complete (no tenant object uses the site).
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # the operator drops the finalizer the next time it looks at the CR: make that now
+    - name: Release the finalizer now
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: CloudInfrastructure, namespace: "{{ cloudinfrastructure_cr_namespace }}", name: "{{ cloudinfrastructure_cr_name }}"}]
+
   rescue:
     - name: Mark teardown refused or failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

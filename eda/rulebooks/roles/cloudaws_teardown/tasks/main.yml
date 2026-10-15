@@ -70,6 +70,12 @@
           deletionComplete: true
           message: "Zone {{ cad_dns.zone | default('(none)') }} and its delegation removed"
 
+    # the operator drops the finalizer the next time it looks at the CR: make that now
+    - name: Release the finalizer now
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: CloudAWS, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
+
   rescue:
     - name: Mark the CloudAWS delete failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"

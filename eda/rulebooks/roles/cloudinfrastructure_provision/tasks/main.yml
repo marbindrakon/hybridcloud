@@ -125,6 +125,33 @@
               reason: "{{ ci_evpn_reason | default('Checked') }}"
               message: "{{ ci_evpn_message | default('') | trim }}"
 
+    # what waited for this site (pending on it) runs now instead of on its reconcile period
+    - name: List what may wait for this site
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+      loop: [CloudGateway, CloudAWS, CloudVirt]
+      register: _ci_dependents
+
+    - name: Wake the ones pending on it
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for r in _ci_dependents.results | default([]) -%}
+            {%- for o in r.resources | default([]) -%}
+              {%- if (o.spec.cloudRef | default({})).name | default('') == cloudinfrastructure_cr_name
+                    and (o.status | default({}, true)).status | default('') in ['pending', 'failed', '']
+                    and o.metadata.deletionTimestamp is not defined -%}
+                {%- set _ = out.append({'kind': r.item, 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+
   rescue:
     - name: Mark CloudInfrastructure failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

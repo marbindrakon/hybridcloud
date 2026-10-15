@@ -22,10 +22,13 @@ interface lo
  mpls enable
 exit
 !
+! no graceful restart: when a gateway (a listen-range peer) is removed, FRR 8.5's restart timer for it still fired
+! two minutes later on the deleted peer and bgpd aborted (every VPNv4 session down until watchfrr restarted it)
 router bgp {{ fab_spec.domainAsn }}
  bgp router-id {{ hf_pe.loopbackIp }}
  bgp cluster-id {{ hf_pe.loopbackIp }}
  no bgp default ipv4-unicast
+ bgp graceful-restart-disable
  neighbor PE peer-group
  neighbor PE remote-as {{ fab_spec.domainAsn }}
  neighbor PE update-source lo

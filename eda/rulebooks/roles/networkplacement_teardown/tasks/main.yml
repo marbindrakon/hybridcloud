@@ -271,6 +271,12 @@
           message: Deleted
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # the operator drops the finalizer the next time it looks at the CR: make that now
+    - name: Release the finalizer now
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: NetworkPlacement, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
+
   rescue:
     - name: Report the teardown waiting or failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
