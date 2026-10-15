@@ -1,0 +1,40 @@
+---
+# shc (design/P8-PLAN.md §7): create or adopt an SHC member account and bootstrap its automation role.
+# Runs in the shc-aws container group (AWS web identity of the management account's automation role, no keys).
+# Extra vars: account (short name, e.g. signal9-hub), purpose (e.g. network-hub, tenant), dry_run (bool);
+# shc_aws (from the job template: organizationalUnit, accountNamePrefix, accountEmailPattern, memberRoleName,
+# memberPolicyArn).
+- name: AWS account bootstrap
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _aws: "{{ shc_aws | default({}) }}"
+    _name: "{{ _aws.accountNamePrefix | default('shc-') }}{{ account }}"
+    _email: "{{ (_aws.accountEmailPattern | default('')) | replace('{name}', account) }}"
+  tasks:
+    - name: Inputs and the web identity
+      ansible.builtin.assert:
+        that:
+          - account is defined and account is match('^[a-z0-9][a-z0-9-]{1,40}$')
+          - _email is match('^[^@ ]+@[^@ ]+$')
+          - (_aws.organizationalUnit | default('')) is match('^ou-')
+          - lookup('env', 'AWS_ROLE_ARN') | length > 0
+          - lookup('env', 'AWS_WEB_IDENTITY_TOKEN_FILE') | length > 0
+        fail_msg: "need account (short name), shc_aws.organizationalUnit/accountEmailPattern, and the shc-aws container group"
+
+    - name: Create or adopt the account and bootstrap its automation role
+      ansible.builtin.command:
+        argv: "{{ ['python3', playbook_dir ~ '/../common/files/shc_aws_account.py',
+                   '--name', _name, '--email', _email, '--ou', _aws.organizationalUnit,
+                   '--purpose', purpose | default('tenant'),
+                   '--member-role', _aws.memberRoleName | default('shc-automation'),
+                   '--member-policy', _aws.memberPolicyArn | default('arn:aws:iam::aws:policy/AdministratorAccess')]
+                  + (['--dry-run'] if (dry_run | default(false) | bool) else []) }}"
+      register: _acct
+      changed_when: (_acct.stdout | from_json).created | default(false)
+      failed_when: _acct.rc != 0 or not ((_acct.stdout | from_json).ok | default(false))
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ _acct.stdout | from_json }}"
