@@ -145,6 +145,18 @@
       delay: 15
       changed_when: false
 
+    # AWS reads the discovery document when the IAM provider is created
+    - name: Wait for the issuer's public discovery document
+      ansible.builtin.uri:
+        url: "{{ cb_issuer }}/.well-known/openid-configuration"
+        return_content: true
+        status_code: [200, 404]
+      register: _cb_disc
+      until: _cb_disc.status == 200 and (_cb_disc.content | from_json).issuer | default('') == cb_issuer
+      retries: 20
+      delay: 15
+      changed_when: false
+
     - name: The release image of the image set
       kubernetes.core.k8s_info:
         host: "{{ central_api_host }}"
