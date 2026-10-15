@@ -305,8 +305,18 @@ class Cluster:
                                                                    ClientID=cid)
                 self.changed.append("provider client " + cid)
         except self.iam.exceptions.NoSuchEntityException:
-            self.iam.create_open_id_connect_provider(Url=self.issuer, ClientIDList=["openshift", "sts.amazonaws.com"],
-                                                     Tags=self.tags())
+            # IAM fetches the issuer's discovery document now; right after publication the issuer's caching front
+            # end may still answer an earlier 404 for a few minutes: retry that
+            import time
+            for i in range(12):
+                try:
+                    self.iam.create_open_id_connect_provider(Url=self.issuer, ClientIDList=["openshift", "sts.amazonaws.com"],
+                                                             Tags=self.tags())
+                    break
+                except self.iam.exceptions.InvalidInputException as e:
+                    if "openid-configuration" not in str(e) or i == 11:
+                        raise
+                    time.sleep(30)
             self.changed.append("provider " + issuer_hostpath(self.issuer))
 
     def roles(self):
