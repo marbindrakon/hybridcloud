@@ -413,7 +413,7 @@ vaultServicesInit:
 # ─── RHACM ───────────────────────────────────────────────────────────────────
 rhacm:
   enabled: true
-  chartVersion: "0.5.1-shc.3"  # shc: + AgentServiceConfig + Provisioning (LAB-PLAN §7.4), assisted-service env overrides (P6); shc.3: Hive AWS service provider (P8)
+  chartVersion: "0.5.1-shc.4"  # shc: + AgentServiceConfig + Provisioning (LAB-PLAN §7.4), assisted-service env overrides (P6); shc.3/4: Hive AWS service provider (P8; key aws_config)
   enableMultiClusterHub: true
   destinationNamespace: open-cluster-management
   syncWave: "10"
