@@ -222,6 +222,15 @@ controller_templates:
     credentials:
       - sovereign-vault-admin-credential
   # shc (P7.3.9): report-only fabric orphan check (fails when something has no owner)
+  # shc (design/P8-PLAN.md): which AWS identity do jobs in the shc-aws container group get (SPIFFE, no keys)
+  - name: aws-identity-check
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/aws-identity-check-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudaws
+    instance_groups:
+      - shc-aws
   - name: fabric-orphan-check
     organization: sovereign
     project: sovereign-eda-project

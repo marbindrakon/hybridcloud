@@ -84,6 +84,12 @@
       ansible.builtin.include_role:
         name: infra.aap_configuration.controller_execution_environments
 
+    # shc (design/P8-PLAN.md): container groups (e.g. shc-aws), before the job templates that name them
+    - name: Configure AAP Controller instance groups
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.controller_instance_groups
+      when: controller_instance_groups | length > 0
+
     - name: Configure AAP Controller projects
       ansible.builtin.include_role:
         name: infra.aap_configuration.controller_projects
