@@ -106,6 +106,19 @@ class Tenant:
             self.r53.change_tags_for_resource(ResourceType="hostedzone", ResourceId=z["Id"].split("/")[-1],
                                               AddTags=[{"Key": t["Key"], "Value": t["Value"]} for t in
                                                        tags(zone, self.cfg.get("tags", {}))])
+        # names appear here all the time (clusters' API and ingress): keep negative answers short-lived in resolvers
+        # (Route53's default SOA makes them 900 s; a lookup just before an installer writes its record then stalls it)
+        soa = [r for r in self.r53.list_resource_record_sets(HostedZoneId=z["Id"], StartRecordName=z["Name"],
+                                                             StartRecordType="SOA", MaxItems="1")["ResourceRecordSets"]
+               if r["Type"] == "SOA" and r["Name"] == z["Name"]]
+        if soa:
+            f = soa[0]["ResourceRecords"][0]["Value"].split()
+            if soa[0]["TTL"] != 60 or f[6] != "60":
+                f[6] = "60"
+                self.r53.change_resource_record_sets(HostedZoneId=z["Id"], ChangeBatch={"Changes": [{"Action": "UPSERT",
+                    "ResourceRecordSet": {"Name": z["Name"], "Type": "SOA", "TTL": 60,
+                                          "ResourceRecords": [{"Value": " ".join(f)}]}}]})
+                self.changed.append("zone %s negative TTL 60 s" % zone)
         ns = self.r53.get_hosted_zone(Id=z["Id"])["DelegationSet"]["NameServers"]
         return {"zone": zone, "zoneId": z["Id"].split("/")[-1], "nameServers": sorted(ns)}
 
