@@ -50,7 +50,7 @@
     that:
       - (platform_spec.aws.region | default('', true)) in ['', aws_region]
     fail_msg: >-
-      PlatformOpenshift {{ ansible_operator_meta.name }}: region {{ platform_spec.aws.region }} differs from
+      PlatformOpenshift {{ ansible_operator_meta.name }}: region {{ platform_spec.aws.region | default('') }} differs from
       CloudAWS {{ aws_env_name }}'s region {{ aws_region }}.
 
 - name: The installation's AWS realization and the job's AWS identity
