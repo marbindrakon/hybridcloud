@@ -215,8 +215,13 @@
 
     - name: Set the gateway's VRFs
       ansible.builtin.set_fact:
+        # a site behind a tunnel carries less than the fabric: its VRFs' bridge/VXLAN run at the site leg's MTU minus
+        # VXLAN, so the gateway knows the real limit for traffic towards the site
         cg_vrfs: >-
           {%- set out = [] -%}
+          {%- set vmtu = ([cg_fabric.spec.overlayMtu | int, (cg_instance.mtu | int) - 50] | min)
+                if ((fab_spec.transport | default('none')) == 'wireguard' and cg_instance.mtu is defined)
+                else (cg_fabric.spec.overlayMtu | int) -%}
           {%- for p in _cg_placements.resources | default([]) -%}
             {%- set st = p.status | default({}, true) -%}
             {%- set r = st.realization | default({}, true) -%}
@@ -224,7 +229,7 @@
                   and not (r.gatewayRelease | default(false) | bool) -%}
               {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name,
                                       'vrf': 't' ~ r.l3Vni, 'vni': r.l3Vni | int, 'vpnTarget': r.vpnTarget | int,
-                                      'mtu': cg_fabric.spec.overlayMtu | int}) -%}
+                                      'mtu': vmtu}) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out | sort(attribute='vni') }}

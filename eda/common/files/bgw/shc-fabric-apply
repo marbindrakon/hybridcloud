@@ -300,6 +300,15 @@ gateway)
       $X ip link set "vx$VNI" type bridge_slave neigh_suppress on learning off
       $X sysctl -qw "net.mpls.conf.$VRF.input=1" 2>/dev/null || true
     done
+    # TCP towards a site never uses segments larger than its leg carries (rt mtu = the route's device MTU): the
+    # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole
+    if [ -n "$WANT" ]; then
+      printf '%s\n' 'table inet shc_gw_mss' 'delete table inet shc_gw_mss' \
+        'table inet shc_gw_mss { chain fwd { type filter hook forward priority mangle; policy accept;' \
+        '  oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu; } }' | $X nft -f -
+    else
+      $X nft delete table inet shc_gw_mss 2>/dev/null || true
+    fi
     for VRF in $($X ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^t[0-9]+$' || true); do
       echo "$WANT" | grep -qx "$VRF" && continue
       VNI=${VRF#t}
