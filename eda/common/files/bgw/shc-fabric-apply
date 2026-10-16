@@ -15,8 +15,16 @@
 #   proxy ARP on egress0 for each network's NAT address (networks with internet egress), and the nftables table ip
 #   shc_egress: conntrack zone per network, source NAT on xe<n>, nothing to deny destinations, nothing unsolicited
 #   into a network - except the platform's sources to a network's platform prefixes on platformPorts (and their
-#   replies, stateless: they may return through the other node), never source-NATed. VRFs e<digits> no longer listed
-#   go with their veth. Routes are FRR's (staticd).
+#   replies, stateless: they may return through the other node), never source-NATed. Veths of networks no longer
+#   listed are removed. Routes are FRR's (staticd).
+#   attachments {vlanPool: [start, end], parents: [interface], platformSources, circuits: [{circuit, device, parent,
+#   vlan, mtu, vrf, table, zone, address, link, nat}]} (attachment circuits; absent = none): per circuit a VLAN
+#   device <parent>.<vlan> in the network's root VRF e<n> (created when missing; the same VRF as the network's
+#   egress) holding the node's address on the circuit's link, with strict reverse path filtering and no IPv6; the
+#   nftables table ip shc_attach: the network's conntrack zone on the device, nothing to the node itself from it but
+#   BGP from the link, BFD and ICMP, nothing to the platform's sources and, unless nat, nothing into the egress veth.
+#   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed.
+#   Root VRFs e<digits> that neither the egress nor a circuit lists are removed with their devices.
 # instance type "gateway" (a CloudGateway, network namespace <netns>):
 #   the namespace (forwarding, MPLS), the provider-edge loopback, the site's underlay VLAN on the trunk moved into
 #   the namespace with the gateway's site address, and a veth from the namespace's core0 (link address) to the core
@@ -55,7 +63,15 @@ snapshot() {
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
-    egress_state; } | sha1sum
+    egress_state; attach_state; } | sha1sum
+}
+
+# an interface another service creates (NetworkManager's trunk and its VLAN devices): at boot this runs alongside
+# NetworkManager (both before network.target), so wait for it a while
+wait_link() {
+  local i
+  for i in $(seq 1 90); do ip link show "$1" >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
 }
 
 # provider internet egress (root): devices, addresses, proxy ARP entries and the nftables table (no counters)
@@ -66,13 +82,29 @@ egress_state() {
   nft -s list table ip shc_egress 2>/dev/null || true
 }
 
-egress_down() {
-  local m v
-  nft delete table ip shc_egress 2>/dev/null || true
-  for v in $(ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$' || true); do
+# the root VRFs e<digits> (networks' VRFs: egress and attachment circuits)
+root_vrfs() { ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$' || true; }
+
+root_vrf() {  # <vrf> <table>
+  ip link show "$1" >/dev/null 2>&1 || ip link add "$1" type vrf table "$2"
+  ip link set "$1" up
+}
+
+# the root VRFs no network wants any more go with their veth and circuit devices (wanted: one VRF per line)
+root_vrfs_prune() {
+  local want="$1" v d
+  for v in $(root_vrfs); do
+    echo "$want" | grep -qx "$v" && continue
     ip link del "xe${v#e}" 2>/dev/null || true
+    for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname'); do ip link del "$d"; done
     ip link del "$v"
   done
+}
+
+egress_down() {
+  local m x
+  nft delete table ip shc_egress 2>/dev/null || true
+  for x in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
   m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty')
   ip link del egress0 2>/dev/null || true
   if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then ip link del "$m"; fi
@@ -136,7 +168,7 @@ PY
 egress_up() {
   local ev et par emtu eaddr want nat n v t z xe xo xea xoa a
   ev=$(q .egress.vrf); et=$(q .egress.table); par=$(q .egress.parent); emtu=$(q .egress.mtu); eaddr=$(q .egress.address)
-  ip link show "$par" >/dev/null 2>&1 || { echo "egress parent interface $par missing" >&2; exit 3; }
+  wait_link "$par" || { echo "egress parent interface $par missing" >&2; exit 3; }
   modprobe vrf
   ip link show "$ev" >/dev/null 2>&1 || ip link add "$ev" type vrf table "$et"
   ip link set "$ev" up
@@ -148,8 +180,7 @@ egress_up() {
   want=$(jq -r '.egress.networks // [] | .[].vrf' "$CONF")
   for n in $(jq -r '.egress.networks // [] | .[] | [.vrf, .table, .xe, .xo, .xeAddr, .xoAddr] | join(":")' "$CONF"); do
     IFS=: read -r v t xe xo xea xoa <<<"$n"
-    ip link show "$v" >/dev/null 2>&1 || ip link add "$v" type vrf table "$t"
-    ip link set "$v" up
+    root_vrf "$v" "$t"
     ip link show "$xe" >/dev/null 2>&1 || ip link add "$xe" mtu "$emtu" type veth peer name "$xo" mtu "$emtu"
     ip link set "$xe" master "$v" mtu "$emtu" up
     ip link set "$xo" master "$ev" mtu "$emtu" up
@@ -158,10 +189,8 @@ egress_up() {
     for a in $(stray "$xo" 0.0.0.0/0 "$xoa"); do ip addr del "$a" dev "$xo"; done
     ip addr show dev "$xo" | grep -q " ${xoa} " || ip addr add "$xoa" dev "$xo"
   done
-  for v in $(ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$' || true); do
-    echo "$want" | grep -qx "$v" && continue
-    ip link del "xe${v#e}" 2>/dev/null || true
-    ip link del "$v"
+  for v in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do
+    echo "$want" | grep -qx "e${v#xe}" || ip link del "$v"
   done
   nat=$(jq -r '.egress.networks // [] | .[].nat | select(. != null and . != "")' "$CONF")
   for a in $(ip -4 neigh show proxy dev egress0 | awk '{print $1}'); do
@@ -169,6 +198,98 @@ egress_up() {
   done
   for a in $nat; do ip -4 neigh show proxy dev egress0 | grep -q "^$a " || ip neigh add proxy "$a" dev egress0; done
   egress_nft | nft -f -
+}
+
+# attachment circuits (root): the circuit devices present - VLAN devices in a root VRF, or on a listed parent with
+# a VLAN in the pool
+attach_devices() {
+  ip -j -d link show type vlan | python3 -c '
+import json, re, sys
+parents, lo, hi = [p for p in sys.argv[1].split(",") if p], int(sys.argv[2]), int(sys.argv[3])
+for l in json.load(sys.stdin):
+    vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
+    if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
+        print(l["ifname"])' "$(jq -r '(.attachments.parents // []) | join(",")' "$CONF")" \
+    "$(jq -r '.attachments.vlanPool[0] // 1' "$CONF")" "$(jq -r '.attachments.vlanPool[1] // 0' "$CONF")"
+}
+
+# devices, addresses, filters and the nftables table (no counters)
+attach_state() {
+  local d
+  for d in $(attach_devices); do
+    ip -o link show dev "$d" | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|master [a-z0-9-]*\|state [A-Z]*'
+    ip -br -4 addr show dev "$d"
+    cat "/proc/sys/net/ipv4/conf/$d/rp_filter" "/proc/sys/net/ipv6/conf/$d/disable_ipv6" 2>/dev/null || true
+  done
+  nft -s list table ip shc_attach 2>/dev/null || true
+}
+
+attach_down() {
+  local d
+  nft delete table ip shc_attach 2>/dev/null || true
+  for d in $(attach_devices); do ip link del "$d"; done
+}
+
+# the nftables table for the listed circuits (replaced as a whole)
+attach_nft() {
+  python3 - "$CONF" <<'PY'
+import json, sys
+a = json.load(open(sys.argv[1]))["attachments"]
+cs = a.get("circuits") or []
+srcs = a.get("platformSources") or []
+def devs(xs):
+    return "{ " + ", ".join(f'"{c["device"]}"' for c in xs) + " }"
+out = ["table ip shc_attach", "delete table ip shc_attach", "table ip shc_attach {"]
+if cs:
+    zones = ", ".join(f'"{c["device"]}" : {c["zone"]}' for c in cs)
+    # the node's own packets in a VRF (BGP, BFD, ICMP to the CE) pass output first with the VRF as their output
+    # interface, and are tracked then: the VRF's zone too, so the CE's replies find them
+    vrfs = {c["vrf"]: c["zone"] for c in cs}
+    zones_out = zones + "".join(f', "{v}" : {z}' for v, z in sorted(vrfs.items()))
+    # the network's zone: a circuit's traffic that leaves through the network's egress veth is source-NATed there
+    out += ["  chain zone_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
+            f"    ct zone set iifname map {{ {zones} }}", "  }",
+            "  chain zone_output {", "    type filter hook output priority raw; policy accept;",
+            f"    ct zone set oifname map {{ {zones_out} }}", "  }"]
+    # past prerouting, a packet from a device in a VRF shows the VRF as its input interface: the circuit's device is
+    # the slave interface (meta sdifname)
+    out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
+    for c in cs:
+        out.append(f'    meta sdifname "{c["device"]}" ip saddr {c["link"]} tcp dport 179 accept')
+    out += [f"    meta sdifname {devs(cs)} ct state established,related accept",
+            f"    meta sdifname {devs(cs)} udp dport {{ 3784, 3785 }} accept",
+            f"    meta sdifname {devs(cs)} icmp type {{ echo-request, echo-reply, destination-unreachable, time-exceeded }} accept",
+            f'    meta sdifname {devs(cs)} counter drop comment "only BGP, BFD and ICMP from a circuit to the node"', "  }"]
+    out += ["  chain forward {", "    type filter hook forward priority filter; policy accept;"]
+    if srcs:
+        out.append(f'    meta sdifname {devs(cs)} ip daddr {{ {", ".join(srcs)} }} counter drop comment "the platform\'s sources"')
+    closed = [c for c in cs if not c.get("nat")]
+    if closed:
+        out.append(f'    meta sdifname {devs(closed)} oifname "xe*" counter drop comment "no provider egress for this circuit"')
+    out.append("  }")
+out.append("}")
+print("\n".join(out))
+PY
+}
+
+attach_up() {
+  local c dev par vlan mtu v t addr a want
+  modprobe vrf; modprobe 8021q
+  want=$(jq -r '.attachments.circuits // [] | .[].device' "$CONF")
+  for c in $(jq -r '.attachments.circuits // [] | .[] | [.device, .parent, .vlan, .mtu, .vrf, .table, .address] | join(":")' "$CONF"); do
+    IFS=: read -r dev par vlan mtu v t addr <<<"$c"
+    wait_link "$par" || { echo "bearer interface $par missing" >&2; exit 3; }
+    root_vrf "$v" "$t"
+    ip link show "$dev" >/dev/null 2>&1 || ip link add link "$par" name "$dev" type vlan id "$vlan"
+    # sysctl names with "/": the device name holds a dot
+    sysctl -qw "net/ipv6/conf/$dev/disable_ipv6=1" "net/ipv4/conf/$dev/rp_filter=1"
+    [ "$(ip -j link show dev "$dev" | jq -r '.[0].master // empty')" = "$v" ] || ip link set "$dev" master "$v"
+    ip link set "$dev" mtu "$mtu" up
+    for a in $(stray "$dev" 0.0.0.0/0 "$addr"); do ip addr del "$a" dev "$dev"; done
+    ip addr show dev "$dev" | grep -q " ${addr} " || ip addr add "$addr" dev "$dev"
+  done
+  for dev in $(attach_devices); do echo "$want" | grep -qx "$dev" || ip link del "$dev"; done
+  if [ -n "$want" ]; then attach_nft | nft -f -; else nft delete table ip shc_attach 2>/dev/null || true; fi
 }
 
 # After the gateway's FRR starts with VRFs in its configuration, zebra's VRF setup can recreate bgpd's listen
@@ -212,8 +333,12 @@ root)
     ip addr show dev lo | grep -q " ${LO} " || ip addr add "$LO" dev lo
     sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
+    if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
+    root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf] | unique | .[]' "$CONF")"
   else
     egress_down
+    attach_down
+    root_vrfs_prune ""
     ip link show "$BR" >/dev/null 2>&1 && ip link del "$BR"
     for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
   fi

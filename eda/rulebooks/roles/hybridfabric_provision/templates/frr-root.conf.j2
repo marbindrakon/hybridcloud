@@ -77,25 +77,83 @@ route-map SHC-EGRESS-DEFAULT permit 10
  match ip address prefix-list SHC-EGRESS-DEFAULT
 exit
 !
-{% for n in hf_node_egress.networks %}
-! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ' platform reach ' ~ n.platform | default([]) | join(',') if n.platform | default([]) else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
+{% endif %}
+{% for v in hf_node_vrfs %}
+{% for c in v.circuits %}
+! AttachmentCircuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): routes from the CE in the
+! accept list and outside the deny list; to the CE the network's placement prefixes{{ ' and the default route' if c.advertiseDefault else '' }}
+{% for e in c.accept %}
+ip prefix-list {{ c.id }}-ACCEPT seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+{% for e in c.deny %}
+ip prefix-list {{ c.id }}-DENY seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+{% for e in c.advertise %}
+ip prefix-list {{ c.id }}-OUT seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+!
+route-map {{ c.id }}-IN deny 10
+ match ip address prefix-list {{ c.id }}-DENY
+exit
+!
+route-map {{ c.id }}-IN permit 20
+ match ip address prefix-list {{ c.id }}-ACCEPT
+exit
+!
+{% if c.advertise %}
+route-map {{ c.id }}-OUT permit 10
+ match ip address prefix-list {{ c.id }}-OUT
+exit
+{% else %}
+route-map {{ c.id }}-OUT deny 10
+exit
+{% endif %}
+!
+{% endfor %}
+{% endfor %}
+{% for n in hf_node_vrfs %}
+! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ' platform reach ' ~ n.platform | default([]) | join(',') if n.platform | default([]) else '' }}{{ ((' ' if n.egress else '') ~ 'attachment circuits ' ~ n.circuits | map(attribute='id') | join(',')) if n.circuits else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
 router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  bgp router-id {{ hf_pe.loopbackIp }}
  no bgp default ipv4-unicast
+{% for c in n.circuits %}
+ neighbor {{ c.ce }} remote-as {{ c.peerAsn }}
+ neighbor {{ c.ce }} description {{ c.id }} {{ c.circuit }}
+{% if c.authentication == 'md5' %}
+ neighbor {{ c.ce }} password {{ hf_circuit_passwords[c.circuit] }}
+{% endif %}
+ neighbor {{ c.ce }} timers 10 30
+{% if c.bfd %}
+ neighbor {{ c.ce }} bfd
+{% endif %}
+{% endfor %}
  !
  address-family ipv4 unicast
+{% if n.egress %}
   redistribute static route-map SHC-EGRESS-DEFAULT
+{% endif %}
+{# no soft-reconfiguration inbound: the routes the policy rejects would be kept, and maximum-prefix doesn't bound
+   them (a CE could fill the node's memory); a policy change asks the CE to send its routes again (route refresh) #}
+{% for c in n.circuits %}
+  neighbor {{ c.ce }} activate
+  neighbor {{ c.ce }} route-map {{ c.id }}-IN in
+  neighbor {{ c.ce }} route-map {{ c.id }}-OUT out
+  neighbor {{ c.ce }} maximum-prefix {{ c.maxPrefixes }}{{ ' warning-only' if c.maxPrefixAction == 'warning' else (' restart ' ~ hf_attach_restart if hf_attach_restart | int > 0 else '') }}
+{% endfor %}
   label vpn export auto
   rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
   rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
+{# FRR tracks an exported BGP route's next hop inside the VRF, where the loopback is unknown: with a CE's routes
+   in the VRF, the VPN routes keep their own next hop (announced as the node's own address) #}
+{% if not n.circuits %}
   nexthop vpn export {{ hf_pe.loopbackIp }}
+{% endif %}
   export vpn
   import vpn
  exit-address-family
 exit
 !
 {% endfor %}
-{% endif %}
 router isis CORE
  is-type level-2-only
  net {{ hf_pe.net }}

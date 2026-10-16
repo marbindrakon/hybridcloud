@@ -1,10 +1,26 @@
 ---
-# one fabric's border gateway nodes, read only (no lease): the gw-* network namespaces and the VRFs in each, and the
-# root's VRFs (key "root": the egress VRFs e<vpnTarget>)
+# one fabric's border gateway nodes, read only (no lease): the gw-* network namespaces and the VRFs in each, the
+# root's VRFs (key "root": the networks' VRFs e<vpnTarget>) and the root's attachment circuit devices (VLAN devices in
+# a root VRF, or on a bearer interface with a VLAN in the attachment pool)
 - name: The platform's realization parameters
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
   vars:
     fab_real_fabric: "{{ foc_fabric.metadata.name }}"
+
+- name: The attachment circuits' bearer interfaces and VLAN pool
+  vars:
+    _at: "{{ fab_real.attachments | default({}) }}"
+  ansible.builtin.set_fact:
+    foc_parents: >-
+      {%- set out = [] -%}
+      {%- for pe in (_at.providerEdges | default({}, true)).values() -%}
+        {%- for b in ((pe | default({}, true)).bearers | default({}, true)).values() if (b | default({}, true)).interface is defined -%}
+          {%- set _ = out.append(b.interface) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | unique | list }}
+    foc_pool: >-
+      {{ [_at.vlanPool.start | default(1), _at.vlanPool.end | default(0)] if _at.enabled | default(false) | bool else [1, 0] }}
 
 - name: Read the nodes
   block:
@@ -17,7 +33,7 @@
     - name: List the gateway namespaces and their VRFs
       ansible.builtin.shell: |
         python3 - <<'PY'
-        import json, subprocess
+        import json, re, subprocess
         out = {}
         for line in subprocess.run(["ip", "netns", "list"], capture_output=True, text=True).stdout.splitlines():
             ns = line.split()[0] if line.split() else ""
@@ -28,7 +44,14 @@
             out[ns] = sorted(l["ifname"] for l in links)
         root = json.loads(subprocess.run(["ip", "-j", "link", "show", "type", "vrf"], capture_output=True, text=True).stdout or "[]")
         out["root"] = sorted(l["ifname"] for l in root)
-        print(json.dumps(out))
+        parents, lo, hi = {{ foc_parents | to_json }}, {{ foc_pool[0] | int }}, {{ foc_pool[1] | int }}
+        vlans = json.loads(subprocess.run(["ip", "-j", "-d", "link", "show", "type", "vlan"], capture_output=True, text=True).stdout or "[]")
+        devices = []
+        for l in vlans:
+            vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
+            if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
+                devices.append({"name": l["ifname"], "master": l.get("master") or ""})
+        print(json.dumps({"netns": out, "rootDevices": devices}))
         PY
       args:
         executable: /bin/bash
@@ -47,6 +70,8 @@
     foc_nodes: >-
       {%- set out = [] -%}
       {%- for r in _foc_node.results -%}
-        {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': r.stdout | from_json}) -%}
+        {%- set n = r.stdout | from_json -%}
+        {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': n.netns,
+                                'rootDevices': n.rootDevices}) -%}
       {%- endfor -%}
       {{ foc_nodes + out }}

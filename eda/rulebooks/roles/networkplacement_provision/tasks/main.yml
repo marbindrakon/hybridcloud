@@ -145,6 +145,23 @@
         namespace: "{{ fab_namespace }}"
       register: _np_all
 
+    # attachment circuits on the network: their policy lists the network's placement prefixes (the fabric job)
+    - name: List the network's attachment circuits
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AttachmentCircuit
+        namespace: "{{ fab_namespace }}"
+      register: _np_circuits
+
+    - name: Set the network's circuits
+      ansible.builtin.set_fact:
+        np_circuits: >-
+          {{ _np_circuits.resources | default([]) | selectattr('spec.network', 'equalto', fab_spec.network)
+             | rejectattr('metadata.deletionTimestamp', 'defined') | list }}
+
     - name: Check the prefixes
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
@@ -158,6 +175,12 @@
                     and p.metadata.deletionTimestamp is not defined -%}
                 {%- set _ = out.append({'name': p.metadata.name, 'prefixes': p.spec.prefixes | default([])}) -%}
               {%- endif -%}
+            {%- endfor -%}
+            {{ out }}
+          circuits: >-
+            {%- set out = [] -%}
+            {%- for c in np_circuits -%}
+              {%- set _ = out.append({'name': c.metadata.name, 'accept': (c.spec.routing | default({}, true)).accept | default([], true)}) -%}
             {%- endfor -%}
             {{ out }}
 
@@ -422,6 +445,15 @@
           - {kind: HybridNetwork, namespace: "{{ fab_namespace }}", name: "{{ fab_spec.network }}"}
           - {kind: "{{ np_backend_kind }}", namespace: "{{ fab_namespace }}", name: "{{ np_backend_name if np_backend_kind == 'CloudVirt' else '' }}"}
       when: fab_st.status | default('') != 'ready'
+
+    # the circuits' policy (deny and advertise lists) holds the network's placement prefixes
+    - name: Tell the fabric when the network has attachment circuits
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ np_fabric.metadata.name }}"}]
+      when:
+        - fab_st.status | default('') != 'ready'
+        - np_circuits | length > 0
 
   rescue:
     - name: Mark the NetworkPlacement failed

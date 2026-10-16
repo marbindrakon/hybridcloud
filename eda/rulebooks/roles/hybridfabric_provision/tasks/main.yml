@@ -9,6 +9,11 @@
 #    ledger that still want it (spec.egress.internet, not being deleted) get a VRF on every node's root with a
 #    default route into their VPN and source NAT (status.realization.egress); the job is the only writer of it and
 #    wakes the networks it added or removed.
+# 5. Attachment circuits (realization attachments.enabled, design/P9-PLAN.md §4): the AttachmentCircuits holding a
+#    VLAN and a link in the ledger on a network that holds its VPN target (not being deleted, not released) get, in
+#    the network's root VRF on every node, a VLAN device on their bearer and an eBGP session to the CE with the
+#    circuit's routing policy (status.realization.attachments, with what wasn't realized and why under
+#    attachmentsSkipped); the job wakes the circuits whose realization changed.
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -129,6 +134,10 @@
       vars:
         fab_ledger: {action: ledger-get, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}"}
 
+    - name: Keep the ledger's allocations
+      ansible.builtin.set_fact:
+        hf_alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
+
     - name: List the HybridNetworks
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -191,6 +200,73 @@
       ansible.builtin.set_fact:
         hf_egress: "{{ fab_check_result }}"
 
+    # attachment circuits: the circuits and the placements of their networks (deny and advertise lists)
+    - name: List the attachment circuits and the placements
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+      loop: [AttachmentCircuit, NetworkPlacement]
+      register: _hf_att
+      when: fab_real.attachments.enabled | default(false) | bool
+
+    - name: Set the circuits of this fabric
+      ansible.builtin.set_fact:
+        hf_circuits: >-
+          {{ ((_hf_att.results | default([{}]))[0].resources | default([]))
+             | selectattr('status.fabric', 'defined') | selectattr('status.fabric', 'equalto', fab_name) | list }}
+        hf_circuit_passwords: {}
+
+    - name: Read the circuits' BGP passwords
+      ansible.builtin.include_tasks: circuit_password.yml
+      loop: >-
+        {%- set out = [] -%}
+        {%- for c in hf_circuits -%}
+          {%- set r = (c.status | default({}, true)).realization | default({}, true) -%}
+          {%- if r.authentication | default('') == 'md5' and r.passwordPath | default('') | length > 0
+                and c.metadata.deletionTimestamp is not defined and not r.release | default(false) -%}
+            {%- set _ = out.append({'circuit': c.metadata.namespace ~ '/' ~ c.metadata.name, 'passwordPath': r.passwordPath}) -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ out }}
+      loop_control:
+        loop_var: hf_circuit
+        label: "{{ hf_circuit.circuit }}"
+
+    - name: Plan the attachment circuits on the nodes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: attachments-plan
+          fabric: "{{ fab_name }}"
+          attachments: "{{ fab_real.attachments | default({}) }}"
+          nodes: "{{ fab_spec.borderGateway.nodes | map(attribute='name') | list }}"
+          tableBase: "{{ fab_real.egress.networkTableBase | default(100000) }}"
+          domainAsn: "{{ fab_spec.domainAsn }}"
+          circuits: "{{ hf_circuits }}"
+          passwords: "{{ hf_circuit_passwords.keys() | list }}"
+          networks: "{{ _hf_networks.resources | default([]) }}"
+          placements: "{{ ((_hf_att.results | default([{}, {}]))[1] | default({})).resources | default([]) }}"
+          ledger: "{{ hf_alloc }}"
+          egress: "{{ hf_egress.networks }}"
+          egressNodes: "{{ hf_egress.nodes }}"
+          # the platform's ranges a CE's routes never reach into (as the circuit job checks the accept list)
+          reserved: >-
+            {{ ([fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
+                 fab_real.egress.linkPool | default('169.254.0.0/16')]
+                + (fab_real.egress.platformSources | default([], true))) if fab_real.attachments.enabled | default(false) | bool
+               else [] }}
+          platformSources: "{{ fab_real.egress.platformSources | default([], true) }}"
+
+    - name: Keep the attachment plan
+      ansible.builtin.set_fact:
+        hf_attach: "{{ fab_check_result }}"
+        hf_attach_restart: "{{ fab_real.attachments.maxPrefixRestart | default(2) }}"
+        hf_attach_before: >-
+          {{ ((fab_st.realization | default({}, true)).attachments | default([], true)) }}
+
     - name: Take the border gateway configuration lease
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
       vars:
@@ -232,7 +308,10 @@
         fab_message: >-
           Ledger fabric-ledger-{{ fab_name }}; root instance on {{ hf_node_results | map(attribute='name') | join(', ') }}
           ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }}){{
-          ('; internet egress for ' ~ hf_egress.networks | length ~ ' network(s)') if fab_real.egress.enabled | default(false) | bool else '' }}
+          ('; internet egress for ' ~ hf_egress.networks | length ~ ' network(s)') if fab_real.egress.enabled | default(false) | bool else '' }}{{
+          ('; ' ~ hf_attach.status | length ~ ' attachment circuit(s)' ~ ((', not realized: ' ~ hf_attach.skipped
+             | map(attribute='circuit') | join(', ')) if hf_attach.skipped else ''))
+          if fab_real.attachments.enabled | default(false) | bool else '' }}
         fab_status: >-
           {{ {'ledger': 'fabric-ledger-' ~ fab_name,
               'allocated': hf_ledger.allocated,
@@ -241,7 +320,8 @@
               'realization': {'model': fab_real.model, 'routeReflector': hf_pe.loopbackIp, 'nodeSid': hf_pe.sid,
                               'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet,
                               'egress': {'enabled': fab_real.egress.enabled | default(false) | bool,
-                                         'networks': hf_egress_status}}} }}
+                                         'networks': hf_egress_status},
+                              'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped}} }}
 
     # the networks this run added to or removed from the egress wait for it: wake them
     - name: Wake the networks whose egress changed
@@ -251,6 +331,21 @@
           {%- set out = [] -%}
           {%- for k in (hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before) -%}
             {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # a circuit added, changed (its realization or its policy) or removed: the circuit job reads the sessions, or
+    # continues the circuit's deletion
+    - name: Wake the circuits whose realization changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set keys = [] -%}
+          {%- for e in hf_attach.status if e not in hf_attach_before -%}{%- set _ = keys.append(e.circuit) -%}{%- endfor -%}
+          {%- for e in hf_attach_before if e not in hf_attach.status -%}{%- set _ = keys.append(e.circuit) -%}{%- endfor -%}
+          {%- set out = [] -%}
+          {%- for k in keys | unique -%}
+            {%- set _ = out.append({'kind': 'AttachmentCircuit', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
           {%- endfor -%}
           {{ out }}
 

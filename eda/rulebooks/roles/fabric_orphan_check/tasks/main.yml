@@ -2,7 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.9): fabric orphan check, report only. Gathers what the fabric jobs realized (the
 # fabric ledgers; on each gateway's site: the placements' networks and advertisements and the CloudVirt namespaces
 # by the platform's labels, or the platform project's networks and routers; on the border gateway nodes: the
-# gateway namespaces and their VRFs) and compares it with the CRs (files/shc_fabric.py orphan-report). Fails when
+# gateway namespaces and their VRFs; the root's VRFs and attachment circuit devices) and compares it with the CRs
+# (files/shc_fabric.py orphan-report). Fails when
 # anything has no owner, so the job shows red; changes nothing.
 - name: Resolve services cluster API connection from Vault
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -14,7 +15,7 @@
     validate_certs: false
     api_version: hybridsovereign.redhat/v1alpha1
     kind: "{{ item }}"
-  loop: [HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt]
+  loop: [HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt, AttachmentCircuit]
   register: _foc_crs
 
 - name: Set the CR facts
@@ -25,6 +26,7 @@
       networks: "{{ _foc_crs.results[2].resources }}"
       placements: "{{ _foc_crs.results[3].resources }}"
       cloudvirts: "{{ _foc_crs.results[4].resources }}"
+      circuits: "{{ _foc_crs.results[5].resources }}"
     foc_ledgers: {}
     foc_sites: []
     foc_nodes: []

@@ -61,6 +61,9 @@ fabric_realization_defaults:
     linkPrefixLength: 29
     # central Vault KV path (mount central) for each circuit's BGP password
     secretPath: "fabric/circuits/{entity}/{name}"
+    # minutes before a session closed for too many prefixes (maxPrefixes action teardown) is tried again; 0 = it
+    # stays down until the circuit changes
+    maxPrefixRestart: 2
     providerEdges: {}
   # provider internet egress for HybridNetworks with spec.egress.internet: each node's root holds a VRF that hands
   # traffic to a network with internet access (a macvlan on parentInterface, default route via gateway); per network

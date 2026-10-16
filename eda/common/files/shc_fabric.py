@@ -6,12 +6,15 @@ unless the request itself is malformed. Pure computation: no API calls, nothing 
 
 actions:
   check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names
-  check-gateway   {fabric: spec, core: realization core, gateway: spec, others: [CloudGateway objects or {name, spec}]}
-                  nodes match the fabric's, one gateway per site, VLAN and site subnet unique on the fabric,
+  check-gateway   {fabric: spec, core: realization core, attachments: realization attachments, gateway: spec,
+                  others: [CloudGateway objects or {name, spec}]}
+                  nodes match the fabric's, one gateway per site, VLAN and site subnet unique on the fabric and the
+                  VLAN outside the attachment circuits' pool,
                   site subnet clear of the core prefixes; transport wireguard: the peers' addresses inside the
                   site subnet and clear of the nodes' tunnel addresses
-  check-placement {prefixes, siblings: [{name, prefixes}], reserved: [cidr]}
-                  prefixes disjoint among themselves, from the network's other placements and from reserved
+  check-placement {prefixes, siblings: [{name, prefixes}], reserved: [cidr], circuits: [{name, accept}]}
+                  prefixes disjoint among themselves, from the network's other placements and from reserved, and
+                  holding no accept entry of the network's attachment circuits
   pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
                   (index 1 is the border gateway root; the same addresses on every node)
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
@@ -32,6 +35,16 @@ actions:
                   advertiseDefault}  entries inside a placement or a reserved range are refused; notes for policy
                   that doesn't apply now; acceptsDefault
   (check-fabric also validates the realization's attachments: poolSize.attachVlanPool, poolSize.attachLinks)
+  attachments-plan {fabric, attachments: realization attachments, nodes: [node names], tableBase, domainAsn,
+                  circuits, networks, placements: [CR objects], ledger: alloc, egress: egress-plan networks,
+                  egressNodes: egress-plan nodes, reserved: [cidr], platformSources: [cidr], passwords: [circuits
+                  (namespace/name) whose BGP password the job holds]}  the circuits the fabric's nodes realize: per circuit its VRF (the
+                  network's root VRF e<vpnTarget>), VLAN device, conntrack zone (the network's egress zone, else its
+                  VPN target) and routing policy (accept list; deny = the network's placement prefixes, the reserved
+                  ranges and 0.0.0.0/0 while the network wants internet egress; advertise = the placement prefixes and
+                  0.0.0.0/0 when asked for and the network has internet egress); per node the root's attachments
+                  (root.json); circuits it can't realize under skipped; vrfs: per node the networks with a root
+                  VRF (egress entry and/or circuits), for the node's FRR configuration
 """
 import hashlib
 import ipaddress
@@ -265,6 +278,12 @@ def check_gateway(req):
                     errors.append(f"wireguard.peers[{i}].allowedIPs {a} holds a node's tunnel address")
     elif under.get("vlan") is None:
         errors.append("siteUnderlay.vlan is required with transport none")
+    else:
+        # the trunk also carries the attachment circuits' VLANs (realization attachments.vlanPool)
+        at = req.get("attachments") or {}
+        vp = at.get("vlanPool") or {}
+        if at.get("enabled") and int(vp.get("start", 1)) <= int(under["vlan"]) <= int(vp.get("end", 0)):
+            errors.append(f"siteUnderlay.vlan {under['vlan']} is in the platform's attachment circuit VLAN range")
     # upstream route reflectors outside the site subnet are reached through siteUnderlay.gateway
     upstream_remote = [r for r in under.get("upstreamRouteReflectors") or []
                        if ipaddress.ip_address(r) not in site]
@@ -325,6 +344,13 @@ def check_placement(req):
         for a in mine:
             if overlaps(a, rn):
                 errors.append(f"prefix {a} overlaps the site's network {rn}")
+    # the circuits accept routes from their CE; a placement prefix never holds one (as check-circuit refuses)
+    for c in req.get("circuits") or []:
+        for e in c.get("accept") or []:
+            entry = accept_entry(e)
+            for a in mine:
+                if entry and entry[0].version == a.version and entry[0].subnet_of(a):
+                    errors.append(f"prefix {a} holds accept entry '{e}' of AttachmentCircuit {c.get('name')}")
     return {"errors": errors}
 
 
@@ -439,6 +465,173 @@ def check_circuit(req):
     return {"errors": errors, "notes": sorted(set(notes)), "acceptsDefault": accepts_default}
 
 
+def accept_entry(e):
+    """A prefix-list entry "<prefix>[ ge <n>][ le <n>]" as (network, ge, le), or None when malformed."""
+    m = ACCEPT_RE.match(str(e).strip())
+    try:
+        net = ipaddress.ip_network(m.group(1), strict=True) if m else None
+    except ValueError:
+        return None
+    if net is None or net.version != 4:
+        return None
+    ge, le = (int(m.group(2)) if m.group(2) else None), (int(m.group(3)) if m.group(3) else None)
+    if (ge is not None and not net.prefixlen < ge <= 32) or (le is not None and not net.prefixlen < le <= 32) \
+            or (ge is not None and le is not None and ge > le):
+        return None
+    return net, ge, le
+
+
+def entry_text(net, ge=None, le=None):
+    return str(net) + (f" ge {ge}" if ge is not None else "") + (f" le {le}" if le is not None else "")
+
+
+def attachments_plan(req):
+    """Which attachment circuits the fabric's nodes realize, and how (see the module docstring)."""
+    at = req.get("attachments") or {}
+    node_names = req.get("nodes") or []
+    fabric = req.get("fabric")
+    base = int(req.get("tableBase") or 100000)
+    alloc = req.get("ledger") or {}
+    egress = req.get("egress") or {}
+    errors, skipped, circuits, status = [], [], [], []
+    nodes = {n: {"circuits": []} for n in node_names}
+    if not at.get("enabled"):
+        return {"errors": [], "circuits": [], "skipped": [], "nodes": {}, "status": [],
+                "vrfs": root_vrfs(req, [])}
+    vp = at.get("vlanPool") or {}
+    pool = ipaddress.ip_network(str(at.get("linkPool")), strict=True)
+    reserved = []
+    for r in req.get("reserved") or []:
+        try:
+            reserved.append(ipaddress.ip_network(str(r), strict=True))
+        except ValueError as e:
+            errors.append(f"reserved range {r}: {e}")
+    sources = [str(ipaddress.ip_network(str(c), strict=True)) for c in req.get("platformSources") or []]
+    nets_by_key = {}
+    for n in req.get("networks") or []:
+        md = n.get("metadata") or {}
+        nets_by_key[f"{md.get('namespace')}/{md.get('name')}"] = n
+    prefixes = {}
+    for p in req.get("placements") or []:
+        md, sp = p.get("metadata") or {}, p.get("spec") or {}
+        if md.get("deletionTimestamp"):
+            continue
+        for c in sp.get("prefixes") or []:
+            try:
+                prefixes.setdefault(f"{md.get('namespace')}/{sp.get('network')}", []).append(
+                    ipaddress.ip_network(str(c), strict=True))
+            except ValueError:
+                continue
+    parents, vlans, passwords = set(), {}, set(req.get("passwords") or [])
+    for c in sorted(req.get("circuits") or [], key=lambda o: (o["metadata"]["namespace"], o["metadata"]["name"])):
+        md, sp, st = c.get("metadata") or {}, c.get("spec") or {}, c.get("status") or {}
+        r = st.get("realization") or {}
+        if st.get("fabric") != fabric or not r.get("vlan"):
+            continue
+        key = f"{md['namespace']}/{md['name']}"
+        owner = f"AttachmentCircuit/{key}"
+
+        def skip(why):
+            skipped.append({"circuit": key, "reason": why})
+
+        if md.get("deletionTimestamp") or r.get("release"):
+            skip("being deleted")
+            continue
+        vlan, idx, t = int(r["vlan"]), int(r.get("linkIndex", -1)), int(r.get("vpnTarget") or 0)
+        if (alloc.get("attachVlan") or {}).get(owner) != vlan or (alloc.get("attachLink") or {}).get(owner) != idx:
+            skip(f"the fabric's ledger does not hold VLAN {vlan} and link {idx} for it")
+            continue
+        net_key = f"{md['namespace']}/{sp.get('network')}"
+        if (alloc.get("vpnTarget") or {}).get(f"HybridNetwork/{net_key}") != t or net_key not in nets_by_key:
+            skip(f"network {net_key} does not hold VPN target {t}")
+            continue
+        if not int(vp.get("start", 1)) <= vlan <= int(vp.get("end", 0)):
+            skip(f"VLAN {vlan} is outside the pool {vp.get('start')}-{vp.get('end')}")
+            continue
+        if vlan in vlans:
+            skip(f"VLAN {vlan} is also {vlans[vlan]}'s")
+            continue
+        link = ipaddress.ip_network(str(r.get("link")), strict=True)
+        parent = str(r.get("interface") or "")
+        device = f"{parent}.{vlan}"
+        if not parent or len(device) > 15 or not link.subnet_of(pool):
+            skip(f"no usable interface ({device}) or link {link} outside {pool}")
+            continue
+        accept, bad = [], []
+        for e in r.get("accept") or []:
+            a = accept_entry(e)
+            (accept.append(entry_text(*a)) if a else bad.append(str(e)))
+        if bad:
+            skip(f"malformed accept entries: {', '.join(bad)}")
+            continue
+        if (r.get("authentication") or "md5") == "md5" and key not in passwords:
+            skip("no usable BGP password in the platform's secret store")
+            continue
+        vlans[vlan] = key
+        parents.add(parent)
+        net = nets_by_key[net_key]
+        internet_intent = bool(((net.get("spec") or {}).get("egress") or {}).get("internet"))
+        eg = egress.get(net_key) or {}
+        internet = bool(eg) and bool(eg.get("internet", True))
+        zone = int(eg["index"]) + 1 if eg else t
+        mine = sorted(prefixes.get(net_key, []), key=lambda n: (int(n.network_address), n.prefixlen))
+        deny = [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in mine + reserved]
+        if internet_intent:
+            deny.append("0.0.0.0/0")
+        nat = bool(r.get("advertiseDefault")) and internet
+        advertise = ([entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in mine]
+                     if r.get("advertiseNetworkPrefixes", True) else []) + (["0.0.0.0/0"] if nat else [])
+        addrs = {n.get("name"): n.get("address") for n in r.get("nodes") or []}
+        plan = {"circuit": key, "network": net_key, "id": f"AC{vlan}", "vrf": f"e{t}", "table": base + t,
+                "vpnTarget": t, "zone": zone, "vlan": vlan, "device": device, "parent": parent,
+                "mtu": int(r.get("mtu") or 1500), "link": str(link), "ce": str(r.get("ce")),
+                "peerAsn": int(r["peerAsn"]), "authentication": r.get("authentication") or "md5",
+                "passwordPath": r.get("passwordPath") or "", "maxPrefixes": int(r.get("maxPrefixes") or 100),
+                "maxPrefixAction": r.get("maxPrefixAction") or "teardown", "bfd": bool(r.get("bfd")),
+                "accept": accept, "deny": deny, "advertise": advertise, "denyDefault": internet_intent,
+                "advertiseDefault": nat, "nat": nat, "rev": str(r.get("rev") or ""),
+                "nodes": {n: addrs[n] for n in node_names if addrs.get(n)}}
+        policy = hashlib.sha1(json.dumps([deny, accept, advertise, nat], sort_keys=True).encode()).hexdigest()[:12]
+        circuits.append(plan)
+        status.append({"circuit": key, "network": net_key, "rev": plan["rev"], "policy": policy, "vlan": vlan,
+                       "vrf": plan["vrf"], "device": device, "link": str(link),
+                       "nodes": sorted(plan["nodes"].keys())})
+        for n, a in plan["nodes"].items():
+            nodes[n]["circuits"].append({"circuit": key, "device": device, "parent": parent, "vlan": vlan,
+                                         "mtu": plan["mtu"], "vrf": plan["vrf"], "table": plan["table"],
+                                         "zone": zone, "address": f"{a}/{link.prefixlen}", "link": str(link),
+                                         "nat": nat})
+    for n in nodes.values():
+        n.update({"vlanPool": [int(vp.get("start", 1)), int(vp.get("end", 0))],
+                  "parents": sorted(parents | {str(b.get("interface")) for p in (at.get("providerEdges") or {}).values()
+                                               for b in ((p or {}).get("bearers") or {}).values()
+                                               if (b or {}).get("interface")}),
+                  "platformSources": sources})
+    return {"errors": errors, "circuits": circuits, "skipped": skipped, "nodes": nodes, "status": status,
+            "vrfs": root_vrfs(req, circuits)}
+
+
+def root_vrfs(req, circuits):
+    """Per node, the networks with a root VRF in vpnTarget order: the node's egress entry (egress-plan nodes) for a
+    network with egress, plus the network's circuits on the node (a circuit-only network gets a bare entry)."""
+    asn = int(req.get("domainAsn") or 0)
+    out = {}
+    for name in req.get("nodes") or []:
+        by_vrf = {}
+        for e in ((req.get("egressNodes") or {}).get(name) or {}).get("networks") or []:
+            by_vrf[e["vrf"]] = dict(e, egress=True, circuits=[])
+        for c in circuits:
+            if name not in c["nodes"]:
+                continue
+            v = by_vrf.setdefault(c["vrf"], {"network": c["network"], "vpnTarget": c["vpnTarget"], "vrf": c["vrf"],
+                                             "table": c["table"], "nat": "", "platform": [], "egress": False,
+                                             "rd": f"{asn}:{c['vpnTarget']}" if 0 < asn <= 65535 else "",
+                                             "circuits": []})
+            v["circuits"].append(dict({k: x for k, x in c.items() if k != "nodes"}, address=c["nodes"][name]))
+        out[name] = sorted(by_vrf.values(), key=lambda v: int(v["vpnTarget"]))
+    return out
+
+
 def site_namespace(entity, cloudvirt, name):
     base = re.sub(r"[^a-z0-9-]", "-", f"{entity}-{cloudvirt}-{name}".lower())
     if len(base) <= 63:
@@ -494,16 +687,17 @@ def placement_names(req):
 
 def orphan_report(req):
     """Fabric orphan check (report only): what the platform realized that no CR owns any more, and CR claims that
-    the ledger does not back. Input: crs {fabrics, gateways, networks, placements, cloudvirts} (CR objects),
+    the ledger does not back. Input: crs {fabrics, gateways, networks, placements, cloudvirts, circuits} (CR objects),
     ledgers {fabric: ledger}, sites [{gateway, type, cudns: [{name, l3vni}], routeAdvertisements: [...],
     namespaces: [{name, labels}], networks: [{name, sharedTo}], routers: [{name, evpnVni}]}],
-    nodes [{fabric, node, netns: {name: [vrf]}}]. Returns {findings: [str], counts}."""
+    nodes [{fabric, node, netns: {name: [vrf]}, rootDevices: [{name, master}] (the root's VLAN devices in root VRFs
+    or on a bearer interface within the attachment VLAN pool)}]. Returns {findings: [str], counts}."""
     crs, findings = req.get("crs") or {}, []
 
     def key(o):
         return f"{o['kind']}/{o['metadata']['namespace']}/{o['metadata']['name']}"
 
-    owners = {key(o) for kind in ("fabrics", "gateways", "networks", "placements") for o in crs.get(kind) or []}
+    owners = {key(o) for kind in ("fabrics", "gateways", "networks", "placements", "circuits") for o in crs.get(kind) or []}
     placements = crs.get("placements") or []
     by_vni = {}
     for p in placements:
@@ -555,11 +749,19 @@ def orphan_report(req):
     for n in req.get("nodes") or []:
         for ns, vrfs in (n.get("netns") or {}).items():
             if ns == "root":
-                eg = (((fabs.get(n.get("fabric")) or {}).get("status") or {}).get("realization") or {}).get("egress") or {}
-                want = {f"e{x.get('vpnTarget')}" for x in eg.get("networks") or []}
+                real = ((fabs.get(n.get("fabric")) or {}).get("status") or {}).get("realization") or {}
+                want = {f"e{x.get('vpnTarget')}" for x in (real.get("egress") or {}).get("networks") or []}
+                att = [a for a in real.get("attachments") or [] if n["node"] in (a.get("nodes") or [])]
+                want |= {a.get("vrf") for a in att}
                 for v in vrfs:
                     if re.fullmatch(r"e\d+", v) and v not in want:
-                        findings.append(f"node {n['node']}: egress VRF {v} belongs to no network with internet egress")
+                        findings.append(f"node {n['node']}: root VRF {v} belongs to no network with internet egress "
+                                        "or attachment circuit")
+                devs = {a.get("device") for a in att}
+                for d in n.get("rootDevices") or []:
+                    if d.get("name") not in devs:
+                        findings.append(f"node {n['node']}: circuit device {d.get('name')} (VRF {d.get('master') or 'none'}) "
+                                        "belongs to no attachment circuit")
                 continue
             g = gws.get(ns[3:]) if ns.startswith("gw-") else None
             if g is None:
@@ -576,7 +778,7 @@ def orphan_report(req):
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
            "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan,
-           "circuit-plan": circuit_plan, "check-circuit": check_circuit}
+           "circuit-plan": circuit_plan, "check-circuit": check_circuit, "attachments-plan": attachments_plan}
 
 
 def main():

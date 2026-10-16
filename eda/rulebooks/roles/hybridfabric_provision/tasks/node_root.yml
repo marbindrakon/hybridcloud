@@ -1,11 +1,14 @@
 ---
 # shc (design/P7-PLAN.md P7.3.4): the border gateway root instance on one node (delegated over SSH, become).
-# Input: bgw_node {name, address}, hf_root (instance config), hf_pe (provider-edge addresses), fab_spec.
+# Input: bgw_node {name, address}, hf_root (instance config), hf_pe (provider-edge addresses), fab_spec, hf_egress,
+# hf_attach (attachments-plan), hf_circuit_passwords.
 # Appends {name, ready, message, lastAppliedAt} to hf_node_results and the node's name to hf_changed_nodes when
 # anything on it changed.
-- name: "{{ bgw_node.name }}: the node's egress plan"
+- name: "{{ bgw_node.name }}: the node's egress plan and attachment circuits"
   ansible.builtin.set_fact:
     hf_node_egress: "{{ (hf_egress.nodes | default({})).get(bgw_node.name, {}) }}"
+    hf_node_attach: "{{ (hf_attach.nodes | default({})).get(bgw_node.name, {}) }}"
+    hf_node_vrfs: "{{ (hf_attach.vrfs | default({})).get(bgw_node.name, []) }}"
 
 - name: "{{ bgw_node.name }}: require FRR"
   ansible.builtin.command: rpm -q frr
@@ -45,7 +48,7 @@
 - name: "{{ bgw_node.name }}: root instance config"
   ansible.builtin.copy:
     dest: /etc/shc-fabric/root.json
-    content: "{{ hf_root | combine({'egress': hf_node_egress} if hf_node_egress | length > 0 else {}) | to_nice_json }}\n"
+    content: "{{ hf_root | combine({'egress': hf_node_egress} if hf_node_egress | length > 0 else {}) | combine({'attachments': hf_node_attach} if hf_node_attach | length > 0 else {}) | to_nice_json }}\n"
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_rootconf
@@ -70,7 +73,8 @@
     path: /etc/frr/daemons
     regexp: "^{{ item }}="
     line: "{{ item }}=yes"
-  loop: [bgpd, isisd]
+  # bfdd: BFD on attachment circuits
+  loop: "{{ ['bgpd', 'isisd'] + (['bfdd'] if fab_real.attachments.enabled | default(false) | bool else []) }}"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_daemons
 
@@ -83,6 +87,8 @@
     mode: "0640"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_frrconf
+  # the circuits' BGP passwords are in the file: no diff, no content in the log
+  no_log: "{{ hf_circuit_passwords | default({}) | length > 0 }}"
 
 - name: "{{ bgw_node.name }}: is FRR running"
   ansible.builtin.command: systemctl is-active frr
@@ -98,20 +104,21 @@
     enabled: true
     state: >-
       {{ 'started' if _hf_frr_active.stdout != 'active'
-         else ('restarted' if (_hf_daemons is changed or 'bridge-mac=changed' in _hf_apply.stdout) else omit) }}
+         else ('restarted' if 'bridge-mac=changed' in _hf_apply.stdout else omit) }}
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_frr_state
 
-# a running FRR with the same daemons takes a new configuration through frr-reload (no session reset)
+# a running FRR takes a new configuration through frr-reload (no session reset), and a newly enabled daemon (bfdd)
+# the same way: the reload restarts watchfrr with the daemons file's list, which starts the missing daemon and
+# leaves the running ones alone (FRR 8.5's frrinit.sh)
 - name: "{{ bgw_node.name }}: reload the FRR configuration"
   ansible.builtin.systemd:
     name: frr
     state: reloaded
   when:
     - _hf_frr_active.stdout == 'active'
-    - _hf_daemons is not changed
     - "'bridge-mac=changed' not in _hf_apply.stdout"
-    - _hf_frrconf is changed
+    - _hf_frrconf is changed or _hf_daemons is changed
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: wait for BGP and IS-IS"
@@ -141,6 +148,17 @@
       {% endfor %}
       {% endfor %}
       {% endif %}
+      {% for v in hf_node_vrfs %}
+      {% for c in v.circuits %}
+      # circuit {{ c.circuit }}: the device in the network's VRF with the node's address, the CE configured as a peer
+      [ "$(ip -j link show dev {{ c.device }} | jq -r '.[0].master')" = {{ v.vrf }} ]
+      ip -br -4 addr show dev {{ c.device }} | grep -q ' {{ c.address }}/'
+      vtysh -c 'show bgp vrf {{ v.vrf }} neighbors {{ c.ce }} json' | grep -q '"remoteAs":{{ c.peerAsn }}'
+      {% if c.bfd %}
+      pgrep -x bfdd >/dev/null
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
   register: _hf_verify
   retries: 12
   delay: 5
@@ -157,7 +175,9 @@
            'message': 'root instance: VPNv4 route reflector, IS-IS SR (SID ' ~ hf_pe.sid ~ '), ' ~ hf_root.bridge ~ ' '
                       ~ hf_root.link ~ ', loopback ' ~ hf_pe.loopbackIp
                       ~ ((', internet egress via ' ~ hf_node_egress.address ~ ' for ' ~ hf_node_egress.networks | length
-                          ~ ' network(s)') if hf_node_egress | length > 0 else ''),
+                          ~ ' network(s)') if hf_node_egress | length > 0 else '')
+                      ~ ((', ' ~ hf_node_attach.circuits | length ~ ' attachment circuit(s)')
+                         if hf_node_attach.circuits | default([]) | length > 0 else ''),
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}] }}
     hf_changed_nodes: >-
       {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_unit, _hf_apply,

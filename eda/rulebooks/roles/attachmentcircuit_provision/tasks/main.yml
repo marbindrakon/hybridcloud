@@ -3,8 +3,11 @@
 # circuit against both (Entity allowed on the edge, bearer and CE kind, same fabric, CE ASN, accept list against the
 # network's placements and the platform's ranges), then takes a VLAN and a link subnet from the fabric's ledger,
 # keeps the BGP password in Vault (the tenant's Secret, or a generated one written to a Secret <name>-bgp), and
-# records the circuit's realization (status.realization) and what the CE needs (status.ceConfig). The fabric job
-# realizes it on the border nodes; this job wakes the fabric when the realization changes.
+# records the circuit's realization (status.realization, with its revision rev) and what the CE needs
+# (status.ceConfig). The fabric job realizes it on the border nodes; this job wakes the fabric when the realization
+# changes. Once the fabric reports this revision on its nodes (status.realization.attachments), the job reads the BGP
+# session from each node: ready when every session is established, else pending (realized; the operator runs the
+# job again on its reconcilePeriod).
 - block:
     - name: Read the AttachmentCircuit
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -253,6 +256,24 @@
             - ac_secret_given | bool
             - ((_ac_secret.resources | default([{}], true))[0].data | default({}, true)).password | default('') | length == 0
 
+        # the password goes into the nodes' BGP configuration as one word
+        - name: Refuse a password the BGP configuration can't carry
+          ansible.builtin.set_fact:
+            fab_fail_reason: InvalidSecret
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: the password in Secret {{ ac_secret_name }} must be 1-80 characters
+              from A-Z, a-z, 0-9 and _.:,+=@%^*~-
+          when:
+            - ac_secret_given | bool
+            - ac_waiting | length == 0
+            - not ((_ac_secret.resources[0].data.password | b64decode) is match('^[A-Za-z0-9_.:,+=@%^*~-]{1,80}$'))
+          no_log: true
+
+        - name: Stop on an unusable password
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_fail_reason | default('') == 'InvalidSecret'
+
         - name: Report the circuit waiting for its Secret
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
           vars:
@@ -388,6 +409,11 @@
               'authentication': {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}),
               'bfd': ac_bgp.bfd | default(false) | bool} }}
 
+    # the revision the fabric reports when it has realized exactly this
+    - name: The realization's revision
+      ansible.builtin.set_fact:
+        ac_real: "{{ ac_real | combine({'rev': (ac_real | to_json(sort_keys=True) | hash('sha1'))[:12]}) }}"
+
     - name: Has the realization changed
       ansible.builtin.set_fact:
         ac_changed: "{{ (fab_st.realization | default({}, true)) != ac_real }}"
@@ -405,11 +431,27 @@
           {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
                                   'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real}) }}
 
+    # ---- on the border nodes? ----
+    - name: Does the fabric hold this revision on its nodes
+      vars:
+        _key: "{{ fab_namespace }}/{{ fab_name }}"
+        _real: "{{ (ac_fabric.status | default({}, true)).realization | default({}, true) }}"
+      ansible.builtin.set_fact:
+        ac_entry: "{{ (_real.attachments | default([], true) | selectattr('circuit', 'equalto', _key) | list + [{}]) | first }}"
+        ac_fabric_skip: >-
+          {{ ((_real.attachmentsSkipped | default([], true) | selectattr('circuit', 'equalto', _key) | list + [{}])
+              | first).reason | default('') }}
+
+    - name: Set whether the circuit is on the nodes
+      ansible.builtin.set_fact:
+        ac_on_nodes: "{{ not (ac_changed | bool) and ac_entry.rev | default('') == ac_real.rev and ac_entry.nodes | default([]) | length > 0 }}"
+
+    # a changed realization, or one the fabric hasn't taken up yet (and hasn't refused): the fabric runs again
     - name: Ask the fabric to realize the circuit
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ ac_fabric.metadata.name }}"}]
-      when: ac_changed | bool
+      when: ac_changed | bool or (not (ac_on_nodes | bool) and ac_fabric_skip | length == 0)
 
     - name: Report the circuit waiting for the fabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
@@ -418,11 +460,92 @@
         fab_reason: WaitingForFabric
         fab_message: >-
           VLAN {{ ac_vlan }} on {{ fab_spec.edgeRef.name }}/{{ fab_spec.edgeRef.bearer }}, link {{ ac_plan.link }}
-          (CE {{ ac_plan.ce }}); waiting for HybridFabric {{ ac_fabric.metadata.name }} to realize the circuit
+          (CE {{ ac_plan.ce }}); {{ ('HybridFabric ' ~ ac_fabric.metadata.name ~ ' does not realize the circuit: ' ~ ac_fabric_skip)
+          if ac_fabric_skip | length > 0 and not ac_changed | bool
+          else 'waiting for HybridFabric ' ~ ac_fabric.metadata.name ~ ' to realize the circuit' }}
         fab_waiting_for: ["HybridFabric {{ ac_fabric.metadata.name }} (circuit on VRF {{ ac_real.vrf }})"]
         fab_status: >-
           {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
-                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real}) }}
+                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real,
+                                  'sessions': []}) }}
+      when: not (ac_on_nodes | bool)
+
+    - name: End the job until the fabric realizes the circuit
+      ansible.builtin.meta: end_play
+      when: not (ac_on_nodes | bool)
+
+    # ---- the sessions ----
+    - name: Read the sessions on the border nodes
+      block:
+        - name: Connect to the border gateway nodes
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
+          vars:
+            bgw_fabric_spec: "{{ ac_fabric.spec }}"
+            bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
+
+        - name: The session from each node
+          ansible.builtin.shell:
+            cmd: |
+              python3 - '{{ ac_real.vrf }}' '{{ ac_real.ce }}' <<'PY'
+              import json, subprocess, sys
+              vrf, ce = sys.argv[1], sys.argv[2]
+              r = subprocess.run(["vtysh", "-c", f"show bgp vrf {vrf} neighbors {ce} json"], capture_output=True, text=True)
+              try:
+                  nb = json.loads(r.stdout or "{}").get(ce) or {}
+              except ValueError:
+                  nb = {}
+              af = (nb.get("addressFamilyInfo") or {}).get("ipv4Unicast") or {}
+              print(json.dumps({"state": nb.get("bgpState", "NotConfigured"), "established": nb.get("bgpTimerUpString"),
+                                "accepted": af.get("acceptedPrefixCounter", 0), "advertised": af.get("sentPrefixCounter", 0),
+                                "lastReset": nb.get("lastNotificationReason") or nb.get("lastResetDueTo") or "",
+                                "bfd": (nb.get("peerBfdInfo") or {}).get("status")}))
+              PY
+            executable: /bin/bash
+          register: _ac_sessions
+          changed_when: false
+          failed_when: false
+          # a node that can't be reached shows as Unknown
+          ignore_unreachable: true
+          delegate_to: "{{ item }}"
+          loop: "{{ ac_entry.nodes }}"
+      always:
+        - name: Remove the SSH key
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+
+    - name: Keep the sessions
+      ansible.builtin.set_fact:
+        ac_sessions: >-
+          {%- set out = [] -%}
+          {%- for r in _ac_sessions.results | default([]) -%}
+            {%- set ok = (r.stdout | default('') | trim).startswith('{') -%}
+            {%- set s = (r.stdout | from_json) if ok else {'state': 'Unknown', 'lastReset': (r.msg | default('node unreachable', true) | string)[:200]} -%}
+            {%- set _ = out.append({'node': r.item,
+                                    'address': (ac_real.nodes | selectattr('name', 'equalto', r.item) | map(attribute='address') | list + [''])[0]}
+                                   | combine(s)) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Report the circuit
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        _up: "{{ ac_sessions | selectattr('state', 'equalto', 'Established') | list }}"
+        _down: "{{ ac_sessions | rejectattr('state', 'equalto', 'Established') | list }}"
+        _all_up: "{{ _up | length == ac_sessions | length and ac_sessions | length > 0 }}"
+        fab_outcome: "{{ 'ready' if _all_up | bool else 'pending' }}"
+        fab_reason: "{{ 'Ready' if _all_up | bool else ('PartiallyEstablished' if _up | length > 0 else 'WaitingForPeer') }}"
+        fab_message: >-
+          {{ (('Established on ' ~ _up | map(attribute='node') | join(', ') ~ '; routes accepted '
+               ~ _up | map(attribute='accepted') | map('string') | join('/') ~ ', advertised '
+               ~ _up | map(attribute='advertised') | map('string') | join('/')) if _up else
+              ('Realized on ' ~ ac_entry.nodes | join(', ') ~ ' (VLAN ' ~ ac_vlan ~ ', CE ' ~ ac_plan.ce ~ ')'))
+             ~ ((('; ' if _up else '; BGP ') ~ _down | map(attribute='node') | zip(_down | map(attribute='state'),
+                 _down | map(attribute='lastReset')) | map('join', ' ') | map('trim') | join(', ')
+                 ~ ('' if _up else ': configure the CE from status.ceConfig')) if _down else '') }}
+        fab_waiting_for: "{{ [] if _all_up | bool else ['the CE: BGP from ' ~ _down | map(attribute='node') | join(', ')] }}"
+        fab_status: >-
+          {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
+                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real,
+                                  'sessions': ac_sessions, 'realized': true}) }}
 
   rescue:
     - name: Mark the AttachmentCircuit failed

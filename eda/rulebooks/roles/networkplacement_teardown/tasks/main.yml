@@ -271,6 +271,26 @@
           message: Deleted
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # the circuits' policy (deny and advertise lists) holds the network's placement prefixes
+    - name: List the network's attachment circuits
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AttachmentCircuit
+        namespace: "{{ fab_namespace }}"
+      register: _npd_circuits
+      when: npd_gw.spec is defined
+
+    - name: Tell the fabric when the network has attachment circuits
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ npd_gw.spec.fabricRef.name }}"}]
+      when:
+        - npd_gw.spec is defined
+        - _npd_circuits.resources | default([]) | selectattr('spec.network', 'equalto', fab_spec.network) | list | length > 0
+
     # the operator drops the finalizer the next time it looks at the CR: make that now
     - name: Release the finalizer now
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
