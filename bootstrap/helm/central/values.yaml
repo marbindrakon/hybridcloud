@@ -4738,7 +4738,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.1.4"
+      tag: "img-5.1.5"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
