@@ -362,44 +362,31 @@
               | default({}, true)).get(fab_spec.edgeRef.bearer, {}) }}
 
     # ---- record ----
+    # one expression per dict: values nested in a YAML mapping stay strings on older ansible-core (no native types)
     - name: The circuit's realization and the CE's parameters
       vars:
         _maxp: "{{ ac_bgp.maxPrefixes | default({}, true) }}"
         _adv: "{{ fab_spec.routing.advertise | default({}, true) }}"
+        _mtu: "{{ (ac_bearer_real.mtu | default(1500)) | int }}"
       ansible.builtin.set_fact:
-        ac_real:
-          vlan: "{{ ac_vlan | int }}"
-          linkIndex: "{{ ac_link_index | int }}"
-          link: "{{ ac_plan.link }}"
-          nodes: "{{ ac_plan.nodes }}"
-          ce: "{{ ac_plan.ce }}"
-          vrf: "e{{ ac_network.status.realization.vpnTarget }}"
-          vpnTarget: "{{ ac_network.status.realization.vpnTarget | int }}"
-          bearer: "{{ fab_spec.edgeRef.bearer }}"
-          interface: "{{ ac_bearer_real.interface | default('') }}"
-          mtu: "{{ (ac_bearer_real.mtu | default(1500)) | int }}"
-          peerAsn: "{{ ac_bgp.peerAsn | int }}"
-          authentication: "{{ ac_auth_type }}"
-          passwordPath: "{{ ac_vault_path if ac_auth_type == 'md5' else '' }}"
-          maxPrefixes: "{{ (_maxp.limit | default(100)) | int }}"
-          maxPrefixAction: "{{ _maxp.action | default('teardown') }}"
-          bfd: "{{ ac_bgp.bfd | default(false) | bool }}"
-          accept: "{{ fab_spec.routing.accept }}"
-          acceptsDefault: "{{ ac_policy.acceptsDefault | bool }}"
-          advertiseNetworkPrefixes: "{{ _adv.networkPrefixes | default(true) | bool }}"
-          advertiseDefault: "{{ _adv.default | default(false) | bool }}"
-        ac_ce_config:
-          vlan: "{{ ac_vlan | int }}"
-          address: "{{ ac_plan.ce }}/{{ ac_plan.prefixLength }}"
-          secondAddress: "{{ ac_plan.ceSecond }}/{{ ac_plan.prefixLength }}"
-          localAsn: "{{ ac_bgp.peerAsn | int }}"
-          neighbors: >-
-            {%- set out = [] -%}
-            {%- for n in ac_plan.nodes -%}{%- set _ = out.append({'address': n.address, 'asn': ac_asn | int}) -%}{%- endfor -%}
-            {{ out }}
-          mtu: "{{ (ac_bearer_real.mtu | default(1500)) | int }}"
-          authentication: "{{ {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}) }}"
-          bfd: "{{ ac_bgp.bfd | default(false) | bool }}"
+        ac_real: >-
+          {{ {'vlan': ac_vlan | int, 'linkIndex': ac_link_index | int, 'link': ac_plan.link, 'nodes': ac_plan.nodes,
+              'ce': ac_plan.ce, 'vrf': 'e' ~ ac_network.status.realization.vpnTarget,
+              'vpnTarget': ac_network.status.realization.vpnTarget | int, 'bearer': fab_spec.edgeRef.bearer,
+              'interface': ac_bearer_real.interface | default(''), 'mtu': _mtu | int, 'peerAsn': ac_bgp.peerAsn | int,
+              'authentication': ac_auth_type, 'passwordPath': ac_vault_path if ac_auth_type == 'md5' else '',
+              'maxPrefixes': (_maxp.limit | default(100)) | int, 'maxPrefixAction': _maxp.action | default('teardown'),
+              'bfd': ac_bgp.bfd | default(false) | bool, 'accept': fab_spec.routing.accept,
+              'acceptsDefault': ac_policy.acceptsDefault | bool,
+              'advertiseNetworkPrefixes': _adv.networkPrefixes | default(true) | bool,
+              'advertiseDefault': _adv.default | default(false) | bool} }}
+        ac_ce_config: >-
+          {{ {'vlan': ac_vlan | int, 'address': ac_plan.ce ~ '/' ~ ac_plan.prefixLength,
+              'secondAddress': ac_plan.ceSecond ~ '/' ~ ac_plan.prefixLength, 'localAsn': ac_bgp.peerAsn | int,
+              'neighbors': ac_plan.nodes | map('combine', {'asn': ac_asn | int}) | list,
+              'mtu': _mtu | int,
+              'authentication': {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}),
+              'bfd': ac_bgp.bfd | default(false) | bool} }}
 
     - name: Has the realization changed
       ansible.builtin.set_fact:
