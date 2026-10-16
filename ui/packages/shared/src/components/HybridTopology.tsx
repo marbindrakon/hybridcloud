@@ -13,7 +13,7 @@ import type {
 } from '../types';
 import { useTranslation } from '../i18n';
 import { normalizeHealth } from './StatusBadge';
-import { egressText } from './KindStatusDetails';
+import { egressText, placementVnis } from './KindStatusDetails';
 
 /**
  * HybridTopology — the hybrid network drawn as the layers it is made of (adapted from
@@ -359,6 +359,7 @@ export function buildTopologyModel(
     if (!netName) continue;
     const kind = str(p.spec?.backend?.kind);
     const name = str(p.spec?.backend?.name);
+    const vnis = placementVnis(p);
     const entry: TopoPlacement = {
       key: `${ns}/${p.metadata.name}`,
       cr: p,
@@ -368,8 +369,8 @@ export function buildTopologyModel(
       siteName: str(p.status?.site) || backendSite.get(`${ns}|${kind}|${name}`) || '',
       cloudGateway: str(p.status?.cloudGateway),
       prefixes: strs(p.spec?.prefixes),
-      l3Vni: num(p.status?.l3Vni),
-      l2Vni: num(p.status?.l2Vni),
+      l3Vni: num(vnis.l3),
+      l2Vni: num(vnis.l2),
       namespaces: strs(p.status?.namespaces),
       state: stateOf(p),
       message: str(p.status?.message),
@@ -614,7 +615,8 @@ function layout(model: TopologyModel): {
     };
   });
 
-  const offsetY = model.platformVisible ? 0 : SITE_Y - PAD;
+  // Without the platform kinds the fabric and gateway bands are left out, and without sites the site band too.
+  const offsetY = model.platformVisible ? 0 : sites.length > 0 ? SITE_Y - PAD : GROUPS_Y - PAD;
   const height = GROUPS_Y + (groups.length > 0 ? maxGroupH : 0) + PAD - offsetY;
   return { width: contentW + PAD * 2, height, offsetY, contentW, groups, sites, siteCx };
 }

@@ -676,7 +676,7 @@
     "vnis": "VNI L3 {{l3}} · VNI L2 {{l2}}",
     "vniL3": "VNI L3 {{l3}}",
     "noVni": "pas encore de VNI",
-    "nsToSite": "ns {{namespaces}} → site {{site}}",
+    "nsToSite": "→ site {{site}} · ns {{namespaces}}",
     "toSite": "→ site {{site}}",
     "unresolved": "non résolu",
     "legendAbsent": "Non placé, ou sans détails",

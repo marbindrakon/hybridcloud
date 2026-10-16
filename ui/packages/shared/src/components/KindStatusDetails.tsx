@@ -643,10 +643,19 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
   );
 }
 
+/** A placement's layer 3 and layer 2 VNIs: status.realization, else the top-level status fields. */
+export function placementVnis(item: NetworkPlacement | undefined): { l3?: number; l2?: number } {
+  const real = (item?.status?.realization ?? {}) as { l3Vni?: unknown; l2Vni?: unknown };
+  const pick = (a: unknown, b: unknown): number | undefined =>
+    typeof a === 'number' ? a : typeof b === 'number' ? b : undefined;
+  return { l3: pick(real.l3Vni, item?.status?.l3Vni), l2: pick(real.l2Vni, item?.status?.l2Vni) };
+}
+
 function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.ReactElement {
   const { t } = useTranslation();
   const spec = item.spec ?? ({} as NetworkPlacement['spec']);
   const st = item.status ?? {};
+  const vnis = placementVnis(item);
   return (
     <Facts>
       <Fact label={t('fields.network')}>{spec.network}</Fact>
@@ -661,8 +670,8 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
       </Fact>
       <Fact label={t('fields.site')}>{st.site}</Fact>
       <Fact label={t('detail.cloudGateway')}>{st.cloudGateway}</Fact>
-      <Fact label={t('detail.l3Vni')}>{st.l3Vni}</Fact>
-      <Fact label={t('detail.l2Vni')}>{st.l2Vni}</Fact>
+      <Fact label={t('detail.l3Vni')}>{vnis.l3}</Fact>
+      <Fact label={t('detail.l2Vni')}>{vnis.l2}</Fact>
       <Fact label={t('detail.effectiveMtu')}>{st.mtu}</Fact>
       <Fact label={t('detail.siteNamespaces')}>
         <List items={st.namespaces} />
