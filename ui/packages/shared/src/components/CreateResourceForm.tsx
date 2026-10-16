@@ -273,6 +273,10 @@ export function CreateResourceForm({
   const [rbacMulti, setRbacMulti] = useState<string[]>([]);
   const [rbacOperator, setRbacOperator] = useState<string[]>([]);
   const [rbacViewer, setRbacViewer] = useState<string[]>([]);
+  // Team RBAC: Rbac CR names in the tenant namespace; each list is written only when it has entries.
+  const [teamAdminRbac, setTeamAdminRbac] = useState<string[]>([]);
+  const [teamMemberRbac, setTeamMemberRbac] = useState<string[]>([]);
+  const [teamViewerRbac, setTeamViewerRbac] = useState<string[]>([]);
   const [personaRbacs, setPersonaRbacs] = useState<string[]>([]);
   /** Spec reported by a network create section (null while incomplete or invalid) */
   const [networkSpec, setNetworkSpec] = useState<Record<string, unknown> | null>(null);
@@ -317,6 +321,9 @@ export function CreateResourceForm({
     setRbacMulti([]);
     setRbacOperator([]);
     setRbacViewer([]);
+    setTeamAdminRbac([]);
+    setTeamMemberRbac([]);
+    setTeamViewerRbac([]);
   }, []);
 
   const entities = useK8sResourceList<K8sResource>('Entity', {
@@ -347,7 +354,7 @@ export function CreateResourceForm({
   });
   const rbacs = useK8sResourceList<K8sResource>('Rbac', {
     namespace: entityNs,
-    enabled: (type === 'persona' || type === 'vaultkv' || type === 'aaporg' || type === 'quayorg' || type === 'assignment' || type === 'platformopenshift') && !!entityNs,
+    enabled: (type === 'persona' || type === 'vaultkv' || type === 'aaporg' || type === 'quayorg' || type === 'assignment' || type === 'platformopenshift' || type === 'team') && !!entityNs,
   });
   const rbacConfigs = useK8sResourceList<K8sResource>('RbacConfig', {
     enabled: type === 'rbac' || type === 'vault',
@@ -465,6 +472,9 @@ export function CreateResourceForm({
       case 'team':
         return {
           features: { argo: argoEnabled, istio: istioEnabled },
+          ...(teamAdminRbac.length ? { teamAdmin: teamAdminRbac } : {}),
+          ...(teamMemberRbac.length ? { teamMemberRbac } : {}),
+          ...(teamViewerRbac.length ? { teamViewerRbac } : {}),
         };
       case 'project':
         return {
@@ -738,6 +748,32 @@ export function CreateResourceForm({
                       onChange={(_e, checked) => setIstioEnabled(checked)}
                     />
                   </FormGroup>
+                  {/* Rbac CR names in the selected Entity's namespace. */}
+                  <RbacMultiSelect
+                    id="team-rbac-admin"
+                    label="Team admin RBAC"
+                    value={teamAdminRbac}
+                    onChange={setTeamAdminRbac}
+                    options={names(rbacs.items)}
+                    placeholder="Optional"
+                  />
+                  <RbacMultiSelect
+                    id="team-rbac-member"
+                    label="Team member RBAC"
+                    value={teamMemberRbac}
+                    onChange={setTeamMemberRbac}
+                    options={names(rbacs.items)}
+                    placeholder="Optional"
+                  />
+                  <RbacMultiSelect
+                    id="team-rbac-viewer"
+                    label="Team viewer RBAC"
+                    value={teamViewerRbac}
+                    onChange={setTeamViewerRbac}
+                    options={names(rbacs.items)}
+                    placeholder="Optional"
+                  />
+                  <Alert variant="info" isInline isPlain title={t('form.teamRbacHelp')} className="sc-mb" />
                 </>
               )}
 

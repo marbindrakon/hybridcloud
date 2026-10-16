@@ -81,7 +81,10 @@ export interface TeamSpec {
     argo?: boolean;
     istio?: boolean;
   };
-  /** Deprecated in the API (access comes from Assignment toolRbac); not written by the forms. */
+  /**
+   * Rbac CR names in the tenant namespace. Members of the viewer Rbacs' groups
+   * (the admin Rbacs' when no viewer Rbac is set) can view the Team.
+   */
   teamAdmin?: string[];
   teamMemberRbac?: string[];
   teamViewerRbac?: string[];

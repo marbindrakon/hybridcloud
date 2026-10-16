@@ -254,6 +254,7 @@
     "entityNamePlaceholder": "Nom de l'entité, p. ex. acme-corp",
     "entityNone": "Aucune entité visible avec vos droits — créez d'abord une entité",
     "entityScopeHelp": "Créé dans l'espace de noms {{namespace}}.",
+    "teamRbacHelp": "Les membres des groupes RBAC lecteur, ou des groupes RBAC admin si aucun RBAC lecteur n'est défini, peuvent consulter cette équipe.",
     "entitySelectPlaceholder": "Sélectionner une entité…",
     "required": "Obligatoire",
     "optional": "Facultatif",

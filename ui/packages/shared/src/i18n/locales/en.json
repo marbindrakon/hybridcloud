@@ -308,6 +308,7 @@
     "entityNamePlaceholder": "Entity name, e.g. acme-corp",
     "entityNone": "No Entities are visible with your access \u2014 create an Entity first",
     "entityScopeHelp": "Created in namespace {{namespace}}.",
+    "teamRbacHelp": "Members of the viewer RBAC groups, or of the admin RBAC groups when no viewer RBAC is set, can view this Team.",
     "entitySelectPlaceholder": "Select Entity\u2026"
   },
   "fields": {
