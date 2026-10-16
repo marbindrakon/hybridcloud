@@ -202,7 +202,37 @@ select.sc-entity-select,
   overflow: auto;
   border: 1px solid var(--sc-border);
   background: var(--sc-surface);
-  max-height: 420px;
+  /* The graph flows top-down, so it needs more vertical room than the old
+     left-to-right layout did. */
+  max-height: 620px;
+}
+
+.sc-topology-graph__viewport:fullscreen {
+  max-height: none;
+  height: 100%;
+}
+
+/* Row caption for each layer of the top-down flow. */
+.sc-topology-layer__title {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  fill: var(--sc-text-muted);
+}
+
+/* Status glyph: the filled disc carries colour, the stroked mark carries the
+   shape, so state reads without colour. */
+.sc-topology-node__mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sc-topo-legend__glyph {
+  vertical-align: -2px;
 }
 
 .sc-topology-svg {

@@ -54,12 +54,35 @@ const PLATFORM_ENV_KIND: Record<string, HybridSovereignKind> = {
   aws: 'CloudAWS',
 };
 
-const COL_GAP = 200;
-const ROW_GAP = 64;
-const NODE_W = 148;
-const NODE_H = 44;
-const PAD_X = 24;
-const PAD_Y = 36;
+/** Cluster-scoped-ish kinds that genuinely live in one shared namespace. */
+const PLATFORM_SCOPED_KINDS = new Set<string>(['HybridFabric', 'CloudInfrastructure']);
+
+/**
+ * Identity of a node in the graph. Tenant CRs live in `entity-<tenant>`
+ * namespaces and their names are NOT globally unique (e.g. `local-virt` exists
+ * in both `entity-acme-corp` and `entity-chad`), so every lookup has to be
+ * keyed on namespace + kind + name — never on the bare name, and never on
+ * array position.
+ */
+function nodeKey(kind: string, namespace: string | undefined, name: string): string {
+  return `${kind}|${namespace ?? ''}|${name}`;
+}
+
+/** The entity that owns a tenant CR: its `.status.entity`, else `entity-<x>` namespace. */
+function entityOf(item: K8sResource): string {
+  const fromStatus = (item.status as { entity?: unknown } | undefined)?.entity;
+  if (typeof fromStatus === 'string' && fromStatus) return fromStatus;
+  const ns = item.metadata.namespace ?? '';
+  return ns.startsWith('entity-') ? ns.slice('entity-'.length) : '';
+}
+
+const NODE_W = 150;
+const NODE_H = 46;
+const COL_GAP = 22; // horizontal gap between sibling nodes in a layer
+const LAYER_GAP = 62; // vertical gap between layers
+const PAD_X = 20;
+const PAD_Y = 16;
+const LAYER_LABEL_H = 16;
 
 function statusFromReady(ready?: boolean, status?: string): TopologyNode['status'] {
   return normalizeHealth(ready, status);
@@ -72,40 +95,86 @@ function statusColor(status: TopologyNode['status']): string {
   return 'var(--sc-text-muted, #6a6e73)';
 }
 
-function layoutColumns(columns: TopologyNode[][]): {
+export interface TopologyLayer {
+  title: string;
+  y: number;
+}
+
+/**
+ * Top-down layered layout: one layer per row, flowing downward, matching the
+ * layered look of the hybrid network topology diagram. Each layer is centred on
+ * a common content width so parents sit above their children.
+ */
+function layoutLayers(layers: Array<{ title: string; nodes: TopologyNode[] }>): {
   nodes: TopologyNode[];
+  rows: TopologyLayer[];
   width: number;
   height: number;
 } {
+  const widest = Math.max(1, ...layers.map((l) => l.nodes.length));
+  const contentW = widest * NODE_W + (widest - 1) * COL_GAP;
+
   const placed: TopologyNode[] = [];
-  let maxH = 0;
-  columns.forEach((col, ci) => {
-    col.forEach((node, ri) => {
-      placed.push({
-        ...node,
-        x: PAD_X + ci * COL_GAP,
-        y: PAD_Y + ri * ROW_GAP,
-      });
+  const rows: TopologyLayer[] = [];
+  let y = PAD_Y;
+
+  for (const layer of layers) {
+    const n = layer.nodes.length;
+    const rowW = n * NODE_W + Math.max(n - 1, 0) * COL_GAP;
+    const startX = PAD_X + (contentW - rowW) / 2;
+    rows.push({ title: layer.title, y });
+    const nodeY = y + LAYER_LABEL_H;
+    layer.nodes.forEach((node, i) => {
+      placed.push({ ...node, x: startX + i * (NODE_W + COL_GAP), y: nodeY });
     });
-    maxH = Math.max(maxH, col.length);
-  });
+    y = nodeY + NODE_H + LAYER_GAP;
+  }
+
   return {
     nodes: placed,
-    width: PAD_X * 2 + Math.max(columns.length - 1, 0) * COL_GAP + NODE_W,
-    height: PAD_Y * 2 + Math.max(maxH - 1, 0) * ROW_GAP + NODE_H,
+    rows,
+    width: PAD_X * 2 + contentW,
+    height: y - LAYER_GAP + PAD_Y,
   };
 }
 
-function edgePath(
-  from: TopologyNode,
-  to: TopologyNode,
-): string {
-  const x1 = (from.x ?? 0) + NODE_W;
-  const y1 = (from.y ?? 0) + NODE_H / 2;
-  const x2 = to.x ?? 0;
-  const y2 = (to.y ?? 0) + NODE_H / 2;
-  const mx = (x1 + x2) / 2;
-  return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+/** Vertical cubic connector: leaves the bottom of `from`, enters the top of `to`. */
+function edgePath(from: TopologyNode, to: TopologyNode): string {
+  const x1 = (from.x ?? 0) + NODE_W / 2;
+  const y1 = (from.y ?? 0) + NODE_H;
+  const x2 = (to.x ?? 0) + NODE_W / 2;
+  const y2 = to.y ?? 0;
+  const my = (y1 + y2) / 2;
+  return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
+}
+
+/**
+ * Status as a drawn shape as well as a colour, so the legend survives
+ * greyscale, print and forced-colors mode.
+ */
+function StatusGlyph({ status, x, y }: { status: TopologyNode['status']; x: number; y: number }) {
+  return (
+    <g transform={`translate(${x}, ${y})`} className="sc-topology-node__glyph">
+      <circle cx={0} cy={0} r={5.5} fill={statusColor(status)} />
+      {status === 'ready' && <path d="M -2.6 0 L -0.8 2 L 2.8 -2" className="sc-topology-node__mark" />}
+      {status === 'failed' && (
+        <path d="M -2.2 -2.2 L 2.2 2.2 M 2.2 -2.2 L -2.2 2.2" className="sc-topology-node__mark" />
+      )}
+      {(status === 'pending' || status === 'reconciling') && (
+        <path d="M 0 -2.8 L 0 0 L 2.2 1.4" className="sc-topology-node__mark" />
+      )}
+      {status === 'unknown' && <path d="M -2.6 0 L 2.6 0" className="sc-topology-node__mark" />}
+    </g>
+  );
+}
+
+/** The same glyph at legend size, as a standalone inline SVG. */
+function LegendGlyph({ status }: { status: TopologyNode['status'] }): React.ReactElement {
+  return (
+    <svg className="sc-topo-legend__glyph" width={14} height={14} viewBox="-7 -7 14 14" aria-hidden="true">
+      <StatusGlyph status={status} x={0} y={0} />
+    </svg>
+  );
 }
 
 /** Live entity topology — layered SVG graph matching design-assets */
@@ -190,7 +259,7 @@ export function EntityTopology({
   const graph = useMemo(() => {
     const allow = (ok: boolean) => !filterByPermissions || ok;
     const toNode = (item: K8sResource, kind: HybridSovereignKind): TopologyNode => ({
-      id: `${kind}/${item.metadata.namespace ?? ''}/${item.metadata.name}`,
+      id: nodeKey(kind, item.metadata.namespace, item.metadata.name),
       label: item.metadata.name,
       kind,
       namespace: item.metadata.namespace,
@@ -208,7 +277,7 @@ export function EntityTopology({
     const entityNodes: TopologyNode[] = entityNamespace
       ? [
           {
-            id: `Entity/${entityNamespace}`,
+            id: nodeKey('Entity', entityNamespace, entityNamespace.replace(/^entity-/, '')),
             label: entityNamespace.replace(/^entity-/, ''),
             kind: 'Entity',
             status: 'ready',
@@ -246,7 +315,7 @@ export function EntityTopology({
       if (infraNames.has(infraName)) continue;
       infraNames.add(infraName);
       infraNodes.push({
-        id: `CloudInfrastructure/sovereign-cloud/${infraName}`,
+        id: nodeKey('CloudInfrastructure', 'sovereign-cloud', infraName),
         label: infraName,
         kind: 'CloudInfrastructure',
         namespace: 'sovereign-cloud',
@@ -254,202 +323,223 @@ export function EntityTopology({
       });
     }
 
-    // Build edges ONLY from real CR references (no mesh heuristics)
-    const edgePairs: Array<{ fromKind: string; fromName: string; toKind: string; toName: string; failed?: boolean }> =
-      [];
+    // ---------------------------------------------------------------- edges
+    // Every node is identified by namespace|kind|name. Tenant CR names are not
+    // globally unique (`local-virt` exists in entity-acme-corp AND entity-chad),
+    // so an edge is only ever built between two resolved node keys — never by
+    // bare name and never by array position.
+    const allNodes: TopologyNode[] = [
+      ...entityNodes,
+      ...teamNodes,
+      ...projectNodes,
+      ...assignmentNodes,
+      ...platformNodes,
+      ...cloudNodes,
+      ...fabricNodes,
+      ...infraNodes,
+    ];
+    const byKey = new Map(allNodes.map((n) => [n.id, n]));
 
-    for (const a of assignmentItems) {
-      if (!allow(assignmentPerm.allowed)) break;
-      const spec = (a.spec || {}) as AssignSpec;
-      const failed = statusFromReady(a.status?.ready, a.status?.status) === 'failed';
-      if (spec.team) {
-        edgePairs.push({ fromKind: 'Team', fromName: spec.team, toKind: 'Assignment', toName: a.metadata.name, failed });
+    /**
+     * Resolve a CR reference to a node key. A reference inside a tenant CR is
+     * namespace-local, so it must resolve inside `ns`. Only the two
+     * platform-scoped kinds (HybridFabric, CloudInfrastructure) may fall back
+     * to the shared `sovereign-cloud` namespace.
+     */
+    const resolve = (kind: string, ns: string | undefined, name: string): string | undefined => {
+      if (!name) return undefined;
+      const local = nodeKey(kind, ns, name);
+      if (byKey.has(local)) return local;
+      if (PLATFORM_SCOPED_KINDS.has(kind)) {
+        const shared = nodeKey(kind, 'sovereign-cloud', name);
+        if (byKey.has(shared)) return shared;
       }
-      for (const pName of spec.projects ?? []) {
-        edgePairs.push({
-          fromKind: 'Project',
-          fromName: pName,
-          toKind: 'Assignment',
-          toName: a.metadata.name,
-          failed,
-        });
-      }
-      if (spec.openshift) {
-        edgePairs.push({
-          fromKind: 'PlatformOpenshift',
-          fromName: spec.openshift,
-          toKind: 'Assignment',
-          toName: a.metadata.name,
-          failed,
-        });
-      }
-      if (spec.aws) {
-        edgePairs.push({
-          fromKind: 'CloudAWS',
-          fromName: spec.aws,
-          toKind: 'Assignment',
-          toName: a.metadata.name,
-          failed,
-        });
-      }
-      if (spec.cloudoso) {
-        edgePairs.push({
-          fromKind: 'CloudOSO',
-          fromName: spec.cloudoso,
-          toKind: 'Assignment',
-          toName: a.metadata.name,
-          failed,
-        });
+      return undefined;
+    };
+
+    const edgePairs: Array<{ from: string; to: string; failed?: boolean }> = [];
+    const link = (from: string | undefined, to: string | undefined, failed?: boolean) => {
+      if (!from || !to || from === to) return;
+      edgePairs.push({ from, to, failed });
+    };
+
+    // Assignment ← Team / Project / PlatformOpenshift / CloudAWS / CloudOSO.
+    // All of these refs are plain names inside the Assignment's own namespace.
+    if (allow(assignmentPerm.allowed)) {
+      for (const a of assignmentItems) {
+        const ans = a.metadata.namespace;
+        const spec = (a.spec || {}) as AssignSpec;
+        const self = resolve('Assignment', ans, a.metadata.name);
+        const failed = statusFromReady(a.status?.ready, a.status?.status) === 'failed';
+        if (spec.team) link(resolve('Team', ans, spec.team), self, failed);
+        for (const pName of spec.projects ?? []) link(resolve('Project', ans, pName), self, failed);
+        if (spec.openshift) link(resolve('PlatformOpenshift', ans, spec.openshift), self, failed);
+        if (spec.aws) link(resolve('CloudAWS', ans, spec.aws), self, failed);
+        if (spec.cloudoso) link(resolve('CloudOSO', ans, spec.cloudoso), self, failed);
       }
     }
 
-    // HybridFabric → CloudInfrastructure through each CloudGateway (fabricRef + cloudRef)
+    // HybridFabric → CloudInfrastructure through each CloudGateway (fabricRef + cloudRef).
     for (const g of gatewayItems) {
+      const gns = g.metadata.namespace;
       const fabricName = (g.spec as { fabricRef?: { name?: string } } | undefined)?.fabricRef?.name;
       const infraName = cloudRefOf(g);
       if (!fabricName || !infraName) continue;
-      edgePairs.push({
-        fromKind: 'HybridFabric',
-        fromName: fabricName,
-        toKind: 'CloudInfrastructure',
-        toName: infraName,
-        failed: statusFromReady(g.status?.ready, g.status?.status) === 'failed',
-      });
+      link(
+        resolve('HybridFabric', gns, fabricName),
+        resolve('CloudInfrastructure', gns, infraName),
+        statusFromReady(g.status?.ready, g.status?.status) === 'failed',
+      );
     }
 
-    // CloudInfrastructure → tenant cloud project (spec.cloudRef)
+    // CloudInfrastructure → tenant cloud project (spec.cloudRef → sovereign-cloud).
     for (const { item, kind } of visibleClouds) {
       const infraName = cloudRefOf(item);
       if (!infraName) continue;
-      edgePairs.push({
-        fromKind: 'CloudInfrastructure',
-        fromName: infraName,
-        toKind: kind,
-        toName: item.metadata.name,
-        failed: statusFromReady(item.status?.ready, item.status?.status) === 'failed',
-      });
+      link(
+        resolve('CloudInfrastructure', item.metadata.namespace, infraName),
+        nodeKey(kind, item.metadata.namespace, item.metadata.name),
+        statusFromReady(item.status?.ready, item.status?.status) === 'failed',
+      );
     }
 
-    // Cloud project → PlatformOpenshift (spec.<type>.environment)
-    for (const p of platformItems) {
-      const spec = (p.spec ?? {}) as { type?: string } & Record<string, unknown>;
-      const cloudKind = PLATFORM_ENV_KIND[spec.type ?? ''];
-      const env = (spec[spec.type ?? ''] as { environment?: string } | undefined)?.environment;
-      if (!cloudKind || !env) continue;
-      if (!visibleClouds.some((c) => c.kind === cloudKind && c.item.metadata.name === env)) continue;
-      edgePairs.push({
-        fromKind: cloudKind,
-        fromName: env,
-        toKind: 'PlatformOpenshift',
-        toName: p.metadata.name,
-        failed: statusFromReady(p.status?.ready, p.status?.status) === 'failed',
-      });
-    }
-
-    // Entity → Team / Entity → Platform only for scoped ownership (namespace membership)
-    if (entityNamespace && entityNodes[0]) {
-      for (const t of teamNodes) {
-        edgePairs.push({
-          fromKind: 'Entity',
-          fromName: entityNodes[0].label,
-          toKind: 'Team',
-          toName: t.label,
-          failed: t.status === 'failed',
-        });
-      }
-    } else {
-      for (const e of entityNodes) {
-        for (const p of platformNodes) {
-          if (p.namespace === `entity-${e.label}`) {
-            edgePairs.push({
-              fromKind: 'Entity',
-              fromName: e.label,
-              toKind: 'PlatformOpenshift',
-              toName: p.label,
-              failed: p.status === 'failed',
-            });
-          }
-        }
-        for (const a of assignmentNodes) {
-          if (a.namespace === `entity-${e.label}`) {
-            // Prefer linking entity → assignment only when no team edge exists
-            const hasTeam = edgePairs.some(
-              (ep) => ep.toKind === 'Assignment' && ep.toName === a.label && ep.fromKind === 'Team',
-            );
-            if (!hasTeam) {
-              edgePairs.push({
-                fromKind: 'Entity',
-                fromName: e.label,
-                toKind: 'Assignment',
-                toName: a.label,
-                failed: a.status === 'failed',
-              });
-            }
-          }
-        }
+    // Cloud project → PlatformOpenshift (spec.<type>.environment, same namespace).
+    const platformHasCloudParent = new Set<string>();
+    if (allow(platformPerm.allowed)) {
+      for (const p of platformItems) {
+        const pns = p.metadata.namespace;
+        const spec = (p.spec ?? {}) as { type?: string } & Record<string, unknown>;
+        const cloudKind = PLATFORM_ENV_KIND[spec.type ?? ''];
+        const env = (spec[spec.type ?? ''] as { environment?: string } | undefined)?.environment;
+        if (!cloudKind || !env) continue;
+        const cloud = resolve(cloudKind, pns, env);
+        const self = nodeKey('PlatformOpenshift', pns, p.metadata.name);
+        if (!cloud) continue;
+        platformHasCloudParent.add(self);
+        link(cloud, self, statusFromReady(p.status?.ready, p.status?.status) === 'failed');
       }
     }
 
-    // Only keep nodes that are entities/teams/projects OR appear in an edge
+    // Entity → everything it owns. Ownership comes from the resource's OWN
+    // namespace (`entity-<name>`) or its `.status.entity`, never from name
+    // similarity: that is what mis-attached `onix-aws` to entity `bulbasaur`.
+    const entityNodeByName = new Map(entityNodes.map((e) => [e.label, e]));
+    const ownerNode = (item: K8sResource): TopologyNode | undefined => {
+      const name = entityOf(item);
+      if (!name) return undefined;
+      const e = entityNodeByName.get(name);
+      // In scoped mode there is exactly one Entity node; only claim resources
+      // that really sit in that entity's namespace.
+      if (!e) return undefined;
+      if (entityNamespace && item.metadata.namespace !== entityNamespace) return undefined;
+      return e;
+    };
+
+    for (const { item, kind } of visibleClouds) {
+      const e = ownerNode(item);
+      if (!e) continue;
+      link(
+        e.id,
+        nodeKey(kind, item.metadata.namespace, item.metadata.name),
+        statusFromReady(item.status?.ready, item.status?.status) === 'failed',
+      );
+    }
+
+    if (allow(teamPerm.allowed)) {
+      for (const t of teamItems) {
+        const e = ownerNode(t);
+        link(e?.id, nodeKey('Team', t.metadata.namespace, t.metadata.name));
+      }
+    }
+
+    // A PlatformOpenshift hangs off its cloud project when it has one; only
+    // orphans attach straight to the entity, so the chain stays a single spine.
+    if (allow(platformPerm.allowed)) {
+      for (const p of platformItems) {
+        const self = nodeKey('PlatformOpenshift', p.metadata.namespace, p.metadata.name);
+        if (platformHasCloudParent.has(self)) continue;
+        const e = ownerNode(p);
+        link(e?.id, self, statusFromReady(p.status?.ready, p.status?.status) === 'failed');
+      }
+    }
+
+    // Likewise, an Assignment only attaches to its entity if nothing upstream claimed it.
+    if (allow(assignmentPerm.allowed)) {
+      const claimed = new Set(edgePairs.map((ep) => ep.to));
+      for (const a of assignmentItems) {
+        const self = nodeKey('Assignment', a.metadata.namespace, a.metadata.name);
+        if (claimed.has(self)) continue;
+        const e = ownerNode(a);
+        link(e?.id, self, statusFromReady(a.status?.ready, a.status?.status) === 'failed');
+      }
+    }
+
+    // --------------------------------------------------------------- pruning
     const referenced = new Set<string>();
     for (const ep of edgePairs) {
-      referenced.add(`${ep.fromKind}:${ep.fromName}`);
-      referenced.add(`${ep.toKind}:${ep.toName}`);
+      referenced.add(ep.from);
+      referenced.add(ep.to);
     }
     const keep = (n: TopologyNode) =>
       n.kind === 'Entity' ||
       (!entityNamespace && (n.kind === 'HybridFabric' || n.kind === 'CloudInfrastructure')) ||
-      referenced.has(`${n.kind}:${n.label}`);
+      referenced.has(n.id);
 
-    const filteredTeams = teamNodes.filter(keep);
-    const filteredProjects = projectNodes.filter(keep);
-    const filteredAssignments = assignmentNodes.filter(keep);
-    const filteredPlatforms = platformNodes.filter(keep);
-    const filteredClouds = cloudNodes.filter(keep);
+    // -------------------------------------------------------------- ordering
+    // Sort each layer by owning entity, then kind, then name, so a tenant's
+    // resources sit under its Entity and edges run mostly straight down.
+    const entityOrder = new Map(entityNodes.map((e, i) => [e.label, i]));
+    const ownerRank = (n: TopologyNode): number => {
+      const name = (n.namespace ?? '').startsWith('entity-')
+        ? (n.namespace ?? '').slice('entity-'.length)
+        : '';
+      return entityOrder.get(name) ?? Number.MAX_SAFE_INTEGER;
+    };
+    const byOwner = (a: TopologyNode, b: TopologyNode) =>
+      ownerRank(a) - ownerRank(b) ||
+      a.kind.localeCompare(b.kind) ||
+      a.label.localeCompare(b.label);
+
+    const sorted = (ns2: TopologyNode[]) => ns2.filter(keep).sort(byOwner);
+
+    const filteredTeams = sorted(teamNodes);
+    const filteredProjects = sorted(projectNodes);
+    const filteredAssignments = sorted(assignmentNodes);
+    const filteredPlatforms = sorted(platformNodes);
+    const filteredClouds = sorted(cloudNodes);
     const filteredFabrics = fabricNodes.filter(keep);
-    const filteredInfra = infraNodes.filter(keep);
+    const filteredInfra = infraNodes.filter(keep).sort((a, b) => a.label.localeCompare(b.label));
 
-    // Order columns by dependency flow; sort rows to reduce crossings
-    const teamOrder = new Map(filteredTeams.map((t, i) => [t.label, i]));
-    filteredAssignments.sort((a, b) => {
-      const aTeam = edgePairs.find((e) => e.toName === a.label && e.fromKind === 'Team')?.fromName;
-      const bTeam = edgePairs.find((e) => e.toName === b.label && e.fromKind === 'Team')?.fromName;
-      return (teamOrder.get(aTeam ?? '') ?? 99) - (teamOrder.get(bTeam ?? '') ?? 99);
-    });
-    filteredProjects.sort((a, b) => {
-      const aTeam = edgePairs.find(
-        (e) => e.fromName === a.label && e.fromKind === 'Project',
-      );
-      const bTeam = edgePairs.find(
-        (e) => e.fromName === b.label && e.fromKind === 'Project',
-      );
-      const aAssign = aTeam?.toName;
-      const bAssign = bTeam?.toName;
-      return (aAssign ?? '').localeCompare(bAssign ?? '');
-    });
-
-    const columns: TopologyNode[][] = (
+    // --------------------------------------------------------- top-down layers
+    const layers = (
       entityNamespace
         ? [
-            entityNodes,
-            filteredTeams,
-            filteredProjects,
-            filteredInfra,
-            filteredClouds,
-            filteredPlatforms,
-            filteredAssignments,
+            { title: 'Entity', nodes: entityNodes },
+            { title: 'Teams', nodes: filteredTeams },
+            { title: 'Projects', nodes: filteredProjects },
+            { title: 'Sites', nodes: filteredInfra },
+            { title: 'Cloud projects', nodes: filteredClouds },
+            { title: 'Clusters', nodes: filteredPlatforms },
+            { title: 'Assignments', nodes: filteredAssignments },
           ]
-        : [filteredFabrics, filteredInfra, entityNodes, filteredClouds, filteredPlatforms, filteredAssignments]
-    ).filter((c) => c.length > 0);
+        : [
+            { title: 'Fabric', nodes: filteredFabrics },
+            { title: 'Sites', nodes: filteredInfra },
+            { title: 'Entities', nodes: entityNodes },
+            { title: 'Cloud projects', nodes: filteredClouds },
+            { title: 'Clusters', nodes: filteredPlatforms },
+            { title: 'Assignments', nodes: filteredAssignments },
+          ]
+    ).filter((l) => l.nodes.length > 0);
 
-    const { nodes, width, height } = layoutColumns(columns);
-    const byKindName = new Map(nodes.map((n) => [`${n.kind}:${n.label}`, n]));
+    const { nodes, rows, width, height } = layoutLayers(layers);
+    const placedByKey = new Map(nodes.map((n) => [n.id, n]));
 
     const edges: TopologyEdge[] = [];
     const seen = new Set<string>();
     for (const ep of edgePairs) {
-      const from = byKindName.get(`${ep.fromKind}:${ep.fromName}`);
-      const to = byKindName.get(`${ep.toKind}:${ep.toName}`);
+      const from = placedByKey.get(ep.from);
+      const to = placedByKey.get(ep.to);
       if (!from || !to) continue;
       const id = `${from.id}->${to.id}`;
       if (seen.has(id)) continue;
@@ -457,7 +547,7 @@ export function EntityTopology({
       edges.push({ id, from: from.id, to: to.id, failed: ep.failed });
     }
 
-    return { nodes, edges, width: Math.max(width, 640), height: Math.max(height, 200) };
+    return { nodes, edges, rows, width: Math.max(width, 480), height: Math.max(height, 200) };
   }, [
     entityNamespace,
     entityItems,
@@ -480,6 +570,11 @@ export function EntityTopology({
     cloudAwsPerm.allowed,
     cloudVirtPerm.allowed,
   ]);
+
+  const nodeById = useMemo(
+    () => new Map(graph.nodes.map((n) => [n.id, n])),
+    [graph.nodes],
+  );
 
   const loading = scoped
     ? teams.loading ||
@@ -531,25 +626,30 @@ export function EntityTopology({
     );
   }
 
+  // The graph now flows top-down, so "fit" has to respect the viewport height
+  // as well as its width.
   const fit = () => {
     const el = wrapRef.current;
     if (!el) return;
-    const scale = Math.min(1, (el.clientWidth - 16) / graph.width);
-    setZoom(Math.max(0.5, scale));
+    const sw = (el.clientWidth - 16) / graph.width;
+    const sh = el.clientHeight > 0 ? (el.clientHeight - 16) / graph.height : Infinity;
+    setZoom(Math.max(0.4, Math.min(1, sw, sh)));
   };
 
   return (
     <div className="sc-topology-graph" aria-label="Entity topology">
       <div className="sc-topology-graph__toolbar">
+        {/* Status is carried by the glyph shape and the text label as well as
+            the colour, so it survives greyscale and forced-colors. */}
         <div className="sc-topo-legend">
           <span>
-            <i className="sc-dot sc-dot--ready" /> Healthy
+            <LegendGlyph status="ready" /> Healthy
           </span>
           <span>
-            <i className="sc-dot sc-dot--failed" /> Failed
+            <LegendGlyph status="failed" /> Failed
           </span>
           <span>
-            <i className="sc-dot sc-dot--pending" /> Pending
+            <LegendGlyph status="pending" /> Pending
           </span>
         </div>
         <div className="sc-topology-graph__controls">
@@ -603,9 +703,15 @@ export function EntityTopology({
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#c9190b" />
             </marker>
           </defs>
+          {/* Layer captions — the row labels of the top-down flow. */}
+          {graph.rows.map((r) => (
+            <text key={r.title} x={PAD_X} y={r.y + 10} className="sc-topology-layer__title">
+              {r.title}
+            </text>
+          ))}
           {graph.edges.map((e) => {
-            const from = graph.nodes.find((n) => n.id === e.from);
-            const to = graph.nodes.find((n) => n.id === e.to);
+            const from = nodeById.get(e.from);
+            const to = nodeById.get(e.to);
             if (!from || !to) return null;
             return (
               <path
@@ -618,12 +724,13 @@ export function EntityTopology({
           })}
           {graph.nodes.map((n) => (
             <g key={n.id} transform={`translate(${n.x}, ${n.y})`} className={`sc-topology-node sc-topology-node--${n.status}`}>
+              <title>{`${n.kind} ${n.label}${n.namespace ? ` (${n.namespace})` : ''} — ${n.status}`}</title>
               <rect width={NODE_W} height={NODE_H} rx={3} ry={3} />
-              <circle cx={12} cy={NODE_H / 2} r={4} fill={statusColor(n.status)} />
-              <text x={22} y={18} className="sc-topology-node__kind">
+              <StatusGlyph status={n.status} x={14} y={NODE_H / 2} />
+              <text x={26} y={19} className="sc-topology-node__kind">
                 {n.kind}
               </text>
-              <text x={22} y={34} className="sc-topology-node__name">
+              <text x={26} y={35} className="sc-topology-node__name">
                 {n.label.length > 16 ? `${n.label.slice(0, 15)}…` : n.label}
               </text>
             </g>
