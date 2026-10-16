@@ -221,48 +221,7 @@
       ansible.builtin.set_fact:
         ac_policy: "{{ fab_check_result }}"
 
-    - name: The circuit's VLAN
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
-      vars:
-        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ ac_fabric.metadata.name }}",
-                     kind: attachVlan, owner: "{{ ac_owner }}"}
-
-    - name: Keep the VLAN
-      ansible.builtin.set_fact:
-        ac_vlan: "{{ fab_ledger_result.value | int }}"
-
-    - name: The circuit's link subnet (its index in the link pool)
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
-      vars:
-        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ ac_fabric.metadata.name }}",
-                     kind: attachLink, owner: "{{ ac_owner }}"}
-
-    - name: Keep the link index
-      ansible.builtin.set_fact:
-        ac_link_index: "{{ fab_ledger_result.value | int }}"
-
-    - name: The circuit's link addresses
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
-      vars:
-        fab_check:
-          action: circuit-plan
-          attachments: "{{ fab_real.attachments }}"
-          nodes: "{{ (ac_fabric.spec.borderGateway | default({}, true)).nodes | default([], true) | map(attribute='name') | list }}"
-          index: "{{ ac_link_index | int }}"
-
-    - name: Refuse a link the platform can't number
-      ansible.builtin.fail:
-        msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
-      when: fab_check_result.errors | length > 0
-
-    - name: Keep the link plan
-      ansible.builtin.set_fact:
-        ac_plan: "{{ fab_check_result }}"
-        ac_bearer_real: >-
-          {{ ((fab_real.attachments.providerEdges | default({}, true)).get(fab_spec.edgeRef.name, {}).bearers
-              | default({}, true)).get(fab_spec.edgeRef.bearer, {}) }}
-
-    # ---- BGP password ----
+    # ---- BGP password (before the ledger: a circuit waiting for its Secret holds no VLAN) ----
     - name: The password's Vault path
       ansible.builtin.set_fact:
         ac_vault_path: "{{ fab_real.attachments.secretPath | replace('{entity}', fab_entity) | replace('{name}', fab_name) }}"
@@ -312,6 +271,7 @@
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
           vars:
             vault_kv_path: "{{ ac_vault_path }}"
+            vault_kv_read_missing_ok: true
 
         - name: The password to keep
           ansible.builtin.set_fact:
@@ -359,6 +319,47 @@
             ac_password: ""
             vault_kv_data: {}
           no_log: true
+
+    - name: The circuit's VLAN
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ ac_fabric.metadata.name }}",
+                     kind: attachVlan, owner: "{{ ac_owner }}"}
+
+    - name: Keep the VLAN
+      ansible.builtin.set_fact:
+        ac_vlan: "{{ fab_ledger_result.value | int }}"
+
+    - name: The circuit's link subnet (its index in the link pool)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ ac_fabric.metadata.name }}",
+                     kind: attachLink, owner: "{{ ac_owner }}"}
+
+    - name: Keep the link index
+      ansible.builtin.set_fact:
+        ac_link_index: "{{ fab_ledger_result.value | int }}"
+
+    - name: The circuit's link addresses
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: circuit-plan
+          attachments: "{{ fab_real.attachments }}"
+          nodes: "{{ (ac_fabric.spec.borderGateway | default({}, true)).nodes | default([], true) | map(attribute='name') | list }}"
+          index: "{{ ac_link_index | int }}"
+
+    - name: Refuse a link the platform can't number
+      ansible.builtin.fail:
+        msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Keep the link plan
+      ansible.builtin.set_fact:
+        ac_plan: "{{ fab_check_result }}"
+        ac_bearer_real: >-
+          {{ ((fab_real.attachments.providerEdges | default({}, true)).get(fab_spec.edgeRef.name, {}).bearers
+              | default({}, true)).get(fab_spec.edgeRef.bearer, {}) }}
 
     # ---- record ----
     - name: The circuit's realization and the CE's parameters

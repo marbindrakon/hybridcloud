@@ -1,6 +1,8 @@
 ---
 # Read a secret from Vault KV v2 using the admin token injected on the EE job.
 # Required var: vault_kv_path. Sets: vault_kv_data (dict of secret fields).
+# Optional: vault_kv_read_missing_ok (default false): a path that doesn't exist gives vault_kv_data {} instead of
+# failing.
 # Uses env VAULT_ADDR (default in-cluster) and VAULT_TOKEN.
 
 - name: Validate Vault admin token is available on the job
@@ -18,11 +20,11 @@
     headers:
       X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
     validate_certs: false
-    status_code: [200]
+    status_code: "{{ [200, 404] if vault_kv_read_missing_ok | default(false) | bool else [200] }}"
   register: _vault_kv_read
   no_log: true
 
 - name: Expose Vault KV secret fields
   ansible.builtin.set_fact:
-    vault_kv_data: "{{ _vault_kv_read.json.data.data }}"
+    vault_kv_data: "{{ _vault_kv_read.json.data.data if _vault_kv_read.status == 200 else {} }}"
   no_log: true
