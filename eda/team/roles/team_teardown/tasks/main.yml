@@ -8,6 +8,32 @@
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
+    - name: Read namespace where the Team CR lives
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Namespace
+        name: "{{ team_cr_namespace }}"
+      register: team_target_ns
+
+    - name: The Team's entity
+      ansible.builtin.set_fact:
+        team_entity: >-
+          {{ ((team_target_ns.resources | first).metadata.labels | default({}, true))['hybridsovereign.redhat/entity'] | default('')
+             if team_target_ns.resources | default([]) | length > 0 else '' }}
+
+    # shc (design/P7-PLAN.md §12.20): release the Team's services sign-in groups (common/tasks/services_signin_groups.yml)
+    - name: Release the Team's sign-in groups
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        ssg_entity: "{{ team_entity }}"
+        ssg_owner: "Team/{{ team_cr_name }}"
+        ssg_label: "Team {{ team_cr_name }}"
+        ssg_wanted: []
+      when: team_entity | length > 0
+
     - name: Find per-CR Team viewer RoleBindings by label
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -63,7 +89,7 @@
           deletionComplete: true
           lastReconciledAt: "{{ team_delete_transition_time }}"
           message: >-
-            Team {{ team_cr_name }} finalized — viewer Role and RoleBinding removed by EDA
+            Team {{ team_cr_name }} finalized — viewer Role, RoleBinding and sign-in groups removed by EDA
 
   rescue:
     - name: Mark Team delete as failed on services cluster

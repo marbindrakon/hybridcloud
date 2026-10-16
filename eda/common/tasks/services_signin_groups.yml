@@ -1,0 +1,195 @@
+---
+# shc (design/P7-PLAN.md §12.20): sign-in groups on the services cluster. OpenShift group names can't contain "/", so
+# RoleBindings can't name an Rbac CR's Keycloak group path. Instead the services sign-in client gets a client role
+# <entity>.<rbac> per Rbac CR, mapped to that Rbac's Keycloak group; the client's mapper puts a member's client roles
+# into the groups claim, so OpenShift sees the group <entity>.<rbac>. Entity names have no dots (the namespace
+# entity-<name> is a DNS label), so the first dot separates the entity.
+#
+# Several CRs of one entity can need the same group (the Entity's namespaceRbac, a Team's viewer Rbacs), so a client
+# role records its users in the attribute owner (e.g. Entity/acme-corp, Team/devs) next to entity=<entity>. A caller
+# adds itself to the roles it wants and removes itself from the ones it no longer wants; a role is deleted with its
+# last owner. A role with entity=<entity> and no owner attribute predates this and belongs to Entity/<entity>.
+#
+# Input:
+#   ssg_entity  the entity name
+#   ssg_owner   this caller, Kind/<name>
+#   ssg_wanted  [{rbac, path, group}] (path = the Rbac's Keycloak group path, group = <entity>.<rbac>); [] drops them all
+#   ssg_label   caller for messages (default ssg_owner)
+#   ssg_purge   true: delete every client role of the entity, whoever owns it (the Entity is being deleted)
+- name: Sign-in settings
+  ansible.builtin.set_fact:
+    ssg_realm: "{{ entity_signin_realm | default('sovereign-tenants') }}"
+    ssg_client_id: "{{ entity_signin_client | default('openshift-services') }}"
+    ssg_legacy_owner: "Entity/{{ ssg_entity }}"
+
+- name: Discover the Keycloak route on services
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: services-rhbk
+    label_selectors: ["app=keycloak"]
+  register: _ssg_kc_route
+
+- name: Keycloak URL
+  ansible.builtin.set_fact:
+    ssg_kc: "https://{{ _ssg_kc_route.resources[0].spec.host }}"
+
+- name: Keycloak admin credentials
+  ansible.builtin.include_tasks: obtain_keycloak_admin_credentials.yml
+  vars:
+    keycloak_vault_path: rhbk-services-admin
+
+- name: Keycloak admin token
+  ansible.builtin.include_tasks: obtain_keycloak_admin_token.yml
+  vars:
+    keycloak_url: "{{ ssg_kc }}"
+
+- name: Find the sign-in client
+  ansible.builtin.uri:
+    url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/clients?clientId={{ ssg_client_id }}"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  register: _ssg_client
+
+- name: Refuse a realm without the sign-in client
+  ansible.builtin.fail:
+    msg: "{{ ssg_label | default(ssg_owner) }}: the tenant realm {{ ssg_realm }} has no sign-in client {{ ssg_client_id }}"
+  when: _ssg_client.json | length == 0
+
+- name: Read the client roles
+  ansible.builtin.uri:
+    url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/clients/{{ _ssg_client.json[0].id }}/roles?briefRepresentation=false"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  register: _ssg_roles_now
+
+- name: This entity's client roles and their owners
+  ansible.builtin.set_fact:
+    ssg_base: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/clients/{{ _ssg_client.json[0].id }}/roles"
+    ssg_wanted_groups: "{{ ssg_wanted | map(attribute='group') | unique | list }}"
+    ssg_entity_roles: >-
+      {%- set out = {} -%}
+      {%- for r in _ssg_roles_now.json -%}
+        {%- set a = r.attributes | default({}, true) -%}
+        {%- if a.entity | default([]) == [ssg_entity] -%}
+          {%- set _ = out.update({r.name: {'description': r.description | default(''),
+                                            'owners': a.owner | default([ssg_legacy_owner], true)}}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    ssg_all_role_names: "{{ _ssg_roles_now.json | map(attribute='name') | list }}"
+
+- name: Create the client roles
+  ansible.builtin.uri:
+    url: "{{ ssg_base }}"
+    method: POST
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    body_format: json
+    body:
+      name: "{{ item }}"
+      description: "Group {{ item }} on the services cluster (entity {{ ssg_entity }})"
+      attributes: {entity: ["{{ ssg_entity }}"], owner: ["{{ ssg_owner }}"]}
+    validate_certs: false
+    status_code: [201, 409]
+  loop: "{{ ssg_wanted_groups | reject('in', ssg_all_role_names) | list }}"
+
+- name: Add this owner to the existing client roles
+  ansible.builtin.uri:
+    url: "{{ ssg_base }}/{{ item | urlencode }}"
+    method: PUT
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    body_format: json
+    body:
+      name: "{{ item }}"
+      description: "{{ ssg_entity_roles[item].description }}"
+      attributes: {entity: ["{{ ssg_entity }}"], owner: "{{ ssg_entity_roles[item].owners + [ssg_owner] }}"}
+    validate_certs: false
+    status_code: [204]
+  loop: >-
+    {{ ssg_wanted_groups
+       | select('in', ssg_entity_roles.keys() | list)
+       | reject('in', ssg_entity_roles | dict2items | selectattr('value.owners', 'contains', ssg_owner)
+                      | map(attribute='key') | list)
+       | list }}
+
+- name: Refuse a wanted group held by a role of another entity
+  ansible.builtin.fail:
+    msg: >-
+      {{ ssg_label | default(ssg_owner) }}: client role {{ item }} of {{ ssg_client_id }} exists but is not tagged
+      entity={{ ssg_entity }}
+  loop: "{{ ssg_wanted_groups | select('in', ssg_all_role_names) | reject('in', ssg_entity_roles.keys() | list) | list }}"
+
+- name: Read the wanted client roles
+  ansible.builtin.uri:
+    url: "{{ ssg_base }}/{{ item | urlencode }}"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  loop: "{{ ssg_wanted_groups }}"
+  register: _ssg_roles
+
+- name: Find the Rbac groups
+  ansible.builtin.uri:
+    url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/group-by-path/{{ item.path | regex_replace('^/+', '') | urlencode }}"
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+  loop: "{{ ssg_wanted }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: _ssg_groups
+
+- name: Map the client role to the Rbac group
+  ansible.builtin.uri:
+    url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/groups/{{ item.json.id }}/role-mappings/clients/{{ _ssg_client.json[0].id }}"
+    method: POST
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    body_format: json
+    body: "{{ [(_ssg_roles.results | selectattr('item', 'equalto', item.item.group) | first).json] }}"
+    validate_certs: false
+    status_code: [204]
+  loop: "{{ _ssg_groups.results }}"
+  loop_control:
+    label: "{{ item.item.path }} -> {{ item.item.group }}"
+  changed_when: false
+
+- name: Client roles this owner no longer wants
+  ansible.builtin.set_fact:
+    ssg_released: >-
+      {%- set out = [] -%}
+      {%- for r in ssg_entity_roles | dict2items -%}
+        {%- if r.key not in ssg_wanted_groups and (ssg_owner in r.value.owners or ssg_purge | default(false) | bool) -%}
+          {%- set _ = out.append({'key': r.key, 'value': {'description': r.value.description,
+                                   'owners': [] if ssg_purge | default(false) | bool
+                                             else r.value.owners | reject('equalto', ssg_owner) | list}}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Remove this owner from client roles others still use
+  ansible.builtin.uri:
+    url: "{{ ssg_base }}/{{ item.key | urlencode }}"
+    method: PUT
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    body_format: json
+    body:
+      name: "{{ item.key }}"
+      description: "{{ item.value.description }}"
+      attributes: {entity: ["{{ ssg_entity }}"], owner: "{{ item.value.owners }}"}
+    validate_certs: false
+    status_code: [204]
+  loop: "{{ ssg_released | selectattr('value.owners') | list }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Delete client roles this owner was the last to use
+  ansible.builtin.uri:
+    url: "{{ ssg_base }}/{{ item.key | urlencode }}"
+    method: DELETE
+    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    validate_certs: false
+    status_code: [204, 404]
+  loop: "{{ ssg_released | rejectattr('value.owners') | list }}"
+  loop_control:
+    label: "{{ item.key }}"

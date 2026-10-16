@@ -63,50 +63,64 @@
           {{
             team_spec.teamViewerRbac
             | default(team_spec.teamAdmin | default([]))
+            | default([], true)
+            | unique | list
           }}
 
-    - name: Resolve team viewer Rbac groups for per-CR binding
-      when: team_viewer_rbac_list | length > 0
-      block:
-        - name: Read team viewer Rbac CRs
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            api_version: hybridsovereign.redhat/v1alpha1
-            kind: Rbac
-            name: "{{ item }}"
-            namespace: "{{ team_cr_namespace }}"
-          register: team_viewer_rbacs
-          loop: "{{ team_viewer_rbac_list }}"
+    # shc (design/P7-PLAN.md §12.20): members of a viewer Rbac's Keycloak group sign in to services with the group
+    # <entity>.<rbac> (common/tasks/services_signin_groups.yml, owner Team/<team>); the RoleBinding names that group.
+    - name: Read team viewer Rbac CRs
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: Rbac
+        name: "{{ item }}"
+        namespace: "{{ team_cr_namespace }}"
+      register: team_viewer_rbacs
+      loop: "{{ team_viewer_rbac_list }}"
 
-        - name: Build team viewer group subjects
-          ansible.builtin.set_fact:
-            team_per_cr_subjects: >-
-              {{
-                team_viewer_rbacs.results
-                | default([])
-                | selectattr('resources', 'defined')
-                | map(attribute='resources')
-                | flatten
-                | selectattr('status.group', 'defined')
-                | map(attribute='status.group')
-                | map('community.general.dict_kv', 'name')
-                | map('combine', {'kind': 'Group', 'apiGroup': 'rbac.authorization.k8s.io'})
-                | list
-              }}
-
-    - name: Default team viewer subjects to empty
-      when: team_viewer_rbac_list | length == 0
+    - name: The services sign-in groups of the viewer Rbac CRs
       ansible.builtin.set_fact:
-        team_per_cr_subjects: []
+        team_signin_wanted: >-
+          {%- set out = [] -%}
+          {%- for r in team_viewer_rbacs.results | default([]) -%}
+            {%- set cr = (r.resources | default([]) + [{}]) | first -%}
+            {%- set path = (cr.status | default({}, true)).group | default('', true) -%}
+            {%- if path -%}{%- set _ = out.append({'rbac': r.item, 'path': path, 'group': team_entity ~ '.' ~ r.item}) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
 
-    - name: Create per-Team viewer Role
+    - name: Viewer Rbac CRs without a Keycloak group yet
+      ansible.builtin.set_fact:
+        team_viewer_waiting: "{{ team_viewer_rbac_list | reject('in', team_signin_wanted | map(attribute='rbac') | list) | list }}"
+        team_per_cr_subjects: >-
+          {%- set out = [] -%}
+          {%- for g in team_signin_wanted -%}
+            {%- set _ = out.append({'kind': 'Group', 'apiGroup': 'rbac.authorization.k8s.io', 'name': g.group}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Refuse a Team outside an entity namespace
+      ansible.builtin.fail:
+        msg: "Team {{ team_cr_name }}: namespace {{ team_cr_namespace }} has no hybridsovereign.redhat/entity label"
+      when: team_entity | length == 0
+
+    - name: Tenant sign-in groups of the Team
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        ssg_entity: "{{ team_entity }}"
+        ssg_owner: "Team/{{ team_cr_name }}"
+        ssg_label: "Team {{ team_cr_name }}"
+        ssg_wanted: "{{ team_signin_wanted }}"
+
+    - name: Per-Team viewer Role
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
-        state: present
+        state: "{{ 'present' if team_per_cr_subjects | length > 0 else 'absent' }}"
         definition:
           apiVersion: rbac.authorization.k8s.io/v1
           kind: Role
@@ -121,14 +135,13 @@
               resources: ["teams"]
               resourceNames: ["{{ team_cr_name }}"]
               verbs: ["get", "list", "watch"]
-      when: team_per_cr_subjects | length > 0
 
-    - name: Create per-Team viewer RoleBinding
+    - name: Per-Team viewer RoleBinding
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
-        state: present
+        state: "{{ 'present' if team_per_cr_subjects | length > 0 else 'absent' }}"
         definition:
           apiVersion: rbac.authorization.k8s.io/v1
           kind: RoleBinding
@@ -143,7 +156,14 @@
             kind: Role
             name: "{{ team_cr_name }}-team-viewer"
             apiGroup: rbac.authorization.k8s.io
-      when: team_per_cr_subjects | length > 0
+
+    - name: Team status message
+      ansible.builtin.set_fact:
+        team_ready_message: >-
+          Team {{ team_cr_name }} provisioned by EDA with istio={{ team_features_istio }},
+          argo={{ team_features_argo }}{{ ('; viewer groups ' ~ (team_signin_wanted | map(attribute='group') | join(', ')))
+          if team_signin_wanted | length > 0 else '' }}{{ ('; waiting for Rbac ' ~ (team_viewer_waiting | join(', '))
+          ~ ' (no Keycloak group yet)') if team_viewer_waiting | length > 0 else '' }}.
 
     - name: Get current timestamp
       ansible.builtin.set_fact:
@@ -168,15 +188,14 @@
             istio: "{{ team_features_istio }}"
             argo: "{{ team_features_argo }}"
           ready: true
+          message: "{{ team_ready_message }}"
           observedGeneration: "{{ team_generation }}"
           conditions:
             - type: Ready
               status: "True"
               lastTransitionTime: "{{ team_status_transition_time }}"
               reason: EDASucceeded
-              message: >-
-                Team {{ team_cr_name }} provisioned by EDA with istio={{ team_features_istio }},
-                argo={{ team_features_argo }}.
+              message: "{{ team_ready_message }}"
 
   rescue:
     - name: Mark Team as failed on services cluster

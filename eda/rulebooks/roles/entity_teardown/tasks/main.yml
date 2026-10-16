@@ -25,6 +25,7 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../entity_provision/tasks/signin.yml"
       vars:
         es_wanted: []
+        es_purge: true
 
     - name: Delete entity namespace on services cluster
       kubernetes.core.k8s:
