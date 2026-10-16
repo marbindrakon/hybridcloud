@@ -166,6 +166,18 @@
     name: hybridsovereign.redhat/networkplacement-cleanup
     role: networkplacement_delete
 
+# shc (P9): a tenant network's hand-off to a customer edge router on a ProviderEdge
+- version: v1alpha1
+  group: hybridsovereign.redhat
+  kind: AttachmentCircuit
+  role: attachmentcircuit
+  maxConcurrentReconciles: 20
+  reconcilePeriod: 300s
+  watchAnnotationsChanges: true
+  finalizer:
+    name: hybridsovereign.redhat/attachmentcircuit-cleanup
+    role: attachmentcircuit_delete
+
 # shc (P7.3.3): tenant VM environment on an OpenShift Virtualization site
 - version: v1alpha1
   group: hybridsovereign.redhat

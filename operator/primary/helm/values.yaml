@@ -67,3 +67,5 @@ cloudInfrastructures: {}
 # gateways (templates/cloud-gateways.yaml), keyed by name, each {spec: ...} (enabled: false skips one).
 hybridFabrics: {}
 cloudGateways: {}
+# shc (P9): provider edges for attachment circuits (templates/provider-edges.yaml), same shape
+providerEdges: {}

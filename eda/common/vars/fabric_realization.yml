@@ -50,6 +50,18 @@ fabric_realization_defaults:
     listenPort: 51820
     mtu: 1420
     persistentKeepalive: 25
+  # attachment circuits (AttachmentCircuit on a ProviderEdge of platform frr): each circuit gets a VLAN from vlanPool
+  # on its bearer and the next /linkPrefixLength of linkPool (node i takes host address i+1, the CE the next one);
+  # the network's root VRF on every node peers with the CE over that VLAN. providerEdges.<edge>.bearers.<bearer>
+  # names the node interface carrying the bearer's VLANs and its MTU.
+  attachments:
+    enabled: false
+    vlanPool: {start: 3000, end: 3099}
+    linkPool: 10.255.128.0/20
+    linkPrefixLength: 29
+    # central Vault KV path (mount central) for each circuit's BGP password
+    secretPath: "fabric/circuits/{entity}/{name}"
+    providerEdges: {}
   # provider internet egress for HybridNetworks with spec.egress.internet: each node's root holds a VRF that hands
   # traffic to a network with internet access (a macvlan on parentInterface, default route via gateway); per network
   # a VRF e<vpnTarget> imports the network's routes, exports a default route into its VPN and source-NATs its traffic

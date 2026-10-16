@@ -26,6 +26,12 @@ actions:
                   true): a default route and one source NAT address per node (the node's natPool + the network's
                   egress index); platform: [CIDRs of the network] the platform's sources (egress.platformSources)
                   may reach on egress.platformPorts (default 6443, 443); errors for an unusable configuration
+  circuit-plan    {attachments: realization attachments, nodes: [node names], index}  an attachment circuit's link
+                  subnet (the index-th of attachments.linkPool), each node's address and the CE's
+  check-circuit   {accept: [prefix-list entries], placements: [{name, prefix}], reserved: [cidr], egressInternet,
+                  advertiseDefault}  entries inside a placement or a reserved range are refused; notes for policy
+                  that doesn't apply now; acceptsDefault
+  (check-fabric also validates the realization's attachments: poolSize.attachVlanPool, poolSize.attachLinks)
 """
 import hashlib
 import ipaddress
@@ -94,6 +100,9 @@ def check_fabric(req):
     eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []])
     errors += eg["errors"]
     size["egressPool"] = eg["poolSize"]
+    at = attachments_check(real.get("attachments") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []], core)
+    errors += at["errors"]
+    size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
     return {"errors": errors, "poolSize": size, "peIndexMax": pe_max}
 
 
@@ -319,6 +328,117 @@ def check_placement(req):
     return {"errors": errors}
 
 
+def attachments_check(at, node_names, core=None):
+    """Validate the realization's attachments settings (attachment circuits on provider edges). vlanPool = the
+    bearer VLANs ([1, 0] when attachments are off), links = /linkPrefixLength subnets in linkPool (0 when off)."""
+    if not at.get("enabled"):
+        return {"errors": [], "vlanPool": [1, 0], "links": 0}
+    errors = []
+    vp = at.get("vlanPool") or {}
+    try:
+        vs, ve = int(vp.get("start")), int(vp.get("end"))
+        if not 2 <= vs <= ve <= 4094:
+            errors.append(f"realization attachments.vlanPool {vs}-{ve} must lie within 2-4094")
+    except (TypeError, ValueError):
+        errors.append("realization attachments.vlanPool needs start and end")
+        vs, ve = 1, 0
+    links = 0
+    try:
+        pool = ipaddress.ip_network(str(at.get("linkPool")), strict=True)
+        plen = int(at.get("linkPrefixLength") or 29)
+        # every node, the CE and a second CE router need an address on the link
+        if not pool.prefixlen <= plen <= 30 or (2 ** (32 - plen) - 2) < len(node_names) + 1:
+            errors.append(f"realization attachments.linkPrefixLength /{plen} must fit in {pool} and hold the "
+                          f"{len(node_names)} nodes plus the CE")
+        else:
+            links = 2 ** (plen - pool.prefixlen)
+        for k in ("loopbackPool", "linkSubnet"):
+            try:
+                c = ipaddress.ip_network(str((core or {}).get(k)), strict=True)
+                if overlaps(pool, c):
+                    errors.append(f"realization attachments.linkPool {pool} overlaps core.{k} {c}")
+            except ValueError:
+                pass
+    except ValueError as e:
+        errors.append(f"realization attachments.linkPool: {e}")
+    for pe, p in (at.get("providerEdges") or {}).items():
+        for b, bearer in ((p or {}).get("bearers") or {}).items():
+            if not (bearer or {}).get("interface"):
+                errors.append(f"realization attachments.providerEdges.{pe}.bearers.{b}.interface is required")
+            mtu = int((bearer or {}).get("mtu") or 1500)
+            if not 576 <= mtu <= 9216:
+                errors.append(f"realization attachments.providerEdges.{pe}.bearers.{b}.mtu {mtu} is out of range")
+    return {"errors": errors, "vlanPool": [vs, ve] if not errors else [1, 0], "links": links if not errors else 0}
+
+
+def circuit_plan(req):
+    """An attachment circuit's link: the index-th /linkPrefixLength of linkPool; node i (in the given order) takes
+    host address i+1, the CE the next one, a second CE router the one after."""
+    at, names, index = req.get("attachments") or {}, req.get("nodes") or [], int(req.get("index"))
+    pool = ipaddress.ip_network(str(at.get("linkPool")), strict=True)
+    plen = int(at.get("linkPrefixLength") or 29)
+    count = 2 ** (plen - pool.prefixlen) if pool.prefixlen <= plen else 0
+    if not 0 <= index < count:
+        return {"errors": [f"link index {index} is outside {pool} (/{plen}: {count} links)"]}
+    link = ipaddress.ip_network(f"{pool.network_address + index * 2 ** (32 - plen)}/{plen}")
+    hosts = list(link.hosts())
+    if len(hosts) < len(names) + 2:
+        return {"errors": [f"link {link} has too few addresses for {len(names)} nodes and the CE"]}
+    return {"errors": [], "link": str(link), "prefixLength": plen,
+            "nodes": [{"name": n, "address": str(hosts[i])} for i, n in enumerate(names)],
+            "ce": str(hosts[len(names)]), "ceSecond": str(hosts[len(names) + 1])}
+
+
+ACCEPT_RE = re.compile(r"^(\S+)(?: ge (\d+))?(?: le (\d+))?$")
+
+
+def check_circuit(req):
+    """A circuit's accept list against the network's placement prefixes and the platform's ranges (reserved).
+    An entry inside a placement prefix or a reserved range is refused; an entry that covers one only gets a note
+    (the edge drops overlapping routes regardless). acceptsDefault: an entry matches 0.0.0.0/0."""
+    errors, notes, accepts_default = [], [], False
+    placements = []
+    for p in req.get("placements") or []:
+        try:
+            placements.append((p.get("name"), ipaddress.ip_network(str(p.get("prefix")), strict=True)))
+        except ValueError:
+            continue
+    reserved = []
+    for r in req.get("reserved") or []:
+        try:
+            reserved.append(ipaddress.ip_network(str(r), strict=False))
+        except ValueError:
+            continue
+    for e in req.get("accept") or []:
+        m = ACCEPT_RE.match(str(e).strip())
+        try:
+            net = ipaddress.ip_network(m.group(1), strict=True) if m else None
+        except ValueError:
+            net = None
+        if net is None or net.version != 4:
+            errors.append(f"accept entry '{e}' is not '<IPv4 prefix>[ ge <n>][ le <n>]'")
+            continue
+        ge = int(m.group(2)) if m.group(2) else None
+        if net.prefixlen == 0 and ge is None:
+            accepts_default = True
+        for name, q in placements:
+            if net.subnet_of(q):
+                errors.append(f"accept entry '{e}' lies inside {q} of placement {name}")
+            elif q.subnet_of(net):
+                notes.append(f"routes overlapping {q} (placement {name}) are never accepted from the CE")
+        for q in reserved:
+            if net.subnet_of(q):
+                errors.append(f"accept entry '{e}' lies inside the platform range {q}")
+            elif q.subnet_of(net) and net.prefixlen > 0:
+                notes.append(f"routes overlapping the platform range {q} are never accepted from the CE")
+    egress = bool(req.get("egressInternet"))
+    if accepts_default and egress:
+        notes.append("0.0.0.0/0 is not accepted from the CE while the network has provider internet egress")
+    if req.get("advertiseDefault") and not egress:
+        notes.append("no default route is advertised: the network has no provider internet egress")
+    return {"errors": errors, "notes": sorted(set(notes)), "acceptsDefault": accepts_default}
+
+
 def site_namespace(entity, cloudvirt, name):
     base = re.sub(r"[^a-z0-9-]", "-", f"{entity}-{cloudvirt}-{name}".lower())
     if len(base) <= 63:
@@ -455,7 +575,8 @@ def orphan_report(req):
 
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
-           "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan}
+           "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan,
+           "circuit-plan": circuit_plan, "check-circuit": check_circuit}
 
 
 def main():

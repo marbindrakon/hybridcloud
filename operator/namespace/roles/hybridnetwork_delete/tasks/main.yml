@@ -1,6 +1,7 @@
 ---
 - block:
-    # shc (P7.3.3): a network is deleted only after its placements, and the CloudVirt namespaces that name it, are gone
+    # shc (P7.3.3, P9): a network is deleted only after its placements, the CloudVirt namespaces that name it and its
+    # attachment circuits are gone
     - name: Wait for the placements of this network to be deleted first
       ansible.builtin.include_role:
         name: _common
@@ -16,6 +17,8 @@
             match: {"spec.network": "{{ ansible_operator_meta.name }}"}
           - kind: CloudVirt
             contains: {path: spec.namespaces, key: network, value: "{{ ansible_operator_meta.name }}"}
+          - kind: AttachmentCircuit
+            match: {"spec.network": "{{ ansible_operator_meta.name }}"}
 
     - name: Get current timestamp
       ansible.builtin.set_fact:

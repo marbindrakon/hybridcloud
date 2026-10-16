@@ -1,0 +1,211 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: provideredges.hybridsovereign.redhat
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Replace=true
+spec:
+  group: hybridsovereign.redhat
+  names:
+    kind: ProviderEdge
+    listKind: ProviderEdgeList
+    plural: provideredges
+    singular: provideredge
+    shortNames:
+      - pedge
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: >-
+            A provider edge of a HybridFabric: where routers outside the platform (customer edge routers) connect to
+            tenant networks. Each bearer is a physical or logical link on which the platform allocates one VLAN and
+            one link subnet per AttachmentCircuit. The edge runs on the fabric's border nodes; platform names the
+            kind of edge that realizes it.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [fabricRef, platform, bearers]
+              properties:
+                fabricRef:
+                  type: object
+                  description: The HybridFabric (same namespace) the edge belongs to. Immutable.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.fabricRef is immutable
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                platform:
+                  type: string
+                  description: >-
+                    What realizes the edge. frr: the fabric's border nodes terminate the circuits themselves.
+                    Immutable.
+                  enum: [frr]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.platform is immutable
+                bearers:
+                  type: array
+                  description: Links on which circuits can be ordered. A bearer can't be removed while circuits use it.
+                  minItems: 1
+                  maxItems: 32
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [name]
+                  items:
+                    type: object
+                    required: [name, ceKinds]
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                      ceKinds:
+                        type: array
+                        description: The kinds of customer edge this bearer accepts.
+                        minItems: 1
+                        x-kubernetes-list-type: set
+                        items:
+                          type: string
+                          enum: [customer]
+                      description:
+                        type: string
+                        maxLength: 256
+                entityRefs:
+                  type: array
+                  description: Entities that may order circuits on this edge. Empty means every Entity.
+                  maxItems: 256
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [name]
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        maxLength: 63
+                        description: Entity name
+            status:
+              type: object
+              properties:
+                fabric:
+                  type: string
+                nodes:
+                  type: array
+                  description: The border nodes that terminate this edge's circuits.
+                  items:
+                    type: string
+                bearers:
+                  type: array
+                  description: Circuits per bearer.
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      circuits:
+                        type: integer
+                      mtu:
+                        type: integer
+                capabilities:
+                  type: object
+                  description: What this edge realizes (informational; depends on the platform).
+                  x-kubernetes-preserve-unknown-fields: true
+                realization:
+                  type: object
+                  description: How the platform realized the edge (informational; depends on the platform).
+                  x-kubernetes-preserve-unknown-fields: true
+                status:
+                  type: string
+                  description: Lifecycle status (reconciling, pending, ready, failed)
+                message:
+                  type: string
+                ready:
+                  type: boolean
+                realized:
+                  type: boolean
+                waitingFor:
+                  type: array
+                  items:
+                    type: string
+                deletionComplete:
+                  type: boolean
+                deletionBlockedBy:
+                  type: array
+                  items:
+                    type: string
+                lastReconciledAt:
+                  type: string
+                  format: date-time
+                observedGeneration:
+                  type: integer
+                  format: int64
+                edaJobs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      jobId:
+                        type: string
+                      url:
+                        type: string
+                      timestamp:
+                        type: string
+                      status:
+                        type: string
+                        enum: [running, waiting, success, failed]
+                    x-kubernetes-preserve-unknown-fields: true
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Fabric
+          type: string
+          jsonPath: .spec.fabricRef.name
+        - name: Platform
+          type: string
+          jsonPath: .spec.platform
+        - name: Status
+          type: string
+          jsonPath: .status.status
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

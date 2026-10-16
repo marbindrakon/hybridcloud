@@ -321,6 +321,43 @@ controller_templates:
     ask_variables_on_launch: true
     credentials:
       - sovereign-vault-admin-credential
+  # shc (design/P9-PLAN.md): provider edges and attachment circuits
+  - name: provideredge-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/provideredge-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: provideredge-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/provideredge-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: attachmentcircuit-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/attachmentcircuit-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: attachmentcircuit-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/attachmentcircuit-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
   - name: platformopenshift-provision
     organization: sovereign
     project: sovereign-eda-project

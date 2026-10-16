@@ -1,0 +1,71 @@
+---
+- block:
+    - name: Get current timestamp
+      ansible.builtin.set_fact:
+        attachmentcircuit_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+    - name: Mark AttachmentCircuit as awaiting EDA delete
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AttachmentCircuit
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: reconciling
+          ready: false
+          message: Awaiting EDA delete
+          lastReconciledAt: "{{ attachmentcircuit_delete_transition_time }}"
+
+    - name: Publish operator event to AMQ Streams
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: publish_operator_event
+      vars:
+        operator_event_reason: "AttachmentCircuitDeleteRequested"
+        operator_event_action: "Delete"
+        operator_event_note: "{{ _hybridsovereign_redhat_attachmentcircuit.spec | to_json }}"
+        operator_reporting_controller: attachmentcircuit-operator
+        operator_event_regarding:
+          apiVersion: hybridsovereign.redhat/v1alpha1
+          kind: AttachmentCircuit
+          name: "{{ ansible_operator_meta.name }}"
+          namespace: "{{ ansible_operator_meta.namespace }}"
+          uid: "{{ _hybridsovereign_redhat_attachmentcircuit.metadata.uid }}"
+
+    - name: Wake the CRs this one was holding up (deletion complete)
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: nudge_referenced
+      vars:
+        nudge_targets:
+          - kind: HybridNetwork
+            name: "{{ _hybridsovereign_redhat_attachmentcircuit.spec.network | default('') }}"
+      when: _hybridsovereign_redhat_attachmentcircuit.status.deletionComplete | default(false) | bool
+
+    - name: Exit cleanly when EDA completed deletion
+      ansible.builtin.meta: end_host
+      when: _hybridsovereign_redhat_attachmentcircuit.status.deletionComplete | default(false) | bool
+
+    - name: Block finalizer until EDA completes deletion
+      ansible.builtin.fail:
+        msg: Waiting for EDA to complete deletion
+
+  rescue:
+    - name: Mark AttachmentCircuit delete as failed
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AttachmentCircuit
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: failed
+          ready: false
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+          message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('Deletion failed')) }}"
+      ignore_errors: true
+      # a delete that waits (for dependents, or for the EDA teardown) is not failed: the status it set stays
+      when: not (ansible_failed_result.msg | default('') is match('(Deletion waits for |Waiting for EDA to complete deletion)'))
+
+    - name: Re-raise to signal finalizer failure
+      ansible.builtin.fail:
+        msg: "AttachmentCircuit {{ ansible_operator_meta.name }} deletion failed — see status.message for details"

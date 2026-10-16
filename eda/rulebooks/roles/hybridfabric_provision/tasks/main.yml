@@ -94,6 +94,9 @@
             peIndex: [1, "{{ hf_pe_max }}"]
             # empty when egress is off: the ledger refuses that while networks hold an index
             egress: [0, "{{ (hf_pools.egressPool | int) - 1 }}"]
+            # attachment circuits (empty when attachments are off; refused while circuits hold values)
+            attachVlan: "{{ hf_pools.attachVlanPool }}"
+            attachLink: [0, "{{ (hf_pools.attachLinks | int) - 1 }}"]
           # (dict keys are not templated: build the owner key in an expression)
           reserve: "{{ {'peIndex': {'HybridFabric/' ~ fab_namespace ~ '/' ~ fab_name: 1}} }}"
 

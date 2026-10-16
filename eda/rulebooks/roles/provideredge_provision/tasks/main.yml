@@ -1,0 +1,146 @@
+---
+# shc (design/P9-PLAN.md §3–4): ProviderEdge provision. Checks the edge against its HybridFabric and the platform's
+# realization (attachments.providerEdges.<edge>: a bearer per spec bearer, with the node interface and MTU), and
+# reports the fabric's nodes, the circuits per bearer and what the edge realizes. The circuits themselves are
+# realized by the fabric job (the only writer of the border nodes' root configuration). Wakes the circuits on this
+# edge that wait for it once it is ready.
+- block:
+    - name: Read the ProviderEdge
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: End the job for an edge being deleted
+      ansible.builtin.meta: end_play
+      when: fab_deleting | bool
+
+    - name: Read the fabric
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ fab_spec.fabricRef.name }}"
+        namespace: "{{ fab_namespace }}"
+      register: _pe_fabric
+
+    - name: Set the fabric facts
+      ansible.builtin.set_fact:
+        pe_fabric: "{{ (_pe_fabric.resources | default([], true) + [{}]) | first }}"
+        pe_status: {fabric: "{{ fab_spec.fabricRef.name }}"}
+
+    - name: Report the edge waiting for its fabric
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        _st: "{{ pe_fabric.status | default({}, true) }}"
+        fab_outcome: pending
+        fab_reason: WaitingForDependencies
+        fab_message: "Waiting for HybridFabric {{ fab_spec.fabricRef.name }} ({{ _st.status | default('not found', true) }})"
+        fab_waiting_for: ["HybridFabric {{ fab_spec.fabricRef.name }}"]
+        fab_status: "{{ pe_status }}"
+      when: >-
+        not pe_fabric or not ((_st.ready | default(false) | bool)
+                              or ((_st.realized | default(false) | bool) and _st.status | default('') != 'failed'))
+
+    - name: End the job while the fabric isn't usable
+      vars:
+        _st: "{{ pe_fabric.status | default({}, true) }}"
+      ansible.builtin.meta: end_play
+      when: >-
+        not pe_fabric or not ((_st.ready | default(false) | bool)
+                              or ((_st.realized | default(false) | bool) and _st.status | default('') != 'failed'))
+
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ fab_spec.fabricRef.name }}"
+
+    - name: The realization of this edge
+      ansible.builtin.set_fact:
+        pe_real: "{{ (fab_real.attachments.providerEdges | default({}, true)).get(fab_name, {}) }}"
+        pe_nodes: "{{ (pe_fabric.spec.borderGateway | default({}, true)).nodes | default([], true) | map(attribute='name') | list }}"
+
+    # frr: the fabric's own border nodes terminate the circuits (realization model linux-pe)
+    - name: Refuse an edge the platform does not realize
+      ansible.builtin.set_fact:
+        fab_fail_reason: NotRealizable
+        fab_fail_msg: >-
+          ProviderEdge {{ fab_name }}:
+          {{ 'attachment circuits are not enabled on this platform' if not (fab_real.attachments.enabled | default(false) | bool)
+             else ('platform ' ~ fab_spec.platform ~ ' needs realization model linux-pe') if fab_real.model != 'linux-pe'
+             else 'the platform has no realization for this edge' if not pe_real
+             else 'no realization for bearer(s) ' ~ (fab_spec.bearers | map(attribute='name')
+                  | reject('in', (pe_real.bearers | default({}, true)).keys() | list) | join(', ')) }}
+      when: >-
+        not (fab_real.attachments.enabled | default(false) | bool) or fab_real.model != 'linux-pe' or not pe_real
+        or (fab_spec.bearers | map(attribute='name') | reject('in', (pe_real.bearers | default({}, true)).keys() | list) | list | length > 0)
+
+    - name: Stop on an edge the platform does not realize
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_msg | default('', true) | length > 0
+
+    - name: List the circuits on this edge
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AttachmentCircuit
+      register: _pe_circuits
+
+    - name: Count the circuits per bearer
+      ansible.builtin.set_fact:
+        pe_circuits: >-
+          {{ _pe_circuits.resources | default([]) | selectattr('spec.edgeRef.name', 'equalto', fab_name) | list }}
+        pe_status: >-
+          {%- set out = [] -%}
+          {%- for b in fab_spec.bearers -%}
+            {%- set _ = out.append({'name': b.name,
+                                    'circuits': _pe_circuits.resources | default([]) | selectattr('spec.edgeRef.name', 'equalto', fab_name)
+                                                | selectattr('spec.edgeRef.bearer', 'equalto', b.name) | list | length,
+                                    'mtu': (pe_real.bearers[b.name].mtu | default(1500)) | int}) -%}
+          {%- endfor -%}
+          {{ pe_status | combine({'nodes': pe_nodes, 'bearers': out,
+                                  'capabilities': {'ceKinds': ['customer'], 'routing': ['bgp'],
+                                                   'authentication': ['md5', 'none'], 'bfd': true, 'maxPrefixes': true},
+                                  'realization': {'platform': fab_spec.platform, 'model': fab_real.model,
+                                                  'vlanPool': fab_real.attachments.vlanPool,
+                                                  'linkPool': fab_real.attachments.linkPool,
+                                                  'linkPrefixLength': fab_real.attachments.linkPrefixLength | int}}) }}
+
+    - name: Report the edge ready
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: ready
+        fab_reason: Ready
+        fab_message: >-
+          {{ pe_nodes | length }} node(s); {{ pe_status.bearers | map(attribute='name') | zip(pe_status.bearers | map(attribute='circuits'))
+             | map('join', ': ') | join(', ') }} circuit(s)
+        fab_status: "{{ pe_status }}"
+
+    - name: Wake the circuits that wait for this edge
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for c in pe_circuits if (c.status | default({}, true)).status | default('') == 'pending' -%}
+            {%- set _ = out.append({'kind': 'AttachmentCircuit', 'namespace': c.metadata.namespace, 'name': c.metadata.name}) -%}
+          {%- endfor -%}
+          {{ out }}
+      when: fab_st.status | default('') != 'ready'
+
+  rescue:
+    - name: Mark the ProviderEdge failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: failed
+        fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
+        fab_message: >-
+          {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('ProviderEdge provision failed') }}
+        fab_status: "{{ pe_status | default({}) }}"
+      when: fab_name is defined and services_api_host is defined
+      ignore_errors: true
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "ProviderEdge {{ fab_name | default('unknown') }} provision failed: {{ fab_fail_reason | default('ProvisionFailed') }}"

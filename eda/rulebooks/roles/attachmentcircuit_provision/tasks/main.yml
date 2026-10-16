@@ -1,0 +1,453 @@
+---
+# shc (design/P9-PLAN.md §3–4): AttachmentCircuit provision. Resolves the network and the ProviderEdge, checks the
+# circuit against both (Entity allowed on the edge, bearer and CE kind, same fabric, CE ASN, accept list against the
+# network's placements and the platform's ranges), then takes a VLAN and a link subnet from the fabric's ledger,
+# keeps the BGP password in Vault (the tenant's Secret, or a generated one written to a Secret <name>-bgp), and
+# records the circuit's realization (status.realization) and what the CE needs (status.ceConfig). The fabric job
+# realizes it on the border nodes; this job wakes the fabric when the realization changes.
+- block:
+    - name: Read the AttachmentCircuit
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
+
+    - name: End the job for a circuit being deleted
+      ansible.builtin.meta: end_play
+      when: fab_deleting | bool
+
+    - name: Start with nothing to wait for
+      ansible.builtin.set_fact:
+        ac_waiting: []
+        ac_status: {entity: "{{ fab_entity }}"}
+        ac_owner: "AttachmentCircuit/{{ fab_namespace }}/{{ fab_name }}"
+        ac_bgp: "{{ fab_spec.routing.bgp | default({}, true) }}"
+        ac_auth_type: "{{ ((fab_spec.routing.bgp | default({}, true)).authentication | default({}, true)).type | default('md5', true) }}"
+
+    - name: Read the network and the edge
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      loop:
+        - {kind: HybridNetwork, name: "{{ fab_spec.network }}", namespace: "{{ fab_namespace }}"}
+        - {kind: ProviderEdge, name: "{{ fab_spec.edgeRef.name }}", namespace: "{{ fabric_platform_namespace }}"}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      register: _ac_refs
+
+    - name: Set the network and edge facts
+      ansible.builtin.set_fact:
+        ac_network: "{{ (_ac_refs.results[0].resources | default([], true) + [{}]) | first }}"
+        ac_edge: "{{ (_ac_refs.results[1].resources | default([], true) + [{}]) | first }}"
+
+    - name: Refuse references that are being deleted
+      ansible.builtin.set_fact:
+        fab_fail_reason: ReferenceDeleting
+        fab_fail_msg: >-
+          AttachmentCircuit {{ fab_name }}: {{ [ac_network, ac_edge] | selectattr('metadata', 'defined')
+          | selectattr('metadata.deletionTimestamp', 'defined') | map(attribute='kind') | join(' and ') }} being deleted
+      when: >-
+        [ac_network, ac_edge] | selectattr('metadata', 'defined') | selectattr('metadata.deletionTimestamp', 'defined')
+        | list | length > 0
+
+    # an edge offers bearers to the Entities it lists (none listed: every Entity), each bearer to some CE kinds
+    - name: Check the circuit against the edge
+      vars:
+        _refs: "{{ (ac_edge.spec | default({}, true)).entityRefs | default([], true) | map(attribute='name') | list }}"
+        _bearer: >-
+          {{ ((ac_edge.spec | default({}, true)).bearers | default([], true)
+              | selectattr('name', 'equalto', fab_spec.edgeRef.bearer) | list + [{}]) | first }}
+        _kind: "{{ fab_spec.ceKind | default('customer') }}"
+      ansible.builtin.set_fact:
+        ac_edge_problem: >-
+          {{ ['EntityNotAllowed', 'Entity ' ~ fab_entity ~ ' may not use ProviderEdge ' ~ fab_spec.edgeRef.name]
+               if _refs | length > 0 and fab_entity not in _refs
+             else ['BearerNotFound', 'ProviderEdge ' ~ fab_spec.edgeRef.name ~ ' has no bearer ' ~ fab_spec.edgeRef.bearer]
+               if not _bearer
+             else ['CeKindNotAccepted', 'bearer ' ~ fab_spec.edgeRef.bearer ~ ' does not accept CE kind ' ~ _kind]
+               if _kind not in (_bearer.ceKinds | default([]))
+             else [] }}
+      when: ac_edge | length > 0
+
+    - name: Refuse a circuit the edge doesn't offer
+      ansible.builtin.set_fact:
+        fab_fail_reason: "{{ ac_edge_problem[0] }}"
+        fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ ac_edge_problem[1] }}"
+      when:
+        - fab_fail_msg | default('', true) | length == 0
+        - ac_edge_problem | default([]) | length > 0
+
+    - name: Refuse a network on another fabric
+      ansible.builtin.set_fact:
+        fab_fail_reason: FabricMismatch
+        fab_fail_msg: >-
+          AttachmentCircuit {{ fab_name }}: ProviderEdge {{ fab_spec.edgeRef.name }} is on HybridFabric
+          {{ ac_edge.spec.fabricRef.name }}, network {{ fab_spec.network }} on {{ ac_network.status.fabric }}
+      when:
+        - fab_fail_msg | default('', true) | length == 0
+        - ac_edge | length > 0
+        - (ac_network.status | default({}, true)).fabric | default('', true) | length > 0
+        - ac_edge.spec.fabricRef.name != ac_network.status.fabric
+
+    - name: Stop on a refused circuit
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_msg | default('', true) | length > 0
+
+    - name: Wait for the network and the edge
+      vars:
+        _deps:
+          - {what: "HybridNetwork {{ fab_spec.network }}", obj: "{{ ac_network }}"}
+          - {what: "ProviderEdge {{ fab_spec.edgeRef.name }}", obj: "{{ ac_edge }}"}
+      ansible.builtin.set_fact:
+        ac_waiting: >-
+          {{ ac_waiting + [item.what ~ ' (' ~ (((item.obj.status | default({}, true)).status | default('not provisioned', true))
+                                               if item.obj else 'not found') ~ ')'] }}
+      loop: "{{ _deps }}"
+      loop_control:
+        label: "{{ item.what }}"
+      when: >-
+        not item.obj or not (((item.obj.status | default({}, true)).ready | default(false) | bool)
+                             or (((item.obj.status | default({}, true)).realized | default(false) | bool)
+                                 and (item.obj.status | default({}, true)).status | default('') != 'failed'))
+
+    - name: Wait for the network's VPN target
+      ansible.builtin.set_fact:
+        ac_waiting: "{{ ac_waiting + ['HybridNetwork ' ~ fab_spec.network ~ ' (no VPN target yet)'] }}"
+      when:
+        - ac_network | length > 0
+        - ac_waiting | length == 0
+        - ((ac_network.status | default({}, true)).realization | default({}, true)).vpnTarget is not defined
+
+    - name: Report what the circuit waits for
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: WaitingForDependencies
+        fab_message: "Waiting for {{ ac_waiting | join('; ') }}"
+        fab_waiting_for: "{{ ac_waiting }}"
+        fab_status: "{{ ac_status }}"
+      when: ac_waiting | length > 0
+
+    - name: End the job while waiting
+      ansible.builtin.meta: end_play
+      when: ac_waiting | length > 0
+
+    # ---- numbers and policy ----
+    - name: Read the fabric
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ ac_edge.spec.fabricRef.name }}"
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _ac_fabric
+
+    - name: Set the fabric facts
+      ansible.builtin.set_fact:
+        ac_fabric: "{{ _ac_fabric.resources[0] }}"
+        ac_asn: "{{ _ac_fabric.resources[0].spec.domainAsn | int }}"
+        ac_status: "{{ ac_status | combine({'fabric': _ac_fabric.resources[0].metadata.name}) }}"
+
+    - name: Refuse the fabric's own AS number for the CE
+      ansible.builtin.set_fact:
+        fab_fail_reason: AsnConflict
+        fab_fail_msg: >-
+          AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }} is the fabric's own AS number;
+          the CE needs a different one
+      when: ac_bgp.peerAsn | int == ac_asn | int
+
+    - name: Stop on the fabric's AS number
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: ac_bgp.peerAsn | int == ac_asn | int
+
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ ac_fabric.metadata.name }}"
+
+    - name: List the network's placements
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: NetworkPlacement
+        namespace: "{{ fab_namespace }}"
+      register: _ac_placements
+
+    - name: Check the accept list
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: check-circuit
+          accept: "{{ fab_spec.routing.accept | default([]) }}"
+          placements: >-
+            {%- set out = [] -%}
+            {%- for p in _ac_placements.resources | default([]) -%}
+              {%- if p.spec.network == fab_spec.network and p.metadata.deletionTimestamp is not defined -%}
+                {%- for c in p.spec.prefixes | default([]) -%}
+                  {%- set _ = out.append({'name': p.metadata.name, 'prefix': c}) -%}
+                {%- endfor -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ out }}
+          reserved: >-
+            {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
+                fab_real.egress.linkPool | default('169.254.0.0/16')]
+               + (fab_real.egress.platformSources | default([], true)) }}
+          egressInternet: "{{ (ac_network.spec.egress | default({}, true)).internet | default(false) | bool }}"
+          advertiseDefault: "{{ (fab_spec.routing.advertise | default({}, true)).default | default(false) | bool }}"
+
+    - name: Refuse an accept list that reaches into the network or the platform
+      ansible.builtin.set_fact:
+        fab_fail_reason: PolicyRefused
+        fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Stop on a refused accept list
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Keep the policy result
+      ansible.builtin.set_fact:
+        ac_policy: "{{ fab_check_result }}"
+
+    - name: The circuit's VLAN
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ ac_fabric.metadata.name }}",
+                     kind: attachVlan, owner: "{{ ac_owner }}"}
+
+    - name: Keep the VLAN
+      ansible.builtin.set_fact:
+        ac_vlan: "{{ fab_ledger_result.value | int }}"
+
+    - name: The circuit's link subnet (its index in the link pool)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ ac_fabric.metadata.name }}",
+                     kind: attachLink, owner: "{{ ac_owner }}"}
+
+    - name: Keep the link index
+      ansible.builtin.set_fact:
+        ac_link_index: "{{ fab_ledger_result.value | int }}"
+
+    - name: The circuit's link addresses
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: circuit-plan
+          attachments: "{{ fab_real.attachments }}"
+          nodes: "{{ (ac_fabric.spec.borderGateway | default({}, true)).nodes | default([], true) | map(attribute='name') | list }}"
+          index: "{{ ac_link_index | int }}"
+
+    - name: Refuse a link the platform can't number
+      ansible.builtin.fail:
+        msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Keep the link plan
+      ansible.builtin.set_fact:
+        ac_plan: "{{ fab_check_result }}"
+        ac_bearer_real: >-
+          {{ ((fab_real.attachments.providerEdges | default({}, true)).get(fab_spec.edgeRef.name, {}).bearers
+              | default({}, true)).get(fab_spec.edgeRef.bearer, {}) }}
+
+    # ---- BGP password ----
+    - name: The password's Vault path
+      ansible.builtin.set_fact:
+        ac_vault_path: "{{ fab_real.attachments.secretPath | replace('{entity}', fab_entity) | replace('{name}', fab_name) }}"
+        ac_secret_name: >-
+          {{ ((ac_bgp.authentication | default({}, true)).secretRef | default({}, true)).name
+             | default(fab_name ~ '-bgp', true) }}
+        ac_secret_given: "{{ ((ac_bgp.authentication | default({}, true)).secretRef | default({}, true)).name is defined }}"
+
+    - name: Keep the BGP password
+      when: ac_auth_type == 'md5'
+      block:
+        - name: Read the tenant's Secret
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: v1
+            kind: Secret
+            name: "{{ ac_secret_name }}"
+            namespace: "{{ fab_namespace }}"
+          register: _ac_secret
+          no_log: true
+          when: ac_secret_given | bool
+
+        - name: Wait for the tenant's Secret
+          ansible.builtin.set_fact:
+            ac_waiting: ["Secret {{ ac_secret_name }} with key password"]
+          when:
+            - ac_secret_given | bool
+            - ((_ac_secret.resources | default([{}], true))[0].data | default({}, true)).password | default('') | length == 0
+
+        - name: Report the circuit waiting for its Secret
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+          vars:
+            fab_outcome: pending
+            fab_reason: WaitingForSecret
+            fab_message: "Waiting for Secret {{ ac_secret_name }} (key password) in {{ fab_namespace }}"
+            fab_waiting_for: "{{ ac_waiting }}"
+            fab_status: "{{ ac_status }}"
+          when: ac_waiting | length > 0
+
+        - name: End the job while waiting for the Secret
+          ansible.builtin.meta: end_play
+          when: ac_waiting | length > 0
+
+        - name: Read the kept password
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+          vars:
+            vault_kv_path: "{{ ac_vault_path }}"
+
+        - name: The password to keep
+          ansible.builtin.set_fact:
+            ac_password: >-
+              {{ (_ac_secret.resources[0].data.password | b64decode) if ac_secret_given | bool
+                 else (vault_kv_data.password | default('', true)
+                       or lookup('ansible.builtin.password', '/dev/null', length=24, chars=['ascii_letters', 'digits'])) }}
+          no_log: true
+
+        - name: Keep the password in Vault
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
+          vars:
+            vault_kv_path: "{{ ac_vault_path }}"
+            vault_kv_write_data: {password: "{{ ac_password }}"}
+          when: ac_password != (vault_kv_data.password | default(''))
+
+        # a generated password goes to a Secret the tenant reads; it goes with the circuit (owner reference)
+        - name: Write the generated password to the tenant's namespace
+          kubernetes.core.k8s:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              type: Opaque
+              metadata:
+                name: "{{ ac_secret_name }}"
+                namespace: "{{ fab_namespace }}"
+                labels:
+                  hybridsovereign.redhat/attachmentcircuit: "{{ fab_name }}"
+                ownerReferences:
+                  - apiVersion: hybridsovereign.redhat/v1alpha1
+                    kind: AttachmentCircuit
+                    name: "{{ fab_name }}"
+                    uid: "{{ fab_obj.metadata.uid }}"
+              stringData:
+                password: "{{ ac_password }}"
+          no_log: true
+          when: not ac_secret_given | bool
+
+        - name: Drop the password
+          ansible.builtin.set_fact:
+            ac_password: ""
+            vault_kv_data: {}
+          no_log: true
+
+    # ---- record ----
+    - name: The circuit's realization and the CE's parameters
+      vars:
+        _maxp: "{{ ac_bgp.maxPrefixes | default({}, true) }}"
+        _adv: "{{ fab_spec.routing.advertise | default({}, true) }}"
+      ansible.builtin.set_fact:
+        ac_real:
+          vlan: "{{ ac_vlan | int }}"
+          linkIndex: "{{ ac_link_index | int }}"
+          link: "{{ ac_plan.link }}"
+          nodes: "{{ ac_plan.nodes }}"
+          ce: "{{ ac_plan.ce }}"
+          vrf: "e{{ ac_network.status.realization.vpnTarget }}"
+          vpnTarget: "{{ ac_network.status.realization.vpnTarget | int }}"
+          bearer: "{{ fab_spec.edgeRef.bearer }}"
+          interface: "{{ ac_bearer_real.interface | default('') }}"
+          mtu: "{{ (ac_bearer_real.mtu | default(1500)) | int }}"
+          peerAsn: "{{ ac_bgp.peerAsn | int }}"
+          authentication: "{{ ac_auth_type }}"
+          passwordPath: "{{ ac_vault_path if ac_auth_type == 'md5' else '' }}"
+          maxPrefixes: "{{ (_maxp.limit | default(100)) | int }}"
+          maxPrefixAction: "{{ _maxp.action | default('teardown') }}"
+          bfd: "{{ ac_bgp.bfd | default(false) | bool }}"
+          accept: "{{ fab_spec.routing.accept }}"
+          acceptsDefault: "{{ ac_policy.acceptsDefault | bool }}"
+          advertiseNetworkPrefixes: "{{ _adv.networkPrefixes | default(true) | bool }}"
+          advertiseDefault: "{{ _adv.default | default(false) | bool }}"
+        ac_ce_config:
+          vlan: "{{ ac_vlan | int }}"
+          address: "{{ ac_plan.ce }}/{{ ac_plan.prefixLength }}"
+          secondAddress: "{{ ac_plan.ceSecond }}/{{ ac_plan.prefixLength }}"
+          localAsn: "{{ ac_bgp.peerAsn | int }}"
+          neighbors: >-
+            {%- set out = [] -%}
+            {%- for n in ac_plan.nodes -%}{%- set _ = out.append({'address': n.address, 'asn': ac_asn | int}) -%}{%- endfor -%}
+            {{ out }}
+          mtu: "{{ (ac_bearer_real.mtu | default(1500)) | int }}"
+          authentication: "{{ {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}) }}"
+          bfd: "{{ ac_bgp.bfd | default(false) | bool }}"
+
+    - name: Has the realization changed
+      ansible.builtin.set_fact:
+        ac_changed: "{{ (fab_st.realization | default({}, true)) != ac_real }}"
+
+    - name: Record the circuit
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: attachmentcircuits
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        cr_status_partial: true
+        patch_ignore_not_found: true
+        cr_status_body: >-
+          {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
+                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real}) }}
+
+    - name: Ask the fabric to realize the circuit
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ ac_fabric.metadata.name }}"}]
+      when: ac_changed | bool
+
+    - name: Report the circuit waiting for the fabric
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: WaitingForFabric
+        fab_message: >-
+          VLAN {{ ac_vlan }} on {{ fab_spec.edgeRef.name }}/{{ fab_spec.edgeRef.bearer }}, link {{ ac_plan.link }}
+          (CE {{ ac_plan.ce }}); waiting for HybridFabric {{ ac_fabric.metadata.name }} to realize the circuit
+        fab_waiting_for: ["HybridFabric {{ ac_fabric.metadata.name }} (circuit on VRF {{ ac_real.vrf }})"]
+        fab_status: >-
+          {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
+                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real}) }}
+
+  rescue:
+    - name: Mark the AttachmentCircuit failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: failed
+        fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
+        fab_message: >-
+          {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('AttachmentCircuit provision failed') }}
+        fab_status: "{{ ac_status | default({}) }}"
+      when: fab_name is defined and services_api_host is defined
+      ignore_errors: true
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "AttachmentCircuit {{ fab_name | default('unknown') }} provision failed: {{ fab_fail_reason | default('ProvisionFailed') }}"

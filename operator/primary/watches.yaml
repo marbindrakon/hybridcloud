@@ -61,6 +61,18 @@
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
+# shc (P9): where customer edge routers connect to tenant networks (AttachmentCircuit)
+- version: v1alpha1
+  group: hybridsovereign.redhat
+  kind: ProviderEdge
+  role: provideredge
+  finalizer:
+    name: provideredges.hybridsovereign.redhat/finalizer
+    role: provideredge_delete
+  maxConcurrentReconciles: 10
+  reconcilePeriod: 300s
+  watchAnnotationsChanges: true
+
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: TransportLink

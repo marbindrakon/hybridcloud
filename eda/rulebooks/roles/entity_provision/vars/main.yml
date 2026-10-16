@@ -7,6 +7,7 @@ entity_named_roles:
       - cloudvirts
       - hybridnetworks
       - networkplacements
+      - attachmentcircuits
       - cloudawss
       - platformopenshifts
       - vaultkvs
@@ -27,6 +28,7 @@ entity_named_roles:
       - cloudvirts
       - hybridnetworks
       - networkplacements
+      - attachmentcircuits
       - cloudawss
       - platformopenshifts
       - vaultkvs
@@ -46,6 +48,7 @@ entity_named_roles:
       - cloudvirts
       - hybridnetworks
       - networkplacements
+      - attachmentcircuits
       - cloudawss
       - platformopenshifts
       - vaultkvs
@@ -79,13 +82,13 @@ entity_named_roles:
 
   - spec_key: networkAdmin
     role_name: network-admin
-    crud_resources: [hybridnetworks, networkplacements]
+    crud_resources: [hybridnetworks, networkplacements, attachmentcircuits]
     read_resources: [cloudosos, cloudvirts, rbacs]
 
   - spec_key: networkView
     role_name: network-view
     crud_resources: []
-    read_resources: [hybridnetworks, networkplacements, rbacs]
+    read_resources: [hybridnetworks, networkplacements, attachmentcircuits, rbacs]
 
   - spec_key: cloudAWSAdmin
     role_name: cloudaws-admin

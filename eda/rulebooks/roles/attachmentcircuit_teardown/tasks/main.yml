@@ -1,0 +1,127 @@
+---
+# shc (design/P9-PLAN.md §4): AttachmentCircuit teardown. In order:
+# 1. the fabric drops the circuit from the border nodes: status.realization.release, the fabric is woken and
+#    wakes this circuit again once the circuit is gone from its realization (the deletion waits meanwhile);
+# 2. the VLAN and the link subnet go back to the fabric's ledger; the password leaves Vault (a generated Secret
+#    goes with the circuit through its owner reference);
+# 3. deletionComplete; the edge is woken (its circuit counts).
+- block:
+    - name: Read the AttachmentCircuit
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
+
+    - name: What was realized
+      ansible.builtin.set_fact:
+        acd_real: "{{ fab_st.realization | default({}, true) }}"
+        acd_fabric_name: "{{ fab_st.fabric | default('', true) }}"
+        acd_owner: "AttachmentCircuit/{{ fab_namespace }}/{{ fab_name }}"
+        acd_key: "{{ fab_namespace }}/{{ fab_name }}"
+
+    - name: Read the fabric
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ acd_fabric_name }}"
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _acd_fabric
+      when: acd_fabric_name | length > 0
+
+    - name: Set the fabric facts
+      ansible.builtin.set_fact:
+        acd_fabric: "{{ ((_acd_fabric.resources | default([], true)) + [{}]) | first }}"
+
+    # the fabric's status.realization.attachments lists the circuits it realized on the nodes
+    - name: Is the circuit still on the border nodes
+      ansible.builtin.set_fact:
+        acd_on_nodes: >-
+          {{ ((acd_fabric.status | default({}, true)).realization | default({}, true)).attachments | default([], true)
+             | selectattr('circuit', 'equalto', acd_key) | list | length > 0 }}
+
+    - name: Ask the fabric to drop the circuit
+      when: acd_on_nodes | bool
+      block:
+        - name: Mark the circuit for release
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: attachmentcircuits
+            cr_name: "{{ fab_name }}"
+            cr_namespace: "{{ fab_namespace }}"
+            cr_status_partial: true
+            patch_ignore_not_found: true
+            cr_status_body:
+              realization: "{{ acd_real | combine({'release': true}) }}"
+
+        - name: Wake the fabric
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+          vars:
+            nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ acd_fabric_name }}"}]
+
+        - name: Wait for the fabric
+          ansible.builtin.fail:
+            msg: "Deletion waits for HybridFabric {{ acd_fabric_name }} to remove the circuit from the border nodes"
+
+    - name: Release the VLAN and the link subnet
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-release, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ acd_fabric_name }}",
+                     kind: "{{ item }}", owner: "{{ acd_owner }}"}
+      loop: [attachVlan, attachLink]
+      when: acd_fabric | length > 0
+
+    - name: Remove the kept password
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
+      vars:
+        vault_kv_delete_paths: ["{{ acd_real.passwordPath | default('', true) }}"]
+      when: acd_real.passwordPath | default('', true) | length > 0
+
+    - name: Mark deletion complete
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: attachmentcircuits
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: ready
+          ready: false
+          deletionComplete: true
+          deletionBlockedBy: []
+          message: Deleted
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+    # the operator drops the finalizer the next time it looks at the CR: make that now; the edge recounts
+    - name: Release the finalizer now and wake the edge
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs:
+          - {kind: AttachmentCircuit, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}
+          - {kind: ProviderEdge, namespace: "{{ fabric_platform_namespace }}", name: "{{ fab_spec.edgeRef.name }}"}
+
+  rescue:
+    - name: Report the teardown waiting or failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        _waits: "{{ ansible_failed_result.msg | default('') is match('Deletion waits for ') }}"
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: attachmentcircuits
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: "{{ 'pending' if _waits else 'failed' }}"
+          ready: false
+          message: "{{ ansible_failed_result.msg | default('AttachmentCircuit teardown failed') }}"
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+      when: fab_name is defined and services_api_host is defined
+      ignore_errors: true
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "AttachmentCircuit {{ fab_name | default('unknown') }} teardown failed"
+      when: not (ansible_failed_result.msg | default('') is match('Deletion waits for '))

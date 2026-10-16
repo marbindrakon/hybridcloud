@@ -91,6 +91,42 @@
           job_args:
             extra_vars:
               event_payload: "{{ event.body.payload }}"
+    - name: ProviderEdge create or reconcile
+      condition: event.body.payload.regarding.kind == "ProviderEdge" and event.body.payload.reason in ["ProviderEdgeCreateRequested", "ProviderEdgeReconcileRequested"]
+      action:
+        run_job_template:
+          name: provideredge-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: ProviderEdge delete
+      condition: event.body.payload.regarding.kind == "ProviderEdge" and event.body.payload.reason == "ProviderEdgeDeleteRequested"
+      action:
+        run_job_template:
+          name: provideredge-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: AttachmentCircuit create or reconcile
+      condition: event.body.payload.regarding.kind == "AttachmentCircuit" and event.body.payload.reason in ["AttachmentCircuitCreateRequested", "AttachmentCircuitReconcileRequested"]
+      action:
+        run_job_template:
+          name: attachmentcircuit-provision
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
+    - name: AttachmentCircuit delete
+      condition: event.body.payload.regarding.kind == "AttachmentCircuit" and event.body.payload.reason == "AttachmentCircuitDeleteRequested"
+      action:
+        run_job_template:
+          name: attachmentcircuit-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"
     - name: CloudVirt create or reconcile
       condition: event.body.payload.regarding.kind == "CloudVirt" and event.body.payload.reason in ["CloudVirtCreateRequested", "CloudVirtReconcileRequested"]
       action:

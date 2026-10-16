@@ -1,0 +1,19 @@
+{{- /*
+shc (P9): the platform's ProviderEdges in the platform namespace, keyed by name, each {spec: <ProviderEdge spec>}
+(enabled: false skips one). Removing one deletes it; its finalizer waits until no AttachmentCircuit uses it.
+*/}}
+{{- range $name, $e := .Values.providerEdges }}
+{{- if ne (toString $e.enabled) "false" }}
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: ProviderEdge
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  {{- toYaml $e.spec | nindent 2 }}
+{{- end }}
+{{- end }}

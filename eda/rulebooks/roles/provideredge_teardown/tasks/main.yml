@@ -1,0 +1,49 @@
+---
+# shc (design/P9-PLAN.md §4): ProviderEdge teardown. The operator's finalizer has already waited until no
+# AttachmentCircuit uses the edge; the edge itself holds nothing on the nodes or in the ledger. deletionComplete.
+- block:
+    - name: Read the ProviderEdge
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+
+    - name: Mark deletion complete
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: provideredges
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: ready
+          ready: false
+          deletionComplete: true
+          deletionBlockedBy: []
+          message: Deleted
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+    # the operator drops the finalizer the next time it looks at the CR: make that now
+    - name: Release the finalizer now
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: ProviderEdge, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
+
+  rescue:
+    - name: Report the teardown failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: provideredges
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: failed
+          ready: false
+          message: "{{ ansible_failed_result.msg | default('ProviderEdge teardown failed') }}"
+          lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+      when: fab_name is defined and services_api_host is defined
+      ignore_errors: true
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "ProviderEdge {{ fab_name | default('unknown') }} teardown failed"
