@@ -254,8 +254,11 @@ if cs:
     # past prerouting, a packet from a device in a VRF shows the VRF as its input interface: the circuit's device is
     # the slave interface (meta sdifname)
     out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
+    # BGP from the CE's link either way, whatever conntrack knows: a network's zone moves when its egress is turned
+    # on or off, and the CE's packets of a session the node opened would then look new
     for c in cs:
         out.append(f'    meta sdifname "{c["device"]}" ip saddr {c["link"]} tcp dport 179 accept')
+        out.append(f'    meta sdifname "{c["device"]}" ip saddr {c["link"]} tcp sport 179 accept')
     out += [f"    meta sdifname {devs(cs)} ct state established,related accept",
             f"    meta sdifname {devs(cs)} udp dport {{ 3784, 3785 }} accept",
             f"    meta sdifname {devs(cs)} icmp type {{ echo-request, echo-reply, destination-unreachable, time-exceeded }} accept",

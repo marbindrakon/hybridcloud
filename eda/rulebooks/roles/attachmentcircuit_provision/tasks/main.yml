@@ -540,7 +540,10 @@
               ('Realized on ' ~ ac_entry.nodes | join(', ') ~ ' (VLAN ' ~ ac_vlan ~ ', CE ' ~ ac_plan.ce ~ ')'))
              ~ ((('; ' if _up else '; BGP ') ~ _down | map(attribute='node') | zip(_down | map(attribute='state'),
                  _down | map(attribute='lastReset')) | map('join', ' ') | map('trim') | join(', ')
-                 ~ ('' if _up else ': configure the CE from status.ceConfig')) if _down else '') }}
+                 ~ ((': the CE sends more routes than routing.bgp.maxPrefixes allows (the session is tried again every '
+                     ~ fab_real.attachments.maxPrefixRestart | default(2) ~ ' minutes)')
+                    if _down | selectattr('lastReset', 'search', 'Maximum Number of Prefixes') | list
+                    else ('' if _up else ': configure the CE from status.ceConfig'))) if _down else '') }}
         fab_waiting_for: "{{ [] if _all_up | bool else ['the CE: BGP from ' ~ _down | map(attribute='node') | join(', ')] }}"
         fab_status: >-
           {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
