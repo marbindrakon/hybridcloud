@@ -12,6 +12,8 @@ Ledger: ConfigMap fabric-ledger-<fabric> (key ledger.json) in the fabric's names
                   when an allocated value would fall outside its new pool
   ledger-allocate {fabric, kind, owner}   the owner's value (lowest free one the first time)
   ledger-release  {fabric, kind, owner}
+  An allocate or release that changes the ledger also writes its counts to the HybridFabric's status.allocated /
+  status.available (best effort), so they follow every change and not only the fabric's own runs.
   ledger-get      {fabric}
 Lease: coordination.k8s.io Lease fabric-config-<fabric>, serializing the jobs that change the border gateway nodes.
   lease-acquire   {fabric, holder, duration (s, default 1800), wait (s, default 1200)}
@@ -35,8 +37,9 @@ class Api:
         self.base = req["api"].rstrip("/")
         self.h = {"Authorization": f"Bearer {req['token']}", "Content-Type": "application/json"}
 
-    def call(self, method, path, body=None):
-        r = requests.request(method, self.base + path, headers=self.h, data=json.dumps(body) if body else None,
+    def call(self, method, path, body=None, content_type=None):
+        h = {**self.h, "Content-Type": content_type} if content_type else self.h
+        r = requests.request(method, self.base + path, headers=h, data=json.dumps(body) if body else None,
                              verify=False, timeout=30)
         return r.status_code, (r.json() if r.text.startswith("{") else {"message": r.text[:300]})
 
@@ -87,6 +90,20 @@ def update(api, req, change):
             return result
         time.sleep(0.2 + random.random() * (0.3 * attempt + 0.2))
     raise RuntimeError("the ledger kept changing underneath (12 conflicts)")
+
+
+def publish_counts(api, req):
+    """Write the ledger's current counts to the HybridFabric's status. Read again just before the write, so the
+    last of several concurrent changes publishes the final counts. False when it could not."""
+    try:
+        cm, led = read(api, req)
+        if cm is None:
+            return False
+        path = f"/apis/hybridsovereign.redhat/v1alpha1/namespaces/{req['namespace']}/hybridfabrics/{req['fabric']}/status"
+        code, _ = api.call("PATCH", path, {"status": counts(led)}, content_type="application/merge-patch+json")
+        return code == 200
+    except Exception:  # noqa: BLE001 - the allocation stands; the next change or fabric run publishes the counts
+        return False
 
 
 def ledger_ensure(api, req):
@@ -145,7 +162,10 @@ def ledger_allocate(api, req):
             raise RuntimeError(f"{k} pool {s}-{e} is exhausted")
         alloc[owner] = free
         return {"value": free, "new": True}
-    return update(api, req, change)
+    result = update(api, req, change)
+    if result.get("new"):
+        result["countsPublished"] = publish_counts(api, req)
+    return result
 
 
 def ledger_release(api, req):
@@ -154,7 +174,10 @@ def ledger_release(api, req):
     def change(led):
         v = led["alloc"].setdefault(k, {}).pop(owner, None)
         return {"released": v, "unchanged": v is None}
-    return update(api, req, change)
+    result = update(api, req, change)
+    if result.get("released") is not None:
+        result["countsPublished"] = publish_counts(api, req)
+    return result
 
 
 def ledger_get(api, req):
