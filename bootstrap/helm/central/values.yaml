@@ -5002,6 +5002,16 @@ hybridsovereignPrimaryOperator:
             vlan: 235
             cidr: 172.18.235.0/24
             addresses: [{node: bgw-1, address: 172.18.235.4}, {node: bgw-2, address: 172.18.235.5}]
+      # 10-16 (owner): Atuin as an EVPN site - Neutron 2026.2 evpn + OVN ovn-evpn, hosts on VLAN 103 (osp1_tun) as RR
+      # clients in AS 65010 like rhoso-bm (p7/atuin-gw/README.md)
+      atuin:
+        spec:
+          fabricRef: {name: lab}
+          cloudRef: {name: atuin}
+          siteUnderlay:
+            vlan: 103
+            cidr: 172.18.103.0/24
+            addresses: [{node: bgw-1, address: 172.18.103.4}, {node: bgw-2, address: 172.18.103.5}]
     # TENANT-DNS D1: the platform's tenant DNS namespace (DNSConfig in sovereign-cloud-plugins). The global zone
     # tenants.shc.signal9.gg lives in Atuin Designate (project shc-tenant-dns); credential = the DNS-only account
     # shc-tenant-dns (p7/tenant-dns-account.sh, bootstrap.sh seed-tenant-dns).
