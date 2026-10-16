@@ -29,5 +29,13 @@ export {
   configurePermissionsClient,
 } from './permissions';
 export type { K8sVerb, PermissionCheck, UsePermissionsResult } from './permissions';
+export {
+  useEntityOptions,
+  entityNamespaceOf,
+  entityNameForNamespace,
+  namespaceForEntityName,
+  ENTITY_NS,
+} from './entityOptions';
+export type { EntityOption, UseEntityOptionsOptions, UseEntityOptionsResult } from './entityOptions';
 export { useEntityNamespace } from './entityNamespace';
 export type { UseEntityNamespaceOptions, UseEntityNamespaceResult } from './entityNamespace';

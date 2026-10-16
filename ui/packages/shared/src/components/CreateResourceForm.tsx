@@ -18,6 +18,7 @@ import { createDashboardResource, useK8sResourceList } from '../hooks/k8s';
 import { HybridSovereignKind, K8sResource } from '../types';
 import { PageHeader } from './PageHeader';
 import { RbacMultiSelect } from './RbacMultiSelect';
+import { EntitySelect } from './EntitySelect';
 import { FabricSelect } from './FabricSelect';
 import { CloudGatewaySelect } from './CloudGatewaySelect';
 import { CloudInfrastructureSelect } from './CloudInfrastructureSelect';
@@ -139,6 +140,18 @@ const FORM_KINDS: Record<SelfServiceFormType, HybridSovereignKind> = {
   transportlink: 'TransportLink',
   uihealthchecker: 'UIHealthChecker',
 };
+
+/**
+ * Tenant-scoped kinds that live in entity-<tenant>. These forms get the
+ * EntitySelect dropdown so the target namespace is picked, not typed.
+ * Persona is handled separately: it already had its own inline Entity picker.
+ */
+const ENTITY_SCOPED_FORMS = new Set<SelfServiceFormType>([
+  'team',
+  'project',
+  'assignment',
+  'platformopenshift',
+]);
 
 const PERSONA_TYPES = [
   'entityAdmin',
@@ -271,6 +284,9 @@ export function CreateResourceForm({
   const isPlatformForm = PLATFORM_FORMS.has(type);
   const usesNetworkSection = NETWORK_SECTION_FORMS.has(type);
   const [entityName, setEntityName] = useState('');
+  const entityScoped = ENTITY_SCOPED_FORMS.has(type);
+  /** Namespace resolved from the Entity the user picked in EntitySelect. */
+  const [pickedEntityNs, setPickedEntityNs] = useState('');
   const entityNs =
     type === 'entity'
       ? PLATFORM_NAMESPACE
@@ -278,7 +294,30 @@ export function CreateResourceForm({
         ? entityName
           ? `entity-${entityName}`
           : ''
-        : namespace;
+        : entityScoped
+          ? // Until the Entity list resolves, stay on whatever the host app scoped us to.
+            pickedEntityNs || namespace
+          : namespace;
+
+  /** Picking a different tenant invalidates every namespace-scoped reference below. */
+  const onEntityPicked = React.useCallback((next: string, nextNs: string) => {
+    setEntityName(next);
+    setPickedEntityNs(nextNs);
+    setTeamRef('');
+    setProjectRef('');
+    setProjectRefs('');
+    setPlatformRef('');
+    setPlatformEnv('');
+    setCloudosoRef('');
+    setCloudAwsRef('');
+    setAssignAdmin([]);
+    setAssignDev([]);
+    setAssignViewer([]);
+    setAssignOps([]);
+    setRbacMulti([]);
+    setRbacOperator([]);
+    setRbacViewer([]);
+  }, []);
 
   const entities = useK8sResourceList<K8sResource>('Entity', {
     namespace: PLATFORM_NAMESPACE,
@@ -570,6 +609,8 @@ export function CreateResourceForm({
     if (usesNetworkSection) return networkSpec !== null && !!(type === 'hybridfabric' || type === 'cloudinfrastructure' || type === 'cloudgateway' || entityNs);
     if (type === 'entity' && !billingID) return false;
     if (type === 'persona' && !entityNs) return false;
+    // Entity-scoped kinds cannot be created without a resolved tenant namespace.
+    if (entityScoped && !entityNs) return false;
     if (type === 'assignment' && !teamRef) return false;
     if (type === 'cloudoso' && !osoProject.trim()) return false;
     if (type === 'cloudaws' && (!awsAccount.trim() || !awsVaultPath.trim() || !(awsBaseDomain || baseDomain).trim())) {
@@ -643,6 +684,20 @@ export function CreateResourceForm({
         <Card isCompact>
           <CardBody>
             <Form onSubmit={handleSubmit}>
+              {entityScoped && (
+                <EntitySelect
+                  id="entity-scope"
+                  value={entityName}
+                  onChange={onEntityPicked}
+                  fallbackNamespace={namespace}
+                  helperText={t('form.entityScopeHelp', {
+                    namespace: entityNs || '—',
+                    defaultValue: `The ${kind} is created in ${entityNs || '—'}.`,
+                  })}
+                  isRequired
+                />
+              )}
+
               <FormGroup label="Name" isRequired fieldId="name">
                 <TextInput id="name" value={name} onChange={(_e, v) => setName(v)} isRequired />
               </FormGroup>

@@ -302,10 +302,17 @@
     "siteDefault": "Site default",
     "siteDefaultNetwork": "Site default network",
     "siteDefaultValue": "Site default: {{value}}",
-    "siteDnsSection": "Environment DNS"
+    "siteDnsSection": "Environment DNS",
+    "entityListRestricted": "Showing only the Entity you have access to \u2014 the full tenant list needs platform access.",
+    "entityListUnavailable": "The Entity list could not be read; type the Entity name given by the platform team.",
+    "entityNamePlaceholder": "Entity name, e.g. acme-corp",
+    "entityNone": "No Entities are visible with your access \u2014 create an Entity first",
+    "entityScopeHelp": "Created in namespace {{namespace}}.",
+    "entitySelectPlaceholder": "Select Entity\u2026"
   },
   "fields": {
     "description": "Description",
+    "entity": "Entity (tenant)",
     "istio": "Istio",
     "argo": "Argo CD",
     "team": "Team",

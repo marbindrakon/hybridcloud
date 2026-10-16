@@ -81,17 +81,28 @@ export interface TeamSpec {
     argo?: boolean;
     istio?: boolean;
   };
+  /** Deprecated in the API (access comes from Assignment toolRbac); not written by the forms. */
   teamAdmin?: string[];
+  teamMemberRbac?: string[];
+  teamViewerRbac?: string[];
 }
 
 export type Team = K8sResource<TeamSpec>;
 
 /** Assignment — binds team to projects and platforms */
+export interface AssignmentToolRbac {
+  assignmentAdmin?: string;
+  assignmentDeveloper?: string;
+  assignmentViewer?: string;
+  assignmentOps?: string;
+}
+
 export interface AssignmentSpec {
   team: string;
   projects?: string[];
   openshift?: string;
   aws?: string;
+  toolRbac?: AssignmentToolRbac;
 }
 
 export type Assignment = K8sResource<AssignmentSpec>;

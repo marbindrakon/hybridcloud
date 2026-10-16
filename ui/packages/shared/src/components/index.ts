@@ -26,6 +26,8 @@ export { CreateResourceForm } from './CreateResourceForm';
 export type { CreateResourceFormProps, SelfServiceFormType } from './CreateResourceForm';
 export { ResourceListTable, filterResourcesByQuery } from './ResourceListTable';
 export type { ResourceListTableProps } from './ResourceListTable';
+export { EntitySelect } from './EntitySelect';
+export type { EntitySelectProps } from './EntitySelect';
 export { EntityMultiSelect } from './EntityMultiSelect';
 export type { EntityMultiSelectProps, EntityMultiSelectOption } from './EntityMultiSelect';
 export { FabricSelect } from './FabricSelect';
