@@ -62,6 +62,11 @@ function k8sRequest(apiServer, reqPath, method, bearerToken, body, contentType) 
 }
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
+// Team RBAC lists (teamAdmin, teamMemberRbac, teamViewerRbac): Rbac CR names in the Team's namespace.
+const TEAM_RBAC_KEYS = ["teamAdmin", "teamMemberRbac", "teamViewerRbac"];
+function teamRbacList(v) {
+  return Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && NAME_PATTERN.test(x)))] : undefined;
+}
 const NS_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const CONFIG_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
 
@@ -804,7 +809,9 @@ export function createK8sHandlers(apiServer) {
             argo: spec?.features?.argo === true,
           },
           ...(spec?.rbacConfig ? { rbacConfig: spec.rbacConfig } : {}),
-          ...(Array.isArray(spec?.teamAdmin) && spec.teamAdmin.length ? { teamAdmin: spec.teamAdmin } : {}),
+          ...Object.fromEntries(
+            TEAM_RBAC_KEYS.map((k) => [k, teamRbacList(spec?.[k])]).filter(([, l]) => l && l.length),
+          ),
         },
       };
       try {
@@ -2156,7 +2163,10 @@ export function createK8sHandlers(apiServer) {
               argo: spec?.features?.argo === true,
             },
             ...(spec?.rbacConfig ? { rbacConfig: spec.rbacConfig } : { rbacConfig: current.spec?.rbacConfig }),
-            ...(Array.isArray(spec?.teamAdmin) ? { teamAdmin: spec.teamAdmin } : {}),
+            // A list in the request replaces the stored one (empty clears it); an absent list is kept.
+            ...Object.fromEntries(
+              TEAM_RBAC_KEYS.map((k) => [k, teamRbacList(spec?.[k])]).filter(([, l]) => l !== undefined),
+            ),
           },
         };
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
