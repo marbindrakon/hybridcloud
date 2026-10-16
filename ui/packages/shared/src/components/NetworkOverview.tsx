@@ -10,7 +10,6 @@ import {
 } from '@patternfly/react-icons';
 import type {
   CloudGateway,
-  CloudInfrastructure,
   HybridFabric,
   HybridNetwork,
   HybridSovereignKind,
@@ -19,25 +18,25 @@ import type {
 } from '../types';
 import { useOverviewCRs } from '../hooks/overviewCrs';
 import { useTranslation } from '../i18n';
-import { normalizeHealth } from './StatusBadge';
-import { PoolBar } from './KindStatusDetails';
+import { HybridTopology, describeGateway, stateOf, type NetState } from './HybridTopology';
+import { PoolBar, egressText } from './KindStatusDetails';
 
 /**
  * Network Overview — the hybrid fabric as one picture.
  *
  * Three views of the same data, in dependency order:
  *   1. Fabric summary  — each HybridFabric: ASN, overlay MTU, border gateway nodes ready, pool use.
- *   2. Fabric map      — the fabric at the centre, one spoke per CloudGateway to its
- *                        CloudInfrastructure: site type, transport, sessions per node, tunnel state.
+ *   2. Topology        — HybridTopology: the fabric, each CloudGateway with its transport (sessions
+ *                        and tunnel state per node), the sites, then each entity's HybridNetworks and
+ *                        their placements, with a line from every placement to the site it lands on.
+ *                        One per fabric when there are several.
  *   3. Networks        — per entity, rows are HybridNetworks (with their internet egress), columns
  *                        are the entity's cloud environments (CloudVirt, CloudOSO). A cell is one
  *                        NetworkPlacement: its state and prefixes.
  *
- * Accessibility: state is never colour alone — every cell and edge carries an icon and a text
- * label, there is a legend, and the network matrix has a table view.
+ * Accessibility: state is never colour alone — every cell carries an icon and a text label, there
+ * is a legend, and the topology and the network matrix each have a table view.
  */
-
-export type NetState = 'ready' | 'pending' | 'failed' | 'absent';
 
 export interface NetworkOverviewProps {
   /** Scope to one tenant: only that entity's networks and environments are shown. */
@@ -48,26 +47,6 @@ export interface NetworkOverviewProps {
   resourcesError?: Error | null;
   /** Called when a gateway, network or placement is activated, for drill-down navigation. */
   onSelect?: (kind: HybridSovereignKind, item: K8sResource) => void;
-}
-
-interface NodeSessions {
-  name: string;
-  ready?: boolean;
-  site?: number;
-  core?: number;
-  upstream?: number;
-  tunnel?: string;
-}
-
-interface Spoke {
-  gateway: CloudGateway;
-  siteName: string;
-  siteType: string;
-  transport: string;
-  state: NetState;
-  /** wireguard only: up when every node's tunnel is up, down when one is down */
-  tunnel: '' | 'up' | 'down' | 'partial';
-  nodes: NodeSessions[];
 }
 
 interface Backend {
@@ -103,13 +82,6 @@ function itemsOfKind<T extends K8sResource>(items: K8sResource[], kind: HybridSo
   return items.filter((i) => (i.kind || '') === kind) as T[];
 }
 
-function stateOf(item: K8sResource): NetState {
-  const health = normalizeHealth(item.status?.ready, item.status?.status);
-  if (health === 'ready') return 'ready';
-  if (health === 'failed') return 'failed';
-  return 'pending';
-}
-
 function refName(item: K8sResource, key: string): string {
   const ref = (item.spec as Record<string, unknown> | undefined)?.[key];
   if (ref && typeof ref === 'object') {
@@ -122,14 +94,6 @@ function refName(item: K8sResource, key: string): string {
 function entityOf(ns: string): string {
   return ns.replace(/^entity-/, '');
 }
-
-/** Geometry for the fabric map. */
-const MAP_W = 760;
-const HUB_R = 54;
-const SPOKE_W = 230;
-const SPOKE_BASE_H = 58;
-const NODE_LINE_H = 13;
-const SPOKE_GAP = 18;
 
 export function NetworkOverview({
   entityNamespace,
@@ -153,7 +117,6 @@ export function NetworkOverview({
     const inScope = (i: K8sResource) => !entityNamespace || i.metadata.namespace === entityNamespace;
     const fabrics = itemsOfKind<HybridFabric>(items, 'HybridFabric');
     const gateways = itemsOfKind<CloudGateway>(items, 'CloudGateway');
-    const infra = itemsOfKind<CloudInfrastructure>(items, 'CloudInfrastructure');
     const networks = itemsOfKind<HybridNetwork>(items, 'HybridNetwork').filter(inScope);
     const placements = itemsOfKind<NetworkPlacement>(items, 'NetworkPlacement').filter(inScope);
     const environments = [
@@ -161,46 +124,15 @@ export function NetworkOverview({
       ...itemsOfKind<K8sResource>(items, 'CloudOSO'),
     ].filter(inScope);
 
-    const infraByName = new Map(infra.map((i) => [i.metadata.name, i]));
-
-    // One spoke per CloudGateway, grouped by the fabric it joins.
-    const spokesByFabric = new Map<string, Spoke[]>();
+    // Each CloudGateway's state (a WireGuard gateway counts once its tunnel is up on every node),
+    // grouped by the fabric it joins.
+    const gatewaysByFabric = new Map<string, NetState[]>();
     for (const gw of gateways) {
-      const siteName = refName(gw, 'cloudRef');
-      const site = infraByName.get(siteName);
-      const transport = gw.spec?.transport || 'none';
-      const nodes: NodeSessions[] = (gw.status?.nodes ?? []).map((n) => ({
-        name: n.name ?? '',
-        ready: n.ready,
-        site: n.siteSessions,
-        core: n.coreSessions,
-        upstream: n.upstreamSessions,
-        tunnel: n.tunnel,
-      }));
-      let tunnel: Spoke['tunnel'] = '';
-      if (transport === 'wireguard') {
-        const states = nodes.map((n) => n.tunnel).filter(Boolean);
-        if (states.length === 0) tunnel = 'down';
-        else if (states.every((s) => s === 'up')) tunnel = 'up';
-        else if (states.every((s) => s !== 'up')) tunnel = 'down';
-        else tunnel = 'partial';
-      }
-      const gwState = stateOf(gw);
-      const spoke: Spoke = {
-        gateway: gw,
-        siteName: siteName || '—',
-        siteType: (gw.status?.site?.type as string | undefined) || site?.spec?.type || '—',
-        transport,
-        // The edge is ready only when the gateway is ready and, for a tunnel, every node's tunnel is up.
-        state: gwState === 'ready' && transport === 'wireguard' && tunnel !== 'up' ? 'pending' : gwState,
-        tunnel,
-        nodes,
-      };
       const fabricName = refName(gw, 'fabricRef');
-      spokesByFabric.set(fabricName, [...(spokesByFabric.get(fabricName) ?? []), spoke]);
+      gatewaysByFabric.set(fabricName, [...(gatewaysByFabric.get(fabricName) ?? []), describeGateway(gw).state]);
     }
     const fabricNames = Array.from(
-      new Set([...fabrics.map((f) => f.metadata.name), ...Array.from(spokesByFabric.keys())]),
+      new Set([...fabrics.map((f) => f.metadata.name), ...Array.from(gatewaysByFabric.keys())]),
     ).sort();
 
     // Environments (columns) and networks (rows), per entity namespace.
@@ -247,7 +179,7 @@ export function NetworkOverview({
       });
     }
 
-    return { fabrics, fabricNames, spokesByFabric, entityGroups, cells, networks };
+    return { fabrics, fabricNames, gatewaysByFabric, entityGroups, cells, networks };
   }, [items, entityNamespace]);
 
   const cellFor = (net: HybridNetwork, backendId: string): Cell =>
@@ -277,28 +209,28 @@ export function NetworkOverview({
   }
 
   const showEntity = !entityNamespace;
+  // One topology per fabric when there are several; otherwise one, which a tenant that cannot read
+  // the platform kinds still gets for its own networks.
+  const multiFabric = model.fabricNames.length > 1;
+  const topology = (fabricName?: string) => (
+    <section className="sc-netov__section">
+      <HybridTopology items={items} entityNamespace={entityNamespace} fabricName={fabricName} onSelect={onSelect} />
+    </section>
+  );
 
   return (
     <div className="sc-netov" aria-label={t('nav.networkOverview')}>
       {model.fabricNames.map((name) => {
         const fabric = model.fabrics.find((f) => f.metadata.name === name);
-        const spokes = model.spokesByFabric.get(name) ?? [];
         return (
           <React.Fragment key={name || '-'}>
-            {fabric && <FabricSummary fabric={fabric} spokes={spokes} />}
-            {spokes.length > 0 && (
-              <section className="sc-netov__section">
-                <h3 className="sc-netov__title">
-                  {t('networkOverview.fabricMap')} {name && <code>{name}</code>}
-                </h3>
-                <p className="sc-netov__hint">{t('networkOverview.fabricMapHint')}</p>
-                <FabricMap spokes={spokes} fabricName={name} onSelect={onSelect} />
-                <Legend />
-              </section>
-            )}
+            {fabric && <FabricSummary fabric={fabric} gateways={model.gatewaysByFabric.get(name) ?? []} />}
+            {multiFabric && topology(name)}
           </React.Fragment>
         );
       })}
+
+      {!multiFabric && (model.fabricNames.length > 0 || model.networks.length > 0) && topology()}
 
       <section className="sc-netov__section">
         <div className="sc-netov__section-head">
@@ -340,7 +272,7 @@ export function NetworkOverview({
   );
 }
 
-function FabricSummary({ fabric, spokes }: { fabric: HybridFabric; spokes: Spoke[] }): React.ReactElement {
+function FabricSummary({ fabric, gateways }: { fabric: HybridFabric; gateways: NetState[] }): React.ReactElement {
   const { t } = useTranslation();
   const st = fabric.status ?? {};
   const state = stateOf(fabric);
@@ -349,7 +281,7 @@ function FabricSummary({ fabric, spokes }: { fabric: HybridFabric; spokes: Spoke
   const statusNodes = st.nodes ?? [];
   const nodesReady = statusNodes.filter((n) => n.ready).length;
   const nodesTotal = Math.max(specNodes.length, statusNodes.length);
-  const attached = spokes.filter((s) => s.state === 'ready').length;
+  const attached = gateways.filter((s) => s === 'ready').length;
   const allocated = st.allocated ?? {};
   const available = st.available ?? {};
   const pools = Array.from(new Set([...Object.keys(allocated), ...Object.keys(available)])).sort();
@@ -376,7 +308,7 @@ function FabricSummary({ fabric, spokes }: { fabric: HybridFabric; spokes: Spoke
         />
         <Fact
           label={t('networkOverview.sitesAttached')}
-          value={t('detail.countOf', { count: attached, total: spokes.length })}
+          value={t('detail.countOf', { count: attached, total: gateways.length })}
         />
       </dl>
       {pools.length > 0 && (
@@ -413,140 +345,6 @@ function Fact({ label, value }: { label: string; value: string }): React.ReactEl
       <dd title={value}>{value}</dd>
     </div>
   );
-}
-
-function short(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-function FabricMap({
-  spokes,
-  fabricName,
-  onSelect,
-}: {
-  spokes: Spoke[];
-  fabricName: string;
-  onSelect?: NetworkOverviewProps['onSelect'];
-}): React.ReactElement {
-  const { t } = useTranslation();
-  const heights = spokes.map((s) => SPOKE_BASE_H + Math.max(s.nodes.length, 1) * NODE_LINE_H);
-  const tops: number[] = [];
-  let y = 24;
-  for (const h of heights) {
-    tops.push(y);
-    y += h + SPOKE_GAP;
-  }
-  const height = Math.max(y + 8, 2 * HUB_R + 48);
-  const hubX = 110;
-  const hubY = height / 2;
-  const spokeX = MAP_W - SPOKE_W - 24;
-
-  const nodeLine = (n: NodeSessions): string => {
-    const parts = [
-      t('networkOverview.sessionsSite', { count: n.site ?? 0 }),
-      t('networkOverview.sessionsCore', { count: n.core ?? 0 }),
-    ];
-    if (n.upstream) parts.push(t('networkOverview.sessionsUpstream', { count: n.upstream }));
-    if (n.tunnel) parts.push(t('networkOverview.tunnelState', { state: t(`detail.${n.tunnel === 'up' ? 'up' : 'down'}`) }));
-    return `${n.name}: ${parts.join(' · ')}`;
-  };
-
-  return (
-    <div className="sc-netov__map-wrap">
-      <svg
-        className="sc-netov__map"
-        viewBox={`0 0 ${MAP_W} ${height}`}
-        role="img"
-        aria-label={t('networkOverview.mapAria', { count: spokes.length })}
-      >
-        {spokes.map((s, i) => {
-          const cy = tops[i] + heights[i] / 2;
-          const x1 = hubX + HUB_R;
-          const mx = (x1 + spokeX) / 2;
-          const meta = STATE_ICON[s.state];
-          const label =
-            s.transport === 'wireguard'
-              ? `${s.transport} · ${t(`networkOverview.tunnel_${s.tunnel || 'down'}`)}`
-              : s.transport;
-          return (
-            <g key={s.gateway.metadata.name}>
-              <path
-                d={`M ${x1} ${hubY} C ${mx} ${hubY}, ${mx} ${cy}, ${spokeX} ${cy}`}
-                className={`sc-netov__edge sc-netov__edge--${meta.cls}`}
-              />
-              <text x={mx} y={(hubY + cy) / 2 - 6} textAnchor="middle" className="sc-netov__edge-label">
-                {label}
-              </text>
-            </g>
-          );
-        })}
-
-        <g transform={`translate(${hubX - HUB_R}, ${hubY - HUB_R})`}>
-          <circle cx={HUB_R} cy={HUB_R} r={HUB_R} className="sc-netov__hub" />
-          <text x={HUB_R} y={HUB_R - 4} textAnchor="middle" className="sc-netov__hub-kind">
-            {t('networkOverview.hubLabel')}
-          </text>
-          <text x={HUB_R} y={HUB_R + 12} textAnchor="middle" className="sc-netov__hub-name">
-            {short(fabricName || '—', 17)}
-          </text>
-        </g>
-
-        {spokes.map((s, i) => {
-          const meta = STATE_ICON[s.state];
-          const select = onSelect ? () => onSelect('CloudGateway', s.gateway) : undefined;
-          const lines = s.nodes.length ? s.nodes.map(nodeLine) : [t('networkOverview.noNodeStatus')];
-          return (
-            <g
-              key={`n-${s.gateway.metadata.name}`}
-              transform={`translate(${spokeX}, ${tops[i]})`}
-              className={`sc-netov__node sc-netov__node--${meta.cls}`}
-              role={select ? 'button' : undefined}
-              tabIndex={select ? 0 : undefined}
-              onClick={select}
-              onKeyDown={
-                select
-                  ? (e) => {
-                      if (e.key === 'Enter' || e.key === ' ') select();
-                    }
-                  : undefined
-              }
-            >
-              <title>
-                {`${s.siteName} (${s.siteType}) — ${t(`networkOverview.state_${s.state}`)}\n${lines.join('\n')}`}
-              </title>
-              <rect width={SPOKE_W} height={heights[i]} rx={3} />
-              <text x={12} y={18} className="sc-netov__node-kind">
-                {`${s.siteType} · ${s.transport}`}
-              </text>
-              <text x={12} y={35} className="sc-netov__node-name">
-                {short(s.siteName, 26)}
-              </text>
-              <text x={12} y={49} className="sc-netov__node-state">
-                {t(`networkOverview.state_${s.state}`)}
-              </text>
-              {lines.map((line, j) => (
-                <text key={j} x={12} y={49 + (j + 1) * NODE_LINE_H} className="sc-netov__node-state">
-                  {short(line, 40)}
-                </text>
-              ))}
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-/** "egress: ready (addresses)" / "egress: off" for one network. */
-function egressText(n: HybridNetwork, t: (k: string, o?: Record<string, unknown>) => string): string {
-  const wanted = n.spec?.egress?.internet === true;
-  const state = n.status?.egress?.internet ?? '';
-  if (!wanted && !state) return t('networkOverview.egressOff');
-  const sources = Array.isArray(n.status?.egress?.sourceAddresses) ? n.status?.egress?.sourceAddresses ?? [] : [];
-  const label = state ? t(`detail.egress_${state}`, { defaultValue: state }) : t('networkOverview.egressRequested');
-  return sources.length
-    ? t('networkOverview.egressWithSources', { state: label, sources: sources.join(', ') })
-    : t('networkOverview.egressState', { state: label });
 }
 
 function PlacementMatrix({

@@ -2265,97 +2265,6 @@ html.pf-v5-theme-dark .sc-console-page,
   background: var(--pf-t--global--color--brand--default, #0066cc);
 }
 
-/* Fabric map */
-.sc-netov__map-wrap {
-  overflow-x: auto;
-}
-
-.sc-netov__map {
-  width: 100%;
-  min-width: 620px;
-  height: auto;
-}
-
-.sc-netov__edge {
-  fill: none;
-  stroke-width: 2;
-  stroke: var(--sc-text-muted);
-}
-
-.sc-netov__edge--ready {
-  stroke: var(--sc-success);
-}
-
-.sc-netov__edge--pending {
-  stroke: var(--sc-warning);
-  stroke-dasharray: 5 4;
-}
-
-.sc-netov__edge--failed {
-  stroke: var(--sc-danger);
-}
-
-.sc-netov__edge--absent {
-  stroke: var(--sc-border);
-  stroke-dasharray: 2 4;
-}
-
-.sc-netov__edge-label {
-  font-size: 10px;
-  fill: var(--sc-text-muted);
-}
-
-.sc-netov__hub {
-  fill: var(--sc-surface-alt);
-  stroke: var(--sc-border);
-  stroke-width: 2;
-}
-
-.sc-netov__hub-kind {
-  font-size: 10px;
-  font-weight: 600;
-  fill: var(--sc-text-muted);
-}
-
-.sc-netov__hub-name {
-  font-size: 11px;
-  fill: var(--pf-t--global--text--color--regular, #151515);
-}
-
-.sc-netov__node rect {
-  fill: var(--sc-surface);
-  stroke: var(--sc-border);
-  stroke-width: 2;
-}
-
-.sc-netov__node--ready rect { stroke: var(--sc-success); }
-.sc-netov__node--pending rect { stroke: var(--sc-warning); }
-.sc-netov__node--failed rect { stroke: var(--sc-danger); }
-
-.sc-netov__node[role='button'] { cursor: pointer; }
-.sc-netov__node[role='button']:focus-visible rect {
-  outline: 2px solid var(--pf-t--global--color--brand--default, #0066cc);
-  outline-offset: 2px;
-}
-
-.sc-netov__node-kind {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  fill: var(--sc-text-muted);
-}
-
-.sc-netov__node-name {
-  font-size: 12px;
-  font-weight: 600;
-  fill: var(--pf-t--global--text--color--regular, #151515);
-}
-
-.sc-netov__node-state {
-  font-size: 10px;
-  fill: var(--sc-text-muted);
-}
-
 /* VRF × backend matrix */
 .sc-netov__matrix-wrap {
   overflow-x: auto;
@@ -2529,4 +2438,292 @@ html.pf-v5-theme-dark .sc-console-page,
     border: 1px solid CanvasText;
   }
   .sc-netov__cell-inner { box-shadow: none; }
+}
+
+/* ------------------------------------------------------------------------
+ * HybridTopology — the layered hybrid-networking diagram.
+ *
+ * Colour rules, deliberately: status hues live on strokes, glyph fills and
+ * card borders only. Text always wears a text token, so contrast is a
+ * property of the theme rather than of the status. Dark mode rides the same
+ * PatternFly status tokens (--pf-t--*), which carry purpose-built dark steps,
+ * so nothing here needs a second palette. Every state also has a drawn shape
+ * and a text label, so the diagram survives greyscale, CVD and forced-colors.
+ * ------------------------------------------------------------------------ */
+.sc-hstopo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sc-hstopo__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.sc-hstopo__alert {
+  margin-bottom: 0.25rem;
+}
+
+.sc-hstopo__dup-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8125rem;
+}
+
+/* The diagram grows with the tenant count; scroll rather than squash. */
+.sc-hstopo__canvas-wrap {
+  overflow: auto;
+  max-height: 78vh;
+  border: 1px solid var(--sc-border);
+  border-radius: 4px;
+  background: var(--sc-surface);
+  padding: 0.5rem;
+}
+
+.sc-hstopo__canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Bands -------------------------------------------------------------- */
+.sc-hstopo__fabric > rect {
+  fill: var(--sc-surface-alt);
+  stroke: var(--sc-border);
+  stroke-width: 2;
+}
+
+.sc-hstopo__fabric.sc-hstopo__node--ready > rect { stroke: var(--sc-success); }
+.sc-hstopo__fabric.sc-hstopo__node--pending > rect { stroke: var(--sc-warning); }
+.sc-hstopo__fabric.sc-hstopo__node--failed > rect { stroke: var(--sc-danger); }
+
+.sc-hstopo__group {
+  fill: var(--sc-surface-alt);
+  stroke: var(--sc-border);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  fill-opacity: 0.55;
+}
+
+.sc-hstopo__group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  fill: var(--sc-text-muted);
+}
+
+.sc-hstopo__node > rect {
+  fill: var(--sc-surface);
+  stroke: var(--sc-border);
+  stroke-width: 2;
+}
+
+.sc-hstopo__node--ready > rect { stroke: var(--sc-success); }
+.sc-hstopo__node--pending > rect { stroke: var(--sc-warning); }
+.sc-hstopo__node--failed > rect { stroke: var(--sc-danger); }
+.sc-hstopo__node--absent > rect { stroke: var(--sc-border); stroke-dasharray: 4 3; }
+
+.sc-hstopo__node--chip > rect { stroke-width: 1.5; }
+
+.sc-hstopo__node[role='button'] { cursor: pointer; }
+.sc-hstopo__node[role='button']:hover > rect,
+.sc-hstopo__fabric[role='button']:hover > rect {
+  filter: brightness(0.97);
+}
+.sc-hstopo__node[role='button']:focus-visible > rect,
+.sc-hstopo__fabric[role='button']:focus-visible > rect {
+  outline: 2px solid var(--sc-primary);
+  outline-offset: 2px;
+}
+
+/* Text ---------------------------------------------------------------- */
+/* Kind and fact labels arrive translated in sentence case; the caps are presentation only. */
+.sc-hstopo__band-kind,
+.sc-hstopo__node-kind {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  fill: var(--sc-text-muted);
+}
+
+.sc-hstopo__band-name {
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--sc-text);
+}
+
+.sc-hstopo__node-name,
+.sc-hstopo__chip-name {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--sc-text);
+}
+
+.sc-hstopo__chip-name { font-size: 11px; }
+
+.sc-hstopo__chip-prefix {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  fill: var(--sc-text);
+}
+
+.sc-hstopo__node-sub,
+.sc-hstopo__node-state,
+.sc-hstopo__band-state {
+  font-size: 10px;
+  fill: var(--sc-text-muted);
+}
+
+.sc-hstopo__fact-k {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  fill: var(--sc-text-muted);
+}
+
+.sc-hstopo__fact-v {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  fill: var(--sc-text);
+}
+
+/* Route target badge — what identifies a network across the core, so it is the loudest token. */
+.sc-hstopo__rt > rect {
+  fill: var(--sc-surface-alt);
+  stroke: var(--sc-border);
+  stroke-width: 1;
+}
+
+.sc-hstopo__rt-text {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  fill: var(--sc-text);
+}
+
+.sc-hstopo__rt--dup > rect {
+  stroke: var(--sc-danger);
+  stroke-width: 2;
+}
+
+.sc-hstopo__rt--dup .sc-hstopo__rt-text {
+  fill: var(--sc-danger);
+}
+
+/* Pool use is a magnitude, so a single-hue bar, never a status colour. */
+.sc-hstopo__pool-track {
+  fill: var(--sc-surface);
+  stroke: var(--sc-border);
+  stroke-width: 1;
+}
+
+.sc-hstopo__pool-fill {
+  fill: var(--sc-primary);
+  stroke: none;
+}
+
+/* Edges --------------------------------------------------------------- */
+.sc-hstopo__edge {
+  fill: none;
+  stroke-width: 2;
+  stroke: var(--sc-text-muted);
+  stroke-linecap: round;
+}
+
+.sc-hstopo__edge--ready { stroke: var(--sc-success); }
+.sc-hstopo__edge--pending { stroke: var(--sc-warning); stroke-dasharray: 5 4; }
+.sc-hstopo__edge--failed { stroke: var(--sc-danger); stroke-dasharray: 2 3; }
+.sc-hstopo__edge--absent { stroke: var(--sc-border); stroke-dasharray: 2 4; }
+
+/* Encapsulation, drawn: a tunnelled transport wears a halo under its edge. */
+.sc-hstopo__tunnel {
+  fill: none;
+  stroke-width: 9;
+  stroke-opacity: 0.28;
+  stroke-linecap: round;
+  stroke: var(--sc-text-muted);
+}
+
+.sc-hstopo__tunnel--ready { stroke: var(--sc-success); }
+.sc-hstopo__tunnel--pending { stroke: var(--sc-warning); }
+.sc-hstopo__tunnel--failed { stroke: var(--sc-danger); }
+
+.sc-hstopo__edge-pill {
+  fill: var(--sc-surface);
+  stroke: var(--sc-border);
+  stroke-width: 1;
+}
+
+.sc-hstopo__edge-label {
+  font-size: 10px;
+  fill: var(--sc-text);
+}
+
+/* Placement -> site connector: thinner than a fabric edge, so the two
+ * layers never read as the same kind of relationship. */
+.sc-hstopo__link {
+  fill: none;
+  stroke-width: 1.5;
+  stroke: var(--sc-text-muted);
+  stroke-opacity: 0.75;
+}
+
+.sc-hstopo__link--ready { stroke: var(--sc-success); }
+.sc-hstopo__link--pending { stroke: var(--sc-warning); stroke-dasharray: 4 3; }
+.sc-hstopo__link--failed { stroke: var(--sc-danger); stroke-dasharray: 2 3; }
+.sc-hstopo__link--absent { stroke: var(--sc-border); stroke-dasharray: 2 4; }
+
+/* State glyphs -------------------------------------------------------- */
+.sc-hstopo__glyph circle {
+  fill: var(--sc-text-muted);
+  stroke: none;
+}
+
+.sc-hstopo__glyph--ready circle { fill: var(--sc-success); }
+.sc-hstopo__glyph--pending circle { fill: var(--sc-warning); }
+.sc-hstopo__glyph--failed circle { fill: var(--sc-danger); }
+.sc-hstopo__glyph--absent circle { fill: var(--sc-text-muted); }
+
+.sc-hstopo__glyph-mark {
+  fill: none;
+  stroke: var(--sc-surface);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sc-hstopo__legends {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 2rem;
+}
+
+.sc-hstopo__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.sc-hstopo__table2 {
+  margin-top: 1rem;
+}
+
+/* Forced-colors: drop the tints and opacity tricks, keep shape + label. */
+@media (forced-colors: active) {
+  .sc-hstopo__tunnel { stroke-opacity: 1; stroke-width: 6; }
+  .sc-hstopo__group { fill: Canvas; stroke: CanvasText; }
+  .sc-hstopo__node > rect,
+  .sc-hstopo__fabric > rect { fill: Canvas; stroke: CanvasText; }
+  .sc-hstopo__glyph circle { fill: CanvasText; }
+  .sc-hstopo__glyph-mark { stroke: Canvas; }
 }

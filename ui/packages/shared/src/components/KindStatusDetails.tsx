@@ -598,6 +598,18 @@ export function EgressStateLabel({ state }: { state?: string | null }): React.Re
   );
 }
 
+/** "internet egress ready (addresses)" / "internet egress off" for one network, as plain text. */
+export function egressText(n: HybridNetwork, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const wanted = n.spec?.egress?.internet === true;
+  const state = n.status?.egress?.internet ?? '';
+  if (!wanted && !state) return t('networkOverview.egressOff');
+  const sources = Array.isArray(n.status?.egress?.sourceAddresses) ? n.status?.egress?.sourceAddresses ?? [] : [];
+  const label = state ? t(`detail.egress_${state}`, { defaultValue: state }) : t('networkOverview.egressRequested');
+  return sources.length
+    ? t('networkOverview.egressWithSources', { state: label, sources: sources.join(', ') })
+    : t('networkOverview.egressState', { state: label });
+}
+
 function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactElement {
   const { t } = useTranslation();
   const spec = item.spec ?? {};
