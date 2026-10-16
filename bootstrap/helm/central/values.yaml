@@ -4014,7 +4014,7 @@ sovereignJobs:
               property: root_token
       env:
         - name: RUN_ID
-          value: "2026-10-15-aap-config-v26"  # v26: AWS_REALIZATION edge.egress (per-network NAT egress VPC), FABRIC_REALIZATION egress platformSources/platformPorts (platform reach); v25: platformopenshift provision/teardown JTs in shc-aws (AWS clusters in STS mode), AWS_REALIZATION tenant.environments + clusterIssuer; v24: AWS sites/environments/placements run in shc-aws (cloudinfrastructure, cloudgateway, networkplacement, cloudaws JTs), inventory var aws_realization, AWS_REALIZATION edge + tenant; v23: aws-hub-network JT + AWS_REALIZATION.hub; v22: aws-account-bootstrap
+          value: "2026-10-16-aap-config-v27"  # v27: platformopenshift-provision/-teardown allow_simultaneous (P8 close-out); v26: AWS_REALIZATION edge.egress (per-network NAT egress VPC), FABRIC_REALIZATION egress platformSources/platformPorts (platform reach); v25: platformopenshift provision/teardown JTs in shc-aws (AWS clusters in STS mode), AWS_REALIZATION tenant.environments + clusterIssuer; v24: AWS sites/environments/placements run in shc-aws (cloudinfrastructure, cloudgateway, networkplacement, cloudaws JTs), inventory var aws_realization, AWS_REALIZATION edge + tenant; v23: aws-hub-network JT + AWS_REALIZATION.hub; v22: aws-account-bootstrap
         - name: AAP_CONFIG_PATH
           value: "/runner/project/aap-config"
         - name: AAP_CONTROLLER_HOST
