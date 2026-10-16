@@ -1,6 +1,9 @@
 ---
 - name: PlatformOpenshift Delete Rulebook
   hosts: all
+  # run_job_template waits for its job (a teardown takes minutes): run the actions in parallel so one cluster's
+  # teardown doesn't hold the next cluster's event; the operator publishes a delete event once per deletion.
+  execution_strategy: parallel
   sources:
     - ansible.eda.kafka:
         host: "{{ KAFKA_HOST }}"

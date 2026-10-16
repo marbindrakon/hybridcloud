@@ -330,6 +330,8 @@ controller_templates:
     ask_variables_on_launch: true
     # shc (design/P8-PLAN.md §12): AWS clusters' IAM (STS roles, OIDC provider) with the platform's AWS identity
     instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc: clusters build side by side (one job per PlatformOpenshift; the rulebook runs in parallel)
+    allow_simultaneous: true
     credentials:
       - sovereign-vault-admin-credential
   - name: platformopenshift-teardown
@@ -341,6 +343,8 @@ controller_templates:
     ask_variables_on_launch: true
     # shc (design/P8-PLAN.md §12): AWS clusters' IAM (STS roles, OIDC provider) with the platform's AWS identity
     instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc: clusters build side by side (one job per PlatformOpenshift; the rulebook runs in parallel)
+    allow_simultaneous: true
     credentials:
       - sovereign-vault-admin-credential
   - name: rbacconfig-provision

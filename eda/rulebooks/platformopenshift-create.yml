@@ -1,6 +1,10 @@
 ---
 - name: PlatformOpenshift Create Rulebook
   hosts: all
+  # run_job_template waits for its job (a build runs up to ~1 h): run the actions in parallel so one cluster's
+  # build doesn't hold the next cluster's event; the operator publishes no new event for a cluster while its last
+  # one is in flight, and a newer event supersedes an older job.
+  execution_strategy: parallel
   sources:
     - ansible.eda.kafka:
         host: "{{ KAFKA_HOST }}"
