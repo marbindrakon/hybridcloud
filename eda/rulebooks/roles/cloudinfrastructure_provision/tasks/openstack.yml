@@ -120,6 +120,7 @@
       name: "{{ dnscfg_domain }}"
       email: "hostmaster@{{ dnscfg_domain }}"
       description: "Tenant DNS namespace of the sovereign cloud platform (parent of the environment zones)"
+      attributes: "{{ ci_dns.zoneAttributes | default({}) }}"
   when:
     - ci_dns_native | bool
     - dnscfg_usable | default(false) | bool

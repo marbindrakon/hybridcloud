@@ -57,6 +57,7 @@
           name: "{{ fab_name }}.{{ fab_entity }}.{{ dnscfg_domain }}"
           email: "hostmaster@{{ dnscfg_domain }}"
           description: "Environment zone of CloudVirt {{ fab_namespace }}/{{ fab_name }} (platform-held)"
+          attributes: "{{ dnscfg_zone_attributes | default({}) }}"
 
     - name: Record the zone
       ansible.builtin.set_fact:

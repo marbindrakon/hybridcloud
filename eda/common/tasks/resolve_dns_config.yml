@@ -4,7 +4,7 @@
 # failed or being deleted (not status.ready: a job's acknowledge step clears it while a re-probe runs).
 # Optional: dnscfg_namespace (default sovereign-cloud-plugins).
 # Sets (never fails): dnscfg_found, dnscfg_usable, dnscfg_name, dnscfg_domain, dnscfg_secret,
-# dnscfg_project_id, dnscfg_zone_id, dnscfg_nameservers.
+# dnscfg_project_id, dnscfg_zone_id, dnscfg_zone_attributes, dnscfg_nameservers.
 - name: Read DNSConfigs
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
@@ -35,4 +35,5 @@
     dnscfg_secret: "{{ (_d.spec | default({})).secret | default('') }}"
     dnscfg_project_id: "{{ ((_d.spec | default({})).designate | default({})).projectId | default('') }}"
     dnscfg_zone_id: "{{ ((_d.spec | default({})).designate | default({})).zoneId | default('') }}"
+    dnscfg_zone_attributes: "{{ ((_d.spec | default({})).designate | default({})).zoneAttributes | default({}) }}"
     dnscfg_nameservers: "{{ (_d.status | default({})).nameservers | default([]) }}"

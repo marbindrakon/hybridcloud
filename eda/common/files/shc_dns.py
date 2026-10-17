@@ -16,6 +16,8 @@ Actions (request["action"]):
   probe              the global zone (project_id, zone_id): name, status, NS records.
   ensure-parent      the parent zone `name` in owner_project_id: present, or created there. Fails when the
                      name is held by another project (then the namespace isn't reserved on this site).
+                     Optional `attributes` (dict) are set on a zone this call creates (Designate pool
+                     scheduling, e.g. {"scope": "public"}); the same for ensure-zone.
   ensure-zone        the environment zone `name` in owner_project_id, shared with share_with (a project id):
                      created when missing, share added when missing. Returns id, NS records, share id.
   delete-zone        deletes zone_id (or `name`) in owner_project_id with its shares, tenant records included.
@@ -62,6 +64,13 @@ def probe(req):
     return {"zone": z.name, "status": z.status, "nameservers": ns_records(conn, z), "project_id": req["project_id"]}
 
 
+def zone_attributes(req):
+    """Designate zone attributes from req["attributes"] (pool scheduling, e.g. {"scope": "public"}): a create_zone
+    kwarg when set, nothing otherwise (the service picks its default pool)."""
+    a = req.get("attributes") or {}
+    return {"attributes": {str(k): str(v) for k, v in a.items()}} if a else {}
+
+
 def ensure_parent(req):
     conn = Account(req).project(req["owner_project_id"])
     z = zone_in_project(conn, req["name"])
@@ -69,12 +78,13 @@ def ensure_parent(req):
     if z is None:
         try:
             z = conn.dns.create_zone(name=fqdn(req["name"]), email=req["email"],
-                                     description=req.get("description", ""))
+                                     description=req.get("description", ""), **zone_attributes(req))
         except openstack.exceptions.HttpException as e:  # 409 duplicate, 403 inside another project's zone
             raise RuntimeError(f"zone {fqdn(req['name'])} is held by another project on this site: {e}")
         created = True
         z = wait_active(conn, z)
-    return {"zone_id": z.id, "zone": z.name, "status": z.status, "created": created, "nameservers": ns_records(conn, z)}
+    return {"zone_id": z.id, "zone": z.name, "status": z.status, "created": created, "nameservers": ns_records(conn, z),
+            "attributes": z.attributes or {}}
 
 
 def ensure_zone(req):
@@ -84,7 +94,7 @@ def ensure_zone(req):
     if z is None:
         try:
             z = conn.dns.create_zone(name=fqdn(req["name"]), email=req["email"],
-                                     description=req.get("description", ""))
+                                     description=req.get("description", ""), **zone_attributes(req))
         except openstack.exceptions.HttpException as e:  # 409 duplicate, 403 inside another project's zone
             raise RuntimeError(f"zone {fqdn(req['name'])} is held by another project on this site: {e}")
         created = True
@@ -98,7 +108,7 @@ def ensure_zone(req):
         if share is None:
             share = conn.dns.create_zone_share(z, target_project_id=req["share_with"])
     return {"zone_id": z.id, "zone": z.name, "status": z.status, "created": created,
-            "nameservers": ns_records(conn, z), "share_id": share.id if share else "",
+            "nameservers": ns_records(conn, z), "attributes": z.attributes or {}, "share_id": share.id if share else "",
             "shared_with": req.get("share_with", "")}
 
 

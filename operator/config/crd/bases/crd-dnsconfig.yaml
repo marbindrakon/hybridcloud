@@ -69,6 +69,14 @@ spec:
                       type: string
                       maxLength: 64
                       description: The global domain's zone.
+                    zoneAttributes:
+                      type: object
+                      additionalProperties:
+                        type: string
+                        maxLength: 64
+                      description: >-
+                        Attributes set on every zone the platform creates in this DNS service, for example the
+                        pool scheduler's scope. Unset leaves zone placement to the service's default.
             status:
               type: object
               properties:

@@ -90,6 +90,7 @@
     oso_settings: "{{ oso_settings | combine({'dnsProvider': 'zone', 'baseDomain': dnscfg_domain}) }}"
     oso_env_dns:
       ownerProjectId: "{{ ci_obj.status.site.dns.projectId }}"
+      zoneAttributes: "{{ (ci_spec.dns | default({}, true)).zoneAttributes | default({}) }}"
       siteNameservers: "{{ ci_obj.status.site.dns.nameservers | default([]) }}"
       globalNameservers: "{{ dnscfg_nameservers }}"
       dnsConfig: "{{ dnscfg_name }}"

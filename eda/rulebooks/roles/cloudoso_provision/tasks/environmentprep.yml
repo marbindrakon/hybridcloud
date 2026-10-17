@@ -109,6 +109,7 @@
       email: "hostmaster@{{ ep_base_domain }}"
       description: "Environment zone of CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }} (shared with its project)"
       share_with: "{{ ep_os.project.id }}"
+      attributes: "{{ oso_env_dns.zoneAttributes | default({}) }}"
       region: "{{ ep_region_name }}"
   when: ep_dns_provider == 'zone'
 

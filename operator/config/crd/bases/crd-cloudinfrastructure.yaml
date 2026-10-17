@@ -185,6 +185,15 @@ spec:
                       description: >-
                         native: the DNS service's zone quota ensured for dns.project (at least this many); every
                         environment zone on this site counts against it.
+                    zoneAttributes:
+                      type: object
+                      additionalProperties:
+                        type: string
+                        maxLength: 64
+                      description: >-
+                        native: attributes set on the parent and environment zones created in this site's DNS
+                        service, for example the pool scheduler's scope. Unset leaves zone placement to the
+                        service's default.
                 external:
                   type: object
                   description: >-
