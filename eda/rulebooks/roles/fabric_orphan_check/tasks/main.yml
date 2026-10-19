@@ -4,7 +4,8 @@
 # by the platform's labels, or the platform project's networks and routers; on the border gateway nodes: the
 # gateway namespaces and their VRFs; the root's VRFs and attachment circuit devices) and compares it with the CRs
 # (files/shc_fabric.py orphan-report). Fails when
-# anything has no owner, so the job shows red; changes nothing.
+# anything has no owner, so the job shows red; changes nothing. A site that can't be read (powered off, API down) is
+# listed as not checked (a warning, not a failure) and the rest is still checked.
 - name: Resolve services cluster API connection from Vault
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
@@ -30,6 +31,7 @@
     foc_ledgers: {}
     foc_sites: []
     foc_nodes: []
+    foc_skipped: []
 
 - name: Read the ledgers
   ansible.builtin.include_tasks: ledger.yml
@@ -59,12 +61,22 @@
 
 - name: Report
   ansible.builtin.debug:
-    msg: "{{ ['fabric orphan check: ' ~ (fab_check_result.findings | length) ~ ' finding(s); ' ~ (fab_check_result.counts | to_json)] + fab_check_result.findings }}"
+    msg: >-
+      {{ ['fabric orphan check: ' ~ (fab_check_result.findings | length) ~ ' finding(s); ' ~ (fab_check_result.counts | to_json)
+          ~ ('; ' ~ (foc_skipped | length) ~ ' site(s) not checked' if foc_skipped | length > 0 else '')]
+         + fab_check_result.findings
+         + (foc_skipped | map('to_json') | map('regex_replace', '^', 'not checked: ') | list) }}
 
 - name: Record the result for the job
   ansible.builtin.set_stats:
     data:
       fabric_orphan_findings: "{{ fab_check_result.findings }}"
+      fabric_orphan_sites_not_checked: "{{ foc_skipped }}"
+
+- name: Warn about sites not checked
+  ansible.builtin.debug:
+    msg: "WARNING: {{ foc_skipped | length }} site(s) not checked: {{ foc_skipped | map(attribute='site') | join(', ') }}"
+  when: foc_skipped | length > 0
 
 - name: Fail on findings
   ansible.builtin.fail:

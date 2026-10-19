@@ -1,0 +1,15 @@
+---
+# rescue of site.yml: record the site as not checked, with the failed task's message (for a loop, the first failed
+# item's) and the last line of a module's stderr (e.g. the API connection error)
+- name: "Record site {{ foc_gw.spec.cloudRef.name }} as not checked"
+  vars:
+    _r: >-
+      {{ (ansible_failed_result.results | default([]) | selectattr('failed', 'defined') | selectattr('failed') | list
+          | first) | default(ansible_failed_result, true) }}
+    _err: "{{ ((_r.module_stderr | default('')) | trim).split('\n') | last }}"
+  ansible.builtin.set_fact:
+    foc_skipped: >-
+      {{ foc_skipped + [{'site': foc_gw.spec.cloudRef.name, 'gateway': foc_gw.metadata.name,
+                         'task': ansible_failed_task.name | default(''),
+                         'reason': ((_r.msg | default('failed') | string | regex_replace('\s+', ' '))[:120]
+                                    ~ ((': ' ~ _err[-200:]) if _err | length > 0 else ''))}] }}

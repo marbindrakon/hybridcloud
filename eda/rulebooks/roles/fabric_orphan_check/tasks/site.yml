@@ -40,6 +40,10 @@
           {%- for o in _l[2].resources -%}{%- set _ = n.append({'name': o.metadata.name, 'labels': o.metadata.labels}) -%}{%- endfor -%}
           {{ foc_sites + [{'site': foc_gw.spec.cloudRef.name, 'gateway': foc_gw.metadata.name, 'type': 'openshift',
                            'cudns': c, 'routeAdvertisements': r, 'namespaces': n}] }}
+  # a site that can't be read (e.g. powered off) is reported as not checked; the other sites and the nodes still are
+  rescue:
+    - name: "Site {{ foc_gw.spec.cloudRef.name }} not checked"
+      ansible.builtin.include_tasks: site_skipped.yml
   always:
     - name: Remove the site kubeconfig
       ansible.builtin.file:
@@ -75,3 +79,6 @@
         foc_sites: >-
           {{ foc_sites + [{'site': foc_gw.spec.cloudRef.name, 'gateway': foc_gw.metadata.name, 'type': 'openstack',
               'networks': os_result.networks, 'routers': os_result.routers}] }}
+  rescue:
+    - name: "Site {{ foc_gw.spec.cloudRef.name }} not checked"
+      ansible.builtin.include_tasks: site_skipped.yml
