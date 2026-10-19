@@ -51,7 +51,15 @@
             vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
             if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
                 devices.append({"name": l["ifname"], "master": l.get("master") or ""})
-        print(json.dumps({"netns": out, "rootDevices": devices}))
+        # the root bfdd's sessions: one whose VRF no longer exists outlived a circuit teardown
+        r = subprocess.run(["vtysh", "-c", "show bfd peers json"], capture_output=True, text=True)
+        try:
+            peers = json.loads(r.stdout or "[]") if r.returncode == 0 else []
+        except ValueError:
+            peers = []
+        bfd = [{"peer": p.get("peer"), "vrf": p.get("vrf") or "default", "interface": p.get("interface") or "",
+                "status": p.get("status") or ""} for p in peers if isinstance(p, dict)]
+        print(json.dumps({"netns": out, "rootDevices": devices, "rootBfd": bfd}))
         PY
       args:
         executable: /bin/bash
@@ -72,6 +80,6 @@
       {%- for r in _foc_node.results -%}
         {%- set n = r.stdout | from_json -%}
         {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': n.netns,
-                                'rootDevices': n.rootDevices}) -%}
+                                'rootDevices': n.rootDevices, 'rootBfd': n.rootBfd | default([])}) -%}
       {%- endfor -%}
       {{ foc_nodes + out }}

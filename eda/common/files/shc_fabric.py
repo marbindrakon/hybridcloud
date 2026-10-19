@@ -691,7 +691,8 @@ def orphan_report(req):
     ledgers {fabric: ledger}, sites [{gateway, type, cudns: [{name, l3vni}], routeAdvertisements: [...],
     namespaces: [{name, labels}], networks: [{name, sharedTo}], routers: [{name, evpnVni}]}],
     nodes [{fabric, node, netns: {name: [vrf]}, rootDevices: [{name, master}] (the root's VLAN devices in root VRFs
-    or on a bearer interface within the attachment VLAN pool)}]. Returns {findings: [str], counts}."""
+    or on a bearer interface within the attachment VLAN pool), rootBfd: [{peer, vrf, interface, status}] (the root
+    bfdd's sessions)}]. Returns {findings: [str], counts}."""
     crs, findings = req.get("crs") or {}, []
 
     def key(o):
@@ -762,6 +763,13 @@ def orphan_report(req):
                     if d.get("name") not in devs:
                         findings.append(f"node {n['node']}: circuit device {d.get('name')} (VRF {d.get('master') or 'none'}) "
                                         "belongs to no attachment circuit")
+                # a BFD session in a VRF the kernel no longer has outlived its circuit (bgpd only deregisters it while
+                # the VRF exists); it stays in bfdd until bfdd restarts
+                for b in n.get("rootBfd") or []:
+                    if (b.get("vrf") or "default") != "default" and b.get("vrf") not in vrfs:
+                        findings.append(f"node {n['node']}: BFD session to {b.get('peer')} in VRF {b.get('vrf')} "
+                                        f"({b.get('interface') or 'no interface'}, {b.get('status') or 'unknown'}) "
+                                        "outlives its VRF")
                 continue
             g = gws.get(ns[3:]) if ns.startswith("gw-") else None
             if g is None:

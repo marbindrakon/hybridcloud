@@ -53,6 +53,25 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_rootconf
 
+# bgpd drops a neighbor's BFD session (bfdd) only while the neighbor's VRF still exists in the kernel. When the apply
+# deletes a root VRF first, the reload then removes its BGP instance but the session stays in bfdd for good (FRR 8.5.3,
+# seen after circuit teardowns). So the BGP instances of root VRFs that go away are removed here, before the apply
+# (or a start of the root unit) deletes their kernel VRFs; the reload then has nothing left to remove for them
+- name: "{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)"
+  ansible.builtin.shell: |
+    set -o pipefail
+    systemctl -q is-active frr || exit 0
+    want=" {{ hf_node_vrfs | map(attribute='vrf') | join(' ') }} "
+    for v in $(vtysh -c 'show bgp vrfs json' | jq -r '.vrfs // {} | keys[]' | grep -E '^e[0-9]+$' || true); do
+      case "$want" in *" $v "*) continue ;; esac
+      vtysh -c 'configure terminal' -c "no router bgp {{ fab_spec.domainAsn }} vrf $v" && echo "removed $v"
+    done
+  args:
+    executable: /bin/bash
+  register: _hf_vrfgone
+  changed_when: "'removed ' in _hf_vrfgone.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: run the root instance at boot (and now)"
   ansible.builtin.systemd:
     name: shc-fabric-apply@root.service
@@ -180,5 +199,5 @@
                          if hf_node_attach.circuits | default([]) | length > 0 else ''),
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}] }}
     hf_changed_nodes: >-
-      {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_unit, _hf_apply,
-         _hf_daemons, _hf_frrconf, _hf_frr_state] | select('changed') | list | length > 0 else []) }}
+      {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_vrfgone, _hf_unit,
+         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state] | select('changed') | list | length > 0 else []) }}
