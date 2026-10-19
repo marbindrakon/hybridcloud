@@ -26,6 +26,14 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_files
 
+# a new apply script takes effect through the direct run below (and at the next unit start), so on its own it needs
+# no restart; only a new unit file restarts the running instance (FRR stop/start in the namespace resets its sessions)
+- name: "{{ bgw_node.name }}: did the gateway unit change"
+  ansible.builtin.set_fact:
+    _cg_unit_changed: >-
+      {{ _cg_files.results | selectattr('changed') | map(attribute='item.dest') | select('search', 'shc-gw@')
+         | list | length > 0 }}
+
 - name: "{{ bgw_node.name }}: gateway instance config"
   ansible.builtin.copy:
     dest: "/etc/shc-fabric/gw-{{ fab_name }}.json"
@@ -96,7 +104,9 @@
     name: "shc-gw@{{ fab_name }}.service"
     enabled: true
     daemon_reload: "{{ _cg_files is changed }}"
-    state: "{{ 'started' if _cg_active.stdout != 'active' else ('restarted' if (_cg_daemons is changed or _cg_files is changed) else omit) }}"
+    state: >-
+      {{ 'started' if _cg_active.stdout != 'active'
+         else ('restarted' if (_cg_daemons is changed or _cg_unit_changed | bool) else omit) }}
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_state
 
@@ -108,7 +118,7 @@
     state: reloaded
   when:
     - _cg_active.stdout == 'active'
-    - _cg_daemons is not changed and _cg_files is not changed
+    - _cg_daemons is not changed and not (_cg_unit_changed | bool)
     - _cg_frrconf is changed
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_reload
