@@ -51,7 +51,8 @@
             vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
             if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
                 devices.append({"name": l["ifname"], "master": l.get("master") or ""})
-        # the root bfdd's sessions: one whose VRF no longer exists outlived a circuit teardown
+        # the root bfdd sessions: one whose VRF no longer exists outlived a circuit teardown (no quote marks in this
+        # block: the shell module splits its free-form arguments and an odd quote fails the task)
         r = subprocess.run(["vtysh", "-c", "show bfd peers json"], capture_output=True, text=True)
         try:
             peers = json.loads(r.stdout or "[]") if r.returncode == 0 else []
