@@ -67,10 +67,16 @@ snapshot() {
 }
 
 # an interface another service creates (NetworkManager's trunk and its VLAN devices): at boot this runs alongside
-# NetworkManager (both before network.target), so wait for it a while
+# NetworkManager (both before network.target), so wait for it a while. With a minimum MTU, also wait until it has at
+# least that MTU: NetworkManager creates a VLAN device with the default MTU and raises it only on activation, and a
+# macvlan or VLAN device on it can't be set above its MTU (EINVAL; seen at a blade reboot, egress0 at 9000 on 1500)
 wait_link() {
-  local i
-  for i in $(seq 1 90); do ip link show "$1" >/dev/null 2>&1 && return 0; sleep 1; done
+  local i m
+  for i in $(seq 1 90); do
+    m=$(ip -j link show "$1" 2>/dev/null | jq -r '.[0].mtu // 0' 2>/dev/null) || m=0
+    [ "${m:-0}" -gt 0 ] && [ "$m" -ge "${2:-0}" ] && return 0
+    sleep 1
+  done
   return 1
 }
 
@@ -168,7 +174,7 @@ PY
 egress_up() {
   local ev et par emtu eaddr want nat n v t z xe xo xea xoa a
   ev=$(q .egress.vrf); et=$(q .egress.table); par=$(q .egress.parent); emtu=$(q .egress.mtu); eaddr=$(q .egress.address)
-  wait_link "$par" || { echo "egress parent interface $par missing" >&2; exit 3; }
+  wait_link "$par" "$emtu" || { echo "egress parent interface $par missing or below MTU $emtu" >&2; exit 3; }
   modprobe vrf
   ip link show "$ev" >/dev/null 2>&1 || ip link add "$ev" type vrf table "$et"
   ip link set "$ev" up
@@ -281,7 +287,7 @@ attach_up() {
   want=$(jq -r '.attachments.circuits // [] | .[].device' "$CONF")
   for c in $(jq -r '.attachments.circuits // [] | .[] | [.device, .parent, .vlan, .mtu, .vrf, .table, .address] | join(":")' "$CONF"); do
     IFS=: read -r dev par vlan mtu v t addr <<<"$c"
-    wait_link "$par" || { echo "bearer interface $par missing" >&2; exit 3; }
+    wait_link "$par" "$mtu" || { echo "bearer interface $par missing or below MTU $mtu" >&2; exit 3; }
     root_vrf "$v" "$t"
     ip link show "$dev" >/dev/null 2>&1 || ip link add link "$par" name "$dev" type vlan id "$vlan"
     # sysctl names with "/": the device name holds a dot
