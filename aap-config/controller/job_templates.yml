@@ -98,8 +98,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudaws-teardown
@@ -109,8 +109,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudoso-provision
@@ -139,8 +139,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudinfrastructure-teardown
@@ -150,8 +150,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   # shc (design/TENANT-DNS.md D1): DNSConfig probe (openstacksdk in de-cloudoso)
@@ -200,8 +200,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudgateway-teardown
@@ -211,8 +211,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: hybridnetwork-provision
@@ -234,7 +234,7 @@ controller_templates:
     credentials:
       - sovereign-vault-admin-credential
   # shc (P7.3.9): report-only fabric orphan check (fails when something has no owner)
-  # shc (design/P8-PLAN.md): which AWS identity do jobs in the shc-aws container group get (SPIFFE, no keys)
+  # shc (design/P8-PLAN.md): which AWS identity do jobs in the shc-cloud container group get (SPIFFE, no keys)
   - name: aws-identity-check
     organization: sovereign
     project: sovereign-eda-project
@@ -242,7 +242,30 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudaws
     instance_groups:
-      - shc-aws
+      - shc-cloud
+  # shc (design/P11-GCP-PLAN.md P11.1): which Google Cloud identity do jobs in the shc-cloud container group get
+  # (SPIFFE -> workload identity federation -> the hub's automation account; extra var project: enter that
+  # project's member account too)
+  - name: gcp-identity-check
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/gcp-identity-check-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    instance_groups:
+      - shc-cloud
+    ask_variables_on_launch: true
+  # shc (design/P11-GCP-PLAN.md P11.2): check an external tenant project (member account, label, APIs; extra vars:
+  # project, enable_apis)
+  - name: gcp-project-bootstrap
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/gcp-project-bootstrap-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    instance_groups:
+      - shc-cloud
+    ask_variables_on_launch: true
   # shc (design/P8-PLAN.md §7): create or adopt an SHC member account (extra vars: account, purpose, dry_run)
   - name: aws-account-bootstrap
     organization: sovereign
@@ -251,7 +274,7 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudaws
     instance_groups:
-      - shc-aws
+      - shc-cloud
     ask_variables_on_launch: true
     extra_vars:
       shc_aws:
@@ -268,7 +291,7 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudaws
     instance_groups:
-      - shc-aws
+      - shc-cloud
     ask_variables_on_launch: true
     extra_vars:
       shc_aws:
@@ -288,8 +311,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: networkplacement-teardown
@@ -299,8 +322,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-cloudoso
     ask_variables_on_launch: true
-    # shc (design/P8-PLAN.md §11): AWS sites and environments (the platform's AWS identity)
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    # shc (design/P8-PLAN.md §11, P11-GCP-PLAN.md §3.2): cloud sites and environments (the platform's cloud identities)
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: cloudvirt-provision
@@ -366,7 +389,7 @@ controller_templates:
     execution_environment: de-platformopenshift
     ask_variables_on_launch: true
     # shc (design/P8-PLAN.md §12): AWS clusters' IAM (STS roles, OIDC provider) with the platform's AWS identity
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     # shc: clusters build side by side (one job per PlatformOpenshift; the rulebook runs in parallel)
     allow_simultaneous: true
     credentials:
@@ -379,7 +402,7 @@ controller_templates:
     execution_environment: de-platformopenshift
     ask_variables_on_launch: true
     # shc (design/P8-PLAN.md §12): AWS clusters' IAM (STS roles, OIDC provider) with the platform's AWS identity
-    instance_groups: "{{ shc_aws_job_instance_groups }}"
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
     # shc: clusters build side by side (one job per PlatformOpenshift; the rulebook runs in parallel)
     allow_simultaneous: true
     credentials:

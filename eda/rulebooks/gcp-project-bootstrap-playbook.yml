@@ -1,0 +1,29 @@
+---
+# shc (design/P11-GCP-PLAN.md P11.2): check an external tenant project of the Google Cloud realization from AAP:
+# the platform identity enters its member account and reports labels, APIs (enabled with enable_apis) and quotas.
+# Runs in the shc-cloud container group. Extra vars: project (required), enable_apis (bool), region.
+- name: GCP project bootstrap (check)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Inputs and the workload identity
+      ansible.builtin.assert:
+        that:
+          - (project | default('')) | length > 0
+          - lookup('env', 'GCP_WORKLOAD_IDENTITY_AUDIENCE') | length > 0
+        fail_msg: "need project, and the shc-cloud container group"
+
+    - name: Check the project through its member account
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', playbook_dir ~ '/../common/files/shc_gcp_project.py', 'check', '--project', project]
+             + (['--enable-apis'] if (enable_apis | default(false) | bool) else [])
+             + (['--region', region] if (region | default('')) | length > 0 else []) }}
+      register: _chk
+      changed_when: (((_chk.stdout | default('', true)) or '{}') | from_json).changed | default([]) | length > 0
+      failed_when: _chk.rc != 0 or not ((((_chk.stdout | default('', true)) or '{}') | from_json).ok | default(false))
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ ((_chk.stdout | default('', true)) or '{}') | from_json }}"

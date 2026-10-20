@@ -1,0 +1,28 @@
+---
+# shc (design/P11-GCP-PLAN.md P11.1): which Google Cloud identity does this job get? No credentials are passed: the
+# job's container group keeps a JWT-SVID for the hub's workload identity pool in GCP_TOKEN_FILE, and
+# shc_gcp_api.py exchanges it at STS and impersonates the hub's automation account (then, with project, the
+# project's member account). Extra vars: project (optional, a tenant project to enter).
+- name: GCP identity check
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The workload identity configuration
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'GCP_WORKLOAD_IDENTITY_AUDIENCE') | length > 0
+          - lookup('env', 'GCP_TOKEN_FILE') | length > 0
+          - lookup('env', 'GCP_AUTOMATION_SERVICE_ACCOUNT') | length > 0
+        fail_msg: "the job's container group sets no Google Cloud workload identity"
+
+    - name: Ask Google who we are
+      ansible.builtin.command:
+        argv: "{{ ['python3', playbook_dir ~ '/../common/files/shc_gcp_api.py', 'whoami'] + (['--project', project] if (project | default('')) | length > 0 else []) }}"
+      register: _who
+      changed_when: false
+      failed_when: _who.rc != 0 or not ((((_who.stdout | default('', true)) or '{}') | from_json).ok | default(false))
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ ((_who.stdout | default('', true)) or '{}') | from_json }}"

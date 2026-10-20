@@ -1,0 +1,18 @@
+---
+# shc (design/P11-GCP-PLAN.md §5.1): this installation's Google Cloud realization (inventory variable
+# gcp_realization, from GCP_REALIZATION) and the job's GCP identity (the shc-cloud container group). Sets gcp_real.
+- name: The installation's GCP realization
+  ansible.builtin.set_fact:
+    gcp_real: "{{ gcp_realization | default({}, true) }}"
+
+- name: Require the GCP realization and the job's GCP identity
+  ansible.builtin.assert:
+    that:
+      - (gcp_real.hub | default({})).project | default('') | length > 0
+      - (gcp_real.automation | default({})).serviceAccount | default('') | length > 0
+      - lookup('env', 'GCP_WORKLOAD_IDENTITY_AUDIENCE') | length > 0
+      - lookup('env', 'GCP_TOKEN_FILE') | length > 0
+    fail_msg: >-
+      Google Cloud is not realized here: the installation needs GCP_REALIZATION (hub.project, automation.serviceAccount)
+      and the job must run in the shc-cloud container group.
+    quiet: true

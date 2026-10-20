@@ -1,0 +1,35 @@
+---
+# shc (design/P11-GCP-PLAN.md §5.2): run one Google Cloud helper command (common/files/<gcp_helper>) with the job's
+# GCP identity. Inputs: gcp_helper (shc_gcp_api.py | shc_gcp_project.py | shc_gcp_hub.py | shc_gcp_edge.py |
+# shc_gcp_tenant.py | shc_gcp_cluster.py), gcp_args (list), gcp_config (dict, optional: passed as --config),
+# gcp_env (dict, optional; secrets go here, never in argv), gcp_no_log (default false). Sets gcp_result (the helper's
+# JSON line); fails with its error, or sets gcp_error instead when gcp_soft is true.
+- name: "GCP {{ gcp_helper }} {{ gcp_args | join(' ') }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['python3', role_path ~ '/../../../common/files/' ~ gcp_helper]
+         + (['--config', gcp_config | to_json] if gcp_config is defined else [])
+         + gcp_args }}
+  environment: "{{ gcp_env | default({}) }}"
+  register: _gcp_call
+  changed_when: (((_gcp_call.stdout | default('', true)) or '{}') | from_json).changed | default([]) | length > 0
+  failed_when: false
+  no_log: "{{ gcp_no_log | default(false) }}"
+
+- name: "GCP {{ gcp_helper }}: parse the result"
+  ansible.builtin.set_fact:
+    gcp_result: >-
+      {{ ((_gcp_call.stdout | default('', true)).splitlines() | last | default('{}', true)) | from_json
+         if (_gcp_call.stdout | default('') | trim).startswith('{')
+         else {'ok': false, 'error': (_gcp_call.stderr | default('') | trim)[-800:] or ('rc ' ~ _gcp_call.rc)} }}
+    gcp_error: ""
+
+- name: "GCP {{ gcp_helper }}: the error"
+  ansible.builtin.set_fact:
+    gcp_error: "{{ gcp_result.error | default('rc ' ~ _gcp_call.rc) }}"
+  when: _gcp_call.rc != 0 or not (gcp_result.ok | default(false))
+
+- name: "GCP {{ gcp_helper }}: fail on error"
+  ansible.builtin.fail:
+    msg: "GCP {{ gcp_args | first | default(gcp_helper) }} failed: {{ gcp_error }}"
+  when: gcp_error | length > 0 and not (gcp_soft | default(false) | bool)

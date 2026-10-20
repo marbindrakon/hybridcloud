@@ -1,48 +1,64 @@
 ---
-# shc (design/P8-PLAN.md §1, §4): container group "shc-aws" for jobs that reach AWS without keys.
-# Jobs run as the service account the workload-identity chart creates (no Kubernetes token mounted); a native
-# sidecar keeps a JWT-SVID (audience sts.amazonaws.com) from the SPIFFE Workload API in a memory volume, and boto3
-# assumes the management account's automation role with it (AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE).
-# Settings: installation config AWS_REALIZATION (JSON); without automationRoleArn no group is defined.
+# shc (design/P8-PLAN.md §1, §4; design/P11-GCP-PLAN.md §3.2): container group "shc-cloud" for jobs that reach AWS
+# or Google Cloud without keys (it replaced "shc-aws"). Jobs run as the service account the workload-identity chart
+# creates (no Kubernetes token mounted); a native sidecar keeps one JWT-SVID per cloud from the SPIFFE Workload API in
+# a memory volume: audience sts.amazonaws.com for AWS (boto3 assumes the management account's automation role:
+# AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE), and the hub's workload identity pool provider for Google Cloud
+# (shc_gcp_api.py exchanges it at STS and impersonates the automation account: GCP_WORKLOAD_IDENTITY_AUDIENCE +
+# GCP_TOKEN_FILE + GCP_AUTOMATION_SERVICE_ACCOUNT). Settings: installation config AWS_REALIZATION and
+# GCP_REALIZATION (JSON); without either identity no group is defined.
 shc_aws: "{{ lookup('env', 'AWS_REALIZATION') | default('{}', true) | from_json }}"
+shc_gcp: "{{ lookup('env', 'GCP_REALIZATION') | default('{}', true) | from_json }}"
+shc_cloud_aws: "{{ (shc_aws.automationRoleArn | default('')) | length > 0 }}"
+shc_cloud_gcp: "{{ ((shc_gcp.automation | default({})).serviceAccount | default('')) | length > 0 }}"
+shc_cloud_enabled: "{{ shc_cloud_aws or shc_cloud_gcp }}"
+# the workload identity pool provider of the hub project (the JWT-SVID audience and the STS exchange audience)
+shc_gcp_audience: >-
+  //iam.googleapis.com/projects/{{ (shc_gcp.hub | default({})).projectNumber | default('') }}/locations/global/workloadIdentityPools/{{ (shc_gcp.automation | default({})).pool | default('shc-spire') }}/providers/{{ (shc_gcp.automation | default({})).provider | default('spire') }}
 
-controller_instance_groups: "{{ [shc_aws_instance_group] if (shc_aws.automationRoleArn | default('')) else [] }}"
-# the job templates that reach AWS when the installation has it (sites, environments, placements)
-shc_aws_job_instance_groups: "{{ ['shc-aws'] if (shc_aws.automationRoleArn | default('')) else [] }}"
+controller_instance_groups: "{{ [shc_cloud_instance_group] if shc_cloud_enabled else [] }}"
+# the job templates that reach a cloud when the installation has one (sites, environments, placements, clusters)
+shc_cloud_job_instance_groups: "{{ ['shc-cloud'] if shc_cloud_enabled else [] }}"
 
-shc_aws_instance_group:
-  name: shc-aws
+shc_cloud_instance_group:
+  name: shc-cloud
   is_container_group: true
   pod_spec_override: |
     apiVersion: v1
     kind: Pod
     metadata:
-      namespace: {{ shc_aws.jobNamespace | default('aap') }}
+      namespace: {{ (shc_gcp.automation | default({})).jobNamespace | default(shc_aws.jobNamespace | default('aap')) }}
       labels:
-        shc.signal9.gg/aws-identity: "true"
+        shc.signal9.gg/cloud-identity: "true"
     spec:
-      serviceAccountName: {{ shc_aws.jobServiceAccount | default('shc-aws-automation') }}
+      serviceAccountName: {{ (shc_gcp.automation | default({})).jobServiceAccount | default(shc_aws.jobServiceAccount | default('shc-aws-automation')) }}
       automountServiceAccountToken: false
       initContainers:
         - name: spiffe-jwt
-          image: {{ shc_aws.jwtSidecarImage | default('registry.redhat.io/zero-trust-workload-identity-manager/spiffe-spire-agent-rhel9@sha256:0fd5f289b7dd4d2bb3d0dad22324dc51287e57fdb401889ddb1c27690aec6539') }}
+          image: {{ shc_aws.jwtSidecarImage | default(shc_gcp.jwtSidecarImage | default('registry.redhat.io/zero-trust-workload-identity-manager/spiffe-spire-agent-rhel9@sha256:0fd5f289b7dd4d2bb3d0dad22324dc51287e57fdb401889ddb1c27690aec6539')) }}
           restartPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
             - |
               umask 027   # group-readable: the volume is owned by the pod fsGroup (setgid), shared with the worker
+              fetch() {  # fetch <audience> <file>
+                t=$(/spire-agent api fetch jwt -audience "$1" -socketPath /spiffe-workload-api/spire-agent.sock 2>/dev/null \
+                      | awk '/^token\(/ {getline; gsub(/[ 	]/, ""); print; exit}')
+                [ -n "$t" ] || return 1
+                printf '%s' "$t" > "$2.new" && mv "$2.new" "$2"
+              }
               while true; do
-                t=$(/spire-agent api fetch jwt -audience sts.amazonaws.com -socketPath /spiffe-workload-api/spire-agent.sock 2>/dev/null \
-                      | awk '/^token\(/ {getline; gsub(/[ \t]/, ""); print; exit}')
-                if [ -n "$t" ]; then
-                  printf '%s' "$t" > /var/run/secrets/aws/token.new && mv /var/run/secrets/aws/token.new /var/run/secrets/aws/token
-                  unset t; sleep 600
-                else
-                  sleep 2
-                fi
+                ok=1
+    {%- if shc_cloud_aws %}
+                fetch sts.amazonaws.com /var/run/secrets/aws/token || ok=0
+    {%- endif %}
+    {%- if shc_cloud_gcp %}
+                fetch '{{ shc_gcp_audience | trim }}' /var/run/secrets/gcp/token || ok=0
+    {%- endif %}
+                if [ "$ok" = 1 ]; then sleep 600; else sleep 2; fi
               done
           startupProbe:
-            exec: {command: ["/bin/sh", "-c", "test -s /var/run/secrets/aws/token"]}
+            exec: {command: ["/bin/sh", "-c", "{% if shc_cloud_aws %}test -s /var/run/secrets/aws/token{% if shc_cloud_gcp %} && {% endif %}{% endif %}{% if shc_cloud_gcp %}test -s /var/run/secrets/gcp/token{% endif %}"]}
             periodSeconds: 2
             failureThreshold: 60
           securityContext:
@@ -52,20 +68,34 @@ shc_aws_instance_group:
           volumeMounts:
             - {name: spiffe, mountPath: /spiffe-workload-api, readOnly: true}
             - {name: aws-token, mountPath: /var/run/secrets/aws}
+            - {name: gcp-token, mountPath: /var/run/secrets/gcp}
       containers:
         - image: registry.redhat.io/ansible-automation-platform-26/ee-supported-rhel9:latest
           name: worker
           args: ["ansible-runner", "worker", "--private-data-dir=/runner"]
           env:
+    {%- if shc_cloud_aws %}
             - {name: AWS_ROLE_ARN, value: "{{ shc_aws.automationRoleArn | default('') }}"}
             - {name: AWS_WEB_IDENTITY_TOKEN_FILE, value: /var/run/secrets/aws/token}
             - {name: AWS_ROLE_SESSION_NAME, value: shc-aap-job}
             - {name: AWS_DEFAULT_REGION, value: "{{ shc_aws.region | default('us-east-1') }}"}
+    {%- endif %}
+    {%- if shc_cloud_gcp %}
+            - {name: GCP_WORKLOAD_IDENTITY_AUDIENCE, value: "{{ shc_gcp_audience | trim }}"}
+            - {name: GCP_TOKEN_FILE, value: /var/run/secrets/gcp/token}
+            - {name: GCP_AUTOMATION_SERVICE_ACCOUNT, value: "{{ shc_gcp.automation.serviceAccount }}"}
+            - {name: GCP_MEMBER_SERVICE_ACCOUNT, value: "{{ shc_gcp.memberServiceAccount | default('shc-automation') }}"}
+            - {name: GCP_HUB_PROJECT, value: "{{ shc_gcp.hub.project }}"}
+            - {name: CLOUDSDK_CORE_PROJECT, value: "{{ shc_gcp.hub.project }}"}
+    {%- endif %}
           resources: {requests: {cpu: 250m, memory: 100Mi}}
           volumeMounts:
             - {name: aws-token, mountPath: /var/run/secrets/aws, readOnly: true}
+            - {name: gcp-token, mountPath: /var/run/secrets/gcp, readOnly: true}
       volumes:
         - name: spiffe
           csi: {driver: csi.spiffe.io, readOnly: true}
         - name: aws-token
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: gcp-token
           emptyDir: {medium: Memory, sizeLimit: 1Mi}

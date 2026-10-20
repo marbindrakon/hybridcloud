@@ -15,6 +15,9 @@ controller_inventories:
       # shc (design/P8-PLAN.md §11): how this installation realizes AWS sites and environments (hub, edge, tenant
       # accounts; no secrets)
       aws_realization: "{{ lookup('env', 'AWS_REALIZATION') | default('{}', true) | from_json }}"
+      # shc (design/P11-GCP-PLAN.md §5.1): how this installation realizes Google Cloud sites and environments (hub
+      # project, edge, tenant projects; no secrets)
+      gcp_realization: "{{ lookup('env', 'GCP_REALIZATION') | default('{}', true) | from_json }}"
 
 controller_hosts:
   - name: localhost
