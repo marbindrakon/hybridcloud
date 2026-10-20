@@ -20,6 +20,12 @@ spec:
       remoteRef:
         key: {{ .Values.provider.providerCredsVault }}
         property: clouds.yaml
+  {{- else if eq .Values.provider.type "GCP" }}
+  data:
+    - secretKey: osServiceAccount.json
+      remoteRef:
+        key: {{ .Values.provider.providerCredsVault }}
+        property: osServiceAccount.json
   {{- else if eq .Values.provider.aws.credentialsMode "Mint" }}
   data:
     - secretKey: aws_access_key_id
