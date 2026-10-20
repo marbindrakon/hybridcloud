@@ -9,6 +9,7 @@ project). Prints one JSON line.
   shc_gcp_edge.py --config '<json>' status|up|down|replace
   shc_gcp_edge.py --config '<json>' gateways --gateways '[{"name","publicKey","address"}]'   (SHC_EDGE_BGP_PASSWORD)
   shc_gcp_edge.py --config '<json>' net-up --vni N [--test]        tunnels from SHC_EDGE_VPN_TUNNELS_FILE (JSON, PSKs; or SHC_EDGE_VPN_TUNNELS)
+  shc_gcp_edge.py --config '<json>' net-known --vni N           tunnel peers whose secret the routers hold
   shc_gcp_edge.py --config '<json>' net-down --vni N
 
 config: {"project", "region", "zones": [..], "vpcName", "subnetName", "machineType", "image": {"project", "family"},
@@ -344,6 +345,16 @@ class Edge:
         return {"vni": vni, "vrf": vrf["name"],
                 "tunnels": {k: [{x: t[x] for x in ("ifId", "peerIp", "inside", "bgp")} for t in v] for k, v in vrf["vpn"].items()}}
 
+    def net_known(self, vni):
+        """The tunnel peers (Google's HA VPN interface addresses) whose shared secret the routers' config holds for
+        this network; the tenant side re-mints the tunnels that are not in this list."""
+        conf = self.read_config() or {}
+        known = {}
+        for v in conf.get("vrfs", []):
+            if v["vni"] == vni:
+                known = {k: sorted(t["peerIp"] for t in ts if t.get("psk")) for k, ts in v.get("vpn", {}).items()}
+        return {"vni": vni, "known": known}
+
     def net_down(self, vni):
         conf = self.read_config()
         if conf and any(v["vni"] == vni for v in conf.get("vrfs", [])):
@@ -371,7 +382,7 @@ class Edge:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
-    ap.add_argument("command", choices=["status", "up", "down", "replace", "gateways", "net-up", "net-down"])
+    ap.add_argument("command", choices=["status", "up", "down", "replace", "gateways", "net-up", "net-known", "net-down"])
     ap.add_argument("--gateways")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--test", action="store_true")
@@ -383,7 +394,8 @@ def main():
         e = Edge(json.loads(a.config))
         r = {"status": e.status, "up": e.up, "down": e.down, "replace": e.replace,
              "gateways": lambda: e.set_gateways(json.loads(a.gateways or "[]")),
-             "net-up": lambda: e.net_up(a.vni, a.test), "net-down": lambda: e.net_down(a.vni)}[a.command]()
+             "net-up": lambda: e.net_up(a.vni, a.test), "net-known": lambda: e.net_known(a.vni),
+             "net-down": lambda: e.net_down(a.vni)}[a.command]()
     except g.GcpError as ex:
         fail(str(ex), code=ex.code, changed=e.changed if e else [])
     print(json.dumps({"ok": True, "changed": e.changed, "result": r}, default=str))

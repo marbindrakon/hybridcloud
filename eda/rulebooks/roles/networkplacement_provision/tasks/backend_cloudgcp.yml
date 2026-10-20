@@ -41,6 +41,18 @@
     msg: "CloudGateway {{ np_gateway.metadata.name }} reports no edge routers yet"
   when: np_gcp_edge.routers | length == 0
 
+# which tunnel secrets the routers already hold: a tunnel they have no secret for is recreated by place-up
+- name: The tunnel secrets the routers hold for this network
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+  vars:
+    gcp_helper: shc_gcp_edge.py
+    gcp_config: "{{ gcp_edge_cfg }}"
+    gcp_args: [net-known, --vni, "{{ np_l3vni | string }}"]
+
+- name: Keep what the routers know
+  ansible.builtin.set_fact:
+    np_gcp_known: "{{ gcp_result.result.known | default({}) }}"
+
 - name: A file for the tunnels' shared secrets
   ansible.builtin.tempfile:
     state: file
@@ -54,7 +66,7 @@
     gcp_config: "{{ np_gcp_cfg }}"
     gcp_args: >-
       {{ ['place-up', '--placement', np_gcp_placement, '--vni', np_l3vni | string, '--prefixes', np_prefixes_v4 | to_json,
-          '--edge', np_gcp_edge | to_json, '--egress', np_gcp_egress] }}
+          '--edge', np_gcp_edge | to_json, '--egress', np_gcp_egress, '--known-peers', np_gcp_known | to_json] }}
     gcp_env: {SHC_EDGE_VPN_TUNNELS_FILE: "{{ _np_gcp_tunnels.path }}"}
 
 - name: Keep the cloud side

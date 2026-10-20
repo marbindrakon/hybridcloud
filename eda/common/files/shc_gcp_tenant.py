@@ -5,7 +5,7 @@ platform identity by impersonating the project's member account. Idempotent; pri
   shc_gcp_tenant.py --config '<json>' check                              the project is usable (label, APIs)
   shc_gcp_tenant.py --config '<json>' zone-up --zone FQDN                the environment's Cloud DNS public zone
   shc_gcp_tenant.py --config '<json>' zone-down --zone FQDN
-  shc_gcp_tenant.py --config '<json>' place-up --placement NAME --vni N --prefixes '[cidr]' --edge '<json>' [--egress fabric|cloudNat]
+  shc_gcp_tenant.py --config '<json>' place-up --placement NAME --vni N --prefixes '[cidr]' --edge '<json>' [--egress fabric|cloudNat] [--known-peers '<json>']
       the placement's VPC, subnet, Cloud Router, HA VPN gateway and tunnels to the site's routers; prints the
       routers' tunnel parameters (PSKs go to SHC_EDGE_VPN_TUNNELS_FILE, never to stdout)
   shc_gcp_tenant.py --config '<json>' place-down --placement NAME
@@ -127,7 +127,7 @@ class Tenant:
             out["routes"] = sorted({r["destRange"] for r in ((rs or {}).get("result") or {}).get("bestRoutesForRouter", [])})
         return out
 
-    def place_up(self, placement, vni, prefixes, edge, egress="fabric"):
+    def place_up(self, placement, vni, prefixes, edge, egress="fabric", known=None):
         c = self.cfg
         n = self.names(placement)
         labels = dict(self.labels, **{"shc-placement": placement, "shc-vni": str(vni)})
@@ -198,6 +198,18 @@ class Tenant:
             tname = "%s-t%d" % (n, i)
             t = self.get("/regions/%s/vpnTunnels/%s" % (self.region, tname))
             psk = None
+            # a tunnel whose shared secret never reached the routers (the run that minted it failed before the
+            # edge config was written) can't be repaired in place: GCE tunnels' secrets are immutable, so the
+            # tunnel is recreated with a fresh secret. `known` = the peers the routers hold a secret for.
+            if t and known is not None and gw["vpnInterfaces"][i]["ipAddress"] not in set(known.get(r["name"], [])):
+                rt = self.get("/regions/%s/routers/%s" % (self.region, n))
+                patch = {"interfaces": [x for x in rt.get("interfaces", []) if x["name"] != "if-t%d" % i],
+                         "bgpPeers": [x for x in rt.get("bgpPeers", []) if x["name"] != "peer-t%d" % i]}
+                if patch != {"interfaces": rt.get("interfaces", []), "bgpPeers": rt.get("bgpPeers", [])}:
+                    self.op("PATCH", "/regions/%s/routers/%s" % (self.region, n), patch)
+                self.op("DELETE", "/regions/%s/vpnTunnels/%s" % (self.region, tname))
+                self.changed.append("tunnel %s recreated (secret unknown to the routers)" % tname)
+                t = None
             if not t:
                 psk = secrets.token_urlsafe(30)
                 self.changed.append("tunnel " + tname)
@@ -281,6 +293,7 @@ def main():
     ap.add_argument("--prefixes")
     ap.add_argument("--edge")
     ap.add_argument("--egress", default="fabric")
+    ap.add_argument("--known-peers", help="JSON {router: [peer ip]} of tunnels whose secret the routers hold (place-up)")
     a = ap.parse_args()
     if a.command.startswith("zone") and not a.zone:
         fail("--zone is required")
@@ -290,7 +303,8 @@ def main():
     try:
         t = Tenant(json.loads(a.config))
         r = {"check": t.check, "zone-up": lambda: t.zone_up(a.zone), "zone-down": lambda: t.zone_down(a.zone),
-             "place-up": lambda: t.place_up(a.placement, a.vni, json.loads(a.prefixes or "[]"), json.loads(a.edge or "{}"), a.egress),
+             "place-up": lambda: t.place_up(a.placement, a.vni, json.loads(a.prefixes or "[]"), json.loads(a.edge or "{}"), a.egress,
+                                             json.loads(a.known_peers) if a.known_peers else None),
              "place-down": lambda: t.place_down(a.placement), "place-status": lambda: t.place_status(a.placement)}[a.command]()
     except g.GcpError as ex:
         fail(str(ex), code=ex.code, changed=t.changed if t else [])
