@@ -2353,18 +2353,23 @@ iaasClusters:
     server: "https://api.edge2.shc.signal9.gg:6443"
     # Not a hybrid network fabric site: no fabric underlay, no CloudInfrastructure (cloudInfra) and no fabric
     # account (fabricAccess). Not a CloudVirt site either: no tenant sign-in client and no tenant DNS controller.
+    # ODF external on Atuin Ceph pool shc-edge2-odf (restricted CSI users, exporter output in central Vault
+    # clusters/edge2/ceph-external) and CNV (owner 10-20).
     clusterBase:
       values:
         tenantAccess:
           enabled: false
         tenantDns:
           enabled: false
-        monitoring:
-          storageClass: ""   # no ODF: Prometheus and Alertmanager on emptyDir
-    odfExternal:
-      enabled: false   # would need an Atuin Ceph pool + CSI clients (clusters/edge2/ceph-external)
     cnv:
-      enabled: false
+      values:
+        # one node: virt-api and virt-controller run a single replica, so a minAvailable 1 budget would block
+        # every node drain (upgrades); no live migration either
+        pdb:
+          virtApi:
+            enabled: false
+          virtController:
+            enabled: false
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
