@@ -46,6 +46,10 @@ sed -i 's/^bgpd=no/bgpd=yes/; s/^bfdd=no/bfdd=yes/' /etc/frr/daemons
 printf '%%s\n' 'net.ipv4.ip_forward = 1' 'net.ipv4.conf.all.rp_filter = 0' 'net.ipv4.conf.default.rp_filter = 0' \
   'net.ipv4.tcp_l3mdev_accept = 1' 'net.ipv4.udp_l3mdev_accept = 1' > /etc/sysctl.d/90-shc-edge.conf
 sysctl --system >/dev/null
+# firewalld's forward chain drops conntrack-INVALID packets: with ECMP over two tunnels and two blades a reply often
+# reaches the router that never saw the request (ICMP replies are then INVALID). Forwarding here is stateless; the
+# VPC firewall and the IPsec/WireGuard peers are the fence.
+systemctl disable --now firewalld >/dev/null 2>&1 || true
 printf '%%s\n' 'table inet shc_edge {' '  chain forward {' '    type filter hook forward priority mangle; policy accept;' \
   '    tcp flags syn tcp option maxseg size set rt mtu' '  }' '}' > /etc/nftables/shc-edge.nft
 grep -q shc-edge.nft /etc/sysconfig/nftables.conf || echo 'include "/etc/nftables/shc-edge.nft"' >> /etc/sysconfig/nftables.conf
