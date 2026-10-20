@@ -62,19 +62,15 @@
     np_gcp_place: "{{ gcp_result.result }}"
     np_gcp_changed: "{{ gcp_result.changed | default([]) | length > 0 }}"
 
-- name: Read the tunnels (shared secrets inside)
-  ansible.builtin.slurp:
-    src: "{{ _np_gcp_tunnels.path }}"
-  register: _np_gcp_tunnels_data
-  no_log: true
-
+# the tunnels file (PSKs inside) is handed over by path: templating its JSON into an environment value turns it
+# into a dict whose Python repr is not JSON (placement gcpnet-gcp1, 10-20)
 - name: The routers' VRF and tunnels for this network
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
   vars:
     gcp_helper: shc_gcp_edge.py
     gcp_config: "{{ gcp_edge_cfg }}"
     gcp_args: [net-up, --vni, "{{ np_l3vni | string }}"]
-    gcp_env: {SHC_EDGE_VPN_TUNNELS: "{{ _np_gcp_tunnels_data.content | b64decode }}"}
+    gcp_env: {SHC_EDGE_VPN_TUNNELS_FILE: "{{ _np_gcp_tunnels.path }}"}
     gcp_no_log: true
 
 - name: Forget the secrets file

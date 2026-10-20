@@ -8,7 +8,7 @@ project). Prints one JSON line.
 
   shc_gcp_edge.py --config '<json>' status|up|down|replace
   shc_gcp_edge.py --config '<json>' gateways --gateways '[{"name","publicKey","address"}]'   (SHC_EDGE_BGP_PASSWORD)
-  shc_gcp_edge.py --config '<json>' net-up --vni N [--test]        tunnels from SHC_EDGE_VPN_TUNNELS (JSON, PSKs)
+  shc_gcp_edge.py --config '<json>' net-up --vni N [--test]        tunnels from SHC_EDGE_VPN_TUNNELS_FILE (JSON, PSKs; or SHC_EDGE_VPN_TUNNELS)
   shc_gcp_edge.py --config '<json>' net-down --vni N
 
 config: {"project", "region", "zones": [..], "vpcName", "subnetName", "machineType", "image": {"project", "family"},
@@ -313,7 +313,15 @@ class Edge:
         conf = self.read_config()
         if conf is None or not conf.get("nodes"):
             fail("site %s is not up" % self.site)
-        tunnels = json.loads(os.environ.get("SHC_EDGE_VPN_TUNNELS") or "{}")
+        # the tenant side writes the tunnels (PSKs inside) to a file; the env var form is kept for tests. Never
+        # pass the JSON through an Ansible environment: a whole-expression template turns it into a dict and
+        # the environment then carries its Python repr (single quotes), which is not JSON.
+        tf = os.environ.get("SHC_EDGE_VPN_TUNNELS_FILE")
+        if tf:
+            with open(tf) as f:
+                tunnels = json.load(f)
+        else:
+            tunnels = json.loads(os.environ.get("SHC_EDGE_VPN_TUNNELS") or "{}")
         # a tunnel the tenant side didn't mint again (psk null) keeps the secret the config already holds
         old = {}
         for v in conf.get("vrfs", []):
