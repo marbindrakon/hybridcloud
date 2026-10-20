@@ -2540,6 +2540,8 @@ fabricHosts:
                 next-hop-address: 172.18.233.1
                 next-hop-interface: bond1.233
                 table-id: 254
+        annotations:
+          baremetalhost.metal3.io/detached: fabric-hosts
         rootDeviceHints:
           serialNumber: CVWL420402GB800RGN
         provision:
