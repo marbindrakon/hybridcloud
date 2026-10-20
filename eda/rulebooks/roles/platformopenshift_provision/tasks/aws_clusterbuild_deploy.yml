@@ -58,7 +58,7 @@
 
 - name: Render install-config YAML
   ansible.builtin.set_fact:
-    cb_install_config: "{{ lookup('template', 'install-config.yaml.j2') }}"
+    cb_install_config: "{{ lookup('template', cb_install_config_template | default('install-config.yaml.j2')) }}"
   no_log: true
 
 - name: Write install-config to Vault
@@ -70,7 +70,7 @@
 
 - name: Render build-values YAML to tempfile
   ansible.builtin.copy:
-    content: "{{ lookup('template', 'build-values-aws.yaml.j2') }}"
+    content: "{{ lookup('template', cb_build_values_template | default('build-values-aws.yaml.j2')) }}"
     dest: "/tmp/{{ cb_app_name }}-build-values.yaml"
     mode: '0600'
   changed_when: false
@@ -165,14 +165,16 @@
 # resolve the cluster through public aliases of its internal load balancers, published as soon as they exist
 - name: Publish the cluster's names while it installs (Internal)
   ansible.builtin.command:
-    argv: [python3, "{{ role_path }}/../../../common/files/shc_aws_cluster.py", --config, "{{ cb_aws_cfg | to_json }}",
-           dns-alias, --state, up, --zone, "{{ aws_domain }}", --name, "{{ cb_ocp_name }}", --vpc, "{{ cb_vpc_id }}",
-           --wait-seconds, "6600"]
+    argv: >-
+      {{ cb_dns_alias_argv | default([
+           'python3', role_path ~ '/../../../common/files/shc_aws_cluster.py', '--config', cb_aws_cfg | default({}) | to_json,
+           'dns-alias', '--state', 'up', '--zone', aws_domain | default(''), '--name', cb_ocp_name, '--vpc', cb_vpc_id,
+           '--wait-seconds', '6600']) }}
   async: 7000
   poll: 0
   register: cb_dns_alias_job
   changed_when: false
-  when: aws_network | default('') | length > 0 and aws_publish | default('External') == 'Internal'
+  when: (cb_network | default(aws_network | default(''))) | length > 0 and (cb_publish | default(aws_publish | default('External'))) == 'Internal'
 
 - name: Clean up temp values and registry files
   ansible.builtin.file:

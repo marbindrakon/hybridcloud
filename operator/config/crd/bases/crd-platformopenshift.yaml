@@ -36,8 +36,8 @@ spec:
               properties:
                 type:
                   type: string
-                  description: "Platform type: openstack or aws"
-                  enum: [openstack, aws]
+                  description: "Platform type: openstack, aws or gcp"
+                  enum: [openstack, aws, gcp]
                 openstack:
                   type: object
                   description: "OpenStack-specific configuration"
@@ -120,6 +120,41 @@ spec:
                       type: string
                       description: "AWS instance type for workers"
                       default: m5.large
+                gcp:
+                  type: object
+                  description: "Google Cloud-specific configuration"
+                  required: [environment]
+                  properties:
+                    environment:
+                      type: string
+                      description: "CloudGCP CR name providing the Google Cloud environment"
+                    network:
+                      type: string
+                      description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a VPC of its own"
+                    publish:
+                      type: string
+                      description: "How the cluster's API and ingress are published: External (internet-facing load balancers) or Internal (reachable only from the cluster's network)"
+                      enum: [External, Internal]
+                      default: External
+                    region:
+                      type: string
+                      description: "Google Cloud region; must be the environment's region (default: the environment's region)"
+                    controlPlaneCount:
+                      type: integer
+                      description: "Control plane node count"
+                      default: 3
+                    workerCount:
+                      type: integer
+                      description: "Worker node count"
+                      default: 2
+                    controllerFlavor:
+                      type: string
+                      description: "Machine type for control plane"
+                      default: n2-standard-4
+                    workerFlavor:
+                      type: string
+                      description: "Machine type for workers"
+                      default: n2-standard-4
                 toolRbac:
                   description: Controls who gets roles on the provisioned OpenShift cluster (Layer 2 RBAC)
                   type: object
@@ -218,6 +253,10 @@ spec:
                 awsHelperName:
                   type: string
                 awsRegion:
+                  type: string
+                gcpProject:
+                  type: string
+                gcpRegion:
                   type: string
                 status:
                   type: string

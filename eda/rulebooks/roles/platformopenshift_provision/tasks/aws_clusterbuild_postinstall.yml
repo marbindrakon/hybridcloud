@@ -95,7 +95,7 @@
           metadata:
             name: "{{ cb_cluster_name }}"
             labels:
-              cloud: Amazon
+              cloud: "{{ cb_acm_cloud_label | default('Amazon') }}"
               vendor: OpenShift
               cluster.open-cluster-management.io/clusterset: default
               platformopenshift: "{{ ansible_operator_meta.name }}"
@@ -118,7 +118,7 @@
           spec:
             clusterName: "{{ cb_cluster_name }}"
             clusterNamespace: "{{ cb_cluster_name }}"
-            clusterLabels: {cloud: Amazon, vendor: OpenShift}
+            clusterLabels: {cloud: "{{ cb_acm_cloud_label | default('Amazon') }}", vendor: OpenShift}
             applicationManager: {enabled: false}
             certPolicyController: {enabled: false}
             policyController: {enabled: true}

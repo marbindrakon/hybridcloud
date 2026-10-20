@@ -2,10 +2,10 @@ apiVersion: v2
 name: mce-cluster-build
 description: >-
   Helm chart for provisioning OpenShift clusters via MCE/Hive ClusterDeployment.
-  Supports AWS (Mint and STS/Manual modes), OpenStack, vSphere, and Agent.
+  Supports AWS (Mint and STS/Manual modes), GCP (workload identity federation), OpenStack, vSphere, and Agent.
   Sovereign Cloud fork of marbindrakon/signal9-lab-gitops mce-cluster-build.
 type: application
-version: 0.2.1-shc.4
+version: 0.2.1-shc.5
 appVersion: "4.21"
 keywords:
   - openshift

@@ -1,0 +1,83 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.6): the build name shc-gcp-<entity>-<name> is the cluster's identity on the platform:
+# Helm release, central namespace, ClusterDeployment and ManagedCluster, issuer path, workload identity pool and Vault
+# prefix. Hive's install and uninstall pods in that namespace are the ones the hub's shc-central pool trusts
+# (namespaces shc-gcp-*). The OpenShift cluster itself is <name>.<environment's domain>.
+- name: Derive cluster identifiers
+  ansible.builtin.set_fact:
+    cb_app_name: "shc-gcp-{{ gcp_entity }}-{{ ansible_operator_meta.name }}"
+    cb_cluster_name: "shc-gcp-{{ gcp_entity }}-{{ ansible_operator_meta.name }}"
+    cb_ocp_name: "{{ ansible_operator_meta.name }}"
+    cb_cluster_domain: "{{ ansible_operator_meta.name }}.{{ gcp_domain }}"
+    cb_install_base_domain: "{{ gcp_domain }}"
+    cb_region: "{{ gcp_region }}"
+    cb_project: "{{ gcp_project }}"
+    cb_image_set: "{{ platform_spec.gcp.ocpImageSet | default(default_ocp_image_set, true) }}"
+    cb_controller_flavor: "{{ gcp_controller_flavor }}"
+    cb_worker_flavor: "{{ gcp_worker_flavor }}"
+    cb_control_plane_count: "{{ gcp_control_plane_count }}"
+    cb_worker_count: "{{ gcp_worker_count }}"
+    cb_pull_secret_vault: "{{ default_pull_secret_vault_path }}"
+    cb_pull_secret_vault_property: "{{ default_pull_secret_vault_property }}"
+    cb_ssh_key_vault: "{{ default_ssh_key_vault_path }}"
+    cb_issuer_base: "{{ (gcp_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
+    cb_issuer_namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+    cb_member_sa: "{{ gcp_real.memberServiceAccount | default('shc-automation') }}"
+    cb_machine_cidr: "10.0.0.0/16"
+    cb_vpc_name: ""
+    cb_subnet_name: ""
+    cb_vpc_id: ""
+    cb_install_config_template: install-config-gcp.yaml.j2
+    cb_build_values_template: build-values-gcp.yaml.j2
+    cb_acm_cloud_label: Google
+    cb_publish: "{{ gcp_publish }}"
+    cb_network: "{{ gcp_network }}"
+    cb_dns_alias_argv: >-
+      {{ ['python3', role_path ~ '/../../../common/files/shc_gcp_cluster.py', '--config', {'project': gcp_project, 'region': gcp_region} | to_json,
+          'dns-alias', '--state', 'up', '--zone', gcp_domain, '--name', ansible_operator_meta.name, '--network', 'shc-' ~ ((ansible_operator_meta.namespace ~ '-' ~ gcp_network ~ '-' ~ gcp_env_name) | regex_replace('[^a-z0-9-]', '-')),
+          '--wait-seconds', '6600'] }}
+
+- name: Derive the build's paths and the project entry
+  ansible.builtin.set_fact:
+    cb_issuer: "{{ cb_issuer_base }}/{{ cb_app_name }}"
+    cb_vault_cluster_path: "cluster/gcp/{{ cb_app_name }}"
+    cb_install_config_vault: "cluster/gcp/{{ cb_app_name }}/build/install-config"
+    cb_signer_vault: "cluster/gcp/{{ cb_app_name }}/build/sa-signer"
+    cb_manifests_vault: "cluster/gcp/{{ cb_app_name }}/build/manifests"
+    cb_provider_creds_vault: "cluster/gcp/{{ cb_app_name }}/build/provider-creds"
+    cb_gcp_cfg:
+      project: "{{ gcp_project }}"
+      region: "{{ gcp_region }}"
+      memberServiceAccount: "{{ cb_member_sa }}"
+      hub:
+        projectNumber: "{{ gcp_real.hub.projectNumber }}"
+        hivePool: "{{ (gcp_real.hive | default({})).pool | default('shc-central') }}"
+        hiveProvider: "{{ (gcp_real.hive | default({})).provider | default('central') }}"
+
+- name: Record the Vault paths this cluster writes
+  ansible.builtin.set_fact:
+    cb_vault_paths:
+      - "{{ cb_install_config_vault }}"
+      - "{{ cb_signer_vault }}"
+      - "{{ cb_manifests_vault }}"
+      - "{{ cb_provider_creds_vault }}"
+      - "{{ cb_vault_cluster_path }}/admin-kubeconfig"
+      - "{{ cb_vault_cluster_path }}/admin-password"
+
+- name: Refuse a build name that can't serve as namespace, issuer path and pool id
+  ansible.builtin.assert:
+    that:
+      - cb_app_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+      - cb_app_name | length <= 40
+      - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+    fail_msg: >-
+      Build name {{ cb_app_name }} (shc-gcp-<entity>-<name>) must be at most 40 characters of [a-z0-9-]; shorten the
+      PlatformOpenshift name.
+
+- name: Fail without a cluster-build chart
+  ansible.builtin.assert:
+    that:
+      - (mce_cluster_build_chart | trim) is match('oci://[^/]+/')
+    fail_msg: >-
+      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
+      (got '{{ mce_cluster_build_chart | trim }}').

@@ -32,7 +32,7 @@ provider:
   # Vault path for provider credentials ExternalSecret
   providerCredsVault: ""
   providerCAs: ""
-  # Can be AWS, OpenStack, Agent, or vSphere
+  # Can be AWS, GCP, OpenStack, Agent, or vSphere
   type: AWS
   aws:
     region: us-east-1
@@ -49,6 +49,14 @@ provider:
     assumeRole:
       roleARN: ""
       externalID: ""
+    serviceAccountSignerSecret: ""
+    extraManifestsSecret: ""
+  # GCP (Manual credentials with workload identity federation): the provider credentials secret holds an
+  # external-account credential configuration (no key); signer and manifests as for AWS STS
+  gcp:
+    region: us-east4
+    controllerFlavor: n2-standard-4
+    workerFlavor: n2-standard-4
     serviceAccountSignerSecret: ""
     extraManifestsSecret: ""
   vsphere:

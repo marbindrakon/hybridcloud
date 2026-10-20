@@ -1,0 +1,56 @@
+apiVersion: v1
+metadata:
+  name: {{ cb_ocp_name }}
+baseDomain: {{ cb_install_base_domain }}
+publish: {{ gcp_publish | default('External') }}
+# shc (design/P11-GCP-PLAN.md §3.6): workload identity federation - the operators' credentials come from the
+# install's manifests (external-account documents with projected tokens of the cluster's own issuer); Hive's
+# credentials are a federated identity too and stay outside
+credentialsMode: Manual
+controlPlane:
+  hyperthreading: Enabled
+  name: master
+  replicas: {{ cb_control_plane_count }}
+  platform:
+    gcp:
+      type: {{ cb_controller_flavor }}
+      osDisk:
+        diskSizeGB: 128
+        diskType: pd-ssd
+compute:
+- hyperthreading: Enabled
+  name: worker
+  replicas: {{ cb_worker_count }}
+  platform:
+    gcp:
+      type: {{ cb_worker_flavor }}
+      osDisk:
+        diskSizeGB: 128
+        diskType: pd-ssd
+networking:
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: 23
+  machineNetwork:
+  - cidr: {{ cb_machine_cidr | default('10.0.0.0/16') }}
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - 172.30.0.0/16
+platform:
+  gcp:
+    projectID: {{ cb_project }}
+    region: {{ cb_region }}
+    userLabels:
+    - key: shc-managed
+      value: "true"
+    - key: shc-build
+      value: {{ cb_app_name }}
+{% if cb_vpc_name | default('') %}
+    # a hybrid network's placement (design/P11-GCP-PLAN.md §3.6): the placement's VPC and regional subnet host the
+    # cluster's machines; the installer creates its load balancers there (internal ones for Internal)
+    network: {{ cb_vpc_name }}
+    controlPlaneSubnet: {{ cb_subnet_name }}
+    computeSubnet: {{ cb_subnet_name }}
+{% endif %}
+pullSecret: '{{ cb_pull_secret_json | to_json }}'
+sshKey: '{{ cb_ssh_public_key | trim }}'

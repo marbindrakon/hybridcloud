@@ -1,4 +1,4 @@
-{{- if .Values.provider.aws.extraManifestsSecret -}}
+{{- if or .Values.provider.aws.extraManifestsSecret .Values.provider.gcp.extraManifestsSecret -}}
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -16,5 +16,5 @@ spec:
     creationPolicy: Owner
   dataFrom:
     - extract:
-        key: {{ .Values.provider.aws.extraManifestsSecret }}
+        key: {{ .Values.provider.aws.extraManifestsSecret | default .Values.provider.gcp.extraManifestsSecret }}
 {{ end }}

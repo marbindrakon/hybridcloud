@@ -1,0 +1,19 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.6): facts, the cluster's workload identity preparation (signing key, published
+# issuer, pool + service accounts and credentials manifests, Hive's credential configuration), the Hive build on
+# central (the AWS deploy and post-install tasks, parameterized), then its outcome.
+- name: Include clusterbuild fact derivation
+  ansible.builtin.include_tasks: gcp_clusterbuild_facts.yml
+
+- name: Include the cluster's network (a hybrid network's placement)
+  ansible.builtin.include_tasks: gcp_clusterbuild_network.yml
+  when: gcp_network | length > 0
+
+- name: Include the cluster's workload identity preparation
+  ansible.builtin.include_tasks: gcp_clusterbuild_wif.yml
+
+- name: Include clusterbuild deploy
+  ansible.builtin.include_tasks: aws_clusterbuild_deploy.yml
+
+- name: Include clusterbuild post-install tasks
+  ansible.builtin.include_tasks: aws_clusterbuild_postinstall.yml

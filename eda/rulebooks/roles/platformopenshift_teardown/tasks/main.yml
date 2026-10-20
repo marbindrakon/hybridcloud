@@ -6,7 +6,8 @@
 # would re-push deleted Vault keys), the recorded Vault paths, the Keycloak client, the services viewer
 # RBAC. Any failure lands in status.deletion and the CR stays Terminating; deletionComplete only after
 # every step succeeded. The build's objects on central are named after status.buildName (AWS:
-# shc-aws-<entity>-<name>), else the CR's name. AWS teardowns run in the shc-aws container group.
+# shc-aws-<entity>-<name>, GCP: shc-gcp-<entity>-<name>), else the CR's name. Cloud teardowns run in the shc-cloud
+# container group.
 - block:
     - name: Parse event payload
       ansible.builtin.set_fact:
@@ -45,6 +46,9 @@
         po_build_name: "{{ _st.buildName | default(platformopenshift_cr_name, true) }}"
         po_aws_account: "{{ _st.awsAccountId | default('', true) }}"
         po_aws_region: "{{ _st.awsRegion | default('', true) }}"
+        po_gcp_project: "{{ _st.gcpProject | default('', true) }}"
+        po_gcp_region: "{{ _st.gcpRegion | default('', true) }}"
+        po_gcp_vpc: "{{ _st.gcpVpc | default('', true) }}"
         po_issuer: "{{ _st.serviceAccountIssuer | default('', true) }}"
         po_network: "{{ _st.network | default('', true) }}"
         po_placement: "{{ _st.placement | default('', true) }}"
@@ -148,6 +152,44 @@
             kind: ConfigMap
             name: "oidc-static-{{ po_build_name }}"
             namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: gcp-wif
+
+    # GCP: the installer's records in the environment's zone went with Hive's deprovision
+    - name: Tear down the GCP cluster's workload identity and its published issuer
+      when: platform_type == "gcp" and po_gcp_project | length > 0
+      block:
+        - name: The installation's GCP realization and the job's GCP identity
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+
+        - name: The cluster's service accounts, custom roles and pool in its project
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+          vars:
+            gcp_helper: shc_gcp_cluster.py
+            gcp_config: {project: "{{ po_gcp_project }}", region: "{{ po_gcp_region }}"}
+            gcp_args: [wif-down, --cluster, "{{ po_build_name }}"]
+
+        - name: Remove the cluster's published names (Internal)
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+          vars:
+            gcp_helper: shc_gcp_cluster.py
+            gcp_config: {project: "{{ po_gcp_project }}", region: "{{ po_gcp_region }}"}
+            gcp_args: [dns-alias, --state, down, --zone, "{{ po_domain.split('.', 1)[1] }}", --name,
+                       "{{ po_domain.split('.', 1)[0] }}"]
+          when: po_publish == 'Internal' and po_domain | length > 0
+
+        - name: Unpublish the cluster's issuer (its static issuer ConfigMap on central)
+          kubernetes.core.k8s:
+            host: "{{ central_api_host }}"
+            api_key: "{{ central_bearer_token }}"
+            validate_certs: false
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            name: "oidc-static-{{ po_build_name }}"
+            namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
 
     - name: Take the cluster's prefix out of the network's platform reach
       when: po_publish == 'Internal' and po_network | length > 0 and po_machine_network | length > 0

@@ -1,0 +1,120 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.6): a cluster on a hybrid network - its machines in the network's NetworkPlacement
+# VPC in the environment (install into the placement's regional subnet; machine network = the placement's IPv4
+# prefix). External: the installer's public load balancers (the VPC has no NAT: image pulls go through the
+# placement's Cloud NAT when its egress is cloudNat, else through the fabric). Internal: API and ingress on internal
+# load balancers; the platform reaches them through the fabric (platform reach: annotation
+# shc.signal9.gg/platform-reach on the HybridNetwork, realized by the fabric on the border gateways and advertised to
+# the VPC by the site's routers), and the cluster's names are published as records of the internal load balancers
+# while it installs (shc_gcp_cluster.py dns-alias, in the deploy).
+- name: The network's placements
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: NetworkPlacement
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _cb_nps
+
+- name: The placement in this environment
+  ansible.builtin.set_fact:
+    cb_placement: >-
+      {{ (_cb_nps.resources | default([])
+          | selectattr('spec.network', 'equalto', gcp_network)
+          | selectattr('spec.backend.kind', 'equalto', 'CloudGCP')
+          | selectattr('spec.backend.name', 'equalto', gcp_env_name) | list + [{}]) | first }}
+
+- name: Require a ready placement with a VPC
+  ansible.builtin.assert:
+    that:
+      - cb_placement | length > 0
+      - (cb_placement.status | default({}, true)).ready | default(false) | bool
+      - ((((cb_placement.status | default({}, true)).realization | default({}, true)).site | default({}, true)).vpc
+         | default('')) | length > 0
+    fail_msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: HybridNetwork {{ gcp_network }} has no ready NetworkPlacement
+      in CloudGCP {{ gcp_env_name }}.
+
+- name: The placement's VPC
+  vars:
+    _site: "{{ cb_placement.status.realization.site }}"
+  ansible.builtin.set_fact:
+    cb_placement_ref: "{{ cb_placement.metadata.namespace }}/{{ cb_placement.metadata.name }}"
+    cb_machine_cidr: "{{ cb_placement.status.prefixes[0] }}"
+    cb_vpc_name: "{{ _site.vpc }}"
+    cb_vpc_id: "{{ _site.vpc }}"
+    cb_subnet_name: "{{ _site.vpc }}"
+    cb_network: "{{ gcp_network }}"
+
+- name: Record the network on the status (teardown undoes what it asks for)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      network: "{{ gcp_network }}"
+      placement: "{{ cb_placement_ref }}"
+      publish: "{{ gcp_publish }}"
+      gcpVpc: "{{ cb_vpc_name }}"
+      machineNetwork: "{{ cb_machine_cidr }}"
+
+- name: Internal - platform reach to the placement's prefix
+  when: gcp_publish == 'Internal'
+  block:
+    - name: Read the network
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridNetwork
+        name: "{{ gcp_network }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: _cb_hn
+
+    - name: Ask for platform reach to the placement's prefix
+      vars:
+        _have: >-
+          {{ ((_cb_hn.resources[0].metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach']
+              | default('[]', true)) | from_json }}
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: patched
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridNetwork
+        name: "{{ gcp_network }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        definition:
+          metadata:
+            annotations:
+              shc.signal9.gg/platform-reach: "{{ (_have + [cb_machine_cidr]) | unique | sort | to_json }}"
+      register: _cb_reach_patch
+
+    - name: Wake the network (it holds the fabric's egress index, then wakes the fabric)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridNetwork, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ gcp_network }}"}]
+      when: _cb_reach_patch is changed
+
+    - name: Wait for the fabric to carry the platform reach
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridFabric
+        name: "{{ _cb_hn.resources[0].status.fabric }}"
+        namespace: "{{ fabric_platform_namespace | default('sovereign-cloud') }}"
+      register: _cb_fab
+      until: >-
+        cb_machine_cidr in ((((_cb_fab.resources[0].status | default({}, true)).realization | default({}, true)).egress
+          | default({}, true)).networks | default([], true)
+          | selectattr('network', 'equalto', ansible_operator_meta.namespace ~ '/' ~ gcp_network)
+          | map(attribute='platform') | flatten | list)
+      retries: 60
+      delay: 20

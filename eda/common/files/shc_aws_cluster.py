@@ -138,7 +138,7 @@ class Registry:
         return self._open("https://%s/v2/%s/blobs/%s" % (self.host, self.repo, digest))
 
 
-def credentials_requests(image):
+def credentials_requests(image, provider_kind="AWSProviderSpec"):
     host, repo, ref = _parse_image(image)
     reg = Registry(host, repo)
     layers = reg.manifest(ref)["layers"]
@@ -172,7 +172,7 @@ def credentials_requests(image):
     out = []
     for cr in found:
         spec = cr.get("spec", {})
-        if spec.get("providerSpec", {}).get("kind") != "AWSProviderSpec":
+        if spec.get("providerSpec", {}).get("kind") != provider_kind:
             continue
         ann = cr.get("metadata", {}).get("annotations", {}) or {}
         if ann.get("include.release.openshift.io/self-managed-high-availability") != "true":
@@ -186,7 +186,7 @@ def credentials_requests(image):
             continue
         out.append(cr)
     if not out:
-        fail("no AWS CredentialsRequests found in " + image)
+        fail("no %s CredentialsRequests found in %s" % (provider_kind, image))
     return out
 
 

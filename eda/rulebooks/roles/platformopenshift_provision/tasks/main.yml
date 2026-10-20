@@ -95,6 +95,10 @@
       ansible.builtin.include_tasks: aws.yml
       when: platform_type == "aws"
 
+    - name: Dispatch to GCP handler
+      ansible.builtin.include_tasks: gcp.yml
+      when: platform_type == "gcp"
+
     - name: Dispatch to OpenStack handler
       ansible.builtin.include_tasks: openstack.yml
       when: platform_type == "openstack"

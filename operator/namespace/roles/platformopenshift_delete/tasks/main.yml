@@ -60,6 +60,8 @@
             name: "{{ _hybridsovereign_redhat_platformopenshift.spec.openstack.environment | default('') if (_hybridsovereign_redhat_platformopenshift.spec.type | default('')) == 'openstack' else '' }}"
           - kind: CloudAWS
             name: "{{ _hybridsovereign_redhat_platformopenshift.spec.aws.environment | default('') if (_hybridsovereign_redhat_platformopenshift.spec.type | default('')) == 'aws' else '' }}"
+          - kind: CloudGCP
+            name: "{{ _hybridsovereign_redhat_platformopenshift.spec.gcp.environment | default('') if (_hybridsovereign_redhat_platformopenshift.spec.type | default('')) == 'gcp' else '' }}"
       when: _hybridsovereign_redhat_platformopenshift.status.deletionComplete | default(false) | bool
     - name: Exit cleanly when EDA completed deletion
       ansible.builtin.meta: end_host

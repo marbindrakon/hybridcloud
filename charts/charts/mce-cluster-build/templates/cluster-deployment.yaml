@@ -16,7 +16,7 @@ spec:
     name: {{ .Values.cluster.name }}
     version: v1beta1
 {{ end }}
-{{ if .Values.provider.aws.serviceAccountSignerSecret }}
+{{ if or .Values.provider.aws.serviceAccountSignerSecret .Values.provider.gcp.serviceAccountSignerSecret }}
   boundServiceAccountSigningKeySecretRef:
     name: {{ .Values.cluster.name }}-svc-signer
 {{ end }}
@@ -59,6 +59,12 @@ spec:
         externalID: {{ .Values.provider.aws.assumeRole.externalID }}
 {{ end }}
 {{ end }}
+{{ if eq .Values.provider.type "GCP" }}
+    gcp:
+      region: {{ .Values.provider.gcp.region }}
+      credentialsSecretRef:
+        name: {{ .Values.cluster.name }}-provider-creds
+{{ end }}
 {{ if eq .Values.provider.type "OpenStack" }}
     openstack:
 {{ if .Values.provider.providerCAs }}
@@ -77,7 +83,7 @@ spec:
 {{ end }}
     sshPrivateKeySecretRef:
       name: {{ .Values.cluster.name }}-ssh-key
-{{ if .Values.provider.aws.extraManifestsSecret }}
+{{ if or .Values.provider.aws.extraManifestsSecret .Values.provider.gcp.extraManifestsSecret }}
     manifestsSecretRef:
       name: {{ .Values.cluster.name }}-manifests
 {{ else if .Values.cluster.extraManifests }}

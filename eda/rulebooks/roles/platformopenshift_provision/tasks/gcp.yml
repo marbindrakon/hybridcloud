@@ -1,0 +1,179 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.6): PlatformOpenshift type gcp = an OpenShift cluster in a CloudGCP environment's
+# project, installed by Hive on central without keys. Hive's install and uninstall pods present their own
+# service-account token at the hub's shc-central workload identity pool and impersonate the project's member
+# account (an external-account credential configuration in the provider credentials Secret). The cluster runs with
+# Manual credentials: its service-account issuer <clusterIssuerBaseURL>/<build> is published from its own signing
+# key before the install, and a workload identity pool in the project trusts only that issuer for the operators'
+# service accounts (shc_gcp_cluster.py; this job runs in the shc-cloud container group with the platform's
+# identity). The environment's Cloud DNS zone (CloudGCP status.domain) is the install's base domain.
+- name: Set GCP spec facts
+  ansible.builtin.set_fact:
+    gcp_env_name: "{{ platform_spec.gcp.environment }}"
+    gcp_network: "{{ platform_spec.gcp.network | default('', true) }}"
+    gcp_publish: "{{ platform_spec.gcp.publish | default('External', true) }}"
+    gcp_control_plane_count: "{{ platform_spec.gcp.controlPlaneCount | default(_gcpd.controlPlaneCount | default(3)) }}"
+    gcp_worker_count: "{{ platform_spec.gcp.workerCount | default(_gcpd.workerCount | default(2)) }}"
+    gcp_controller_flavor: "{{ platform_spec.gcp.controllerFlavor | default(_gcpd.controlPlaneFlavor | default('n2-standard-4')) }}"
+    gcp_worker_flavor: "{{ platform_spec.gcp.workerFlavor | default(_gcpd.workerFlavor | default('n2-standard-4')) }}"
+  vars:
+    _gcpd: "{{ platformopenshift_defaults.gcp | default({}) }}"
+
+- name: Read CloudGCP CR via REST API
+  ansible.builtin.uri:
+    url: "{{ services_api_host }}/apis/hybridsovereign.redhat/v1alpha1/namespaces/{{ ansible_operator_meta.namespace }}/cloudgcps/{{ gcp_env_name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ services_bearer_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: cloudgcp_raw
+
+- name: Fail if CloudGCP not ready
+  ansible.builtin.assert:
+    that:
+      - cloudgcp_raw.json.status.ready | default(false) | bool
+      - (cloudgcp_raw.json.status.project | default('')) | length > 0
+      - (cloudgcp_raw.json.status.domain | default('')) | length > 0
+    fail_msg: >-
+      CloudGCP '{{ gcp_env_name }}' is not ready yet (or has no project/zone in its status). Wait for environment
+      preparation.
+
+- name: Extract CloudGCP details
+  ansible.builtin.set_fact:
+    gcp_project: "{{ cloudgcp_raw.json.status.project }}"
+    gcp_region: "{{ cloudgcp_raw.json.status.region }}"
+    gcp_domain: "{{ cloudgcp_raw.json.status.domain }}"
+    gcp_entity: "{{ cloudgcp_raw.json.status.entity | default(resolved_entity, true) }}"
+
+- name: Refuse a region other than the environment's
+  ansible.builtin.assert:
+    that:
+      - (platform_spec.gcp.region | default('', true)) in ['', gcp_region]
+    fail_msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: region {{ platform_spec.gcp.region | default('') }} differs from
+      CloudGCP {{ gcp_env_name }}'s region {{ gcp_region }}.
+
+- name: The installation's GCP realization and the job's GCP identity
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+
+- name: Provision GCP cluster build on central cluster
+  ansible.builtin.include_tasks: gcp_clusterbuild.yml
+
+- name: Get reconciliation timestamp
+  ansible.builtin.set_fact:
+    event_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+    transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Emit reconciliation event
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: present
+    definition:
+      apiVersion: events.k8s.io/v1
+      kind: Event
+      metadata:
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        generateName: "platformopenshift-{{ ansible_operator_meta.name }}-"
+      regarding:
+        apiVersion: hybridsovereign.redhat/v1alpha1
+        kind: PlatformOpenshift
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      note: >-
+        PlatformOpenshift {{ ansible_operator_meta.name }} GCP cluster build
+        {{ 'installed' if cb_cluster_installed | bool else 'not installed' }}. Build: {{ cb_app_name }},
+        domain: {{ cb_cluster_domain }}
+      type: Normal
+      action: Reconcile
+      reason: ClusterBuildProvisioned
+      reportingController: platformopenshift-operator
+      reportingInstance: platformopenshift-operator
+      eventTime: "{{ event_time }}"
+  ignore_errors: true
+
+- name: Update PlatformOpenshift status
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      status: "{{ 'ready' if cb_cluster_installed | bool else 'failed' }}"
+      ready: "{{ cb_cluster_installed | bool }}"
+      observedGeneration: "{{ platformopenshift_generation }}"
+      lastReconciledAt: "{{ event_time }}"
+      message: >-
+        {{ ('GCP cluster ' ~ cb_ocp_name ~ ' installed (' ~ cb_api_url ~ ')') if cb_cluster_installed | bool
+           else ('GCP cluster build ' ~ cb_app_name ~ ' not installed: ' ~ cb_provision_status | default('Unknown')) }}
+      name: "{{ ansible_operator_meta.name }}"
+      namespace: "{{ ansible_operator_meta.namespace }}"
+      entity: "{{ resolved_entity }}"
+      billingId: "{{ resolved_billing_id }}"
+      description: "{{ resolved_description }}"
+      platformType: gcp
+      domain: "{{ cb_cluster_domain }}"
+      buildName: "{{ cb_app_name }}"
+      gcpProject: "{{ gcp_project }}"
+      gcpRegion: "{{ gcp_region }}"
+      serviceAccountIssuer: "{{ cb_issuer }}"
+      apiURL: "{{ cb_api_url }}"
+      appsURL: "{{ cb_apps_url }}"
+      consoleURL: "{{ cb_console_url | default('') }}"
+      adminPasswordVaultPath: "{{ cb_admin_password_vault | default('') }}"
+      kubeconfigVaultPath: "{{ cb_kubeconfig_vault | default('') }}"
+      secretsVaultPath: "{{ cb_secrets_vault_path | default('') }}"
+      vaultPaths: "{{ cb_vault_paths }}"
+      clusterVersion: "{{ cb_cluster_version | default('') }}"
+      powerState: "{{ cb_power_state | default('Unknown') }}"
+      clusterHealth: "{{ cb_cluster_health | default('Unknown') }}"
+      provisionStatus: "{{ cb_provision_status | default('Unknown') }}"
+      acmAvailable: "{{ cb_acm_available | default(false) | bool }}"
+      clusterInstalled: "{{ cb_cluster_installed | default(false) | bool }}"
+      conditions:
+        - type: Available
+          status: "{{ 'True' if cb_cluster_installed | bool else 'False' }}"
+          lastTransitionTime: "{{ transition_time }}"
+          reason: "{{ 'EDASucceeded' if cb_cluster_installed | bool else 'InstallNotComplete' }}"
+          message: >-
+            GCP OCP cluster build '{{ cb_app_name }}': {{ cb_provision_status | default('Unknown') }}.
+            API: {{ cb_api_url }}
+
+# ACM policies need the cluster available in the hub (imported in the post-install)
+- name: Configure Keycloak OIDC client and ACM OAuth policy for this cluster
+  ansible.builtin.include_tasks: keycloak_oidc.yml
+  vars:
+    cluster_name: "{{ cb_app_name }}"
+    cluster_ocp_name: "{{ cb_ocp_name }}"
+    cluster_console_url: "{{ cb_console_url | default('') }}"
+    cluster_api_url: "{{ cb_api_url | default('') }}"
+    cluster_apps_url: "{{ cb_apps_url | default('') }}"
+    cluster_namespace: "{{ ansible_operator_meta.namespace }}"
+    central_token: "{{ central_bearer_token }}"
+  when:
+    - cb_cluster_installed | default(false) | bool
+    - cb_acm_available | default(false) | bool
+
+- name: Update PlatformOpenshift status with OIDC info
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      oidcConfigured: "{{ oidc_configured | default(false) | bool }}"
+      oidcClientId: "{{ oidc_client_id | default('') }}"
+  when:
+    - cb_cluster_installed | default(false) | bool
+    - cb_acm_available | default(false) | bool
+
+- name: Fail the job when the cluster did not install
+  ansible.builtin.fail:
+    msg: >-
+      GCP cluster build {{ cb_app_name }} is not installed ({{ cb_provision_status | default('Unknown') }}); see the
+      ClusterDeployment's provisions in namespace {{ cb_app_name }} on central.
+  when: not (cb_cluster_installed | bool)

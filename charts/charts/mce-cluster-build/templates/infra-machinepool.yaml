@@ -1,4 +1,4 @@
-{{- if and (has .Values.provider.type (list "OpenStack" "AWS")) (gt (int .Values.cluster.infraCount) 0) -}}
+{{- if and (has .Values.provider.type (list "OpenStack" "AWS" "GCP")) (gt (int .Values.cluster.infraCount) 0) -}}
 apiVersion: hive.openshift.io/v1
 kind: MachinePool
 metadata:
