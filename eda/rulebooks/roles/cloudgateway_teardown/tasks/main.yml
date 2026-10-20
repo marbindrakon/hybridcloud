@@ -80,7 +80,7 @@
 
     - name: The site side ({{ ci_type }})
       ansible.builtin.include_tasks: "site_{{ ci_type }}_down.yml"
-      when: ci_found and ci_type in ['openshift', 'openstack', 'aws']
+      when: ci_found and ci_type in ['openshift', 'openstack', 'aws', 'gcp']
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

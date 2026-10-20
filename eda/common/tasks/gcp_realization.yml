@@ -16,3 +16,13 @@
       Google Cloud is not realized here: the installation needs GCP_REALIZATION (hub.project, automation.serviceAccount)
       and the job must run in the shc-cloud container group.
     quiet: true
+
+# the edge site's settings (a CloudGateway of a gcp site): inputs gcp_edge_site, gcp_edge_cidr, gcp_edge_asn
+- name: The edge site's settings
+  ansible.builtin.set_fact:
+    gcp_edge_cfg: >-
+      {{ gcp_real.edge | combine({
+           'project': gcp_real.hub.project, 'region': gcp_real.hub.region,
+           'site': gcp_edge_site, 'asn': gcp_edge_asn | int,
+           'tunnel': (gcp_real.edge.tunnel | default({})) | combine({'cidr': gcp_edge_cidr})}) }}
+  when: gcp_edge_site is defined

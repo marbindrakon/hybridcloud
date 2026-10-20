@@ -1,0 +1,53 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.3): a Google Cloud site = a region the platform reaches with its own identity.
+# Ensures the hub project's edge network in that region (VPC, subnet, firewall rules; free, no instance) and records
+# what the site offers: the API (the identity chain works), EVPN (through the edge routers a CloudGateway runs),
+# DNS (Cloud DNS in the tenants' projects). The region must be the one this installation realizes.
+- name: The installation's GCP realization
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+
+- name: Set the unsupported-region failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: RegionNotSupported
+  when: (ci_cr_spec.gcp | default({})).region | default('') != gcp_real.hub.region
+
+- name: Refuse a region the installation doesn't realize
+  ansible.builtin.fail:
+    msg: >-
+      CloudInfrastructure {{ cloudinfrastructure_cr_name }}: region {{ (ci_cr_spec.gcp | default({})).region | default('') }}
+      is not realized here ({{ gcp_real.hub.region }} is).
+  when: cloudinfrastructure_fail_reason == 'RegionNotSupported'
+
+- name: Set the unsupported-attachment failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: AttachmentNotSupported
+  when: (ci_cr_spec.gcp | default({})).attachment | default('vpn') != 'vpn'
+
+- name: Refuse an attachment type that isn't realized yet
+  ansible.builtin.fail:
+    msg: "CloudInfrastructure {{ cloudinfrastructure_cr_name }}: only attachment vpn is realized (interconnect is not)"
+  when: cloudinfrastructure_fail_reason == 'AttachmentNotSupported'
+
+- name: Ensure the hub network
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+  vars:
+    gcp_helper: shc_gcp_hub.py
+    gcp_config: "{{ gcp_real.edge | combine({'project': gcp_real.hub.project, 'region': gcp_real.hub.region}) }}"
+    gcp_args: []
+
+- name: Record the GCP site
+  ansible.builtin.set_fact:
+    ci_capabilities_out:
+      api: true
+      evpn: true
+      dns: true
+    ci_site_out:
+      managed: true
+      region: "{{ gcp_result.region }}"
+      project: "{{ gcp_result.project }}"
+      vpc: "{{ gcp_result.vpc.name }}"
+      attachment: "{{ (ci_cr_spec.gcp | default({})).attachment | default('vpn') }}"
+    ci_type_message: "hub project {{ gcp_result.project }} in {{ gcp_result.region }}, VPC {{ gcp_result.vpc.name }}{{ (' (' ~ gcp_result.changed | join(', ') ~ ')') if gcp_result.changed | default([]) | length > 0 else '' }};"
+    ci_credentials_message: "the platform's workload identity entered the hub project"
+    ci_evpn_reason: PlatformEdge
+    ci_evpn_message: the site's CloudGateway runs the edge routers

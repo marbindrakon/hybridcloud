@@ -1,0 +1,17 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.3): a gcp site's edge goes with its gateway: `shc_gcp_edge.py down` removes the
+# routers, their static external addresses, the config secret and the routers' service account. The hub's VPC,
+# subnet and firewall rules stay (free). Tenant VPCs' HA VPN tunnels belong to their placements.
+- name: The installation's GCP realization and this site's edge settings
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+  vars:
+    gcp_edge_site: "{{ fab_name }}"
+    gcp_edge_cidr: "{{ fab_spec.siteUnderlay.cidr }}"
+    gcp_edge_asn: 65000
+
+- name: Take down the edge
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+  vars:
+    gcp_helper: shc_gcp_edge.py
+    gcp_config: "{{ gcp_edge_cfg }}"
+    gcp_args: [down]

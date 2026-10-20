@@ -1,0 +1,28 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.3): after the border gateway nodes are configured, give the gcp site's routers the
+# nodes' WireGuard keys and tunnel addresses and the site's BGP key (written to the routers' config secret;
+# the key never goes on a command line). The routers apply it within half a minute; when it changed, the gateway is
+# reconciled once more so its status shows the sessions that come up.
+- name: The border gateway nodes as the routers see them
+  ansible.builtin.set_fact:
+    cg_gcp_gateways: >-
+      {%- set out = [] -%}
+      {%- for n in cg_wg_nodes | default([]) -%}
+        {%- set a = fab_spec.siteUnderlay.addresses | selectattr('node', 'equalto', n.name) | map(attribute='address') | first -%}
+        {%- set _ = out.append({'name': n.name, 'publicKey': n.publicKey, 'address': a}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Hand them to the routers
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+  vars:
+    gcp_helper: shc_gcp_edge.py
+    gcp_config: "{{ gcp_edge_cfg }}"
+    gcp_args: [gateways, --gateways, "{{ cg_gcp_gateways | to_json }}"]
+    gcp_env: {SHC_EDGE_BGP_PASSWORD: "{{ cg_bgp_password | default('') }}"}
+    gcp_no_log: true
+
+- name: Note whether the routers' configuration changed
+  ansible.builtin.set_fact:
+    cg_site_changed: "{{ cg_site_changed | bool or gcp_result.changed | default([]) | length > 0 }}"
+    cg_gcp_recheck: "{{ gcp_result.changed | default([]) | length > 0 }}"

@@ -6,6 +6,7 @@
 # 1. a provider-edge index from the fabric ledger (loopback, core link address, node SID);
 # 2. the site side: OpenShift = the VTEP named after the fabric; OpenStack = the platform project; external = none;
 #    aws = the platform's edge routers (site_aws.yml; their keys handed over after the nodes, site_aws_post.yml);
+#    gcp = the same on Google Cloud (site_gcp.yml, site_gcp_post.yml; design/P11-GCP-PLAN.md §3.3);
 # 3. under the fabric's lease, one border gateway node at a time: network namespace gw-<name> with the site's
 #    underlay (transport none: the VLAN; wireguard: a tunnel to the remote site's peers, the node's key generated
 #    and kept on the node) and a core leg, and its FRR instance (site route reflector over the site subnet, client of
@@ -300,6 +301,10 @@
       ansible.builtin.include_tasks: site_aws_post.yml
       when: ci_type == 'aws'
 
+    - name: Give the platform-run edge the nodes' keys and the site key (gcp)
+      ansible.builtin.include_tasks: site_gcp_post.yml
+      when: ci_type == 'gcp'
+
     - name: Report the gateway ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -326,7 +331,7 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         nudge_crs: [{kind: CloudGateway, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
-      when: ci_type == 'aws' and cg_aws_recheck | default(false) | bool
+      when: (ci_type == 'aws' and cg_aws_recheck | default(false) | bool) or (ci_type == 'gcp' and cg_gcp_recheck | default(false) | bool)
 
     # the placements this run added or removed wait for it (pending / deletion): wake them
     - name: Wake the placements whose VRF changed

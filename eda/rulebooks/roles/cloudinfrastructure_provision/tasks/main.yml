@@ -9,6 +9,7 @@
 #   type openshift : OpenShift Virtualization Available; capabilities.evpn = CNO FRR provider +
 #                    routeAdvertisements Enabled + fabric BGP sessions Established (read only).
 #   type aws       : ensures the hub's network in the region (design/P8-PLAN.md §11); evpn through the platform's edge.
+#   type gcp       : ensures the hub project's edge network in the region (design/P11-GCP-PLAN.md §3.3); same shape.
 #   type external  : nothing to probe (the platform doesn't manage the site); capabilities.evpn = spec.external.evpn.
 - block:
     - name: Parse event payload
@@ -48,14 +49,14 @@
     - name: Set the unsupported-type failure reason
       ansible.builtin.set_fact:
         cloudinfrastructure_fail_reason: TypeNotSupported
-      when: ci_cr_type not in ['openstack', 'openshift', 'external', 'aws']
+      when: ci_cr_type not in ['openstack', 'openshift', 'external', 'aws', 'gcp']
 
     - name: Refuse types without a probe
       ansible.builtin.fail:
         msg: >-
           CloudInfrastructure {{ cloudinfrastructure_cr_name }}: type {{ ci_cr_type }} is not supported yet
-          (openstack, openshift, external and aws sites are).
-      when: ci_cr_type not in ['openstack', 'openshift', 'external', 'aws']
+          (openstack, openshift, external, aws and gcp sites are).
+      when: ci_cr_type not in ['openstack', 'openshift', 'external', 'aws', 'gcp']
 
     - name: Set the credentials-missing failure reason
       ansible.builtin.set_fact:
@@ -85,6 +86,10 @@
     - name: Realize an aws site
       ansible.builtin.include_tasks: aws.yml
       when: ci_cr_type == 'aws'
+
+    - name: Realize a gcp site
+      ansible.builtin.include_tasks: gcp.yml
+      when: ci_cr_type == 'gcp'
 
     - name: Get timestamp
       ansible.builtin.set_fact:

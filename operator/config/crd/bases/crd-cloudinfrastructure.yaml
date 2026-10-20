@@ -46,13 +46,15 @@ spec:
                   message: spec.openshift must be set if and only if spec.type is openshift
                 - rule: has(self.aws) == (self.type == 'aws')
                   message: spec.aws must be set if and only if spec.type is aws
+                - rule: has(self.gcp) == (self.type == 'gcp')
+                  message: spec.gcp must be set if and only if spec.type is gcp
                 - rule: has(self.external) == (self.type == 'external')
                   message: spec.external must be set if and only if spec.type is external
               properties:
                 type:
                   type: string
                   description: Cloud type. Selects the typed section below. Immutable.
-                  enum: [openstack, openshift, aws, external]
+                  enum: [openstack, openshift, aws, gcp, external]
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.type is immutable
@@ -218,6 +220,26 @@ spec:
                       minLength: 1
                       maxLength: 32
                       description: AWS region, e.g. us-east-2.
+                gcp:
+                  type: object
+                  description: >-
+                    A Google Cloud region the platform reaches with its own workload identity (no stored keys).
+                    Tenant environments (CloudGCP) live in projects the platform enters, and the site's CloudGateway
+                    runs the edge that joins the region to the fabric. Required when type is gcp.
+                  required: [region]
+                  properties:
+                    region:
+                      type: string
+                      minLength: 1
+                      maxLength: 32
+                      description: Google Cloud region, e.g. us-east4.
+                    attachment:
+                      type: string
+                      enum: [vpn, interconnect]
+                      default: vpn
+                      description: >-
+                        How tenant networks in this region attach to the fabric. vpn: HA VPN with BGP from each
+                        placement's VPC. interconnect: Cloud Interconnect VLAN attachments (not available yet).
             status:
               type: object
               properties:
