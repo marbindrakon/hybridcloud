@@ -26,9 +26,10 @@ spec:
             The platform allocates a VLAN and a link subnet on the bearer, peers with the CE from every node of the
             edge, and exchanges routes with it inside the network: routes the CE sends that match spec.routing.accept
             reach the network's placements, and the network's placement prefixes are advertised to the CE.
-            status.ceConfig lists what the CE needs. Routes that overlap the network's placements or platform
-            ranges are never accepted; a default route from the CE is accepted only while the network has no
-            provider internet egress.
+            status.ceConfig lists what the CE needs. Routes inside the network's address space (HybridNetwork
+            spec.prefixes) or the platform's ranges are never accepted, and an accept entry inside the address
+            space is refused; a default route from the CE is accepted only while the network has no provider
+            internet egress.
           type: object
           required:
             - spec

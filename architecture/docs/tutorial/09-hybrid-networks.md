@@ -1,10 +1,11 @@
 # Hybrid networks: one private network across cloud sites
 
-A **HybridNetwork** is a tenant's routed private network that spans cloud sites. Each **NetworkPlacement** puts
-the network on one cloud environment, either a VM environment (**CloudVirt**) on an OpenShift Virtualization site
-or an OpenStack project (**CloudOSO**), with one or more prefixes. Every placement's subnets reach every other
-placement's subnets of the same network, and nothing else. Two tenants can use the same prefixes, even the same
-addresses, without seeing each other.
+A **HybridNetwork** is a tenant's routed private network that spans cloud sites, with its own address space.
+Each **NetworkPlacement** puts the network on one cloud environment: a VM environment (**CloudVirt**) on an
+OpenShift Virtualization site, an OpenStack project (**CloudOSO**) or an AWS account (**CloudAWS**). The platform
+gives each placement a subnet from the network's address space, of the size the tenant asks for (or a pinned
+prefix). Every placement's subnets reach every other placement's subnets of the same network, and nothing else.
+Two tenants can use the same prefixes, even the same addresses, without seeing each other.
 
 The platform team runs the fabric underneath (**HybridFabric**, one **CloudGateway** per site). Tenants never
 touch it.
@@ -16,8 +17,8 @@ touch it.
 | `HybridFabric` | platform (`sovereign-cloud`) | platform | ASN, overlay MTU, VNI pools, border gateway nodes and credentials |
 | `CloudGateway` | platform | platform | attaches one site (a `CloudInfrastructure` with `evpn: true`) to the fabric |
 | `CloudVirt` | entity | tenant | VM environment on an OpenShift site; its namespaces |
-| `HybridNetwork` | entity | tenant | the network: name, MTU (default and maximum: the fabric's `overlayMtu`) |
-| `NetworkPlacement` | entity | tenant | network × environment × prefixes |
+| `HybridNetwork` | entity | tenant | the network: address space, MTU (default and maximum: the fabric's `overlayMtu`) |
+| `NetworkPlacement` | entity | tenant | network × environment × subnet size (or pinned prefix) |
 
 ## Tenant walk-through
 
@@ -26,9 +27,19 @@ touch it.
    apiVersion: hybridsovereign.redhat/v1alpha1
    kind: HybridNetwork
    metadata: {name: core, namespace: entity-acme-corp}
-   spec: {description: shared services network}
+   spec:
+     description: shared services network
+     prefixes: [10.110.0.0/16, "fd12:3456:789a::/48"]
    ```
-   It becomes `ready` once the fabric is ready (`status.fabric`, `status.mtu`).
+   - `prefixes` is the network's address space: 1–8 prefixes in canonical form (host bits zero), at least one
+     IPv4, not overlapping each other. IPv4 /8–/29, IPv6 /32–/64.
+   - The platform refuses a space that overlaps its own ranges (`PrefixReserved`).
+   - Prefixes can be added at any time. A change that would leave a placement's subnet outside the space is refused
+     and names the placements (`PrefixInUse`; the space stays as it was). Removing an unused prefix, or growing one
+     in place (a /16 replaced by the /15 that holds it), works.
+   - It becomes `ready` once the fabric is ready (`status.fabric`, `status.mtu`). `status.addressSpace` shows each
+     prefix with its placement subnets (`allocations`) and the largest free block (`largestFree`, a prefix
+     length).
 
 2. **A VM environment** whose namespace `vms` uses the network:
    ```yaml
@@ -54,7 +65,7 @@ touch it.
    spec:
      network: core
      backend: {kind: CloudVirt, name: virt1}
-     prefixes: [10.110.1.0/24]
+     ipv4: {prefixLength: 24}
    ---
    apiVersion: hybridsovereign.redhat/v1alpha1
    kind: NetworkPlacement
@@ -62,10 +73,20 @@ touch it.
    spec:
      network: core
      backend: {kind: CloudOSO, name: oso1}
-     prefixes: [10.110.2.0/24]
+     ipv4: {prefix: 10.110.200.0/24}
    ```
-   - `network`, `backend` and `prefixes` are immutable.
-   - Prefixes must not overlap each other, the network's other placements, or the site's own networks.
+   - `ipv4` is a size (`prefixLength`, /16–/29; on a CloudAWS /16–/24), or a pinned `prefix` inside the
+     network's space, or both when they agree. The subnet is in `status.prefixes`. Its first usable address is the
+     gateway.
+   - A size gets the lowest free block of the network's IPv4 prefixes, stepping around the network's other
+     placements and the site's own ranges (on an OpenShift site its cluster and service networks, and OVN-Kubernetes'
+     internal subnets). With no room the placement waits (`WaitingForAddressSpace`) until a prefix is added or a
+     placement goes away.
+   - A pinned prefix is never replaced: outside the space, or on one of the site's ranges, it is refused
+     (`PrefixInvalid`); held by another placement, the placement waits until it is free.
+   - `ipv6` (optional, /64) is accepted, but where the platform doesn't offer IPv6 for the backend the placement
+     fails with `FamilyUnavailable`, before anything is allocated.
+   - `network`, `backend`, `ipv4` and `ipv6` are immutable. To resize, create a new placement.
    - On OpenStack the placement's network appears in the tenant's project as a **shared network**. Attach VMs to
      it; its router and subnets belong to the platform.
 
@@ -135,10 +156,11 @@ groups to what they may do in the entity namespace.
 Tenants:
 - **IaaS Networking → Network Overview:** the entity's networks against its environments. A cell is one
   NetworkPlacement (state and prefixes); each network shows its MTU and internet egress (state and source addresses).
-- **Hybrid Networks:** create and edit (description, MTU, internet egress, viewer RBAC); the detail page shows the
-  effective MTU, placements ready, egress and the informational realization.
-- **Network Placements:** create (network, environment, prefixes); read-only afterwards, since all three fields are
-  immutable.
+- **Hybrid Networks:** create and edit (address space, description, MTU, internet egress, viewer RBAC); the detail
+  page shows the address space in use, the effective MTU, placements ready, egress and the informational
+  realization.
+- **Network Placements:** create (network, environment, subnet size or pinned prefix); read-only afterwards, since
+  those fields are immutable.
 - **IaaS Platform → OpenShift Virt:** environments with their site, VM namespaces (network, ready), quota, DNS zone and
   API endpoint. Where the site list isn't readable, type the site's name as given by the platform team.
 - Platform objects aren't shown to tenants; the console hides the admin sections.
@@ -157,9 +179,9 @@ Platform team (Admin Networks):
 | `status.status` | Meaning |
 |---|---|
 | `reconciling` | a job is running |
-| `pending` | waiting for something; `status.waitingFor` says what, and the job is retried on the CR's period. Common reasons: `WaitingForDependencies` (network, backend or gateway not usable yet), `WaitingForGateway` (the site's gateway is adding the network), `RoutesMissing` (the site hasn't advertised the placement's prefixes yet), `SiteNotEvpnCapable` |
+| `pending` | waiting for something; `status.waitingFor` says what, and the job is retried on the CR's period. Common reasons: `WaitingForDependencies` (network, backend or gateway not usable yet), `WaitingForAddressSpace` (no room in the network's space, or a pinned prefix held by another placement), `WaitingForGateway` (the site's gateway is adding the network), `RoutesMissing` (the site hasn't advertised the placement's prefixes yet), `SiteNotEvpnCapable` |
 | `ready` | realized; `status.realization` shows how (informational) |
-| `failed` | the spec can't be realized as written; the condition's reason says why (`PrefixOverlap`, `FabricMismatch`, `EntityNotAllowed`, `NamespaceTaken`, `EnvironmentNameTaken`, …) |
+| `failed` | the spec can't be realized as written; the condition's reason says why (`PrefixReserved`, `PrefixInUse`, `PrefixInvalid`, `FamilyUnavailable`, `FabricMismatch`, `EntityNotAllowed`, `NamespaceTaken`, `EnvironmentNameTaken`, …) |
 
 A dependency counts as usable when it is ready, or realized before (`status.realized`) and not failed. A
 network or gateway that is re-running doesn't stop its placements.
@@ -171,7 +193,8 @@ Deletes wait for what depends on the object (`status.deletionBlockedBy`):
 - a **CloudVirt** waits for the **VirtualMachines** in its namespaces (delete them first);
 - a **NetworkPlacement** on a CloudVirt waits while the environment still has a namespace naming its network;
   on a CloudOSO it waits for the tenant's **ports** on the network (delete those VMs first);
-- a **HybridNetwork** waits for its placements and for CloudVirt namespaces naming it;
+- a **HybridNetwork** waits for its placements and for CloudVirt namespaces naming it; its address space goes with
+  it;
 - **CloudGateway** and **HybridFabric** (platform) wait for the placements and networks that use them.
 
 Deleting everything at once works: the guards order it.
@@ -179,9 +202,13 @@ Deleting everything at once works: the guards order it.
 ## Platform operations
 
 - **Realization parameters** (how this platform builds the fabric) live in the EDA vars
-  `common/vars/fabric_realization.yml` and the installation's `FABRIC_REALIZATION`, not in the CRs.
+  `common/vars/fabric_realization.yml` and the installation's `FABRIC_REALIZATION`, not in the CRs. Among them:
+  `ipam.provider` (where address spaces and placement subnets are kept; `ledger`, the fabric's ledger, is the only
+  one so far), `placement.ipFamilies` (families offered per backend kind) and `placement.siteReserved` (site ranges
+  the allocator steps around, per backend kind).
 - **`fabric-orphan-check`** (AAP job template, report only) compares what the fabric jobs realized with the CRs:
-  - ledger entries without owners;
+  - ledger entries without owners, including address spaces and placement subnets (the IPAM), and placements
+    whose subnets the IPAM doesn't hold for them;
   - networks, advertisements and CloudVirt namespaces on the sites with the platform's labels;
   - networks and routers in the OpenStack platform project;
   - gateway namespaces and VRFs on the border gateway nodes.

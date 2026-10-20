@@ -43,7 +43,10 @@
       ansible.builtin.set_fact:
         np_spec: "{{ np_cr_lookup.resources[0].spec | default({}) }}"
         np_entity: "{{ networkplacement_cr_namespace | regex_replace('^entity-', '') | regex_replace('^sovereign-', '') }}"
-        np_prefixes: "{{ (np_cr_lookup.resources[0].spec.prefixes | default([])) }}"
+        # the stub allocates nothing: only pinned prefixes are reported
+        np_prefixes: >-
+          {{ [(np_cr_lookup.resources[0].spec.ipv4 | default({})).prefix | default(''),
+              (np_cr_lookup.resources[0].spec.ipv6 | default({})).prefix | default('')] | select | list }}
         np_target_backend: >-
           {{
             'aws' if (np_cr_lookup.resources[0].spec.backend.kind | default('')) == 'CloudAWS'
@@ -102,7 +105,7 @@
           fabricApplied: true
           backendApplied: true
           validated: true
-          realizedPrefixes: "{{ np_prefixes }}"
+          prefixes: "{{ np_prefixes }}"
           conditions:
             - type: Ready
               status: "True"

@@ -4008,9 +4008,13 @@ spec:
         openAPIV3Schema:
           description: >-
             A tenant's routed private network across cloud sites: one isolated routing domain (VRF) on the
-            platform's HybridFabric. NetworkPlacements put it on cloud environments (CloudOSO, CloudVirt); every
-            placement's subnets can reach every other placement's subnets of the same network, and nothing else.
+            platform's HybridFabric. NetworkPlacements put it on cloud environments (CloudOSO, CloudVirt,
+            CloudAWS); every placement's subnets can reach every other placement's subnets of the same network,
+            and nothing else. The network's address space (spec.prefixes) is the tenant's: the platform allocates
+            each placement's subnets from it. Networks may use the same addresses as other networks.
           type: object
+          required:
+            - spec
           properties:
             apiVersion:
               type: string
@@ -4063,6 +4067,38 @@ spec:
                         addresses (status.egress.sourceAddresses). Connections can only be opened from inside the
                         network, and the platform's private address ranges are not reachable this way. Leave it off
                         when the network's default route comes from your own edge router. Can be changed at any time.
+                prefixes:
+                  type: array
+                  description: >-
+                    The network's address space, IPv4 and IPv6 prefixes the platform allocates the placements'
+                    subnets from (NetworkPlacement spec.ipv4 and spec.ipv6). At least one IPv4 prefix. Prefixes
+                    are in canonical form (host bits zero, e.g. 10.60.0.0/16 or fd12:3456:789a::/48), must not
+                    overlap each other, and must stay clear of the platform's own ranges. Prefixes can be added at
+                    any time; a change that would leave a placement's subnet outside the space is refused, as is a
+                    prefix holding a route an AttachmentCircuit of the network accepts from its CE.
+                  minItems: 1
+                  maxItems: 8
+                  x-kubernetes-list-type: set
+                  x-kubernetes-validations:
+                    - rule: self.exists(p, isCIDR(p) && cidr(p).ip().family() == 4)
+                      message: at least one prefix must be IPv4
+                    - rule: >-
+                        self.all(a, self.all(b, a == b || !isCIDR(a) || !isCIDR(b)
+                        || cidr(a).ip().family() != cidr(b).ip().family()
+                        || !(cidr(a).containsCIDR(cidr(b)) || cidr(b).containsCIDR(cidr(a)))))
+                      message: prefixes must not overlap
+                  items:
+                    type: string
+                    maxLength: 43
+                    x-kubernetes-validations:
+                      - rule: isCIDR(self) && string(cidr(self).masked()) == self
+                        message: each prefix must be a network prefix in canonical form (host bits zero, e.g. 10.60.0.0/16)
+                      - rule: >-
+                          !isCIDR(self) || (cidr(self).ip().family() == 4
+                          ? cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 29
+                          : cidr(self).prefixLength() >= 32 && cidr(self).prefixLength() <= 64)
+                        message: prefix length must be /8 to /29 for IPv4 and /32 to /64 for IPv6
+              required: [prefixes]
               x-kubernetes-validations:
                 - rule: has(self.fabricRef) || !has(oldSelf.fabricRef)
                   message: spec.fabricRef cannot be removed
@@ -4099,6 +4135,27 @@ spec:
                   type: integer
                 placementsReady:
                   type: integer
+                addressSpace:
+                  type: array
+                  description: >-
+                    The network's address space as the platform holds it, per prefix: its family, how many
+                    placement subnets it holds, and the largest block still free.
+                  items:
+                    type: object
+                    properties:
+                      prefix:
+                        type: string
+                      family:
+                        type: integer
+                        description: 4 or 6.
+                      allocations:
+                        type: integer
+                        description: Placement subnets inside the prefix.
+                      largestFree:
+                        type: integer
+                        description: >-
+                          Prefix length of the largest free block (a site's own ranges are not counted); absent
+                          when the prefix is full.
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
@@ -4203,9 +4260,11 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            Places a HybridNetwork on one cloud environment of the same Entity: a CloudOSO (an OpenStack project)
-            or a CloudVirt (OpenShift Virtualization). The platform creates the network there with the given
-            subnets and connects it, through the site's CloudGateway, to the network's other placements. On a
+            Places a HybridNetwork on one cloud environment of the same Entity: a CloudOSO (an OpenStack project),
+            a CloudVirt (OpenShift Virtualization) or a CloudAWS (a VPC in the environment's account). The
+            platform allocates the placement's subnets from the network's address space (one per address family,
+            of the requested size or pinned), creates the network there with them and connects it, through the
+            site's CloudGateway, to the network's other placements. On a
             CloudVirt, the network serves every namespace of the environment that names it (CloudVirt
             spec.namespaces). The environment's site must offer EVPN and have a CloudGateway. A CloudVirt placement
             is deleted only after no namespace of the environment names the network.
@@ -4221,7 +4280,14 @@ spec:
               type: object
             spec:
               type: object
-              required: [network, backend, prefixes]
+              required: [network, backend, ipv4]
+              x-kubernetes-validations:
+                - rule: >-
+                    self.backend.kind != 'CloudAWS' || (has(self.ipv4.prefixLength) ? self.ipv4.prefixLength <= 24
+                    : (!isCIDR(self.ipv4.prefix) || cidr(self.ipv4.prefix).prefixLength() <= 24))
+                  message: the IPv4 subnet of a CloudAWS placement must be /16 to /24
+                - rule: has(self.ipv6) == has(oldSelf.ipv6)
+                  message: spec.ipv6 cannot be added or removed
               properties:
                 network:
                   type: string
@@ -4246,25 +4312,61 @@ spec:
                       type: string
                       minLength: 1
                       maxLength: 253
-                prefixes:
-                  type: array
+                ipv4:
+                  type: object
                   description: >-
-                    IPv4 subnets of the network at this placement. They must not overlap the network's other
-                    placements or the site's own networks. The first usable address of each is the gateway.
-                    Immutable.
-                  minItems: 1
-                  maxItems: 16
+                    The placement's IPv4 subnet: a size (prefixLength) the platform allocates from the network's
+                    IPv4 prefixes, or a pinned prefix inside them (prefix), or both when they agree. A pinned prefix
+                    is never replaced by another: one outside the network's space or clashing with the site's own
+                    networks is refused, and one held by another placement waits until it is free. Without room the
+                    placement waits until the network grows or a placement goes away. The first usable address is
+                    the gateway. Immutable.
                   x-kubernetes-validations:
                     - rule: self == oldSelf
-                      message: spec.prefixes is immutable
-                  items:
-                    type: string
-                    maxLength: 43
-                    x-kubernetes-validations:
-                      - rule: isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked()
-                        message: each prefix must be an IPv4 network prefix (host bits zero)
-                      - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 29)"
-                        message: prefix length must be between 8 and 29
+                      message: spec.ipv4 is immutable
+                    - rule: has(self.prefixLength) || has(self.prefix)
+                      message: spec.ipv4 needs prefixLength or prefix
+                    - rule: >-
+                        !has(self.prefix) || !has(self.prefixLength) || !isCIDR(self.prefix)
+                        || cidr(self.prefix).prefixLength() == self.prefixLength
+                      message: spec.ipv4.prefix must be as long as spec.ipv4.prefixLength
+                  properties:
+                    prefixLength:
+                      type: integer
+                      minimum: 16
+                      maximum: 29
+                    prefix:
+                      type: string
+                      maxLength: 18
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && string(cidr(self).masked()) == self
+                          message: spec.ipv4.prefix must be an IPv4 network prefix in canonical form (host bits zero)
+                        - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 16 && cidr(self).prefixLength() <= 29)"
+                          message: spec.ipv4.prefix must be /16 to /29
+                ipv6:
+                  type: object
+                  description: >-
+                    The placement's IPv6 subnet (optional), from the network's IPv6 prefixes, by size or pinned as
+                    for ipv4. Refused (FamilyUnavailable) where the platform does not offer IPv6 for the backend.
+                    Immutable.
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.ipv6 is immutable
+                    - rule: has(self.prefixLength) || has(self.prefix)
+                      message: spec.ipv6 needs prefixLength or prefix
+                  properties:
+                    prefixLength:
+                      type: integer
+                      minimum: 64
+                      maximum: 64
+                    prefix:
+                      type: string
+                      maxLength: 43
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 6 && string(cidr(self).masked()) == self
+                          message: spec.ipv6.prefix must be an IPv6 network prefix in canonical form (host bits zero)
+                        - rule: "!isCIDR(self) || cidr(self).prefixLength() == 64"
+                          message: spec.ipv6.prefix must be a /64
             status:
               type: object
               properties:
@@ -4289,8 +4391,9 @@ spec:
                 mtu:
                   type: integer
                   description: Effective MTU at this placement.
-                realizedPrefixes:
+                prefixes:
                   type: array
+                  description: The subnets allocated to the placement, IPv4 first. Fixed for the placement's life.
                   items:
                     type: string
                 namespaces:
@@ -4380,6 +4483,9 @@ spec:
         - name: Site
           type: string
           jsonPath: .status.site
+        - name: Prefix
+          type: string
+          jsonPath: .status.prefixes[0]
         - name: Status
           type: string
           jsonPath: .status.status
@@ -5343,9 +5449,10 @@ spec:
             The platform allocates a VLAN and a link subnet on the bearer, peers with the CE from every node of the
             edge, and exchanges routes with it inside the network: routes the CE sends that match spec.routing.accept
             reach the network's placements, and the network's placement prefixes are advertised to the CE.
-            status.ceConfig lists what the CE needs. Routes that overlap the network's placements or platform
-            ranges are never accepted; a default route from the CE is accepted only while the network has no
-            provider internet egress.
+            status.ceConfig lists what the CE needs. Routes inside the network's address space (HybridNetwork
+            spec.prefixes) or the platform's ranges are never accepted, and an accept entry inside the address
+            space is refused; a default route from the CE is accepted only while the network has no provider
+            internet egress.
           type: object
           required:
             - spec
