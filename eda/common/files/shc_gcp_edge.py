@@ -222,7 +222,7 @@ class Edge:
                     "labels": {"shc-managed": "true", "shc-edge-site": self.site},
                     "disks": [{"boot": True, "autoDelete": True, "initializeParams": {
                         "sourceImage": "projects/%s/global/images/family/%s" % (c["image"]["project"], c["image"]["family"]),
-                        "diskSizeGb": "10", "diskType": "zones/%s/diskTypes/pd-balanced" % zone}}],
+                        "diskSizeGb": "20", "diskType": "zones/%s/diskTypes/pd-balanced" % zone}}],
                     "networkInterfaces": [{"subnetwork": subnet["selfLink"], "networkIP": fixed,
                                            "accessConfigs": [{"type": "ONE_TO_ONE_NAT", "name": "External NAT",
                                                               "natIP": addr["address"]}]}],
@@ -314,6 +314,17 @@ class Edge:
         if conf is None or not conf.get("nodes"):
             fail("site %s is not up" % self.site)
         tunnels = json.loads(os.environ.get("SHC_EDGE_VPN_TUNNELS") or "{}")
+        # a tunnel the tenant side didn't mint again (psk null) keeps the secret the config already holds
+        old = {}
+        for v in conf.get("vrfs", []):
+            if v["vni"] == vni:
+                old = {k: {t["peerIp"]: t.get("psk") for t in ts} for k, ts in v.get("vpn", {}).items()}
+        for k, ts in tunnels.items():
+            for t in ts:
+                if not t.get("psk"):
+                    t["psk"] = old.get(k, {}).get(t["peerIp"])
+                if not t.get("psk"):
+                    fail("tunnel %s -> %s has no shared secret (not minted, none known)" % (k, t["peerIp"]))
         vrf = {"name": "t%d" % vni, "vni": vni, "mtu": int(self.cfg["overlayMtu"]),
                "peerAsn": int((self.cfg.get("vpn") or {}).get("cloudRouterAsn", 65020)),
                "vpn": {k: v for k, v in tunnels.items() if k in conf["nodes"]}}

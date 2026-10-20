@@ -225,6 +225,29 @@ eda_rulebook_activations:
     eda_credentials:
       - sovereign-aap-controller-credential
       - sovereign-kafka-consumer-credential
+  # shc (design/P11-GCP-PLAN.md §3.5): CloudGCP events (the cloudaws decision environment: only the Kafka source)
+  - name: cloudgcp-create-activation
+    description: Rulebook activation for cloudgcp-create
+    project: sovereign-eda-rulebooks
+    rulebook: cloudgcp-create.yml
+    decision_environment: de-cloudaws
+    organization: Default
+    restart_policy: on-failure
+    enabled: true
+    eda_credentials:
+      - sovereign-aap-controller-credential
+      - sovereign-kafka-consumer-credential
+  - name: cloudgcp-delete-activation
+    description: Rulebook activation for cloudgcp-delete
+    project: sovereign-eda-rulebooks
+    rulebook: cloudgcp-delete.yml
+    decision_environment: de-cloudaws
+    organization: Default
+    restart_policy: on-failure
+    enabled: true
+    eda_credentials:
+      - sovereign-aap-controller-credential
+      - sovereign-kafka-consumer-credential
   - name: persona-create-activation
     description: Rulebook activation for persona-create
     project: sovereign-eda-rulebooks

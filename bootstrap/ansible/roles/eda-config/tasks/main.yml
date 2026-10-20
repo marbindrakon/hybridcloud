@@ -41,6 +41,11 @@
         rulebooks:
           - { name: "cloudaws-create", file: "cloudaws-create.yml" }
           - { name: "cloudaws-delete", file: "cloudaws-delete.yml" }
+      - name: cloudgcp
+        de_image: "{{ de_registry }}/de-cloudaws:{{ de_tags['cloudaws'] }}"
+        rulebooks:
+          - { name: "cloudgcp-create", file: "cloudgcp-create.yml" }
+          - { name: "cloudgcp-delete", file: "cloudgcp-delete.yml" }
       - name: persona
         de_image: "{{ de_registry }}/de-persona:{{ de_tags['persona'] }}"
         rulebooks:

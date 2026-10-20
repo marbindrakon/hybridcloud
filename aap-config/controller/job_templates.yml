@@ -113,6 +113,27 @@ controller_templates:
     instance_groups: "{{ shc_cloud_job_instance_groups }}"
     credentials:
       - sovereign-vault-admin-credential
+  # shc (design/P11-GCP-PLAN.md §3.5): Google Cloud environments (the platform's cloud identity)
+  - name: cloudgcp-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudgcp-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: cloudgcp-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudgcp-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    instance_groups: "{{ shc_cloud_job_instance_groups }}"
+    credentials:
+      - sovereign-vault-admin-credential
   - name: cloudoso-provision
     organization: sovereign
     project: sovereign-eda-project

@@ -1,0 +1,5 @@
+---
+cloudgcp_operator_namespace: sovereign-cloud
+
+eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
+fabric_platform_namespace: sovereign-cloud

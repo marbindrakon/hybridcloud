@@ -128,9 +128,11 @@ def frr_conf(cfg, me, node):
     return "\n".join(out) + "\n"
 
 
-def ipsec_conf(cfg, me, node, local_ip):
+def ipsec_conf(cfg, me, node, local_ip, gateway):
     """Libreswan: one route-based (XFRM interface) IKEv2 tunnel per HA VPN gateway interface, PSK. Google Cloud
-    sees the router at its external address (one-to-one NAT), so the router identifies itself by it."""
+    sees the router at its external address (one-to-one NAT), so the router identifies itself by it. leftnexthop is
+    the subnet gateway: Libreswan routes the encrypted packets through its table 50, and on GCE (a /32 on eth0) a
+    link-scope host route to the peer never resolves ARP, so nothing leaves (P11 spike, 10-20)."""
     ext = node.get("externalIp", "")
     conns, secrets = [], []
     for v in cfg.get("vrfs", []):
@@ -138,7 +140,7 @@ def ipsec_conf(cfg, me, node, local_ip):
             name = "shc-%d-%d" % (v["vni"], t["ifId"])
             conns += ["conn %s" % name,
                       "    type=tunnel", "    authby=secret", "    ikev2=insist",
-                      "    left=%s" % local_ip, "    leftid=%s" % ext,
+                      "    left=%s" % local_ip, "    leftid=%s" % ext, "    leftnexthop=%s" % gateway,
                       "    right=%s" % t["peerIp"], "    rightid=%s" % t["peerIp"],
                       "    leftsubnet=0.0.0.0/0", "    rightsubnet=0.0.0.0/0",
                       # Google's recommended AEAD set: AES-GCM-16-256, PRF SHA2-512, DH group 20 (ECP-384), PFS
@@ -169,6 +171,7 @@ def apply(cfg, me):
     t = cfg["tunnel"]
     plen = ipaddress.ip_network(t["cidr"]).prefixlen
     eth = sh("ip -o route show default | awk '{print $5; exit}'").strip()
+    gateway = sh("ip -o route show default | awk '{print $3; exit}'").strip()
     local_ip = sh("ip -4 -o addr show dev %s | awk '{print $4; exit}'" % eth).strip().split("/")[0]
     # WireGuard: the gateways dial in (no endpoints here); the site's other routers are dialled over the VPC
     if not link_exists("wg0"):
@@ -196,7 +199,7 @@ def apply(cfg, me):
                 if link_exists(dev):
                     sh(["ip", "link", "del", dev])
     # Libreswan first (it creates the XFRM interfaces), then the VRF membership
-    conf, secrets = ipsec_conf(cfg, me, node, local_ip)
+    conf, secrets = ipsec_conf(cfg, me, node, local_ip, gateway)
     changed = write_if_changed(IPSEC_CONF, conf + "\n")
     changed |= write_if_changed(IPSEC_SECRETS, secrets, mode=0o600)
     if subprocess.run(["systemctl", "is-active", "--quiet", "ipsec"]).returncode != 0:
@@ -213,6 +216,9 @@ def apply(cfg, me):
         wanted = {"shc-%d-%d" % (v["vni"], tn["ifId"]) for v in cfg.get("vrfs", []) for tn in v.get("vpn", {}).get(me, [])}
         for name in set(listed) - wanted:
             sh(["ipsec", "auto", "--delete", name], check=False)
+    for v in cfg.get("vrfs", []):
+        for tn in v.get("vpn", {}).get(me, []):
+            sh(["ip", "route", "replace", tn["peerIp"], "via", gateway, "dev", eth, "table", "50"], check=False)
     for v in cfg.get("vrfs", []):
         n, vrf = str(v["vni"]), v["name"]
         if not link_exists(vrf):

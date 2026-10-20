@@ -331,6 +331,24 @@ controller_templates:
     ask_variables_on_launch: true
     credentials:
       - sovereign-vault-admin-credential
+  - name: cloudgcp-provision
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudgcp-provision-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
+  - name: cloudgcp-teardown
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/cloudgcp-teardown-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    ask_variables_on_launch: true
+    credentials:
+      - sovereign-vault-admin-credential
   - name: cloudoso-provision
     organization: sovereign
     project: sovereign-eda-project

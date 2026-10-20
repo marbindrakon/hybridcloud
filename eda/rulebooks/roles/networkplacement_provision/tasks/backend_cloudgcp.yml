@@ -1,0 +1,96 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.4, §3.5): the site side of a placement on a CloudGCP. One VPC in the environment's
+# project (shc_gcp_tenant.py place-up): the placement's allocated IPv4 prefix as one regional subnet (MTU 1370, the
+# WireGuard leg's), a Cloud Router and an HA VPN gateway whose two tunnels dial the site's two edge routers (the
+# external VPN gateway), BGP over a /30 link-local per tunnel; then the routers' VRF and XFRM tunnels
+# (shc_gcp_edge.py net-up; the shared secrets travel in a file and the routers' config secret, never on a command
+# line). The routers learn the VPC's prefix from the Cloud Router and advertise it to the gateway as EVPN Type-5
+# (checked by gateway_routes.yml). Egress: fabric (the VPC's default internet route removed; 0/0 learned from the
+# routers) or cloudNat. Sets np_backend_status, np_backend_changed.
+- name: The installation's GCP realization and the site's edge settings
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+  vars:
+    gcp_edge_site: "{{ np_gateway.metadata.name }}"
+    gcp_edge_cidr: "{{ np_gateway.spec.siteUnderlay.cidr }}"
+    gcp_edge_asn: "{{ np_asn }}"
+
+- name: The environment's project and the placement's names
+  ansible.builtin.set_fact:
+    np_gcp_cfg:
+      project: "{{ (np_backend.status | default({}, true)).project | default('') }}"
+      region: "{{ (np_backend.status | default({}, true)).region | default('') }}"
+      labels: {shc-entity: "{{ fab_entity }}", shc-network: "{{ fab_spec.network }}"}
+      vpcMtu: "{{ (gcp_real.placement | default({})).vpcMtu | default(1370) }}"
+      linkLocalPool: "{{ (gcp_real.edge.vpn | default({})).linkLocalPool | default('169.254.0.0/16') }}"
+      cloudRouterAsn: "{{ (gcp_real.edge.vpn | default({})).cloudRouterAsn | default(65020) }}"
+    np_gcp_placement: "{{ (fab_namespace ~ '-' ~ fab_name) | regex_replace('[^a-z0-9-]', '-') | truncate(55, true, '') }}"
+    np_gcp_egress: >-
+      {{ fab_spec.egress | default((gcp_real.placement | default({})).defaultEgress | default('fabric')) }}
+    np_gcp_edge:
+      site: "{{ np_gateway.metadata.name }}"
+      asn: "{{ np_asn }}"
+      routers: "{{ ((np_gateway.status | default({}, true)).site | default({}, true)).routers | default([]) }}"
+
+- name: Refuse an environment without a project yet
+  ansible.builtin.fail:
+    msg: "CloudGCP {{ np_backend_name }} has no project in its status yet"
+  when: np_gcp_cfg.project | length == 0
+
+- name: Refuse a site whose edge has no routers yet
+  ansible.builtin.fail:
+    msg: "CloudGateway {{ np_gateway.metadata.name }} reports no edge routers yet"
+  when: np_gcp_edge.routers | length == 0
+
+- name: A file for the tunnels' shared secrets
+  ansible.builtin.tempfile:
+    state: file
+    suffix: .tunnels
+  register: _np_gcp_tunnels
+
+- name: The placement's VPC and its HA VPN to the site's routers
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+  vars:
+    gcp_helper: shc_gcp_tenant.py
+    gcp_config: "{{ np_gcp_cfg }}"
+    gcp_args: >-
+      {{ ['place-up', '--placement', np_gcp_placement, '--vni', np_l3vni | string, '--prefixes', np_prefixes_v4 | to_json,
+          '--edge', np_gcp_edge | to_json, '--egress', np_gcp_egress] }}
+    gcp_env: {SHC_EDGE_VPN_TUNNELS_FILE: "{{ _np_gcp_tunnels.path }}"}
+
+- name: Keep the cloud side
+  ansible.builtin.set_fact:
+    np_gcp_place: "{{ gcp_result.result }}"
+    np_gcp_changed: "{{ gcp_result.changed | default([]) | length > 0 }}"
+
+- name: Read the tunnels (shared secrets inside)
+  ansible.builtin.slurp:
+    src: "{{ _np_gcp_tunnels.path }}"
+  register: _np_gcp_tunnels_data
+  no_log: true
+
+- name: The routers' VRF and tunnels for this network
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+  vars:
+    gcp_helper: shc_gcp_edge.py
+    gcp_config: "{{ gcp_edge_cfg }}"
+    gcp_args: [net-up, --vni, "{{ np_l3vni | string }}"]
+    gcp_env: {SHC_EDGE_VPN_TUNNELS: "{{ _np_gcp_tunnels_data.content | b64decode }}"}
+    gcp_no_log: true
+
+- name: Forget the secrets file
+  ansible.builtin.file:
+    path: "{{ _np_gcp_tunnels.path }}"
+    state: absent
+
+- name: Record the site side
+  ansible.builtin.set_fact:
+    np_backend_status:
+      project: "{{ np_gcp_cfg.project }}"
+      region: "{{ np_gcp_cfg.region }}"
+      vpc: "{{ np_gcp_place.vpc }}"
+      subnet: "{{ np_gcp_place.subnet }}"
+      haVpnGateway: "{{ np_gcp_place.haVpnGateway.name }}"
+      haVpnInterfaces: "{{ np_gcp_place.haVpnGateway.interfaces }}"
+      externalGateway: "{{ np_gcp_place.externalGateway }}"
+      egress: "{{ np_gcp_egress }}"
+    np_backend_changed: "{{ np_gcp_changed | bool or gcp_result.changed | default([]) | length > 0 }}"

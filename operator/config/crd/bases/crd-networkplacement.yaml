@@ -23,7 +23,7 @@ spec:
         openAPIV3Schema:
           description: >-
             Places a HybridNetwork on one cloud environment of the same Entity: a CloudOSO (an OpenStack project),
-            a CloudVirt (OpenShift Virtualization) or a CloudAWS (a VPC in the environment's account). The
+            a CloudVirt (OpenShift Virtualization), a CloudAWS (a VPC in the environment's account) or a CloudGCP (a VPC in the environment's project). The
             platform allocates the placement's subnets from the network's address space (one per address family,
             of the requested size or pinned), creates the network there with them and connects it, through the
             site's CloudGateway, to the network's other placements. On a
@@ -69,7 +69,7 @@ spec:
                   properties:
                     kind:
                       type: string
-                      enum: [CloudOSO, CloudVirt, CloudAWS]
+                      enum: [CloudOSO, CloudVirt, CloudAWS, CloudGCP]
                     name:
                       type: string
                       minLength: 1

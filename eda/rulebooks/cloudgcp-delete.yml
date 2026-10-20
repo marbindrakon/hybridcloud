@@ -1,0 +1,25 @@
+---
+- name: CloudGCP Delete Rulebook
+  hosts: all
+  sources:
+    - ansible.eda.kafka:
+        host: "{{ KAFKA_HOST }}"
+        port: "{{ KAFKA_PORT }}"
+        topic: hybridsovereign-events
+        group_id: eda-cloudgcp-delete
+        security_protocol: SASL_SSL
+        sasl_mechanism: SCRAM-SHA-512
+        sasl_plain_username: "{{ KAFKA_USERNAME }}"
+        sasl_plain_password: "{{ KAFKA_PASSWORD }}"
+        check_hostname: true
+        verify_mode: CERT_REQUIRED
+  rules:
+    - name: Handle CloudGCP Delete
+      condition: event.body.payload.reason in ["CloudGCPDeleteRequested"] and event.body.payload.regarding.kind == "CloudGCP"
+      action:
+        run_job_template:
+          name: cloudgcp-teardown
+          organization: sovereign
+          job_args:
+            extra_vars:
+              event_payload: "{{ event.body.payload }}"

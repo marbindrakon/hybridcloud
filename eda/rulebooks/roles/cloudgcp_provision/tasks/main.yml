@@ -1,0 +1,208 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.5): CloudGCP provision = an Entity's environment in a Google Cloud site. No keys
+# anywhere: the job runs with the platform's workload identity (shc-cloud container group). Resolves the site (type
+# gcp, the Entity allowed); the project is the realization's (GCP_REALIZATION tenant.environments.<entity>/<name>,
+# else tenant.projects.<entity>) and is entered by impersonating its member account (shc_gcp_tenant.py check: label
+# shc-managed, the APIs the platform needs). The environment's public zone <name>.<entity>.<tenant DNS domain> is
+# created in Cloud DNS in that project and delegated from the platform's tenant zone (DNSConfig, shc_dns.py
+# ensure-delegation). Networks come with NetworkPlacements (backend CloudGCP: one VPC each). Ends pending while the
+# site or the DNSConfig isn't usable.
+- block:
+    - name: Read the CloudGCP
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
+
+    - name: Start with nothing to wait for
+      ansible.builtin.set_fact:
+        ca_waiting: []
+        ca_reason: WaitingForDependencies
+        ca_site_name: "{{ fab_spec.cloudRef.name }}"
+
+    - name: Resolve the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ ca_site_name }}"
+        ci_ref_namespace: "{{ fabric_platform_namespace }}"
+        ci_expected_type: gcp
+
+    - name: Refuse a site of another type or one the Entity may not use
+      ansible.builtin.set_fact:
+        fab_fail_reason: "{{ 'SiteTypeMismatch' if (ci_found and ci_type != 'gcp') else 'EntityNotAllowed' }}"
+        fab_fail_msg: >-
+          {{ ('CloudGCP ' ~ fab_name ~ ': CloudInfrastructure ' ~ ca_site_name ~ ' has type ' ~ ci_type ~ ', not gcp')
+             if (ci_found and ci_type != 'gcp')
+             else ('Entity ' ~ fab_entity ~ ' may not use CloudInfrastructure ' ~ ca_site_name ~ ' (spec.entityRefs)') }}
+      when: >-
+        ci_found and (ci_type != 'gcp'
+        or ((ci_spec.entityRefs | default([]) | length > 0)
+            and fab_entity not in (ci_spec.entityRefs | map(attribute='name') | list)))
+
+    - name: Stop on a refused site
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_msg | default('', true) | length > 0
+
+    - name: Wait for a missing or unusable site
+      ansible.builtin.set_fact:
+        ca_waiting: "{{ ca_waiting + [ci_error | trim] }}"
+      when: ci_error | trim | length > 0
+
+    - name: The platform's tenant DNS namespace
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+
+    - name: Wait for a usable DNSConfig
+      ansible.builtin.set_fact:
+        ca_waiting: "{{ ca_waiting + ['DNSConfig (none usable)'] }}"
+      when: not (dnscfg_usable | default(false) | bool)
+
+    - name: Report what the environment waits for
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: pending
+        fab_reason: "{{ ca_reason }}"
+        fab_message: "Waiting for {{ ca_waiting | join('; ') }}"
+        fab_waiting_for: "{{ ca_waiting }}"
+        fab_status: {cloudInfrastructure: "{{ ca_site_name }}"}
+      when: ca_waiting | length > 0
+
+    - name: End the job while waiting
+      ansible.builtin.meta: end_play
+      when: ca_waiting | length > 0
+
+    - name: The installation's GCP realization
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+
+    # tenant.environments.<entity>/<environment> (e.g. an RHDP open environment) wins over the Entity's project
+    # tenant.projects.<entity>
+    - name: The environment's project
+      ansible.builtin.set_fact:
+        ca_account: >-
+          {{ ((gcp_real.tenant | default({})).environments | default({})).get(fab_entity ~ '/' ~ fab_name, '')
+             or ((gcp_real.tenant | default({})).projects | default({})).get(fab_entity, '') }}
+        ca_zone: "{{ fab_name }}.{{ fab_entity }}.{{ dnscfg_domain }}"
+
+    - name: Refuse an Entity without a project in this installation
+      ansible.builtin.set_fact:
+        fab_fail_reason: NoProject
+        fab_fail_msg: >-
+          CloudGCP {{ fab_name }}: neither the environment nor Entity {{ fab_entity }} has a Google Cloud project in
+          this installation
+      when: ca_account | length == 0
+
+    - name: Stop without a project
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: ca_account | length == 0
+
+    - name: The tenant helper's settings
+      ansible.builtin.set_fact:
+        ca_tenant_cfg:
+          project: "{{ ca_account }}"
+          region: "{{ ci_spec.gcp.region }}"
+          labels: {shc-entity: "{{ fab_entity }}", shc-environment: "{{ fab_namespace }}-{{ fab_name }}"}
+
+    - name: Enter the project
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+      vars:
+        gcp_helper: shc_gcp_tenant.py
+        gcp_config: "{{ ca_tenant_cfg }}"
+        gcp_args: [check]
+
+    - name: Keep the project details
+      ansible.builtin.set_fact:
+        ca_project: "{{ gcp_result.result }}"
+
+    - name: The environment's zone in the project
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+      vars:
+        gcp_helper: shc_gcp_tenant.py
+        gcp_config: "{{ ca_tenant_cfg }}"
+        gcp_args: [zone-up, --zone, "{{ ca_zone }}"]
+
+    - name: Keep the zone
+      ansible.builtin.set_fact:
+        ca_dns: "{{ gcp_result.result }}"
+
+    - name: Load the DNSConfig account for the delegation
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ dnscfg_secret }}"
+        os_account_tag: "cloudgcp-dns-{{ fab_name }}"
+
+    - name: Delegate the environment zone from the tenant zone
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_request:
+          action: ensure-delegation
+          project_id: "{{ dnscfg_project_id }}"
+          zone_id: "{{ dnscfg_zone_id }}"
+          name: "{{ ca_zone }}"
+          nameservers: "{{ ca_dns.nameServers }}"
+          description: "Delegation of CloudGCP {{ fab_namespace }}/{{ fab_name }} (Cloud DNS, project {{ ca_account }})"
+
+    - name: Report the environment ready
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: ready
+        fab_reason: Ready
+        fab_message: >-
+          Project {{ ca_account }} in {{ ci_spec.gcp.region }}; zone {{ ca_zone }} (Cloud DNS {{ ca_dns.zoneId }}),
+          delegated from the tenant zone
+        fab_status:
+          cloudInfrastructure: "{{ ca_site_name }}"
+          entity: "{{ fab_entity }}"
+          project: "{{ ca_account }}"
+          projectNumber: "{{ ca_project.projectNumber | default('') }}"
+          region: "{{ ci_spec.gcp.region }}"
+          domain: "{{ ca_zone }}"
+          dnsZoneId: "{{ ca_dns.zoneId }}"
+          dns:
+            zone: "{{ ca_zone }}"
+            zoneId: "{{ ca_dns.zoneId }}"
+            mode: platform
+            provider: clouddns
+            owner: "{{ ca_account }}"
+            nameservers: "{{ ca_dns.nameServers }}"
+            delegated: true
+            dnsConfig: "{{ dnscfg_name }}"
+
+    # placements that waited for this environment
+    - name: List the namespace's placements
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: NetworkPlacement
+        namespace: "{{ fab_namespace }}"
+      register: _ca_placements
+
+    - name: Wake the placements on this environment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for p in _ca_placements.resources | default([]) -%}
+            {%- if p.spec.backend.kind == 'CloudGCP' and p.spec.backend.name == fab_name -%}
+              {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': p.metadata.namespace, 'name': p.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+  rescue:
+    - name: Mark the CloudGCP failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: failed
+        fab_reason: "{{ fab_fail_reason | default('ProvisionFailed') }}"
+        fab_message: >-
+          {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('CloudGCP provision failed') }}
+      when: fab_name is defined and services_api_host is defined
+      ignore_errors: true
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "CloudGCP {{ fab_name | default('unknown') }} provision failed: {{ fab_fail_reason | default('ProvisionFailed') }}"

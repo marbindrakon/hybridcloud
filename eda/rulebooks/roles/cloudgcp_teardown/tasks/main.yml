@@ -1,0 +1,87 @@
+---
+# shc (design/P11-GCP-PLAN.md §3.5): CloudGCP teardown. The operator holds the delete while NetworkPlacements use
+# the environment. Removes the delegation from the tenant zone, then the environment's Cloud DNS zone in the
+# Entity's project (with its records). The project itself stays (it belongs to the Entity or to RHDP).
+- block:
+    - name: Read the CloudGCP
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
+      vars:
+        fab_read_entity: true
+
+    - name: What the environment recorded
+      ansible.builtin.set_fact:
+        cad_dns: "{{ (fab_st.dns | default({}, true)) }}"
+        cad_account: "{{ fab_st.project | default('', true) }}"
+        cad_region: "{{ fab_st.region | default('', true) }}"
+
+    - name: Remove the delegation from the tenant zone
+      when: (cad_dns.zone | default('')) | length > 0 and (cad_dns.dnsConfig | default('')) | length > 0
+      block:
+        - name: The platform's tenant DNS namespace
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+
+        - name: Load the DNSConfig account
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+          vars:
+            os_account_vault_path: "{{ dnscfg_secret }}"
+            os_account_tag: "cloudgcp-dns-{{ fab_name }}"
+          when: dnscfg_found | default(false) | bool
+
+        - name: Delete the delegation
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+          vars:
+            os_helper: shc_dns.py
+            os_call_no_log: false
+            os_request:
+              action: delete-delegation
+              project_id: "{{ dnscfg_project_id }}"
+              zone_id: "{{ dnscfg_zone_id }}"
+              name: "{{ cad_dns.zone }}"
+          when: dnscfg_found | default(false) | bool
+
+    - name: Remove the environment's zone
+      when: (cad_dns.zone | default('')) | length > 0 and cad_account | length > 0
+      block:
+        - name: The installation's GCP realization
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+
+        - name: Delete the zone
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+          vars:
+            gcp_helper: shc_gcp_tenant.py
+            gcp_config: {project: "{{ cad_account }}", region: "{{ cad_region }}"}
+            gcp_args: [zone-down, --zone, "{{ cad_dns.zone }}"]
+
+    - name: Mark deletion complete
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudgcps
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: deleted
+          ready: false
+          deletionComplete: true
+          message: "Zone {{ cad_dns.zone | default('(none)') }} and its delegation removed"
+
+    # the operator drops the finalizer the next time it looks at the CR: make that now
+    - name: Release the finalizer now
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: CloudGCP, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
+
+  rescue:
+    - name: Mark the CloudGCP delete failed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+      vars:
+        fab_outcome: failed
+        fab_reason: TeardownFailed
+        fab_message: "{{ ansible_failed_result.msg | default('CloudGCP teardown failed') }}"
+      when: fab_name is defined and services_api_host is defined
+      ignore_errors: true
+
+    - name: Re-raise
+      ansible.builtin.fail:
+        msg: "CloudGCP {{ fab_name | default('unknown') }} teardown failed"

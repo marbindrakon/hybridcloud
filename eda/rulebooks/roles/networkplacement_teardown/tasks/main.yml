@@ -189,6 +189,72 @@
               ansible.builtin.meta: end_play
               when: os_result.blocked | default([]) | length > 0
 
+        - name: Remove the GCP site side
+          when: fab_spec.backend.kind == 'CloudGCP' and ci_found | bool
+          block:
+            - name: Read the CloudGCP
+              kubernetes.core.k8s_info:
+                host: "{{ services_api_host }}"
+                api_key: "{{ services_bearer_token }}"
+                validate_certs: false
+                api_version: hybridsovereign.redhat/v1alpha1
+                kind: CloudGCP
+                name: "{{ fab_spec.backend.name }}"
+                namespace: "{{ fab_namespace }}"
+              register: _npd_gcp_env
+
+            - name: The installation's GCP realization and the site's edge settings
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
+              vars:
+                gcp_edge_site: "{{ npd_gw.metadata.name }}"
+                gcp_edge_cidr: "{{ npd_gw.spec.siteUnderlay.cidr }}"
+                gcp_edge_asn: 65000
+
+            # the project and region the placement recorded (the environment's, if it never got that far)
+            - name: Remove the placement's VPC and tunnels
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+              vars:
+                _env_st: "{{ ((_npd_gcp_env.resources | default([{}], true) + [{}]) | first).status | default({}, true) }}"
+                _site_st: "{{ (fab_st.realization | default({}, true)).site | default({}, true) }}"
+                gcp_helper: shc_gcp_tenant.py
+                gcp_config:
+                  project: "{{ _site_st.project | default(_env_st.project | default(''), true) }}"
+                  region: "{{ _site_st.region | default(_env_st.region | default(''), true) }}"
+                gcp_args: [place-down, --placement, "{{ (fab_namespace ~ '-' ~ fab_name) | regex_replace('[^a-z0-9-]', '-') | truncate(55, true, '') }}"]
+                gcp_soft: true
+
+            - name: Report the workloads that block the deletion
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+              vars:
+                cr_api_version: hybridsovereign.redhat/v1alpha1
+                cr_plural: networkplacements
+                cr_name: "{{ fab_name }}"
+                cr_namespace: "{{ fab_namespace }}"
+                patch_ignore_not_found: true
+                cr_status_body:
+                  status: pending
+                  ready: false
+                  lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+                  message: "Deletion waits for workloads: {{ gcp_error }}"
+              when: gcp_error | length > 0 and 'Deletion waits' in gcp_error
+
+            - name: Stop while workloads block the deletion
+              ansible.builtin.meta: end_play
+              when: gcp_error | length > 0 and 'Deletion waits' in gcp_error
+
+            - name: Fail on any other error
+              ansible.builtin.fail:
+                msg: "{{ gcp_error }}"
+              when: gcp_error | length > 0
+
+            - name: The routers' VRF for this network goes with the placement
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
+              vars:
+                gcp_helper: shc_gcp_edge.py
+                gcp_config: "{{ gcp_edge_cfg }}"
+                gcp_args: [net-down, --vni, "{{ npd_real.l3Vni | string }}"]
+              when: npd_real.l3Vni is defined
+
         - name: Remove the AWS site side
           when: fab_spec.backend.kind == 'CloudAWS' and ci_found | bool
           block:

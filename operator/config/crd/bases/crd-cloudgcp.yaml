@@ -1,0 +1,158 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cloudgcps.hybridsovereign.redhat
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  group: hybridsovereign.redhat
+  names:
+    kind: CloudGCP
+    listKind: CloudGCPList
+    plural: cloudgcps
+    singular: cloudgcp
+    shortNames:
+      - cgcp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: >-
+            An entity's environment in a Google Cloud site: a project the platform assigns and enters with its own
+            identity (no stored keys), and the environment's public DNS zone (Cloud DNS), delegated from the tenant
+            zone. Networks are placed into it with NetworkPlacement (backend kind CloudGCP), one VPC per placement.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [cloudRef]
+              properties:
+                cloudRef:
+                  type: object
+                  description: >-
+                    The Google Cloud site (a CloudInfrastructure of type gcp) this environment lives in. The
+                    platform assigns the entity's project in that site and enters it with its own identity. Immutable.
+                  required: [name]
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.cloudRef is immutable
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+            status:
+              type: object
+              properties:
+                name:
+                  type: string
+                namespace:
+                  type: string
+                entity:
+                  type: string
+                project:
+                  type: string
+                  description: The Google Cloud project the environment lives in.
+                projectNumber:
+                  type: string
+                  description: The project's number.
+                region:
+                  type: string
+                  description: The site's region.
+                domain:
+                  type: string
+                  description: "The environment's DNS zone name."
+                dnsZoneId:
+                  type: string
+                  description: "Cloud DNS managed zone name"
+                cloudInfrastructure:
+                  type: string
+                  description: The Google Cloud site this environment lives in.
+                dns:
+                  type: object
+                  description: "The environment's DNS zone: zone, zoneId, provider, owner, nameservers, delegated."
+                  x-kubernetes-preserve-unknown-fields: true
+                status:
+                  type: string
+                  description: Lifecycle status (reconciling, ready, failed)
+                lastReconciledAt:
+                  type: string
+                  format: date-time
+                  description: Timestamp of the last reconciliation attempt
+                message:
+                  type: string
+                  description: Human-readable status message (set on failure)
+                ready:
+                  type: boolean
+                observedGeneration:
+                  type: integer
+                  format: int64
+                edaJobs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      jobId:
+                        type: string
+                      url:
+                        type: string
+                      timestamp:
+                        type: string
+                      status:
+                        type: string
+                        enum: [running, waiting, success, failed]
+                    x-kubernetes-preserve-unknown-fields: true
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Entity
+          type: string
+          jsonPath: .status.entity
+        - name: Slug
+          type: string
+          jsonPath: .status.slug
+        - name: Domain
+          type: string
+          jsonPath: .status.domain
+        - name: Status
+          type: string
+          jsonPath: .status.status
+        - name: Last-Reconciled
+          type: string
+          jsonPath: .status.lastReconciledAt
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

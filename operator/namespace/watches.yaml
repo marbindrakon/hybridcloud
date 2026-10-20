@@ -190,3 +190,15 @@
   finalizer:
     name: hybridsovereign.redhat/cloudvirt-cleanup
     role: cloudvirt_delete
+
+- version: v1alpha1
+  group: hybridsovereign.redhat
+  kind: CloudGCP
+  role: cloudgcp
+  maxConcurrentReconciles: 20
+  reconcilePeriod: 300s
+  watchDependentResources: false
+  watchAnnotationsChanges: true
+  finalizer:
+    name: hybridsovereign.redhat/cloudgcp-cleanup
+    role: cloudgcp_delete

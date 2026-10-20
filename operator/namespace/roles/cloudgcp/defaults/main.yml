@@ -1,0 +1,5 @@
+---
+cloudgcp_operator_namespace: sovereign-cloud
+central_api_server: "https://api.central.{{ lookup('env', 'LAB_DOMAIN') }}:6443"
+central_sa_secret_name: gcphelper-creator-sa
+central_sa_secret_namespace: sovereign-cloud
