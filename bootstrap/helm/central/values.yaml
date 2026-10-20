@@ -505,6 +505,8 @@ oidcIssuer:
           source: acm
         - name: edge1
           source: acm
+        - name: edge2
+          source: acm
         # P8 SPIFFE spike: SPIRE's JWT-SVID issuer (SpireServer jwtIssuer https://oidc.shc.signal9.gg/spire)
         - name: spire
           source: url
@@ -2346,6 +2348,23 @@ iaasClusters:
           master: bond1.239
           range: 10.239.0.0/24
           mtu: 9000
+  edge2:
+    enabled: true  # shc: 2026-10-20 single-node OpenShift on C6220 sled 4; Argo + Vault kubernetes-edge2
+    server: "https://api.edge2.shc.signal9.gg:6443"
+    # Not a hybrid network fabric site: no fabric underlay, no CloudInfrastructure (cloudInfra) and no fabric
+    # account (fabricAccess). Not a CloudVirt site either: no tenant sign-in client and no tenant DNS controller.
+    clusterBase:
+      values:
+        tenantAccess:
+          enabled: false
+        tenantDns:
+          enabled: false
+        monitoring:
+          storageClass: ""   # no ODF: Prometheus and Alertmanager on emptyDir
+    odfExternal:
+      enabled: false   # would need an Atuin Ceph pool + CSI clients (clusters/edge2/ceph-external)
+    cnv:
+      enabled: false
 
 # ─── AAP (services cluster) ─────────────────────────────────────────────────
 aap:
