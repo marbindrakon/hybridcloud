@@ -2092,6 +2092,9 @@ fabricHosts:
     - node: bgw-2
       namespace: shc-fabric-hosts
       assignmentType: metal3
+    - node: smc-node1
+      namespace: openshift-machine-api
+      assignmentType: metal3
     nodes:
       bgw-1:
         labels:
@@ -2414,13 +2417,213 @@ fabricHosts:
             services:
             - type: dns
               address: 172.18.42.20
+      smc-node1:
+        labels:
+          compute-model: smc
+          shc.signal9.gg/smc-node: '1'
+        bootMac: 00:25:90:85:1f:02
+        bootMode: legacy
+        bmc:
+          url: ipmi://172.18.2.30
+          externalSecret:
+            vaultName: metal/bmc-smc
+            usernameKey: username
+            passwordKey: password
+        network:
+          nmstateConfig:
+            interfaces:
+            - name: eno1
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: eno2
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp131s0f0
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp131s0f1
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: bond0
+              type: bond
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: true
+                dhcp: true
+                auto-dns: false
+                auto-gateway: false
+                auto-routes: false
+              ipv6:
+                enabled: false
+              link-aggregation:
+                mode: active-backup
+                options:
+                  miimon: '100'
+                  primary: eno1
+                port:
+                - eno1
+                - eno2
+            - name: bond1
+              type: bond
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+              link-aggregation:
+                mode: active-backup
+                options:
+                  miimon: '100'
+                  primary: enp131s0f0
+                port:
+                - enp131s0f0
+                - enp131s0f1
+            - name: bond1.233
+              type: vlan
+              state: up
+              mtu: 9100
+              vlan:
+                base-iface: bond1
+                id: 233
+              ipv4:
+                enabled: true
+                dhcp: false
+                address:
+                - ip: 172.18.233.21
+                  prefix-length: 24
+              ipv6:
+                enabled: false
+            - name: bond1.11
+              type: vlan
+              state: up
+              mtu: 9000
+              vlan:
+                base-iface: bond1
+                id: 11
+              ipv4:
+                enabled: true
+                dhcp: false
+                address:
+                - ip: 172.18.5.231
+                  prefix-length: 24
+              ipv6:
+                enabled: false
+            dns-resolver:
+              config:
+                server:
+                - 172.18.42.20
+            routes:
+              config:
+              - destination: 0.0.0.0/0
+                next-hop-address: 172.18.233.1
+                next-hop-interface: bond1.233
+                table-id: 254
+        rootDeviceHints:
+          serialNumber: CVWL420402GB800RGN
+        provision:
+          protect: true
+          image: *id002
+          userData:
+            vaultName: metal/smc-hosts
+            vaultKeys: *id003
+            template: "#cloud-config\nhostname: smc-node1\nfqdn: smc-node1.shc.signal9.gg\nssh_pwauth: false\ndisable_root: true\n\
+              ssh_authorized_keys:\n  - {{ .ssh_public_key }}\nchpasswd:\n  expire: false\n  users:\n    - name: cloud-user\n\
+              \      password: \"{{ .console_password_hash }}\"\n      type: hash\nruncmd:\n  # cloud-final can start before the\
+              \ bond carries traffic (BGW lesson): wait up to 5 min for DNS and Katello.\n  - [sh, -c, \"for i in $(seq 1 60);\
+              \ do getent hosts satellite.lab.signal9.gg >/dev/null && curl -sfo /dev/null http://satellite.lab.signal9.gg/pub/katello-ca-consumer-latest.noarch.rpm\
+              \ && exit 0; sleep 5; done; exit 1\"]\n  - [sh, -c, \"grubby --update-kernel=ALL --args='console=tty0 console=ttyS1,115200n8'\"\
+              ]\n  - [sh, -c, \"rpm -Uvh http://satellite.lab.signal9.gg/pub/katello-ca-consumer-latest.noarch.rpm\"]\n  - [sh,\
+              \ -c, \"subscription-manager register --org='{{ .katello_org }}' --activationkey='{{ .katello_activation_key }}'\
+              \ && touch /var/lib/shc-smc-base-done\"]\n"
+          networkData:
+            links:
+            - id: eno1
+              type: phy
+              ethernet_mac_address: 00:25:90:85:1f:02
+              mtu: 1500
+            - id: eno2
+              type: phy
+              ethernet_mac_address: 00:25:90:85:1f:03
+              mtu: 1500
+            - id: bond0
+              type: bond
+              bond_links:
+              - eno1
+              - eno2
+              bond_mode: active-backup
+              bond_miimon: 100
+              ethernet_mac_address: 00:25:90:85:1f:02
+              mtu: 1500
+            - id: enp131s0f0
+              type: phy
+              ethernet_mac_address: 90:e2:ba:91:1c:20
+              mtu: 9100
+            - id: enp131s0f1
+              type: phy
+              ethernet_mac_address: 90:e2:ba:91:1c:21
+              mtu: 9100
+            - id: bond1
+              type: bond
+              bond_links:
+              - enp131s0f0
+              - enp131s0f1
+              bond_mode: active-backup
+              bond_miimon: 100
+              ethernet_mac_address: 90:e2:ba:91:1c:20
+              mtu: 9100
+            - id: bond1.233
+              type: vlan
+              vlan_link: bond1
+              vlan_id: 233
+              vlan_mac_address: 90:e2:ba:91:1c:20
+              mtu: 9000
+            - id: bond1.11
+              type: vlan
+              vlan_link: bond1
+              vlan_id: 11
+              vlan_mac_address: 90:e2:ba:91:1c:20
+              mtu: 9000
+            networks:
+            - id: mgmt
+              type: ipv4
+              link: bond1.233
+              ip_address: 172.18.233.21
+              netmask: 255.255.255.0
+              routes:
+              - network: 0.0.0.0
+                netmask: 0.0.0.0
+                gateway: 172.18.233.1
+            - id: ceph
+              type: ipv4
+              link: bond1.11
+              ip_address: 172.18.5.231
+              netmask: 255.255.255.0
+            services:
+            - type: dns
+              address: 172.18.42.20
 
-# ─── shc: platform IaaS clusters (LAB-PLAN P5/P6) ───────────────────────────────────────────────
-# Bare-metal clusters built by central from metal-infra-env (mce-cluster-build Agent provider, lab
-# workspace p5/build-iaas1.sh). templates/iaasClusters renders, per enabled cluster, the base layer, a
-# ClusterSecretStore on central Vault (auth mount kubernetes-<name>, policy limited to that cluster's
-# keys), ODF external on Atuin Ceph and CNV. Enable a cluster once it is registered in Argo CD and its
-# Vault auth mount exists.
 iaasClusterDefaults:
   enabled: false
   server: ""
