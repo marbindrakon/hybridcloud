@@ -200,7 +200,7 @@
       ansible.builtin.set_fact:
         hf_egress: "{{ fab_check_result }}"
 
-    # attachment circuits: the circuits and the placements of their networks (deny and advertise lists)
+    # attachment circuits: the circuits, their networks (address space: deny list) and placements (advertise list)
     - name: List the attachment circuits and the placements
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"

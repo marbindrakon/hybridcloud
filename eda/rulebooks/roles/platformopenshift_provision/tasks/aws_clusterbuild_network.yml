@@ -1,11 +1,11 @@
 ---
 # shc (design/P8-PLAN.md §13): a cluster on a hybrid network - its machines in the network's NetworkPlacement VPC in
-# the environment (install into existing subnets; machine network = the placement's prefix). External: the placement
-# gets public subnets and an internet gateway for the internet-facing load balancers (DMZ-like; the machines still
-# leave through the network). Internal: API and ingress on internal load balancers; the platform reaches them through
-# the fabric (platform reach: annotation shc.signal9.gg/platform-reach on the HybridNetwork, realized by the fabric on
-# the border gateways), and the cluster's names are published as aliases of the internal load balancers while it
-# installs (shc_aws_cluster.py dns-alias, below in the deploy).
+# the environment (install into existing subnets; machine network = the placement's IPv4 prefix). External: the
+# placement gets public subnets and an internet gateway for the internet-facing load balancers (DMZ-like; the machines
+# still leave through the network). Internal: API and ingress on internal load balancers; the platform reaches them
+# through the fabric (platform reach: annotation shc.signal9.gg/platform-reach on the HybridNetwork, realized by the
+# fabric on the border gateways), and the cluster's names are published as aliases of the internal load balancers
+# while it installs (shc_aws_cluster.py dns-alias, below in the deploy).
 - name: The network's placements
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
@@ -40,7 +40,7 @@
     _site: "{{ cb_placement.status.realization.site }}"
   ansible.builtin.set_fact:
     cb_placement_ref: "{{ cb_placement.metadata.namespace }}/{{ cb_placement.metadata.name }}"
-    cb_machine_cidr: "{{ cb_placement.spec.prefixes[0] }}"
+    cb_machine_cidr: "{{ cb_placement.status.prefixes[0] }}"
     cb_vpc_id: "{{ _site.vpc }}"
     cb_subnet_ids: "{{ _site.subnets | map(attribute='id') | list }}"
     cb_tenant_cfg:

@@ -1,6 +1,6 @@
 ---
 # shc (design/P7-PLAN.md P7.3.8): does the site's gateway hold the placement's routes on every border gateway node?
-# Read-only (vtysh over SSH, no lease). For each node: the VRF's routes inside the placement's prefixes that the
+# Read-only (vtysh over SSH, no lease). For each node: the VRF's routes inside the placement's IPv4 prefixes that the
 # site advertised (next hop in the site underlay), and the routes of the network's other placements (VPN); waits up
 # to np_route_wait seconds (default 0) for the site's. Sets
 # np_route_nodes [{name, siteRoutes, vpnRoutes, missing: [prefix]}] and np_routes_missing (bool).
@@ -32,7 +32,7 @@
                     vpn += 1
         print(json.dumps({"siteRoutes": len(found), "vpnRoutes": vpn,
                           "missing": [str(m) for m in mine if str(m) not in found]}))' \
-          {{ np_gateway.spec.siteUnderlay.cidr }} {{ fab_spec.prefixes | join(',') }}
+          {{ np_gateway.spec.siteUnderlay.cidr }} {{ np_prefixes_v4 | join(',') }}
         }
         end=$((SECONDS + {{ np_route_wait | default(0) | int }}))
         while :; do

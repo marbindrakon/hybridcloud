@@ -5,7 +5,8 @@
 #    placement again once its VRF is gone (the deletion waits meanwhile);
 # 2. the site side: CloudVirt = the RouteAdvertisements and the ClusterUserDefinedNetwork; CloudOSO = the share,
 #    router, subnets and network in the platform project (refused while the tenant's ports still use the network);
-# 3. the VNIs go back to the fabric's ledger; deletionComplete.
+# 3. the VNIs go back to the fabric's ledger and the subnets to the network's address space (design/P10-PLAN.md §3),
+#    which wakes the network's placements waiting for address space; deletionComplete.
 - block:
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -255,6 +256,49 @@
       loop: [vni, l2vni]
       when: npd_gw.spec is defined
 
+    - name: Give the subnets back
+      when: npd_gw.spec is defined
+      block:
+        - name: The platform's realization parameters
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+          vars:
+            fab_real_fabric: "{{ npd_gw.spec.fabricRef.name }}"
+
+        - name: Release the subnets
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+          vars:
+            fab_ipam: {action: ipam-release, fabric: "{{ npd_gw.spec.fabricRef.name }}",
+                       network: "HybridNetwork/{{ fab_namespace }}/{{ fab_spec.network }}", owner: "{{ npd_owner }}"}
+
+        - name: List the network's placements
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: NetworkPlacement
+            namespace: "{{ fab_namespace }}"
+          register: _npd_siblings
+          when: fab_ipam_result.released | default([], true) | length > 0
+
+        # a placement without room (or waiting for a pinned prefix) may fit now
+        - name: Wake the placements waiting for address space
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+          vars:
+            nudge_crs: >-
+              {%- set out = [] -%}
+              {%- for p in _npd_siblings.resources | default([]) -%}
+                {%- set c = ((p.status | default({}, true)).conditions | default([], true) + [{}]) | first -%}
+                {%- if p.spec.network == fab_spec.network and p.metadata.name != fab_name
+                      and p.metadata.deletionTimestamp is not defined
+                      and (p.status | default({}, true)).status | default('') == 'pending'
+                      and c.reason | default('') == 'WaitingForAddressSpace' -%}
+                  {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': fab_namespace, 'name': p.metadata.name}) -%}
+                {%- endif -%}
+              {%- endfor -%}
+              {{ out }}
+          when: fab_ipam_result.released | default([], true) | length > 0
+
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
@@ -271,7 +315,7 @@
           message: Deleted
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
-    # the circuits' policy (deny and advertise lists) holds the network's placement prefixes
+    # the circuits' policy (advertise list) holds the network's placement prefixes
     - name: List the network's attachment circuits
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"

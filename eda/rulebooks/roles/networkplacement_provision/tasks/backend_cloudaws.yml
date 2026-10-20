@@ -1,6 +1,6 @@
 ---
 # shc (design/P8-PLAN.md §11): the site side of a placement on a CloudAWS. One VPC in the environment's account
-# (shc_aws_tenant.py place-up): the placement's prefixes (the first is the VPC's primary CIDR, at least a /24), per
+# (shc_aws_tenant.py place-up): the placement's allocated IPv4 prefix (the VPC's primary CIDR, at least a /24), per
 # AZ a workload subnet and a /28 for the transit gateway attachment, the attachment accepted into the network's
 # route table at the hub (shc-net-<l3vni>, created with the network's Connect attachment to the site's edge routers
 # and the routers' VRF on first use), the VPC's default route to the transit gateway. The routers learn the VPC's
@@ -45,7 +45,7 @@
     aws_config: "{{ np_aws_cfg }}"
     aws_args: >-
       {{ ['place-up', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', np_l3vni | string]
-         + (fab_spec.prefixes | map('regex_replace', '^', '--prefix=') | list)
+         + (np_prefixes_v4 | map('regex_replace', '^', '--prefix=') | list)
          + (['--egress'] if np_aws_nat_egress | bool else []) }}
 
 - name: Record the site side

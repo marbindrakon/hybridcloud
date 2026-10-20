@@ -40,9 +40,22 @@ fabric_realization_defaults:
       clientId: "openshift-{cluster}"
       editRole: edit
       viewRole: view
+  # address management of the HybridNetworks (files/shc_ipam.py): where each network's space and its placements'
+  # subnets are kept; ledger = the fabric's ledger (the only provider so far)
+  ipam:
+    provider: ledger
   placement:
     # how long a placement job waits for the gateways to hold the site's routes for its prefixes (s)
     routeWait: 180
+    # address families a placement may ask for, per backend kind (spec.ipv6 elsewhere fails FamilyUnavailable)
+    ipFamilies: {CloudVirt: [4], CloudOSO: [4], CloudAWS: [4]}
+    # ranges of a site the allocator steps around, per backend kind, besides the site underlay and (OpenShift) the
+    # cluster's cluster and service networks: OVN-Kubernetes' join (100.64.0.0/16), Layer2 user-defined network
+    # join (100.65.0.0/16), transit switch (100.88.0.0/16) and masquerade (169.254.0.0/17) subnets
+    siteReserved:
+      CloudVirt: [100.64.0.0/16, 100.65.0.0/16, 100.88.0.0/16, 169.254.0.0/17]
+      CloudOSO: []
+      CloudAWS: []
   # CloudGateways over transport wireguard (remote sites): each node's tunnel listens on listenPort (unless the
   # gateway sets one); the tunnel's MTU is the site leg's MTU unless siteUnderlay.mtu says otherwise (1420 = a 1500
   # path minus WireGuard over IPv4); keepalives keep NAT state open

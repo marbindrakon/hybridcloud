@@ -7,6 +7,10 @@
 # the ledger while it wants egress; the HybridFabric job realizes it on the border gateway nodes (default route into
 # the network, source NAT) and wakes the network when it did; status.egress {internet: pending|ready|removing|
 # unavailable, sourceAddresses}. Turning it off: the fabric removes it first, then the index goes back.
+# Address space (design/P10-PLAN.md §2.1): spec.prefixes stays clear of the platform's ranges (PrefixReserved) and
+# of the accept entries of the network's attachment circuits (PrefixInUse); the IPAM holds it and refuses an edit
+# that would leave a placement's subnet outside (PrefixInUse, the space unchanged); status.addressSpace. A change
+# wakes the network's placements waiting for address space.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -141,6 +145,93 @@
       ansible.builtin.meta: end_play
       when: hn_waiting | length > 0
 
+    # ---- address space ----
+    - name: The platform's realization parameters
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ hn_fabric_name }}"
+
+    - name: List the attachment circuits
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AttachmentCircuit
+        namespace: "{{ fab_namespace }}"
+      register: _hn_circuits
+
+    - name: Check the address space against the platform's ranges and the circuits
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: check-network
+          prefixes: "{{ fab_spec.prefixes }}"
+          # the platform's own ranges inside the networks' VRFs (as the circuit job and the fabric's circuit policy)
+          reserved: >-
+            {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
+                fab_real.egress.linkPool | default('169.254.0.0/16')]
+               + (fab_real.egress.platformSources | default([], true)) }}
+          circuits: >-
+            {%- set out = [] -%}
+            {%- for c in _hn_circuits.resources | default([]) -%}
+              {%- if c.spec.network == fab_name and c.metadata.deletionTimestamp is not defined -%}
+                {%- set _ = out.append({'name': c.metadata.name, 'accept': (c.spec.routing | default({}, true)).accept | default([], true)}) -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ out }}
+
+    - name: Refuse an address space in the platform's ranges or holding a circuit's accept entry
+      ansible.builtin.set_fact:
+        fab_fail_reason: "{{ 'PrefixReserved' if fab_check_result.reserved | length > 0 else 'PrefixInUse' }}"
+        fab_fail_msg: "HybridNetwork {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Stop on a refused address space
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: The address space in the IPAM
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam: {action: ipam-space, fabric: "{{ hn_fabric_name }}", network: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}",
+                   prefixes: "{{ fab_spec.prefixes }}"}
+
+    - name: Refuse an edit that leaves placements' subnets outside the space
+      ansible.builtin.set_fact:
+        fab_fail_reason: PrefixInUse
+        fab_fail_msg: >-
+          HybridNetwork {{ fab_name }}: the address space stays {{ fab_ipam_result.addressSpace | map(attribute='prefix') | join(', ') }}:
+          {{ fab_ipam_result.refused | join('; ') }}
+      when: fab_ipam_result.refused | default([]) | length > 0
+
+    - name: Stop on a refused edit
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_ipam_result.refused | default([]) | length > 0
+
+    - name: Keep the address space
+      ansible.builtin.set_fact:
+        hn_space: "{{ fab_ipam_result.addressSpace }}"
+
+    # a placement without room waits; the space changed, so it may fit now
+    - name: Wake the placements waiting for address space
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for p in _hn_placements.resources | default([]) -%}
+            {%- set c = ((p.status | default({}, true)).conditions | default([], true) + [{}]) | first -%}
+            {%- if p.spec.network == fab_name and p.metadata.deletionTimestamp is not defined
+                  and (p.status | default({}, true)).status | default('') == 'pending'
+                  and c.reason | default('') == 'WaitingForAddressSpace' -%}
+              {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': fab_namespace, 'name': p.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      when: fab_ipam_result.changed | default(false) | bool
+
     # the network's VPN route target: the gateways of every site it is placed on import and export it
     - name: The network's VPN route target
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
@@ -235,10 +326,11 @@
         fab_outcome: ready
         fab_reason: Ready
         fab_message: >-
-          On HybridFabric {{ hn_fabric_name }}, MTU {{ hn_status.mtu }};
+          {{ hn_space | map(attribute='prefix') | join(', ') }} on HybridFabric {{ hn_fabric_name }}, MTU {{ hn_status.mtu }};
           {{ hn_status.placementsReady }}/{{ hn_status.placementCount }} placements ready{{ hn_egress_note }}
         fab_status: >-
-          {{ hn_status | combine({'realization': {'vpnTarget': hn_vpn_target | int,
+          {{ hn_status | combine({'addressSpace': hn_space,
+                                  'realization': {'vpnTarget': hn_vpn_target | int,
                                                   'routeTarget': hn_fabric.spec.domainAsn ~ ':' ~ hn_vpn_target}})
              | combine({'egress': hn_egress if hn_egress | length > 0 else none}) }}
 

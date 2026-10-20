@@ -1,8 +1,9 @@
 ---
 # shc (design/P7-PLAN.md P7.3.8): HybridNetwork teardown. The operator's finalizer has already waited for the
 # network's placements and the CloudVirt namespaces naming it. With internet egress, the fabric removes it from the
-# border gateway nodes first (the deletion waits; the fabric wakes the network when it did). Then the egress index
-# and the VPN route target go back to the fabric's ledger, and the job marks deletionComplete.
+# border gateway nodes first (the deletion waits; the fabric wakes the network when it did). Then the address space
+# leaves the IPAM (refused while a placement that still exists holds subnets in it), the egress index and the VPN
+# route target go back to the fabric's ledger, and the job marks deletionComplete.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -56,6 +57,40 @@
         - name: End the job until the fabric removed it
           ansible.builtin.meta: end_play
 
+    - name: Remove the address space from the IPAM
+      when: fab_st.fabric | default('', true) | length > 0
+      block:
+        - name: The platform's realization parameters
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+          vars:
+            fab_real_fabric: "{{ fab_st.fabric }}"
+
+        - name: List the placements (holders of the network's subnets)
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: NetworkPlacement
+            namespace: "{{ fab_namespace }}"
+          register: _hnd_placements
+
+        - name: Drop the address space
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+          vars:
+            fab_ipam:
+              action: ipam-drop
+              fabric: "{{ fab_st.fabric }}"
+              network: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+              holders: >-
+                {{ _hnd_placements.resources | default([]) | selectattr('spec.network', 'equalto', fab_name)
+                   | map(attribute='metadata.name') | map('regex_replace', '^', 'NetworkPlacement/' ~ fab_namespace ~ '/') | list }}
+
+        - name: Refuse while placements hold subnets
+          ansible.builtin.fail:
+            msg: "Deletion waits for the placements' subnets: {{ fab_ipam_result.refused | join('; ') }}"
+          when: fab_ipam_result.refused | default([]) | length > 0
+
     - name: Release the egress index
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
       vars:
@@ -100,16 +135,17 @@
         nudge_crs: [{kind: HybridNetwork, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
 
   rescue:
-    - name: Mark the HybridNetwork teardown failed
+    - name: Report the teardown waiting or failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
+        _waits: "{{ ansible_failed_result.msg | default('') is match('Deletion waits for ') }}"
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: hybridnetworks
         cr_name: "{{ fab_name }}"
         cr_namespace: "{{ fab_namespace }}"
         patch_ignore_not_found: true
         cr_status_body:
-          status: failed
+          status: "{{ 'pending' if _waits else 'failed' }}"
           ready: false
           message: "{{ ansible_failed_result.msg | default('HybridNetwork teardown failed') }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -119,3 +155,4 @@
     - name: Re-raise
       ansible.builtin.fail:
         msg: "HybridNetwork {{ fab_name | default('unknown') }} teardown failed"
+      when: not (ansible_failed_result.msg | default('') is match('Deletion waits for '))

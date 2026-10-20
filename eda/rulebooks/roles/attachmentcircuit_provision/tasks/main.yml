@@ -1,7 +1,7 @@
 ---
 # shc (design/P9-PLAN.md §3–4): AttachmentCircuit provision. Resolves the network and the ProviderEdge, checks the
 # circuit against both (Entity allowed on the edge, bearer and CE kind, same fabric, CE ASN, accept list against the
-# network's placements and the platform's ranges), then takes a VLAN and a link subnet from the fabric's ledger,
+# network's address space and the platform's ranges), then takes a VLAN and a link subnet from the fabric's ledger,
 # keeps the BGP password in Vault (the tenant's Secret, or a generated one written to a Secret <name>-bgp), and
 # records the circuit's realization (status.realization, with its revision rev) and what the CE needs
 # (status.ceConfig). The fabric job realizes it on the border nodes; this job wakes the fabric when the realization
@@ -176,32 +176,16 @@
       vars:
         fab_real_fabric: "{{ ac_fabric.metadata.name }}"
 
-    - name: List the network's placements
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: NetworkPlacement
-        namespace: "{{ fab_namespace }}"
-      register: _ac_placements
-
+    # the network's address space (as asked for and as the IPAM holds it) is the tenant's own: no CE route in it
     - name: Check the accept list
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
         fab_check:
           action: check-circuit
           accept: "{{ fab_spec.routing.accept | default([]) }}"
-          placements: >-
-            {%- set out = [] -%}
-            {%- for p in _ac_placements.resources | default([]) -%}
-              {%- if p.spec.network == fab_spec.network and p.metadata.deletionTimestamp is not defined -%}
-                {%- for c in p.spec.prefixes | default([]) -%}
-                  {%- set _ = out.append({'name': p.metadata.name, 'prefix': c}) -%}
-                {%- endfor -%}
-              {%- endif -%}
-            {%- endfor -%}
-            {{ out }}
+          space: >-
+            {{ ((ac_network.spec | default({}, true)).prefixes | default([], true))
+               + ((ac_network.status | default({}, true)).addressSpace | default([], true) | map(attribute='prefix') | list) }}
           reserved: >-
             {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
                 fab_real.egress.linkPool | default('169.254.0.0/16')]

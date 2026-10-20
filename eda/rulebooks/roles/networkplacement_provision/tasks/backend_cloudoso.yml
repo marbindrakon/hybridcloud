@@ -1,9 +1,9 @@
 ---
-# shc (design/P7-PLAN.md P7.3.8, §12.3.2): the site side of a placement on a CloudOSO (OpenStack site with EVPN):
-# in the platform project, a network (the network's MTU), a subnet per prefix and a router with the placement's
-# layer 3 VNI (the site advertises the subnets as EVPN type-5 routes under it), shared to the CloudOSO's project
-# (Neutron RBAC). The tenant attaches its VMs to the network; the router and subnets stay the platform's. Uses the
-# site account (cloud admin). Input: np_recreate_router (bool). Sets np_backend_status.
+# shc (design/P7-PLAN.md P7.3.8, §12.3.2): the site side of a placement on a CloudOSO (OpenStack site with EVPN): in
+# the platform project, a network (the network's MTU), a subnet per allocated IPv4 prefix and a router with the
+# placement's layer 3 VNI (the site advertises the subnets as EVPN type-5 routes under it), shared to the CloudOSO's
+# project (Neutron RBAC). The tenant attaches its VMs to the network; the router and subnets stay the platform's. Uses
+# the site account (cloud admin). Input: np_recreate_router (bool). Sets np_backend_status.
 - name: The site's OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
   vars:
@@ -23,7 +23,7 @@
       tag: "{{ np_names.tag }}"
       description: "NetworkPlacement {{ fab_namespace }}/{{ fab_name }} (HybridNetwork {{ fab_spec.network }})"
       mtu: "{{ np_real.mtu | int }}"
-      prefixes: "{{ fab_spec.prefixes }}"
+      prefixes: "{{ np_prefixes_v4 }}"
       l3Vni: "{{ np_real.l3Vni | int }}"
       shareProjectId: "{{ np_backend.status.projectId }}"
       recreateRouter: "{{ np_recreate_router | default(false) | bool }}"

@@ -1,0 +1,46 @@
+---
+# shc (design/P10-PLAN.md §3.2): the site's own ranges, which the placement's subnets step around (a pinned prefix
+# clashing with one is refused): the site underlay, the realization's placement.siteReserved for the backend kind and,
+# on an OpenShift site (CloudVirt), the cluster's cluster and service networks (read with the site's fabric
+# credential). Sets np_site_ranges.
+- name: The site underlay and the realization's ranges
+  ansible.builtin.set_fact:
+    np_site_ranges: >-
+      {{ [np_gateway.spec.siteUnderlay.cidr]
+         + ((fab_real.placement.siteReserved | default({}, true))[np_backend_kind] | default([], true)) }}
+
+- name: The cluster's networks (OpenShift site)
+  when: np_backend_kind == 'CloudVirt'
+  block:
+    - name: The site's fabric credential
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
+      vars:
+        site_kc_tag: "npr-{{ fab_namespace }}-{{ fab_name }}"
+
+    - name: Read the cluster's networks
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ site_kubeconfig }}"
+        api_version: config.openshift.io/v1
+        kind: Network
+        name: cluster
+      register: _np_cluster_net
+
+    - name: Add the cluster and service networks
+      vars:
+        _n: "{{ (_np_cluster_net.resources | default([{}], true))[0].status | default({}, true) }}"
+      ansible.builtin.set_fact:
+        np_site_ranges: >-
+          {{ np_site_ranges + (_n.clusterNetwork | default([]) | map(attribute='cidr') | list)
+             + (_n.serviceNetwork | default([])) }}
+        np_cluster_ranges_found: "{{ (_n.clusterNetwork | default([]) | length > 0) and (_n.serviceNetwork | default([]) | length > 0) }}"
+
+    # allocating without them could put the placement on the cluster's own pod or service addresses
+    - name: Refuse to allocate without the cluster's networks
+      ansible.builtin.fail:
+        msg: "site {{ np_site }}: the cluster's network configuration (clusterNetwork, serviceNetwork) could not be read"
+      when: not np_cluster_ranges_found | bool
+  always:
+    - name: Remove the site kubeconfig
+      ansible.builtin.file:
+        path: "{{ site_kubeconfig | default('/tmp/eda-npr-' ~ fab_namespace ~ '-' ~ fab_name ~ '-kubeconfig') }}"
+        state: absent

@@ -2,44 +2,15 @@
 # shc (design/P7-PLAN.md P7.3.8, §12.3.1): the site side of a placement on a CloudVirt (OpenShift site): a Layer2
 # primary ClusterUserDefinedNetwork with EVPN transport (IP-VRF = the placement's layer 3 VNI, MAC-VRF = its
 # layer 2 VNI, route targets <asn>:<vni>) over the site's VTEP, selecting the CloudVirt's namespaces that name the
-# network (by label), and a RouteAdvertisements that advertises it toward the site's gateway. Checks the prefixes
-# against the cluster's own networks first. Uses the site's fabric credential. Sets np_backend_status.
+# network (by label), and a RouteAdvertisements that advertises it toward the site's gateway. The subnets are the
+# placement's allocated prefixes (np_prefixes; site_ranges.yml kept them off the cluster's own networks). Uses the
+# site's fabric credential. Sets np_backend_status.
 - name: Realize the network on the site
   block:
     - name: The site's fabric credential
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
       vars:
         site_kc_tag: "np-{{ fab_namespace }}-{{ fab_name }}"
-
-    - name: Read the cluster's networks
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ site_kubeconfig }}"
-        api_version: config.openshift.io/v1
-        kind: Network
-        name: cluster
-      register: _np_cluster_net
-
-    - name: Check the prefixes against the cluster's networks and the site underlay
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
-      vars:
-        _n: "{{ (_np_cluster_net.resources | default([{}], true))[0].status | default({}, true) }}"
-        fab_check:
-          action: check-placement
-          prefixes: "{{ fab_spec.prefixes }}"
-          reserved: >-
-            {{ (_n.clusterNetwork | default([]) | map(attribute='cidr') | list) + (_n.serviceNetwork | default([]))
-               + [np_gateway.spec.siteUnderlay.cidr] }}
-
-    - name: Refuse prefixes the site uses itself
-      ansible.builtin.set_fact:
-        fab_fail_reason: PrefixOverlap
-        fab_fail_msg: "NetworkPlacement {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
-      when: fab_check_result.errors | length > 0
-
-    - name: Stop on a refused prefix
-      ansible.builtin.fail:
-        msg: "{{ fab_fail_msg }}"
-      when: fab_check_result.errors | length > 0
 
     # one expression: numbers stay numbers (templated scalars inside a YAML definition become strings)
     - name: "ClusterUserDefinedNetwork {{ np_names.cudn }}"
@@ -55,7 +26,7 @@
                                    'evpn': {'vtep': np_gateway.status.site.vtep,
                                             'ipVRF': {'vni': np_real.l3Vni | int, 'routeTarget': np_asn ~ ':' ~ np_real.l3Vni},
                                             'macVRF': {'vni': np_real.l2Vni | int, 'routeTarget': np_asn ~ ':' ~ np_real.l2Vni}},
-                                   'layer2': {'role': 'Primary', 'mtu': np_real.mtu | int, 'subnets': fab_spec.prefixes,
+                                   'layer2': {'role': 'Primary', 'mtu': np_real.mtu | int, 'subnets': np_prefixes,
                                               'ipam': {'lifecycle': 'Persistent'}}}}} }}
       register: _np_cudn
 

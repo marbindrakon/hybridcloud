@@ -1,0 +1,32 @@
+---
+# shc (design/P10-PLAN.md §3): run one files/shc_ipam.py action (a HybridNetwork's address space and its placements'
+# subnets) against the services API. Included from a role (paths are role_path-relative) after fabric_realization.yml.
+# Input: fab_ipam (dict with action, network, fabric, ...); the provider (realization ipam.provider), the ledger's
+# namespace, the API connection and token are added here and passed on stdin. Sets fab_ipam_result; fails with the
+# helper's error.
+- name: "IPAM {{ fab_ipam.action }}"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../../../common/files/shc_ipam.py"
+    stdin: >-
+      {{ {'provider': (fab_real.ipam | default({}, true)).provider | default('ledger', true),
+          'namespace': fabric_platform_namespace}
+         | combine(fab_ipam)
+         | combine({'api': services_api_host | trim, 'token': services_bearer_token | trim}) | to_json }}
+  register: _fab_ipam
+  changed_when: >-
+    (_fab_ipam.stdout | default('')) is search('"(new|changed|dropped)": true|"released": \[')
+  failed_when: false
+  no_log: true
+
+- name: "IPAM {{ fab_ipam.action }}: parse the result"
+  ansible.builtin.set_fact:
+    fab_ipam_result: >-
+      {{ (_fab_ipam.stdout | from_json) if (_fab_ipam.stdout | default('') | trim).startswith('{')
+         else {'error': 'shc_ipam.py rc ' ~ _fab_ipam.rc} }}
+
+- name: "IPAM {{ fab_ipam.action }}: fail on error"
+  ansible.builtin.fail:
+    msg: "IPAM {{ fab_ipam.action }} failed: {{ fab_ipam_result.error }}"
+  when: _fab_ipam.rc != 0 or 'error' in fab_ipam_result

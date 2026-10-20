@@ -12,9 +12,9 @@ actions:
                   VLAN outside the attachment circuits' pool,
                   site subnet clear of the core prefixes; transport wireguard: the peers' addresses inside the
                   site subnet and clear of the nodes' tunnel addresses
-  check-placement {prefixes, siblings: [{name, prefixes}], reserved: [cidr], circuits: [{name, accept}]}
-                  prefixes disjoint among themselves, from the network's other placements and from reserved, and
-                  holding no accept entry of the network's attachment circuits
+  check-network   {prefixes, reserved: [cidr], circuits: [{name, accept}]}   a HybridNetwork's address space: no
+                  prefix overlapping the platform's ranges (reserved), none holding an accept entry of the network's
+                  attachment circuits; reserved / circuits: the errors of each kind
   pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
                   (index 1 is the border gateway root; the same addresses on every node)
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
@@ -31,18 +31,19 @@ actions:
                   may reach on egress.platformPorts (default 6443, 443); errors for an unusable configuration
   circuit-plan    {attachments: realization attachments, nodes: [node names], index}  an attachment circuit's link
                   subnet (the index-th of attachments.linkPool), each node's address and the CE's
-  check-circuit   {accept: [prefix-list entries], placements: [{name, prefix}], reserved: [cidr], egressInternet,
-                  advertiseDefault}  entries inside a placement or a reserved range are refused; notes for policy
-                  that doesn't apply now; acceptsDefault
+  check-circuit   {accept: [prefix-list entries], space: [the network's prefixes], reserved: [cidr], egressInternet,
+                  advertiseDefault}  entries inside the network's address space or a reserved range are refused;
+                  notes for policy that doesn't apply now; acceptsDefault
   (check-fabric also validates the realization's attachments: poolSize.attachVlanPool, poolSize.attachLinks)
   attachments-plan {fabric, attachments: realization attachments, nodes: [node names], tableBase, domainAsn,
                   circuits, networks, placements: [CR objects], ledger: alloc, egress: egress-plan networks,
                   egressNodes: egress-plan nodes, reserved: [cidr], platformSources: [cidr], passwords: [circuits
                   (namespace/name) whose BGP password the job holds]}  the circuits the fabric's nodes realize: per circuit its VRF (the
                   network's root VRF e<vpnTarget>), VLAN device, conntrack zone (the network's egress zone, else its
-                  VPN target) and routing policy (accept list; deny = the network's placement prefixes, the reserved
-                  ranges and 0.0.0.0/0 while the network wants internet egress; advertise = the placement prefixes and
-                  0.0.0.0/0 when asked for and the network has internet egress); per node the root's attachments
+                  VPN target) and routing policy (accept list; deny = the network's address space (spec.prefixes and
+                  status.addressSpace) and its placements' prefixes (status.prefixes), the reserved ranges and
+                  0.0.0.0/0 while the network wants internet egress; advertise = the placement prefixes and 0.0.0.0/0
+                  when asked for and the network has internet egress; IPv4 only); per node the root's attachments
                   (root.json); circuits it can't realize under skipped; vrfs: per node the networks with a root
                   VRF (egress entry and/or circuits), for the node's FRR configuration
 """
@@ -317,25 +318,13 @@ def check_gateway(req):
     return {"errors": errors, "upstreamRemote": upstream_remote}
 
 
-def check_placement(req):
-    errors = []
+def check_network(req):
+    """A network's address space against the platform's ranges and its circuits' accept entries."""
     try:
         mine = nets(req.get("prefixes"))
     except ValueError as e:
-        return {"errors": [f"prefixes: {e}"]}
-    for i, a in enumerate(mine):
-        for b in mine[i + 1:]:
-            if overlaps(a, b):
-                errors.append(f"prefixes {a} and {b} overlap")
-    for s in req.get("siblings") or []:
-        try:
-            theirs = nets(s.get("prefixes"))
-        except ValueError:
-            continue
-        for a in mine:
-            for b in theirs:
-                if overlaps(a, b):
-                    errors.append(f"prefix {a} overlaps {b} of placement {s.get('name')}")
+        return {"errors": [f"prefixes: {e}"], "reserved": [f"prefixes: {e}"], "circuits": []}
+    reserved, circuits = [], []
     for r in req.get("reserved") or []:
         try:
             rn = ipaddress.ip_network(str(r), strict=False)
@@ -343,15 +332,15 @@ def check_placement(req):
             continue
         for a in mine:
             if overlaps(a, rn):
-                errors.append(f"prefix {a} overlaps the site's network {rn}")
-    # the circuits accept routes from their CE; a placement prefix never holds one (as check-circuit refuses)
+                reserved.append(f"prefix {a} overlaps the platform range {rn}")
+    # the circuits accept routes from their CE; the network's space never holds one (as check-circuit refuses)
     for c in req.get("circuits") or []:
         for e in c.get("accept") or []:
             entry = accept_entry(e)
             for a in mine:
                 if entry and entry[0].version == a.version and entry[0].subnet_of(a):
-                    errors.append(f"prefix {a} holds accept entry '{e}' of AttachmentCircuit {c.get('name')}")
-    return {"errors": errors}
+                    circuits.append(f"prefix {a} holds accept entry '{e}' of AttachmentCircuit {c.get('name')}")
+    return {"errors": reserved + circuits, "reserved": reserved, "circuits": circuits}
 
 
 def attachments_check(at, node_names, core=None):
@@ -419,16 +408,18 @@ ACCEPT_RE = re.compile(r"^(\S+)(?: ge (\d+))?(?: le (\d+))?$")
 
 
 def check_circuit(req):
-    """A circuit's accept list against the network's placement prefixes and the platform's ranges (reserved).
-    An entry inside a placement prefix or a reserved range is refused; an entry that covers one only gets a note
-    (the edge drops overlapping routes regardless). acceptsDefault: an entry matches 0.0.0.0/0."""
+    """A circuit's accept list against the network's address space and the platform's ranges (reserved). An entry
+    inside the space or a reserved range is refused; an entry that covers part of one only gets a note (the edge
+    drops overlapping routes regardless). acceptsDefault: an entry matches 0.0.0.0/0."""
     errors, notes, accepts_default = [], [], False
-    placements = []
-    for p in req.get("placements") or []:
+    space = []
+    for p in req.get("space") or []:
         try:
-            placements.append((p.get("name"), ipaddress.ip_network(str(p.get("prefix")), strict=True)))
+            n = ipaddress.ip_network(str(p), strict=True)
         except ValueError:
             continue
+        if n.version == 4 and n not in space:
+            space.append(n)
     reserved = []
     for r in req.get("reserved") or []:
         try:
@@ -447,11 +438,11 @@ def check_circuit(req):
         ge = int(m.group(2)) if m.group(2) else None
         if net.prefixlen == 0 and ge is None:
             accepts_default = True
-        for name, q in placements:
+        for q in space:
             if net.subnet_of(q):
-                errors.append(f"accept entry '{e}' lies inside {q} of placement {name}")
+                errors.append(f"accept entry '{e}' lies inside the network's address space {q}")
             elif q.subnet_of(net):
-                notes.append(f"routes overlapping {q} (placement {name}) are never accepted from the CE")
+                notes.append(f"routes overlapping the network's address space {q} are never accepted from the CE")
         for q in reserved:
             if net.subnet_of(q):
                 errors.append(f"accept entry '{e}' lies inside the platform range {q}")
@@ -481,6 +472,16 @@ def accept_entry(e):
     return net, ge, le
 
 
+def collapse(networks):
+    """The IPv4 networks without those inside another one (duplicates once)."""
+    v4 = sorted({n for n in networks if n.version == 4}, key=lambda n: n.prefixlen)
+    out = []
+    for n in v4:
+        if not any(n.subnet_of(o) for o in out):
+            out.append(n)
+    return out
+
+
 def entry_text(net, ge=None, le=None):
     return str(net) + (f" ge {ge}" if ge is not None else "") + (f" le {le}" if le is not None else "")
 
@@ -507,16 +508,24 @@ def attachments_plan(req):
         except ValueError as e:
             errors.append(f"reserved range {r}: {e}")
     sources = [str(ipaddress.ip_network(str(c), strict=True)) for c in req.get("platformSources") or []]
-    nets_by_key = {}
+    nets_by_key, space = {}, {}
     for n in req.get("networks") or []:
         md = n.get("metadata") or {}
-        nets_by_key[f"{md.get('namespace')}/{md.get('name')}"] = n
+        k = f"{md.get('namespace')}/{md.get('name')}"
+        nets_by_key[k] = n
+        # the space as asked for and as the IPAM holds it (they differ while an edit is refused)
+        for c in ((n.get("spec") or {}).get("prefixes") or []) + [
+                a.get("prefix") for a in (n.get("status") or {}).get("addressSpace") or []]:
+            try:
+                space.setdefault(k, []).append(ipaddress.ip_network(str(c), strict=True))
+            except ValueError:
+                continue
     prefixes = {}
     for p in req.get("placements") or []:
         md, sp = p.get("metadata") or {}, p.get("spec") or {}
         if md.get("deletionTimestamp"):
             continue
-        for c in sp.get("prefixes") or []:
+        for c in (p.get("status") or {}).get("prefixes") or []:
             try:
                 prefixes.setdefault(f"{md.get('namespace')}/{sp.get('network')}", []).append(
                     ipaddress.ip_network(str(c), strict=True))
@@ -574,8 +583,10 @@ def attachments_plan(req):
         eg = egress.get(net_key) or {}
         internet = bool(eg) and bool(eg.get("internet", True))
         zone = int(eg["index"]) + 1 if eg else t
-        mine = sorted(prefixes.get(net_key, []), key=lambda n: (int(n.network_address), n.prefixlen))
-        deny = [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in mine + reserved]
+        mine = sorted({n for n in prefixes.get(net_key, []) if n.version == 4},
+                      key=lambda n: (int(n.network_address), n.prefixlen))
+        own = sorted(collapse(space.get(net_key, []) + mine), key=lambda n: (int(n.network_address), n.prefixlen))
+        deny = [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in own + reserved]
         if internet_intent:
             deny.append("0.0.0.0/0")
         nat = bool(r.get("advertiseDefault")) and internet
@@ -688,7 +699,7 @@ def placement_names(req):
 def orphan_report(req):
     """Fabric orphan check (report only): what the platform realized that no CR owns any more, and CR claims that
     the ledger does not back. Input: crs {fabrics, gateways, networks, placements, cloudvirts, circuits} (CR objects),
-    ledgers {fabric: ledger}, sites [{gateway, type, cudns: [{name, l3vni}], routeAdvertisements: [...],
+    ledgers {fabric: ledger} (with its IPAM section), sites [{gateway, type, cudns: [{name, l3vni}], routeAdvertisements: [...],
     namespaces: [{name, labels}], networks: [{name, sharedTo}], routers: [{name, evpnVni}]}],
     nodes [{fabric, node, netns: {name: [vrf]}, rootDevices: [{name, master}] (the root's VLAN devices in root VRFs
     or on a bearer interface within the attachment VLAN pool), rootBfd: [{peer, vrf, interface, status}] (the root
@@ -711,12 +722,32 @@ def orphan_report(req):
             for owner, value in entries.items():
                 if owner not in owners:
                     findings.append(f"ledger {fab}: {kind} {value} held by {owner}, which no longer exists")
+        for network, state in ((led or {}).get("ipam") or {}).items():
+            if network not in owners:
+                findings.append(f"ledger {fab}: IPAM address space of {network}, which no longer exists")
+            for owner, cidrs in ((state or {}).get("alloc") or {}).items():
+                if owner not in owners:
+                    findings.append(f"ledger {fab}: IPAM {', '.join(cidrs)} of {network} held by {owner}, "
+                                    "which no longer exists")
         vnis = {int(v): o for o, v in (alloc.get("vni") or {}).items()}
         for v, p in by_vni.items():
             if vnis.get(v) != key(p) and ((p.get("status") or {}).get("cloudGateway")):
                 gw = next((g for g in crs.get("gateways") or [] if g["metadata"]["name"] == p["status"]["cloudGateway"]), None)
                 if gw and gw["spec"]["fabricRef"]["name"] == fab:
                     findings.append(f"{key(p)} claims VNI {v}, which the ledger of {fab} does not record for it")
+    # a placement's subnets are the IPAM's: the ledger of its network's fabric holds them for it
+    net_fabric = {f"HybridNetwork/{n['metadata']['namespace']}/{n['metadata']['name']}": (n.get("status") or {}).get("fabric")
+                  for n in crs.get("networks") or []}
+    for p in placements:
+        mine = (p.get("status") or {}).get("prefixes") or []
+        network = f"HybridNetwork/{p['metadata']['namespace']}/{(p.get('spec') or {}).get('network')}"
+        led = (req.get("ledgers") or {}).get(net_fabric.get(network) or "")
+        if not mine or led is None:
+            continue
+        held = (((led.get("ipam") or {}).get(network) or {}).get("alloc") or {}).get(key(p)) or []
+        if sorted(held) != sorted(mine):
+            findings.append(f"{key(p)} claims {', '.join(mine)}, which the IPAM of {net_fabric[network]} holds as "
+                            f"{', '.join(held) or 'nothing'} for it")
     cvs = {(c["metadata"]["namespace"], c["metadata"]["name"]): c for c in crs.get("cloudvirts") or []}
     for site in req.get("sites") or []:
         gw, where = site.get("gateway"), f"site {site.get('site')}"
@@ -783,7 +814,7 @@ def orphan_report(req):
             "counts": {"placements": len(placements), "sites": len(req.get("sites") or []), "nodes": len(req.get("nodes") or [])}}
 
 
-ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-placement": check_placement,
+ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-network": check_network,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
            "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan,
            "circuit-plan": circuit_plan, "check-circuit": check_circuit, "attachments-plan": attachments_plan}
