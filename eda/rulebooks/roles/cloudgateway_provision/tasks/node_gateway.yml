@@ -155,6 +155,30 @@
   changed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# FRR 8.5: a VRF deleted and created again under the same name (a placement's VNI used again) can keep zebra's old binding of
+# its VPN label: bgpd exports the label, but zebra never installs it into the kernel, so traffic from the core for the
+# VRF is dropped. Every VRF must have an MPLS route into it; a VRF without one gets its label bound again (label vpn
+# export off and on, so the running configuration ends unchanged).
+- name: "{{ bgw_node.name }}: every VRF's VPN label leads into it"
+  ansible.builtin.shell: |
+    has() { ip -n gw-{{ fab_name }} -f mpls route | grep -qE " dev $1( |$)"; }
+    rebound=""
+    for v in {{ cg_vrfs | map(attribute='vrf') | join(' ') }}; do
+      for i in 1 2 3; do has "$v" && break; sleep 5; done
+      has "$v" && continue
+      vtysh -N gw-{{ fab_name }} -c 'configure terminal' -c "router bgp {{ cg_fabric.spec.domainAsn }} vrf $v" -c 'address-family ipv4 unicast' \
+        -c 'no label vpn export auto' -c 'label vpn export auto' -c 'end' >/dev/null
+      for i in 1 2 3 4 5 6; do has "$v" && break; sleep 5; done
+      has "$v" || { echo "VRF $v: its VPN label has no MPLS route into it, even after binding it again" >&2; exit 1; }
+      rebound="$rebound $v"
+    done
+    echo "rebound=$rebound"
+  args:
+    executable: /bin/bash
+  register: _cg_labels
+  changed_when: _cg_labels.stdout is search('rebound=.')
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: read the gateway's sessions"
   ansible.builtin.shell: |
     vtysh -N gw-{{ fab_name }} -c 'show bgp l2vpn evpn summary json' 2>/dev/null | python3 -c '
