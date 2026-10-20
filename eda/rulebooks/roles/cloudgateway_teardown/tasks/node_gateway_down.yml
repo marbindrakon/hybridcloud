@@ -1,6 +1,7 @@
 ---
 # shc (design/P7-PLAN.md P7.3.5): remove a gateway instance from one node (delegated, become). The gateway's
-# delete waited for its placements, so the instance carries no tenant network.
+# delete waited for its placements; VRFs of placements deleted together with the gateway (which didn't wait for a
+# release) go with the instance.
 - name: "{{ bgw_node.name }}: stop the gateway instance and keep it off at boot"
   ansible.builtin.systemd:
     name: "shc-gw@{{ fab_name }}.service"

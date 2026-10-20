@@ -36,11 +36,14 @@
       ansible.builtin.set_fact:
         npd_gw: "{{ (_npd_gw.resources | default([], true) + [{}]) | first }}"
 
+    # a gateway being deleted runs no provision job (its teardown waits for its placements) and its teardown removes
+    # the whole instance with this VRF: the placement doesn't wait for a release that can't come
     - name: Does the gateway still carry the placement
       ansible.builtin.set_fact:
         npd_carried: >-
           {{ ((npd_gw.status | default({}, true)).realization | default({}, true)).vrfs | default([], true)
-             | selectattr('placement', 'equalto', npd_key) | list | length > 0 }}
+             | selectattr('placement', 'equalto', npd_key) | list | length > 0
+             and (npd_gw.metadata | default({})).deletionTimestamp is not defined }}
 
     - name: Release the gateway
       when: npd_carried | bool
