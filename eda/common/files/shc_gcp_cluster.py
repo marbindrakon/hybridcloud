@@ -133,7 +133,7 @@ class Cluster:
 
     def project_policy_add(self, member, roles):
         """Bind roles to a member on the project (one read-modify-write with etag)."""
-        for attempt in range(5):
+        for attempt in range(10):
             pol = g.http("POST", "%s/projects/%s:getIamPolicy" % (g.CRM, self.project), {"options": {"requestedPolicyVersion": 3}}, token=self.tok)
             pol.setdefault("bindings", [])
             changed = False
@@ -151,9 +151,11 @@ class Cluster:
                 g.http("POST", "%s/projects/%s:setIamPolicy" % (g.CRM, self.project), {"policy": pol}, token=self.tok)
                 return True
             except g.GcpError as e:
-                if e.code != 409 or attempt == 4:
+                # 409: etag race; 400 "does not exist": a service account created seconds ago is not yet visible
+                # to IAM (read-after-write lag of up to a minute)
+                if not (e.code == 409 or (e.code == 400 and "does not exist" in str(e))) or attempt == 9:
                     raise
-                time.sleep(2)
+                time.sleep(2 if e.code == 409 else 10)
 
     def custom_role_up(self, role_id, permissions, title):
         name = "projects/%s/roles/%s" % (self.project, role_id)
@@ -183,7 +185,14 @@ class Cluster:
         pol.setdefault("bindings", [])
         pol["bindings"] = [x for x in pol["bindings"] if x["role"] != "roles/iam.workloadIdentityUser"]
         pol["bindings"].append({"role": "roles/iam.workloadIdentityUser", "members": members})
-        g.http("POST", url + ":setIamPolicy", {"policy": pol}, token=self.tok)
+        for attempt in range(10):  # the same read-after-write lag on a new service account's own policy
+            try:
+                g.http("POST", url + ":setIamPolicy", {"policy": pol}, token=self.tok)
+                break
+            except g.GcpError as e:
+                if not (e.code == 400 and "does not exist" in str(e)) or attempt == 9:
+                    raise
+                time.sleep(10)
         self.changed.append("binding " + email.split("@")[0])
 
     def up(self, issuer, release, mdir):
