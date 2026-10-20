@@ -368,7 +368,7 @@ export function buildTopologyModel(
       backendName: name,
       siteName: str(p.status?.site) || backendSite.get(`${ns}|${kind}|${name}`) || '',
       cloudGateway: str(p.status?.cloudGateway),
-      prefixes: strs(p.spec?.prefixes),
+      prefixes: strs(p.status?.prefixes),
       l3Vni: num(vnis.l3),
       l2Vni: num(vnis.l2),
       namespaces: strs(p.status?.namespaces),

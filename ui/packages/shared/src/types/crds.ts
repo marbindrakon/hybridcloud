@@ -560,6 +560,8 @@ export type TransportLink = K8sResource<TransportLinkSpec>;
 /** HybridNetwork — a tenant's routed private network across cloud sites */
 export interface HybridNetworkSpec {
   description?: string;
+  /** The network's address space (IPv4 and IPv6); the platform allocates the placements' subnets from it */
+  prefixes: string[];
   /** Default: the platform's only fabric. Immutable once set; cannot be removed. */
   fabricRef?: NameRef;
   /** Default and maximum: the fabric's overlayMtu */
@@ -570,11 +572,22 @@ export interface HybridNetworkSpec {
 
 export type EgressState = 'pending' | 'ready' | 'removing' | 'unavailable';
 
+/** One prefix of a network's address space as the platform holds it */
+export interface AddressSpaceEntry {
+  prefix: string;
+  family: 4 | 6;
+  /** Placement subnets inside the prefix */
+  allocations?: number;
+  /** Prefix length of the largest free block; absent when the prefix is full */
+  largestFree?: number;
+}
+
 export interface HybridNetworkStatus extends OperatorStatus {
   fabric?: string;
   mtu?: number;
   placementCount?: number;
   placementsReady?: number;
+  addressSpace?: AddressSpaceEntry[];
   egress?: { internet?: EgressState | string; sourceAddresses?: string[] | null };
   /** Informational; depends on the platform */
   realization?: Record<string, unknown>;
@@ -585,11 +598,18 @@ export type HybridNetwork = K8sResource<HybridNetworkSpec, HybridNetworkStatus>;
 /** NetworkPlacement backends */
 export type NetworkPlacementBackendKind = 'CloudOSO' | 'CloudVirt';
 
+/** A placement's subnet of one family: a size, or a pinned prefix inside the network's space (or both, agreeing) */
+export interface PlacementSubnetRequest {
+  prefixLength?: number;
+  prefix?: string;
+}
+
 /** NetworkPlacement — puts a HybridNetwork on one cloud environment (all of spec is immutable) */
 export interface NetworkPlacementSpec {
   network: string;
   backend: { kind: NetworkPlacementBackendKind; name: string };
-  prefixes: string[];
+  ipv4: PlacementSubnetRequest;
+  ipv6?: PlacementSubnetRequest;
 }
 
 export interface NetworkPlacementStatus extends OperatorStatus {
@@ -599,7 +619,8 @@ export interface NetworkPlacementStatus extends OperatorStatus {
   l3Vni?: number;
   l2Vni?: number;
   mtu?: number;
-  realizedPrefixes?: string[];
+  /** The subnets allocated to the placement, IPv4 first */
+  prefixes?: string[];
   /** CloudVirt site namespaces the network serves */
   namespaces?: string[];
   backendReady?: boolean;

@@ -174,7 +174,7 @@ export function NetworkOverview({
       if (!net || id === '/') continue;
       cells.set(`${p.metadata.namespace}|${net}|${id}`, {
         state: stateOf(p),
-        prefixes: Array.isArray(p.spec?.prefixes) ? p.spec.prefixes : [],
+        prefixes: Array.isArray(p.status?.prefixes) ? p.status.prefixes : [],
         placement: p,
       });
     }

@@ -97,10 +97,128 @@ export function isIpv4Cidr(text: string): boolean {
   return parseIpv4Cidr(text) !== null;
 }
 
-/** NetworkPlacement prefix: IPv4 network prefix with host bits zero, length 8 to 29. */
-export function isPlacementPrefix(text: string): boolean {
-  const c = parseIpv4Cidr(text);
-  return !!c && c.masked && c.length >= 8 && c.length <= 29;
+/** Parse an IPv6 address (no zone, no embedded IPv4) to its 128-bit value. */
+function ipv6ToBigInt(ip: string): bigint | null {
+  if (!/^[0-9a-fA-F:]+$/.test(ip) || (ip.match(/::/g) ?? []).length > 1) return null;
+  const [head, tail] = ip.includes('::') ? ip.split('::') : [ip, undefined];
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const missing = 8 - left.length - right.length;
+  if ((tail === undefined && missing !== 0) || (tail !== undefined && missing < 1)) return null;
+  const groups = [...left, ...Array(tail === undefined ? 0 : missing).fill('0'), ...right];
+  let n = BigInt(0);
+  for (const g of groups) {
+    if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;
+    n = (n << BigInt(16)) + BigInt(parseInt(g, 16));
+  }
+  return n;
+}
+
+/** RFC 5952 text of a 128-bit IPv6 value (lowercase, no leading zeros, the longest run of 2+ zero groups as ::). */
+function ipv6ToString(n: bigint): string {
+  const groups: number[] = [];
+  for (let i = 7; i >= 0; i -= 1) groups.push(Number((n >> BigInt(16 * i)) & BigInt(0xffff)));
+  let best = -1;
+  let bestLen = 1;
+  for (let i = 0; i < 8; ) {
+    if (groups[i] !== 0) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < 8 && groups[j] === 0) j += 1;
+    if (j - i > bestLen) {
+      best = i;
+      bestLen = j - i;
+    }
+    i = j;
+  }
+  const hex = groups.map((g) => g.toString(16));
+  if (best < 0) return hex.join(':');
+  return `${hex.slice(0, best).join(':')}::${hex.slice(best + bestLen).join(':')}`;
+}
+
+/** An IPv4 or IPv6 prefix: family, first and last address, length, canonical text, whether host bits are zero. */
+export interface NetworkPrefix {
+  family: 4 | 6;
+  start: bigint;
+  end: bigint;
+  length: number;
+  canonical: string;
+  masked: boolean;
+}
+
+export function parseNetworkPrefix(text: string): NetworkPrefix | null {
+  const m = /^([^/\s]+)\/(\d{1,3})$/.exec(text.trim());
+  if (!m) return null;
+  const length = Number(m[2]);
+  const v4 = ipv4ToInt(m[1]);
+  const family: 4 | 6 = v4 !== null ? 4 : 6;
+  const value = v4 !== null ? BigInt(v4) : ipv6ToBigInt(m[1]);
+  const bits = family === 4 ? 32 : 128;
+  if (value === null || length > bits) return null;
+  const size = BigInt(1) << BigInt(bits - length);
+  const start = value - (value % size);
+  const canonical =
+    family === 4
+      ? `${[24, 16, 8, 0].map((s) => Number((start >> BigInt(s)) & BigInt(255))).join('.')}/${length}`
+      : `${ipv6ToString(start)}/${length}`;
+  return { family, start, end: start + size - BigInt(1), length, canonical, masked: start === value };
+}
+
+/** A prefix of a HybridNetwork's address space: canonical, host bits zero, IPv4 /8–/29 or IPv6 /32–/64. */
+export function isSpacePrefix(text: string): boolean {
+  const p = parseNetworkPrefix(text);
+  if (!p || !p.masked || p.canonical !== text.trim()) return false;
+  return p.family === 4 ? p.length >= 8 && p.length <= 29 : p.length >= 32 && p.length <= 64;
+}
+
+/** Whether two prefixes of a list (same family) overlap. */
+export function prefixListOverlaps(list: string[]): boolean {
+  const parsed = list.map(parseNetworkPrefix).filter((p): p is NetworkPrefix => !!p);
+  for (let i = 0; i < parsed.length; i += 1) {
+    for (let j = i + 1; j < parsed.length; j += 1) {
+      const a = parsed[i];
+      const b = parsed[j];
+      if (a.family === b.family && !(a.end < b.start || b.end < a.start)) return true;
+    }
+  }
+  return false;
+}
+
+/** A HybridNetwork's address space as the CRD accepts it: 1–8 distinct, disjoint prefixes, at least one IPv4. */
+export function isAddressSpace(list: string[]): boolean {
+  return (
+    list.length >= 1 &&
+    list.length <= 8 &&
+    list.every(isSpacePrefix) &&
+    list.some((p) => parseNetworkPrefix(p)?.family === 4) &&
+    new Set(list).size === list.length &&
+    !prefixListOverlaps(list)
+  );
+}
+
+/** NetworkPlacement IPv4 subnet sizes (CloudAWS: up to a /24) */
+export const PLACEMENT_IPV4_MIN = 16;
+export const PLACEMENT_IPV4_MAX = 29;
+export const PLACEMENT_IPV4_MAX_AWS = 24;
+export const PLACEMENT_IPV4_DEFAULT = 24;
+
+/** A pinned NetworkPlacement IPv4 prefix: canonical, host bits zero, /16 to maxLength. */
+export function isPinnedIpv4Prefix(text: string, maxLength: number = PLACEMENT_IPV4_MAX): boolean {
+  const p = parseNetworkPrefix(text);
+  return (
+    !!p && p.family === 4 && p.masked && p.canonical === text.trim() && p.length >= PLACEMENT_IPV4_MIN && p.length <= maxLength
+  );
+}
+
+/** Whether a prefix lies inside one of a list of prefixes (same family). */
+export function prefixWithin(text: string, space: string[]): boolean {
+  const p = parseNetworkPrefix(text);
+  if (!p) return false;
+  return space
+    .map(parseNetworkPrefix)
+    .some((s) => !!s && s.family === p.family && s.start <= p.start && p.end <= s.end);
 }
 
 /** Whether an IPv4 address lies inside an IPv4 prefix. */

@@ -370,6 +370,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
   },
   HybridNetwork: {
     fields: [
+      { path: 'prefixes', labelKey: 'fields.networkPrefixes', widget: 'cidrList', helpKey: 'fields.networkPrefixesHelp' },
       { path: 'description', labelKey: 'fields.description', widget: 'textarea', omitWhenEmpty: true },
       {
         path: 'fabricRef',
@@ -395,7 +396,10 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'network', labelKey: 'fields.network', widget: 'text', immutable: true },
       { path: 'backend.kind', labelKey: 'fields.backendKind', widget: 'text', immutable: true },
       { path: 'backend.name', labelKey: 'fields.backendName', widget: 'text', immutable: true },
-      { path: 'prefixes', labelKey: 'fields.prefixes', widget: 'cidrList', immutable: true },
+      { path: 'ipv4.prefixLength', labelKey: 'fields.placementIpv4Size', widget: 'number', immutable: true },
+      { path: 'ipv4.prefix', labelKey: 'fields.placementIpv4Pinned', widget: 'text', immutable: true },
+      { path: 'ipv6.prefixLength', labelKey: 'fields.placementIpv6Size', widget: 'number', immutable: true },
+      { path: 'ipv6.prefix', labelKey: 'fields.placementIpv6Pinned', widget: 'text', immutable: true },
     ],
   },
   HybridFabric: {

@@ -29,14 +29,14 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
   HybridFabric: ['nodes', 'allocated', 'available', 'ledger'],
   CloudGateway: ['nodes', 'wireguard', 'site'],
   CloudInfrastructure: ['capabilities', 'site'],
-  HybridNetwork: ['egress', 'fabric', 'mtu', 'placementCount', 'placementsReady'],
+  HybridNetwork: ['addressSpace', 'egress', 'fabric', 'mtu', 'placementCount', 'placementsReady'],
   NetworkPlacement: [
     'site',
     'cloudGateway',
     'l3Vni',
     'l2Vni',
     'mtu',
-    'realizedPrefixes',
+    'prefixes',
     'namespaces',
     'backendReady',
     'gatewayReady',
@@ -616,8 +616,44 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
   const st = item.status ?? {};
   const requested = spec.egress?.internet === true;
   const sources = Array.isArray(st.egress?.sourceAddresses) ? st.egress?.sourceAddresses ?? [] : [];
+  const space = Array.isArray(st.addressSpace) ? st.addressSpace : [];
+  const held = new Set(space.map((a) => a.prefix));
+  const asked = (spec.prefixes ?? []).filter((p) => !held.has(p));
   return (
     <>
+      <Section title={t('detail.addressSpace')}>
+        {space.length === 0 ? (
+          <List items={spec.prefixes} />
+        ) : (
+          <Table aria-label={t('detail.addressSpace')} variant="compact" className="sc-mb">
+            <Thead>
+              <Tr>
+                <Th modifier="wrap">{t('detail.prefix')}</Th>
+                <Th modifier="wrap">{t('detail.family')}</Th>
+                <Th modifier="wrap">{t('detail.allocations')}</Th>
+                <Th modifier="wrap">{t('detail.largestFree')}</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {space.map((a) => (
+                <Tr key={a.prefix}>
+                  <Td dataLabel={t('detail.prefix')}>
+                    <Mono>{a.prefix}</Mono>
+                  </Td>
+                  <Td dataLabel={t('detail.family')}>{`IPv${a.family}`}</Td>
+                  <Td dataLabel={t('detail.allocations')}>{a.allocations ?? 0}</Td>
+                  <Td dataLabel={t('detail.largestFree')}>
+                    {a.largestFree != null ? `/${a.largestFree}` : t('detail.spaceFull')}
+                  </Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        )}
+        {space.length > 0 && asked.length > 0 && (
+          <p className="sc-text-muted">{t('detail.addressSpacePending', { prefixes: asked.join(', ') })}</p>
+        )}
+      </Section>
       <Facts>
         <Fact label={t('fields.fabricRef')}>{st.fabric || spec.fabricRef?.name}</Fact>
         <Fact label={t('detail.effectiveMtu')}>{st.mtu}</Fact>
@@ -643,6 +679,26 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
   );
 }
 
+/** What a placement asked for, per family: "IPv4 /24", "IPv4 10.60.5.0/24 (pinned)". */
+export function placementRequestText(
+  spec: Partial<NetworkPlacement['spec']> | undefined,
+  t: (k: string, o?: Record<string, unknown>) => string,
+): string {
+  const parts: string[] = [];
+  for (const [family, req] of [
+    [4, spec?.ipv4],
+    [6, spec?.ipv6],
+  ] as const) {
+    if (!req) continue;
+    parts.push(
+      req.prefix
+        ? t('detail.requestPinned', { family, prefix: req.prefix })
+        : t('detail.requestSize', { family, length: req.prefixLength }),
+    );
+  }
+  return parts.join(', ');
+}
+
 /** A placement's layer 3 and layer 2 VNIs: status.realization, else the top-level status fields. */
 export function placementVnis(item: NetworkPlacement | undefined): { l3?: number; l2?: number } {
   const real = (item?.status?.realization ?? {}) as { l3Vni?: unknown; l2Vni?: unknown };
@@ -662,11 +718,9 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
       <Fact label={t('fields.backendName')}>
         {spec.backend ? `${spec.backend.kind} / ${spec.backend.name}` : undefined}
       </Fact>
-      <Fact label={t('fields.prefixes')}>
-        <List items={spec.prefixes} />
-      </Fact>
-      <Fact label={t('detail.realizedPrefixes')}>
-        <List items={st.realizedPrefixes} />
+      <Fact label={t('detail.placementRequest')}>{placementRequestText(spec, t)}</Fact>
+      <Fact label={t('detail.allocatedPrefixes')}>
+        <List items={st.prefixes} />
       </Fact>
       <Fact label={t('fields.site')}>{st.site}</Fact>
       <Fact label={t('detail.cloudGateway')}>{st.cloudGateway}</Fact>

@@ -281,6 +281,10 @@ function sanitizeCloudVirtSpec(raw) {
 function sanitizeHybridNetworkSpec(raw) {
   if (!isObject(raw)) return { error: "spec must be an object" };
   const spec = pickStrings(raw, ["description"]);
+  // the address space; the API checks the prefixes themselves
+  const prefixes = stringList(raw.prefixes);
+  if (!prefixes) return { error: "spec.prefixes must be a non-empty list of IPv4/IPv6 prefixes" };
+  spec.prefixes = prefixes;
   const fabricRef = sanitizeNameRef(raw.fabricRef);
   if (fabricRef === false) return { error: "spec.fabricRef.name is invalid" };
   if (fabricRef) spec.fabricRef = fabricRef;
@@ -310,9 +314,25 @@ function sanitizeNetworkPlacementSpec(raw) {
   }
   const backendName = typeof backend.name === "string" ? backend.name.trim() : "";
   if (!backendName || !NAME_PATTERN.test(backendName)) return { error: "spec.backend.name is required" };
-  const prefixes = stringList(raw.prefixes);
-  if (!prefixes) return { error: "spec.prefixes must be a non-empty list of IPv4 prefixes" };
-  return { spec: { network, backend: { kind: backend.kind, name: backendName }, prefixes } };
+  const spec = { network, backend: { kind: backend.kind, name: backendName } };
+  // a placement's subnet per family: a size and/or a pinned prefix (the API checks both)
+  for (const family of ["ipv4", "ipv6"]) {
+    const req = raw[family];
+    if (req == null) continue;
+    if (!isObject(req)) return { error: `spec.${family} must be an object` };
+    const out = {};
+    const length = intIn(req.prefixLength, 0, 128);
+    if (length === false) return { error: `spec.${family}.prefixLength must be an integer` };
+    if (length !== undefined) out.prefixLength = length;
+    if (req.prefix != null) {
+      if (typeof req.prefix !== "string" || !req.prefix.trim()) return { error: `spec.${family}.prefix must be a prefix` };
+      out.prefix = req.prefix.trim();
+    }
+    if (!Object.keys(out).length) return { error: `spec.${family} needs prefixLength or prefix` };
+    spec[family] = out;
+  }
+  if (!spec.ipv4) return { error: "spec.ipv4 (a prefixLength or a pinned prefix) is required" };
+  return { spec };
 }
 
 const KIND_PLURALS = {

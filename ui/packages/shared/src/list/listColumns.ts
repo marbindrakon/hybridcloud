@@ -778,6 +778,15 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
   ],
   HybridNetwork: [
     {
+      id: 'prefixes',
+      labelKey: 'list.addressSpace',
+      sortable: true,
+      getSortValue: (i) => asStringArray(specOf(i).prefixes).join(' '),
+      getSearchText: (i) => asStringArray(specOf(i).prefixes).join(' '),
+      render: (i) =>
+        asStringArray(specOf(i).prefixes).length ? truncate(asStringArray(specOf(i).prefixes).join(', ')) : '—',
+    },
+    {
       id: 'description',
       labelKey: 'list.description',
       sortable: true,
@@ -866,10 +875,9 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       id: 'prefixes',
       labelKey: 'list.prefixes',
       sortable: true,
-      getSortValue: (i) => asStringArray(specOf(i).prefixes).length,
-      getSearchText: (i) => asStringArray(specOf(i).prefixes).join(' '),
-      render: (i) =>
-        countChip(asStringArray(specOf(i).prefixes).length, asStringArray(specOf(i).prefixes).join(', '), 'CIDRs'),
+      getSortValue: (i) => asStringArray(statusOf(i).prefixes).join(' '),
+      getSearchText: (i) => asStringArray(statusOf(i).prefixes).join(' '),
+      render: (i) => asStringArray(statusOf(i).prefixes).join(', ') || '—',
     },
     {
       id: 'site',

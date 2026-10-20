@@ -20,6 +20,7 @@ import type {
   CloudInfrastructureType,
   GatewayTransport,
   HybridFabric,
+  HybridNetwork,
   K8sResource,
   NetworkPlacementBackendKind,
 } from '../types';
@@ -54,8 +55,13 @@ import {
   isIntInRange,
   isIpv4,
   isIpv4Cidr,
-  isPlacementPrefix,
-  parseIpv4Cidr,
+  isAddressSpace,
+  isPinnedIpv4Prefix,
+  prefixWithin,
+  PLACEMENT_IPV4_DEFAULT,
+  PLACEMENT_IPV4_MAX,
+  PLACEMENT_IPV4_MAX_AWS,
+  PLACEMENT_IPV4_MIN,
 } from './hybridFabricDefaults';
 
 export const PLATFORM_NAMESPACE = 'sovereign-cloud';
@@ -93,21 +99,6 @@ function useReportSpec(spec: Record<string, unknown> | null, onChange: SpecChang
 
 function rangesOverlap(a: [number, number], b: [number, number]): boolean {
   return !(a[1] < b[0] || b[1] < a[0]);
-}
-
-function prefixesOverlap(list: string[]): boolean {
-  const parsed = list.map(parseIpv4Cidr).filter((c): c is NonNullable<typeof c> => !!c);
-  const spans = parsed.map((c) => {
-    const size = 2 ** (32 - c.length);
-    const start = c.base - (c.base % size);
-    return [start, start + size - 1] as [number, number];
-  });
-  for (let i = 0; i < spans.length; i += 1) {
-    for (let j = i + 1; j < spans.length; j += 1) {
-      if (rangesOverlap(spans[i], spans[j])) return true;
-    }
-  }
-  return false;
 }
 
 /* ------------------------------------------------------------------ HybridFabric (platform) */
@@ -847,6 +838,7 @@ export function HybridNetworkCreateFields({
   const [mtu, setMtu] = useState('');
   const [egress, setEgress] = useState(false);
   const [viewers, setViewers] = useState<string[]>([]);
+  const [prefixes, setPrefixes] = useState<string[]>([]);
 
   const fabricsReadable = !fabrics.error;
   const eligible = (f: HybridFabric) => {
@@ -870,9 +862,11 @@ export function HybridNetworkCreateFields({
   const mtuMax = typeof fabricMtu === 'number' ? Math.min(fabricMtu, MTU_MAX) : MTU_MAX;
   const mtuOk = optionalInt(mtu, MTU_MIN, mtuMax);
 
-  const valid = mtuOk && (!fabricRequired || !!fabricRef);
+  const prefixesOk = isAddressSpace(prefixes);
+  const valid = mtuOk && prefixesOk && (!fabricRequired || !!fabricRef);
   const spec = valid
     ? {
+        prefixes,
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(fabricRef.trim() ? { fabricRef: { name: fabricRef.trim() } } : {}),
         ...(mtu.trim() ? { mtu: Number(mtu) } : {}),
@@ -884,6 +878,15 @@ export function HybridNetworkCreateFields({
 
   return (
     <>
+      <FormGroup label={t('fields.networkPrefixes')} fieldId="hn-prefixes" isRequired>
+        <ListTextArea
+          id="hn-prefixes"
+          value={prefixes}
+          onChange={setPrefixes}
+          validated={prefixes.length === 0 || prefixesOk ? 'default' : 'error'}
+        />
+        <Help>{t('fields.networkPrefixesHelp')}</Help>
+      </FormGroup>
       <FormGroup label={t('fields.description')} fieldId="hn-desc">
         <TextArea id="hn-desc" value={description} onChange={(_e, v) => setDescription(v)} rows={2} />
       </FormGroup>
@@ -954,13 +957,14 @@ export function NetworkPlacementCreateFields({
 }): React.ReactElement {
   const { t } = useTranslation();
   const enabled = !!namespace;
-  const networks = useK8sResourceList<K8sResource>('HybridNetwork', { namespace, enabled });
+  const networks = useK8sResourceList<HybridNetwork>('HybridNetwork', { namespace, enabled });
   const cloudvirts = useK8sResourceList<K8sResource>('CloudVirt', { namespace, enabled });
   const cloudosos = useK8sResourceList<K8sResource>('CloudOSO', { namespace, enabled });
   const [network, setNetwork] = useState('');
   const [backendKind, setBackendKind] = useState<NetworkPlacementBackendKind>('CloudVirt');
   const [backendName, setBackendName] = useState('');
-  const [prefixes, setPrefixes] = useState<string[]>([]);
+  const [prefixLength, setPrefixLength] = useState(String(PLACEMENT_IPV4_DEFAULT));
+  const [pinned, setPinned] = useState('');
 
   const backendOptions = useMemo(
     () =>
@@ -970,14 +974,25 @@ export function NetworkPlacementCreateFields({
     [cloudosos.items, cloudvirts.items, backendKind],
   );
 
-  const prefixesOk =
-    prefixes.length >= 1 &&
-    prefixes.length <= 16 &&
-    prefixes.every(isPlacementPrefix) &&
-    new Set(prefixes).size === prefixes.length &&
-    !prefixesOverlap(prefixes);
-  const valid = !!network && !!backendName && prefixesOk;
-  const spec = valid ? { network, backend: { kind: backendKind, name: backendName }, prefixes } : null;
+  // the chosen network's IPv4 space (as the platform holds it, else as asked for) for the size hint and the pinned check
+  const chosen = networks.items.find((n) => n.metadata.name === network);
+  const space = (chosen?.status?.addressSpace ?? []).filter((a) => a.family === 4);
+  const spacePrefixes = space.length
+    ? space.map((a) => a.prefix)
+    : (chosen?.spec?.prefixes ?? []).filter((p) => !p.includes(':'));
+  const maxLength = (backendKind as string) === 'CloudAWS' ? PLACEMENT_IPV4_MAX_AWS : PLACEMENT_IPV4_MAX;
+  const lengths = Array.from({ length: maxLength - PLACEMENT_IPV4_MIN + 1 }, (_v, i) => PLACEMENT_IPV4_MIN + i);
+  const pinnedText = pinned.trim();
+  const pinnedOk =
+    !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
+  const valid = !!network && !!backendName && pinnedOk;
+  const spec = valid
+    ? {
+        network,
+        backend: { kind: backendKind, name: backendName },
+        ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) },
+      }
+    : null;
   useReportSpec(spec, onChange);
 
   return (
@@ -1016,14 +1031,41 @@ export function NetworkPlacementCreateFields({
         isRequired
       />
       <Help>{t('fields.placementBackendHelp')}</Help>
-      <FormGroup label={t('fields.prefixes')} fieldId="np-prefixes" isRequired>
-        <ListTextArea
-          id="np-prefixes"
-          value={prefixes}
-          onChange={setPrefixes}
-          validated={prefixes.length === 0 || prefixesOk ? 'default' : 'error'}
+      <FormGroup label={t('fields.placementIpv4Size')} fieldId="np-ipv4-length" isRequired>
+        <FormSelect
+          id="np-ipv4-length"
+          value={prefixLength}
+          onChange={(_e, v) => setPrefixLength(v)}
+          aria-label={t('fields.placementIpv4Size')}
+          isDisabled={!!pinnedText}
+        >
+          {lengths.map((l) => (
+            <FormSelectOption key={l} value={String(l)} label={`/${l}`} />
+          ))}
+        </FormSelect>
+        <Help>
+          {space.length
+            ? t('fields.placementSpaceHint', {
+                space: space
+                  .map((a) =>
+                    a.largestFree != null
+                      ? t('fields.placementSpaceFree', { prefix: a.prefix, free: a.largestFree })
+                      : t('fields.placementSpaceFull', { prefix: a.prefix }),
+                  )
+                  .join(', '),
+              })
+            : t('fields.placementIpv4SizeHelp')}
+        </Help>
+      </FormGroup>
+      <FormGroup label={t('fields.placementIpv4Pinned')} fieldId="np-ipv4-prefix">
+        <TextInput
+          id="np-ipv4-prefix"
+          value={pinned}
+          onChange={(_e, v) => setPinned(v)}
+          placeholder={spacePrefixes[0] ?? ''}
+          validated={pinnedOk ? 'default' : 'error'}
         />
-        <Help>{t('fields.placementPrefixesHelp')}</Help>
+        <Help>{t('fields.placementIpv4PinnedHelp')}</Help>
       </FormGroup>
       <Help>{t('form.placementImmutable')}</Help>
     </>

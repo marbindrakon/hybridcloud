@@ -210,7 +210,7 @@ app.post("/api/hybridnetworks", requireAuth, mutationLimiter, k8s.createHybridNe
 app.patch("/api/hybridnetworks/:name", requireAuth, mutationLimiter, k8s.patchHybridNetwork);
 app.delete("/api/hybridnetworks/:name", requireAuth, mutationLimiter, k8s.deleteHybridNetwork);
 
-// NetworkPlacement CRUD (network, backend and prefixes are immutable: no update)
+// NetworkPlacement CRUD (network, backend and subnets are immutable: no update)
 app.get("/api/networkplacements", requireAuth, k8s.listNetworkPlacements);
 app.get("/api/networkplacements/:name", requireAuth, k8s.getNetworkPlacement);
 app.post("/api/networkplacements", requireAuth, mutationLimiter, k8s.createNetworkPlacement);
