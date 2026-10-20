@@ -4725,7 +4725,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.1.7"
+      tag: "img-2.1.8"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -4757,7 +4757,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.1.8"
+      tag: "img-5.1.9"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret

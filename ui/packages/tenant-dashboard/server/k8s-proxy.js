@@ -127,7 +127,7 @@ function sanitizePlatformOpenshiftSpec(raw) {
   if (!isObject(raw)) return { error: "spec must be an object" };
   const spec = {};
   if (raw.type != null) {
-    if (raw.type !== "openstack" && raw.type !== "aws") return { error: "spec.type must be openstack or aws" };
+    if (raw.type !== "openstack" && raw.type !== "aws" && raw.type !== "gcp") return { error: "spec.type must be openstack, aws or gcp" };
     spec.type = raw.type;
   }
   if (raw.openstack != null) {
@@ -167,6 +167,21 @@ function sanitizePlatformOpenshiftSpec(raw) {
     if (cp !== undefined) aws.controlPlaneCount = cp;
     if (workers !== undefined) aws.workerCount = workers;
     spec.aws = aws;
+  }
+  if (raw.gcp != null) {
+    if (!isObject(raw.gcp)) return { error: "spec.gcp must be an object" };
+    const gcp = pickStrings(raw.gcp, ["environment", "region", "controllerFlavor", "workerFlavor", "network"]);
+    if (!gcp.environment) return { error: "spec.gcp.environment is required" };
+    if (raw.gcp.publish != null) {
+      if (raw.gcp.publish !== "External" && raw.gcp.publish !== "Internal") return { error: "spec.gcp.publish must be External or Internal" };
+      gcp.publish = raw.gcp.publish;
+    }
+    const cp = intIn(raw.gcp.controlPlaneCount, 0, 1000);
+    const workers = intIn(raw.gcp.workerCount, 0, 1000);
+    if (cp === false || workers === false) return { error: "spec.gcp node counts must be integers" };
+    if (cp !== undefined) gcp.controlPlaneCount = cp;
+    if (workers !== undefined) gcp.workerCount = workers;
+    spec.gcp = gcp;
   }
   if (raw.toolRbac != null) {
     if (!isObject(raw.toolRbac)) return { error: "spec.toolRbac must be an object" };
@@ -221,6 +236,15 @@ function sanitizeCloudAWSSpec(raw) {
   if (!spec.account || !spec.vaultPath || !spec.baseDomain) {
     return { error: "spec.account, spec.vaultPath and spec.baseDomain are required" };
   }
+  return { spec };
+}
+
+function sanitizeCloudGCPSpec(raw) {
+  if (!isObject(raw)) return { error: "spec must be an object" };
+  const spec = {};
+  const cloudRef = sanitizeCloudRef(raw.cloudRef);
+  if (!cloudRef) return { error: "spec.cloudRef.name (a CloudInfrastructure of type gcp) is required" };
+  spec.cloudRef = cloudRef;
   return { spec };
 }
 
@@ -343,6 +367,7 @@ const KIND_PLURALS = {
   PlatformOpenshift: "platformopenshifts",
   CloudOSO: "cloudosos",
   CloudAWS: "cloudawss",
+  CloudGCP: "cloudgcps",
   CloudVirt: "cloudvirts",
   OpenStackMigration: "openstackmigrations",
   Rbac: "rbacs",
@@ -417,6 +442,10 @@ export function createK8sHandlers(apiServer) {
   const MTV_CATALOG_PATH = "/api/v1/namespaces/sovereign-cloud/configmaps/mtv-migration-catalog";
   function cloudawssCollectionPath(namespace) {
     return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/cloudawss`;
+  }
+
+  function cloudgcpsCollectionPath(namespace) {
+    return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/cloudgcps`;
   }
 
   function cloudvirtsCollectionPath(namespace) {
@@ -1472,6 +1501,119 @@ export function createK8sHandlers(apiServer) {
         res.json({ message: `CloudAWS '${name}' deleted` });
       } catch (err) {
         console.error("CloudAWS delete error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async listCloudGCPs(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const namespace = req.query.namespace;
+      if (!namespace || !NS_PATTERN.test(namespace)) {
+        return res.status(400).json({ message: "namespace query parameter required" });
+      }
+      try {
+        const resp = await k8sRequest(apiServer, cloudgcpsCollectionPath(namespace), "GET", token);
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list CloudGCPs" });
+        res.json(resp.body?.items || []);
+      } catch (err) {
+        console.error("CloudGCP list error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async createCloudGCP(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name, namespace, spec } = req.body || {};
+      if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
+      if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      const clean = sanitizeCloudGCPSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const obj = {
+        apiVersion: "hybridsovereign.redhat/v1alpha1",
+        kind: "CloudGCP",
+        metadata: { name, namespace },
+        spec: clean.spec,
+      };
+      try {
+        const resp = await k8sRequest(apiServer, cloudgcpsCollectionPath(namespace), "POST", token, obj);
+        if (resp.status === 409) return res.status(409).json({ message: `CloudGCP '${name}' already exists` });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) {
+          return res.status(502).json({ message: resp.body?.message || "Failed to create CloudGCP" });
+        }
+        res.status(201).json(resp.body);
+      } catch (err) {
+        console.error("CloudGCP create error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async getCloudGCP(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${cloudgcpsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "GET", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get CloudGCP" });
+        res.json(resp.body);
+      } catch (err) {
+        console.error("CloudGCP get error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async patchCloudGCP(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      const { spec } = req.body || {};
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      if (!spec) return res.status(400).json({ message: "spec is required" });
+      const clean = sanitizeCloudGCPSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      try {
+        const urlPath = `${cloudgcpsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        // The editor sends the whole spec: replace it (fields left out are removed).
+        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
+        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch CloudGCP" });
+        res.json(resp.body);
+      } catch (err) {
+        console.error("CloudGCP patch error:", err.message);
+        res.status(502).json({ message: "Failed to communicate with cluster API" });
+      }
+    },
+
+    async deleteCloudGCP(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      try {
+        const urlPath = `${cloudgcpsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
+        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
+        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
+        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete CloudGCP" });
+        res.json({ message: `CloudGCP '${name}' deleted` });
+      } catch (err) {
+        console.error("CloudGCP delete error:", err.message);
         res.status(502).json({ message: "Failed to communicate with cluster API" });
       }
     },
@@ -2603,6 +2745,7 @@ export function createK8sHandlers(apiServer) {
       const RESOURCE_TYPES = [
         { resource: "cloudosos",           group: "hybridsovereign.redhat" },
         { resource: "cloudawss",           group: "hybridsovereign.redhat" },
+        { resource: "cloudgcps",           group: "hybridsovereign.redhat" },
         { resource: "cloudvirts",          group: "hybridsovereign.redhat" },
         { resource: "hybridnetworks",      group: "hybridsovereign.redhat" },
         { resource: "networkplacements",   group: "hybridsovereign.redhat" },

@@ -9,6 +9,7 @@ const LIST_PATH: Record<string, string> = {
   assignment: '/assignments',
   cloudoso: '/cloudoso',
   cloudaws: '/cloudaws',
+  cloudgcp: '/cloudgcp',
   cloudvirt: '/cloudvirt',
   platformopenshift: '/platforms',
   migration: '/migrations',

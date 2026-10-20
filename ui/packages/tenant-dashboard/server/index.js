@@ -195,6 +195,12 @@ app.get("/api/cloudawss/:name", requireAuth, k8s.getCloudAWS);
 app.post("/api/cloudawss", requireAuth, mutationLimiter, k8s.createCloudAWS);
 app.patch("/api/cloudawss/:name", requireAuth, mutationLimiter, k8s.patchCloudAWS);
 app.delete("/api/cloudawss/:name", requireAuth, mutationLimiter, k8s.deleteCloudAWS);
+// CloudGCP CRUD
+app.get("/api/cloudgcps", requireAuth, k8s.listCloudGCPs);
+app.get("/api/cloudgcps/:name", requireAuth, k8s.getCloudGCP);
+app.post("/api/cloudgcps", requireAuth, mutationLimiter, k8s.createCloudGCP);
+app.patch("/api/cloudgcps/:name", requireAuth, mutationLimiter, k8s.patchCloudGCP);
+app.delete("/api/cloudgcps/:name", requireAuth, mutationLimiter, k8s.deleteCloudGCP);
 
 // CloudVirt CRUD
 app.get("/api/cloudvirts", requireAuth, k8s.listCloudVirts);

@@ -8,6 +8,7 @@ entity_named_roles:
       - hybridnetworks
       - networkplacements
       - cloudawss
+      - cloudgcps
       - platformopenshifts
       - vaultkvs
       - vaults
@@ -28,6 +29,7 @@ entity_named_roles:
       - hybridnetworks
       - networkplacements
       - cloudawss
+      - cloudgcps
       - platformopenshifts
       - vaultkvs
       - vaults
@@ -47,6 +49,7 @@ entity_named_roles:
       - hybridnetworks
       - networkplacements
       - cloudawss
+      - cloudgcps
       - platformopenshifts
       - vaultkvs
       - vaults
@@ -97,10 +100,20 @@ entity_named_roles:
     crud_resources: []
     read_resources: [cloudawss, rbacs]
 
+  - spec_key: cloudGCPAdmin
+    role_name: cloudgcp-admin
+    crud_resources: [cloudgcps]
+    read_resources: [rbacs]
+
+  - spec_key: cloudGCPView
+    role_name: cloudgcp-view
+    crud_resources: []
+    read_resources: [cloudgcps, rbacs]
+
   - spec_key: platformOpenshiftAdmin
     role_name: platformopenshift-admin
     crud_resources: [platformopenshifts]
-    read_resources: [cloudosos, cloudawss, rbacs]
+    read_resources: [cloudosos, cloudawss, cloudgcps, rbacs]
 
   - spec_key: platformOpenshiftView
     role_name: platformopenshift-view
