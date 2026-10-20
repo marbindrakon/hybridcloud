@@ -9,6 +9,7 @@ export { default as TenantPlatformsPage } from './components/TenantPlatformsPage
 export { default as TenantAssignmentsPage } from './components/TenantAssignmentsPage';
 export { default as TenantCloudOSOPage } from './components/TenantCloudOSOPage';
 export { default as TenantCloudAWSPage } from './components/TenantCloudAWSPage';
+export { default as TenantCloudGCPPage } from './components/TenantCloudGCPPage';
 export { default as TenantCloudVirtPage } from './components/TenantCloudVirtPage';
 export { default as TenantMigrationsPage } from './components/TenantMigrationsPage';
 export { default as TenantPersonasPage } from './components/TenantPersonasPage';
@@ -26,6 +27,7 @@ export { default as TenantPlatformDetailPage } from './components/TenantPlatform
 export { default as TenantAssignmentDetailPage } from './components/TenantAssignmentDetailPage';
 export { default as TenantCloudOSODetailPage } from './components/TenantCloudOSODetailPage';
 export { default as TenantCloudAWSDetailPage } from './components/TenantCloudAWSDetailPage';
+export { default as TenantCloudGCPDetailPage } from './components/TenantCloudGCPDetailPage';
 export { default as TenantCloudVirtDetailPage } from './components/TenantCloudVirtDetailPage';
 export { default as TenantMigrationDetailPage } from './components/TenantMigrationDetailPage';
 export { default as TenantPersonaDetailPage } from './components/TenantPersonaDetailPage';

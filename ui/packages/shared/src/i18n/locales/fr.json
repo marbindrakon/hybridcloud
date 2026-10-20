@@ -113,7 +113,8 @@
     "cloudInfrastructure": "Infrastructure cloud",
     "networkOverview": "Vue d'ensemble du réseau",
     "hybridNetworksAll": "Hybrid Networks (toutes les entités)",
-    "networkPlacementsAll": "Network Placements (toutes les entités)"
+    "networkPlacementsAll": "Network Placements (toutes les entités)",
+    "cloudGcp": "Google Cloud"
   },
   "kinds": {
     "Entity": "Entités",
@@ -140,7 +141,8 @@
     "HybridNetwork": "Réseaux hybrides",
     "NetworkPlacement": "Placements réseau",
     "UIHealthChecker": "Contrôles de santé UI",
-    "CloudInfrastructure": "Infrastructures cloud"
+    "CloudInfrastructure": "Infrastructures cloud",
+    "CloudGCP": "Cloud GCP"
   },
   "pages": {
     "overviewTitle": "Vue d'ensemble",
@@ -247,7 +249,9 @@
     "transport": "Transport",
     "egressOff": "désactivée",
     "egressRequested": "demandée",
-    "namespacesReady": "{{ready}}/{{total}} prêts"
+    "namespacesReady": "{{ready}}/{{total}} prêts",
+    "project": "Projet",
+    "domain": "Domaine"
   },
   "form": {
     "entityListRestricted": "Seule l'entité à laquelle vous avez accès est affichée — la liste complète nécessite un accès plateforme.",
@@ -541,7 +545,18 @@
     "wireguardListenPortHelp": "Port UDP des nœuds (1024 à 65535). Par défaut 51820.",
     "wireguardPeers": "Pairs du site distant",
     "wireguardPeersHelp": "Les extrémités de tunnel du site distant : clé publique WireGuard, hôte:port facultatif (sans lui, le pair doit se connecter en premier), ses adresses de tunnel (préfixes dans le sous-réseau du tunnel) et keepalive en secondes (25 par défaut ; 0 le désactive).",
-    "wireguardPublicKey": "Clé publique"
+    "wireguardPublicKey": "Clé publique",
+    "platformGcp": "Google Cloud",
+    "cloudGcpEnv": "Environnement CloudGCP",
+    "cloudTypeGcp": "Google Cloud",
+    "gcpAttachment": "Rattachement",
+    "gcpAttachmentHelp": "Comment les réseaux des locataires de cette région rejoignent la fabric.",
+    "gcpAttachmentVpn": "HA VPN avec BGP",
+    "gcpAttachmentInterconnect": "Cloud Interconnect",
+    "cloudGcpSiteHelp": "Le site Google Cloud (CloudInfrastructure de type gcp) de cet environnement ; la plateforme attribue le projet.",
+    "publish": "Publication",
+    "publishExternal": "Externe (exposé sur Internet)",
+    "publishInternal": "Interne (réseau seulement)"
   },
   "detail": {
     "allocated": "Alloués",

@@ -416,6 +416,12 @@ function AdminLayout(): React.ReactElement {
               }
             />
             <Route
+              path="/clouds/cloudgcp/:namespace/:name"
+              element={
+                <AdminResourceDetailPage kind="CloudGCP" title={t('nav.cloudEnvironments')} listPath="/clouds" />
+              }
+            />
+            <Route
               path="/clouds/cloudvirt/:namespace/:name"
               element={
                 <AdminResourceDetailPage

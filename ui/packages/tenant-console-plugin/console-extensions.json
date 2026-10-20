@@ -22,6 +22,16 @@
   {
     "type": "console.navigation/href",
     "properties": {
+      "id": "hybridsovereign-tenant-cloudgcp",
+      "section": "hybridsovereign-iaas-platform-section",
+      "perspective": "hybridsovereign",
+      "name": "Google Cloud",
+      "href": "/hybridsovereign/tenant/cloudgcp"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
       "id": "hybridsovereign-tenant-cloudvirt",
       "section": "hybridsovereign-iaas-platform-section",
       "perspective": "hybridsovereign",
@@ -292,10 +302,30 @@
   {
     "type": "console.page/route",
     "properties": {
+      "exact": true,
+      "path": "/hybridsovereign/tenant/cloudgcp",
+      "component": {
+        "$codeRef": "TenantCloudGCPPage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
       "exact": false,
       "path": "/hybridsovereign/tenant/cloudaws/:name",
       "component": {
         "$codeRef": "TenantCloudAWSDetailPage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": false,
+      "path": "/hybridsovereign/tenant/cloudgcp/:name",
+      "component": {
+        "$codeRef": "TenantCloudGCPDetailPage"
       }
     }
   },

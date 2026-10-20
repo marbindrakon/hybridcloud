@@ -14,6 +14,7 @@ export const TenantAssignmentDetailPage = makeTenantDetailPage(
 );
 export const TenantCloudOSODetailPage = makeTenantDetailPage('CloudOSO', 'Cloud OSO', 'cloudoso');
 export const TenantCloudAWSDetailPage = makeTenantDetailPage('CloudAWS', 'Cloud AWS', 'cloudaws');
+export const TenantCloudGCPDetailPage = makeTenantDetailPage('CloudGCP', 'Cloud GCP', 'cloudgcp');
 export const TenantCloudVirtDetailPage = makeTenantDetailPage('CloudVirt', 'Cloud Virt', 'cloudvirt');
 export const TenantMigrationDetailPage = makeTenantDetailPage(
   'OpenStackMigration',

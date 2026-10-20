@@ -22,7 +22,7 @@ export const DEFAULT_CREATE_PROJECT_DOMAIN = false;
 export const DEFAULT_EXTERNAL_EVPN = true;
 
 /** NetworkPlacement.spec.backend.kind */
-export const PLACEMENT_BACKEND_KINDS: NetworkPlacementBackendKind[] = ['CloudVirt', 'CloudOSO'];
+export const PLACEMENT_BACKEND_KINDS: NetworkPlacementBackendKind[] = ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'];
 
 /** CloudVirt.spec.namespaces (CRD default [{name: vms}]) */
 export const DEFAULT_CLOUDVIRT_NAMESPACES = [{ name: 'vms' }];

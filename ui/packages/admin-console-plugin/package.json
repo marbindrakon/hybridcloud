@@ -33,6 +33,7 @@
       "AdminAssignmentDetailPage": "./src/components/AdminAssignmentDetailPage.tsx",
       "AdminCloudOSODetailPage": "./src/components/AdminCloudOSODetailPage.tsx",
       "AdminCloudAWSDetailPage": "./src/components/AdminCloudAWSDetailPage.tsx",
+      "AdminCloudGCPDetailPage": "./src/components/AdminCloudGCPDetailPage.tsx",
       "AdminCloudVirtDetailPage": "./src/components/AdminCloudVirtDetailPage.tsx",
       "AdminCloudInfrastructuresPage": "./src/components/AdminCloudInfrastructuresPage.tsx",
       "AdminCloudInfrastructureDetailPage": "./src/components/AdminCloudInfrastructureDetailPage.tsx",

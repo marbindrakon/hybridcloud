@@ -88,12 +88,14 @@ const whenType = (path: string, equals: string | string[]): SpecFieldVisibleWhen
 const cinfraOpenstack = whenType('type', 'openstack');
 const cinfraOpenshift = whenType('type', 'openshift');
 const cinfraAws = whenType('type', 'aws');
+const cinfraGcp = whenType('type', 'gcp');
 const cinfraExternal = whenType('type', 'external');
 const cinfraCreds = whenType('type', ['openstack', 'openshift', 'aws']);
 const cinfraDns = whenType('type', ['openstack', 'openshift']);
 const dnsNative = whenType('dns.mode', 'native');
 const poOpenstack = whenType('type', 'openstack');
 const poAws = whenType('type', 'aws');
+const poGcp = whenType('type', 'gcp');
 const gwNone = whenType('transport', ['none', '']);
 const gwWireguard = whenType('transport', 'wireguard');
 
@@ -142,6 +144,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         options: [
           { value: 'openstack', labelKey: 'fields.platformOpenstack' },
           { value: 'aws', labelKey: 'fields.platformAws' },
+          { value: 'gcp', labelKey: 'fields.platformGcp' },
         ],
       },
       { path: 'openstack.environment', labelKey: 'fields.cloudOsoEnv', widget: 'text', immutable: true, visibleWhen: poOpenstack },
@@ -166,6 +169,23 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'aws.workerCount', labelKey: 'fields.workerCount', widget: 'number', visibleWhen: poAws },
       { path: 'aws.controllerFlavor', labelKey: 'fields.controllerFlavor', widget: 'text', visibleWhen: poAws },
       { path: 'aws.workerFlavor', labelKey: 'fields.workerFlavor', widget: 'text', visibleWhen: poAws },
+      { path: 'gcp.environment', labelKey: 'fields.cloudGcpEnv', widget: 'text', immutable: true, visibleWhen: poGcp },
+      { path: 'gcp.region', labelKey: 'fields.region', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
+      { path: 'gcp.network', labelKey: 'fields.network', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
+      {
+        path: 'gcp.publish',
+        labelKey: 'fields.publish',
+        widget: 'select',
+        visibleWhen: poGcp,
+        options: [
+          { value: 'External', labelKey: 'fields.publishExternal' },
+          { value: 'Internal', labelKey: 'fields.publishInternal' },
+        ],
+      },
+      { path: 'gcp.controlPlaneCount', labelKey: 'fields.controlPlaneCount', widget: 'number', visibleWhen: poGcp },
+      { path: 'gcp.workerCount', labelKey: 'fields.workerCount', widget: 'number', visibleWhen: poGcp },
+      { path: 'gcp.controllerFlavor', labelKey: 'fields.controllerFlavor', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
+      { path: 'gcp.workerFlavor', labelKey: 'fields.workerFlavor', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
       { path: 'toolRbac.clusterAdminRbac', labelKey: 'fields.clusterAdminRbac', widget: 'stringList' },
       { path: 'toolRbac.clusterOperatorRbac', labelKey: 'fields.clusterOperatorRbac', widget: 'stringList' },
       { path: 'toolRbac.clusterDeveloperRbac', labelKey: 'fields.clusterDeveloperRbac', widget: 'stringList' },
@@ -196,6 +216,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
           { value: 'openstack', labelKey: 'fields.cloudTypeOpenstack' },
           { value: 'openshift', labelKey: 'fields.cloudTypeOpenshift' },
           { value: 'aws', labelKey: 'fields.cloudTypeAws' },
+          { value: 'gcp', labelKey: 'fields.cloudTypeGcp' },
           { value: 'external', labelKey: 'fields.cloudTypeExternal' },
         ],
       },
@@ -234,6 +255,18 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'aws.accountId', labelKey: 'fields.awsAccountId', widget: 'text', visibleWhen: cinfraAws },
       { path: 'aws.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraAws },
       { path: 'aws.baseDomain', labelKey: 'fields.baseDomain', widget: 'text', helpKey: 'fields.awsBaseDomainHelp', visibleWhen: cinfraAws, omitWhenEmpty: true },
+      { path: 'gcp.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraGcp },
+      {
+        path: 'gcp.attachment',
+        labelKey: 'fields.gcpAttachment',
+        widget: 'select',
+        visibleWhen: cinfraGcp,
+        helpKey: 'fields.gcpAttachmentHelp',
+        options: [
+          { value: 'vpn', labelKey: 'fields.gcpAttachmentVpn' },
+          { value: 'interconnect', labelKey: 'fields.gcpAttachmentInterconnect' },
+        ],
+      },
       { path: 'external.evpn', labelKey: 'fields.externalEvpn', widget: 'boolean', helpKey: 'fields.externalEvpnHelp', visibleWhen: cinfraExternal },
       {
         path: 'dns.mode',
@@ -294,6 +327,11 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'vaultPath', labelKey: 'fields.vaultPath', widget: 'text' },
       { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text' },
       { path: 'landingzone', labelKey: 'fields.landingzone', widget: 'text' },
+    ],
+  },
+  CloudGCP: {
+    fields: [
+      { path: 'cloudRef', labelKey: 'fields.site', widget: 'namedRef', immutable: true, helpKey: 'fields.cloudGcpSiteHelp' },
     ],
   },
   CloudVirt: {

@@ -5,7 +5,7 @@ import type { K8sResource } from '../types';
 import { useTranslation } from '../i18n';
 
 /** NetworkPlacement backends (spec.backend.kind). */
-export type BackendKind = 'CloudOSO' | 'CloudVirt';
+export type BackendKind = 'CloudOSO' | 'CloudVirt' | 'CloudAWS' | 'CloudGCP';
 
 export interface BackendSelectOption {
   kind: BackendKind;
@@ -39,6 +39,8 @@ const decode = (v: string): BackendSelectValue => {
 export function buildBackendOptions(sources: {
   cloudosos?: K8sResource<object, { ready?: boolean }>[] | null;
   cloudvirts?: K8sResource<object, { ready?: boolean }>[] | null;
+  cloudawss?: K8sResource<object, { ready?: boolean }>[] | null;
+  cloudgcps?: K8sResource<object, { ready?: boolean }>[] | null;
 }): BackendSelectOption[] {
   const cloudoso = (sources.cloudosos ?? []).map((c) => ({
     kind: 'CloudOSO' as const,
@@ -52,7 +54,19 @@ export function buildBackendOptions(sources: {
     label: c.metadata.name,
     ready: c.status?.ready,
   }));
-  return [...cloudoso, ...cloudvirt];
+  const cloudaws = (sources.cloudawss ?? []).map((c) => ({
+    kind: 'CloudAWS' as const,
+    name: c.metadata.name,
+    label: c.metadata.name,
+    ready: c.status?.ready,
+  }));
+  const cloudgcp = (sources.cloudgcps ?? []).map((c) => ({
+    kind: 'CloudGCP' as const,
+    name: c.metadata.name,
+    label: c.metadata.name,
+    ready: c.status?.ready,
+  }));
+  return [...cloudoso, ...cloudvirt, ...cloudaws, ...cloudgcp];
 }
 
 /**

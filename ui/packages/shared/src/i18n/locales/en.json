@@ -113,7 +113,8 @@
     "cloudInfrastructure": "Cloud Infrastructure",
     "networkOverview": "Network Overview",
     "hybridNetworksAll": "Hybrid Networks (all entities)",
-    "networkPlacementsAll": "Network Placements (all entities)"
+    "networkPlacementsAll": "Network Placements (all entities)",
+    "cloudGcp": "Google Cloud"
   },
   "kinds": {
     "Entity": "Entities",
@@ -140,7 +141,8 @@
     "HybridNetwork": "Hybrid Networks",
     "NetworkPlacement": "Network Placements",
     "UIHealthChecker": "UI Health Checkers",
-    "CloudInfrastructure": "Cloud Infrastructure"
+    "CloudInfrastructure": "Cloud Infrastructure",
+    "CloudGCP": "Cloud GCP"
   },
   "pages": {
     "overviewTitle": "Overview",
@@ -247,7 +249,9 @@
     "transport": "Transport",
     "egressOff": "off",
     "egressRequested": "requested",
-    "namespacesReady": "{{ready}}/{{total}} ready"
+    "namespacesReady": "{{ready}}/{{total}} ready",
+    "project": "Project",
+    "domain": "Domain"
   },
   "form": {
     "required": "Required",
@@ -304,13 +308,13 @@
     "siteDefaultNetwork": "Site default network",
     "siteDefaultValue": "Site default: {{value}}",
     "siteDnsSection": "Environment DNS",
-    "entityListRestricted": "Showing only the Entity you have access to \u2014 the full tenant list needs platform access.",
+    "entityListRestricted": "Showing only the Entity you have access to — the full tenant list needs platform access.",
     "entityListUnavailable": "The Entity list could not be read; type the Entity name given by the platform team.",
     "entityNamePlaceholder": "Entity name, e.g. acme-corp",
-    "entityNone": "No Entities are visible with your access \u2014 create an Entity first",
+    "entityNone": "No Entities are visible with your access — create an Entity first",
     "entityScopeHelp": "Created in namespace {{namespace}}.",
     "teamRbacHelp": "Members of the viewer RBAC groups, or of the admin RBAC groups when no viewer RBAC is set, can view this Team.",
-    "entitySelectPlaceholder": "Select Entity\u2026"
+    "entitySelectPlaceholder": "Select Entity…"
   },
   "fields": {
     "description": "Description",
@@ -541,7 +545,18 @@
     "wireguardListenPortHelp": "The nodes' UDP port (1024 to 65535). Default 51820.",
     "wireguardPeers": "Remote site peers",
     "wireguardPeersHelp": "The remote site's tunnel endpoints: WireGuard public key, optional host:port (without it the peer must connect first), its tunnel addresses (prefixes inside the tunnel subnet) and keepalive seconds (default 25; 0 turns it off).",
-    "wireguardPublicKey": "Public key"
+    "wireguardPublicKey": "Public key",
+    "platformGcp": "Google Cloud",
+    "cloudGcpEnv": "CloudGCP environment",
+    "cloudTypeGcp": "Google Cloud",
+    "gcpAttachment": "Attachment",
+    "gcpAttachmentHelp": "How tenant networks in this region attach to the fabric.",
+    "gcpAttachmentVpn": "HA VPN with BGP",
+    "gcpAttachmentInterconnect": "Cloud Interconnect",
+    "cloudGcpSiteHelp": "The Google Cloud site (CloudInfrastructure of type gcp) this environment lives in; the platform assigns the project.",
+    "publish": "Publish",
+    "publishExternal": "External (internet-facing)",
+    "publishInternal": "Internal (network only)"
   },
   "detail": {
     "allocated": "Allocated",

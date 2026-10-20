@@ -556,6 +556,16 @@
   {
     "type": "console.page/route",
     "properties": {
+      "path": "/hybridsovereign/clouds/cloudgcp/:namespace/:name",
+      "component": {
+        "$codeRef": "AdminCloudGCPDetailPage"
+      },
+      "exact": false
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
       "path": "/hybridsovereign/clouds/cloudvirt/:namespace/:name",
       "component": {
         "$codeRef": "AdminCloudVirtDetailPage"

@@ -43,6 +43,7 @@ const ENTITY_KINDS: HybridSovereignKind[] = [
   'PlatformOpenshift',
   'CloudOSO',
   'CloudAWS',
+  'CloudGCP',
   'CloudVirt',
   'Vault',
   // Tenant VRFs and their per-cloud placements. Needed by NetworkOverview to

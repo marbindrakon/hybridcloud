@@ -40,6 +40,7 @@ export type SelfServiceFormType =
   | 'assignment'
   | 'cloudoso'
   | 'cloudaws'
+  | 'cloudgcp'
   | 'cloudvirt'
   | 'platformopenshift'
   | 'migration'
@@ -97,6 +98,7 @@ const FORM_TITLES: Record<SelfServiceFormType, string> = {
   assignment: 'Create Assignment',
   cloudoso: 'Request CloudOSO Environment',
   cloudaws: 'Request Cloud AWS Account',
+  cloudgcp: 'Request Cloud GCP Environment',
   cloudvirt: 'Request Cloud Virt Environment',
   platformopenshift: 'Create Platform Openshift',
   migration: 'Migrate to OpenStack',
@@ -122,6 +124,7 @@ const FORM_KINDS: Record<SelfServiceFormType, HybridSovereignKind> = {
   assignment: 'Assignment',
   cloudoso: 'CloudOSO',
   cloudaws: 'CloudAWS',
+  cloudgcp: 'CloudGCP',
   cloudvirt: 'CloudVirt',
   platformopenshift: 'PlatformOpenshift',
   migration: 'OpenStackMigration',
@@ -265,6 +268,9 @@ export function CreateResourceForm({
   const [awsAccount, setAwsAccount] = useState('');
   const [awsVaultPath, setAwsVaultPath] = useState('');
   const [awsBaseDomain, setAwsBaseDomain] = useState('');
+  // CloudGCP: the site (spec.cloudRef)
+  const [gcpSiteRef, setGcpSiteRef] = useState('');
+  const [cloudGcpRef, setCloudGcpRef] = useState('');
   // PlatformOpenshift
   const [platformType, setPlatformType] = useState('openstack');
   const [platformEnv, setPlatformEnv] = useState('');
@@ -343,6 +349,10 @@ export function CreateResourceForm({
   const cloudAwss = useK8sResourceList<K8sResource>('CloudAWS', {
     namespace: entityNs,
     enabled: type === 'assignment' || type === 'platformopenshift',
+  });
+  const cloudGcps = useK8sResourceList<K8sResource>('CloudGCP', {
+    namespace: entityNs,
+    enabled: type === 'platformopenshift',
   });
   const vaults = useK8sResourceList<K8sResource>('Vault', {
     namespace: entityNs,
@@ -522,6 +532,8 @@ export function CreateResourceForm({
           baseDomain: (awsBaseDomain || baseDomain).trim(),
           ...optional('landingzone', landingzone),
         };
+      case 'cloudgcp':
+        return { cloudRef: { name: gcpSiteRef.trim() } };
       case 'platformopenshift': {
         const toolRbac =
           rbacMulti.length || rbacOperator.length || rbacViewer.length
@@ -531,6 +543,18 @@ export function CreateResourceForm({
                 ...(rbacViewer.length ? { clusterViewerRbac: rbacViewer } : {}),
               }
             : undefined;
+        if (platformType === 'gcp') {
+          return {
+            type: 'gcp',
+            gcp: {
+              environment: platformEnv || cloudGcpRef,
+              ...optional('region', region),
+              controlPlaneCount: Number(cpCount) || 3,
+              workerCount: Number(workerCount) || 2,
+            },
+            ...(toolRbac ? { toolRbac } : {}),
+          };
+        }
         if (platformType === 'aws') {
           return {
             type: 'aws',
@@ -626,7 +650,8 @@ export function CreateResourceForm({
     if (type === 'cloudaws' && (!awsAccount.trim() || !awsVaultPath.trim() || !(awsBaseDomain || baseDomain).trim())) {
       return false;
     }
-    if (type === 'platformopenshift' && !(platformEnv || cloudosoRef || cloudAwsRef)) return false;
+    if (type === 'cloudgcp' && !gcpSiteRef.trim()) return false;
+    if (type === 'platformopenshift' && !(platformEnv || cloudosoRef || cloudAwsRef || cloudGcpRef)) return false;
     if (type === 'persona' && (!(personaRbacs[0] || rbacRef) || !personaType)) return false;
     if (type === 'vaultkv' && !vaultRef) return false;
     if (type === 'migration' && (!vmName || !cloudosoRef)) return false;
@@ -939,6 +964,18 @@ export function CreateResourceForm({
                 </>
               )}
 
+              {type === 'cloudgcp' && (
+                <CloudInfrastructureSelect
+                  id="gcp-site"
+                  label="Google Cloud site"
+                  value={gcpSiteRef}
+                  onChange={setGcpSiteRef}
+                  types={['gcp']}
+                  entityName={currentEntityName}
+                  isRequired
+                />
+              )}
+
               {type === 'cloudvirt' && (
                 <CloudVirtCreateFields
                   namespace={entityNs}
@@ -957,24 +994,26 @@ export function CreateResourceForm({
                       setPlatformType(v);
                       setPlatformEnv('');
                       setCpCount('3');
-                      setWorkerCount(v === 'aws' ? '2' : '3');
+                      setWorkerCount(v === 'aws' || v === 'gcp' ? '2' : '3');
                     }}
                     options={[
                       { value: 'openstack', label: 'OpenStack' },
                       { value: 'aws', label: 'AWS' },
+                      { value: 'gcp', label: 'Google Cloud' },
                     ]}
                     isRequired
                   />
                   <RefSelect
                     id="platform-env"
-                    label={platformType === 'aws' ? 'CloudAWS environment' : 'CloudOSO environment'}
-                    value={platformEnv || (platformType === 'aws' ? cloudAwsRef : cloudosoRef)}
+                    label={platformType === 'aws' ? 'CloudAWS environment' : platformType === 'gcp' ? 'CloudGCP environment' : 'CloudOSO environment'}
+                    value={platformEnv || (platformType === 'aws' ? cloudAwsRef : platformType === 'gcp' ? cloudGcpRef : cloudosoRef)}
                     onChange={(v) => {
                       setPlatformEnv(v);
                       if (platformType === 'aws') setCloudAwsRef(v);
+                      else if (platformType === 'gcp') setCloudGcpRef(v);
                       else setCloudosoRef(v);
                     }}
-                    options={names(platformType === 'aws' ? cloudAwss.items : cloudosos.items)}
+                    options={names(platformType === 'aws' ? cloudAwss.items : platformType === 'gcp' ? cloudGcps.items : cloudosos.items)}
                     isRequired
                   />
                   <FormGroup label="Control plane count" fieldId="cp-count">
@@ -988,7 +1027,7 @@ export function CreateResourceForm({
                       onChange={(_e, v) => setWorkerCount(v)}
                     />
                   </FormGroup>
-                  {platformType === 'aws' && (
+                  {(platformType === 'aws' || platformType === 'gcp') && (
                     <FormGroup label="Region" fieldId="plat-region">
                       <TextInput id="plat-region" value={region} onChange={(_e, v) => setRegion(v)} />
                     </FormGroup>

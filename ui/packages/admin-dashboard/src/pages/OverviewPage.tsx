@@ -44,6 +44,7 @@ const KIND_LIST_PATH: Partial<Record<string, string>> = {
   PlatformOpenshift: '/platforms',
   CloudOSO: '/clouds/cloudoso',
   CloudAWS: '/clouds/cloudaws',
+  CloudGCP: '/clouds/cloudgcp',
   CloudVirt: '/clouds/cloudvirt',
   CloudInfrastructure: '/clouds/infrastructure',
   Persona: '/personas',

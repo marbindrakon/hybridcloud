@@ -29,6 +29,7 @@ import {
   LayerGroupIcon,
   NetworkIcon,
   AwsIcon,
+  GoogleIcon,
   ServerIcon,
   TopologyIcon,
   OutlinedBellIcon,
@@ -90,6 +91,7 @@ const NAV: NavEntry[] = [
   { type: 'sep', labelKey: 'nav.iaasPlatform' },
   { type: 'link', path: '/cloudoso', labelKey: 'nav.cloudOso', icon: LayerGroupIcon, kind: 'CloudOSO', form: 'cloudoso' },
   { type: 'link', path: '/cloudaws', labelKey: 'nav.cloudAws', icon: AwsIcon, kind: 'CloudAWS', form: 'cloudaws' },
+  { type: 'link', path: '/cloudgcp', labelKey: 'nav.cloudGcp', icon: GoogleIcon, kind: 'CloudGCP', form: 'cloudgcp' },
   { type: 'link', path: '/cloudvirt', labelKey: 'nav.cloudVirt', icon: ServerIcon, kind: 'CloudVirt', form: 'cloudvirt' },
   { type: 'sep', labelKey: 'nav.iaasNetworking' },
   {

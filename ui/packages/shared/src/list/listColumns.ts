@@ -370,6 +370,30 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       render: (i) => asString(specOf(i).landingzone) || '—',
     },
   ],
+  CloudGCP: [
+    {
+      id: 'project',
+      labelKey: 'list.project',
+      sortable: true,
+      getSortValue: (i) => asString(statusOf(i).project),
+      getSearchText: (i) => asString(statusOf(i).project),
+      render: (i) => mono(asString(statusOf(i).project)) || '—',
+    },
+    {
+      id: 'site',
+      labelKey: 'list.site',
+      sortable: true,
+      getSortValue: (i) => asString((specOf(i).cloudRef as Record<string, unknown> | undefined)?.name),
+      render: (i) => asString((specOf(i).cloudRef as Record<string, unknown> | undefined)?.name) || '—',
+    },
+    {
+      id: 'domain',
+      labelKey: 'list.domain',
+      sortable: true,
+      getSortValue: (i) => asString(statusOf(i).domain),
+      render: (i) => asString(statusOf(i).domain) || '—',
+    },
+  ],
   CloudVirt: [
     cloudRefColumn(),
     {

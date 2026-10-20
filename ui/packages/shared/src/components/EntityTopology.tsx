@@ -52,6 +52,7 @@ function cloudRefOf(item: K8sResource): string {
 const PLATFORM_ENV_KIND: Record<string, HybridSovereignKind> = {
   openstack: 'CloudOSO',
   aws: 'CloudAWS',
+  gcp: 'CloudGCP',
 };
 
 /** Cluster-scoped-ish kinds that genuinely live in one shared namespace. */

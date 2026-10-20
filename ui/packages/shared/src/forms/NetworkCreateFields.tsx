@@ -270,6 +270,7 @@ const SITE_TYPE_LABEL: Record<CloudInfrastructureType, string> = {
   openstack: 'fields.cloudTypeOpenstack',
   openshift: 'fields.cloudTypeOpenshift',
   aws: 'fields.cloudTypeAws',
+  gcp: 'fields.cloudTypeGcp',
   external: 'fields.cloudTypeExternal',
 };
 
@@ -960,6 +961,8 @@ export function NetworkPlacementCreateFields({
   const networks = useK8sResourceList<HybridNetwork>('HybridNetwork', { namespace, enabled });
   const cloudvirts = useK8sResourceList<K8sResource>('CloudVirt', { namespace, enabled });
   const cloudosos = useK8sResourceList<K8sResource>('CloudOSO', { namespace, enabled });
+  const cloudawss = useK8sResourceList<K8sResource>('CloudAWS', { namespace, enabled });
+  const cloudgcps = useK8sResourceList<K8sResource>('CloudGCP', { namespace, enabled });
   const [network, setNetwork] = useState('');
   const [backendKind, setBackendKind] = useState<NetworkPlacementBackendKind>('CloudVirt');
   const [backendName, setBackendName] = useState('');
@@ -968,10 +971,10 @@ export function NetworkPlacementCreateFields({
 
   const backendOptions = useMemo(
     () =>
-      buildBackendOptions({ cloudosos: cloudosos.items, cloudvirts: cloudvirts.items }).filter(
+      buildBackendOptions({ cloudosos: cloudosos.items, cloudvirts: cloudvirts.items, cloudawss: cloudawss.items, cloudgcps: cloudgcps.items }).filter(
         (o) => o.kind === backendKind,
       ),
-    [cloudosos.items, cloudvirts.items, backendKind],
+    [cloudosos.items, cloudvirts.items, cloudawss.items, cloudgcps.items, backendKind],
   );
 
   // the chosen network's IPv4 space (as the platform holds it, else as asked for) for the size hint and the pinned check
@@ -1011,7 +1014,7 @@ export function NetworkPlacementCreateFields({
           id="np-backend-kind"
           value={backendKind}
           onChange={(_e, v) => {
-            setBackendKind(v === 'CloudOSO' ? 'CloudOSO' : 'CloudVirt');
+            setBackendKind(v as NetworkPlacementBackendKind);
             setBackendName('');
           }}
           aria-label={t('fields.backendKind')}

@@ -32,6 +32,11 @@ export const AdminCloudAWSDetailPage = makeAdminDetailPage(
   'Cloud Environments',
   '/hybridsovereign/clouds',
 );
+export const AdminCloudGCPDetailPage = makeAdminDetailPage(
+  'CloudGCP',
+  'Cloud Environments',
+  '/hybridsovereign/clouds',
+);
 export const AdminCloudVirtDetailPage = makeAdminDetailPage(
   'CloudVirt',
   'Cloud Environments',

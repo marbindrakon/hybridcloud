@@ -23,6 +23,7 @@ export { default as AdminPlatformDetailPage } from './components/AdminPlatformDe
 export { default as AdminAssignmentDetailPage } from './components/AdminAssignmentDetailPage';
 export { default as AdminCloudOSODetailPage } from './components/AdminCloudOSODetailPage';
 export { default as AdminCloudAWSDetailPage } from './components/AdminCloudAWSDetailPage';
+export { default as AdminCloudGCPDetailPage } from './components/AdminCloudGCPDetailPage';
 export { default as AdminCloudVirtDetailPage } from './components/AdminCloudVirtDetailPage';
 export { default as AdminRbacDetailPage } from './components/AdminRbacDetailPage';
 export { default as AdminRbacConfigDetailPage } from './components/AdminRbacConfigDetailPage';

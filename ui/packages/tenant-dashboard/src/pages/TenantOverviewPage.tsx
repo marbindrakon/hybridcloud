@@ -47,6 +47,7 @@ const KIND_PATH: Partial<Record<HybridSovereignKind, string>> = {
   Assignment: '/assignments',
   CloudOSO: '/cloudoso',
   CloudAWS: '/cloudaws',
+  CloudGCP: '/cloudgcp',
   CloudVirt: '/cloudvirt',
   OpenStackMigration: '/migrations',
   Persona: '/personas',
@@ -83,6 +84,7 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
   const assignments = useK8sResourceList<K8sResource>('Assignment', opts);
   const cloudoso = useK8sResourceList<K8sResource>('CloudOSO', opts);
   const cloudaws = useK8sResourceList<K8sResource>('CloudAWS', opts);
+  const cloudgcp = useK8sResourceList<K8sResource>('CloudGCP', opts);
   const cloudvirt = useK8sResourceList<K8sResource>('CloudVirt', opts);
   const migrations = useK8sResourceList<K8sResource>('OpenStackMigration', opts);
   const personas = useK8sResourceList<K8sResource>('Persona', opts);
@@ -101,6 +103,7 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
     Assignment: assignments,
     CloudOSO: cloudoso,
     CloudAWS: cloudaws,
+    CloudGCP: cloudgcp,
     CloudVirt: cloudvirt,
     OpenStackMigration: migrations,
     Persona: personas,

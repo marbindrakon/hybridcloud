@@ -153,6 +153,19 @@ export interface PlatformOpenshiftAwsSpec {
   workerFlavor?: string;
 }
 
+export interface PlatformOpenshiftGcpSpec {
+  /** CloudGCP name providing the Google Cloud environment */
+  environment: string;
+  region?: string;
+  /** HybridNetwork whose placement in the environment hosts the cluster's machines */
+  network?: string;
+  publish?: 'External' | 'Internal';
+  controlPlaneCount?: number;
+  workerCount?: number;
+  controllerFlavor?: string;
+  workerFlavor?: string;
+}
+
 export interface PlatformOpenshiftToolRbac {
   clusterAdminRbac?: string[];
   clusterOperatorRbac?: string[];
@@ -164,6 +177,7 @@ export interface PlatformOpenshiftSpec {
   type?: 'openstack' | 'aws';
   openstack?: PlatformOpenshiftOpenstackSpec;
   aws?: PlatformOpenshiftAwsSpec;
+  gcp?: PlatformOpenshiftGcpSpec;
   toolRbac?: PlatformOpenshiftToolRbac;
   clusterViewerRbac?: string[];
 }
@@ -181,7 +195,7 @@ export interface NameRef {
 }
 
 /** CloudInfrastructure — platform-owned cloud site (sovereign-cloud) */
-export type CloudInfrastructureType = 'openstack' | 'openshift' | 'aws' | 'external';
+export type CloudInfrastructureType = 'openstack' | 'openshift' | 'aws' | 'gcp' | 'external';
 
 export interface CloudInfrastructureOpenstackSpec {
   region?: string;
@@ -196,6 +210,12 @@ export interface CloudInfrastructureOpenshiftSpec {
   bootImage?: string;
   storageClass?: string;
   fabricCredentialsRef?: VaultPathRef;
+}
+
+export interface CloudInfrastructureGcpSpec {
+  region: string;
+  /** How tenant networks attach: HA VPN with BGP (vpn) or Cloud Interconnect (interconnect) */
+  attachment?: 'vpn' | 'interconnect';
 }
 
 export interface CloudInfrastructureAwsSpec {
@@ -228,6 +248,7 @@ export interface CloudInfrastructureSpec {
   openstack?: CloudInfrastructureOpenstackSpec;
   openshift?: CloudInfrastructureOpenshiftSpec;
   aws?: CloudInfrastructureAwsSpec;
+  gcp?: CloudInfrastructureGcpSpec;
   external?: CloudInfrastructureExternalSpec;
   dns?: CloudInfrastructureDnsSpec;
 }
@@ -277,6 +298,13 @@ export interface CloudAWSSpec {
 }
 
 export type CloudAWS = K8sResource<CloudAWSSpec>;
+
+/** CloudGCP — Google Cloud project environment on a CloudInfrastructure (type gcp) */
+export interface CloudGCPSpec {
+  cloudRef: { name: string };
+}
+
+export type CloudGCP = K8sResource<CloudGCPSpec>;
 
 /** CloudVirt — tenant VM environment on a CloudInfrastructure (type openshift) */
 export interface CloudVirtNamespace {
@@ -596,7 +624,7 @@ export interface HybridNetworkStatus extends OperatorStatus {
 export type HybridNetwork = K8sResource<HybridNetworkSpec, HybridNetworkStatus>;
 
 /** NetworkPlacement backends */
-export type NetworkPlacementBackendKind = 'CloudOSO' | 'CloudVirt';
+export type NetworkPlacementBackendKind = 'CloudOSO' | 'CloudVirt' | 'CloudAWS' | 'CloudGCP';
 
 /** A placement's subnet of one family: a size, or a pinned prefix inside the network's space (or both, agreeing) */
 export interface PlacementSubnetRequest {
@@ -654,6 +682,7 @@ export type HybridSovereignKind =
   | 'PlatformOpenshift'
   | 'CloudOSO'
   | 'CloudAWS'
+  | 'CloudGCP'
   | 'CloudVirt'
   | 'OpenStackMigration'
   | 'Rbac'
@@ -682,6 +711,7 @@ export const KIND_PLURALS: Record<HybridSovereignKind, string> = {
   PlatformOpenshift: 'platformopenshifts',
   CloudOSO: 'cloudosos',
   CloudAWS: 'cloudawss',
+  CloudGCP: 'cloudgcps',
   CloudVirt: 'cloudvirts',
   OpenStackMigration: 'openstackmigrations',
   Rbac: 'rbacs',
@@ -709,6 +739,7 @@ export const TENANT_OVERVIEW_KINDS: HybridSovereignKind[] = [
   'Assignment',
   'CloudOSO',
   'CloudAWS',
+  'CloudGCP',
   'CloudVirt',
   'OpenStackMigration',
   'Persona',
@@ -730,6 +761,7 @@ export type HybridSovereignResource =
   | PlatformOpenshift
   | CloudOSO
   | CloudAWS
+  | CloudGCP
   | CloudVirt
   | OpenStackMigration
   | Rbac
