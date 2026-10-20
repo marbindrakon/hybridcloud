@@ -56,7 +56,7 @@ export type NetState = 'ready' | 'pending' | 'failed' | 'absent';
 
 export interface HybridTopologyProps {
   /** Networking CRs: HybridFabric, CloudGateway, CloudInfrastructure, HybridNetwork,
-   *  NetworkPlacement and the placement backends (CloudVirt, CloudOSO). */
+   *  NetworkPlacement and the placement backends (CloudVirt, CloudOSO, CloudAWS, CloudGCP). */
   items: K8sResource[];
   /** Scope to one tenant: only that entity's HybridNetworks are drawn. */
   entityNamespace?: string;
@@ -229,9 +229,9 @@ function fabricOfNetwork(net: HybridNetwork): string {
 }
 
 /** Site type a backend kind implies, for a site whose CloudInfrastructure isn't readable. */
-const BACKEND_SITE_TYPE: Record<string, string> = { CloudVirt: 'openshift', CloudOSO: 'openstack' };
+const BACKEND_SITE_TYPE: Record<string, string> = { CloudVirt: 'openshift', CloudOSO: 'openstack', CloudAWS: 'aws', CloudGCP: 'gcp' };
 
-const BACKEND_KINDS: HybridSovereignKind[] = ['CloudVirt', 'CloudOSO'];
+const BACKEND_KINDS: HybridSovereignKind[] = ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'];
 
 /** Transport, per-node sessions and tunnel state of one CloudGateway. */
 export function describeGateway(gw: CloudGateway): GatewayView {

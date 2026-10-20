@@ -216,6 +216,10 @@ export function EntityTopology({
     namespace: entityNamespace,
     enabled: scoped,
   });
+  const cloudGcp = useK8sResourceList<K8sResource>('CloudGCP', {
+    namespace: entityNamespace,
+    enabled: scoped,
+  });
   const cloudVirt = useK8sResourceList<K8sResource>('CloudVirt', {
     namespace: entityNamespace,
     enabled: scoped,
@@ -236,6 +240,7 @@ export function EntityTopology({
     : itemsOfKind(aggregateItems, 'PlatformOpenshift');
   const cloudOsoItems = scoped ? cloudOso.items : itemsOfKind(aggregateItems, 'CloudOSO');
   const cloudAwsItems = scoped ? cloudAws.items : itemsOfKind(aggregateItems, 'CloudAWS');
+  const cloudGcpItems = scoped ? cloudGcp.items : itemsOfKind(aggregateItems, 'CloudGCP');
   const cloudVirtItems = scoped ? cloudVirt.items : itemsOfKind(aggregateItems, 'CloudVirt');
   const cloudInfraItems = scoped
     ? cloudInfra.error
@@ -252,6 +257,7 @@ export function EntityTopology({
   const platformPerm = useCanListKind(permNs, 'PlatformOpenshift', { enabled: filterByPermissions });
   const cloudOsoPerm = useCanListKind(permNs, 'CloudOSO', { enabled: filterByPermissions });
   const cloudAwsPerm = useCanListKind(permNs, 'CloudAWS', { enabled: filterByPermissions });
+  const cloudGcpPerm = useCanListKind(permNs, 'CloudGCP', { enabled: filterByPermissions });
   const cloudVirtPerm = useCanListKind(permNs, 'CloudVirt', { enabled: filterByPermissions });
 
   const [zoom, setZoom] = useState(1);
@@ -300,6 +306,7 @@ export function EntityTopology({
     const visibleClouds: Array<{ item: K8sResource; kind: HybridSovereignKind }> = [
       ...(allow(cloudOsoPerm.allowed) ? cloudOsoItems.map((item) => ({ item, kind: 'CloudOSO' as const })) : []),
       ...(allow(cloudAwsPerm.allowed) ? cloudAwsItems.map((item) => ({ item, kind: 'CloudAWS' as const })) : []),
+      ...(allow(cloudGcpPerm.allowed) ? cloudGcpItems.map((item) => ({ item, kind: 'CloudGCP' as const })) : []),
       ...(allow(cloudVirtPerm.allowed) ? cloudVirtItems.map((item) => ({ item, kind: 'CloudVirt' as const })) : []),
     ];
     const cloudNodes = visibleClouds.map(({ item, kind }) => toNode(item, kind));
@@ -558,6 +565,7 @@ export function EntityTopology({
     platformItems,
     cloudOsoItems,
     cloudAwsItems,
+    cloudGcpItems,
     cloudVirtItems,
     cloudInfraItems,
     fabricItems,
@@ -569,6 +577,7 @@ export function EntityTopology({
     platformPerm.allowed,
     cloudOsoPerm.allowed,
     cloudAwsPerm.allowed,
+    cloudGcpPerm.allowed,
     cloudVirtPerm.allowed,
   ]);
 
