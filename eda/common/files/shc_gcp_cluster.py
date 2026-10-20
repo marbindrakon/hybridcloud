@@ -212,8 +212,12 @@ class Cluster:
             ps = spec["providerSpec"]
             roles = list(ps.get("predefinedRoles") or [])
             if ps.get("permissions"):
-                roles.append(self.custom_role_up(re.sub(r"[^a-zA-Z0-9_.]", "_", "shc_%s_%s" % (self.cluster, ref["name"]))[:64],
-                                                 ps["permissions"], "%s %s" % (self.cluster, ref["name"])))
+                # one custom role per request: several requests share the secret name "cloud-credentials" (ingress,
+                # cloud-network-config-controller), so the id carries the namespace (ids are [a-zA-Z0-9_.]{3,64})
+                rid = re.sub(r"[^a-zA-Z0-9_.]", "_", "shc_%s_%s_%s" % (self.cluster, ref["namespace"], ref["name"]))
+                if len(rid) > 64:
+                    rid = rid[:57] + "_" + hashlib.sha256(rid.encode()).hexdigest()[:6]
+                roles.append(self.custom_role_up(rid, ps["permissions"], "%s %s/%s" % (self.cluster, ref["namespace"], ref["name"])))
             if self.project_policy_add("serviceAccount:" + email, roles):
                 self.changed.append("roles for " + account_id)
             self.sa_binding_up(email, ["system:serviceaccount:%s:%s" % (ref["namespace"], sa) for sa in sas])
