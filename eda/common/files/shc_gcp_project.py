@@ -102,7 +102,10 @@ def external(a):
             out["changed"].append("roles/owner")
         spol = gcloud(["iam", "service-accounts", "get-iam-policy", sa_email, "--project", a.project], account) or {}
         have = {(b["role"], m) for b in spol.get("bindings", []) for m in b.get("members", [])}
+        # the self-binding: the OpenShift installer (running as the member account through the keyless chain)
+        # signs the bootstrap ignition URL with iam.serviceAccounts.signBlob, which roles/owner does not carry
         for role, member in (("roles/iam.serviceAccountTokenCreator", "serviceAccount:" + hub_sa),
+                             ("roles/iam.serviceAccountTokenCreator", "serviceAccount:" + sa_email),
                              ("roles/iam.workloadIdentityUser", hive_set)):
             if (role, member) not in have:
                 gcloud(["iam", "service-accounts", "add-iam-policy-binding", sa_email, "--project", a.project,
