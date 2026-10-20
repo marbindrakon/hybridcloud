@@ -90,6 +90,6 @@
       {{ cg_instance | combine({'wireguard': cg_instance.wireguard | combine({'peers': peers})}) }}
     cg_site_extra:
       managed: true
-      account: "{{ gcp_edge_cfg.account }}"
+      project: "{{ gcp_edge_cfg.project }}"
       region: "{{ gcp_edge_cfg.region }}"
       routers: "{{ cg_gcp_routers | map('dict2items') | map('rejectattr', 'key', 'equalto', 'privateIp') | map('items2dict') | list }}"
