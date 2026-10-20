@@ -13,8 +13,9 @@ actions:
                   site subnet clear of the core prefixes; transport wireguard: the peers' addresses inside the
                   site subnet and clear of the nodes' tunnel addresses
   check-network   {prefixes, reserved: [cidr], circuits: [{name, accept}]}   a HybridNetwork's address space: no
-                  prefix overlapping the platform's ranges (reserved), none holding an accept entry of the network's
-                  attachment circuits; reserved / circuits: the errors of each kind
+                  prefix wholly inside a platform range (reserved; the IPAM steps around the ones inside a prefix),
+                  none holding an accept entry of the network's attachment circuits; reserved / circuits: the errors
+                  of each kind
   pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
                   (index 1 is the border gateway root; the same addresses on every node)
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
@@ -330,9 +331,10 @@ def check_network(req):
             rn = ipaddress.ip_network(str(r), strict=False)
         except ValueError:
             continue
+        # a platform range inside a prefix is only never allocated; a prefix inside one has nothing to allocate
         for a in mine:
-            if overlaps(a, rn):
-                reserved.append(f"prefix {a} overlaps the platform range {rn}")
+            if a.version == rn.version and a.subnet_of(rn):
+                reserved.append(f"prefix {a} lies inside the platform range {rn}")
     # the circuits accept routes from their CE; the network's space never holds one (as check-circuit refuses)
     for c in req.get("circuits") or []:
         for e in c.get("accept") or []:

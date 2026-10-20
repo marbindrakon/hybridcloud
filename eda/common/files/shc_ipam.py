@@ -5,24 +5,28 @@ Reads one JSON request on stdin ({action, provider, ...}), prints one JSON resul
 failure. A token arrives on stdin, never in argv.
 
 Provider contract (`network` = HybridNetwork/<ns>/<name>, `owner` = NetworkPlacement/<ns>/<name>):
-  ipam-space    {network, prefixes}   set the network's space; refused (refused: [...]) when an allocation would fall
-                outside it (adding, removing an unused prefix and growing one in place work); addressSpace
+  ipam-space    {network, prefixes, reserved: [cidr]}   set the network's space and the platform's ranges never
+                allocated in it (reserved, kept where they overlap the space); refused (refused: [...]) when an
+                allocation would fall outside the space (adding, removing an unused prefix and growing one in place
+                work); addressSpace
   ipam-allocate {network, owner, want: [{family, prefixLength?, prefix?}], exclude: [cidr]}
                 an owner holding prefixes gets them back (idempotent); else every family or none: a pinned prefix as
                 given, a size at the lowest free aligned block of the network's prefixes of that family, clear of the
-                network's other allocations and of exclude (the site's ranges). Result {prefixes} (IPv4 first), or
-                {waiting: why} (no room, or a pinned prefix held by another owner), or {invalid: why} (a pinned prefix
-                outside the space or clashing with exclude); waiting and invalid store nothing
+                network's other allocations, its reserved ranges and exclude (the site's ranges). Result {prefixes}
+                (IPv4 first), or {waiting: why} (no room, or a pinned prefix held by another owner), or {invalid:
+                why} (a pinned prefix outside the space or on a reserved or excluded range); waiting and invalid
+                store nothing
   ipam-release  {network, owner}
   ipam-drop     {network, holders: [owner]}   remove the network's space; refused while a holder (a placement that
                 still exists) has prefixes; allocations of other owners are dropped with it and reported (stale)
   ipam-get      {network}   space, allocations, addressSpace
 addressSpace: per space prefix {prefix, family, allocations, largestFree (shortest free prefix length; absent when
-full)}, site ranges not counted.
+full)}: the reserved ranges are not free, the site ranges are not counted.
 
 Providers (request field `provider`, default ledger):
   ledger  the fabric ledger: section "ipam" of ConfigMap fabric-ledger-<fabric> (shc_ledger.py, compare-and-swap),
-          {"HybridNetwork/<ns>/<name>": {"prefixes": [...], "alloc": {owner: [cidr, ...]}}}; requests also carry
+          {"HybridNetwork/<ns>/<name>": {"prefixes": [...], "reserved": [...], "alloc": {owner: [cidr, ...]}}};
+          requests also carry
           {api, token, namespace, fabric}. An allocate or release that changes the ledger writes the network's
           status.addressSpace (best effort), so it follows every change and not only the network's own runs.
   Another provider (e.g. NetBox) implements the same five calls; the pure functions below do the arithmetic for all.
@@ -101,15 +105,26 @@ def largest_free(space_prefix, taken):
     return best
 
 
+def overlapping(ranges, space):
+    """The ranges (any host bits) that overlap a prefix of space, canonical and in address order."""
+    out = []
+    for r in ranges or []:
+        rn = net(r, strict=False)
+        if any(rn.version == s.version and rn.overlaps(s) for s in space) and rn not in out:
+            out.append(rn)
+    return [str(r) for r in ordered(out)]
+
+
 def usage(state):
-    """addressSpace of a network's state {prefixes, alloc}."""
+    """addressSpace of a network's state {prefixes, reserved, alloc}."""
     allocs = [net(c) for cs in (state.get("alloc") or {}).values() for c in cs]
+    reserved = [net(c) for c in state.get("reserved") or []]
     out = []
     for p in state.get("prefixes") or []:
         sp = net(p)
         inside = [a for a in allocs if a.version == sp.version and a.subnet_of(sp)]
         row = {"prefix": str(sp), "family": sp.version, "allocations": len(inside)}
-        lf = largest_free(sp, inside)
+        lf = largest_free(sp, inside + reserved)
         if lf is not None:
             row["largestFree"] = lf
         out.append(row)
@@ -148,6 +163,7 @@ def plan_allocation(state, owner, want, exclude):
     """What ipam-allocate answers for state (see the module docstring); never changes state.
     {prefixes, existing: true} | {prefixes, new: true} | {waiting} | {invalid}"""
     space = [net(p) for p in state.get("prefixes") or []]
+    platform = [net(c) for c in state.get("reserved") or []]
     excl = [net(c, strict=False) for c in exclude or []]
     want = sorted(want or [], key=lambda w: int(w["family"]))
     held = (state.get("alloc") or {}).get(owner)
@@ -175,6 +191,9 @@ def plan_allocation(state, owner, want, exclude):
                 return {"invalid": f"{p} is not an IPv{fam} prefix"}
             if not any(p.subnet_of(s) for s in fam_space):
                 return {"invalid": f"{p} lies outside the network's IPv{fam} address space ({shown})"}
+            clash = next((x for x in platform if x.version == p.version and x.overlaps(p)), None)
+            if clash is not None:
+                return {"invalid": f"{p} overlaps the platform's range {clash}"}
             clash = next((x for x in excl if x.version == p.version and x.overlaps(p)), None)
             if clash is not None:
                 return {"invalid": f"{p} overlaps the site's own range {clash}"}
@@ -184,7 +203,7 @@ def plan_allocation(state, owner, want, exclude):
             got.append(p)
         else:
             plen = int(w["prefixLength"])
-            p = first_fit(space, taken + excl + got, fam, plen)
+            p = first_fit(space, taken + platform + excl + got, fam, plen)
             if p is None:
                 return {"waiting": f"no free /{plen} in the network's IPv{fam} address space ({shown})"}
             got.append(p)
@@ -226,8 +245,9 @@ class LedgerProvider:
         except Exception:  # noqa: BLE001 - the change stands; the network's next run writes the status
             return False
 
-    def space(self, network, prefixes):
+    def space(self, network, prefixes, reserved=None):
         canon = [str(net(p)) for p in prefixes]
+        held = overlapping(reserved, [net(p) for p in canon])
 
         def change(led):
             nets = self._networks(led)
@@ -235,8 +255,8 @@ class LedgerProvider:
             refused = space_change(state, canon)
             if refused:
                 return {"refused": refused, "addressSpace": usage(state), "unchanged": True}
-            unchanged = network in nets and state.get("prefixes") == canon
-            state = {"prefixes": canon, "alloc": state.get("alloc") or {}}
+            unchanged = network in nets and state.get("prefixes") == canon and (state.get("reserved") or []) == held
+            state = {"prefixes": canon, "reserved": held, "alloc": state.get("alloc") or {}}
             nets[network] = state
             return {"addressSpace": usage(state), "changed": not unchanged, "unchanged": unchanged}
         return self._update(change)
@@ -246,7 +266,7 @@ class LedgerProvider:
             state = self._networks(led).get(network) or {}
             out = plan_allocation(state, owner, want, exclude)
             if out.get("new"):
-                state["alloc"][owner] = out["prefixes"]
+                state.setdefault("alloc", {})[owner] = out["prefixes"]
             else:
                 out["unchanged"] = True
             return out
@@ -288,8 +308,8 @@ class LedgerProvider:
         state = ((led or {}).get("ipam") or {}).get(network)
         if state is None:
             return {"exists": False}
-        return {"exists": True, "prefixes": state.get("prefixes") or [], "alloc": state.get("alloc") or {},
-                "addressSpace": usage(state)}
+        return {"exists": True, "prefixes": state.get("prefixes") or [], "reserved": state.get("reserved") or [],
+                "alloc": state.get("alloc") or {}, "addressSpace": usage(state)}
 
 
 PROVIDERS = {"ledger": LedgerProvider}
@@ -303,7 +323,7 @@ def provider(req):
 
 
 ACTIONS = {
-    "ipam-space": lambda p, r: p.space(r["network"], r["prefixes"]),
+    "ipam-space": lambda p, r: p.space(r["network"], r["prefixes"], r.get("reserved") or []),
     "ipam-allocate": lambda p, r: p.allocate(r["network"], r["owner"], r.get("want") or [], r.get("exclude") or []),
     "ipam-release": lambda p, r: p.release(r["network"], r["owner"]),
     "ipam-drop": lambda p, r: p.drop(r["network"], r.get("holders") or []),

@@ -7,10 +7,11 @@
 # the ledger while it wants egress; the HybridFabric job realizes it on the border gateway nodes (default route into
 # the network, source NAT) and wakes the network when it did; status.egress {internet: pending|ready|removing|
 # unavailable, sourceAddresses}. Turning it off: the fabric removes it first, then the index goes back.
-# Address space (design/P10-PLAN.md §2.1): spec.prefixes stays clear of the platform's ranges (PrefixReserved) and
-# of the accept entries of the network's attachment circuits (PrefixInUse); the IPAM holds it and refuses an edit
-# that would leave a placement's subnet outside (PrefixInUse, the space unchanged); status.addressSpace. A change
-# wakes the network's placements waiting for address space.
+# Address space (design/P10-PLAN.md §2.1): the IPAM holds spec.prefixes with the platform's ranges inside them, which
+# it never allocates (a prefix wholly inside one is refused: PrefixReserved); no prefix may hold an accept entry of
+# the network's attachment circuits (PrefixInUse); the IPAM refuses an edit that would leave a placement's subnet
+# outside (PrefixInUse, the space unchanged); status.addressSpace. A change wakes the network's placements waiting
+# for address space.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -161,17 +162,21 @@
         namespace: "{{ fab_namespace }}"
       register: _hn_circuits
 
+    # the platform's own ranges inside the networks' VRFs (as the circuit job and the fabric's circuit policy)
+    - name: The platform's ranges
+      ansible.builtin.set_fact:
+        hn_platform_ranges: >-
+          {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
+              fab_real.egress.linkPool | default('169.254.0.0/16')]
+             + (fab_real.egress.platformSources | default([], true)) }}
+
     - name: Check the address space against the platform's ranges and the circuits
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
         fab_check:
           action: check-network
           prefixes: "{{ fab_spec.prefixes }}"
-          # the platform's own ranges inside the networks' VRFs (as the circuit job and the fabric's circuit policy)
-          reserved: >-
-            {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
-                fab_real.egress.linkPool | default('169.254.0.0/16')]
-               + (fab_real.egress.platformSources | default([], true)) }}
+          reserved: "{{ hn_platform_ranges }}"
           circuits: >-
             {%- set out = [] -%}
             {%- for c in _hn_circuits.resources | default([]) -%}
@@ -181,7 +186,7 @@
             {%- endfor -%}
             {{ out }}
 
-    - name: Refuse an address space in the platform's ranges or holding a circuit's accept entry
+    - name: Refuse a prefix inside a platform range or holding a circuit's accept entry
       ansible.builtin.set_fact:
         fab_fail_reason: "{{ 'PrefixReserved' if fab_check_result.reserved | length > 0 else 'PrefixInUse' }}"
         fab_fail_msg: "HybridNetwork {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
@@ -196,7 +201,7 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
       vars:
         fab_ipam: {action: ipam-space, fabric: "{{ hn_fabric_name }}", network: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}",
-                   prefixes: "{{ fab_spec.prefixes }}"}
+                   prefixes: "{{ fab_spec.prefixes }}", reserved: "{{ hn_platform_ranges }}"}
 
     - name: Refuse an edit that leaves placements' subnets outside the space
       ansible.builtin.set_fact:

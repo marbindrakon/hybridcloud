@@ -33,7 +33,8 @@ touch it.
    ```
    - `prefixes` is the network's address space: 1–8 prefixes in canonical form (host bits zero), at least one
      IPv4, not overlapping each other. IPv4 /8–/29, IPv6 /32–/64.
-   - The platform refuses a space that overlaps its own ranges (`PrefixReserved`).
+   - The platform never allocates its own ranges inside the space (they are not free in `addressSpace`). A prefix
+     lying wholly inside one of them is refused (`PrefixReserved`).
    - Prefixes can be added at any time. A change that would leave a placement's subnet outside the space is refused
      and names the placements (`PrefixInUse`; the space stays as it was). Removing an unused prefix, or growing one
      in place (a /16 replaced by the /15 that holds it), works.
@@ -79,11 +80,11 @@ touch it.
      network's space, or both when they agree. The subnet is in `status.prefixes`. Its first usable address is the
      gateway.
    - A size gets the lowest free block of the network's IPv4 prefixes, stepping around the network's other
-     placements and the site's own ranges (on an OpenShift site its cluster and service networks, and OVN-Kubernetes'
-     internal subnets). With no room the placement waits (`WaitingForAddressSpace`) until a prefix is added or a
-     placement goes away.
-   - A pinned prefix is never replaced: outside the space, or on one of the site's ranges, it is refused
-     (`PrefixInvalid`); held by another placement, the placement waits until it is free.
+     placements, the platform's ranges and the site's own ranges (on an OpenShift site its cluster and service
+     networks, and OVN-Kubernetes' internal subnets). With no room the placement waits (`WaitingForAddressSpace`)
+     until a prefix is added or a placement goes away.
+   - A pinned prefix is never replaced: outside the space, or on one of the platform's or the site's ranges, it is
+     refused (`PrefixInvalid`); held by another placement, the placement waits until it is free.
    - `ipv6` (optional, /64) is accepted, but where the platform doesn't offer IPv6 for the backend the placement
      fails with `FamilyUnavailable`, before anything is allocated.
    - `network`, `backend`, `ipv4` and `ipv6` are immutable. To resize, create a new placement.

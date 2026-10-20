@@ -87,10 +87,11 @@ spec:
                   description: >-
                     The network's address space, IPv4 and IPv6 prefixes the platform allocates the placements'
                     subnets from (NetworkPlacement spec.ipv4 and spec.ipv6). At least one IPv4 prefix. Prefixes
-                    are in canonical form (host bits zero, e.g. 10.60.0.0/16 or fd12:3456:789a::/48), must not
-                    overlap each other, and must stay clear of the platform's own ranges. Prefixes can be added at
-                    any time; a change that would leave a placement's subnet outside the space is refused, as is a
-                    prefix holding a route an AttachmentCircuit of the network accepts from its CE.
+                    are in canonical form (host bits zero, e.g. 10.60.0.0/16 or fd12:3456:789a::/48) and must not
+                    overlap each other. The platform's own ranges inside a prefix are never allocated; a prefix
+                    wholly inside one is refused. Prefixes can be added at any time; a change that would leave a
+                    placement's subnet outside the space is refused, as is a prefix holding a route an
+                    AttachmentCircuit of the network accepts from its CE.
                   minItems: 1
                   maxItems: 8
                   x-kubernetes-list-type: set
@@ -169,8 +170,8 @@ spec:
                       largestFree:
                         type: integer
                         description: >-
-                          Prefix length of the largest free block (a site's own ranges are not counted); absent
-                          when the prefix is full.
+                          Prefix length of the largest free block (the platform's ranges are not free, a site's own
+                          ranges are not counted); absent when the prefix is full.
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
