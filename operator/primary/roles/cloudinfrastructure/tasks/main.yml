@@ -12,24 +12,13 @@
         cloudinfrastructure_status: "{{ _hybridsovereign_redhat_cloudinfrastructure.status.status | default('') | string }}"
         cloudinfrastructure_ready: "{{ _hybridsovereign_redhat_cloudinfrastructure.status.ready | default(false) | bool }}"
         cloudinfrastructure_last_reconciled: "{{ _hybridsovereign_redhat_cloudinfrastructure.status.lastReconciledAt | default('') | string }}"
-        reconcile_now: >-
-          {{
-            (_hybridsovereign_redhat_cloudinfrastructure.metadata.annotations | default({}))
-            .get('ansible.sdk.operatorframework.io/reconcileNow', '') | string == 'true'
-          }}
 
-    - name: Clear reconcileNow annotation when forced reconcile
-      kubernetes.core.k8s:
-        state: patched
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: CloudInfrastructure
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-        definition:
-          metadata:
-            annotations:
-              ansible.sdk.operatorframework.io/reconcileNow: null
-      when: reconcile_now | bool
+    - name: Read the Retry-now request
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: reconcile_request
+      vars:
+        reconcile_request_cr: "{{ _hybridsovereign_redhat_cloudinfrastructure }}"
 
     - name: Age of the last probe
       ansible.builtin.set_fact:

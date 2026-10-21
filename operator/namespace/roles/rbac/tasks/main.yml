@@ -7,11 +7,13 @@
         rbac_observed_generation: "{{ _hybridsovereign_redhat_rbac.status.observedGeneration | default(0) | int }}"
         rbac_status: "{{ _hybridsovereign_redhat_rbac.status.status | default('') }}"
         rbac_ready: "{{ _hybridsovereign_redhat_rbac.status.ready | default(false) | bool }}"
-        reconcile_now: >-
-          {{
-            (_hybridsovereign_redhat_rbac.metadata.annotations | default({}))
-            .get('ansible.sdk.operatorframework.io/reconcileNow', '') | string == 'true'
-          }}
+
+    - name: Read the Retry-now request
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: reconcile_request
+      vars:
+        reconcile_request_cr: "{{ _hybridsovereign_redhat_rbac }}"
 
     - name: Read entity Namespace for RBAC reconciliation
       kubernetes.core.k8s_info:
@@ -48,19 +50,6 @@
         fail_msg: >-
           RbacConfig '{{ rbac_spec.config }}' in namespace '{{ plugin_rbac_operator_namespace }}'
           must have status.ready=true before Rbac '{{ ansible_operator_meta.name }}' can reconcile.
-
-    - name: Clear reconcileNow annotation when forced reconcile
-      kubernetes.core.k8s:
-        state: patched
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: Rbac
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-        definition:
-          metadata:
-            annotations:
-              ansible.sdk.operatorframework.io/reconcileNow: null
-      when: reconcile_now | bool
 
     - name: Set event action and reason
       ansible.builtin.set_fact:

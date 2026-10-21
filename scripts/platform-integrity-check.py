@@ -472,7 +472,8 @@ def retrigger_crs(crs: list[tuple[str, str, str, dict]], context: str | None = N
         patch = {
             "metadata": {
                 "annotations": {
-                    RECONCILE_ANN: "true",
+                    # Retry now: any new value is a request; an RFC 3339 UTC time makes each one differ
+                    RECONCILE_ANN: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     FORCE_SYNC_ANN: ts,
                 }
             }

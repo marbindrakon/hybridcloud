@@ -16,10 +16,11 @@
     definition:
       metadata:
         annotations:
-          ansible.sdk.operatorframework.io/reconcileNow: "true"
-          # the delete roles leave reconcileNow "true", so a second nudge during a deletion would change nothing and
-          # wake nothing: the time makes every nudge an update the operator sees
-          hybridsovereign.redhat/nudged: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.%NZ') }}"
+          # Retry now: any new value is a request (an RFC 3339 UTC time, so every nudge differs)
+          ansible.sdk.operatorframework.io/reconcileNow: "{{ _nudge_time }}"
+          hybridsovereign.redhat/nudged: "{{ _nudge_time }}"
+  vars:
+    _nudge_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.%NZ') }}"
   loop: "{{ nudge_crs | default([]) | selectattr('name') | list }}"
   loop_control:
     label: "{{ item.kind }} {{ item.namespace }}/{{ item.name }}"

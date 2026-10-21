@@ -7,11 +7,13 @@
         vault_observed_generation: "{{ _hybridsovereign_redhat_vault.status.observedGeneration | default(0) | int }}"
         vault_status: "{{ _hybridsovereign_redhat_vault.status.status | default('') }}"
         vault_ready: "{{ _hybridsovereign_redhat_vault.status.ready | default(false) | bool }}"
-        reconcile_now: >-
-          {{
-            (_hybridsovereign_redhat_vault.metadata.annotations | default({}))
-            .get('ansible.sdk.operatorframework.io/reconcileNow', '') | string == 'true'
-          }}
+
+    - name: Read the Retry-now request
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: reconcile_request
+      vars:
+        reconcile_request_cr: "{{ _hybridsovereign_redhat_vault }}"
 
     - name: Read entity Namespace
       kubernetes.core.k8s_info:
@@ -27,19 +29,6 @@
           - vault_target_ns.resources[0].metadata.labels['hybridsovereign.redhat/entity'] is defined
           - (vault_target_ns.resources[0].metadata.labels['hybridsovereign.redhat/entity'] | length) > 0
         fail_msg: Namespace must have non-empty hybridsovereign.redhat/entity label
-
-    - name: Clear reconcileNow annotation when forced reconcile
-      kubernetes.core.k8s:
-        state: patched
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: Vault
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-        definition:
-          metadata:
-            annotations:
-              ansible.sdk.operatorframework.io/reconcileNow: null
-      when: reconcile_now | bool
 
     - name: Set event action and reason
       ansible.builtin.set_fact:

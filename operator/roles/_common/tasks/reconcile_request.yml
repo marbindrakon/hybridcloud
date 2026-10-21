@@ -1,0 +1,18 @@
+---
+# Retry now: the annotation ansible.sdk.operatorframework.io/reconcileNow with any non-empty value is a
+# request (writers use an RFC 3339 UTC timestamp, so repeated requests differ). A request is new while its
+# value differs from status.lastHandledReconcileRequest; publish_operator_event records the value there
+# after it published. The annotation is never cleared.
+# Input: reconcile_request_cr (the role's CR, e.g. _hybridsovereign_redhat_hybridnetwork).
+# Sets: reconcile_request (the annotation value, '' when absent), reconcile_now (a new request).
+- name: Read the Retry-now request
+  ansible.builtin.set_fact:
+    reconcile_request: >-
+      {{ ((reconcile_request_cr.metadata | default({}, true)).annotations | default({}, true))
+         .get('ansible.sdk.operatorframework.io/reconcileNow', '') | default('', true) | string | trim }}
+    _reconcile_request_handled: >-
+      {{ (reconcile_request_cr.status | default({}, true)).lastHandledReconcileRequest | default('', true) | string | trim }}
+
+- name: Decide whether the request is new
+  ansible.builtin.set_fact:
+    reconcile_now: "{{ (reconcile_request | length > 0) and (reconcile_request != _reconcile_request_handled) }}"

@@ -1,5 +1,5 @@
 ---
 # shc (P7.1): a Ready site is probed again after this many seconds (capabilities such as evpn change when
 # the site's underlay changes, without a spec change). The watch's reconcileInterval sets how often this
-# is checked. reconcileNow probes at once.
+# is checked. A Retry-now request (reconcileNow, any new value) probes at once.
 cloudinfrastructure_reprobe_seconds: 21600

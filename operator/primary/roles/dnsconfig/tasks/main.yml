@@ -11,24 +11,13 @@
         dnsconfig_status: "{{ _hybridsovereign_redhat_dnsconfig.status.status | default('') | string }}"
         dnsconfig_ready: "{{ _hybridsovereign_redhat_dnsconfig.status.ready | default(false) | bool }}"
         dnsconfig_last_reconciled: "{{ _hybridsovereign_redhat_dnsconfig.status.lastReconciledAt | default('') | string }}"
-        reconcile_now: >-
-          {{
-            (_hybridsovereign_redhat_dnsconfig.metadata.annotations | default({}))
-            .get('ansible.sdk.operatorframework.io/reconcileNow', '') | string == 'true'
-          }}
 
-    - name: Clear reconcileNow annotation when forced reconcile
-      kubernetes.core.k8s:
-        state: patched
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: DNSConfig
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-        definition:
-          metadata:
-            annotations:
-              ansible.sdk.operatorframework.io/reconcileNow: null
-      when: reconcile_now | bool
+    - name: Read the Retry-now request
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: reconcile_request
+      vars:
+        reconcile_request_cr: "{{ _hybridsovereign_redhat_dnsconfig }}"
 
     - name: Age of the last probe
       ansible.builtin.set_fact:
