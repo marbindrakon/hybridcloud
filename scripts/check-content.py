@@ -186,6 +186,10 @@ def check_crds(rep, terms, rules, crd_rules, labs):
                     msg = (f"{rel} {kind} {p}", "undocumented", "spec field has no description")
                     (rep.error if kind in STRICT_KINDS else rep.warn)(*msg)
     for kind in sorted(set(kinds) - seen):
+        if kinds[kind].get("planned"):
+            # entry written ahead of the CRD (another change adds the kind); checked once it lands
+            rep.warn(TERMS.relative_to(ROOT), "terms", f"{kind}: planned kind, no CRD yet")
+            continue
         rep.error(TERMS.relative_to(ROOT), "terms", f"{kind} is not a kind in {BASES.name}")
 
 
