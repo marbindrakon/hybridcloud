@@ -6,7 +6,7 @@ import {
   K8sResource,
 } from '../types';
 import { getK8sClientConfig } from './k8s';
-import { errorFromResponse, networkError } from './errors';
+import { errorFromFetchFailure, errorFromResponse } from './errors';
 
 export interface OverviewCRsResult {
   items: K8sResource[];
@@ -100,7 +100,11 @@ async function listKindInNamespace(
   try {
     r = await fetchFn(url, { headers });
   } catch (err) {
-    throw networkError(err, { kind, verb: 'list', namespace });
+    // consoleFetch throws non-2xx answers; 403 and 404 mean the same as below.
+    const error = errorFromFetchFailure(err, { kind, verb: 'list', namespace });
+    if (error.status === 403) throw new FinalAnswer({ kind, items: [], forbidden: true });
+    if (error.status === 404) throw new FinalAnswer({ kind, items: [], forbidden: false });
+    throw error;
   }
   if (!r.ok) {
     // 403 is an access limit (reported, never shown as zero); 404 is a kind
