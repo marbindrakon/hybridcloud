@@ -1,0 +1,11 @@
+# Experimental. A VM migration to OpenStack (OpenStackMigration): moves the VMware VM example-vm
+# into the OpenStack environment example-osp. Not available on every installation.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: OpenStackMigration
+metadata:
+  name: example-migration
+  namespace: entity-example-corp
+spec:
+  vmName: example-vm
+  cloudoso: example-osp

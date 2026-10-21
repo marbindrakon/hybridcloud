@@ -1,8 +1,0 @@
-{{- if .Values.samples.project.project_data_pipeline.enabled }}
-apiVersion: hybridsovereign.redhat/v1alpha1
-kind: Project
-metadata:
-  name: data-pipeline
-  namespace: entity-acme-corp
-spec: {}
-{{- end }}

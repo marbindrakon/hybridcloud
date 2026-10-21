@@ -1,0 +1,22 @@
+# An edge connection (AttachmentCircuit): hands example-net to the tenant's own router on the
+# bearer bearer-1 of the provider edge example-edge. Ask the platform team for the edge and
+# bearer names. Routes from the router are accepted only as listed under accept.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: AttachmentCircuit
+metadata:
+  name: example-edge
+  namespace: entity-example-corp
+spec:
+  network: example-net
+  edgeRef:
+    name: example-edge
+    bearer: bearer-1
+  routing:
+    protocol: bgp
+    bgp:
+      peerAsn: 64600
+      authentication:
+        type: none
+    accept:
+      - 172.30.0.0/16 le 24

@@ -1,0 +1,12 @@
+# A team setup (Team): the tooling the team gets on each cluster it is assigned to. It holds no
+# people; access is given on the cluster assignment.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Team
+metadata:
+  name: example-team
+  namespace: entity-example-corp
+spec:
+  features:
+    argo: true
+    istio: false

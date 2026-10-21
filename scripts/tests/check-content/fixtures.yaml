@@ -1,0 +1,43 @@
+# Self-test cases for scripts/check-content.py --self-test. `hits` lists the matched words the
+# rules must report for `text` on `surface` (crd, ui, docs); `tenant: true` is tenant-facing text.
+cases:
+  # everywhere
+  - {surface: crd, text: "Creates an OSOHelper on the central cluster.", hits: [OSOHelper]}
+  - {surface: docs, text: "OpenStack/Routed53 prerequisites", hits: [Routed53]}
+  - {surface: docs, text: "Route 53 zone of the environment", hits: []}
+  - {surface: crd, text: "Default: platformopenshift_defaults, else 3", hits: [platformopenshift_defaults]}
+  - {surface: docs, text: "The role defaults (cloudoso_defaults) are in Git.", hits: []}
+  - {surface: crd, text: "Central Vault path of the pull secret", hits: [Central Vault]}
+  - {surface: crd, text: "Controls access (Layer 2 RBAC)", hits: [Layer 2]}
+  - {surface: ui, text: "Hybrid VPC", hits: [Hybrid VPC]}
+  - {surface: docs, text: "the Event Forwarder relays events", hits: [Event Forwarder]}
+  - {surface: ui, text: "Cloud Virt", hits: [Cloud Virt]}
+  - {surface: docs, text: "Create a CloudVirt in the tenant namespace.", hits: []}
+  - {surface: docs, text: "Openshift Virt sites", hits: [Openshift Virt]}
+  - {surface: ui, text: "IAAS", hits: [IAAS]}
+  - {surface: docs, text: "Console plugin scaffold", hits: [scaffold]}
+  - {surface: docs, text: "the 14 named RBAC roles", hits: [14 named RBAC roles]}
+  - {surface: docs, text: "a 14-role model", hits: [14-role]}
+  - {surface: docs, text: "bind sovereign-cloud-editor to your group", hits: [sovereign-cloud-editor]}
+  - {surface: crd, text: "Deprecated: the same as auditor; use auditor.", hits: []}
+  # tenant-facing only
+  - {surface: docs, tenant: true, text: "Each Entity has a namespace.", hits: [Entity]}
+  - {surface: docs, tenant: false, text: "Each Entity has a namespace.", hits: []}
+  - {surface: docs, tenant: true, text: "Create an Rbac for your team.", hits: [Rbac]}
+  - {surface: ui, tenant: true, text: "The helper is pending", hits: [helper, pending]}
+  - {surface: docs, tenant: true, text: "The object stays Pending.", hits: [Pending]}
+  - {surface: crd, tenant: true, text: "Name of the Team CR.", hits: [CR]}
+  - {surface: crd, tenant: false, text: "Name of the Team CR.", hits: []}
+  - {surface: crd, tenant: true, text: "Access on the spoke cluster", hits: [spoke]}
+  - {surface: crd, tenant: true, text: "Networks are placed with NetworkPlacement (backend kind CloudAWS).", hits: [backend]}
+  - {surface: ui, tenant: true, text: "Sync now", hits: [Sync now]}
+  - {surface: docs, tenant: true, text: "Retry now", hits: []}
+  - {surface: docs, tenant: true, text: "the site gateway of site-vm", hits: [site gateway]}
+  - {surface: crd, tenant: true, text: "OSO project", hits: [OSO]}
+  - {surface: crd, tenant: true, text: "the CloudOSO environment", hits: []}
+  # CRD structural rules
+  - {surface: crd, text: "Added in P7.3 for the gateway.", hits: [P7.3]}
+  - {surface: crd, text: "Decided on 2026-10-14.", hits: ["2026-10-14"]}
+  - {surface: crd, text: "See design/P10-PLAN.md.", hits: [design/]}
+  - {surface: crd, text: "The owner decided this.", hits: [owner decided]}
+  - {surface: crd, text: "Allocated from the pool (RFC 4271).", hits: []}

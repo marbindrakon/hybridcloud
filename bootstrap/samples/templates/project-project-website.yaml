@@ -1,8 +1,0 @@
-{{- if .Values.samples.project.project_website.enabled }}
-apiVersion: hybridsovereign.redhat/v1alpha1
-kind: Project
-metadata:
-  name: website-redesign
-  namespace: entity-acme-corp
-spec: {}
-{{- end }}

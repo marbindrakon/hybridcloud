@@ -1,0 +1,21 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# A site gateway (CloudGateway): attaches the site site-vm to the fabric example-fabric over the
+# site underlay VLAN 100.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudGateway
+metadata:
+  name: site-vm
+  namespace: sovereign-cloud
+spec:
+  fabricRef:
+    name: example-fabric
+  cloudRef:
+    name: site-vm
+  siteUnderlay:
+    vlan: 100
+    cidr: 198.51.100.0/24
+    addresses:
+      - node: border-1
+        address: 198.51.100.11

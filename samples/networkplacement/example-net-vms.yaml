@@ -1,0 +1,15 @@
+# A network placement (NetworkPlacement): attaches example-net to the VM environment example-vms
+# and allocates a /24 for it from the network's address space.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: NetworkPlacement
+metadata:
+  name: example-net-vms
+  namespace: entity-example-corp
+spec:
+  network: example-net
+  backend:
+    kind: CloudVirt
+    name: example-vms
+  ipv4:
+    prefixLength: 24

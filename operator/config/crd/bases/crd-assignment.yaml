@@ -20,7 +20,10 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
-          description: Assignment links a Team to one or more Projects and PlatformOpenshift clusters.
+          description: >-
+            A cluster assignment: puts one team setup and its app projects on one tenant OpenShift
+            cluster, comparable to binding an Argo CD AppProject and its namespaces to a cluster. It
+            waits until the cluster is ready.
           type: object
           required:
             - spec
@@ -32,134 +35,182 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired assignment linking Team, Projects, and PlatformOpenshift resources
+              description: What goes on which cluster, and who gets which access there.
               type: object
               properties:
                 team:
-                  description: Name of the Team CR this assignment belongs to
+                  description: Name of the team setup (Team) in this namespace.
                   type: string
                 projects:
-                  description: List of Project CR names assigned to this team
+                  description: >-
+                    Names of the app projects (Project) in this namespace to create on the cluster.
                   type: array
                   items:
                     type: string
                 openshift:
-                  description: Name of the PlatformOpenshift CR where the team is deployed (single cluster)
+                  description: >-
+                    Name of the OpenShift cluster (PlatformOpenshift) in this namespace. One cluster
+                    per assignment.
                   type: string
                 toolRbac:
-                  description: Controls access levels for team members on the spoke cluster (Layer 2 RBAC)
+                  description: >-
+                    Access on the assigned cluster: each field names one access group (an Rbac in
+                    this namespace) and says which role its members get in the namespaces this
+                    assignment creates there.
                   type: object
                   properties:
                     assignmentAdmin:
                       type: string
                       description: >-
-                        Rbac CR name — group receives admin RoleBindings in all Assignment-created
-                        namespaces (devops, project namespaces, istio) plus ArgoCD admin access.
+                        Access group whose members get admin in every namespace this assignment
+                        creates on the cluster (the team's tooling, mesh and app project namespaces)
+                        and admin in the team's Argo CD.
                     assignmentDeveloper:
                       type: string
                       description: >-
-                        Rbac CR name — group receives edit RoleBindings in all project namespaces.
+                        Access group whose members get edit in the app project namespaces.
                     assignmentViewer:
                       type: string
                       description: >-
-                        Rbac CR name — group receives view RoleBindings in all Assignment-created
-                        namespaces (devops, project namespaces, istio).
+                        Access group whose members get view in every namespace this assignment
+                        creates on the cluster.
                     assignmentOps:
                       type: string
                       description: >-
-                        Rbac CR name — group receives view in project namespaces, edit in devops
-                        and istio namespaces, and ArgoCD admin access.
+                        Access group whose members get view in the app project namespaces, edit in
+                        the team's tooling and mesh namespaces, and admin in the team's Argo CD.
             status:
-              description: Observed state populated by assignment-operator reconciliation
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 name:
+                  description: Name of the cluster assignment.
                   type: string
                 namespace:
+                  description: Namespace of the cluster assignment.
                   type: string
                 entity:
+                  description: The tenant this cluster assignment belongs to.
                   type: string
                 billingId:
+                  description: The tenant's billing identifier.
                   type: string
                 description:
+                  description: The tenant's description.
                   type: string
                 team:
+                  description: The team setup as applied.
                   type: string
                 teamReady:
+                  description: True when the team setup is ready.
                   type: boolean
                 projects:
+                  description: The app projects and whether each is ready.
                   type: array
                   items:
+                    description: One app project.
                     type: object
                     properties:
                       name:
+                        description: Name of the app project.
                         type: string
                       ready:
+                        description: True when the app project is ready.
                         type: boolean
                 openshift:
                   type: string
-                  description: PlatformOpenshift CR name targeted by this assignment
+                  description: The OpenShift cluster this assignment targets.
                 openshiftReady:
+                  description: True when the OpenShift cluster is ready.
                   type: boolean
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 assignmentProvisioned:
+                  description: True when the namespaces and access exist on the cluster.
                   type: boolean
                 clusterName:
+                  description: Name of the cluster in the platform's cluster management.
                   type: string
                 acmPolicyName:
                   type: string
-                  description: Name of the ACM Policy created on the central cluster for this Assignment.
+                  description: >-
+                    Name of the policy that delivers the assignment to the cluster. Platform detail.
                 helperName:
                   type: string
-                  description: "DEPRECATED: Legacy helper CR name (OSOHelper/AWSHelper type:assignment). Kept for backward compatibility."
+                  description: No longer set.
                 helperProvider:
                   type: string
-                  description: "DEPRECATED: Legacy provider type. Kept for backward compatibility."
+                  description: No longer set.
                 status:
+                  description: Short state word written by the platform's automation.
                   type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
               x-kubernetes-preserve-unknown-fields: true
