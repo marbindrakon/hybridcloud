@@ -1,9 +1,4 @@
 ---
-- name: Load Keycloak admin credentials from Vault
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
-  vars:
-    keycloak_vault_path: rhbk-services-admin
-
 - name: Get Keycloak external URL from Route
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
@@ -25,11 +20,14 @@
         else lookup('env', 'KEYCLOAK_EXTERNAL_URL') | default('https://rhbk-services.apps.cluster.local', true)
       }}
 
-- name: Obtain Keycloak admin access token
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+# the tenant realm's clients automation client (published by the RbacConfig job), not the master realm admin
+- name: Obtain the realm token for the Vault sign-in client
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
   vars:
-    keycloak_url: "{{ kc_external_url }}"
-    keycloak_token_output_fact: kc_access_token
+    krt_purpose: clients
+    krt_rbac_config: "{{ vault_spec.rbacConfig | default(plugin_vault_rbac_config | default('keycloak-sovereign-tenants-services'), true) }}"
+    krt_url: "{{ kc_external_url }}"
+    krt_token_fact: kc_access_token
 
 - name: Set OIDC client ID for this Vault
   ansible.builtin.set_fact:
@@ -45,11 +43,13 @@
     status_code: [200]
   register: kc_oidc_check
 
-- name: Refresh Keycloak admin token before client lookup
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+- name: Refresh the realm token before the client lookup
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
   vars:
-    keycloak_url: "{{ kc_external_url }}"
-    keycloak_token_output_fact: kc_access_token
+    krt_purpose: clients
+    krt_rbac_config: "{{ vault_spec.rbacConfig | default(plugin_vault_rbac_config | default('keycloak-sovereign-tenants-services'), true) }}"
+    krt_url: "{{ kc_external_url }}"
+    krt_token_fact: kc_access_token
 
 - name: Create Keycloak OIDC client for Vault
   when: kc_oidc_check.json | length == 0
@@ -91,11 +91,13 @@
   delay: 3
   until: kc_oidc_final.json | length > 0
 
-- name: Refresh Keycloak admin token before client secret lookup
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+- name: Refresh the realm token before the client secret lookup
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
   vars:
-    keycloak_url: "{{ kc_external_url }}"
-    keycloak_token_output_fact: kc_access_token
+    krt_purpose: clients
+    krt_rbac_config: "{{ vault_spec.rbacConfig | default(plugin_vault_rbac_config | default('keycloak-sovereign-tenants-services'), true) }}"
+    krt_url: "{{ kc_external_url }}"
+    krt_token_fact: kc_access_token
 
 - name: Get OIDC client secret
   ansible.builtin.uri:

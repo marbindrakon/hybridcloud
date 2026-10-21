@@ -1,5 +1,6 @@
 ---
-# Keycloak admin access token (password grant against the master realm), after
+# Keycloak MASTER-realm admin access token (password grant), for the bootstrap paths only: the RbacConfig jobs that
+# publish the realm automation clients. Every other job uses obtain_keycloak_realm_token.yml. After
 # obtain_keycloak_admin_credentials.yml. Upstream included this file but never committed it
 # (.gitignore `*token*`). Inputs: keycloak_url, keycloak_admin_user, keycloak_admin_password;
 # optional keycloak_url_http_headers, keycloak_token_output_fact (also set that fact). Sets keycloak_admin_token.
