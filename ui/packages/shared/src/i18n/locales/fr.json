@@ -431,7 +431,7 @@
     "advanced": "Avancé",
     "connection": "Connexion",
     "connectionDefault": "La connexion par défaut de la plateforme",
-    "connectionHelp": "Facultatif. Vide, la plateforme utilise sa connexion par défaut ; celle utilisée est affichée sur l'objet.",
+    "connectionHelp": "Facultatif. Vide, la connexion par défaut de la plateforme est utilisée et conservée, même si la connexion par défaut change ensuite ; celle utilisée est affichée sur l'objet.",
     "awsSite": "Site AWS",
     "gcpSite": "Site Google Cloud",
     "awsAccountAssigned": "La plateforme attribue le compte AWS de cet environnement.",

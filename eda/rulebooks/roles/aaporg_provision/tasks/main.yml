@@ -15,12 +15,26 @@
       vars:
         resolve_config_kind: AAPConfig
         resolve_config_name: "{{ aaporg_spec.aapConfig | default('') }}"
+        resolve_config_recorded: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).config | default('', true) }}"
         resolve_config_namespace: "{{ plugin_aap_config_namespace }}"
         resolve_config_required: true
 
     - name: Use the resolved automation connection
       ansible.builtin.set_fact:
         aaporg_spec: "{{ aaporg_spec | combine({'aapConfig': resolved_config_name}) }}"
+
+    # The connection is taken once: status.config keeps the object on it on every later run.
+    - name: Record the automation connection this object uses
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: aaporgs
+        cr_name: "{{ aaporg_cr_name }}"
+        cr_namespace: "{{ aaporg_cr_namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          config: "{{ resolved_config_name }}"
+      when: resolved_config_name != (((shc_live_cr | default({}, true)).status | default({}, true)).config | default('', true))
 
     - name: Load AAP admin credentials from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_aap_admin_credentials.yml"

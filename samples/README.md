@@ -39,9 +39,10 @@ groups need the matching role (see [Onboard a tenant](../docs/platform/onboard-a
 | [quayorg/example-images.yaml](quayorg/example-images.yaml) | QuayOrg | A Quay organization. |
 | [experimental/example-openstackmigration.yaml](experimental/example-openstackmigration.yaml) | OpenStackMigration | Experimental: a VM migration to OpenStack. |
 
-Site names (`site-vm`, `site-osp`, `site-aws`, `site-gcp`), the edge name and the names of the
-platform's connections (`example-identity`, `example-automation-connection`,
-`example-registry-connection`) are placeholders: ask the platform team for the real ones.
+Site names (`site-vm`, `site-osp`, `site-aws`, `site-gcp`) and the edge name are placeholders:
+ask the platform team for the real ones. The samples do not name the platform's identity
+provider, automation or registry connections: the platform uses its default connection for
+each.
 
 ## Platform objects (reference only)
 
