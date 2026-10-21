@@ -54,6 +54,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "MappingFailed": { actor: "P", class: "failed", summary: "The sign-in mapping could not be set up. The platform team is looking at it." },
   "NameInUse": { actor: "T", class: "failed", summary: "This name is already used by an OpenStack environment of another tenant. Create it with another name." },
   "NamespaceNotOwned": { actor: "P", class: "failed", summary: "The tenant namespace already exists and was not created for this tenant. The platform team must remove or rename it." },
+  "NamespaceOperatorImageRejected": { actor: "P", class: "failed", summary: "The requested operator version for this tenant is not allowed; the default version is used." },
   "NamespaceTaken": { actor: "T", class: "failed", summary: "The namespace name is already in use on the site. Choose another name." },
   "NeutronEvpnExtension": { actor: "A", class: "ready", summary: "Ready." },
   "NoAccount": { actor: "T", class: "failed", summary: "No cloud account is set up for this environment." },
