@@ -2,7 +2,9 @@
 # shc (design/TENANT-DNS.md D1): the platform's tenant DNS namespace (DNSConfig in the plugins namespace;
 # the first usable one by name). Usable = the last probe succeeded (status.nameservers set) and it isn't
 # failed or being deleted (not status.ready: a job's acknowledge step clears it while a re-probe runs).
-# Optional: dnscfg_namespace (default sovereign-cloud-plugins).
+# Optional: dnscfg_namespace (default sovereign-cloud-plugins); dnscfg_wanted_name: pick that DNSConfig by name
+# (usable or not; dnscfg_found false when it does not exist) instead of the first usable one. Existing
+# environments use the name they recorded; the first-usable rule is for new ones only.
 # Sets (never fails): dnscfg_found, dnscfg_usable, dnscfg_name, dnscfg_domain, dnscfg_secret,
 # dnscfg_project_id, dnscfg_zone_id, dnscfg_zone_attributes, dnscfg_nameservers.
 - name: Read DNSConfigs
@@ -26,10 +28,14 @@
          | rejectattr('status.status', 'equalto', 'failed')
          | sort(attribute='metadata.name') | list }}
     _all: "{{ _dnscfg_list.resources | default([]) | sort(attribute='metadata.name') | list }}"
-    _d: "{{ (_usable + _all + [{}]) | first }}"
+    _wanted: "{{ dnscfg_wanted_name | default('', true) }}"
+    _named: "{{ _all | selectattr('metadata.name', 'equalto', _wanted) | list if _wanted | length > 0 else [] }}"
+    _d: "{{ (_named + [{}]) | first if _wanted | length > 0 else (_usable + _all + [{}]) | first }}"
   ansible.builtin.set_fact:
-    dnscfg_found: "{{ _all | length > 0 }}"
-    dnscfg_usable: "{{ _usable | length > 0 }}"
+    dnscfg_found: "{{ (_named | length > 0) if _wanted | length > 0 else (_all | length > 0) }}"
+    dnscfg_usable: >-
+      {{ ((_named | map(attribute='metadata.name') | list) | intersect(_usable | map(attribute='metadata.name') | list) | length > 0)
+         if _wanted | length > 0 else (_usable | length > 0) }}
     dnscfg_name: "{{ (_d.metadata | default({})).name | default('') }}"
     dnscfg_domain: "{{ (_d.spec | default({})).domain | default('') | regex_replace('\\.$', '') }}"
     dnscfg_secret: "{{ (_d.spec | default({})).secret | default('') }}"

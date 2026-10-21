@@ -116,8 +116,9 @@
           apiVIP: "{{ oso_api_vip }}"
           ingressVIP: "{{ oso_ingress_vip }}"
           externalNetwork: "{{ oso_external_network }}"
-          # shc (§11.6 phase C): what provision created, for teardown
-          accountVaultPath: "{{ oso_record.accountVaultPath }}"
+          # what provision created, for teardown: ids only. Accounts and Vault paths are derived again where they
+          # are needed (eda/common/tasks/resolve_cloudoso_accounts.yml); null removes the keys older runs wrote.
+          accountVaultPath: null
           appCredentialId: "{{ oso_record.appCredentialId }}"
           apiFloatingIPId: "{{ oso_record.apiFloatingIPId }}"
           ingressFloatingIPId: "{{ oso_record.ingressFloatingIPId }}"
@@ -125,8 +126,8 @@
           dnsZoneId: "{{ oso_record.dnsZoneId }}"
           dnsZoneName: "{{ oso_record.dnsZoneName }}"
           dnsProjectId: "{{ oso_record.dnsProjectId }}"
-          route53VaultPath: "{{ oso_record.route53VaultPath }}"
-          vaultPaths: "{{ oso_record.vaultPaths }}"
+          route53VaultPath: null
+          vaultPaths: null
           # design/TENANT-DNS.md: the environment zone ({} without one)
           dns: "{{ oso_record.dns }}"
           conditions:

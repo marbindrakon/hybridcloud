@@ -1,0 +1,111 @@
+---
+# The accounts and Vault paths of an existing CloudOSO, derived from where they come from instead of being read
+# back from the object's status (the status keeps ids only; Vault paths and secret references are not part of
+# the tenant-readable record).
+#
+# Input:
+#   rca_cr                   the CloudOSO object (as read from the API)
+#   rca_ignore_status_keys   true: never read the legacy status keys (accountVaultPath, route53VaultPath,
+#                            vaultPaths, dns.dnsConfigSecret); default false: an object written before they were
+#                            dropped is read from them until its status is migrated
+# Uses services_api_host / services_bearer_token and cloudoso_defaults (legacy objects without a site).
+# Sets:
+#   rca_site                 the CloudInfrastructure in effect ('' = legacy account)
+#   rca_account_vault_path   the OpenStack account the project was created with ('' = cannot be told)
+#   rca_route53_vault_path   the Route53 account ('' unless the environment uses Route53)
+#   rca_dns_config_secret    the DNS account of the environment zone's delegation ('' without an environment zone)
+#   rca_clouds_config_paths  the project's own Vault paths
+#   rca_sources              {key: status|derived|none} per output (never values)
+# Fails only when an environment zone exists and its DNSConfig cannot be found by the name recorded at provision.
+- name: Reset the CloudOSO account facts
+  vars:
+    _st: "{{ (rca_cr | default({})).status | default({}, true) }}"
+    _spec: "{{ (rca_cr | default({})).spec | default({}, true) }}"
+    _dns: "{{ _st.dns | default({}, true) }}"
+    _use_status: "{{ not (rca_ignore_status_keys | default(false) | bool) }}"
+    _default: "{{ (cloudoso_defaults | default({}, true)).cloudRef | default('', true) }}"
+    _default_name: "{{ _default.name | default('') if _default is mapping else _default }}"
+  ansible.builtin.set_fact:
+    rca_name: "{{ (rca_cr | default({})).metadata.name | default('') }}"
+    rca_status_keys:
+      account: "{{ (_st.accountVaultPath | default('', true)) if _use_status | bool else '' }}"
+      route53: "{{ (_st.route53VaultPath | default('', true)) if _use_status | bool else '' }}"
+      dns: "{{ (_dns.dnsConfigSecret | default('', true)) if _use_status | bool else '' }}"
+      paths: "{{ (_st.vaultPaths | default([], true)) if _use_status | bool else [] }}"
+    # the site recorded at provision ('' recorded = the legacy account); without a record the spec, then the
+    # installation default
+    rca_site: >-
+      {{ _st.cloudInfrastructure if 'cloudInfrastructure' in _st
+         else ((_spec.cloudRef | default({}, true)).name | default('', true) or _default_name) }}
+    rca_dns_provider: "{{ _st.dnsProvider | default('') }}"
+    rca_env_dns: "{{ _dns }}"
+
+- name: Read the CloudOSO's site
+  ansible.builtin.include_tasks: resolve_cloud_infrastructure.yml
+  vars:
+    ci_ref_name: "{{ rca_site }}"
+  when: rca_site | length > 0 and rca_status_keys.account | length == 0
+
+- name: Derive the account and the Route53 account
+  vars:
+    _spec: "{{ (rca_cr | default({})).spec | default({}, true) }}"
+    _legacy_account: "{{ _spec.vaultPath | default((cloudoso_defaults | default({}, true)).vaultPath | default(''), true) }}"
+    _legacy_route53: "{{ _spec.route53VaultPath | default((cloudoso_defaults | default({}, true)).route53VaultPath | default(''), true) }}"
+    _site_account: >-
+      {{ ((ci_spec | default({})).credentialsRef | default({}, true)).vaultPath | default('')
+         if (rca_site | length > 0 and (ci_found | default(false) | bool)) else '' }}
+  ansible.builtin.set_fact:
+    rca_account_vault_path: >-
+      {{ rca_status_keys.account or (_site_account if rca_site | length > 0 else _legacy_account) }}
+    # a site never uses Route53 for an environment; the legacy account only when the environment recorded route53
+    rca_route53_vault_path: >-
+      {{ rca_status_keys.route53 or ((_legacy_route53 if rca_dns_provider == 'route53' else '') if rca_site | length == 0 else '') }}
+    rca_clouds_config_paths: >-
+      {{ rca_status_keys.paths if rca_status_keys.paths | length > 0
+         else (['oso/projects/' ~ rca_name ~ '/clouds-config'] if rca_name | length > 0 else []) }}
+
+- name: Does the environment have its own zone
+  ansible.builtin.set_fact:
+    rca_has_env_zone: >-
+      {{ (rca_env_dns.zoneId | default('', true) | length > 0)
+         or ((rca_env_dns.mode | default('', true)) not in ['', 'none']) }}
+
+# The zone's delegation account is the DNSConfig named at provision, never "the first usable one" (that may be
+# another DNS account by now).
+- name: Read the DNSConfig the environment zone was made with
+  ansible.builtin.include_tasks: resolve_dns_config.yml
+  vars:
+    dnscfg_wanted_name: "{{ rca_env_dns.dnsConfig | default('', true) }}"
+  when:
+    - rca_has_env_zone | bool
+    - rca_status_keys.dns | length == 0
+    - (rca_env_dns.dnsConfig | default('', true)) | length > 0
+
+- name: Require the DNSConfig of an environment zone
+  ansible.builtin.assert:
+    that:
+      - (rca_env_dns.dnsConfig | default('', true)) | length > 0
+      - dnscfg_found | default(false) | bool
+      - (dnscfg_secret | default('')) | length > 0
+    fail_msg: >-
+      Cannot tell which DNS account created this environment's zone; the platform team must check it before the
+      delete continues.
+  when:
+    - rca_has_env_zone | bool
+    - rca_status_keys.dns | length == 0
+
+- name: Set the DNS account
+  ansible.builtin.set_fact:
+    rca_dns_config_secret: >-
+      {{ rca_status_keys.dns or ((dnscfg_secret | default('')) if rca_has_env_zone | bool else '') }}
+
+- name: Record where each value came from
+  ansible.builtin.set_fact:
+    rca_sources:
+      accountVaultPath: >-
+        {{ 'status' if rca_status_keys.account | length > 0 else ('derived' if rca_account_vault_path | length > 0 else 'none') }}
+      route53VaultPath: >-
+        {{ 'status' if rca_status_keys.route53 | length > 0 else ('derived' if rca_route53_vault_path | length > 0 else 'none') }}
+      dnsConfigSecret: >-
+        {{ 'status' if rca_status_keys.dns | length > 0 else ('derived' if rca_dns_config_secret | length > 0 else 'none') }}
+      vaultPaths: "{{ 'status' if rca_status_keys.paths | length > 0 else 'derived' }}"
