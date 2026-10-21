@@ -5,10 +5,12 @@ plugin_rbac_keycloak_url_default: "https://rhbk-services.apps.services.shc.signa
 eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
 # Realm automation clients of an RbacConfig (tasks/automation_client.yml): purpose, client id suffix and the exact
 # realm-management roles of its service account. Credentials in central Vault <keycloak_automation_vault_prefix>/<name>.
+# membership holds view-clients (read-only) because the tool orgs' sign-in check (keycloak_verify_group_claim.yml)
+# asks Keycloak for a member's example token of a client, which needs view of the client and of the user in one token.
 plugin_rbac_automation_clients:
   - purpose: membership
     suffix: ""
-    roles: [manage-users, view-users, query-users, query-groups, query-clients]
+    roles: [manage-users, view-users, query-users, query-groups, query-clients, view-clients]
   - purpose: clients
     suffix: "-clients"
     roles: [manage-clients, view-clients, query-clients]
