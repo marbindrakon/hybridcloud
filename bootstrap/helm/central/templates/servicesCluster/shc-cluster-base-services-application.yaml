@@ -38,6 +38,11 @@ spec:
 
   ignoreDifferences:
     {{- include "sovereign-central.esoIgnoreDifferences" $ | nindent 4 }}
+    {{- with $cfg.extraIgnoreDifferences }}
+    # fields another controller on services owns (shcClusterBaseServices.extraIgnoreDifferences);
+    # with RespectIgnoreDifferences the chart does not re-apply them either
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 
   syncPolicy:
     automated:

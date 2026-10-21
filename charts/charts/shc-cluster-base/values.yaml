@@ -177,6 +177,9 @@ ops:
     secretStore: vault-backend
     config:
       domain: ""
+      # CloudInfrastructure name of the cloud the account belongs to; CloudOSOs on other clouds are
+      # not compared with its projects. Empty = every CloudOSO.
+      cloudInfrastructure: ""
       ignoreProjects: []
       dnsZoneId: ""
       dnsProjectId: ""

@@ -487,6 +487,11 @@ kind: CronJob
 metadata:
   name: tenant-orphan-check
   namespace: {{ $o.namespace }}
+  annotations:
+    # Report-only: Argo CD reports the CronJob Degraded while its last check has findings. In the last
+    # sync wave that health cannot hold back the resources of later waves (it did: wave 1 was never
+    # applied while a finding was open).
+    argocd.argoproj.io/sync-wave: "10"
 spec:
   schedule: {{ $c.schedule | quote }}
   timeZone: Etc/UTC
