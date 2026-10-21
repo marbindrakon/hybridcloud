@@ -83,27 +83,16 @@
         namespace: "{{ vault_cr_namespace }}"
       ignore_errors: true
 
-    - name: Read Keycloak admin Secret for cleanup
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: v1
-        kind: Secret
-        name: rhbk-services-admin
-        namespace: sovereign-cloud-plugins
-      register: kc_admin_secret_fin
-      ignore_errors: true
+    - name: Derive Vault OIDC client ID
+      ansible.builtin.set_fact:
+        vault_fin_entity: "{{ vault_cr_final.resources[0].status.entity | default('') }}"
+        vault_fin_oidc_client_id: "vault-{{ vault_cr_final.resources[0].status.entity | default('') }}-{{ vault_cr_name }}"
+      when: vault_cr_final.resources | length > 0
 
+    # the tenant realm's clients automation client (published by the RbacConfig job), not the master realm admin
     - name: Run Keycloak OIDC client cleanup
-      when: kc_admin_secret_fin.resources | default([]) | length > 0
+      when: vault_fin_oidc_client_id is defined
       block:
-        - name: Decode Keycloak credentials
-          ansible.builtin.set_fact:
-            kc_admin_user_fin: "{{ kc_admin_secret_fin.resources[0].data.username | b64decode }}"
-            kc_admin_password_fin: "{{ kc_admin_secret_fin.resources[0].data.password | b64decode }}"
-          no_log: true
-
         - name: Get Keycloak external URL
           kubernetes.core.k8s_info:
             host: "{{ services_api_host }}"
@@ -125,54 +114,46 @@
                 else lookup('env', 'KEYCLOAK_EXTERNAL_URL') | default('https://rhbk-services.apps.cluster.local', true)
               }}
 
-        - name: Get Keycloak admin token
-          ansible.builtin.uri:
-            url: "{{ kc_external_url_fin }}/realms/master/protocol/openid-connect/token"
-            method: POST
-            body_format: form-urlencoded
-            body:
-              client_id: admin-cli
-              username: "{{ kc_admin_user_fin }}"
-              password: "{{ kc_admin_password_fin }}"
-              grant_type: password
-            validate_certs: false
-            status_code: [200]
-          register: kc_token_fin
-          ignore_errors: true
-          no_log: true
+        - name: Obtain the realm token for the Vault sign-in client
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
+          vars:
+            krt_purpose: clients
+            krt_rbac_config: >-
+              {{ (shc_live_spec | default({}, true)).rbacConfig
+                 | default((vault_cr_final.resources[0].spec | default({}, true)).rbacConfig
+                           if vault_cr_final.resources | default([]) | length > 0 else '', true)
+                 | default('keycloak-sovereign-tenants-services', true) }}
+            krt_url: "{{ kc_external_url_fin }}"
+            krt_token_fact: kc_token_fin
 
-        - name: Derive Vault OIDC client ID
-          ansible.builtin.set_fact:
-            vault_fin_entity: "{{ vault_cr_final.resources[0].status.entity | default('') }}"
-            vault_fin_oidc_client_id: "vault-{{ vault_cr_final.resources[0].status.entity | default('') }}-{{ vault_cr_name }}"
-          when: vault_cr_final.resources | length > 0
-
+        # the client representation carries the client secret
         - name: Look up Vault Keycloak OIDC client
           ansible.builtin.uri:
-            url: "{{ kc_external_url_fin }}/admin/realms/sovereign-tenants/clients?clientId={{ vault_fin_oidc_client_id | urlencode }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/sovereign-tenants/clients?clientId={{ vault_fin_oidc_client_id | urlencode }}"
             method: GET
             headers:
-              Authorization: "Bearer {{ kc_token_fin.json.access_token }}"
+              Authorization: "Bearer {{ kc_token_fin }}"
             validate_certs: false
             status_code: [200]
           register: kc_client_lookup_fin
-          when:
-            - vault_fin_oidc_client_id is defined
-            - kc_token_fin.status | default(0) == 200
-          ignore_errors: true
+          no_log: true
 
         - name: Delete Vault Keycloak OIDC client
           ansible.builtin.uri:
-            url: "{{ kc_external_url_fin }}/admin/realms/sovereign-tenants/clients/{{ kc_client_lookup_fin.json[0].id }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/sovereign-tenants/clients/{{ kc_client_lookup_fin.json[0].id }}"
             method: DELETE
             headers:
-              Authorization: "Bearer {{ kc_token_fin.json.access_token }}"
+              Authorization: "Bearer {{ kc_token_fin }}"
             validate_certs: false
             status_code: [200, 204, 404]
-          when:
-            - kc_client_lookup_fin is defined
-            - kc_client_lookup_fin.json | default([]) | length > 0
-          ignore_errors: true
+          when: kc_client_lookup_fin.json | default([]) | length > 0
+      always:
+        - name: Forget the realm token and the client
+          ansible.builtin.set_fact:
+            kc_token_fin: ""
+            kc_client_lookup_fin: {}
+          no_log: true
+      ignore_errors: true
 
     - name: Get current timestamp
       ansible.builtin.set_fact:

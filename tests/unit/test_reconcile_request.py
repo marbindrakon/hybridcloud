@@ -2,8 +2,12 @@
 
 A timestamp is a request while it differs from status.lastHandledReconcileRequest. The legacy literal "true"
 (older dashboards, runbooks) is a request every time; publish_operator_event removes it after publishing.
-Skipped when ansible-playbook is absent.
+reconcile_keeps_ready: a run on a Ready object whose spec was already processed keeps Ready, and every
+operator role then writes Reconciling=True/Queued instead of Ready=False/AwaitingEDA (UX-062).
+Skipped when ansible-playbook is absent (the role scan always runs).
 """
+import glob
+import re
 import json
 import os
 import shutil
@@ -20,10 +24,18 @@ ANN = "ansible.sdk.operatorframework.io/reconcileNow"
 @unittest.skipUnless(shutil.which("ansible-playbook"), "ansible-playbook not installed")
 class ReconcileRequestTest(unittest.TestCase):
     def decide(self, annotation, handled):
+        cr = {"metadata": {"annotations": {} if annotation is None else {ANN: annotation}},
+              "status": {} if handled is None else {"lastHandledReconcileRequest": handled}}
+        out = self.run_task(cr)
+        return {"now": out["now"], "legacy": out["legacy"]}
+
+    def keeps_ready(self, status, generation=2):
+        cr = {"metadata": {"generation": generation, "annotations": {ANN: "true"}}, "status": status}
+        return self.run_task(cr)["keeps"]
+
+    def run_task(self, cr):
         tmp = tempfile.mkdtemp(prefix="shc-rr-test-")
         try:
-            cr = {"metadata": {"annotations": {} if annotation is None else {ANN: annotation}},
-                  "status": {} if handled is None else {"lastHandledReconcileRequest": handled}}
             play = textwrap.dedent('''\
                 - hosts: localhost
                   connection: local
@@ -32,7 +44,7 @@ class ReconcileRequestTest(unittest.TestCase):
                     - ansible.builtin.include_tasks: "{{ task_file }}"
                     - ansible.builtin.copy:
                         dest: "{{ out }}"
-                        content: "{{ {'now': reconcile_now | bool, 'legacy': reconcile_request_legacy | bool} | to_json }}"
+                        content: "{{ {'now': reconcile_now | bool, 'legacy': reconcile_request_legacy | bool, 'keeps': reconcile_keeps_ready | bool} | to_json }}"
                 ''')
             with open(os.path.join(tmp, "play.yml"), "w") as f:
                 f.write(play)
@@ -66,6 +78,61 @@ class ReconcileRequestTest(unittest.TestCase):
         self.assertEqual(self.decide("true", None), {"now": True, "legacy": True})
         self.assertEqual(self.decide("true", "true"), {"now": True, "legacy": True})
         self.assertEqual(self.decide("True", "True"), {"now": True, "legacy": True})
+
+    def test_rerun_of_ready_object_keeps_ready(self):
+        ready = {"type": "Ready", "status": "True", "reason": "Ready"}
+        self.assertTrue(self.keeps_ready({"ready": True, "observedGeneration": 2, "conditions": [ready]}))
+        # a Ready condition decides over status.ready
+        self.assertTrue(self.keeps_ready({"ready": False, "observedGeneration": 2, "conditions": [ready]}))
+        # no Ready condition: status.ready
+        self.assertTrue(self.keeps_ready({"ready": True, "observedGeneration": 3}))
+
+    def test_create_spec_change_or_not_ready_flips(self):
+        ready = {"type": "Ready", "status": "True", "reason": "Ready"}
+        not_ready = {"type": "Ready", "status": "False", "reason": "ProvisionFailed"}
+        self.assertFalse(self.keeps_ready({}))
+        self.assertFalse(self.keeps_ready({"ready": True, "observedGeneration": 1, "conditions": [ready]}))
+        self.assertFalse(self.keeps_ready({"ready": True, "observedGeneration": 2, "conditions": [not_ready]}))
+        self.assertFalse(self.keeps_ready({"ready": False, "observedGeneration": 2}))
+        self.assertFalse(self.keeps_ready({"ready": True}, generation=None))
+
+
+MARK = re.compile(r"^(\s*)- name: Mark (\w+) as reconciling$")
+
+
+class RerunKeepsReadyRolesTest(unittest.TestCase):
+    """Every operator role that marks its CR as reconciling guards the Ready=False write (UX-062)."""
+
+    def test_roles_guard_the_ready_flip(self):
+        files = sorted(glob.glob(os.path.join(ROOT, "operator", "*", "roles", "*", "tasks", "main.yml")))
+        seen = 0
+        for path in files:
+            with open(path) as f:
+                text = f.read()
+            if "tasks_from: reconcile_request" not in text:
+                continue
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                m = MARK.match(line)
+                if not m:
+                    continue
+                seen += 1
+                ind, kind = m.group(1), m.group(2)
+                j = i + 1
+                while j < len(lines) and lines[j].strip() and not lines[j].startswith(ind + "- "):
+                    j += 1
+                block = "\n".join(lines[i:j])
+                rel = os.path.relpath(path, ROOT)
+                self.assertIn("when: not (reconcile_keeps_ready | default(false) | bool)", block, rel)
+                queued = text.split("- name: Mark %s as queued for a re-run" % kind, 1)
+                self.assertEqual(len(queued), 2, rel)
+                qblock = queued[1].split("\n" + ind + "- ", 1)[0]
+                self.assertIn("type: Reconciling", qblock, rel)
+                self.assertIn("reason: Queued", qblock, rel)
+                self.assertNotIn("ready:", qblock, rel)
+                self.assertIn("when: reconcile_keeps_ready | default(false) | bool", qblock, rel)
+                self.assertLess(text.index("tasks_from: reconcile_request"), text.index(line), rel)
+        self.assertGreaterEqual(seen, 28)
 
 
 if __name__ == "__main__":

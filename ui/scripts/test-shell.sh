@@ -25,6 +25,8 @@ entries=(
   "forms/apiErrors.ts:apiErrors"
   "status/completion.ts:completion"
   "forms/entityFields.ts:entityFields"
+  "hooks/k8s.ts:k8s"
+  "hooks/overviewCrs.ts:overviewCrs"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

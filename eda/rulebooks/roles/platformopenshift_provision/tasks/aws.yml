@@ -29,6 +29,17 @@
     validate_certs: false
     status_code: [200]
   register: cloudaws_raw
+  # The request carries the services API token in a header, which the uri module does not mask: keep the whole
+  # result out of the job output and report only the HTTP status and the API's message below.
+  no_log: true
+  failed_when: false
+
+- name: Fail when the CloudAWS could not be read
+  ansible.builtin.fail:
+    msg: >-
+      Reading CloudAWS '{{ aws_env_name }}' failed (HTTP {{ cloudaws_raw.status | default('?') }}):
+      {{ (cloudaws_raw.json | default({}, true)).message | default(cloudaws_raw.msg | default(''), true) }}
+  when: (cloudaws_raw.status | default(-1)) != 200
 
 - name: Fail if CloudAWS not ready
   ansible.builtin.assert:

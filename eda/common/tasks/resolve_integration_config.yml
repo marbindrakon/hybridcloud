@@ -2,28 +2,54 @@
 # Resolve the integration connection (RbacConfig, AAPConfig or QuayConfig) an object uses.
 #
 # The connection reference on Rbac, Vault, AAPOrg and QuayOrg is optional. When the object
-# names none, the platform uses its default connection of that kind:
-#   1. the object named in the spec, when set;
-#   2. else the only object of the kind labelled hybridsovereign.redhat/default: "true";
-#   3. else the only object of the kind;
-#   4. else nothing (fails when resolve_config_required, the default).
+# names none, the platform's default connection of that kind is taken once, when the object is
+# first realized, and recorded in the object's status.config. From then on the object stays on
+# that connection, even when the platform adds connections or labels another one its default.
+#
+# Provision and reconcile (resolve_config_teardown false, the default):
+#   1. the connection named in the spec, when set;
+#   2. else the recorded connection (status.config), when it still exists and is not being deleted;
+#   3. else the only object of the kind labelled hybridsovereign.redhat/default: "true";
+#   4. else the only object of the kind;
+#   5. else nothing (fails when resolve_config_required, the default).
+# Teardown (resolve_config_teardown true): the cleanup happens where the object was realized:
+#   1. the recorded connection (status.config), when set (also when it no longer exists: the
+#      teardown then finds no connection and skips that cleanup; it never cleans up elsewhere);
+#   2. else the connection named in the spec;
+#   3. else the default, as in steps 3 and 4 above.
 #
 # EDA copy of operator/roles/_common/tasks/resolve_integration_config.yml: same rules, read
 # through the services cluster connection (resolve_services_cluster_connection.yml first).
 #
 # Inputs:
 #   resolve_config_kind       RbacConfig | AAPConfig | QuayConfig
-#   resolve_config_name       the name the object asks for ('' or undefined for the default)
+#   resolve_config_name       the name the object's spec asks for ('' or undefined for the default)
+#   resolve_config_recorded   the name the object's status.config records ('' or undefined: none)
 #   resolve_config_namespace  the integration namespace holding the connections
 #   resolve_config_required   fail when nothing resolves (default true)
+#   resolve_config_teardown   resolve for a teardown (default false)
 # Output:
 #   resolved_config_name      the connection name (empty when not required and nothing resolves)
-- name: Use the connection the object names
+#   resolved_config_source    spec | recorded | default | none
+- name: Read the connection the object names and the one it records
   ansible.builtin.set_fact:
-    resolved_config_name: "{{ resolve_config_name | default('', true) | string | trim }}"
+    _resolve_config_spec: "{{ resolve_config_name | default('', true) | string | trim }}"
+    _resolve_config_recorded: "{{ resolve_config_recorded | default('', true) | string | trim }}"
+    _resolve_config_teardown: "{{ resolve_config_teardown | default(false) | bool }}"
 
-- name: Find the default {{ resolve_config_kind }}
-  when: resolved_config_name | default('', true) | length == 0
+- name: Use the named connection (for a teardown, the recorded one first)
+  ansible.builtin.set_fact:
+    resolved_config_name: >-
+      {{ (_resolve_config_recorded if _resolve_config_recorded | length > 0 else _resolve_config_spec)
+         if _resolve_config_teardown else _resolve_config_spec }}
+    resolved_config_source: >-
+      {{ ('recorded' if _resolve_config_recorded | length > 0
+          else ('spec' if _resolve_config_spec | length > 0 else 'none'))
+         if _resolve_config_teardown
+         else ('spec' if _resolve_config_spec | length > 0 else 'none') }}
+
+- name: Find the recorded or the default {{ resolve_config_kind }}
+  when: resolved_config_name | length == 0
   block:
     - name: List {{ resolve_config_kind }} objects in the integration namespace
       kubernetes.core.k8s_info:
@@ -48,13 +74,21 @@
         label: "{{ item.metadata.name }}"
       when: ((item.metadata.labels | default({}))['hybridsovereign.redhat/default'] | default('') | string | lower) == 'true'
 
-    - name: Pick the default {{ resolve_config_kind }}
-      ansible.builtin.set_fact:
-        resolved_config_name: >-
+    - name: Pick the recorded or the default {{ resolve_config_kind }}
+      vars:
+        _resolve_config_keep: >-
+          {{ _resolve_config_recorded | length > 0
+             and _resolve_config_recorded in (_resolve_config_items | map(attribute='metadata.name') | list) }}
+        _resolve_config_default: >-
           {{ _resolve_config_marked[0] if (_resolve_config_marked | length == 1)
              else (_resolve_config_items[0].metadata.name
                    if (_resolve_config_marked | length == 0 and _resolve_config_items | length == 1)
                    else '') }}
+      ansible.builtin.set_fact:
+        resolved_config_name: "{{ _resolve_config_recorded if (_resolve_config_keep | bool) else _resolve_config_default }}"
+        resolved_config_source: >-
+          {{ 'recorded' if (_resolve_config_keep | bool)
+             else ('default' if _resolve_config_default | length > 0 else 'none') }}
 
 - name: Fail when no default {{ resolve_config_kind }} exists
   ansible.builtin.fail:
@@ -63,5 +97,5 @@
       {{ resolve_config_namespace }}; name one on the object or ask the platform team
       to label one hybridsovereign.redhat/default=true.
   when:
-    - resolved_config_name | default('', true) | length == 0
+    - resolved_config_name | length == 0
     - resolve_config_required | default(true) | bool

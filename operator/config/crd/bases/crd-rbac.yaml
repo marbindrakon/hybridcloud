@@ -53,8 +53,10 @@ spec:
                 config:
                   description: >-
                     Optional. The identity provider connection (an RbacConfig in the platform's
-                    integration namespace) this access group uses. When omitted the platform uses
-                    its default connection; the one used is reported in status.config.
+                    integration namespace) this access group uses. When omitted the platform's
+                    default connection is taken once, when the group is first set up, and kept:
+                    the one used is reported in status.config, and the group stays on it when the
+                    platform's default changes later.
                   type: string
                 description:
                   description: >-

@@ -171,6 +171,8 @@
             OIDC_ENDPOINT: "{{ keycloak_external_url }}/realms/{{ keycloak_realm }}"
             KEY: "{{ aap_oidc_client_id }}"
             SECRET: "{{ _kc_client_secret.json.value }}"
+            # the claim the Keycloak groups mapper emits (the gateway's default, "Group", never matches it)
+            GROUPS_CLAIM: "{{ aap_oidc_groups_claim }}"
           slug: "oidc-{{ aapconfig_cr_name | lower }}"
         validate_certs: false
         status_code: [200, 201]
@@ -189,6 +191,26 @@
         status_code: [200]
       register: _existing_auth
       when: _aap_auth is failed or (_aap_auth.status | default(0) == 400)
+
+    # the gateway replaces the whole configuration on PATCH; the masked SECRET ("$encrypted$") keeps the stored one
+    - name: Converge the groups claim of the existing authenticator
+      ansible.builtin.uri:
+        url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticators/{{ _existing_auth.json.results[0].id }}/"
+        method: PATCH
+        user: "{{ aap_username }}"
+        password: "{{ aap_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          configuration: >-
+            {{ _existing_auth.json.results[0].configuration | combine({'GROUPS_CLAIM': aap_oidc_groups_claim}) }}
+        validate_certs: false
+        status_code: [200]
+      register: _aap_auth_groups_claim
+      when:
+        - _existing_auth.json is defined
+        - _existing_auth.json.results | default([]) | length > 0
+        - _existing_auth.json.results[0].configuration.GROUPS_CLAIM | default('', true) != aap_oidc_groups_claim
 
     - name: Read the authenticator's callback
       ansible.builtin.set_fact:

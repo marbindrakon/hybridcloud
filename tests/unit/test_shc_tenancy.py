@@ -171,6 +171,40 @@ class Config(unittest.TestCase):
 
 
 
+class FakeApi:
+    def __init__(self):
+        self.annotations = []
+
+    def patch_namespaced_custom_object(self, group, version, ns, plural, name, body):
+        self.annotations.append(body["metadata"]["annotations"])
+
+    def patch_namespaced_custom_object_status(self, *args):
+        pass
+
+
+class MachineWakeTest(unittest.TestCase):
+    """Re-drive and re-check write the legacy literal "true": operators of every generation act on it."""
+
+    def test_redrive_writes_true(self):
+        api = FakeApi()
+        cr = {"metadata": {"namespace": "entity-a", "name": "n1", "generation": 1},
+              "status": {"ready": False, "delivery": {"eventId": "e1", "publishedAt": "2026-10-21T11:00:00Z"}}}
+        kinds = [{"kind": "HybridNetwork", "plural": "hybridnetworks", "version": "v1alpha1", "items": [cr]}]
+        counts, _ = T.eda_redrive.run_redrive(api, kinds, {"redriveKinds": ["HybridNetwork"]}, NOW, False)
+        self.assertEqual(counts["redriven"], 1)
+        self.assertEqual(api.annotations[0][T.RECONCILE_NOW], "true")
+
+    def test_recheck_writes_true(self):
+        api = FakeApi()
+        cr = {"metadata": {"namespace": "entity-a", "name": "t1", "generation": 1},
+              "status": {"ready": False, "observedGeneration": 1,
+                         "conditions": [{"type": "Ready", "status": "False", "reason": "ProvisionFailed"}]}}
+        kinds = [{"kind": "Team", "plural": "teams", "version": "v1alpha1", "items": [cr]}]
+        counts, _ = T.run_failed_recheck(api, kinds, T.DEFAULTS, NOW, False)
+        self.assertEqual(counts["rechecked"], 1)
+        self.assertEqual(api.annotations[0][T.RECONCILE_NOW], "true")
+
+
 class StatusKindsTest(unittest.TestCase):
     def test_skip_tier_kinds_are_left_out(self):
         kinds = [{"kind": "TenantProfile", "labels": {"hybridsovereign.redhat/teardown-tier": "skip"}, "items": []},

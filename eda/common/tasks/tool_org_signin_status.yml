@@ -12,6 +12,7 @@
 #   tos_fields          the spec fields that name access groups (for messages)
 #   tos_rbacs           the granted Rbac objects that exist (status.group set)
 #   tos_mapping_failed  true when the tool-side mapping could not be set up
+#   tos_mapping_message optional: what is wrong with the tool-side mapping, when tos_mapping_failed (for the message)
 #   tos_client          clientId of the tool's sign-in client ('' when unknown)
 # Sets: tool_org_ready_reason, tool_org_signin_condition (a condition to add to the status), and
 #   tool_org_failure_reason before failing (the role's rescue writes it as the Ready reason).
@@ -47,7 +48,7 @@
 
     - name: Stop
       ansible.builtin.fail:
-        msg: The sign-in mapping of this {{ tos_kind }} could not be set up in the tool.
+        msg: "{{ tos_mapping_message | default('', true) or ('The sign-in mapping of this ' ~ tos_kind ~ ' could not be set up in the tool.') }}"
 
 - name: Refuse when the sign-in client is unknown
   when: tos_client | default('', true) | length == 0

@@ -35,6 +35,7 @@ export {
   parseStatusBody,
   parseWarningHeaders,
   errorFromResponse,
+  errorFromFetchFailure,
   networkError,
 } from './errors';
 export type { ErrorClass, K8sStatusCause, K8sApiErrorContext } from './errors';

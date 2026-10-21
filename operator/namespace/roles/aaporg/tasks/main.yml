@@ -16,6 +16,7 @@
       vars:
         resolve_config_kind: AAPConfig
         resolve_config_name: "{{ aaporg_spec.aapConfig | default('') }}"
+        resolve_config_recorded: "{{ (_hybridsovereign_redhat_aaporg.status | default({}, true)).config | default('', true) }}"
         resolve_config_namespace: sovereign-cloud-plugins
 
     - name: Use the resolved automation connection
@@ -94,6 +95,9 @@
       ansible.builtin.set_fact:
         aaporg_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # A create or a spec change: Ready=False until the job reports. A re-run of a Ready object (Retry now,
+    # a wake from another job, a periodic re-check) keeps ready/conditions as they are until the job
+    # reports, and only Reconciling says that a run is queued (reconcile_keeps_ready, reconcile_request.yml).
     - name: Mark AAPOrg as reconciling
       operator_sdk.util.k8s_status:
         api_version: hybridsovereign.redhat/v1alpha1
@@ -110,6 +114,22 @@
               lastTransitionTime: "{{ aaporg_status_transition_time }}"
               reason: AwaitingEDA
               message: Awaiting EDA to complete provisioning
+      when: not (reconcile_keeps_ready | default(false) | bool)
+
+    - name: Mark AAPOrg as queued for a re-run
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AAPOrg
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          conditions:
+            - type: Reconciling
+              status: "True"
+              lastTransitionTime: "{{ aaporg_status_transition_time }}"
+              reason: Queued
+              message: A re-run is queued.
+      when: reconcile_keeps_ready | default(false) | bool
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:
