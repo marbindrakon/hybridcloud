@@ -6,6 +6,10 @@
 
   vars:
     services_server: "{{ lookup('env', 'OCP_SERVICES_SERVER') | default('', true) }}"
+    # the acme-corp demo tenant (files/demo/acme-corp.yaml = samples/demo/acme-corp.yaml)
+    acme_demo: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/demo/acme-corp.yaml') | from_yaml_all | select | list }}"
+    # access groups are ready within a few minutes; 40 x 15 s
+    demo_ready_retries: 40
     entity_namespace: "sovereign-cloud"
     argocd_namespace: "openshift-gitops"
     # Applications to resync after entity namespaces are ready
@@ -41,22 +45,18 @@
 
   tasks:
     # ── Entity CRs (billingID uppercase D per CRD schema) ─────────────────────
-    - name: Create acme-corp Entity CR
+    # acme-corp is the demo tenant (files/demo/acme-corp.yaml): its tenant first, without the roles; the roles, the
+    # team setup and the app project follow once its access groups are ready (below)
+    - name: Create acme-corp Entity CR (demo tenant, without its roles yet)
       kubernetes.core.k8s:
         host: "{{ services_server }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
         state: present
-        definition:
-          apiVersion: hybridsovereign.redhat/v1alpha1
-          kind: Entity
-          metadata:
-            name: acme-corp
-            namespace: "{{ entity_namespace }}"
-          spec:
-            billingID: "ACME-001"
-            description: "Acme Corporation"
-            websiteLink: "https://acme.example.com"
+        definition: >-
+          {{ (acme_demo | selectattr('kind', 'equalto', 'Entity') | first)
+             | combine({'spec': (acme_demo | selectattr('kind', 'equalto', 'Entity') | first).spec
+                                | dict2items | rejectattr('key', 'equalto', 'namespaceRbac') | items2dict}) }}
 
     - name: Create globex-industries Entity CR
       kubernetes.core.k8s:
@@ -138,28 +138,49 @@
         waynetech_ns.resources | length > 0 and
         waynetech_ns.resources[0].status.phase == 'Active'
 
-    # ── AAPOrg CRs (spec.aapConfig per CRD schema, NOT spec.config) ───────────
-    - name: Create AAPOrg for acme-corp
+    # ── acme-corp demo: access groups, then the tenant's roles, team setup, app project, AAP and Quay ──
+    - name: Create the acme-corp access groups
       kubernetes.core.k8s:
         host: "{{ services_server }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
         state: present
-        definition:
-          apiVersion: hybridsovereign.redhat/v1alpha1
-          kind: AAPOrg
-          metadata:
-            name: automation
-            namespace: entity-acme-corp
-          spec:
-            aapConfig: "aap-sovereign-services"
-            description: "Automation org for Acme Corp"
-            aapAdminRbac:
-              - "acme-corp-platform-engineering-admins"
-            aapJobExecutorRbac:
-              - "acme-corp-platform-engineering-editors"
-              - "acme-corp-platform-ops-admins"
+        definition: "{{ item }}"
+      loop: "{{ acme_demo | selectattr('kind', 'equalto', 'Rbac') | list }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
 
+    - name: Wait for each acme-corp access group to be ready
+      kubernetes.core.k8s_info:
+        host: "{{ services_server }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: Rbac
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ item.metadata.namespace }}"
+      loop: "{{ acme_demo | selectattr('kind', 'equalto', 'Rbac') | list }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      register: acme_rbac_ready
+      retries: "{{ demo_ready_retries }}"
+      delay: 15
+      until: >-
+        acme_rbac_ready.resources | default([]) | length > 0 and
+        (acme_rbac_ready.resources[0].status | default({}, true)).ready | default(false) | bool
+
+    - name: Give the acme-corp access groups their roles (Entity, team setup, app project, AAP, Quay)
+      kubernetes.core.k8s:
+        host: "{{ services_server }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: present
+        definition: "{{ item }}"
+      loop: "{{ acme_demo | selectattr('kind', 'in', ['Entity', 'Team', 'Project', 'AAPOrg', 'QuayOrg']) | list }}"
+      loop_control:
+        label: "{{ item.kind }} {{ item.metadata.name }}"
+
+    # ── AAPOrg CRs (spec.aapConfig per CRD schema, NOT spec.config) ───────────
     - name: Create AAPOrg for globex-industries
       kubernetes.core.k8s:
         host: "{{ services_server }}"
@@ -181,28 +202,6 @@
               - "globex-industries-platform-engineering-editors"
 
     # ── QuayOrg CRs (spec.quayConfig per CRD schema, NOT spec.config) ─────────
-    - name: Create QuayOrg for acme-corp
-      kubernetes.core.k8s:
-        host: "{{ services_server }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        state: present
-        definition:
-          apiVersion: hybridsovereign.redhat/v1alpha1
-          kind: QuayOrg
-          metadata:
-            name: registry
-            namespace: entity-acme-corp
-          spec:
-            quayConfig: "quay-sovereign-services"
-            quayAdminRbac:
-              - "acme-corp-platform-engineering-admins"
-            quayCreatorRbac:
-              - "acme-corp-platform-engineering-editors"
-            quayMemberRbac:
-              - "acme-corp-platform-ops-admins"
-              - "acme-corp-platform-engineering-viewers"
-
     - name: Create QuayOrg for globex-industries
       kubernetes.core.k8s:
         host: "{{ services_server }}"
