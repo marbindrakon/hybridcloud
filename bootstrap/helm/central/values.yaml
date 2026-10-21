@@ -5332,6 +5332,9 @@ hybridsovereignPrimaryOperator:
   values:
     namespace: sovereign-cloud
     pluginsNamespace: sovereign-cloud-plugins
+    # GitOps marks: hybridsovereign.redhat/gitops-source names this Argo application (Q16a)
+    gitopsSource:
+      app: hybridsovereign-primary-operator
     # shc: "img-" tags - the operator charts share these Quay repositories, and a chart push of
     # hybridsovereign-namespace-operator 0.1.10 replaced the 0.1.10 image (namespace operators then
     # failed "image not known"); chart versions are semver, so img-* can never collide.
@@ -5399,6 +5402,13 @@ hybridsovereignPrimaryOperator:
             storageClass: ocs-external-storagecluster-ceph-rbd
             fabricCredentialsRef: {vaultPath: cloudinfra/edge1-fabric}   # P7.3.2: write MSA shc-fabric
           dns: {mode: platform}
+      # Billable (AWS us-east-2, owner account): brought into Git with its live spec verbatim (it had been applied
+      # by hand). No keys anywhere: the jobs reach AWS through web identity (AssumeRole) per CloudAWS.
+      aws-use2:
+        spec:
+          type: aws
+          displayName: AWS us-east-2
+          aws: {region: us-east-2}
     # P7.3 (P7-PLAN §12.3, H2 = gateway as PE): the fabric and a gateway per EVPN site on the BGW blades bgw-1/2
     # (blades 5/8). The fabric is realized from P7.3.4 (ledger + root instance on both blades), the gateways from
     # P7.3.5 (one site at a time). SSH key and BGP password: central Vault fabric/bgw, fabric/bgp (seed-fabric-hosts).
