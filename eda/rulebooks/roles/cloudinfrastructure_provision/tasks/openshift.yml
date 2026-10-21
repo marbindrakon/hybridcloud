@@ -58,6 +58,32 @@
   no_log: true
   when: not (ci_ocp_local | bool)
 
+# Reachability first: a site that does not answer is SiteUnreachable, not a credentials problem.
+- name: Parse the API endpoint
+  ansible.builtin.set_fact:
+    _ci_ep_host: "{{ (ci_endpoint | trim | urlsplit('hostname')) | default('', true) }}"
+    _ci_ep_port: "{{ (ci_endpoint | trim | urlsplit('port')) | default(443, true) }}"
+  when: (ci_endpoint | default('') | trim) is match('https?://')
+
+- name: Check that the API endpoint answers
+  ansible.builtin.wait_for:
+    host: "{{ _ci_ep_host }}"
+    port: "{{ _ci_ep_port | int }}"
+    timeout: "{{ ci_reachability_timeout | default(10) | int }}"
+  register: _ci_reach
+  failed_when: false
+  when: (_ci_ep_host | default('')) | length > 0
+
+- name: Set the reachability failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: SiteUnreachable
+  when: _ci_reach.failed | default(false) | bool or (_ci_reach.msg | default('') is search('[Tt]imeout|refused|resolve'))
+
+- name: Require a reachable API endpoint
+  ansible.builtin.assert:
+    that: cloudinfrastructure_fail_reason != 'SiteUnreachable'
+    fail_msg: "The site API {{ ci_endpoint | trim }} does not answer within {{ ci_reachability_timeout | default(10) }} s."
+
 - name: Read the cluster version
   kubernetes.core.k8s_info:
     host: "{{ ci_k8s.host | default(omit) }}"
@@ -69,14 +95,20 @@
   register: _ci_cv
   failed_when: false
 
+# 401/403 = the credentials were refused; connection errors = the site does not answer; else the probe failed.
 - name: Set the API failure reason
   ansible.builtin.set_fact:
-    cloudinfrastructure_fail_reason: CredentialsInvalid
+    cloudinfrastructure_fail_reason: >-
+      {{ 'CredentialsInvalid' if (_ci_cv.msg | default('') | string) is search('401|403|[Uu]nauthori[sz]ed|[Ff]orbidden')
+         else ('SiteUnreachable' if (_ci_cv.msg | default('') | string) is search(ci_unreachable_pattern)
+         else ('ProbeFailed' if (_ci_cv.msg | default('') | string) | length > 0 else 'CredentialsInvalid')) }}
+  vars:
+    ci_unreachable_pattern: '(?i)timed? ?out|connection (refused|reset|aborted)|max retries|name or service not known|no route to host|temporary failure in name resolution|failed to establish|network is unreachable'
   when: (_ci_cv.resources | default([])) | length == 0
 
 - name: Require API access
   ansible.builtin.assert:
-    that: cloudinfrastructure_fail_reason != 'CredentialsInvalid'
+    that: cloudinfrastructure_fail_reason not in ['CredentialsInvalid', 'SiteUnreachable', 'ProbeFailed']
     fail_msg: >-
       Cannot read ClusterVersion on {{ ci_endpoint | trim }} with {{ ci_credentials_message }}
       {{ (_ci_cv.msg | default('') | string)[:300] }}

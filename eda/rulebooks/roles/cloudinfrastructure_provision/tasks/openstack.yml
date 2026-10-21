@@ -37,8 +37,10 @@
     - name: Set the probe failure reason
       ansible.builtin.set_fact:
         cloudinfrastructure_fail_reason: >-
-          {{ 'CredentialsInvalid' if (os_result.error | default('')) is search('Unauthorized|401|authenticat', ignorecase=True)
-             else 'ProbeFailed' }}
+          {{ 'SiteUnreachable' if (os_result.error | default(ansible_failed_result.msg | default(''), true) | string)
+                is search('timed? ?out|connection (refused|reset|aborted)|max retries|name or service not known|no route to host|temporary failure in name resolution|failed to establish|network is unreachable|unable to establish connection', ignorecase=True)
+             else ('CredentialsInvalid' if (os_result.error | default('')) is search('Unauthorized|401|authenticat', ignorecase=True)
+             else 'ProbeFailed') }}
 
     - name: Fail with the probe's error
       ansible.builtin.fail:
