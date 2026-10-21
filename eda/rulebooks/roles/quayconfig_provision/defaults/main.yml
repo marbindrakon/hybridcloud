@@ -1,0 +1,4 @@
+---
+# Id of the registry's external login service for the tenant realm (the <ID>_LOGIN_CONFIG key of the Quay config, in
+# lower case): the sign-in client's callbacks are <quay>/oauth2/<id>/callback, /callback/attach and /callback/cli.
+quay_login_service_id: rhbk

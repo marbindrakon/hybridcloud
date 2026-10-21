@@ -102,52 +102,25 @@
         _kc_token: {json: {access_token: "{{ quay_kc_realm_token }}"}}
       no_log: true
 
-    - name: Check if OIDC client exists in Keycloak
-      ansible.builtin.uri:
-        url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ quay_oidc_client_id }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ _kc_token.json.access_token }}"
-        validate_certs: false
-        status_code: [200]
-      register: _kc_existing_client
+    # exact callbacks of the registry's external login service (quay_login_service_id), the groups claim
+    - name: Ensure the Keycloak sign-in client for Quay
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/keycloak_client_ensure.yml"
+      vars:
+        kce_url: "{{ keycloak_internal_url }}"
+        kce_realm: "{{ keycloak_realm }}"
+        kce_token: "{{ _kc_token.json.access_token }}"
+        kce_client: "{{ quay_oidc_client_id }}"
+        kce_name: "Quay OIDC - {{ quayconfig_cr_name }}"
+        kce_root_url: "{{ quay_url | regex_replace('/$', '') }}"
+        kce_redirect_uris: >-
+          {{ ['', '/attach', '/cli'] | map('regex_replace', '^', (quay_url | regex_replace('/$', '')) ~ '/oauth2/'
+             ~ quay_login_service_id ~ '/callback') | list }}
+        kce_web_origins: ["{{ quay_url | regex_replace('/$', '') }}"]
+        kce_attributes: {"access.token.lifespan": "3600"}
 
-    - name: Create OIDC client in Keycloak for Quay
-      ansible.builtin.uri:
-        url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ _kc_token.json.access_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          clientId: "{{ quay_oidc_client_id }}"
-          name: "Quay OIDC - {{ quayconfig_cr_name }}"
-          protocol: openid-connect
-          publicClient: false
-          directAccessGrantsEnabled: false
-          standardFlowEnabled: true
-          serviceAccountsEnabled: false
-          rootUrl: "{{ quay_url }}"
-          redirectUris:
-            - "{{ quay_url }}/*"
-          webOrigins:
-            - "{{ quay_url }}"
-          attributes:
-            "access.token.lifespan": "3600"
-        validate_certs: false
-        status_code: [201, 409]
-      when: _kc_existing_client.json | length == 0
-
-    - name: Retrieve client UUID
-      ansible.builtin.uri:
-        url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ quay_oidc_client_id }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ _kc_token.json.access_token }}"
-        validate_certs: false
-        status_code: [200]
-      register: _kc_client_info
+    - name: Keep the client for the secret lookup
+      ansible.builtin.set_fact:
+        _kc_client_info: {json: [{id: "{{ kce_client_uuid }}"}]}
 
     - name: Get client secret
       ansible.builtin.uri:

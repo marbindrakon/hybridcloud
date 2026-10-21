@@ -245,7 +245,8 @@
           Content-Type: application/json
         body_format: json
         body:
-          group_dn: "{{ item }}"
+          # OIDC team sync: the group as the sign-in claim carries it (full path /<entity>/<access group>)
+          group_name: "{{ '/' ~ (item | regex_replace('^/+', '')) }}"
         validate_certs: false
         status_code: [200, 201, 400]
       loop: "{{ admin_groups }}"
@@ -261,7 +262,8 @@
           Content-Type: application/json
         body_format: json
         body:
-          group_dn: "{{ item }}"
+          # OIDC team sync: the group as the sign-in claim carries it (full path /<entity>/<access group>)
+          group_name: "{{ '/' ~ (item | regex_replace('^/+', '')) }}"
         validate_certs: false
         status_code: [200, 201, 400]
       loop: "{{ creator_groups }}"
@@ -277,7 +279,8 @@
           Content-Type: application/json
         body_format: json
         body:
-          group_dn: "{{ item }}"
+          # OIDC team sync: the group as the sign-in claim carries it (full path /<entity>/<access group>)
+          group_name: "{{ '/' ~ (item | regex_replace('^/+', '')) }}"
         validate_certs: false
         status_code: [200, 201, 400]
       loop: "{{ member_groups }}"
