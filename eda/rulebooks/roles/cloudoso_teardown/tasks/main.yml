@@ -4,6 +4,10 @@
 # resources (status.deletion lists them; the CR stays Terminating and the operator re-publishes
 # with backoff), and sets deletionComplete only after every step succeeded.
 - block:
+    # nothing on a site (refused at validation): delete without site cleanup
+    - name: Skip the site cleanup when nothing was realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+
     - name: Parse event payload
       ansible.builtin.set_fact:
         cloudoso_cr_name: "{{ event_payload.regarding.name }}"

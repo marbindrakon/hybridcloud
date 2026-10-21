@@ -4,6 +4,10 @@
 # status says which (deletionBlockedBy) and the operator's finalizer asks again later. Waits until the namespaces
 # are gone, then marks deletionComplete; the operator then wakes the placements that waited for them.
 - block:
+    # nothing on a site (refused at validation): delete without site cleanup
+    - name: Skip the site cleanup when nothing was realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+
     - name: Read the CloudVirt
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:

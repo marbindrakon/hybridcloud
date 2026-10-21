@@ -8,6 +8,10 @@
 # 3. the VNIs go back to the fabric's ledger and the subnets to the network's address space (design/P10-PLAN.md §3),
 #    which wakes the network's placements waiting for address space; deletionComplete.
 - block:
+    # nothing on a site (refused at validation): delete without site cleanup
+    - name: Skip the site cleanup when nothing was realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:

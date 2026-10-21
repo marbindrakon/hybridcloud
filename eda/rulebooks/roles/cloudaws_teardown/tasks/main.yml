@@ -3,6 +3,10 @@
 # environment. Removes the delegation from the tenant zone, then the environment's Route53 zone in the Entity's
 # account (with its records). The account itself stays (it belongs to the Entity in this installation).
 - block:
+    # nothing on a site (refused at validation): delete without site cleanup
+    - name: Skip the site cleanup when nothing was realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+
     - name: Read the CloudAWS
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:

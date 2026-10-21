@@ -3,6 +3,10 @@
 # the environment. Removes the delegation from the tenant zone, then the environment's Cloud DNS zone in the
 # Entity's project (with its records). The project itself stays (it belongs to the Entity or to RHDP).
 - block:
+    # nothing on a site (refused at validation): delete without site cleanup
+    - name: Skip the site cleanup when nothing was realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+
     - name: Read the CloudGCP
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:

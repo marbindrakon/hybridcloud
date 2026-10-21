@@ -9,6 +9,10 @@
 # shc-aws-<entity>-<name>, GCP: shc-gcp-<entity>-<name>), else the CR's name. Cloud teardowns run in the shc-cloud
 # container group.
 - block:
+    # nothing on a site (refused at validation): delete without site cleanup
+    - name: Skip the site cleanup when nothing was realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+
     - name: Parse event payload
       ansible.builtin.set_fact:
         platformopenshift_cr_name: "{{ event_payload.regarding.name }}"
