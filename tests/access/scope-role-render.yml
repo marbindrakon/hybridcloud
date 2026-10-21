@@ -1,0 +1,82 @@
+---
+# Render-only test of eda/common/tasks/scope_role.yml (no cluster): fixed Team and Project grants in, the Role and
+# RoleBinding manifests out, compared with scope-role-render.golden.yaml.
+#   ansible-playbook -i localhost, -c local tests/access/scope-role-render.yml [-e update_golden=true]
+- name: Scope-role render test
+  hosts: localhost
+  gather_facts: false
+  vars:
+    shc_common_dir: "{{ playbook_dir }}/../../eda/common"
+    golden: "{{ playbook_dir }}/scope-role-render.golden.yaml"
+    team_grants:
+      - {kind: Team, names: [platform], level: edit, group: uxr-corp.uxr-admins}
+      - {kind: Project, names: [webshop, api], level: edit, group: uxr-corp.uxr-admins}
+      - {kind: Assignment, names: [platform-dev], level: view, group: uxr-corp.uxr-admins}
+      - {kind: Team, names: [platform], level: view, group: uxr-corp.uxr-devs}
+      - {kind: Project, names: [api, webshop], level: edit, group: uxr-corp.uxr-devs}
+      - {kind: Team, names: [platform], level: view, group: uxr-corp.uxr-auditors}
+      - {kind: Assignment, names: [platform-dev], level: view, group: uxr-corp.uxr-auditors}
+      - {kind: Project, names: [], level: view, group: uxr-corp.uxr-auditors}
+      - {kind: Project, names: [webshop], level: view, group: ""}
+    project_grants:
+      - {kind: Project, names: [webshop], level: admin, group: uxr-corp.uxr-admins}
+      - {kind: Project, names: [webshop], level: edit, group: uxr-corp.uxr-devs}
+      - {kind: Project, names: [webshop], verbs: [get], group: uxr-corp.uxr-auditors}
+  tasks:
+    - name: Render the Team's grants
+      ansible.builtin.include_tasks: ../../eda/common/tasks/scope_role.yml
+      vars:
+        sr_namespace: entity-uxr-corp
+        sr_source: {kind: Team, name: platform}
+        sr_grants: "{{ team_grants }}"
+        sr_apply: false
+
+    - name: Keep the Team's objects
+      ansible.builtin.set_fact:
+        team_objects: "{{ sr_objects }}"
+        team_rendered: "{{ sr_rendered }}"
+
+    - name: Render the Project's grants
+      ansible.builtin.include_tasks: ../../eda/common/tasks/scope_role.yml
+      vars:
+        sr_namespace: entity-uxr-corp
+        sr_source: {kind: Project, name: webshop}
+        sr_grants: "{{ project_grants }}"
+        sr_apply: false
+
+    - name: Keep the Project's objects
+      ansible.builtin.set_fact:
+        project_objects: "{{ sr_objects }}"
+        project_rendered: "{{ sr_rendered }}"
+
+    - name: Render nothing for a teardown
+      ansible.builtin.include_tasks: ../../eda/common/tasks/scope_role.yml
+      vars:
+        sr_namespace: entity-uxr-corp
+        sr_source: {kind: Team, name: platform}
+        sr_grants: []
+        sr_apply: false
+
+    - name: Teardown renders no object
+      ansible.builtin.assert:
+        that: sr_objects | length == 0 and sr_rendered | length == 0
+
+    - name: Collect the result
+      ansible.builtin.set_fact:
+        result:
+          team: "{{ team_objects }}"
+          teamRendered: "{{ team_rendered }}"
+          project: "{{ project_objects }}"
+          projectRendered: "{{ project_rendered }}"
+
+    - name: Write the golden file
+      ansible.builtin.copy:
+        content: "{{ result | to_nice_yaml(indent=2, width=200) }}"
+        dest: "{{ golden }}"
+        mode: "0644"
+      when: update_golden | default(false) | bool
+
+    - name: Compare with the golden file
+      ansible.builtin.assert:
+        that: (lookup('file', golden) | from_yaml) == (result | to_nice_yaml(indent=2, width=200) | from_yaml)
+        fail_msg: "scope_role.yml output differs from {{ golden }} (re-run with -e update_golden=true and review the diff)"
