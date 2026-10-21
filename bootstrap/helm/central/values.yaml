@@ -2397,6 +2397,8 @@ fabricHosts:
                 next-hop-address: 172.18.233.1
                 next-hop-interface: bond1.233
                 table-id: 254
+        rootDeviceHints:
+          serialNumber: BTWL505205M9480QGN
       smc-node3:
         labels:
           compute-model: smc
@@ -2520,6 +2522,8 @@ fabricHosts:
                 next-hop-address: 172.18.233.1
                 next-hop-interface: bond1.233
                 table-id: 254
+        rootDeviceHints:
+          serialNumber: BTWL505204ZF480QGN
 
 iaasClusterDefaults:
   enabled: false
