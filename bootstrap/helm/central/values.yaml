@@ -81,6 +81,8 @@ servicesCluster:
       - {apiGroups: [""], resources: [secrets, configmaps, services, serviceaccounts], verbs: [get, list, watch, create, update, patch, delete]}
       - {apiGroups: ["", events.k8s.io], resources: [events], verbs: [get, list, watch, create, patch]}
       - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
+      # tenant Vault init/unseal over the API server's pod proxy (the Vault HTTP API); no pods/exec
+      - {apiGroups: [""], resources: [pods/proxy], verbs: [get, create]}
       - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch, create, update, patch, delete]}
       - {apiGroups: [route.openshift.io], resources: [routes], verbs: [get, list, watch, create, update, patch, delete]}
       - {apiGroups: [coordination.k8s.io], resources: [leases], verbs: [get, list, watch, create, update, patch, delete]}
