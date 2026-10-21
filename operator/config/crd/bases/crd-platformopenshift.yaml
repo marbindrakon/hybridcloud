@@ -14,6 +14,12 @@ spec:
     listKind: PlatformOpenshiftList
     plural: platformopenshifts
     singular: platformopenshift
+    shortNames:
+      - ocpcluster
+    categories:
+      - shc
+      - shc-tenant
+      - shc-appplatform
   scope: Namespaced
   versions:
     - name: v1alpha1

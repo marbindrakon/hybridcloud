@@ -14,6 +14,9 @@ spec:
     singular: iaac
     shortNames:
       - iac
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1

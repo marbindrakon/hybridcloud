@@ -16,6 +16,10 @@ spec:
     singular: aaporg
     shortNames:
       - aaporg
+    categories:
+      - shc
+      - shc-tenant
+      - shc-services
   scope: Namespaced
   versions:
     - name: v1alpha1

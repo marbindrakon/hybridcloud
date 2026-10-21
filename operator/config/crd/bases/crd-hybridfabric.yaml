@@ -14,6 +14,9 @@ spec:
     singular: hybridfabric
     shortNames:
       - hfab
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1

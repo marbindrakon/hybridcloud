@@ -16,6 +16,9 @@ spec:
     singular: openstackmigration
     shortNames:
       - osm
+    categories:
+      - shc
+      - shc-tenant
   scope: Namespaced
   versions:
     - name: v1alpha1

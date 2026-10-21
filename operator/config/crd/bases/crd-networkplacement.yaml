@@ -16,6 +16,10 @@ spec:
     singular: networkplacement
     shortNames:
       - nplace
+    categories:
+      - shc
+      - shc-tenant
+      - shc-network
   scope: Namespaced
   versions:
     - name: v1alpha1

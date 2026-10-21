@@ -14,6 +14,9 @@ spec:
     singular: provideredge
     shortNames:
       - pedge
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1

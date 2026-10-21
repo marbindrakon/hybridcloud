@@ -12,6 +12,9 @@ spec:
     listKind: DNSConfigList
     plural: dnsconfigs
     singular: dnsconfig
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1

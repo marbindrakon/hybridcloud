@@ -14,6 +14,9 @@ spec:
     listKind: PersonaList
     plural: personas
     singular: persona
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1

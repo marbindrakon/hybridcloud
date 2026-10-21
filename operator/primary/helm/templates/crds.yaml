@@ -19,6 +19,9 @@ spec:
     singular: aapconfig
     shortNames:
       - aapcfg
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -181,6 +184,10 @@ spec:
     singular: aaporg
     shortNames:
       - aaporg
+    categories:
+      - shc
+      - shc-tenant
+      - shc-services
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -383,6 +390,12 @@ spec:
     listKind: AssignmentList
     plural: assignments
     singular: assignment
+    shortNames:
+      - clusterassignment
+    categories:
+      - shc
+      - shc-tenant
+      - shc-appplatform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -631,6 +644,10 @@ spec:
     singular: attachmentcircuit
     shortNames:
       - acirc
+    categories:
+      - shc
+      - shc-tenant
+      - shc-network
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -981,6 +998,11 @@ spec:
     singular: cloudaws
     shortNames:
       - caws
+      - awsenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -1184,6 +1206,10 @@ spec:
     singular: cloudgateway
     shortNames:
       - cgw
+      - sitegw
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -1577,6 +1603,11 @@ spec:
     singular: cloudgcp
     shortNames:
       - cgcp
+      - gcpenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -1775,6 +1806,10 @@ spec:
     singular: cloudinfrastructure
     shortNames:
       - cinfra
+      - site
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -2159,6 +2194,12 @@ spec:
     listKind: CloudOSOList
     plural: cloudosos
     singular: cloudoso
+    shortNames:
+      - osenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -2448,6 +2489,11 @@ spec:
     singular: cloudvirt
     shortNames:
       - cvirt
+      - vmenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -2734,6 +2780,9 @@ spec:
     listKind: DNSConfigList
     plural: dnsconfigs
     singular: dnsconfig
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -2927,6 +2976,10 @@ spec:
     singular: entity
     shortNames:
       - ent
+      - tenant
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -3294,6 +3347,9 @@ spec:
     singular: hybridfabric
     shortNames:
       - hfab
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -3614,6 +3670,10 @@ spec:
     singular: hybridnetwork
     shortNames:
       - hnet
+    categories:
+      - shc
+      - shc-tenant
+      - shc-network
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -3914,6 +3974,9 @@ spec:
     singular: iaac
     shortNames:
       - iac
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -4065,6 +4128,10 @@ spec:
     singular: networkplacement
     shortNames:
       - nplace
+    categories:
+      - shc
+      - shc-tenant
+      - shc-network
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -4367,6 +4434,9 @@ spec:
     singular: openstackmigration
     shortNames:
       - osm
+    categories:
+      - shc
+      - shc-tenant
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -4652,6 +4722,9 @@ spec:
     listKind: PersonaList
     plural: personas
     singular: persona
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -4819,6 +4892,12 @@ spec:
     listKind: PlatformOpenshiftList
     plural: platformopenshifts
     singular: platformopenshift
+    shortNames:
+      - ocpcluster
+    categories:
+      - shc
+      - shc-tenant
+      - shc-appplatform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -5254,6 +5333,10 @@ spec:
     singular: project
     shortNames:
       - proj
+    categories:
+      - shc
+      - shc-tenant
+      - shc-appplatform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -5440,6 +5523,9 @@ spec:
     singular: provideredge
     shortNames:
       - pedge
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -5688,6 +5774,9 @@ spec:
     singular: quayconfig
     shortNames:
       - qcfg
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -5844,6 +5933,10 @@ spec:
     singular: quayorg
     shortNames:
       - qorg
+    categories:
+      - shc
+      - shc-tenant
+      - shc-services
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -6046,6 +6139,12 @@ spec:
     singular: rbac
     shortNames:
       - rb
+      - accessgroup
+      - ag
+    categories:
+      - shc
+      - shc-tenant
+      - shc-access
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -6228,6 +6327,9 @@ spec:
     singular: rbacconfig
     shortNames:
       - rbc
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -6380,6 +6482,10 @@ spec:
     listKind: TeamList
     plural: teams
     singular: team
+    categories:
+      - shc
+      - shc-tenant
+      - shc-appplatform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -6801,6 +6907,9 @@ spec:
     singular: transportlink
     shortNames:
       - tlink
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -6974,6 +7083,9 @@ spec:
     singular: uihealthchecker
     shortNames:
       - uihc
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -7146,6 +7258,10 @@ spec:
     singular: vault
     shortNames:
       - vlt
+    categories:
+      - shc
+      - shc-tenant
+      - shc-services
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -7320,6 +7436,10 @@ spec:
     singular: vaultkv
     shortNames:
       - vkv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-services
   scope: Namespaced
   versions:
     - name: v1alpha1

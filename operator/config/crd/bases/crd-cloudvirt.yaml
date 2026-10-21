@@ -16,6 +16,11 @@ spec:
     singular: cloudvirt
     shortNames:
       - cvirt
+      - vmenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1

@@ -16,6 +16,11 @@ spec:
     singular: cloudgcp
     shortNames:
       - cgcp
+      - gcpenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1

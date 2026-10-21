@@ -16,6 +16,10 @@ spec:
     singular: quayorg
     shortNames:
       - qorg
+    categories:
+      - shc
+      - shc-tenant
+      - shc-services
   scope: Namespaced
   versions:
     - name: v1alpha1

@@ -16,6 +16,11 @@ spec:
     singular: cloudaws
     shortNames:
       - caws
+      - awsenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1

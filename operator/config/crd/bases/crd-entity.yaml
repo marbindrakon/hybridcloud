@@ -14,6 +14,10 @@ spec:
     singular: entity
     shortNames:
       - ent
+      - tenant
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1

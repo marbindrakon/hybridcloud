@@ -14,6 +14,10 @@ spec:
     singular: cloudinfrastructure
     shortNames:
       - cinfra
+      - site
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1

@@ -16,6 +16,12 @@ spec:
     singular: rbac
     shortNames:
       - rb
+      - accessgroup
+      - ag
+    categories:
+      - shc
+      - shc-tenant
+      - shc-access
   scope: Namespaced
   versions:
     - name: v1alpha1

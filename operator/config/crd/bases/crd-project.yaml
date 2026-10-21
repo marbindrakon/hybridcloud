@@ -16,6 +16,10 @@ spec:
     singular: project
     shortNames:
       - proj
+    categories:
+      - shc
+      - shc-tenant
+      - shc-appplatform
   scope: Namespaced
   versions:
     - name: v1alpha1

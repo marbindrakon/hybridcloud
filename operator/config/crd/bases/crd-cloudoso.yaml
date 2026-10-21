@@ -14,6 +14,12 @@ spec:
     listKind: CloudOSOList
     plural: cloudosos
     singular: cloudoso
+    shortNames:
+      - osenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1
