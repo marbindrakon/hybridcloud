@@ -1,0 +1,39 @@
+# One-off Job: scripts/migrations/strip_legacy_conditions.py on the cluster that holds the CRs, as the
+# shc-tenancy ServiceAccount (status patch on hybridsovereign.redhat; its ConfigMap carries shc_status.py).
+# Create the script's ConfigMap first, then the Job (args: --dry-run first, then --apply, then --verify):
+#   oc -n shc-ops create configmap shc-strip-legacy-conditions --from-file=scripts/migrations/strip_legacy_conditions.py
+#   oc -n shc-ops create -f scripts/migrations/strip-legacy-conditions-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: shc-strip-legacy-conditions-
+  namespace: shc-ops
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      serviceAccountName: shc-tenancy
+      restartPolicy: Never
+      containers:
+        - name: strip
+          image: quay.signal9.gg/shc/ansible-runner:latest
+          command: [python3, /opt/strip/strip_legacy_conditions.py]
+          args: [--dry-run]
+          env:
+            - name: SHC_STATUS_PATH
+              value: /etc/shc-tenancy
+          volumeMounts:
+            - {name: lib, mountPath: /etc/shc-tenancy, readOnly: true}
+            - {name: script, mountPath: /opt/strip, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+      volumes:
+        - name: lib
+          configMap: {name: shc-tenancy}
+        - name: script
+          configMap: {name: shc-strip-legacy-conditions}
