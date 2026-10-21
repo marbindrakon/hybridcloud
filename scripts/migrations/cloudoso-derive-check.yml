@@ -1,0 +1,89 @@
+---
+# Can the accounts and Vault paths of one CloudOSO be derived again once its status no longer carries them?
+# Runs the same resolver the teardown uses (eda/common/tasks/resolve_cloudoso_accounts.yml) with the stored
+# status keys masked, compares with what is stored, and writes only a verdict per key, never a value:
+#   equal | differs | underivable | absent (the key is not stored)
+# Connection: KUBECONFIG of the services cluster (the API host and token of the EDA jobs are not used).
+#
+#   ansible-playbook scripts/migrations/cloudoso-derive-check.yml \
+#     -e cdc_namespace=<ns> -e cdc_name=<name> -e cdc_report=<file> [-e @<file with cloudoso_defaults>]
+- name: Derive-check one CloudOSO
+  hosts: localhost
+  gather_facts: false
+  vars:
+    services_api_host: "{{ omit }}"
+    services_bearer_token: "{{ omit }}"
+    cloudoso_defaults: {}
+  tasks:
+    - name: Require the object and the report file
+      ansible.builtin.assert:
+        that:
+          - cdc_namespace | default('') | length > 0
+          - cdc_name | default('') | length > 0
+          - cdc_report | default('') | length > 0
+        fail_msg: Pass cdc_namespace, cdc_name and cdc_report.
+
+    - name: Read the CloudOSO
+      kubernetes.core.k8s_info:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudOSO
+        name: "{{ cdc_name }}"
+        namespace: "{{ cdc_namespace }}"
+      register: cdc_obj
+
+    - name: Require the CloudOSO
+      ansible.builtin.assert:
+        that: cdc_obj.resources | length == 1
+        fail_msg: "CloudOSO {{ cdc_namespace }}/{{ cdc_name }} not found"
+
+    - name: Derive with the stored keys masked
+      block:
+        - name: Resolve the accounts
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../eda/common/tasks/resolve_cloudoso_accounts.yml"
+          vars:
+            rca_cr: "{{ cdc_obj.resources[0] }}"
+            rca_ignore_status_keys: true
+
+        - name: Derivation succeeded
+          ansible.builtin.set_fact:
+            cdc_failed: false
+      rescue:
+        - name: Derivation failed
+          ansible.builtin.set_fact:
+            cdc_failed: true
+
+    - name: Compare stored and derived (verdicts only)
+      vars:
+        _st: "{{ cdc_obj.resources[0].status | default({}, true) }}"
+        _stored:
+          accountVaultPath: "{{ _st.accountVaultPath | default('__absent__') }}"
+          route53VaultPath: "{{ _st.route53VaultPath | default('__absent__') }}"
+          vaultPaths: "{{ _st.vaultPaths | default('__absent__') }}"
+          dnsConfigSecret: "{{ (_st.dns | default({}, true)).dnsConfigSecret | default('__absent__') }}"
+        _derived:
+          accountVaultPath: "{{ '__underivable__' if cdc_failed | bool else rca_account_vault_path }}"
+          route53VaultPath: "{{ '__underivable__' if cdc_failed | bool else rca_route53_vault_path }}"
+          vaultPaths: "{{ '__underivable__' if cdc_failed | bool else rca_clouds_config_paths }}"
+          dnsConfigSecret: "{{ '__underivable__' if cdc_failed | bool else rca_dns_config_secret }}"
+      ansible.builtin.set_fact:
+        cdc_verdicts: >-
+          {%- set out = {} -%}
+          {%- for k in ['accountVaultPath', 'route53VaultPath', 'vaultPaths', 'dnsConfigSecret'] -%}
+            {%- set s = _stored[k] -%}
+            {%- set d = _derived[k] -%}
+            {%- if s == '__absent__' -%}{%- set _ = out.update({k: 'absent'}) -%}
+            {%- elif d == '__underivable__' -%}{%- set _ = out.update({k: 'underivable'}) -%}
+            {%- elif k == 'vaultPaths' -%}
+              {%- set _ = out.update({k: 'equal' if (s | sort | list) == (d | sort | list) else ('underivable' if d | length == 0 else 'differs')}) -%}
+            {%- elif (s | string) == (d | string) -%}{%- set _ = out.update({k: 'equal'}) -%}
+            {%- elif (d | string) | length == 0 -%}{%- set _ = out.update({k: 'underivable'}) -%}
+            {%- else -%}{%- set _ = out.update({k: 'differs'}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Write the report
+      ansible.builtin.copy:
+        dest: "{{ cdc_report }}"
+        content: "{{ cdc_verdicts | to_nice_json }}\n"
+        mode: "0600"

@@ -4,3 +4,19 @@ keycloak_token: ""
 keycloak_realms:
   - name: sovereign-central
     display_name: "Sovereign Central"
+
+# Security settings every listed realm is brought to when keycloak_realms_harden is true (env KEYCLOAK_HARDEN):
+# TLS for every non-local request and brute-force protection (temporary lockout, never permanent).
+keycloak_realms_harden: "{{ lookup('env', 'KEYCLOAK_HARDEN') | default('false', true) | bool }}"
+# true (env KEYCLOAK_PLAN_ONLY): print the fields that would change, write nothing
+keycloak_plan_only: "{{ lookup('env', 'KEYCLOAK_PLAN_ONLY') | default('false', true) | bool }}"
+keycloak_realm_security:
+  sslRequired: external
+  bruteForceProtected: true
+  permanentLockout: false
+  failureFactor: 10
+  waitIncrementSeconds: 60
+  maxFailureWaitSeconds: 900
+  minimumQuickLoginWaitSeconds: 60
+  quickLoginCheckMilliSeconds: 1000
+  maxDeltaTimeSeconds: 43200

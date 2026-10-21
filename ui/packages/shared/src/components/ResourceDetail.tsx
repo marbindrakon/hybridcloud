@@ -23,6 +23,9 @@ import { HybridSovereignKind, K8sResource } from '../types';
 import { GenericSpecEditor } from '../forms/GenericSpecEditor';
 import { PageHeader } from './PageHeader';
 import { StatusBadge } from './StatusBadge';
+import { RefreshFailedAlert } from './ResourceListTable';
+import { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind } from './PlacementTabs';
+import { useTranslation } from '../i18n';
 import {
   COMMON_STATUS_KEYS,
   KIND_STATUS_KEYS,
@@ -150,6 +153,7 @@ export function ResourceDetail({
   readOnly = false,
   audience = 'tenant',
 }: ResourceDetailProps): React.ReactElement {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<string | number>(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState(false);
@@ -157,8 +161,9 @@ export function ResourceDetail({
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const { resource, loading, error, refresh } = useK8sResource<K8sResource>(kind, name, {
+  const { resource, loading, error, refreshError, loadedAt, refresh } = useK8sResource<K8sResource>(kind, name, {
     namespace,
+    pollWhileInFlight: true,
   });
 
   const readyStatus =
@@ -274,12 +279,7 @@ export function ResourceDetail({
       />
 
       <div className="sc-detail__badges" style={{ marginBottom: '1rem' }}>
-        <StatusBadge
-          status={resource.status?.status}
-          ready={resource.status?.ready}
-          message={resource.status?.message}
-          lastTransition={resource.status?.lastReconciledAt}
-        />
+        <StatusBadge item={resource} />
         <Label color="grey" isCompact>
           {kind}
         </Label>
@@ -292,6 +292,8 @@ export function ResourceDetail({
           Sync: {readyStatus}
         </span>
       </div>
+
+      {refreshError && <RefreshFailedAlert error={refreshError} loadedAt={loadedAt} onRetry={refresh} />}
 
       {actionError && (
         <Alert
@@ -318,6 +320,16 @@ export function ResourceDetail({
             <FieldGrid data={overviewFields} />
           </div>
         </Tab>
+        {isEnvironmentKind(kind) && (
+          <Tab eventKey="networks" title={<TabTitleText>{t('attach.networksTab')}</TabTitleText>}>
+            <EnvironmentNetworksTab kind={kind} name={name} namespace={namespace} item={resource} readOnly={readOnly} />
+          </Tab>
+        )}
+        {kind === 'HybridNetwork' && (
+          <Tab eventKey="environments" title={<TabTitleText>{t('attach.environmentsTab')}</TabTitleText>}>
+            <NetworkEnvironmentsTab network={name} namespace={namespace} readOnly={readOnly} />
+          </Tab>
+        )}
         <Tab eventKey={1} title={<TabTitleText>Configuration</TabTitleText>}>
           <div style={{ paddingTop: '1rem' }}>
             <SpecEditor

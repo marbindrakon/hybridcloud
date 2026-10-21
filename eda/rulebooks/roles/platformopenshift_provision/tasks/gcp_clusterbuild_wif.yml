@@ -26,7 +26,7 @@
       gcpRegion: "{{ gcp_region }}"
       serviceAccountIssuer: "{{ cb_issuer }}"
       domain: "{{ cb_cluster_domain }}"
-      vaultPaths: "{{ cb_vault_paths }}"
+      vaultPaths: null
 
 - name: The cluster's workload identity preparation
   block:

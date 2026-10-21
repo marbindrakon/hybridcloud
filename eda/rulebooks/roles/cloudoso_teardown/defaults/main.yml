@@ -2,3 +2,7 @@
 # shc (§11.6 phase C): installation defaults (inventory `cloudoso_defaults`), used only for a CR whose
 # provision never recorded its account and project; see cloudoso_provision.
 cloudoso_defaults: {}
+# Vault paths a legacy CloudOSO spec (no cloudRef in effect) may name in spec.vaultPath / spec.route53VaultPath.
+# The jobs read them with the platform's Vault token, so any other spec value is ignored and cloudoso_defaults
+# applies (cloudoso_defaults key allowedVaultPaths; empty: the spec never chooses).
+cloudoso_allowed_vault_paths: "{{ cloudoso_defaults.allowedVaultPaths | default([], true) }}"

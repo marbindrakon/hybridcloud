@@ -11,13 +11,19 @@ keycloak_admin_vault_path: rhbk-services-admin
 
 # shc (§11.6 phase C): installation settings through the sovereign-localhost inventory variable
 # `platformopenshift_defaults` (config-as-code env PLATFORMOPENSHIFT_DEFAULTS). A CR field wins.
-# Keys: ocpImageSet, pullSecretVaultPath, pullSecretVaultProperty, sshKeyVaultPath,
-# controlPlaneCount, workerCount, controlPlaneFlavor, workerFlavor, glanceImage, externalDNS (list),
+# Keys: ocpImageSet, pullSecretVaultPath, pullSecretVaultProperty, sshKeyVaultPath, allowedVaultPaths,
+# allowedPullSecretProperties, controlPlaneCount, workerCount, controlPlaneFlavor, workerFlavor, glanceImage, externalDNS (list),
 # mceClusterBuildChart (oci:// ref), mceClusterBuildChartVersion. Fallbacks are upstream's.
 platformopenshift_defaults: {}
 default_pull_secret_vault_path: "{{ platformopenshift_defaults.pullSecretVaultPath | default('aws/ocp-pull-secret') }}"
 default_pull_secret_vault_property: "{{ platformopenshift_defaults.pullSecretVaultProperty | default('pull_secret') }}"
 default_ssh_key_vault_path: "{{ platformopenshift_defaults.sshKeyVaultPath | default('aws/ocp-ssh-key') }}"
+# Central Vault paths (and pull-secret properties) a PlatformOpenshift spec may name in
+# spec.openstack.{pullSecretVaultPath,sshKeyVaultPath,pullSecretVaultProperty}. The jobs read these with the
+# platform's Vault token, so a spec value outside these lists is ignored and the defaults above apply
+# (platformopenshift_defaults keys allowedVaultPaths, allowedPullSecretProperties; empty: the spec never chooses).
+platformopenshift_allowed_vault_paths: "{{ platformopenshift_defaults.allowedVaultPaths | default([], true) }}"
+platformopenshift_allowed_pull_secret_properties: "{{ platformopenshift_defaults.allowedPullSecretProperties | default([], true) }}"
 default_ocp_image_set: "{{ platformopenshift_defaults.ocpImageSet | default('img4.21.9-x86-64-appsub') }}"
 default_control_plane_count: "{{ platformopenshift_defaults.controlPlaneCount | default(3) }}"
 default_worker_count: "{{ platformopenshift_defaults.workerCount | default(3) }}"

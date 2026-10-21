@@ -1,0 +1,61 @@
+---
+# Resolve the integration connection (RbacConfig, AAPConfig or QuayConfig) an object uses.
+#
+# The connection reference on Rbac, Vault, AAPOrg and QuayOrg is optional. When the object
+# names none, the platform uses its default connection of that kind:
+#   1. the object named in the spec, when set;
+#   2. else the only object of the kind labelled hybridsovereign.redhat/default: "true";
+#   3. else the only object of the kind;
+#   4. else nothing (fails when resolve_config_required, the default).
+#
+# Inputs:
+#   resolve_config_kind       RbacConfig | AAPConfig | QuayConfig
+#   resolve_config_name       the name the object asks for ('' or undefined for the default)
+#   resolve_config_namespace  the integration namespace holding the connections
+#   resolve_config_required   fail when nothing resolves (default true)
+# Output:
+#   resolved_config_name      the connection name (empty when not required and nothing resolves)
+- name: Use the connection the object names
+  ansible.builtin.set_fact:
+    resolved_config_name: "{{ resolve_config_name | default('', true) | string | trim }}"
+
+- name: Find the default {{ resolve_config_kind }}
+  when: resolved_config_name | default('', true) | length == 0
+  block:
+    - name: List {{ resolve_config_kind }} objects in the integration namespace
+      kubernetes.core.k8s_info:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ resolve_config_kind }}"
+        namespace: "{{ resolve_config_namespace }}"
+      register: _resolve_config_list
+
+    - name: Keep the {{ resolve_config_kind }} objects that are not being deleted
+      ansible.builtin.set_fact:
+        _resolve_config_items: "{{ _resolve_config_list.resources | default([]) | rejectattr('metadata.deletionTimestamp', 'defined') | list }}"
+        _resolve_config_marked: []
+
+    - name: Collect the ones labelled as the default
+      ansible.builtin.set_fact:
+        _resolve_config_marked: "{{ _resolve_config_marked + [item.metadata.name] }}"
+      loop: "{{ _resolve_config_items }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: ((item.metadata.labels | default({}))['hybridsovereign.redhat/default'] | default('') | string | lower) == 'true'
+
+    - name: Pick the default {{ resolve_config_kind }}
+      ansible.builtin.set_fact:
+        resolved_config_name: >-
+          {{ _resolve_config_marked[0] if (_resolve_config_marked | length == 1)
+             else (_resolve_config_items[0].metadata.name
+                   if (_resolve_config_marked | length == 0 and _resolve_config_items | length == 1)
+                   else '') }}
+
+- name: Fail when no default {{ resolve_config_kind }} exists
+  ansible.builtin.fail:
+    msg: >-
+      NoDefaultConfig: no default {{ resolve_config_kind }} is configured in
+      {{ resolve_config_namespace }}; name one on the object or ask the platform team
+      to label one hybridsovereign.redhat/default=true.
+  when:
+    - resolved_config_name | default('', true) | length == 0
+    - resolve_config_required | default(true) | bool

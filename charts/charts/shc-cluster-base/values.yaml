@@ -256,6 +256,15 @@ tenantAccess:
   # cluster admins may manage NetworkAttachmentDefinitions and UserDefinedNetworks
   networkGuard: true
 
+# ─── Project self-provisioning — layer "certs" ───────────────────────────────
+# restricted true: only the groups listed here may create projects (templates/self-provisioners.yaml replaces the
+# self-provisioners ClusterRoleBinding; an empty list leaves it to cluster admins). restricted false leaves the
+# cluster default (every signed-in user), unless tenantAccess.enabled with tenantAccess.selfProvisioners false,
+# which implies restricted with no groups.
+selfProvisioning:
+  restricted: false
+  groups: []
+
 # ─── Tenant DNS controller (TENANT-DNS D3) — layer "certs" ───────────────────
 # Tenants publish names in their CloudVirt environment's zone with DNSEndpoint objects and external-dns hostname
 # annotations on Services/Routes (templates/tenant-dns.yaml, files/tenant_dns_controller.py). Installs the

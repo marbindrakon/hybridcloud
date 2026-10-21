@@ -1,0 +1,26 @@
+# An OpenShift Virtualization environment (CloudVirt) on the site site-vm. Its namespace vms is
+# bound to the network example-net once the network is attached to this environment
+# (networkplacement/example-net-vms.yaml).
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudVirt
+metadata:
+  name: example-vms
+  namespace: entity-example-corp
+spec:
+  cloudRef:
+    name: site-vm
+  description: VMs of the example application.
+  namespaces:
+    - name: vms
+      network: example-net
+  quota:
+    cpu: "16"
+    memory: 64Gi
+    storage: 500Gi
+    virtualMachines: 10
+  toolRbac:
+    editRbac:
+      - example-network-team
+    viewRbac:
+      - example-auditors

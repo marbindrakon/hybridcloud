@@ -43,7 +43,9 @@ Never claim “air-gap ready” until the items below are green.
 2. **Ansible-runner / DE builds** — still pull Galaxy, PyPI, mirror.openshift.com, get.helm.sh at *build* time (vendor or mirror)
 3. **Hard-coded lab FQDNs** in committed `bootstrap/helm/central/values.yaml` — prefer empty git defaults + `values-lab.yaml` / Vault `lab-config` (see `docs/lab-config.md`)
 4. **Crunchy / some Job images** — public registry defaults; override to private Quay
+<!-- retired:begin -->
 5. **Event forwarder** — retired (`enabled: false`); do not gate disconnected deploy on it
+<!-- retired:end -->
 
 ## Related
 

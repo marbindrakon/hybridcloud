@@ -177,6 +177,16 @@ If `OCI_REGISTRY` is just a hostname (no path), `OCI_NAMESPACE` defaults to `sov
 
 ---
 
+## Verify
+
+```bash
+# All Argo CD applications should be Synced and Healthy
+oc get applications -n openshift-gitops
+
+# The primary operator runs on the services cluster
+oc get deployment -n sovereign-cloud hybridsovereign-primary-operator
+```
+
 ## Architecture
 
 See [`architecture/docs/architecture.md`](../architecture/docs/architecture.md) for:
@@ -187,16 +197,11 @@ See [`architecture/docs/architecture.md`](../architecture/docs/architecture.md) 
 
 Bootstrap-aligned technical supplements (waves, tenancy stack):
 
-- [`architecture/docs/technical/18-secrets-flow.md`](architecture/docs/technical/18-secrets-flow.md) — vault / ESO choreography (includes **helm/central** sync waves)
-- [`architecture/docs/technical/20-tenancy-operators.md`](architecture/docs/technical/20-tenancy-operators.md) — tenancy **Ansible** operators (`Team`, `Assignment`, `Project`, `PlatformOpenshift`, `CloudOSO`)
-- [`architecture/docs/technical/21-prometheus-metrics.md`](architecture/docs/technical/21-prometheus-metrics.md) — `8443` metrics, `ServiceMonitor`, `PrometheusRule` alerts
+- [`architecture/docs/technical/09-vault.md`](../architecture/docs/technical/09-vault.md) and [`31-keycloak-vault-integration.md`](../architecture/docs/technical/31-keycloak-vault-integration.md) — Vault, ESO and sign-in choreography
+- [`architecture/docs/technical/29-deployment-sequence.md`](../architecture/docs/technical/29-deployment-sequence.md) — **helm/central** sync waves
+- [`architecture/docs/c4/components/operator.md`](../architecture/docs/c4/components/operator.md) — the primary and namespace operators
+- [`architecture/docs/technical/26-observability.md`](../architecture/docs/technical/26-observability.md) — metrics, `ServiceMonitor`, `PrometheusRule` alerts
 
 ## Security Assessment
 
-See [`architecture/hardeningcheck/security-assessment.md`](../architecture/hardeningcheck/security-assessment.md) for:
-- Threat model
-- Hardening checks (pass/fail/todo)
-- CIS benchmark gaps
-- Remediation priority list
-
-Tenancy operator hardening addendum: [`architecture/hardeningcheck/tenancy-operators.md`](architecture/hardeningcheck/tenancy-operators.md)
+See [`architecture/hardeningcheck/`](../architecture/hardeningcheck/README.md) for the hardening checks, their retest method and the current security state ([`security-state.md`](../architecture/hardeningcheck/security-state.md)).

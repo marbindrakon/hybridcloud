@@ -1,8 +1,0 @@
-{{- if .Values.samples.team.team_alpha.enabled }}
-apiVersion: hybridsovereign.redhat/v1alpha1
-kind: Team
-metadata:
-  name: platform-engineering
-  namespace: entity-acme-corp
-spec: {}
-{{- end }}

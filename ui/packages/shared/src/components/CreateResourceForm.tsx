@@ -21,7 +21,7 @@ import { RbacMultiSelect } from './RbacMultiSelect';
 import { EntitySelect } from './EntitySelect';
 import { FabricSelect } from './FabricSelect';
 import { CloudGatewaySelect } from './CloudGatewaySelect';
-import { CloudInfrastructureSelect } from './CloudInfrastructureSelect';
+import { SitePicker } from './SitePicker';
 import { useTranslation } from '../i18n';
 import { DEFAULT_LANDING_ZONE } from '../forms/hybridFabricDefaults';
 import {
@@ -176,6 +176,30 @@ const PERSONA_TYPES = [
   'BobsTeam',
 ];
 
+/** One role field of a service object: the access groups whose members get that role. */
+interface RoleField {
+  key: string;
+  labelKey: string;
+  helpKey: string;
+}
+
+const VAULTKV_ROLES: readonly RoleField[] = [
+  { key: 'vaultAdminRbac', labelKey: 'form.roles.vaultAdmin', helpKey: 'form.roles.vaultAdminHelp' },
+  { key: 'vaultOpsRbac', labelKey: 'form.roles.vaultOps', helpKey: 'form.roles.vaultOpsHelp' },
+  { key: 'vaultDeveloperRbac', labelKey: 'form.roles.vaultDeveloper', helpKey: 'form.roles.vaultDeveloperHelp' },
+  { key: 'vaultReaderRbac', labelKey: 'form.roles.vaultReader', helpKey: 'form.roles.vaultReaderHelp' },
+];
+const AAPORG_ROLES: readonly RoleField[] = [
+  { key: 'aapAdminRbac', labelKey: 'form.roles.aapAdmin', helpKey: 'form.roles.aapAdminHelp' },
+  { key: 'aapJobExecutorRbac', labelKey: 'form.roles.aapJobExecutor', helpKey: 'form.roles.aapJobExecutorHelp' },
+  { key: 'aapViewerRbac', labelKey: 'form.roles.aapViewer', helpKey: 'form.roles.aapViewerHelp' },
+];
+const QUAYORG_ROLES: readonly RoleField[] = [
+  { key: 'quayAdminRbac', labelKey: 'form.roles.quayAdmin', helpKey: 'form.roles.quayAdminHelp' },
+  { key: 'quayCreatorRbac', labelKey: 'form.roles.quayCreator', helpKey: 'form.roles.quayCreatorHelp' },
+  { key: 'quayMemberRbac', labelKey: 'form.roles.quayMember', helpKey: 'form.roles.quayMemberHelp' },
+];
+
 function RefSelect({
   id,
   label,
@@ -264,11 +288,8 @@ export function CreateResourceForm({
   const [externalNetwork, setExternalNetwork] = useState('');
   const [route53VaultPath, setRoute53VaultPath] = useState('');
   const [landingzone, setLandingzone] = useState(DEFAULT_LANDING_ZONE);
-  // CloudAWS
-  const [awsAccount, setAwsAccount] = useState('');
-  const [awsVaultPath, setAwsVaultPath] = useState('');
-  const [awsBaseDomain, setAwsBaseDomain] = useState('');
-  // CloudGCP: the site (spec.cloudRef)
+  // CloudAWS / CloudGCP: the site (spec.cloudRef); the platform assigns the account or project.
+  const [awsSiteRef, setAwsSiteRef] = useState('');
   const [gcpSiteRef, setGcpSiteRef] = useState('');
   const [cloudGcpRef, setCloudGcpRef] = useState('');
   // PlatformOpenshift
@@ -278,7 +299,16 @@ export function CreateResourceForm({
   const [workerCount, setWorkerCount] = useState('3');
   const [rbacMulti, setRbacMulti] = useState<string[]>([]);
   const [rbacOperator, setRbacOperator] = useState<string[]>([]);
+  const [rbacDeveloper, setRbacDeveloper] = useState<string[]>([]);
   const [rbacViewer, setRbacViewer] = useState<string[]>([]);
+  // Service objects: one access-group list per role field (UX-019).
+  const [roleLists, setRoleLists] = useState<Record<string, string[]>>({});
+  const roleList = (key: string): string[] => roleLists[key] ?? [];
+  const setRoleList = (key: string) => (next: string[]) => setRoleLists((prev) => ({ ...prev, [key]: next }));
+  // Project access fields (the interim form of a role assignment on the project, OD15).
+  const [projectAdminRbac, setProjectAdminRbac] = useState<string[]>([]);
+  const [projectDeveloperRbac, setProjectDeveloperRbac] = useState<string[]>([]);
+  const [projectViewerRbac, setProjectViewerRbac] = useState<string[]>([]);
   // Team RBAC: Rbac CR names in the tenant namespace; each list is written only when it has entries.
   const [teamAdminRbac, setTeamAdminRbac] = useState<string[]>([]);
   const [teamMemberRbac, setTeamMemberRbac] = useState<string[]>([]);
@@ -326,7 +356,12 @@ export function CreateResourceForm({
     setAssignOps([]);
     setRbacMulti([]);
     setRbacOperator([]);
+    setRbacDeveloper([]);
     setRbacViewer([]);
+    setRoleLists({});
+    setProjectAdminRbac([]);
+    setProjectDeveloperRbac([]);
+    setProjectViewerRbac([]);
     setTeamAdminRbac([]);
     setTeamMemberRbac([]);
     setTeamViewerRbac([]);
@@ -364,13 +399,28 @@ export function CreateResourceForm({
   });
   const rbacs = useK8sResourceList<K8sResource>('Rbac', {
     namespace: entityNs,
-    enabled: (type === 'persona' || type === 'vaultkv' || type === 'aaporg' || type === 'quayorg' || type === 'assignment' || type === 'platformopenshift' || type === 'team') && !!entityNs,
+    enabled:
+      (type === 'persona' ||
+        type === 'vaultkv' ||
+        type === 'aaporg' ||
+        type === 'quayorg' ||
+        type === 'assignment' ||
+        type === 'platformopenshift' ||
+        type === 'team' ||
+        type === 'project') &&
+      !!entityNs,
   });
+  // Integration connections live in the platform's integration namespace, which only platform
+  // administrators can read (tenants get 403, UX-013). Tenant forms never ask for them: the
+  // platform uses its default connection and reports the one used in status.config.
+  const isAdmin = audience === 'admin';
+  /** The administrator chose a connection (or the platform default): stop preselecting. */
+  const connectionTouched = React.useRef(false);
   const rbacConfigs = useK8sResourceList<K8sResource>('RbacConfig', {
-    enabled: type === 'rbac' || type === 'vault',
+    enabled: isAdmin && (type === 'rbac' || type === 'vault'),
   });
-  const aapConfigs = useK8sResourceList<K8sResource>('AAPConfig', { enabled: type === 'aaporg' });
-  const quayConfigs = useK8sResourceList<K8sResource>('QuayConfig', { enabled: type === 'quayorg' });
+  const aapConfigs = useK8sResourceList<K8sResource>('AAPConfig', { enabled: isAdmin && type === 'aaporg' });
+  const quayConfigs = useK8sResourceList<K8sResource>('QuayConfig', { enabled: isAdmin && type === 'quayorg' });
   const fabrics = useK8sResourceList<K8sResource>('HybridFabric', {
     namespace: PLATFORM_NAMESPACE,
     enabled: type === 'transportlink',
@@ -412,17 +462,18 @@ export function CreateResourceForm({
       const n = firstName(entities.items);
       if (n) setEntityName(n);
     }
-    if (type === 'rbac' || type === 'vault') {
+    // Platform administrators: preselect the only connection (they may clear it under Advanced).
+    if (isAdmin && !connectionTouched.current && (type === 'rbac' || type === 'vault')) {
       if (!rbacConfig) {
         const n = firstName(rbacConfigs.items);
         if (n) setRbacConfig(n);
       }
     }
-    if (type === 'aaporg' && !aapConfig) {
+    if (isAdmin && !connectionTouched.current && type === 'aaporg' && !aapConfig) {
       const n = firstName(aapConfigs.items);
       if (n) setAapConfig(n);
     }
-    if (type === 'quayorg' && !quayConfig) {
+    if (isAdmin && !connectionTouched.current && type === 'quayorg' && !quayConfig) {
       const n = firstName(quayConfigs.items);
       if (n) setQuayConfig(n);
     }
@@ -465,10 +516,15 @@ export function CreateResourceForm({
     personaRbacs,
     vaultRef,
     cloudosoRef,
+    isAdmin,
   ]);
 
   const optional = (key: string, value: string): Record<string, string> =>
     value.trim() ? { [key]: value.trim() } : {};
+
+  /** The role lists of a service object that have entries. */
+  const rolesSpec = (roles: readonly RoleField[]): Record<string, string[]> =>
+    Object.fromEntries(roles.map((r) => [r.key, roleList(r.key)]).filter(([, l]) => (l as string[]).length));
 
   const buildSpec = (): Record<string, unknown> => {
     if (usesNetworkSection) return networkSpec ?? {};
@@ -488,8 +544,11 @@ export function CreateResourceForm({
         };
       case 'project':
         return {
-          description,
+          ...(description ? { description } : {}),
           ...(displayName ? { displayName } : {}),
+          ...(projectAdminRbac.length ? { projectAdmin: projectAdminRbac } : {}),
+          ...(projectDeveloperRbac.length ? { projectDeveloperRbac } : {}),
+          ...(projectViewerRbac.length ? { projectViewerRbac } : {}),
         };
       case 'assignment': {
         const projectsList = projectRefs
@@ -497,7 +556,7 @@ export function CreateResourceForm({
           : projectRef
             ? [projectRef]
             : [];
-        // Assignment CRD toolRbac fields are single strings — use first selected.
+        // Assignment toolRbac fields are single access group names (single selects below).
         const toolRbac: Record<string, string> = {};
         if (assignAdmin[0]) toolRbac.assignmentAdmin = assignAdmin[0];
         if (assignDev[0]) toolRbac.assignmentDeveloper = assignDev[0];
@@ -526,20 +585,17 @@ export function CreateResourceForm({
           ...(audience === 'admin' ? optional('route53VaultPath', route53VaultPath) : {}),
         };
       case 'cloudaws':
-        return {
-          account: awsAccount.trim(),
-          vaultPath: awsVaultPath.trim(),
-          baseDomain: (awsBaseDomain || baseDomain).trim(),
-          ...optional('landingzone', landingzone),
-        };
+        // The CRD needs only the site; the platform assigns the account (UX-038).
+        return { cloudRef: { name: awsSiteRef.trim() } };
       case 'cloudgcp':
         return { cloudRef: { name: gcpSiteRef.trim() } };
       case 'platformopenshift': {
         const toolRbac =
-          rbacMulti.length || rbacOperator.length || rbacViewer.length
+          rbacMulti.length || rbacOperator.length || rbacDeveloper.length || rbacViewer.length
             ? {
                 ...(rbacMulti.length ? { clusterAdminRbac: rbacMulti } : {}),
                 ...(rbacOperator.length ? { clusterOperatorRbac: rbacOperator } : {}),
+                ...(rbacDeveloper.length ? { clusterDeveloperRbac: rbacDeveloper } : {}),
                 ...(rbacViewer.length ? { clusterViewerRbac: rbacViewer } : {}),
               }
             : undefined;
@@ -584,38 +640,17 @@ export function CreateResourceForm({
       case 'persona':
         // Persona CRD rbac is a single string — use first selected.
         return { rbac: personaRbacs[0] || rbacRef, type: personaType };
+      // Connection references are optional: without one the platform uses its default connection.
       case 'rbac':
-        return { config: rbacConfig, description };
+        return { ...optional('config', rbacConfig), ...optional('description', description) };
       case 'vault':
-        return { ha: haEnabled, rbacConfig };
-      case 'vaultkv': {
-        const list = rbacMulti;
-        return {
-          vault: vaultRef,
-          vaultAdminRbac: list,
-          vaultReaderRbac: list,
-          vaultOpsRbac: list,
-          vaultDeveloperRbac: list,
-        };
-      }
-      case 'aaporg': {
-        const list = rbacMulti;
-        return {
-          aapConfig,
-          aapAdminRbac: list,
-          aapJobExecutorRbac: list,
-          aapViewerRbac: list,
-        };
-      }
-      case 'quayorg': {
-        const list = rbacMulti;
-        return {
-          quayConfig,
-          quayAdminRbac: list,
-          quayCreatorRbac: list,
-          quayMemberRbac: list,
-        };
-      }
+        return { ha: haEnabled, ...optional('rbacConfig', rbacConfig) };
+      case 'vaultkv':
+        return { vault: vaultRef, ...rolesSpec(VAULTKV_ROLES) };
+      case 'aaporg':
+        return { ...optional('aapConfig', aapConfig), ...rolesSpec(AAPORG_ROLES) };
+      case 'quayorg':
+        return { ...optional('quayConfig', quayConfig), ...rolesSpec(QUAYORG_ROLES) };
       case 'transportlink':
         return {
           enabled: true,
@@ -647,17 +682,12 @@ export function CreateResourceForm({
     if (entityScoped && !entityNs) return false;
     if (type === 'assignment' && !teamRef) return false;
     if (type === 'cloudoso' && !osoProject.trim()) return false;
-    if (type === 'cloudaws' && (!awsAccount.trim() || !awsVaultPath.trim() || !(awsBaseDomain || baseDomain).trim())) {
-      return false;
-    }
+    if (type === 'cloudaws' && !awsSiteRef.trim()) return false;
     if (type === 'cloudgcp' && !gcpSiteRef.trim()) return false;
     if (type === 'platformopenshift' && !(platformEnv || cloudosoRef || cloudAwsRef || cloudGcpRef)) return false;
     if (type === 'persona' && (!(personaRbacs[0] || rbacRef) || !personaType)) return false;
     if (type === 'vaultkv' && !vaultRef) return false;
     if (type === 'migration' && (!vmName || !cloudosoRef)) return false;
-    if ((type === 'vault' || type === 'rbac') && !rbacConfig) return false;
-    if (type === 'aaporg' && !aapConfig) return false;
-    if (type === 'quayorg' && !quayConfig) return false;
     if (type === 'transportlink' && (!fabricRef || !gatewayRef)) return false;
     if (type === 'uihealthchecker' && !healthUrl.startsWith('http')) return false;
     return true;
@@ -773,39 +803,66 @@ export function CreateResourceForm({
                       onChange={(_e, checked) => setIstioEnabled(checked)}
                     />
                   </FormGroup>
-                  {/* Rbac CR names in the selected Entity's namespace. */}
+                  {/* Access groups of the selected tenant (the interim form of a role assignment, OD15). */}
                   <RbacMultiSelect
                     id="team-rbac-admin"
-                    label="Team admin RBAC"
+                    label={t('form.roles.teamAdmins')}
+                    helperText={t('form.roles.teamAdminsHelp')}
                     value={teamAdminRbac}
                     onChange={setTeamAdminRbac}
                     options={names(rbacs.items)}
-                    placeholder="Optional"
                   />
                   <RbacMultiSelect
                     id="team-rbac-member"
-                    label="Team member RBAC"
+                    label={t('form.roles.teamMembers')}
+                    helperText={t('form.roles.teamMembersHelp')}
                     value={teamMemberRbac}
                     onChange={setTeamMemberRbac}
                     options={names(rbacs.items)}
-                    placeholder="Optional"
                   />
                   <RbacMultiSelect
                     id="team-rbac-viewer"
-                    label="Team viewer RBAC"
+                    label={t('form.roles.teamViewers')}
+                    helperText={t('form.roles.teamViewersHelp')}
                     value={teamViewerRbac}
                     onChange={setTeamViewerRbac}
                     options={names(rbacs.items)}
-                    placeholder="Optional"
                   />
-                  <Alert variant="info" isInline isPlain title={t('form.teamRbacHelp')} className="sc-mb" />
+                  <Alert variant="info" isInline isPlain title={t('form.accessInterimNote')} className="sc-mb" />
                 </>
               )}
 
               {type === 'project' && (
-                <FormGroup label="Display name" fieldId="display-name">
-                  <TextInput id="display-name" value={displayName} onChange={(_e, v) => setDisplayName(v)} />
-                </FormGroup>
+                <>
+                  <FormGroup label={t('fields.displayName')} fieldId="display-name">
+                    <TextInput id="display-name" value={displayName} onChange={(_e, v) => setDisplayName(v)} />
+                  </FormGroup>
+                  <RbacMultiSelect
+                    id="project-rbac-admin"
+                    label={t('form.roles.projectAdmins')}
+                    helperText={t('form.roles.projectAdminsHelp')}
+                    value={projectAdminRbac}
+                    onChange={setProjectAdminRbac}
+                    options={names(rbacs.items)}
+                  />
+                  <RbacMultiSelect
+                    id="project-rbac-developer"
+                    label={t('form.roles.projectDevelopers')}
+                    helperText={t('form.roles.projectDevelopersHelp')}
+                    value={projectDeveloperRbac}
+                    onChange={setProjectDeveloperRbac}
+                    options={names(rbacs.items)}
+                  />
+                  <RbacMultiSelect
+                    id="project-rbac-viewer"
+                    label={t('form.roles.projectViewers')}
+                    helperText={t('form.roles.projectViewersHelp')}
+                    value={projectViewerRbac}
+                    onChange={setProjectViewerRbac}
+                    options={names(rbacs.items)}
+                  />
+                  <Alert variant="info" isInline isPlain title={t('form.accessInterimNote')} className="sc-mb" />
+                </>
               )}
 
               {type === 'assignment' && (
@@ -828,51 +885,56 @@ export function CreateResourceForm({
                     options={names(platforms.items)}
                     placeholder="Optional"
                   />
-                  <RbacMultiSelect
+                  {/* toolRbac fields hold one access group each. */}
+                  <RefSelect
                     id="assign-admin"
-                    label="Assignment admin RBAC"
-                    value={assignAdmin}
-                    onChange={setAssignAdmin}
+                    label={t('form.roles.assignmentAdmin')}
+                    value={assignAdmin[0] ?? ''}
+                    onChange={(v) => setAssignAdmin(v ? [v] : [])}
                     options={names(rbacs.items)}
-                    placeholder="Optional"
+                    placeholder={t('form.optionalNone')}
                   />
-                  <RbacMultiSelect
+                  {/* toolRbac fields hold one access group each. */}
+                  <RefSelect
                     id="assign-dev"
-                    label="Assignment developer RBAC"
-                    value={assignDev}
-                    onChange={setAssignDev}
+                    label={t('form.roles.assignmentDeveloper')}
+                    value={assignDev[0] ?? ''}
+                    onChange={(v) => setAssignDev(v ? [v] : [])}
                     options={names(rbacs.items)}
-                    placeholder="Optional"
+                    placeholder={t('form.optionalNone')}
                   />
-                  <RbacMultiSelect
+                  {/* toolRbac fields hold one access group each. */}
+                  <RefSelect
                     id="assign-viewer"
-                    label="Assignment viewer RBAC"
-                    value={assignViewer}
-                    onChange={setAssignViewer}
+                    label={t('form.roles.assignmentViewer')}
+                    value={assignViewer[0] ?? ''}
+                    onChange={(v) => setAssignViewer(v ? [v] : [])}
                     options={names(rbacs.items)}
-                    placeholder="Optional"
+                    placeholder={t('form.optionalNone')}
                   />
-                  <RbacMultiSelect
+                  {/* toolRbac fields hold one access group each. */}
+                  <RefSelect
                     id="assign-ops"
-                    label="Assignment ops RBAC"
-                    value={assignOps}
-                    onChange={setAssignOps}
+                    label={t('form.roles.assignmentOps')}
+                    value={assignOps[0] ?? ''}
+                    onChange={(v) => setAssignOps(v ? [v] : [])}
                     options={names(rbacs.items)}
-                    placeholder="Optional"
+                    placeholder={t('form.optionalNone')}
                   />
                 </>
               )}
 
               {type === 'cloudoso' && (
                 <>
-                  <CloudInfrastructureSelect
+                  <SitePicker
                     id="oso-cloudref"
                     label={t('fields.site')}
                     value={cloudRefName}
                     onChange={setCloudRefName}
                     types={['openstack']}
-                    entityName={currentEntityName}
-                    placeholder={t('form.installationDefaultSite')}
+                    namespace={entityNs}
+                    audience={audience}
+                    emptyLabel={t('form.installationDefaultSite')}
                     allowEmpty
                   />
                   <p className="sc-text-muted" style={{ marginTop: '-0.75rem' }}>
@@ -949,31 +1011,38 @@ export function CreateResourceForm({
 
               {type === 'cloudaws' && (
                 <>
-                  <FormGroup label="AWS account ID" fieldId="aws-acct" isRequired>
-                    <TextInput id="aws-acct" value={awsAccount} onChange={(_e, v) => setAwsAccount(v)} isRequired />
-                  </FormGroup>
-                  <FormGroup label="Vault path" fieldId="aws-vault" isRequired>
-                    <TextInput id="aws-vault" value={awsVaultPath} onChange={(_e, v) => setAwsVaultPath(v)} isRequired />
-                  </FormGroup>
-                  <FormGroup label="Base domain" fieldId="aws-base" isRequired>
-                    <TextInput id="aws-base" value={awsBaseDomain} onChange={(_e, v) => setAwsBaseDomain(v)} isRequired />
-                  </FormGroup>
-                  <FormGroup label="Landing zone" fieldId="aws-lz">
-                    <TextInput id="aws-lz" value={landingzone} onChange={(_e, v) => setLandingzone(v)} />
-                  </FormGroup>
+                  <SitePicker
+                    id="aws-site"
+                    label={t('form.awsSite')}
+                    value={awsSiteRef}
+                    onChange={setAwsSiteRef}
+                    types={['aws']}
+                    namespace={entityNs}
+                    audience={audience}
+                    isRequired
+                  />
+                  <Alert variant="info" isInline isPlain className="sc-mb" title={t('form.awsAccountAssigned')}>
+                    {t('form.publicCloudBillable')}
+                  </Alert>
                 </>
               )}
 
               {type === 'cloudgcp' && (
-                <CloudInfrastructureSelect
-                  id="gcp-site"
-                  label="Google Cloud site"
-                  value={gcpSiteRef}
-                  onChange={setGcpSiteRef}
-                  types={['gcp']}
-                  entityName={currentEntityName}
-                  isRequired
-                />
+                <>
+                  <SitePicker
+                    id="gcp-site"
+                    label={t('form.gcpSite')}
+                    value={gcpSiteRef}
+                    onChange={setGcpSiteRef}
+                    types={['gcp']}
+                    namespace={entityNs}
+                    audience={audience}
+                    isRequired
+                  />
+                  <Alert variant="info" isInline isPlain className="sc-mb" title={t('form.gcpProjectAssigned')}>
+                    {t('form.publicCloudBillable')}
+                  </Alert>
+                </>
               )}
 
               {type === 'cloudvirt' && (
@@ -1039,27 +1108,31 @@ export function CreateResourceForm({
                   )}
                   <RbacMultiSelect
                     id="plat-rbac-admin"
-                    label="Cluster admin RBAC"
+                    label={t('form.roles.clusterAdmins')}
                     value={rbacMulti}
                     onChange={setRbacMulti}
                     options={names(rbacs.items)}
-                    placeholder="Select Rbac CRs…"
                   />
                   <RbacMultiSelect
                     id="plat-rbac-op"
-                    label="Cluster operator RBAC"
+                    label={t('form.roles.clusterOperators')}
                     value={rbacOperator}
                     onChange={setRbacOperator}
                     options={names(rbacs.items)}
-                    placeholder="Select Rbac CRs…"
+                  />
+                  <RbacMultiSelect
+                    id="plat-rbac-dev"
+                    label={t('form.roles.clusterDevelopers')}
+                    value={rbacDeveloper}
+                    onChange={setRbacDeveloper}
+                    options={names(rbacs.items)}
                   />
                   <RbacMultiSelect
                     id="plat-rbac-view"
-                    label="Cluster viewer RBAC"
+                    label={t('form.roles.clusterViewers')}
                     value={rbacViewer}
                     onChange={setRbacViewer}
                     options={names(rbacs.items)}
-                    placeholder="Select Rbac CRs…"
                   />
                 </>
               )}
@@ -1102,87 +1175,70 @@ export function CreateResourceForm({
                 </>
               )}
 
-              {type === 'rbac' && (
-                <RefSelect
-                  id="rbac-config"
-                  label="Config"
-                  value={rbacConfig}
-                  onChange={setRbacConfig}
-                  options={names(rbacConfigs.items)}
-                  isRequired
-                />
-              )}
-
               {type === 'vault' && (
-                <>
-                  <RefSelect
-                    id="vault-rbac-config"
-                    label="RBAC Config"
-                    value={rbacConfig}
-                    onChange={setRbacConfig}
-                    options={names(rbacConfigs.items)}
-                    isRequired
-                  />
-                  <FormGroup label="High availability" fieldId="vault-ha">
-                    <Switch id="vault-ha" isChecked={haEnabled} onChange={(_e, c) => setHaEnabled(c)} />
-                  </FormGroup>
-                </>
+                <FormGroup label={t('form.vaultHa')} fieldId="vault-ha">
+                  <Switch id="vault-ha" isChecked={haEnabled} onChange={(_e, c) => setHaEnabled(c)} />
+                </FormGroup>
               )}
 
               {type === 'vaultkv' && (
                 <>
-                  <RefSelect id="vault-ref" label="Vault" value={vaultRef} onChange={setVaultRef} options={names(vaults.items)} isRequired />
-                  <RbacMultiSelect
-                    id="vaultkv-rbac"
-                    label="RBAC groups"
-                    value={rbacMulti}
-                    onChange={setRbacMulti}
-                    options={names(rbacs.items)}
-                    placeholder="Select Rbac CRs…"
-                  />
+                  <RefSelect id="vault-ref" label={t('kindsOne.Vault')} value={vaultRef} onChange={setVaultRef} options={names(vaults.items)} isRequired />
+                  {VAULTKV_ROLES.map((r) => (
+                    <RbacMultiSelect
+                      key={r.key}
+                      id={`vaultkv-${r.key}`}
+                      label={t(r.labelKey)}
+                      helperText={t(r.helpKey)}
+                      value={roleList(r.key)}
+                      onChange={setRoleList(r.key)}
+                      options={names(rbacs.items)}
+                    />
+                  ))}
                 </>
               )}
 
-              {type === 'aaporg' && (
-                <>
-                  <RefSelect
-                    id="aap-config"
-                    label="AAP Config"
-                    value={aapConfig}
-                    onChange={setAapConfig}
-                    options={names(aapConfigs.items)}
-                    isRequired
-                  />
+              {type === 'aaporg' &&
+                AAPORG_ROLES.map((r) => (
                   <RbacMultiSelect
-                    id="aap-rbac"
-                    label="RBAC groups"
-                    value={rbacMulti}
-                    onChange={setRbacMulti}
+                    key={r.key}
+                    id={`aap-${r.key}`}
+                    label={t(r.labelKey)}
+                    helperText={t(r.helpKey)}
+                    value={roleList(r.key)}
+                    onChange={setRoleList(r.key)}
                     options={names(rbacs.items)}
-                    placeholder="Select Rbac CRs…"
                   />
-                </>
-              )}
+                ))}
 
-              {type === 'quayorg' && (
-                <>
-                  <RefSelect
-                    id="quay-config"
-                    label="Quay Config"
-                    value={quayConfig}
-                    onChange={setQuayConfig}
-                    options={names(quayConfigs.items)}
-                    isRequired
-                  />
+              {type === 'quayorg' &&
+                QUAYORG_ROLES.map((r) => (
                   <RbacMultiSelect
-                    id="quay-rbac"
-                    label="RBAC groups"
-                    value={rbacMulti}
-                    onChange={setRbacMulti}
+                    key={r.key}
+                    id={`quay-${r.key}`}
+                    label={t(r.labelKey)}
+                    helperText={t(r.helpKey)}
+                    value={roleList(r.key)}
+                    onChange={setRoleList(r.key)}
                     options={names(rbacs.items)}
-                    placeholder="Select Rbac CRs…"
                   />
-                </>
+                ))}
+
+              {isAdmin && (type === 'rbac' || type === 'vault' || type === 'aaporg' || type === 'quayorg') && (
+                <ExpandableSection toggleText={t('form.advanced')}>
+                  <RefSelect
+                    id="connection"
+                    label={t('form.connection')}
+                    value={type === 'aaporg' ? aapConfig : type === 'quayorg' ? quayConfig : rbacConfig}
+                    onChange={(v) => {
+                      connectionTouched.current = true;
+                      (type === 'aaporg' ? setAapConfig : type === 'quayorg' ? setQuayConfig : setRbacConfig)(v);
+                    }}
+                    options={names(type === 'aaporg' ? aapConfigs.items : type === 'quayorg' ? quayConfigs.items : rbacConfigs.items)}
+                    placeholder={t('form.connectionDefault')}
+                  />
+                  <p className="sc-text-muted">{t('form.connectionHelp')}</p>
+                </ExpandableSection>
               )}
 
               {type === 'migration' && (

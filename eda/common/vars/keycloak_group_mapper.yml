@@ -1,0 +1,13 @@
+---
+# The sign-in claim every tool client (Vault, AAP, Quay) carries: the user's Keycloak groups as full paths
+# (/<entity>/<access group>), in the ID token, the access token and userinfo.
+keycloak_group_mapper:
+  name: groups
+  protocol: openid-connect
+  protocolMapper: oidc-group-membership-mapper
+  config:
+    claim.name: groups
+    full.path: "true"
+    id.token.claim: "true"
+    access.token.claim: "true"
+    userinfo.token.claim: "true"

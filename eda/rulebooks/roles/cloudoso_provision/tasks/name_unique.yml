@@ -1,0 +1,47 @@
+---
+# The name of an OpenStack environment is unique across tenants for now: its project credential lives at a
+# name-only Vault path (oso/projects/<name>/clouds-config). An older CloudOSO with the same name in another
+# namespace (creationTimestamp, tie broken by namespace name) that is not itself refused for its name, and whose
+# deletion has not completed, keeps it;
+# this one is refused before any Vault or OpenStack call. The other tenant is never named.
+# Expects cloudoso_cr_lookup (this object), cloudoso_cr_name, cloudoso_cr_namespace, services_api_host/token.
+- name: List the environments with this name
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: CloudOSO
+    field_selectors:
+      - "metadata.name={{ cloudoso_cr_name }}"
+  register: _cnu_same_name
+
+- name: Decide whether another tenant holds the name
+  vars:
+    _me: "{{ cloudoso_cr_lookup.resources[0] }}"
+    _my_key: "{{ _me.metadata.creationTimestamp ~ '|' ~ cloudoso_cr_namespace }}"
+  ansible.builtin.set_fact:
+    cloudoso_name_taken: >-
+      {%- set ns = namespace(taken=false) -%}
+      {%- for o in _cnu_same_name.resources | default([]) if o.metadata.namespace != cloudoso_cr_namespace -%}
+        {%- set ready = ((o.status | default({}, true)).conditions | default([], true)) | selectattr('type', 'equalto', 'Ready') | list -%}
+        {%- set refused = ready and ((ready | first).reason | default('')) == 'NameInUse' -%}
+        {%- set gone = o.metadata.deletionTimestamp is defined and ((o.status | default({}, true)).deletionComplete | default(false) | bool) -%}
+        {%- if (o.metadata.creationTimestamp ~ '|' ~ o.metadata.namespace) < _my_key and not refused and not gone -%}
+          {%- set ns.taken = true -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.taken }}
+
+- name: Refuse a name another tenant already uses
+  when: cloudoso_name_taken | bool
+  block:
+    - name: Record the reason
+      ansible.builtin.set_fact:
+        cloudoso_failure_reason: NameInUse
+
+    - name: Stop before any Vault or OpenStack call
+      ansible.builtin.fail:
+        msg: >-
+          The name {{ cloudoso_cr_name }} is already used by an OpenStack environment of another tenant. Names are
+          unique across the platform for now; delete this environment and create it with another name.

@@ -3,7 +3,13 @@
 # 1. Reads the object the event is about (event_payload.regarding) from the services cluster. The job ends,
 #    successfully and without a write, when the object does not exist or its uid is not the event's uid
 #    (deleted and re-created, or an event that names an object it was not published for). The live object
-#    and its spec are the job's input: facts shc_live_cr and shc_live_spec. The event's note is not read.
+#    and its spec are the job's input: facts shc_live_cr and shc_live_spec. The event's note is not read,
+#    with one exception: a *DeleteRequested event whose object is already gone while its namespace is
+#    Terminating or gone. A controller may release such an object at once (it cannot wait for the job in
+#    a namespace that is being removed), so the teardown still has work. The job then runs from the note:
+#    shc_live_cr is {} and shc_live_spec is the note (it must be a JSON object), shc_object_released is
+#    true, and no status is written. A tenant cannot make another tenant's namespace terminate, so this
+#    does not reopen the note to forged events for live objects.
 # 2. For an event with an eventId it writes Reconciling=True/JobRunning ("Applying the change.") through
 #    patch_cr_status, which records status.delivery.acknowledgedEventId/jobId/jobStartedAt (an existing
 #    Ready=True stays as it is) - or ends the job, successfully, when a newer request superseded this event.
@@ -40,6 +46,41 @@
       register: _ack_live
       check_mode: false
 
+    - name: Check whether a delete event for a gone object can run from its note
+      when:
+        - _ack_live.resource is none
+        - (event_payload.reason | default('') | string) is search('DeleteRequested$')
+      block:
+        - name: Parse the delete event's note
+          ansible.builtin.set_fact:
+            _ack_note_spec: >-
+              {%- set n = event_payload.note | default('', true) -%}
+              {%- if n is mapping -%}{{ n }}
+              {%- elif (n | string | trim) is search('^[{]') -%}{{ n | from_json }}
+              {%- else -%}{{ {} }}{%- endif -%}
+
+        - name: Read the object's namespace
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host | trim }}"
+            api_key: "{{ services_bearer_token | trim }}"
+            validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+            api_version: v1
+            kind: Namespace
+            name: "{{ _ack_ref.namespace }}"
+          register: _ack_ns
+          check_mode: false
+          when: _ack_note_spec is mapping and (_ack_note_spec | length > 0)
+
+        - name: Decide whether the object was released with its namespace
+          ansible.builtin.set_fact:
+            shc_object_released: >-
+              {{
+                (_ack_note_spec is mapping) and (_ack_note_spec | length > 0)
+                and (_ack_ns.resources is defined)
+                and ((_ack_ns.resources | length == 0)
+                     or (_ack_ns.resources[0].status.phase | default('') == 'Terminating'))
+              }}
+
     - name: Report why the job ends without work
       ansible.builtin.debug:
         msg: >-
@@ -48,23 +89,37 @@
              else 'the object uid ' ~ _ack_live.resource.metadata.uid ~ ' is not the event uid ' ~ _ack_ref.uid }};
           nothing to do
       when: >-
-        _ack_live.resource is none
-        or ((_ack_ref.uid | length > 0) and (_ack_live.resource.metadata.uid | default('') != _ack_ref.uid))
+        (_ack_live.resource is none and not (shc_object_released | default(false) | bool))
+        or (_ack_live.resource is not none and (_ack_ref.uid | length > 0)
+            and (_ack_live.resource.metadata.uid | default('') != _ack_ref.uid))
 
     - name: End the job when the object is gone or is another object
       ansible.builtin.meta: end_play
       when: >-
-        _ack_live.resource is none
-        or ((_ack_ref.uid | length > 0) and (_ack_live.resource.metadata.uid | default('') != _ack_ref.uid))
+        (_ack_live.resource is none and not (shc_object_released | default(false) | bool))
+        or (_ack_live.resource is not none and (_ack_ref.uid | length > 0)
+            and (_ack_live.resource.metadata.uid | default('') != _ack_ref.uid))
 
-    - name: Use the live object as the job's input
+    - name: Run the teardown of a released object from the event's note
+      ansible.builtin.debug:
+        msg: >-
+          {{ event_payload.regarding.kind }} {{ _ack_ref.namespace }}/{{ _ack_ref.name }} was released with its
+          namespace; the teardown runs from the event's note
+      when: shc_object_released | default(false) | bool
+
+    - name: Use the live object (or the released object's note) as the job's input
       ansible.builtin.set_fact:
-        shc_live_cr: "{{ _ack_live.resource }}"
-        shc_live_spec: "{{ _ack_live.resource.spec | default({}, true) }}"
+        shc_live_cr: "{{ {} if (shc_object_released | default(false) | bool) else _ack_live.resource }}"
+        shc_live_spec: >-
+          {{ _ack_note_spec if (shc_object_released | default(false) | bool)
+             else (_ack_live.resource.spec | default({}, true)) }}
+        shc_object_released: "{{ shc_object_released | default(false) | bool }}"
 
     - name: Mark the job started (or end it when superseded)
       ansible.builtin.include_tasks: patch_cr_status.yml
-      when: (event_payload.eventId | default('')) | length > 0
+      when:
+        - (event_payload.eventId | default('')) | length > 0
+        - not (shc_object_released | bool)
       vars:
         cr_api_version: "{{ _ack_ref.api_version }}"
         cr_plural: "{{ _ack_ref.plural }}"

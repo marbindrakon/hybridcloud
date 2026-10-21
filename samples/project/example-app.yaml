@@ -1,0 +1,11 @@
+# An app project (Project): application namespaces for the team on its cluster. Not an OpenStack
+# project and not a Google Cloud project.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Project
+metadata:
+  name: example-app
+  namespace: entity-example-corp
+spec:
+  displayName: Example application
+  description: Namespaces of the example application.

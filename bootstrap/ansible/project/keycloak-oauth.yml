@@ -15,6 +15,9 @@
     services_realm: "{{ lookup('env', 'SERVICES_REALM_NAME') | default('sovereign-central', true) }}"
     central_oauth_client_id: "openshift-central"
     services_oauth_client_id: "openshift-services"
+    # identity provider names of the OAuth configuration (roles/keycloak-oauth)
+    central_oauth_idp_name: sovereign-central
+    services_oauth_idp_name: sovereign-services
     ocp_services_server: "{{ lookup('env', 'OCP_SERVICES_SERVER') }}"
 
   pre_tasks:
@@ -109,6 +112,34 @@
       ansible.builtin.set_fact:
         central_keycloak_token: "{{ keycloak_token }}"
 
+    # the sign-in clients accept only their cluster's OAuth callback (oauth2callback/<identity provider name>)
+    - name: Read the central OAuth route
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        name: oauth-openshift
+        namespace: openshift-authentication
+      register: central_oauth_route
+
+    - name: Read the services OAuth route
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        name: oauth-openshift
+        namespace: openshift-authentication
+        host: "{{ ocp_services_server }}"
+        api_key: "{{ services_cluster_token }}"
+        validate_certs: false
+      register: services_oauth_route
+      when: ocp_services_server | length > 0
+
+    - name: Set the OAuth callbacks
+      ansible.builtin.set_fact:
+        central_oauth_callback: "https://{{ central_oauth_route.resources[0].spec.host }}/oauth2callback/{{ central_oauth_idp_name }}"
+        services_oauth_callback: >-
+          {{ ('https://' ~ services_oauth_route.resources[0].spec.host ~ '/oauth2callback/' ~ services_oauth_idp_name)
+             if (services_oauth_route.resources | default([])) | length > 0 else '' }}
+
     - name: Retrieve central client secrets
       ansible.builtin.include_role:
         name: keycloak-clients
@@ -119,7 +150,8 @@
           - realm: "{{ central_realm }}"
             client_id: "{{ central_oauth_client_id }}"
             name: "OpenShift Central"
-            redirect_uris: ["*"]
+            redirect_uris: ["{{ central_oauth_callback }}"]
+            direct_access_grants: false
 
     - name: Save central secrets
       ansible.builtin.set_fact:
@@ -161,7 +193,8 @@
           - realm: "{{ services_realm }}"
             client_id: "{{ services_oauth_client_id }}"
             name: "OpenShift Services"
-            redirect_uris: ["*"]
+            redirect_uris: ["{{ services_oauth_callback }}"]
+            direct_access_grants: false
       when: ocp_services_server | length > 0
 
     - name: Merge all secrets

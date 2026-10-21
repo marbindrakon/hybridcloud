@@ -22,10 +22,12 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            Attaches one cloud site (a CloudInfrastructure with EVPN) to a HybridFabric. The gateway runs on every
-            border gateway node: on the site side it is the route reflector of the site's EVPN domain and the
-            endpoint for each tenant network placed there; on the fabric side it connects those networks to the
-            same networks on the other sites. One CloudGateway per site.
+            A site gateway: attaches one site (a CloudInfrastructure with EVPN) to a HybridFabric,
+            comparable to a transit gateway attachment. The gateway runs on every border gateway
+            node: on the site side it is the route reflector of the site's EVPN domain and the
+            endpoint for each tenant network placed there; on the fabric side it connects those
+            networks to the same networks on the other sites. One CloudGateway per site.
+            Platform-owned.
           type: object
           required:
             - spec
@@ -37,6 +39,7 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required: [fabricRef, cloudRef, siteUnderlay]
               x-kubernetes-validations:
@@ -54,6 +57,7 @@ spec:
                       message: spec.fabricRef is immutable
                   properties:
                     name:
+                      description: Name of the referenced object.
                       type: string
                       minLength: 1
                       maxLength: 253
@@ -68,6 +72,7 @@ spec:
                       message: spec.cloudRef is immutable
                   properties:
                     name:
+                      description: Name of the referenced object.
                       type: string
                       minLength: 1
                       maxLength: 253
@@ -219,6 +224,7 @@ spec:
                           minLength: 1
                           maxLength: 512
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 site:
@@ -275,8 +281,11 @@ spec:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 waitingFor:
                   type: array
@@ -284,49 +293,71 @@ spec:
                   items:
                     type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 deletionBlockedBy:
                   type: array
                   items:
                     type: string
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

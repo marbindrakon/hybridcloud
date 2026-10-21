@@ -12,6 +12,21 @@
   retries: 3
   delay: 5
 
+- name: Refuse wildcard or relative redirect URIs
+  ansible.builtin.assert:
+    that: >-
+      (item.item.allow_wildcard_redirect | default(false) | bool)
+      or (item.item.redirect_uris | default([])
+          | select('match', '^(\\*|/.*|.*/\\*|(?!https?://).*)$') | list | length == 0)
+    fail_msg: >-
+      {{ item.item.realm }}/{{ item.item.client_id }}: redirect URIs must be exact absolute callbacks
+      (no '*', '.../*' or relative URI); set allow_wildcard_redirect to accept them.
+    quiet: true
+  loop: "{{ client_check.results }}"
+  loop_control:
+    label: "{{ item.item.realm }}/{{ item.item.client_id }}"
+  when: item.json | length == 0 or keycloak_clients_converge | bool
+
 - name: Create clients that do not exist
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ item.item.realm }}/clients"
@@ -25,10 +40,12 @@
       name: "{{ item.item.name | default(item.item.client_id) }}"
       enabled: true
       clientAuthenticatorType: client-secret
-      serviceAccountsEnabled: true
-      standardFlowEnabled: true
-      directAccessGrantsEnabled: true
-      redirectUris: "{{ item.item.redirect_uris | default(['*']) }}"
+      serviceAccountsEnabled: "{{ item.item.service_accounts | default(false) | bool }}"
+      standardFlowEnabled: "{{ item.item.standard_flow | default(true) | bool }}"
+      directAccessGrantsEnabled: "{{ item.item.direct_access_grants | default(false) | bool }}"
+      redirectUris: "{{ item.item.redirect_uris | default([]) }}"
+      webOrigins: "{{ item.item.web_origins | default(['+']) }}"
+      rootUrl: "{{ item.item.root_url | default(omit) }}"
     validate_certs: false
     status_code: [201, 409]
   loop: "{{ client_check.results }}"
@@ -103,4 +120,121 @@
   loop: "{{ client_mappers.results | default([]) | selectattr('json', 'defined') | subelements('item.item.protocol_mappers') }}"
   loop_control:
     label: "{{ item.0.item.item.client_id }}/{{ item.1.name }}"
-  when: item.1.name not in (item.0.json | map(attribute='name') | list)
+  when:
+    - item.1.name not in (item.0.json | map(attribute='name') | list)
+    - not (keycloak_clients_converge | bool and keycloak_clients_plan_only | bool)
+
+# Convergence of existing clients (keycloak_clients_converge): the declared fields win, everything else is kept.
+- name: Read the full representation of each declared client
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.item.realm }}/clients/{{ item.json[0].id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: client_full
+  loop: "{{ client_ids.results }}"
+  loop_control:
+    label: "{{ item.item.realm }}/{{ item.item.client_id }}"
+  when: keycloak_clients_converge | bool
+  no_log: true
+
+- name: Work out the client fields that change
+  ansible.builtin.set_fact:
+    keycloak_client_changes: >-
+      {%- set out = [] -%}
+      {%- for r in client_full.results | default([]) if r.json is defined -%}
+        {%- set want = r.item.item -%}
+        {%- set cur = r.json -%}
+        {%- set desired = {'directAccessGrantsEnabled': want.direct_access_grants | default(false) | bool} -%}
+        {%- if want.redirect_uris is defined -%}{%- set _ = desired.update({'redirectUris': want.redirect_uris}) -%}{%- endif -%}
+        {%- if want.web_origins is defined -%}{%- set _ = desired.update({'webOrigins': want.web_origins}) -%}{%- endif -%}
+        {%- if want.root_url is defined -%}{%- set _ = desired.update({'rootUrl': want.root_url}) -%}{%- endif -%}
+        {%- if want.service_accounts is defined -%}{%- set _ = desired.update({'serviceAccountsEnabled': want.service_accounts | bool}) -%}{%- endif -%}
+        {%- if want.standard_flow is defined -%}{%- set _ = desired.update({'standardFlowEnabled': want.standard_flow | bool}) -%}{%- endif -%}
+        {%- set diff = {} -%}
+        {%- for k, v in desired.items() -%}
+          {%- set c = cur.get(k) -%}
+          {%- if (v is sequence and v is not string) -%}
+            {%- if (c | default([], true) | sort | list) != (v | sort | list) -%}{%- set _ = diff.update({k: v}) -%}{%- endif -%}
+          {%- elif c != v -%}{%- set _ = diff.update({k: v}) -%}{%- endif -%}
+        {%- endfor -%}
+        {%- if diff -%}
+          {%- set _ = out.append({'realm': want.realm, 'client_id': want.client_id, 'id': cur.id, 'fields': diff.keys() | list,
+                                   'body': cur | combine(diff)}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  when: keycloak_clients_converge | bool
+  no_log: true
+
+- name: Client fields that change
+  ansible.builtin.debug:
+    msg: "{{ item.realm }}/{{ item.client_id }}: {{ item.fields | join(', ') }}{{ ' (plan only)' if keycloak_clients_plan_only | bool else '' }}"
+  loop: "{{ keycloak_client_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.realm }}/{{ item.client_id }}"
+  when: keycloak_clients_converge | bool
+
+- name: Converge the clients
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.realm }}/clients/{{ item.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ item.body }}"
+    validate_certs: false
+    status_code: [204]
+  loop: "{{ keycloak_client_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.realm }}/{{ item.client_id }}"
+  when: keycloak_clients_converge | bool and not (keycloak_clients_plan_only | bool)
+  no_log: true
+
+- name: Work out the protocol mappers whose config differs
+  ansible.builtin.set_fact:
+    keycloak_mapper_changes: >-
+      {%- set out = [] -%}
+      {%- for r in client_mappers.results | default([]) if r.json is defined -%}
+        {%- for m in r.item.item.protocol_mappers | default([]) -%}
+          {%- for c in r.json if c.name == m.name -%}
+            {%- set cc = c.config | default({}, true) -%}
+            {%- set ns = namespace(differs=(c.protocolMapper != m.protocolMapper)) -%}
+            {%- for k, v in (m.config | default({}, true)).items() if (cc[k] | default(none)) != v -%}{%- set ns.differs = true -%}{%- endfor -%}
+            {%- if ns.differs -%}
+              {%- set _ = out.append({'realm': r.item.item.realm, 'client_id': r.item.item.client_id, 'client': r.item.json[0].id,
+                                       'id': c.id, 'name': m.name,
+                                       'body': m | combine({'id': c.id, 'config': cc | combine(m.config | default({}, true))})}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+  when: keycloak_clients_converge | bool
+
+- name: Protocol mappers that change
+  ansible.builtin.debug:
+    msg: "{{ item.realm }}/{{ item.client_id }}: mapper {{ item.name }}{{ ' (plan only)' if keycloak_clients_plan_only | bool else '' }}"
+  loop: "{{ keycloak_mapper_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.realm }}/{{ item.client_id }}/{{ item.name }}"
+  when: keycloak_clients_converge | bool
+
+- name: Update the protocol mappers
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.realm }}/clients/{{ item.client }}/protocol-mappers/models/{{ item.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ item.body }}"
+    validate_certs: false
+    status_code: [204]
+  loop: "{{ keycloak_mapper_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.realm }}/{{ item.client_id }}/{{ item.name }}"
+  when: keycloak_clients_converge | bool and not (keycloak_clients_plan_only | bool)

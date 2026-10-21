@@ -1,0 +1,151 @@
+{{- /*
+API policies for tenant objects (ValidatingAdmissionPolicy, services cluster).
+
+shc-namespace-label-integrity: only platform automation sets, changes or removes the tenant labels
+(hybridsovereign.redhat/entity, hybridsovereign.redhat/workspace) on a namespace. People in a platform group may do it
+only when the namespace carries a non-empty hybridsovereign.redhat/label-override annotation (the reason, kept in the
+audit log).
+
+shc-platform-only-fields: the Vault paths a cluster or an OpenStack environment is built from are chosen by the
+platform. A request from anyone but platform automation, the per-tenant namespace operators or a platform group that
+sets one of these fields, or changes its stored value, is refused (Deny) or answered with a warning (Warn). A field
+that is absent, or unchanged from the stored object, always passes, so objects that already exist keep working.
+
+Exemptions are exact usernames and groups from .Values.admission; they can never name a tenant-facing server
+account or kube:admin (render-time check below).
+*/}}
+{{- $adm := .Values.admission }}
+{{- range $list := (list $adm.automationUsernames $adm.platformGroups) }}
+{{- range $list }}
+{{- if or (contains "tenancy-" (toString .)) (eq (toString .) "kube:admin") }}
+{{- fail (printf "admission exemptions must not name %q: tenant-facing server accounts and kube:admin are never exempt" .) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $adm.namespaceLabelIntegrity.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-namespace-label-integrity
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $adm.namespaceLabelIntegrity.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["namespaces"]
+  matchConditions:
+    # only requests that add, change or remove a tenant label
+    - name: tenant-label-changed
+      expression: >-
+        ['hybridsovereign.redhat/entity', 'hybridsovereign.redhat/workspace'].exists(k,
+        (has(object.metadata.labels) && k in object.metadata.labels ? object.metadata.labels[k] : '<absent>')
+        != (oldObject != null && has(oldObject.metadata.labels) && k in oldObject.metadata.labels
+        ? oldObject.metadata.labels[k] : '<absent>'))
+  validations:
+    - expression: >-
+        {{ include "primary-operator.isAutomationCEL" . }}
+        || ({{ include "primary-operator.isPlatformGroupCEL" . }}
+        && has(object.metadata.annotations)
+        && 'hybridsovereign.redhat/label-override' in object.metadata.annotations
+        && object.metadata.annotations['hybridsovereign.redhat/label-override'] != '')
+      message: >-
+        Only the platform sets the tenant label on a namespace. Platform administrators can change it after
+        adding the annotation hybridsovereign.redhat/label-override with the reason.
+      reason: Forbidden
+  auditAnnotations:
+    - key: label-change
+      valueExpression: >-
+        request.userInfo.username + ' entity '
+        + (oldObject != null && has(oldObject.metadata.labels) && 'hybridsovereign.redhat/entity' in oldObject.metadata.labels
+        ? oldObject.metadata.labels['hybridsovereign.redhat/entity'] : '-')
+        + ' -> '
+        + (has(object.metadata.labels) && 'hybridsovereign.redhat/entity' in object.metadata.labels
+        ? object.metadata.labels['hybridsovereign.redhat/entity'] : '-')
+        + ', workspace '
+        + (oldObject != null && has(oldObject.metadata.labels) && 'hybridsovereign.redhat/workspace' in oldObject.metadata.labels
+        ? oldObject.metadata.labels['hybridsovereign.redhat/workspace'] : '-')
+        + ' -> '
+        + (has(object.metadata.labels) && 'hybridsovereign.redhat/workspace' in object.metadata.labels
+        ? object.metadata.labels['hybridsovereign.redhat/workspace'] : '-')
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-namespace-label-integrity
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-namespace-label-integrity
+  validationActions: {{ include "primary-operator.vapActions" $adm.namespaceLabelIntegrity.mode }}
+{{- end }}
+{{- if $adm.platformOnlyFields.enabled }}
+{{- /*
+One validation per field: [resource, path below spec, remedy]. The path is read through dyn() so the policy type-checks
+against both kinds (each kind lacks the other's fields).
+*/}}
+{{- $fields := list
+  (list "platformopenshifts" "openstack.pullSecretVaultPath" "the platform supplies the pull secret")
+  (list "platformopenshifts" "openstack.pullSecretVaultProperty" "the platform supplies the pull secret")
+  (list "platformopenshifts" "openstack.sshKeyVaultPath" "the platform supplies the cluster SSH key")
+  (list "cloudosos" "vaultPath" "the platform account comes from the cloud site (spec.cloudRef)")
+  (list "cloudosos" "route53VaultPath" "the DNS account comes from the cloud site and the platform DNS settings")
+}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-platform-only-fields
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $adm.platformOnlyFields.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["hybridsovereign.redhat"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["platformopenshifts", "cloudosos"]
+  matchConditions:
+    - name: not-platform
+      expression: >-
+        !({{ include "primary-operator.isAutomationCEL" . }}
+        || {{ include "primary-operator.isNamespaceOperatorCEL" . }}
+        || {{ include "primary-operator.isPlatformGroupCEL" . }})
+  validations:
+{{- range $fields }}
+{{- $res := index . 0 }}
+{{- $parts := splitList "." (index . 1) }}
+{{- $new := "dyn(object.spec)" }}
+{{- $old := "dyn(oldObject.spec)" }}
+{{- $hasNew := list "has(object.spec)" }}
+{{- $hasOld := list "oldObject != null" "has(oldObject.spec)" }}
+{{- range $parts }}
+{{- $hasNew = append $hasNew (printf "has(%s.%s)" $new .) }}
+{{- $hasOld = append $hasOld (printf "has(%s.%s)" $old .) }}
+{{- $new = printf "%s.%s" $new . }}
+{{- $old = printf "%s.%s" $old . }}
+{{- end }}
+    - expression: >-
+        request.resource.resource != {{ $res | toJson }}
+        || !({{ join " && " $hasNew }})
+        || ({{ join " && " $hasOld }} && {{ $old }} == {{ $new }})
+      message: >-
+        spec.{{ index . 1 }} is chosen by the platform. Remove it; {{ index . 2 }}.
+      reason: Forbidden
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-platform-only-fields
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-platform-only-fields
+  validationActions: {{ include "primary-operator.vapActions" $adm.platformOnlyFields.mode }}
+{{- end }}

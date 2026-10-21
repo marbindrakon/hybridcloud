@@ -18,7 +18,8 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes crds crds-check replay sar-matrix
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-content check-manifests \
+        check-includes crds crds-check replay sar-matrix
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -43,6 +44,19 @@ lint-all:
 	@helm lint operator/primary/helm
 	@helm lint operator/namespace/helm
 	@helm lint iaac/helm
+
+# Content lint: banned words, CRD description rules, lab knowledge, generated blocks
+# (docs/content/style.md). Repo-only; reads no cluster and no Secret.
+check-content:
+	python3 -I scripts/check-content.py --self-test
+	python3 -I scripts/check-content.py
+	python3 -I scripts/crd-descriptions.py lockstep
+	python3 -I scripts/check-doc-links.py
+
+# Strict server-side dry run of samples/ and the YAML in docs/ (nothing is created).
+# Needs KUBECONFIG (services), SAMPLES_NS (an existing tenant namespace) and optionally OC.
+check-manifests:
+	OC=$${OC:-oc} python3 -I scripts/check-manifests.py samples docs
 
 # --- be-foundations ---
 check-includes:

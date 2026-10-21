@@ -1,8 +1,0 @@
-{{- if .Values.samples.assignment.assignment_frontend.enabled }}
-apiVersion: hybridsovereign.redhat/v1alpha1
-kind: Assignment
-metadata:
-  name: frontend-team
-  namespace: entity-acme-corp
-spec: {}
-{{- end }}

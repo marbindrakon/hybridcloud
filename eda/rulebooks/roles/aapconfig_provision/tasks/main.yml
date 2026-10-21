@@ -66,15 +66,6 @@
         aap_oidc_client_id: "aap-{{ aapconfig_cr_name }}"
         keycloak_vault_path: "{{ _rbac_config.resources[0].spec.secret | default('rhbk-services-admin') }}"
 
-    - name: Load Keycloak admin credentials from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
-
-    - name: Set Keycloak credential facts for AAPConfig tasks
-      ansible.builtin.set_fact:
-        kc_admin_user: "{{ keycloak_admin_user }}"
-        kc_admin_pass: "{{ keycloak_admin_password }}"
-      no_log: true
-
     - name: Discover Keycloak external URL from services cluster Route
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -113,70 +104,43 @@
         aap_gateway_internal_url: "https://{{ aap_gw_route.resources[0].spec.host }}"
       when: aap_gw_route.resources | length > 0
 
-    - name: Get Keycloak admin token
-      ansible.builtin.uri:
-        url: "{{ keycloak_internal_url }}/realms/master/protocol/openid-connect/token"
-        method: POST
-        body_format: form-urlencoded
-        body:
-          grant_type: password
-          client_id: admin-cli
-          username: "{{ kc_admin_user }}"
-          password: "{{ kc_admin_pass }}"
-        validate_certs: false
-        status_code: [200]
-      register: _kc_token
+    # the tenant realm's clients automation client (published by the RbacConfig job), not the master realm admin
+    - name: Obtain the realm token for the sign-in client
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
+      vars:
+        krt_purpose: clients
+        krt_rbac_config: "{{ aapconfig_spec.rbacConfig }}"
+        krt_url: "{{ keycloak_internal_url }}"
+        krt_token_fact: aap_kc_realm_token
+
+    - name: Keep the realm token for the client tasks
+      ansible.builtin.set_fact:
+        _kc_token: {json: {access_token: "{{ aap_kc_realm_token }}"}}
       no_log: true
-      retries: 3
-      delay: 5
 
-    - name: Check if OIDC client already exists in Keycloak
-      ansible.builtin.uri:
-        url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ aap_oidc_client_id }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ _kc_token.json.access_token }}"
-        validate_certs: false
-        status_code: [200]
-      register: _kc_existing_client
+    # the gateway's callback for this authenticator (read back from the authenticator below; same formula)
+    - name: Name the gateway callback
+      ansible.builtin.set_fact:
+        aap_gateway_url: "{{ aap_gateway_internal_url | regex_replace('/$', '') }}"
+        aap_oidc_callback: >-
+          {{ aap_gateway_internal_url | regex_replace('/$', '') }}/api/gateway/social/complete/oidc-{{ aapconfig_cr_name | lower }}/
 
-    - name: Create OIDC client in Keycloak for AAP
-      ansible.builtin.uri:
-        url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ _kc_token.json.access_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          clientId: "{{ aap_oidc_client_id }}"
-          name: "AAP OIDC - {{ aapconfig_cr_name }}"
-          protocol: openid-connect
-          publicClient: false
-          directAccessGrantsEnabled: true
-          standardFlowEnabled: true
-          serviceAccountsEnabled: false
-          rootUrl: "{{ aap_controller_url }}"
-          redirectUris:
-            - "{{ aap_controller_url }}/*"
-          webOrigins:
-            - "{{ aap_controller_url }}"
-          attributes:
-            "access.token.lifespan": "3600"
-        validate_certs: false
-        status_code: [201, 409]
-      when: _kc_existing_client.json | length == 0
-      register: _kc_client_create
+    - name: Ensure the Keycloak sign-in client for AAP
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/keycloak_client_ensure.yml"
+      vars:
+        kce_url: "{{ keycloak_internal_url }}"
+        kce_realm: "{{ keycloak_realm }}"
+        kce_token: "{{ _kc_token.json.access_token }}"
+        kce_client: "{{ aap_oidc_client_id }}"
+        kce_name: "AAP OIDC - {{ aapconfig_cr_name }}"
+        kce_root_url: "{{ aap_gateway_url }}"
+        kce_redirect_uris: ["{{ aap_oidc_callback }}"]
+        kce_web_origins: ["{{ aap_gateway_url }}"]
+        kce_attributes: {"access.token.lifespan": "3600"}
 
-    - name: Retrieve client UUID
-      ansible.builtin.uri:
-        url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ aap_oidc_client_id }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ _kc_token.json.access_token }}"
-        validate_certs: false
-        status_code: [200]
-      register: _kc_client_info
+    - name: Keep the client for the secret lookup
+      ansible.builtin.set_fact:
+        _kc_client_info: {json: [{id: "{{ kce_client_uuid }}"}]}
 
     - name: Get client secret from Keycloak
       ansible.builtin.uri:
@@ -226,6 +190,27 @@
       register: _existing_auth
       when: _aap_auth is failed or (_aap_auth.status | default(0) == 400)
 
+    - name: Read the authenticator's callback
+      ansible.builtin.set_fact:
+        aap_auth_callback: >-
+          {{ (_aap_auth.json.configuration.CALLBACK_URL | default(''))
+             if (_aap_auth is succeeded and _aap_auth.json is defined)
+             else ((_existing_auth.json.results[0].configuration.CALLBACK_URL | default(''))
+                   if (_existing_auth.json is defined and _existing_auth.json.results | default([]) | length > 0) else '') }}
+
+    - name: Use the callback the gateway reports
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/keycloak_client_ensure.yml"
+      vars:
+        kce_url: "{{ keycloak_internal_url }}"
+        kce_realm: "{{ keycloak_realm }}"
+        kce_token: "{{ _kc_token.json.access_token }}"
+        kce_client: "{{ aap_oidc_client_id }}"
+        kce_name: "AAP OIDC - {{ aapconfig_cr_name }}"
+        kce_root_url: "{{ aap_gateway_url }}"
+        kce_redirect_uris: ["{{ aap_auth_callback }}"]
+        kce_web_origins: ["{{ aap_gateway_url }}"]
+      when: aap_auth_callback | length > 0 and aap_auth_callback != aap_oidc_callback
+
     - name: Set authenticator ID
       ansible.builtin.set_fact:
         aap_auth_id: >-
@@ -251,7 +236,8 @@
           ready: true
           observedGeneration: "{{ aapconfig_generation }}"
           lastReconciledAt: "{{ aapconfig_status_transition_time }}"
-          aapControllerUrl: "{{ aap_controller_url }}"
+          # the services gateway (the controller UI and API are behind it)
+          aapControllerUrl: "{{ aap_gateway_url }}"
           authMethodType: oidc
           authMethodId: "{{ aap_auth_id }}"
           keycloakClientId: "{{ aap_oidc_client_id }}"

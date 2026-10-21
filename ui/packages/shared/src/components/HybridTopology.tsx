@@ -211,7 +211,7 @@ function byName(a: K8sResource, b: K8sResource): number {
 
 export function stateOf(item: K8sResource | undefined): NetState {
   if (!item) return 'pending';
-  const health = normalizeHealth(item.status?.ready, item.status?.status);
+  const health = normalizeHealth(item);
   if (health === 'ready') return 'ready';
   if (health === 'failed') return 'failed';
   return 'pending';

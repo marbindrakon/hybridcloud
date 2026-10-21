@@ -1,0 +1,21 @@
+# A tenant (Entity). The platform team creates it in the platform namespace; the tenant namespace
+# entity-example-corp follows. Each role under namespaceRbac lists the access groups (Rbac objects
+# in entity-example-corp) that hold it; create those access groups next.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Entity
+metadata:
+  name: example-corp
+  namespace: sovereign-cloud
+spec:
+  description: Example Corp, a tenant for the samples.
+  billingID: example-corp-0001
+  namespaceRbac:
+    entityAdmin:
+      - example-admins
+    auditor:
+      - example-auditors
+    networkAdmin:
+      - example-network-team
+    cloudVirtAdmin:
+      - example-network-team

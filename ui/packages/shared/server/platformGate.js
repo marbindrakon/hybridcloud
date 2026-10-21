@@ -6,7 +6,9 @@
  *
  * The permission is the same one the proxy checks; both come from the chart
  * value oauthProxy.openshiftSar, passed to the server as SHC_PLATFORM_SAR
- * (JSON: {namespace, resource, resourceAPIGroup, verb}).
+ * (JSON: OpenShift SubjectAccessReview keys {namespace, resource,
+ * resourceAPIGroup, verb, resourceName?}, translated here to the Kubernetes
+ * ResourceAttributes keys group and name).
  */
 import crypto from "crypto";
 import { k8sRequest, userToken } from "./upstream.js";
@@ -69,7 +71,7 @@ export function createRequirePlatform(opts = {}) {
               group: sar.resourceAPIGroup || "",
               resource: sar.resource,
               verb: sar.verb,
-              ...(sar.name ? { name: sar.name } : {}),
+              ...(sar.resourceName || sar.name ? { name: sar.resourceName || sar.name } : {}),
             },
           },
         },

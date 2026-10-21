@@ -1,0 +1,18 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# A site (CloudInfrastructure) of type openstack.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudInfrastructure
+metadata:
+  name: site-osp
+  namespace: sovereign-cloud
+spec:
+  type: openstack
+  displayName: Example OpenStack site
+  credentialsRef:
+    vaultPath: sites/site-osp/credentials
+  openstack:
+    region: regionOne
+    projectDomain: example-tenants
+    externalNetwork: public

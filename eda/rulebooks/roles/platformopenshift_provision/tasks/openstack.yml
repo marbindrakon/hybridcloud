@@ -32,6 +32,13 @@
     fail_msg: >-
       CloudOSO '{{ oso_env_name }}' is not ready yet. Wait for environment preparation.
 
+# The DNS account (the CloudOSO's site account for Designate, the Route53 account otherwise) is derived from the
+# CloudOSO's site; its status keeps ids only.
+- name: Resolve the CloudOSO's accounts
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloudoso_accounts.yml"
+  vars:
+    rca_cr: "{{ cloudoso_cr.resources[0] }}"
+
 # shc (§11.6 phase C): the environment's domain, DNS zone and account come from what the CloudOSO
 # recorded at provision, not from re-derived names or the old lab zone/project ids.
 - name: Extract CloudOSO details
@@ -42,14 +49,14 @@
     oso_domain: "{{ _oso_st.domain }}"
     cb_cluster_domain: "{{ _oso_st.domain }}"
     cb_base_domain: "{{ cloudoso_cr.resources[0].spec.baseDomain | default('') }}"
-    cb_route53_vault_path: "{{ _oso_st.route53VaultPath | default(cloudoso_cr.resources[0].spec.route53VaultPath | default(''), true) }}"
+    cb_route53_vault_path: "{{ rca_route53_vault_path }}"
     cb_api_vip: "{{ _oso_st.apiVIP | default('') }}"
     cb_ingress_vip: "{{ _oso_st.ingressVIP | default('') }}"
     cb_external_network: "{{ platform_spec.openstack.externalNetwork | default(_oso_st.externalNetwork, true) }}"
     use_designate_dns: "{{ (_oso_st.dnsProvider | default('')) == 'designate' }}"
     designate_zone_id: "{{ _oso_st.dnsZoneId | default('') }}"
     designate_project_id: "{{ _oso_st.dnsProjectId | default('') }}"
-    designate_admin_vault_path: "{{ _oso_st.accountVaultPath | default('') }}"
+    designate_admin_vault_path: "{{ rca_account_vault_path }}"
 
 - name: Fail if the CloudOSO predates the recorded DNS settings
   ansible.builtin.assert:
@@ -59,7 +66,7 @@
     fail_msg: >-
       {{ ("CloudOSO '" ~ oso_env_name ~ "' is on a site without tenant DNS (dnsProvider none); an OpenShift cluster needs designate or route53.")
          if (cloudoso_cr.resources[0].status.dnsProvider | default('')) == 'none' else
-         ("CloudOSO '" ~ oso_env_name ~ "' has no recorded DNS provider/zone/account; reconcile it (reconcileNow) so its status carries dnsProvider, dnsZoneId, dnsProjectId and accountVaultPath.") }}
+         ("CloudOSO '" ~ oso_env_name ~ "' has no recorded DNS provider/zone/account; reconcile it (reconcileNow) so its status carries dnsProvider, dnsZoneId and dnsProjectId, and check its site's account.") }}
 
 - name: Set cluster build identifiers
   ansible.builtin.set_fact:
@@ -165,9 +172,11 @@
       apiURL: "{{ cb_api_url }}"
       appsURL: "{{ cb_apps_url }}"
       consoleURL: "{{ cb_console_url | default('') }}"
-      adminPasswordVaultPath: "{{ cb_admin_password_vault | default('') }}"
-      kubeconfigVaultPath: "{{ cb_kubeconfig_vault | default('') }}"
-      secretsVaultPath: "{{ cb_secrets_vault_path | default('') }}"
+      # Vault paths are not part of the record (eda/common/tasks/resolve_platformopenshift_paths.yml derives
+      # them); null removes what older runs stored
+      adminPasswordVaultPath: null
+      kubeconfigVaultPath: null
+      secretsVaultPath: null
       clusterVersion: "{{ cb_cluster_version | default('') }}"
       powerState: "{{ cb_power_state | default('Unknown') }}"
       clusterHealth: "{{ cb_cluster_health | default('Unknown') }}"
@@ -177,10 +186,10 @@
       # shc (§11.6 phase C): what provision created, for teardown
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
-        accountVaultPath: "{{ designate_admin_vault_path if (use_designate_dns | bool) else cb_route53_vault_path }}"
+        accountVaultPath: null
         projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
         records: "{{ cb_dns_records | default(po_cr_current.resources[0].status.dns.records | default([])) }}"
-      vaultPaths: "{{ cb_vault_paths | default(po_cr_current.resources[0].status.vaultPaths | default([])) }}"
+      vaultPaths: null
       conditions:
         - type: Available
           status: "True"

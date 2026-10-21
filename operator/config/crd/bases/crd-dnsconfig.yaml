@@ -20,9 +20,10 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            The platform's tenant DNS namespace: one global domain under which every tenant environment gets a
-            zone named <environment>.<entity>.<domain>, whatever site the environment is on. Lives in the
-            plugins namespace; the platform uses the first Ready DNSConfig.
+            Tenant DNS settings: the platform's tenant DNS namespace, one global domain under which
+            every tenant environment gets a zone named <environment>.<tenant>.<domain>, whatever
+            site the environment is on. Platform-owned; created in the integrations namespace
+            sovereign-cloud-plugins. The platform uses the first ready DNSConfig.
           type: object
           required:
             - spec
@@ -34,6 +35,7 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required: [domain, provider, secret]
               x-kubernetes-validations:
@@ -79,14 +81,18 @@ spec:
                         Attributes set on every zone the platform creates in this DNS service, for example the
                         pool scheduler's scope. Unset leaves zone placement to the service's default.
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 status:
                   type: string
                   description: Lifecycle status (reconciling, ready, failed)
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 zone:
                   type: string
@@ -97,45 +103,67 @@ spec:
                   items:
                     type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

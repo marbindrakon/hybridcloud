@@ -113,29 +113,51 @@ def controller_condition(deploy, pods, tcfg, now):
     return {"type": "ControllerAvailable", "status": "True", "reason": "AsExpected", "message": ""}
 
 
+# Ready reasons that report a delivery problem themselves; a Failed/Waiting phase with one of them still counts.
+DELIVERY_REASONS = ("NoJobStarted", "ControllerUnavailable", "ControllerRestarting", "ControllerOutOfMemory")
+
+
 def delivery_condition(crs, tcfg, now):
-    """DeliveryStalled condition of one tenant from its CRs."""
+    """DeliveryStalled condition of one tenant from its CRs.
+
+    Counts only undelivered work: an event published but not picked up by a job (or whose publish keeps
+    failing), a redrive verdict (Stalled/NoAcknowledgement) for the current event, or a change with no
+    event at all (generation > observedGeneration). Not counted: objects whose current event's job finished
+    (completedEventId == eventId), objects whose job is running, and objects a controller reported as
+    failed, blocked or waiting (phase Failed or Waiting: a refused input, OperatorFailed, a dependency wait).
+    """
     limit = tcfg["deliveryStalledMinutes"]
     stalled = []
     for kind, cr in crs:
         meta, status = cr["metadata"], cr.get("status") or {}
         if meta.get("deletionTimestamp") and status.get("deletionComplete"):
             continue
-        ready = shc_status.derive_phase(cr) == "Ready"
-        if ready:
+        phase = shc_status.derive_phase(cr)
+        if phase == "Ready":
             continue
         delivery = status.get("delivery") or {}
         ref = f"{kind}/{meta['name']}"
+        event_id = delivery.get("eventId")
+        completed = bool(event_id) and delivery.get("completedEventId") == event_id
+        acknowledged = bool(event_id) and delivery.get("acknowledgedEventId") == event_id
+        if completed:
+            continue  # a job finished this event (failed or not): not a delivery problem
         if delivery.get("state") in ("Stalled", "NoAcknowledgement"):
             stalled.append(ref)
             continue
-        event_id = delivery.get("eventId")
-        if event_id and delivery.get("publishedAt") and delivery.get("acknowledgedEventId") != event_id \
-                and delivery.get("completedEventId") != event_id:
-            age = minutes_since(delivery.get("publishedAt"), now)
+        if acknowledged:
+            continue  # a job is running; a job past its timeout is the redrive's Stalled verdict above
+        if event_id:
+            # published and not picked up, or the publish keeps failing (no publishedAt, publishFailingSince
+            # set); an id with neither is a publish in flight
+            age = minutes_since(delivery.get("publishedAt") or delivery.get("publishFailingSince"), now)
             if age is not None and age > limit:
                 stalled.append(ref)
-                continue
+            continue
+        conds = status.get("conditions") or []
+        ready_cond = shc_status.find_condition(conds, "Ready") or {}
+        if phase in ("Failed", "Waiting") and ready_cond.get("reason") not in DELIVERY_REASONS:
+            continue  # a controller reported it: refused, failed, blocked or waiting
         generation = meta.get("generation") or 0
         observed = status.get("observedGeneration")
         try:
@@ -143,10 +165,8 @@ def delivery_condition(crs, tcfg, now):
         except (TypeError, ValueError):
             observed = 0
         if generation > observed:
-            last = delivery.get("publishedAt") or meta.get("creationTimestamp")
-            age = minutes_since(last, now)
-            if age is not None and age > limit and not (event_id and delivery.get("acknowledgedEventId") == event_id
-                                                        and delivery.get("completedEventId") != event_id):
+            age = minutes_since(meta.get("creationTimestamp"), now)
+            if age is not None and age > limit:
                 stalled.append(ref)
     if stalled:
         return {"type": "DeliveryStalled", "status": "True", "reason": "NoJobStarted", "message": STALLED_MESSAGE}, stalled

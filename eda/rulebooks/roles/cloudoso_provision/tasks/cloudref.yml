@@ -101,11 +101,23 @@
     - oso_cloudinfra_name | length > 0
     - ((ci_spec.dns | default({}, true)).mode | default('platform', true)) == 'native'
 
+# A legacy spec may name only the accounts the platform lists (cloudoso_allowed_vault_paths, role defaults): the
+# job reads them with the platform's Vault token.
 - name: Legacy settings (no cloudRef in effect)
   when: oso_cloudinfra_name | length == 0
+  vars:
+    _spec_account: "{{ oso_spec.vaultPath | default('', true) }}"
+    _spec_route53: "{{ oso_spec.route53VaultPath | default('', true) }}"
+    _ignored: >-
+      {{ ([] if _spec_account in ([''] + cloudoso_allowed_vault_paths) else ['vaultPath'])
+         + ([] if _spec_route53 in ([''] + cloudoso_allowed_vault_paths) else ['route53VaultPath']) }}
   ansible.builtin.set_fact:
+    oso_settings_note: >-
+      {{ ('Ignored spec.' ~ (_ignored | join(', spec.')) ~ ' (chosen by the platform).') if _ignored | length > 0 else '' }}
     oso_settings:
-      vaultPath: "{{ oso_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true) }}"
+      vaultPath: >-
+        {{ _spec_account if (_spec_account | length > 0 and 'vaultPath' not in _ignored)
+           else (cloudoso_defaults.vaultPath | default('')) }}
       projectDomain: "{{ oso_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true) }}"
       externalNetwork: "{{ oso_spec.externalNetwork | default(cloudoso_defaults.externalNetwork | default(''), true) }}"
       baseDomain: "{{ oso_spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
@@ -115,4 +127,6 @@
            | default('designate' if (oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true)) else 'route53', true) }}
       designateZoneId: "{{ oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true) }}"
       designateProjectId: "{{ oso_spec.designateProjectId | default(cloudoso_defaults.designateProjectId | default(''), true) }}"
-      route53VaultPath: "{{ oso_spec.route53VaultPath | default(cloudoso_defaults.route53VaultPath | default(''), true) }}"
+      route53VaultPath: >-
+        {{ _spec_route53 if (_spec_route53 | length > 0 and 'route53VaultPath' not in _ignored)
+           else (cloudoso_defaults.route53VaultPath | default('')) }}

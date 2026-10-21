@@ -1,8 +1,0 @@
-{{- if .Values.samples.project.project_infra_automation.enabled }}
-apiVersion: hybridsovereign.redhat/v1alpha1
-kind: Project
-metadata:
-  name: infra-automation
-  namespace: entity-acme-corp
-spec: {}
-{{- end }}
