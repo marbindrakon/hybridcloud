@@ -31,6 +31,14 @@ spec:
           type: object
           required:
             - spec
+          x-kubernetes-validations:
+            - rule: >-
+                self.metadata.name.size() <= 56
+                && self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+                && !self.metadata.name.contains('--')
+              message: >-
+                Tenant names are lowercase letters, digits and single '-', at most 56 characters; the
+                name becomes the namespace entity-<name>.
           properties:
             apiVersion:
               type: string
@@ -58,6 +66,51 @@ spec:
                 websiteLink:
                   description: Link to the tenant's own website, shown with the tenant.
                   type: string
+                displayName:
+                  description: >-
+                    Human-readable tenant name shown in consoles; metadata.name cannot change, this
+                    can.
+                  type: string
+                  maxLength: 64
+                contacts:
+                  description: >-
+                    Who the tenant's users contact about access and the tenant; shown to them.
+                  type: array
+                  maxItems: 10
+                  x-kubernetes-list-type: atomic
+                  items:
+                    description: One contact.
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      name:
+                        description: Name of the person or team.
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      email:
+                        description: E-mail address.
+                        type: string
+                        maxLength: 254
+                      url:
+                        description: Web page or ticket queue (https).
+                        type: string
+                        maxLength: 512
+                        pattern: "^https://"
+                allowedSites:
+                  description: >-
+                    Sites (CloudInfrastructure names) this tenant's environments may use. Narrows the
+                    sites that already allow the tenant through their spec.entityRefs; omitted means
+                    all of those. An environment on a site outside this list is refused.
+                  type: array
+                  minItems: 1
+                  maxItems: 64
+                  x-kubernetes-list-type: set
+                  items:
+                    type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 namespaceRbac:
                   description: >-
                     The tenant's roles in its namespace. Each key is a role; its value lists the
