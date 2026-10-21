@@ -18,7 +18,7 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes crds crds-check
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes crds crds-check replay
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -53,4 +53,11 @@ crds:
 
 crds-check:
 	python3 -I scripts/gen-crds.py --check
+
+# Schema replay (tests/schema-replay/README.md): OBJECTS = an export.sh objects dir; BASELINE_CRDS optional
+REPLAY_BACKEND ?= envtest
+replay:
+	@test -n "$(OBJECTS)" || { echo "usage: make replay OBJECTS=<dir> [BASELINE_CRDS=<dir>] [REPLAY_BACKEND=envtest|kind]"; exit 2; }
+	python3 -I tests/schema-replay/replay.py --objects $(OBJECTS) --crds operator/primary/helm/templates/crds.yaml \
+	  --backend $(REPLAY_BACKEND) $(if $(BASELINE_CRDS),--baseline-crds $(BASELINE_CRDS))
 # --- end be-foundations ---

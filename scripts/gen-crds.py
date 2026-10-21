@@ -129,6 +129,7 @@ def load_crd_file(path):
             data = json.loads(text)
             docs = data.get("items", [data]) if isinstance(data, dict) else data
         else:
+            text = re.sub(r"\{\{-?\s*/\*.*?\*/\s*-?\}\}", "", text, flags=re.S)  # Helm comments
             text = "\n".join(line for line in text.splitlines() if "{{" not in line)
             docs = list(yaml.safe_load_all(text))
         for d in docs:
