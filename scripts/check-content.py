@@ -45,9 +45,7 @@ UI_FILES = [
 DOC_GLOBS = ["README.md", "docs/**/*.md", "samples/**/*.md", "samples/**/*.yaml",
              "architecture/README.md", "architecture/docs/architecture.md"]
 TENANT_DOCS = ["docs/tenant/**"]
-# Kinds whose every spec field must be described (the others: warnings).
-STRICT_KINDS = {"Entity", "Rbac", "RbacConfig", "Team", "Project", "Assignment",
-                "PlatformOpenshift", "CloudOSO", "Persona", "TransportLink"}
+# Every spec field of every kind must be described (an undescribed field is an error).
 STATE_PREFIX = {"not-implemented": "Not implemented.", "deprecated": "Deprecated.",
                 "experimental": "Experimental."}
 FIELD_PATH = re.compile(r"\b(spec|status|metadata)(\.[A-Za-z0-9_\[\]]+)+")
@@ -183,8 +181,7 @@ def check_crds(rep, terms, rules, crd_rules, labs):
                         if m:
                             rep.error(where, f"lab knowledge ({what}) '{m.group(0)}'", d)
                 elif p.startswith("spec") and not p.endswith("[]"):
-                    msg = (f"{rel} {kind} {p}", "undocumented", "spec field has no description")
-                    (rep.error if kind in STRICT_KINDS else rep.warn)(*msg)
+                    rep.error(f"{rel} {kind} {p}", "undocumented", "spec field has no description")
     for kind in sorted(set(kinds) - seen):
         if kinds[kind].get("planned"):
             # entry written ahead of the CRD (another change adds the kind); checked once it lands

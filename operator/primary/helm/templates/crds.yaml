@@ -687,6 +687,9 @@ spec:
                       minLength: 1
                       maxLength: 253
                     bearer:
+                      description: >-
+                        Name of the bearer on that ProviderEdge (one of its spec.bearers) the
+                        circuit is ordered on.
                       type: string
                       minLength: 1
                       maxLength: 63
@@ -699,6 +702,7 @@ spec:
                     - rule: self == oldSelf
                       message: spec.ceKind is immutable
                 routing:
+                  description: How the network and the CE exchange routes.
                   type: object
                   required: [protocol]
                   x-kubernetes-validations:
@@ -710,6 +714,7 @@ spec:
                       description: How routes are exchanged with the CE.
                       enum: [bgp]
                     bgp:
+                      description: The BGP session with the CE. Required when protocol is bgp.
                       type: object
                       required: [peerAsn]
                       properties:
@@ -727,10 +732,15 @@ spec:
                             it to a Secret named in status.ceConfig.
                           properties:
                             type:
+                              description: >-
+                                md5: TCP MD5 password on the session (default). none: no password.
                               type: string
                               enum: [md5, none]
                               default: md5
                             secretRef:
+                              description: >-
+                                A Secret in this namespace whose key "password" holds the session
+                                password. Omit it to have the platform generate one.
                               type: object
                               required: [name]
                               properties:
@@ -744,11 +754,15 @@ spec:
                           description: How many routes the CE may send. teardown closes the session above the limit.
                           properties:
                             limit:
+                              description: Most routes the CE may send (1 to 100000, default 100).
                               type: integer
                               minimum: 1
                               maximum: 100000
                               default: 100
                             action:
+                              description: >-
+                                What happens above the limit. teardown (default): the session is
+                                closed. warning: the session stays up and the excess is only logged.
                               type: string
                               enum: [teardown, warning]
                               default: teardown
@@ -1390,6 +1404,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -1911,6 +1926,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -2208,8 +2224,9 @@ spec:
                 vaultPath:
                   type: string
                   description: >-
-                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Location
-                    of the platform's OpenStack account credential in the platform's secret store.
+                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Requests
+                    from tenant users that set or change it are refused, or accepted with a warning,
+                    depending on the platform's admission settings.
                 baseDomain:
                   type: string
                   description: >-
@@ -2234,9 +2251,9 @@ spec:
                 route53VaultPath:
                   type: string
                   description: >-
-                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Location
-                    of the Route 53 credential in the platform's secret store, used when dnsProvider
-                    is route53.
+                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Requests
+                    from tenant users that set or change it are refused, or accepted with a warning,
+                    depending on the platform's admission settings.
                 landingzone:
                   type: string
                   description: No effect.
@@ -3299,10 +3316,12 @@ spec:
                       message: start must not exceed end
                   properties:
                     start:
+                      description: First VNI of the pool (1 to 16777215).
                       type: integer
                       minimum: 1
                       maximum: 16777215
                     end:
+                      description: Last VNI of the pool, not lower than start.
                       type: integer
                       minimum: 1
                       maximum: 16777215
@@ -3317,10 +3336,12 @@ spec:
                       message: start must not exceed end
                   properties:
                     start:
+                      description: First VNI of the pool (1 to 16777215).
                       type: integer
                       minimum: 1
                       maximum: 16777215
                     end:
+                      description: Last VNI of the pool, not lower than start.
                       type: integer
                       minimum: 1
                       maximum: 16777215
@@ -3333,6 +3354,7 @@ spec:
                   required: [nodes, credentialsRef]
                   properties:
                     nodes:
+                      description: The border gateway nodes, 1 to 8, by unique name.
                       type: array
                       minItems: 1
                       maxItems: 8
@@ -3359,6 +3381,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -3374,6 +3397,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -4093,10 +4117,16 @@ spec:
                       message: spec.ipv4.prefix must be as long as spec.ipv4.prefixLength
                   properties:
                     prefixLength:
+                      description: >-
+                        Size of the subnet the platform allocates, 16 to 29 (for example 24 for a
+                        /24).
                       type: integer
                       minimum: 16
                       maximum: 29
                     prefix:
+                      description: >-
+                        A pinned IPv4 subnet in canonical form (host bits zero, for example
+                        10.20.30.0/24), inside one of the network's IPv4 prefixes.
                       type: string
                       maxLength: 18
                       x-kubernetes-validations:
@@ -4117,10 +4147,14 @@ spec:
                       message: spec.ipv6 needs prefixLength or prefix
                   properties:
                     prefixLength:
+                      description: Size of the subnet the platform allocates. Only 64 is accepted.
                       type: integer
                       minimum: 64
                       maximum: 64
                     prefix:
+                      description: >-
+                        A pinned IPv6 /64 in canonical form, inside one of the network's IPv6
+                        prefixes.
                       type: string
                       maxLength: 43
                       x-kubernetes-validations:
@@ -4416,8 +4450,10 @@ spec:
                           - targetNetwork
                         properties:
                           sourceNetwork:
+                            description: Network name on the source side.
                             type: string
                           targetNetwork:
+                            description: Network name in the target OpenStack project.
                             type: string
                     flavorStrategy:
                       type: string
@@ -4429,45 +4465,58 @@ spec:
               type: object
               properties:
                 name:
+                  description: Name of the migration.
                   type: string
                 namespace:
+                  description: Namespace of the migration.
                   type: string
                 entity:
+                  description: Tenant the migration belongs to.
                   type: string
                 source:
+                  description: Migration provider the run used.
                   type: string
                 vmName:
+                  description: Virtual machine being migrated.
                   type: string
                 cloudoso:
+                  description: Target OpenStack environment.
                   type: string
                 targetProject:
+                  description: Target OpenStack project.
                   type: string
                 migrationMethod:
+                  description: Data transfer method the run used.
                   type: string
                 phase:
                   type: string
                   description: >-
-                    Current migration phase (validating, deployingConversionHost,
-                    exportingMetadata, convertingMetadata, importingWorkloads,
-                    cutover, ready, failed)
+                    Lifecycle phase, written by the platform: Waiting, Creating, Updating, Ready,
+                    Degraded, Failed or Deleting. The steps of the migration are in status.phases.
                 phases:
                   type: array
-                  description: Phase history with timestamps
+                  description: Steps of the migration, with timestamps.
                   items:
+                    description: One step.
                     type: object
                     properties:
                       name:
+                        description: Name of the step.
                         type: string
                       status:
+                        description: Result of the step.
                         type: string
                         enum: [pending, running, succeeded, failed]
                       startedAt:
+                        description: When the step started.
                         type: string
                         format: date-time
                       completedAt:
+                        description: When the step finished.
                         type: string
                         format: date-time
                       message:
+                        description: What happened in the step, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
                 status:
@@ -4834,18 +4883,24 @@ spec:
                     pullSecretVaultPath:
                       type: string
                       description: >-
-                        Set by the platform; leave unset. Location of the pull secret in the
-                        platform's secret store. Default: the installation's default.
+                        Set by the platform; leave unset. Requests from tenant users that set or
+                        change it are refused, or accepted with a warning, depending on the
+                        platform's admission settings. Location of the pull secret in the platform's
+                        secret store.
                     pullSecretVaultProperty:
                       type: string
                       description: >-
-                        Set by the platform; leave unset. Property that holds the pull secret at
-                        that location. Default: the installation's default.
+                        Set by the platform; leave unset. Requests from tenant users that set or
+                        change it are refused, or accepted with a warning, depending on the
+                        platform's admission settings. Property that holds the pull secret at that
+                        location.
                     sshKeyVaultPath:
                       type: string
                       description: >-
-                        Set by the platform; leave unset. Location of the nodes' SSH key pair in the
-                        platform's secret store. Default: the installation's default.
+                        Set by the platform; leave unset. Requests from tenant users that set or
+                        change it are refused, or accepted with a warning, depending on the
+                        platform's admission settings. Location of the nodes' SSH key pair in the
+                        platform's secret store.
                     glanceImageOverride:
                       type: string
                       description: >-
@@ -5007,18 +5062,13 @@ spec:
                   description: URL of the cluster's web console.
                 adminPasswordVaultPath:
                   type: string
-                  description: >-
-                    Platform detail. Location of the admin password in the platform's secret store.
+                  description: Not written any more; removed from older objects.
                 kubeconfigVaultPath:
                   type: string
-                  description: >-
-                    Platform detail. Location of the admin kubeconfig in the platform's secret
-                    store.
+                  description: Not written any more; removed from older objects.
                 secretsVaultPath:
                   type: string
-                  description: >-
-                    Platform detail. Location of the cluster's secrets in the platform's secret
-                    store.
+                  description: Not written any more; removed from older objects.
                 clusterVersion:
                   type: string
                   description: OpenShift version of the cluster.
@@ -5443,6 +5493,8 @@ spec:
                     required: [name, ceKinds]
                     properties:
                       name:
+                        description: >-
+                          Bearer name, unique on this edge. Circuits name it in spec.edgeRef.bearer.
                         type: string
                         minLength: 1
                         maxLength: 63
@@ -5456,6 +5508,8 @@ spec:
                           type: string
                           enum: [customer]
                       description:
+                        description: >-
+                          What the bearer is, in a few words, for the people ordering circuits.
                         type: string
                         maxLength: 256
                 entityRefs:
