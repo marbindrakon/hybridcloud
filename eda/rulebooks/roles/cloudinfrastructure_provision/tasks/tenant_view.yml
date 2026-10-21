@@ -9,7 +9,8 @@
   vars:
     sts_sites:
       - "{{ civ_before }}"
-      - "{{ civ_before | combine({'status': (civ_before.status | default({}, true)) | combine(civ_after_status)}) }}"
+      # the job writes status by merge-patch: maps merge key by key, lists and scalars are replaced
+      - "{{ civ_before | combine({'status': (civ_before.status | default({}, true)) | combine(civ_after_status, recursive=True)}) }}"
 
 - name: Decide whether the tenants' view changed
   vars:

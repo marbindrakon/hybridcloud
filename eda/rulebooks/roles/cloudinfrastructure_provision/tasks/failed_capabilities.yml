@@ -1,0 +1,18 @@
+---
+# The capabilities a failed site records. Status is written by merge-patch, so a key left out keeps its last value:
+# every stored capability is switched off (a failed site offers none), which also keeps the tenants' view of a site
+# that stays failed steady from one run to the next (tenant_view.yml).
+# Input:  shc_live_cr (the CR before the job), else cloudinfrastructure_cr_lookup (the job's read of it)
+# Output: _ci_failed_caps
+- name: Every capability of the failed site is off
+  ansible.builtin.set_fact:
+    _ci_failed_caps: >-
+      {%- set cr = shc_live_cr | default({}, true) -%}
+      {%- if not cr and cloudinfrastructure_cr_lookup is defined -%}
+        {%- set cr = ((cloudinfrastructure_cr_lookup.resources | default([], true)) + [{}]) | first -%}
+      {%- endif -%}
+      {%- set out = {'evpn': false, 'api': false} -%}
+      {%- for k in ((cr.status | default({}, true)).capabilities | default({}, true)) -%}
+        {%- set _ = out.update({k: false}) -%}
+      {%- endfor -%}
+      {{ out }}

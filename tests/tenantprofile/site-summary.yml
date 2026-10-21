@@ -62,3 +62,33 @@
     - name: Nothing of the platform's detail leaks
       ansible.builtin.assert:
         that: (site_tenant_summaries | to_json) is not search('https://|vpc-|123456789012|abc123|secret/')
+
+# A site that stays failed must leave the tenants' view steady (no Entity wake on every run). The jobs write status
+# by merge-patch; the "stored" CRs below are built the same way (recursive combine, lists replaced).
+- name: A site that stays failed wakes nothing
+  hosts: localhost
+  gather_facts: false
+  vars:
+    role_dir: "{{ playbook_dir }}/../../eda/rulebooks/roles/cloudinfrastructure_provision"
+    ready_sites:
+      - metadata: {name: ocp-a, namespace: hybrid-sovereign, generation: 3}
+        spec: {type: openshift, location: Room 1, openshift: {clusterRef: local}}
+        status:
+          status: ready
+          observedGeneration: 3
+          capabilities: {api: true, virtualization: true, evpn: true, frrK8s: true}
+          site: {storageClasses: [{name: ceph-rbd, default: true}]}
+      - metadata: {name: os-b, namespace: hybrid-sovereign, generation: 1}
+        spec: {type: openstack, credentialsRef: {vaultPath: secret/x}}
+        status:
+          status: ready
+          observedGeneration: 1
+          capabilities: {api: true, dns: true, evpn: true}
+          site: {volumeTypes: [{name: standard}]}
+  tasks:
+    - name: Two failed runs in a row, per site
+      ansible.builtin.include_tasks: site-summary-failed-runs.yml
+      loop: "{{ ready_sites }}"
+      loop_control:
+        loop_var: ready_site
+        label: "{{ ready_site.metadata.name }}"
