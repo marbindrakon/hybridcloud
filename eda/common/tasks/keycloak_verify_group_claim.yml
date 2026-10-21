@@ -15,8 +15,9 @@
 #   kvg_mapper    true when the client has the groups mapper (full paths)
 # Only ids, client ids and group paths reach the job output (the example token holds personal data: no_log).
 #
-# The realm token is the membership automation client's: the example-token endpoint needs to view the client
-# (view-clients) and the user (view-users) with one token (rbacconfig_provision defaults).
+# The realm token is the clients automation client's: the example-token endpoint needs to view the client
+# (view-clients) and the user (view-users) with one token (rbacconfig_provision defaults). The client
+# representation carries the client secret, so the client read is no_log.
 - name: Load the groups mapper definition
   ansible.builtin.include_vars:
     file: "{{ role_path }}/../../../common/vars/keycloak_group_mapper.yml"
@@ -44,7 +45,7 @@
     - name: Obtain the realm token for the check
       ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
       vars:
-        krt_purpose: membership
+        krt_purpose: clients
         krt_rbac_config: "{{ kvg_rbac_config | default(_kvg_groups[0].config, true) }}"
         krt_token_fact: _kvg_token
 
@@ -55,6 +56,7 @@
         validate_certs: false
         status_code: [200]
       register: _kvg_client
+      no_log: true
 
     - name: Does {{ kvg_client }} carry the groups claim with full paths
       vars:
@@ -122,7 +124,7 @@
       ansible.builtin.fail:
         msg: >-
           The sign-in check of client {{ kvg_client }} was refused by Keycloak (HTTP 403): the realm membership
-          automation client needs view-clients and view-users (reconcile the RbacConfig).
+          automation client for clients needs view-clients and view-users (reconcile the RbacConfig).
       when: _kvg_example.status | default(0) == 403
 
     - name: Record the result
@@ -144,6 +146,7 @@
       ansible.builtin.set_fact:
         _kvg_token: ""
         _kvg_example: {}
+        _kvg_client: {}
       no_log: true
 
 - name: Sign-in check of {{ kvg_client }}
