@@ -121,3 +121,18 @@
   resource: {group: "", resource: pods, subresource: exec}
   verbs: [create]
   expect: deny
+# a tenant Vault is initialized and unsealed through its HTTP API over the API server's pod proxy (no exec)
+- id: automation-pods-proxy
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: pods, subresource: proxy}
+  verbs: [get, create]
+  expect: allow
+- id: automation-no-pods-attach
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: pods, subresource: attach}
+  verbs: [create]
+  expect: deny

@@ -233,6 +233,17 @@ run_repo_checks() {
     log_fail "crds.yaml drift (run python3 -I scripts/gen-crds.py)"
     cat /tmp/shc-gen-crds.log
   fi
+  # the automation account's rules (central values) cover every call the EDA jobs make on services
+  if (cd "${REPO_ROOT}" && python3 -I scripts/check-automation-rules.py) >/tmp/shc-automation-rules.log 2>&1; then
+    if grep -q '^check-automation-rules: SKIP' /tmp/shc-automation-rules.log; then
+      log_skip "automation rules (no servicesCluster.automation.rules in the central values)"
+    else
+      log_pass "automation rules cover the EDA services calls ($(tail -1 /tmp/shc-automation-rules.log))"
+    fi
+  else
+    log_fail "automation rules miss permissions the EDA jobs use (scripts/check-automation-rules.py)"
+    grep MISSING /tmp/shc-automation-rules.log | head -20 || true
+  fi
 }
 # --- end be-foundations ---
 
