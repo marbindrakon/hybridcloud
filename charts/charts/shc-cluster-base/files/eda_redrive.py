@@ -5,7 +5,7 @@ shc LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.4. Runs as a CronJob on th
 hybridsovereign.redhat CRs. For every CR that is not ready:
 
 - published (status.delivery.publishedAt) but not acknowledged by an EDA job within ackTimeoutMinutes:
-  annotate reconcileNow=<RFC 3339 time> (Retry now: any new value is a request), or redeliver=true for a
+  annotate reconcileNow=true (the legacy request every operator generation acts on), or redeliver=true for a
   CR being deleted (the operator re-publishes with a new eventId), at most maxRedrives
   times, and only for kinds in redriveKinds; otherwise status.delivery.state=NoAcknowledgement
 - acknowledged but not completed within the kind's jobTimeoutMinutes: status.delivery.state=Stalled
@@ -31,6 +31,9 @@ from kubernetes.client.rest import ApiException
 GROUP = "hybridsovereign.redhat"
 REDRIVES = f"{GROUP}/redrives"
 RECONCILE_NOW = "ansible.sdk.operatorframework.io/reconcileNow"
+# Machine writers use the legacy literal: operators of every generation act on it each time and remove it after
+# publishing, while a timestamp is only understood by the current ones (namespace operators upgrade per tenant).
+RECONCILE_REQUEST = "true"
 # delete finalizers publish once (LAB-PLAN §11.6); this asks them to publish the delete event again
 REDELIVER = f"{GROUP}/redeliver"
 
@@ -169,7 +172,8 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                 print(f"redrive {ref}: event {event_id} unacknowledged for {age:.0f} min "
                       f"(redrive {redrives + 1}/{cfg['maxRedrives']})")
                 trigger = REDELIVER if meta.get("deletionTimestamp") else RECONCILE_NOW
-                patch_annotations({trigger: stamp if trigger == RECONCILE_NOW else "true", REDRIVES: str(redrives + 1)})
+                patch_annotations({trigger: RECONCILE_REQUEST if trigger == RECONCILE_NOW else "true",
+                                   REDRIVES: str(redrives + 1)})
             else:
                 counts["noAcknowledgement"] += 1
                 why = "redrive disabled for this kind" if not may_redrive else f"{redrives} redrives"
