@@ -776,11 +776,11 @@ export function CreateResourceForm({
     <>
       <PageHeader
         title={title}
-        subtitle={`Namespace ${(isPlatformForm ? PLATFORM_NAMESPACE : entityNs) || 'cluster'}`}
+        subtitle={t('form.inNamespace', { namespace: (isPlatformForm ? PLATFORM_NAMESPACE : entityNs) || '—' })}
         breadcrumbs={[
-          { label: 'Sovereign Cloud' },
-          { label: title.replace(/^Create |^Request |^Migrate to /, ''), to: listPath },
-          { label: 'Create' },
+          { label: t('nav.sovereignCloud') },
+          { label: t(`kinds.${kind}`, { defaultValue: kind }), to: listPath },
+          { label: t('common.create') },
         ]}
       />
       {result && (
