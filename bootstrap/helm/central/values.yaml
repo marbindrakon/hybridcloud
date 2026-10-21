@@ -4076,8 +4076,9 @@ sovereignJobs:
           value: "sovereign-tenants"
         - name: ADMIN_GROUP
           value: "sovereign-admin"
+        # acme-corp's access groups are /acme-corp/<rbac> (Rbac objects, demo seed); no flat acme-corp-* groups (F-31)
         - name: EXTRA_GROUPS
-          value: '[{"name":"acme-corp-platform-engineering-admins"},{"name":"acme-corp-platform-engineering-editors"},{"name":"acme-corp-platform-engineering-viewers"},{"name":"acme-corp-platform-ops-admins"},{"name":"acme-corp-platform-ops-editors"},{"name":"acme-corp-platform-ops-viewers"},{"name":"acme-corp-assignment-admins"},{"name":"acme-corp-developers"},{"name":"acme-corp-platform-viewers"},{"name":"acme-corp-devops"}]'
+          value: '[]'
     # shc (design/P7-PLAN.md §12.20): openshift-services' entity-groups mapper puts the user's roles of that client into
     # the groups claim; the Entity job gives each Rbac CR's Keycloak group the client role <entity>.<rbac> and binds that
     # group in the entity namespace (Keycloak group paths contain "/", which OpenShift group names can't).
@@ -4664,7 +4665,7 @@ sovereignJobs:
         - name: VAULT_ADDR
           value: "http://vault-active.central-vault.svc:8200"
         - name: RUN_ID
-          value: "2026-06-24-fix-keycloak-test-users"
+          value: "2026-10-21-ux-h1-acme-access-groups"
         - name: KEYCLOAK_CENTRAL_URL
           value: "https://rhbk-central.apps.central.shc.signal9.gg"
         - name: KEYCLOAK_SERVICES_URL
@@ -4715,13 +4716,14 @@ sovereignJobs:
     operatorSamples:
       enabled: true  # shc: P4 (services cluster) enabled
       playbook: operator-samples.yml
-      activeDeadlineSeconds: 900
+      # the acme-corp demo waits for its access groups to be ready (up to 10 minutes)
+      activeDeadlineSeconds: 1800
       syncWave: "45"
       env:
         - name: OCP_SERVICES_SERVER
           value: "https://api.services.shc.signal9.gg:6443"
         - name: RUN_ID
-          value: "3"
+          value: "4"
 
     # ─── Quay Central Config: init admin + store in Vault + configure OIDC ──────
     quayCentralConfig:
