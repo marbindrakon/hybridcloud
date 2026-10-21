@@ -175,6 +175,14 @@
             Projects={{ assignment_projects | length }},
             Openshift={{ assignment_openshift }}(ready={{ openshift_is_ready }})
 
+    # the Team's access fields reach this Assignment and its Projects: refresh the Team's scope roles
+    - name: Wake the Team (and a Team this Assignment named before)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_assignment_teams.yml"
+      vars:
+        wat_namespace: "{{ assignment_cr_namespace }}"
+        wat_assignment: "{{ assignment_cr_name }}"
+        wat_team: "{{ assignment_team }}"
+
   rescue:
     - name: Mark Assignment as failed on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

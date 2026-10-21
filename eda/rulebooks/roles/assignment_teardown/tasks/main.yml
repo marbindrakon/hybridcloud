@@ -23,6 +23,14 @@
         namespace: "{{ assignment_cr_namespace }}"
       register: assignment_cr_lookup
 
+    # the Assignment is going away: the Teams that reach it through their access fields drop it
+    - name: Wake the Teams whose access reaches this Assignment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_assignment_teams.yml"
+      vars:
+        wat_namespace: "{{ assignment_cr_namespace }}"
+        wat_assignment: "{{ assignment_cr_name }}"
+        wat_team: "{{ (shc_live_spec | default({}, true)).team | default('', true) }}"
+
     - name: Derive ACM policy name from Assignment CR name (unique per cluster)
       ansible.builtin.set_fact:
         delete_acm_policy_name: "{{ assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}"
