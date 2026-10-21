@@ -18,7 +18,7 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes crds crds-check replay
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes crds crds-check replay sar-matrix
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -60,4 +60,8 @@ replay:
 	@test -n "$(OBJECTS)" || { echo "usage: make replay OBJECTS=<dir> [BASELINE_CRDS=<dir>] [REPLAY_BACKEND=envtest|kind]"; exit 2; }
 	python3 -I tests/schema-replay/replay.py --objects $(OBJECTS) --crds operator/primary/helm/templates/crds.yaml \
 	  --backend $(REPLAY_BACKEND) $(if $(BASELINE_CRDS),--baseline-crds $(BASELINE_CRDS))
+# SAR matrix (tests/rbac-access/README.md) against the current KUBECONFIG: ENTITY = a tenant, PROFILE optional
+sar-matrix:
+	@test -n "$(ENTITY)" || { echo "usage: make sar-matrix ENTITY=<tenant> [PROFILE=generated|negative|automation]"; exit 2; }
+	python3 -I tests/rbac-access/sar_matrix.py --entity $(ENTITY) $(if $(PROFILE),--profile $(PROFILE))
 # --- end be-foundations ---

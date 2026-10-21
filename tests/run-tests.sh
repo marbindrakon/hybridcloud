@@ -167,7 +167,7 @@ print_manual_gates() {
             Follow tests/functional/README.md (TC-F001–F010)
 
   GATE-M03  RBAC matrix
-            Follow tests/rbac-access/README.md (TC-RBAC-001–008)
+            python3 -I tests/rbac-access/sar_matrix.py --entity <tenant>  (tests/rbac-access/README.md)
 
   GATE-M04  Cluster connectivity
             Follow tests/connectivity/README.md (TC-CONN-001–015)
