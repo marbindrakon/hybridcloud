@@ -129,23 +129,41 @@ ops:
     labVaultAddr: ""
     minTTLDays: 7
     schedule: "15 6 * * *"
-  # Dispatch re-drive and stall detection (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md): only on the
-  # cluster that holds the hybridsovereign.redhat CRs (services). Failures surface as ShcBackupJobFailed.
-  edaRedrive:
+  # Tenancy health (files/shc_tenancy.py), on the cluster that holds the hybridsovereign.redhat CRs:
+  # dispatch re-drive, the tenants' ControllerAvailable/DeliveryStalled conditions, status.phase backfill
+  # and a slow re-check of failed objects of kinds without a periodic re-run. Problems surface as
+  # ShcBackupJobFailed; the tenant controllers also have their own alerts (ShcTenantController*).
+  shcTenancy:
     enabled: false
     schedule: "*/5 * * * *"
     # python3 + kubernetes client + PyYAML
     image: quay.signal9.gg/shc/ansible-runner:latest
     config:
-      ackTimeoutMinutes: 10
-      jobTimeoutMinutes: 30
-      publishFailedMinutes: 15
-      maxRedrives: 3
-      # kinds whose EDA roles are idempotent (create-if-absent); others are only reported
-      redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment]
-      kinds:
-        PlatformOpenshift: {jobTimeoutMinutes: 150}
-        CloudOSO: {jobTimeoutMinutes: 150}
+      redrive:
+        ackTimeoutMinutes: 10
+        jobTimeoutMinutes: 30
+        publishFailedMinutes: 15
+        maxRedrives: 3
+        # kinds whose jobs are idempotent (create-if-absent); others are only reported
+        redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment]
+        kinds:
+          PlatformOpenshift: {jobTimeoutMinutes: 150}
+          CloudOSO: {jobTimeoutMinutes: 150}
+      tenancy:
+        unavailableMinutes: 2
+        restartWindowMinutes: 15
+        restartThreshold: 3
+        deliveryStalledMinutes: 15
+      # write: false only reports the objects whose stored phase differs
+      phase:
+        write: false
+      failedRecheck:
+        enabled: true
+        intervalMinutes: 30
+        maxRechecks: 6
+  # Former name of shcTenancy (its config = shcTenancy.config.redrive); read for one release.
+  edaRedrive:
+    enabled: false
   # Tenant cloud orphan check (LAB-PLAN §11.6 phase D, design/TENANT-TEARDOWN.md §3.5): report-only,
   # on the cluster that holds the CloudOSO/PlatformOpenshift CRs (services). Findings fail the job
   # (ShcBackupJobFailed). Scope: the tenant Keystone domain and the tenant DNS zone.

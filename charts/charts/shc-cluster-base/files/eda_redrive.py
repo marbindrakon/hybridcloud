@@ -5,8 +5,8 @@ shc LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.4. Runs as a CronJob on th
 hybridsovereign.redhat CRs. For every CR that is not ready:
 
 - published (status.delivery.publishedAt) but not acknowledged by an EDA job within ackTimeoutMinutes:
-  annotate reconcileNow=true, or redeliver=true for a CR being deleted (the operator re-publishes with
-  a new eventId), at most maxRedrives
+  annotate reconcileNow=<RFC 3339 time> (Retry now: any new value is a request), or redeliver=true for a
+  CR being deleted (the operator re-publishes with a new eventId), at most maxRedrives
   times, and only for kinds in redriveKinds; otherwise status.delivery.state=NoAcknowledgement
 - acknowledged but not completed within the kind's jobTimeoutMinutes: status.delivery.state=Stalled
   (never re-driven: the job may still be changing things)
@@ -17,6 +17,7 @@ Exits 1 while any CR is NoAcknowledgement, Stalled or PublishFailed, so the plat
 fires. Events from operators without eventId support carry no status.delivery and are skipped.
 
 usage: eda_redrive.py [--config FILE] [--dry-run]
+The logic is run_redrive(); shc_tenancy.py imports it (this entry point is kept for one release).
 """
 import argparse
 import datetime as dt
@@ -54,42 +55,54 @@ def minutes_since(value, now):
     return (now - t).total_seconds() / 60 if t else None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="/etc/eda-redrive/config.yaml")
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
-
+def load_config(path):
     cfg = dict(DEFAULTS)
     try:
-        with open(args.config) as f:
+        with open(path) as f:
             cfg.update(yaml.safe_load(f) or {})
     except FileNotFoundError:
         pass
+    return cfg
 
+
+def connect():
     try:
         config.load_incluster_config()
     except config.ConfigException:
         config.load_kube_config()
-    crds = client.ApiextensionsV1Api().list_custom_resource_definition().items
-    api = client.CustomObjectsApi()
-    now = dt.datetime.now(dt.timezone.utc)
+    return client.CustomObjectsApi()
+
+
+def collect(api):
+    """Every namespaced kind of the group with its CRs: [{kind, plural, version, items}]."""
+    out = []
+    for crd in client.ApiextensionsV1Api().list_custom_resource_definition().items:
+        if crd.spec.group != GROUP or crd.spec.scope != "Namespaced":
+            continue
+        version = next(v.name for v in crd.spec.versions if v.storage)
+        out.append({"kind": crd.spec.names.kind, "plural": crd.spec.names.plural, "version": version,
+                    "labels": dict(crd.metadata.labels or {}),
+                    "items": api.list_cluster_custom_object(GROUP, version, crd.spec.names.plural).get("items", [])})
+    return out
+
+
+def run_redrive(api, kinds, cfg, now, dry_run):
+    """Pass over every CR: re-drive unacknowledged events, mark stalled jobs. Returns (counts, problems)."""
+    cfg = dict(DEFAULTS, **(cfg or {}))
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    args = argparse.Namespace(dry_run=dry_run)
 
     counts = {"crs": 0, "notReady": 0, "published": 0, "acknowledged": 0, "redriven": 0,
               "noAcknowledgement": 0, "stalled": 0, "publishFailed": 0, "legacy": 0}
     problems = []
 
-    for crd in crds:
-        if crd.spec.group != GROUP or crd.spec.scope != "Namespaced":
-            continue
-        version = next(v.name for v in crd.spec.versions if v.storage)
-        plural, kind = crd.spec.names.plural, crd.spec.names.kind
+    for k in kinds:
+        version, plural, kind = k["version"], k["plural"], k["kind"]
         kcfg = cfg["kinds"].get(kind, {})
         job_timeout = kcfg.get("jobTimeoutMinutes", cfg["jobTimeoutMinutes"])
         may_redrive = kind in cfg["redriveKinds"] and kcfg.get("redrive", True)
 
-        for cr in api.list_cluster_custom_object(GROUP, version, plural).get("items", []):
+        for cr in k["items"]:
             counts["crs"] += 1
             meta, status = cr["metadata"], cr.get("status") or {}
             ns, name = meta["namespace"], meta["name"]
@@ -156,7 +169,7 @@ def main():
                 print(f"redrive {ref}: event {event_id} unacknowledged for {age:.0f} min "
                       f"(redrive {redrives + 1}/{cfg['maxRedrives']})")
                 trigger = REDELIVER if meta.get("deletionTimestamp") else RECONCILE_NOW
-                patch_annotations({trigger: "true", REDRIVES: str(redrives + 1)})
+                patch_annotations({trigger: stamp if trigger == RECONCILE_NOW else "true", REDRIVES: str(redrives + 1)})
             else:
                 counts["noAcknowledgement"] += 1
                 why = "redrive disabled for this kind" if not may_redrive else f"{redrives} redrives"
@@ -164,7 +177,19 @@ def main():
                 if delivery.get("state") != "NoAcknowledgement":
                     patch_status({"state": "NoAcknowledgement", "stateSince": stamp})
 
-    print(json.dumps({"time": stamp, "dryRun": args.dry_run, **counts}))
+    return counts, problems
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="/etc/eda-redrive/config.yaml")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+    cfg = load_config(args.config)
+    api = connect()
+    now = dt.datetime.now(dt.timezone.utc)
+    counts, problems = run_redrive(api, collect(api), cfg, now, args.dry_run)
+    print(json.dumps({"time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "dryRun": args.dry_run, **counts}))
     for p in problems:
         print("PROBLEM", p)
     return 1 if problems else 0

@@ -306,20 +306,30 @@ spec:
                 seccompProfile: {type: RuntimeDefault}
 {{- end }}
 
-{{- if $o.edaRedrive.enabled }}
-{{- $r := $o.edaRedrive }}
+{{- /* ops.shcTenancy; the former ops.edaRedrive block is read as its redrive section for one release */}}
+{{- $t := $o.shcTenancy | default dict }}
+{{- $legacy := $o.edaRedrive | default dict }}
+{{- if or $t.enabled $legacy.enabled }}
+{{- $cfg := deepCopy ($t.config | default dict) }}
+{{- if $legacy.enabled }}
+{{- $_ := set $cfg "redrive" (mergeOverwrite (deepCopy ($cfg.redrive | default dict)) (deepCopy ($legacy.config | default dict))) }}
+{{- end }}
+{{- $image := $t.image | default $legacy.image }}
+{{- $schedule := $t.schedule | default $legacy.schedule | default "*/5 * * * *" }}
+{{- $files := printf "%s%s%s%s%s" ($.Files.Get "files/shc_tenancy.py") ($.Files.Get "files/eda_redrive.py") ($.Files.Get "files/shc_status.py") ($.Files.Get "files/shc_status_reasons.py") (toYaml $cfg) }}
 ---
-# Dispatch re-drive and stall detection (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.4): files/eda_redrive.py
+# Tenancy health (files/shc_tenancy.py): dispatch re-drive and stall detection, the tenants'
+# ControllerAvailable/DeliveryStalled conditions, status.phase backfill, slow re-check of failed objects.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: eda-redrive
+  name: shc-tenancy
   namespace: {{ $o.namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: shc-ops-eda-redrive
+  name: shc-ops-shc-tenancy
 rules:
   - apiGroups: [apiextensions.k8s.io]
     resources: [customresourcedefinitions]
@@ -330,38 +340,51 @@ rules:
   - apiGroups: [hybridsovereign.redhat]
     resources: ["*/status"]
     verbs: [patch]
+  # the tenants' namespace operators (ControllerAvailable)
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: shc-ops-eda-redrive
+  name: shc-ops-shc-tenancy
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: shc-ops-eda-redrive
+  name: shc-ops-shc-tenancy
 subjects:
   - kind: ServiceAccount
-    name: eda-redrive
+    name: shc-tenancy
     namespace: {{ $o.namespace }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: eda-redrive
+  name: shc-tenancy
   namespace: {{ $o.namespace }}
 data:
+  shc_tenancy.py: |
+    {{- $.Files.Get "files/shc_tenancy.py" | nindent 4 }}
   eda_redrive.py: |
     {{- $.Files.Get "files/eda_redrive.py" | nindent 4 }}
+  shc_status.py: |
+    {{- $.Files.Get "files/shc_status.py" | nindent 4 }}
+  shc_status_reasons.py: |
+    {{- $.Files.Get "files/shc_status_reasons.py" | nindent 4 }}
   config.yaml: |
-    {{- toYaml $r.config | nindent 4 }}
+    {{- toYaml $cfg | nindent 4 }}
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: eda-redrive
+  name: shc-tenancy
   namespace: {{ $o.namespace }}
 spec:
-  schedule: {{ $r.schedule | quote }}
+  schedule: {{ $schedule | quote }}
   timeZone: Etc/UTC
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
@@ -373,23 +396,26 @@ spec:
       template:
         metadata:
           annotations:
-            # the script and its config come from the ConfigMap; restart-free updates
-            shc/config-hash: {{ printf "%s%s" ($.Files.Get "files/eda_redrive.py") (toYaml $r.config) | sha256sum | trunc 16 | quote }}
+            # the scripts and their config come from the ConfigMap; restart-free updates
+            shc/config-hash: {{ $files | sha256sum | trunc 16 | quote }}
         spec:
-          serviceAccountName: eda-redrive
+          serviceAccountName: shc-tenancy
           restartPolicy: Never
           containers:
-            - name: redrive
-              image: {{ $r.image }}
-              command: [python3, /etc/eda-redrive/eda_redrive.py, --config, /etc/eda-redrive/config.yaml]
+            - name: tenancy
+              image: {{ $image }}
+              command: [python3, /etc/shc-tenancy/shc_tenancy.py, --config, /etc/shc-tenancy/config.yaml]
+              env:
+                - name: PYTHONPATH
+                  value: /etc/shc-tenancy
               volumeMounts:
                 - name: config
-                  mountPath: /etc/eda-redrive
+                  mountPath: /etc/shc-tenancy
                   readOnly: true
           volumes:
             - name: config
               configMap:
-                name: eda-redrive
+                name: shc-tenancy
 {{- end }}
 
 {{- if $o.tenantOrphanCheck.enabled }}
@@ -566,6 +592,26 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   groups:
+    - name: shc-tenancy
+      rules:
+        - alert: ShcTenantControllerUnavailable
+          expr: >-
+            max by (namespace) (kube_deployment_status_replicas_available{namespace=~"entity-.*", deployment="hybridsovereign-namespace-operator"}) == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ "{{" }} $labels.namespace {{ "}}" }}: the tenant controller has no available replica"
+            description: "Changes in this tenant are not processed. Check the hybridsovereign-namespace-operator Deployment and its pod events."
+        - alert: ShcTenantControllerRestarting
+          expr: >-
+            max by (namespace) (increase(kube_pod_container_status_restarts_total{namespace=~"entity-.*", pod=~"hybridsovereign-namespace-operator-.*"}[15m])) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{" }} $labels.namespace {{ "}}" }}: the tenant controller keeps restarting"
+            description: "The namespace operator restarted more than 3 times in 15 minutes (probes, memory). Check its last termination reason."
     - name: shc-ops-jobs
       rules:
         - alert: ShcBackupJobFailed
