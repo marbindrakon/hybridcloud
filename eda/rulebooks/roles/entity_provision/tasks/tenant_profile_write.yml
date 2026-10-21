@@ -34,3 +34,14 @@
     validate_certs: "{{ services_validate_certs | default(true) | bool }}"
     status_code: [200]
   register: _tp_write
+  # The request carries the services API token in a header, which the uri module does not mask: keep the whole
+  # result out of the job output and report only the HTTP status and the API's message below.
+  no_log: true
+  failed_when: false
+
+- name: Fail when the tenant profile's status was not written
+  ansible.builtin.fail:
+    msg: >-
+      Writing TenantProfile {{ entity_namespace }}/shc status failed (HTTP {{ _tp_write.status | default('?') }}):
+      {{ (_tp_write.json | default({}, true)).message | default(_tp_write.msg | default(''), true) }}
+  when: (_tp_write.status | default(-1)) != 200

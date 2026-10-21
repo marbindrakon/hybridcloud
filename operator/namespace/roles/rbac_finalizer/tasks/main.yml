@@ -28,7 +28,8 @@
     rbac_delete_event_note: >-
       {{
         {
-          'config': (_hybridsovereign_redhat_rbac.spec.config | default('')),
+          'config': ((_hybridsovereign_redhat_rbac.status | default({}, true)).config
+                     | default(_hybridsovereign_redhat_rbac.spec.config | default(''), true)),
           'name': (_hybridsovereign_redhat_rbac.spec.name | default(''))
         } | to_json
       }}

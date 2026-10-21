@@ -16,6 +16,7 @@
       vars:
         resolve_config_kind: AAPConfig
         resolve_config_name: "{{ aaporg_spec.aapConfig | default('') }}"
+        resolve_config_recorded: "{{ (_hybridsovereign_redhat_aaporg.status | default({}, true)).config | default('', true) }}"
         resolve_config_namespace: sovereign-cloud-plugins
 
     - name: Use the resolved automation connection

@@ -1,6 +1,5 @@
 # An access group (Rbac). Members sign in with the group example-corp.example-network-team; the platform team
-# adds people to example-corp/example-network-team in the sign-in directory. spec.config names the platform's
-# identity provider connection: ask the platform team for its name.
+# adds people to example-corp/example-network-team in the sign-in directory.
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: Rbac
@@ -8,5 +7,4 @@ metadata:
   name: example-network-team
   namespace: entity-example-corp
 spec:
-  config: example-identity
   description: People who build Example Corp's networks and VM environments.

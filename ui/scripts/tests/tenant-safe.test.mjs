@@ -94,3 +94,41 @@ test('transformBody: filtered paths, watch refused, other paths untouched', () =
   const statusBody = { kind: 'Status', code: 404 };
   assert.equal(m.transformBody(`${base}/namespaces/entity-t1/cloudosos/nope`, statusBody, {}), statusBody);
 });
+
+test('transformBody: filters by object kind on paths it does not recognise', () => {
+  const base = '/apis/hybridsovereign.redhat/v1alpha1';
+  // encoded, doubled or trailing-slash spellings normalise to the filtered path
+  for (const p of [`${base}/namespaces/entity-t1/cloud%6Fsos/env1`, `${base}//namespaces/entity-t1/cloudosos/`, `${base}/namespaces/entity-t1/cloudosos/env1/`]) {
+    assert.equal(m.filteredKindForPath(p), 'CloudOSO', p);
+  }
+  assert.equal(m.filteredKindForPath(`${base}/namespaces/x/cloudosos%2Fenv1`), null);
+  // an unknown path still filters the object by its own kind
+  const one = m.transformBody('/apis/other/v1/things', cloudoso(), {});
+  assert.deepEqual(secretKeys(one), []);
+  const list = m.transformBody('/apis/other/v1/things', { kind: 'PlatformOpenshiftList', items: [platform()] }, {});
+  assert.deepEqual(secretKeys(list), []);
+  // a generic List with mixed items: each item by its own kind
+  const virt = { kind: 'CloudVirt', status: { someVaultPath: 'x' } };
+  const mixed = m.transformBody('/apis/other/v1/things', { kind: 'List', items: [cloudoso(), virt, platform()] }, {});
+  assert.deepEqual(secretKeys(mixed.items[0]), []);
+  assert.deepEqual(secretKeys(mixed.items[2]), []);
+  assert.equal(mixed.items[1], virt);
+  // items without a kind on a filtered path use the path's kind
+  const bare = cloudoso();
+  delete bare.kind;
+  const byPath = m.transformBody(`${base}/cloudosos`, { kind: 'CloudOSOList', items: [bare] }, {});
+  assert.deepEqual(secretKeys(byPath), []);
+});
+
+test('transformBody: watch events are filtered by the object kind', () => {
+  for (const type of ['ADDED', 'MODIFIED', 'DELETED']) {
+    const ev = m.transformBody('/apis/other/v1/things?watch=1', { type, object: cloudoso() }, {});
+    assert.equal(ev.type, type);
+    assert.deepEqual(secretKeys(ev), []);
+    assert.equal(ev.object.status.projectId, 'p1');
+  }
+  const err = { type: 'ERROR', object: { kind: 'Status', code: 410 } };
+  assert.deepEqual(m.transformBody('/apis/other/v1/things?watch=1', err, {}), err);
+  const virt = { type: 'ADDED', object: { kind: 'CloudVirt', status: { someVaultPath: 'x' } } };
+  assert.deepEqual(m.transformBody('/apis/other/v1/things?watch=1', virt, {}), virt);
+});

@@ -431,7 +431,7 @@
     "advanced": "Advanced",
     "connection": "Connection",
     "connectionDefault": "The platform's default connection",
-    "connectionHelp": "Optional. When empty the platform uses its default connection; the one used is shown on the object.",
+    "connectionHelp": "Optional. When empty the platform's default connection is used and kept, even if the default changes later; the one used is shown on the object.",
     "awsSite": "AWS site",
     "gcpSite": "Google Cloud site",
     "awsAccountAssigned": "The platform assigns the AWS account of this environment.",

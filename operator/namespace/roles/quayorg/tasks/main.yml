@@ -16,6 +16,7 @@
       vars:
         resolve_config_kind: QuayConfig
         resolve_config_name: "{{ quayorg_spec.quayConfig | default('') }}"
+        resolve_config_recorded: "{{ (_hybridsovereign_redhat_quayorg.status | default({}, true)).config | default('', true) }}"
         resolve_config_namespace: sovereign-cloud-plugins
 
     - name: Use the resolved registry connection
