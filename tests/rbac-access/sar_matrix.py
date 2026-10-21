@@ -206,7 +206,7 @@ def expand_cases(cases, entity, other, ns_rbac, kinds, source):
 def load_cases(profiles):
     out = {}
     for f in sorted((HERE / "cases").glob("*.yaml")):
-        if profiles and f.stem not in profiles:
+        if profiles is not None and f.stem not in profiles:
             continue
         out[f.stem] = yaml.safe_load(f.read_text()) or []
     return out
