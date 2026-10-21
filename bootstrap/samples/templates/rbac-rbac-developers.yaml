@@ -1,9 +1,0 @@
-{{- if .Values.samples.rbac.rbac_developers.enabled }}
-apiVersion: hybridsovereign.redhat/v1alpha1
-kind: Rbac
-metadata:
-  name: developers
-  namespace: entity-acme-corp
-spec:
-  config: keycloak-sovereign-tenants-services
-{{- end }}

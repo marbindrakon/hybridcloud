@@ -1,0 +1,13 @@
+# A KV secrets engine (VaultKV) in the Vault example-vault, with access for two access groups.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: VaultKV
+metadata:
+  name: example-kv
+  namespace: entity-example-corp
+spec:
+  vault: example-vault
+  vaultAdminRbac:
+    - example-admins
+  vaultDeveloperRbac:
+    - example-developers

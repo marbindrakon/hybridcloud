@@ -1,0 +1,14 @@
+# An AAP organization (AAPOrg). spec.aapConfig names the platform's automation connection: ask the
+# platform team for its name.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: AAPOrg
+metadata:
+  name: example-automation
+  namespace: entity-example-corp
+spec:
+  aapConfig: example-automation-connection
+  aapAdminRbac:
+    - example-admins
+  aapJobExecutorRbac:
+    - example-developers

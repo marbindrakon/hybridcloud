@@ -1,0 +1,18 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# A provider edge (ProviderEdge): where tenants' own routers connect, with one bearer.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: ProviderEdge
+metadata:
+  name: example-edge
+  namespace: sovereign-cloud
+spec:
+  fabricRef:
+    name: example-fabric
+  platform: frr
+  bearers:
+    - name: bearer-1
+      ceKinds:
+        - customer
+      description: Example bearer.

@@ -18,7 +18,7 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-content
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-content check-manifests
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -50,3 +50,8 @@ check-content:
 	python3 -I scripts/check-content.py --self-test
 	python3 -I scripts/check-content.py
 	python3 -I scripts/crd-descriptions.py lockstep
+
+# Strict server-side dry run of samples/ and the YAML in docs/ (nothing is created).
+# Needs KUBECONFIG (services), SAMPLES_NS (an existing tenant namespace) and optionally OC.
+check-manifests:
+	OC=$${OC:-oc} python3 -I scripts/check-manifests.py samples docs

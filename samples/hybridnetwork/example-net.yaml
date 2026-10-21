@@ -1,0 +1,12 @@
+# A network (HybridNetwork): a private address space that can span sites. Attach it to an
+# environment with a network placement.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: HybridNetwork
+metadata:
+  name: example-net
+  namespace: entity-example-corp
+spec:
+  description: Network of the example application.
+  prefixes:
+    - 10.20.0.0/16

@@ -1,0 +1,11 @@
+# An AWS environment (CloudAWS) on the site site-aws. Billable: an AWS account is assigned to the
+# tenant. The platform enters it with its own identity; the spec holds no keys.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudAWS
+metadata:
+  name: example-aws
+  namespace: entity-example-corp
+spec:
+  cloudRef:
+    name: site-aws
