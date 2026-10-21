@@ -1,0 +1,28 @@
+---
+# Which identity the EDA jobs get on the services cluster (eda/common/tasks/resolve_services_cluster_connection.yml).
+# Read-only; prints only services_identity and the SelfSubjectReview username, never a token.
+#   VAULT_ADDR=<central Vault> VAULT_TOKEN=<token that reads the central KV> \
+#     ansible-playbook -i localhost, -c local tests/rbac-access/whoami-services.yml [-e shc_services_identity=kubeadmin]
+- name: Services identity of the EDA jobs
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Resolve the services connection as a job does
+      ansible.builtin.include_tasks: ../../eda/common/tasks/resolve_services_cluster_connection.yml
+
+    - name: Ask the services cluster who the token is
+      ansible.builtin.uri:
+        url: "{{ services_api_host }}/apis/authentication.k8s.io/v1/selfsubjectreviews"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ services_bearer_token }}"
+        body_format: json
+        body: {apiVersion: authentication.k8s.io/v1, kind: SelfSubjectReview}
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        status_code: [200, 201]
+      register: whoami_review
+      no_log: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "services_identity={{ services_identity }} username={{ whoami_review.json.status.userInfo.username }}"
