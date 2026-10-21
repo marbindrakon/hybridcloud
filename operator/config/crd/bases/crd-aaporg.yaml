@@ -4,7 +4,6 @@ metadata:
   name: aaporgs.hybridsovereign.redhat
   labels:
     hybridsovereign.redhat/teardown-tier: "5"
-    {{- include "plugin-aap.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:

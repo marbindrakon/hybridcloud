@@ -211,7 +211,7 @@ run_unit_tests() {
 # --- be-foundations ---
 # ─── Phase 6: Repository consistency checks ──────────────────────────────────
 run_repo_checks() {
-  log_info "Repository consistency — EDA includes"
+  log_info "Repository consistency — EDA includes, generated CRDs"
   if ! require_cmd python3; then
     return
   fi
@@ -220,6 +220,12 @@ run_repo_checks() {
   else
     log_fail "EDA includes (scripts/check-includes.py)"
     grep MISSING /tmp/shc-check-includes.log | head -20 || true
+  fi
+  if (cd "${REPO_ROOT}" && python3 -I scripts/gen-crds.py --check) >/tmp/shc-gen-crds.log 2>&1; then
+    log_pass "crds.yaml generated from operator/config/crd/bases"
+  else
+    log_fail "crds.yaml drift (run python3 -I scripts/gen-crds.py)"
+    cat /tmp/shc-gen-crds.log
   fi
 }
 # --- end be-foundations ---

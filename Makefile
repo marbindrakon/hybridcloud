@@ -18,7 +18,7 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes crds crds-check
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -47,4 +47,10 @@ lint-all:
 # --- be-foundations ---
 check-includes:
 	python3 -I scripts/check-includes.py
+
+crds:
+	python3 -I scripts/gen-crds.py
+
+crds-check:
+	python3 -I scripts/gen-crds.py --check
 # --- end be-foundations ---
