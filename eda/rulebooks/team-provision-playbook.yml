@@ -6,6 +6,6 @@
   pre_tasks:
     # shc (§11.1): acknowledge the event, or end the job when a newer request superseded it
     - name: Acknowledge the event
-      ansible.builtin.include_tasks: common/tasks/acknowledge_event.yml
+      ansible.builtin.include_tasks: ../common/tasks/acknowledge_event.yml
   roles:
     - team_provision

@@ -18,7 +18,7 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-includes
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -43,3 +43,8 @@ lint-all:
 	@helm lint operator/primary/helm
 	@helm lint operator/namespace/helm
 	@helm lint iaac/helm
+
+# --- be-foundations ---
+check-includes:
+	python3 -I scripts/check-includes.py
+# --- end be-foundations ---

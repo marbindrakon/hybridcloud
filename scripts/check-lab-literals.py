@@ -14,7 +14,6 @@ from pathlib import Path
 SCOPE = [
     "eda/rulebooks/*.yml",
     "eda/common/tasks/*.yml",
-    "eda/rulebooks/common/tasks/*.yml",
     "aap-config/**/*.yml",
     # §11.6 phase C: tenant cloud roles (the OpenStack path of PlatformOpenshift provision)
     "eda/common/files/*.py",

@@ -208,6 +208,22 @@ run_unit_tests() {
   fi
 }
 
+# --- be-foundations ---
+# ─── Phase 6: Repository consistency checks ──────────────────────────────────
+run_repo_checks() {
+  log_info "Repository consistency — EDA includes"
+  if ! require_cmd python3; then
+    return
+  fi
+  if (cd "${REPO_ROOT}" && python3 -I scripts/check-includes.py) >/tmp/shc-check-includes.log 2>&1; then
+    log_pass "EDA includes resolve ($(tail -1 /tmp/shc-check-includes.log))"
+  else
+    log_fail "EDA includes (scripts/check-includes.py)"
+    grep MISSING /tmp/shc-check-includes.log | head -20 || true
+  fi
+}
+# --- end be-foundations ---
+
 main() {
   echo "Hybrid Sovereign Test Runner"
   echo "Repository: ${REPO_ROOT}"
@@ -223,6 +239,8 @@ main() {
   run_script_permissions
   echo ""
   run_unit_tests
+  echo ""
+  run_repo_checks
   echo ""
   print_manual_gates
   echo ""
