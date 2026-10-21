@@ -2143,7 +2143,9 @@ export function createK8sHandlers(apiServer) {
           "application/merge-patch+json",
         );
         if (resp.status >= 400) return sendUpstreamError(res, resp, { kind, verb: "patch", namespace, name });
-        res.json({ message: "Annotation patched", resource: resp.body });
+        // The PATCH answer is the whole object: CloudOSO / PlatformOpenshift go through the tenant
+        // status allow-list and hidden-spec strip like every other curated route.
+        res.json({ message: "Annotation patched", resource: tenantSafe(kind, resp.body) });
       } catch (err) {
         console.error("patchAnnotation error:", err.message);
         sendUpstreamError(res, err);
