@@ -31,10 +31,14 @@
         {%- if caps.dns | default(false) | bool -%}{%- set _ = c.append('DNS') -%}{%- endif -%}
         {%- set sc = [] -%}
         {%- for s in (site.storageClasses | default([], true)) if type == 'openshift' -%}
-          {%- if s is mapping and (s.name | default('', true)) -%}{%- set _ = sc.append({'name': s.name | string, 'default': s.default | default(false) | bool}) -%}{%- endif -%}
+          {%- if s is mapping and (s.name | default('', true)) -%}
+            {%- set _ = sc.append({'name': s.name | string, 'default': s.default | default(false) | bool}) -%}
+          {%- endif -%}
         {%- endfor -%}
         {%- for s in (site.volumeTypes | default([], true)) if type == 'openstack' -%}
-          {%- if s is mapping and (s.name | default('', true)) -%}{%- set _ = sc.append({'name': s.name | string, 'default': s.default | default(false) | bool}) -%}{%- endif -%}
+          {%- if s is mapping and (s.name | default('', true)) -%}
+            {%- set _ = sc.append({'name': s.name | string, 'default': s.default | default(false) | bool}) -%}
+          {%- endif -%}
         {%- endfor -%}
         {%- set e = {'name': o.metadata.name, 'type': type, 'billable': regional,
                      'state': 'Available' if usable else 'Unavailable', 'capabilities': c} -%}

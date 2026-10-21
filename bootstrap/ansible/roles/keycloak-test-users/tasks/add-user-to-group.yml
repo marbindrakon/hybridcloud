@@ -2,7 +2,7 @@
 # Add the user to group_name. A name starting with "/" is a group path (/<tenant>/<access group>): the parent and
 # the child are created when missing (the access group job adopts an existing group). Any other name is a top-level
 # group looked up by exact name.
-- name: "Look up group {{ group_name }} in {{ test_user.realm }}"
+- name: "Look up the group by name {{ group_name }}"
   ansible.builtin.uri:
     url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/groups?search={{ group_name | urlencode }}&exact=true"
     method: GET
@@ -20,7 +20,7 @@
   vars:
     _parts: "{{ group_name.strip('/').split('/') }}"
   block:
-    - name: "Look up {{ group_name }} by path"
+    - name: "Look up the group by path {{ group_name }}"
       ansible.builtin.uri:
         url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/group-by-path/{{ _parts | map('urlencode') | join('/') }}"
         method: GET
@@ -30,7 +30,7 @@
         status_code: [200, 404]
       register: _path_lookup
 
-    - name: "Create {{ group_name }} when missing"
+    - name: "Create the missing group {{ group_name }}"
       when: _path_lookup.status == 404
       block:
         - name: "Look up the parent /{{ _parts[0] }}"
@@ -78,7 +78,7 @@
             validate_certs: false
             status_code: [201, 409]
 
-        - name: "Read {{ group_name }} again"
+        - name: "Read the created group {{ group_name }}"
           ansible.builtin.uri:
             url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/group-by-path/{{ _parts | map('urlencode') | join('/') }}"
             method: GET

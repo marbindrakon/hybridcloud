@@ -26,7 +26,7 @@
   ansible.builtin.include_vars:
     file: "{{ (shc_common_dir if shc_common_dir is defined else (role_path ~ '/../../../common')) ~ '/vars/scope_levels.yml' }}"
 
-- name: Render the scope Roles and RoleBindings of {{ sr_source.kind }}/{{ sr_source.name }}
+- name: Render the scope Roles and RoleBindings of {{ sr_source.kind ~ '/' ~ sr_source.name }}
   vars:
     _entity: "{{ sr_entity | default(sr_namespace | regex_replace('^entity-', ''), true) }}"
     _src_hash: "{{ (sr_source.name | hash('sha256'))[:16] }}"
