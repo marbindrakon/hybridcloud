@@ -53,6 +53,7 @@
     # resolvers for the cluster subnet (empty: the cloud's DHCP default)
     cb_external_dns: "{{ platformopenshift_defaults.externalDNS | default([]) }}"
 
+# the teardown derives the same list (eda/common/tasks/resolve_platformopenshift_paths.yml): change both
 - name: Record the Vault paths this cluster writes (install-config here, PushSecrets in the monitor)
   ansible.builtin.set_fact:
     cb_vault_paths:
@@ -196,10 +197,10 @@
       message: "OpenStack cluster build {{ cb_cluster_name }} in progress"
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
-        accountVaultPath: "{{ designate_admin_vault_path if (use_designate_dns | bool) else cb_route53_vault_path }}"
+        accountVaultPath: null
         projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
         records: "{{ cb_dns_records | default([]) }}"
-      vaultPaths: "{{ cb_vault_paths }}"
+      vaultPaths: null
 
 - name: Render build-values YAML to tempfile
   ansible.builtin.copy:

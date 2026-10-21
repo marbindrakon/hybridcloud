@@ -43,6 +43,7 @@
     cb_assume_role_arn: "arn:aws:iam::{{ aws_account }}:role/{{ cb_member_role }}"
     cb_assume_external_id: "shc-{{ aws_account }}"
 
+# the teardown derives the same list (eda/common/tasks/resolve_platformopenshift_paths.yml): change both
 - name: Record the Vault paths this cluster writes
   ansible.builtin.set_fact:
     cb_vault_paths:

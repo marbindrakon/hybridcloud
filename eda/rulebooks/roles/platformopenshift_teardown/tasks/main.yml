@@ -37,6 +37,13 @@
         namespace: "{{ platformopenshift_cr_namespace }}"
       register: po_cr
 
+    # Vault paths and the DNS account are derived from the cluster's identity (an object written before they left
+    # the status is read from its old keys)
+    - name: Resolve the cluster's Vault paths and DNS account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_platformopenshift_paths.yml"
+      vars:
+        rpp_cr: "{{ po_cr.resources | default([]) | first | default({}) }}"
+
     - name: Set platform type and recorded status facts
       vars:
         _st: "{{ (po_cr.resources | default([]) | first | default({})).status | default({}) }}"
@@ -45,7 +52,8 @@
         po_status_slug: "{{ _st.slug | default('') }}"
         po_status_domain: "{{ _st.domain | default('') }}"
         po_dns: "{{ _st.dns | default({}) }}"
-        po_vault_paths: "{{ _st.vaultPaths | default([]) }}"
+        po_vault_paths: "{{ rpp_vault_paths }}"
+        po_dns_account_vault_path: "{{ rpp_dns_account_vault_path }}"
         po_oidc_client_id: "{{ _st.oidcClientId | default('', true) | default(platformopenshift_cr_name ~ '-keycloak-oidc', true) }}"
         po_build_name: "{{ _st.buildName | default(platformopenshift_cr_name, true) }}"
         po_aws_account: "{{ _st.awsAccountId | default('', true) }}"
@@ -88,7 +96,7 @@
     - name: Tear down the recorded Route53 records (OpenStack)
       ansible.builtin.include_tasks: delete_dns_aws.yml
       vars:
-        r53_vault_path: "{{ po_dns.accountVaultPath }}"
+        r53_vault_path: "{{ po_dns_account_vault_path }}"
         r53_records: "{{ po_dns.records }}"
       when:
         - platform_type == "openstack"

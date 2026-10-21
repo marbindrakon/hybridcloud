@@ -1,0 +1,90 @@
+---
+# The Vault paths and the DNS account of an existing PlatformOpenshift, derived from the cluster's identity instead
+# of being read back from its status (the status keeps names and ids only; Vault paths are not part of the
+# tenant-readable record).
+#
+# Input:
+#   rpp_cr                   the PlatformOpenshift object (as read from the API)
+#   rpp_ignore_status_keys   true: never read the legacy status keys (vaultPaths, dns.accountVaultPath)
+# Uses services_api_host / services_bearer_token (the OpenStack environment's CloudOSO, for its DNS account).
+# Sets:
+#   rpp_vault_paths              the Vault paths the cluster build wrote (same formulas as
+#                                platformopenshift_provision tasks/{openstack_clusterbuild,aws_clusterbuild_facts,
+#                                gcp_clusterbuild_facts}.yml: change them together)
+#   rpp_dns_account_vault_path   the account of the recorded DNS records ('' when there are none)
+# Fails only when DNS records exist and their account cannot be told.
+- name: Derive the cluster's Vault paths
+  vars:
+    _cr: "{{ rpp_cr | default({}, true) }}"
+    _st: "{{ _cr.status | default({}, true) }}"
+    _spec: "{{ _cr.spec | default({}, true) }}"
+    _name: "{{ (_cr.metadata | default({})).name | default('') }}"
+    _type: "{{ _spec.type | default(_st.platformType | default(''), true) }}"
+    _build: "{{ _st.buildName | default(_name, true) }}"
+    _env: "{{ (_spec.openstack | default({}, true)).environment | default('', true) }}"
+    _use_status: "{{ not (rpp_ignore_status_keys | default(false) | bool) }}"
+    _derived: >-
+      {%- if _type == 'openstack' -%}
+        {{ ((['oso/projects/' ~ _env ~ '/clusters/' ~ _name ~ '/install-config'] if _env | length > 0 else [])
+            + ['admin-kubeconfig', 'admin-password', 'ssh-key', 'install-config'] | map('regex_replace', '^', 'cluster/oso/' ~ _name ~ '/') | list) }}
+      {%- elif _type == 'aws' -%}
+        {{ ['build/install-config', 'build/sa-signer', 'build/manifests', 'admin-kubeconfig', 'admin-password']
+           | map('regex_replace', '^', 'cluster/aws/' ~ _build ~ '/') | list }}
+      {%- elif _type == 'gcp' -%}
+        {{ ['build/install-config', 'build/sa-signer', 'build/manifests', 'build/provider-creds', 'admin-kubeconfig', 'admin-password']
+           | map('regex_replace', '^', 'cluster/gcp/' ~ _build ~ '/') | list }}
+      {%- else -%}[]{%- endif -%}
+  ansible.builtin.set_fact:
+    rpp_vault_paths: >-
+      {{ ((_st.vaultPaths | default([], true)) if _use_status | bool else []) | union(_derived) }}
+    rpp_status_dns_account: >-
+      {{ ((_st.dns | default({}, true)).accountVaultPath | default('', true)) if _use_status | bool else '' }}
+    rpp_dns: "{{ _st.dns | default({}, true) }}"
+    rpp_type: "{{ _type }}"
+    rpp_env: "{{ _env }}"
+    rpp_namespace: "{{ (_cr.metadata | default({})).namespace | default('') }}"
+
+- name: Read the OpenStack environment of the cluster
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: CloudOSO
+    name: "{{ rpp_env }}"
+    namespace: "{{ rpp_namespace }}"
+  register: _rpp_oso
+  when:
+    - rpp_type == 'openstack'
+    - rpp_status_dns_account | length == 0
+    - (rpp_dns.records | default([], true)) | length > 0
+    - rpp_env | length > 0
+
+- name: Resolve the environment's accounts
+  ansible.builtin.include_tasks: resolve_cloudoso_accounts.yml
+  vars:
+    rca_cr: "{{ _rpp_oso.resources[0] }}"
+  when:
+    - rpp_type == 'openstack'
+    - rpp_status_dns_account | length == 0
+    - (rpp_dns.records | default([], true)) | length > 0
+    - (_rpp_oso.resources | default([])) | length > 0
+
+- name: Set the DNS account of the recorded records
+  ansible.builtin.set_fact:
+    rpp_dns_account_vault_path: >-
+      {{ rpp_status_dns_account if rpp_status_dns_account | length > 0
+         else ('' if (rpp_dns.records | default([], true)) | length == 0 or rpp_type != 'openstack'
+               else ('' if (_rpp_oso.resources | default([])) | length == 0
+                     else ((rca_account_vault_path | default('')) if (rpp_dns.provider | default('')) == 'designate'
+                           else (rca_route53_vault_path | default(''))))) }}
+
+- name: Require the DNS account of recorded records
+  ansible.builtin.assert:
+    that: rpp_dns_account_vault_path | length > 0
+    fail_msg: >-
+      Cannot tell which DNS account holds this cluster's records (its OpenStack environment is gone); the platform
+      team must check it before the delete continues.
+  when:
+    - rpp_type == 'openstack'
+    - (rpp_dns.records | default([], true)) | length > 0

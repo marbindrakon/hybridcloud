@@ -32,7 +32,7 @@
       CloudGCP: [project, projectNumber, dnsZoneId]
       NetworkPlacement: [realization, l3Vni, l2Vni, namespaces]
       AttachmentCircuit: [realization, vlan, sessions]
-      PlatformOpenshift: [apiURL, clusterInstalled, provisionStatus, awsHelperName, kubeconfigVaultPath]
+      PlatformOpenshift: [apiURL, clusterInstalled, provisionStatus, awsHelperName, buildName, dns]
     teardown_unrealized_reasons:
       - SiteTypeMismatch
       - EntityNotAllowed

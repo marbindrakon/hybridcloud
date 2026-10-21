@@ -54,6 +54,7 @@
         hivePool: "{{ (gcp_real.hive | default({})).pool | default('shc-central') }}"
         hiveProvider: "{{ (gcp_real.hive | default({})).provider | default('central') }}"
 
+# the teardown derives the same list (eda/common/tasks/resolve_platformopenshift_paths.yml): change both
 - name: Record the Vault paths this cluster writes
   ansible.builtin.set_fact:
     cb_vault_paths:
