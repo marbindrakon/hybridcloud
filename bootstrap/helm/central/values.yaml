@@ -64,6 +64,33 @@ applicationsEnabled: true
 # ─── Services cluster (managed by central ArgoCD) ────────────────────────────
 servicesCluster:
   server: "https://api.services.shc.signal9.gg:6443"
+  # OD12a: the platform automation account on services (templates/servicesCluster/automation-access.yaml): ACM
+  # ManagedServiceAccount shc-automation, its kubeconfig in central Vault shc-automation/services. The EDA jobs use
+  # it instead of the kubeadmin login (eda/common/tasks/resolve_services_cluster_connection.yml). Rules = what the
+  # jobs do on services (static scan of the EDA tasks + an audit-log sample of the kube:admin calls, 2026-10-21):
+  # no clusterrolebindings, bind/escalate only on admin/edit/view (the account holds every permission its
+  # namespaced Roles grant, so creating them needs no escalate).
+  automation:
+    enabled: true
+    serviceAccount: shc-automation
+    tokenValidity: 168h
+    vaultKey: shc-automation/services
+    rules:
+      - {apiGroups: [hybridsovereign.redhat], resources: ["*"], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [""], resources: [namespaces], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [""], resources: [secrets, configmaps, services, serviceaccounts], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: ["", events.k8s.io], resources: [events], verbs: [get, list, watch, create, patch]}
+      - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
+      - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [route.openshift.io], resources: [routes], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [coordination.k8s.io], resources: [leases], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [rbac.authorization.k8s.io], resources: [roles, rolebindings], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], verbs: [bind, escalate], resourceNames: [admin, edit, view]}
+      - {apiGroups: [config.openshift.io], resources: [consoles], verbs: [get, list]}
+      - {apiGroups: [project.openshift.io], resources: [projects], verbs: [get, list]}
+      - {apiGroups: [authorization.k8s.io], resources: [subjectaccessreviews, selfsubjectaccessreviews], verbs: [create]}
+      - {apiGroups: [authentication.k8s.io], resources: [selfsubjectreviews], verbs: [create]}
 
 # ─── OCI registry that stores platform Helm charts ───────────────────────────
 oci:
