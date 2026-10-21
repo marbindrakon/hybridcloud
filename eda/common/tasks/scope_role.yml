@@ -10,6 +10,8 @@
 #   sr_grants     [{kind, names: [..], level: view|edit|admin (or verbs: [..]), group: <entity>.<rbac>}];
 #                 grants without names or group are skipped; [] removes every object of the source (teardown)
 #   sr_apply      default true; false = render only (sets sr_rendered and sr_objects, writes and deletes nothing)
+#   sr_annotations  default {}; extra annotations on every rendered object (the source's own bookkeeping, for
+#                 example the Assignments a Team's grants were derived from); they do not change the object names
 #   sr_entity     default: sr_namespace without the entity- prefix
 #   shc_common_dir  default <role_path>/../../../common (set it when the task runs outside a role)
 # Output:
@@ -60,9 +62,10 @@
       name: "{{ item.role }}"
       namespace: "{{ sr_namespace }}"
       labels: "{{ sr_source_labels }}"
-      annotations:
-        hybridsovereign.redhat/scope-source-name: "{{ sr_source.name }}"
-        hybridsovereign.redhat/scope: "{{ item.kind }}/{{ item.names | join(',') }} {{ item.level }} {{ item.group }}"
+      annotations: >-
+        {{ sr_annotations | default({}, true) | combine({
+             'hybridsovereign.redhat/scope-source-name': sr_source.name,
+             'hybridsovereign.redhat/scope': item.kind ~ '/' ~ (item.names | join(',')) ~ ' ' ~ item.level ~ ' ' ~ item.group}) }}
   ansible.builtin.set_fact:
     _sr_objects: >-
       {{ (_sr_objects | default([])) + [

@@ -168,6 +168,10 @@
           {{ out }}
 
   rescue:
+    # a key left out of the merge-patch keeps its last value: switch every stored capability off
+    - name: Every capability of the failed site is off
+      ansible.builtin.include_tasks: failed_capabilities.yml
+
     - name: Mark CloudInfrastructure failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
@@ -181,7 +185,7 @@
           ready: false
           message: "{{ _msg }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          capabilities: {evpn: false, api: false}
+          capabilities: "{{ _ci_failed_caps }}"
           conditions:
             - type: Ready
               status: "False"
@@ -197,7 +201,7 @@
         civ_before: "{{ shc_live_cr | default(cloudinfrastructure_cr_lookup.resources[0], true) }}"
         civ_after_status:
           status: failed
-          capabilities: {evpn: false, api: false}
+          capabilities: "{{ _ci_failed_caps }}"
         civ_check_generation: false
       when:
         - services_api_host is defined and services_bearer_token is defined

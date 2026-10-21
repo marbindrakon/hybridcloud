@@ -80,6 +80,10 @@
     sr_namespace: "{{ team_cr_namespace }}"
     sr_entity: "{{ team_entity }}"
     sr_source: {kind: Team, name: "{{ team_cr_name }}"}
+    # every Role of the Team lists the Assignments its grants were derived from, so a moved or deleted Assignment
+    # wakes this Team whatever fields it uses (common/tasks/wake_assignment_teams.yml)
+    sr_annotations:
+      hybridsovereign.redhat/scope-assignments: "{{ team_assignments | join(',') }}"
     sr_grants: >-
       {%- set out = [] -%}
       {%- for r in _ta_fields.admin if r in _ta_ready -%}

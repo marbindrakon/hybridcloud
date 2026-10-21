@@ -1,0 +1,68 @@
+---
+# One site of site-summary.yml's failed-runs play: ready -> failed run 1 -> failed run 2 with the role's own
+# failed_capabilities.yml and tenant_view.yml (tenant_view lists and nudges Entities only when the view changed, so
+# a steady result needs no cluster; a changed one fails at the Entity listing, "services_bearer_token is undefined").
+- name: Run 1 - the failure capabilities from the ready CR
+  ansible.builtin.include_role:
+    name: "{{ role_dir }}"
+    tasks_from: failed_capabilities.yml
+  vars:
+    shc_live_cr: "{{ ready_site }}"
+
+- name: Run 1 switches every stored capability off
+  ansible.builtin.assert:
+    that:
+      - _ci_failed_caps | dict2items | map(attribute='value') | unique | list == [false]
+      - (ready_site.status.capabilities.keys() | list) | difference(_ci_failed_caps.keys() | list) == []
+    fail_msg: "caps: {{ _ci_failed_caps | to_json }}"
+
+- name: The CR as run 1 leaves it (merge-patch)
+  ansible.builtin.set_fact:
+    _failed_once: >-
+      {{ ready_site | combine({'status': {'status': 'failed', 'ready': false, 'capabilities': _ci_failed_caps}},
+                              recursive=True) }}
+    # what the previous content wrote on failure: the probe-specific keys stay true in the stored map
+    _failed_once_legacy: >-
+      {{ ready_site | combine({'status': {'status': 'failed', 'ready': false,
+                                          'capabilities': {'evpn': false, 'api': false}}}, recursive=True) }}
+
+- name: Run 2 - the failure capabilities from the failed CR
+  ansible.builtin.include_role:
+    name: "{{ role_dir }}"
+    tasks_from: failed_capabilities.yml
+  vars:
+    shc_live_cr: "{{ _failed_once }}"
+
+- name: Run 2 - the tenants' view
+  ansible.builtin.include_role:
+    name: "{{ role_dir }}"
+    tasks_from: tenant_view.yml
+  vars:
+    cloudinfrastructure_cr_namespace: hybrid-sovereign
+    civ_before: "{{ _failed_once }}"
+    civ_after_status: {status: failed, capabilities: "{{ _ci_failed_caps }}"}
+    civ_check_generation: false
+
+- name: Run 2 changes nothing a tenant sees, and the failed site offers no capability
+  ansible.builtin.assert:
+    that:
+      - not (civ_changed | bool)
+      - site_tenant_summaries[0] == site_tenant_summaries[1]
+      - site_tenant_summaries[1].state == 'Unavailable'
+      - site_tenant_summaries[1].capabilities == []
+    fail_msg: "{{ site_tenant_summaries | to_nice_yaml }}"
+
+- name: A second failure after the previous content's first failure (virtualization or dns still stored true)
+  ansible.builtin.include_role:
+    name: "{{ role_dir }}"
+    tasks_from: tenant_view.yml
+  vars:
+    cloudinfrastructure_cr_namespace: hybrid-sovereign
+    civ_before: "{{ _failed_once_legacy }}"
+    civ_after_status: {status: failed, capabilities: {evpn: false, api: false}}
+    civ_check_generation: false
+
+- name: The merge-patch view of an unchanged failure body is steady
+  ansible.builtin.assert:
+    that: not (civ_changed | bool)
+    fail_msg: "{{ site_tenant_summaries | to_nice_yaml }}"
