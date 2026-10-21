@@ -9,7 +9,8 @@
 # never after deletionComplete; again when the last delete job finished without completing (failed) or
 # when the re-drive CronJob set the hybridsovereign.redhat/redeliver annotation, or on a new Retry-now request
 # (reconcileNow differs from status.lastHandledReconcileRequest; see reconcile_request.yml), which also resets
-# status.retry.
+# status.retry. After repeated failed teardown jobs (Stalled=True/TeardownFailed, counted by the status
+# library) the delete event is not published again until one of those two.
 - name: Read the CR before publishing a delete event
   kubernetes.core.k8s_info:
     api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -39,7 +40,11 @@
         {%- set d = st.delivery | default({}, true) -%}
         {%- set redeliver = (((_publish_cr.resources[0].metadata.annotations | default({}, true))['hybridsovereign.redhat/redeliver'] | default('')) == 'true')
                             or (reconcile_now | default(false) | bool) -%}
+        {%- set gave_up = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Stalled')
+                           | selectattr('status', 'equalto', 'True') | selectattr('reason', 'equalto', 'TeardownFailed')
+                           | list | length) > 0 -%}
         {{ (st.deletionComplete | default(false) | bool)
+           or ((not redeliver) and gave_up)
            or ((not redeliver) and (d.reason | default('')) == operator_event_reason
                and (d.publishedAt | default('', true)) != ''
                and (d.completedEventId | default('')) != (d.eventId | default('-'))) }}
