@@ -10,7 +10,8 @@ Reads docs/content/terms.yaml (the content contract) and checks
   d) lab knowledge in CRDs, samples, README and docs/ (the patterns of
      scripts/check-lab-literals.py plus the gitignored scripts/scrub-patterns.txt when present),
   e) one terms.yaml entry per CRD kind and the other way round,
-  f) generated blocks are current (the role table of docs/platform/onboard-a-tenant.md).
+  f) generated blocks are current (the role table of docs/platform/onboard-a-tenant.md, the
+     terms table of docs/tenant/glossary.md, the reasons table of docs/tenant/status-reasons.md).
 
 Output: `file:line: rule: excerpt`. Exit 1 on any error. The lint reads no Secret.
 
@@ -18,6 +19,7 @@ usage:
   check-content.py                 run every check
   check-content.py --self-test     check the rules against scripts/tests/check-content/
   check-content.py --write-baseline  record today's UI hits as accepted (the baseline only shrinks)
+  check-content.py --write-glossary  rewrite the generated terms table of docs/tenant/glossary.md
 """
 import argparse
 import ast
@@ -49,7 +51,13 @@ TENANT_DOCS = ["docs/tenant/**"]
 STATE_PREFIX = {"not-implemented": "Not implemented.", "deprecated": "Deprecated.",
                 "experimental": "Experimental."}
 FIELD_PATH = re.compile(r"\b(spec|status|metadata)(\.[A-Za-z0-9_\[\]]+)+")
-GENERATORS = [["scripts/gen-role-table.py", "--check"]]
+GENERATORS = [["scripts/gen-role-table.py", "--check"], ["scripts/gen-reason-table.py", "--check"]]
+GLOSSARY = ROOT / "docs/tenant/glossary.md"
+GLOSSARY_BEGIN, GLOSSARY_END = "<!-- terms:begin -->", "<!-- terms:end -->"
+CLOUDS = [("aws", "AWS"), ("gcp", "Google Cloud"), ("azure", "Azure"), ("openstack", "OpenStack"),
+          ("openshift", "OpenShift")]
+# Platform kinds a tenant meets (the rest of the platform kinds are not in the tenant glossary).
+GLOSSARY_PLATFORM_KINDS = ("Entity", "CloudInfrastructure")
 
 
 class Rule:
@@ -317,6 +325,64 @@ def check_docs(rep, rules, labs):
 # ------------------------------------------------------------------ f) generated blocks
 
 
+def _crd_names():
+    out = {}
+    for _, doc in _crd_docs():
+        n = doc["spec"]["names"]
+        out[n["kind"]] = n
+    return out
+
+
+def glossary_table(terms):
+    """The terms table of the glossary: one row per term a tenant meets, from terms.yaml (term,
+    analogy, note) and the CRDs (plural and short names for `oc get`)."""
+    names = _crd_names()
+    rows = ["| Term | In the API (`oc get ...`) | Comparable to | Note |", "|---|---|---|---|"]
+    for kind, e in terms["kinds"].items():
+        if e.get("state") in ("deprecated", "not-implemented"):
+            continue
+        if e.get("audience") != "tenant" and kind not in GLOSSARY_PLATFORM_KINDS:
+            continue
+        n = names.get(kind)
+        if n:
+            api = ", ".join(f"`{x}`" for x in [n["plural"], *(n.get("shortNames") or [])])
+            api = f"`{kind}`: {api}"
+        else:
+            api = f"`{kind}` (available with this release)"
+        like = "; ".join(f"{label}: {e['analogy'][key]}" for key, label in CLOUDS
+                         if key in (e.get("analogy") or {})) or "-"
+        note = " ".join(str(e.get("note", "")).split())
+        if e.get("state") == "experimental":
+            note = ("Experimental. " + note).strip()
+        if e.get("dense"):
+            note = (f"Short form: {e['dense']}. " + note).strip()
+        term = e["term"]
+        if e.get("first"):
+            term = f"{term} ({e['first']})"
+        rows.append(f"| {term} | {api} | {like} | {note or '-'} |")
+    return "\n".join(rows)
+
+
+def _glossary_render(terms):
+    text = GLOSSARY.read_text(encoding="utf-8")
+    if GLOSSARY_BEGIN not in text or GLOSSARY_END not in text:
+        return text, None
+    head, rest = text.split(GLOSSARY_BEGIN, 1)
+    _, tail = rest.split(GLOSSARY_END, 1)
+    return text, f"{head}{GLOSSARY_BEGIN}\n{glossary_table(terms)}\n{GLOSSARY_END}{tail}"
+
+
+def check_glossary(rep, terms):
+    if not GLOSSARY.exists():
+        return
+    text, new = _glossary_render(terms)
+    rel = GLOSSARY.relative_to(ROOT)
+    if new is None:
+        rep.error(rel, "generated block", f"markers {GLOSSARY_BEGIN} / {GLOSSARY_END} missing")
+    elif new != text:
+        rep.error(rel, "generated block out of date", "run check-content.py --write-glossary")
+
+
 def check_generated(rep):
     for cmd in GENERATORS:
         script = ROOT / cmd[0]
@@ -354,11 +420,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--write-glossary", action="store_true")
     ap.add_argument("--warnings", action="store_true", help="print warnings, not only a count")
     args = ap.parse_args()
     terms, rules, crd_rules = load_terms()
     if args.self_test:
         sys.exit(self_test(rules, crd_rules))
+    if args.write_glossary:
+        _, new = _glossary_render(terms)
+        if new is None:
+            sys.exit(f"{GLOSSARY.relative_to(ROOT)}: markers missing")
+        GLOSSARY.write_text(new, encoding="utf-8")
+        print(f"wrote the terms table of {GLOSSARY.relative_to(ROOT)}")
+        return
     rep = Report()
     labs = lab_patterns()
     check_ui(rep, rules)
@@ -369,6 +443,7 @@ def main():
     check_baseline(rep)
     check_docs(rep, rules, labs)
     check_generated(rep)
+    check_glossary(rep, terms)
     for e in rep.errors:
         print(e)
     if args.warnings:
