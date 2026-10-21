@@ -211,6 +211,9 @@
     ci_notes: "{{ ci_notes + [(ci_bgp_sessions | int - ci_bgp_established | int) ~ ' of ' ~ ci_bgp_sessions ~ ' fabric BGP sessions not Established'] }}"
   when: ci_bgp_established | int < ci_bgp_sessions | int
 
+- name: Read the site's way in for tenants (console URL, sign-in button)
+  ansible.builtin.include_tasks: openshift_wayin.yml
+
 - name: Set openshift result facts
   vars:
     _evpn: "{{ (ci_cno_frr | bool) and ci_cno_ra == 'Enabled' and (ci_bgp_established | int > 0) }}"
@@ -232,6 +235,8 @@
       version: "{{ ((_ci_cv.resources | first).status | default({})).desired.version | default('') }}"
       cluster: "{{ ci_ocp.clusterRef | default('local', true) }}"
       routeAdvertisements: "{{ ci_cno_ra }}"
+      console: "{{ ci_wayin.console | default('') }}"
+      signIn: "{{ {'clientId': ci_wayin.signIn.clientId | default(''), 'idpName': ci_wayin.signIn.idpName | default('') | trim} }}"
       # one expression: nested "{{ x | int }}" values come out as strings
       underlay: "{{ {'sessions': ci_bgp_sessions | int, 'established': ci_bgp_established | int, 'peers': ci_bgp_peers} }}"
     ci_type_message: >-

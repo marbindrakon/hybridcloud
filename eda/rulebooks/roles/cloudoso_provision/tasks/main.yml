@@ -83,6 +83,9 @@
     - name: Log VRF spec passthrough for future use
       ansible.builtin.include_tasks: vrf_passthrough.yml
 
+    - name: How tenants reach the environment (status.endpoints)
+      ansible.builtin.include_tasks: endpoints.yml
+
     - name: Get reconciliation timestamp
       ansible.builtin.set_fact:
         cloudoso_status_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -133,6 +136,7 @@
           vaultPaths: null
           # design/TENANT-DNS.md: the environment zone ({} without one)
           dns: "{{ oso_record.dns }}"
+          endpoints: "{{ oso_endpoints }}"
           conditions:
             - type: Ready
               status: "True"
