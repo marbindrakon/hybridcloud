@@ -67,6 +67,12 @@ spec:
                   type: string
                   maxLength: 128
                   description: Human-readable site name shown in consoles.
+                location:
+                  type: string
+                  maxLength: 128
+                  description: >-
+                    Where the site is, in words shown to tenants (for example a city or a data-centre
+                    name). Region-based sites (aws, gcp) use their region instead.
                 credentialsRef:
                   type: object
                   description: >-
