@@ -121,12 +121,18 @@ export interface TeamSpec {
     argo?: boolean;
     istio?: boolean;
   };
-  /**
-   * Rbac CR names in the tenant namespace. Members of the viewer Rbacs' groups
-   * (the admin Rbacs' when no viewer Rbac is set) can view the Team.
+  /*
+   * Access groups (Rbac names in the tenant namespace): the interim form of a
+   * resource-scoped role assignment, on the services cluster only (nothing on
+   * clusters; cluster access is the Assignment's toolRbac). The Team's Projects
+   * are the spec.projects of the Assignments that name the Team. The three lists
+   * can be changed only by users allowed to delete the Team.
    */
+  /** View and change this Team and its Projects; view its Assignments */
   teamAdmin?: string[];
+  /** View this Team; view and change its Projects */
   teamMemberRbac?: string[];
+  /** View this Team, its Assignments and its Projects */
   teamViewerRbac?: string[];
 }
 
@@ -152,7 +158,20 @@ export type Assignment = K8sResource<AssignmentSpec>;
 
 /** Project — entity-scoped project namespace */
 export interface ProjectSpec {
+  displayName?: string;
   description?: string;
+  /*
+   * Access groups (Rbac names in the tenant namespace): the interim form of a
+   * resource-scoped role assignment on this Project, on the services cluster
+   * only. Changes to the lists are accepted only from users allowed to delete
+   * the Project.
+   */
+  /** View, change and delete this Project, including its access lists */
+  projectAdmin?: string[];
+  /** View and change this Project (not its access lists) */
+  projectDeveloperRbac?: string[];
+  /** View this Project */
+  projectViewerRbac?: string[];
 }
 
 export type Project = K8sResource<ProjectSpec>;
@@ -282,6 +301,8 @@ export interface CloudInfrastructureSpec {
   /** Immutable; selects the typed section */
   type: CloudInfrastructureType;
   displayName?: string;
+  /** Where the site is, in words shown to tenants; aws and gcp sites use their region */
+  location?: string;
   credentialsRef?: VaultPathRef;
   /** Entities allowed to reference this site; empty means every Entity */
   entityRefs?: NameRef[];
