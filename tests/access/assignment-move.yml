@@ -1,0 +1,140 @@
+---
+# Unit test (no cluster) of the Team wake on an Assignment change (eda/common/tasks/wake_assignment_teams.yml) with
+# the Roles that eda/common/tasks/scope_role.yml renders for the Team's access fields.
+#   ansible-playbook -i localhost, -c local tests/access/assignment-move.yml
+# Case: Team alpha uses teamMemberRbac only (no Assignment-kind grant). Assignment dev moves from alpha to beta.
+# alpha must be woken, and its re-render must no longer hold the Project Role, so its prune removes it.
+- name: Assignment moves between Teams
+  hosts: localhost
+  gather_facts: false
+  vars:
+    shc_common_dir: "{{ playbook_dir }}/../../eda/common"
+    access_yml: "{{ playbook_dir }}/../../eda/rulebooks/roles/team_provision/tasks/access.yml"
+    stamp_key: hybridsovereign.redhat/scope-assignments
+    # the member grants of team_provision/tasks/access.yml
+    alpha_grants_with_dev:
+      - {kind: Team, names: [alpha], level: view, group: uxr-corp.uxr-devs}
+      - {kind: Project, names: [webshop], level: edit, group: uxr-corp.uxr-devs}
+    alpha_grants_without_dev:
+      - {kind: Team, names: [alpha], level: view, group: uxr-corp.uxr-devs}
+      - {kind: Project, names: [], level: edit, group: uxr-corp.uxr-devs}
+    beta_grants:
+      - {kind: Team, names: [beta], level: edit, group: uxr-corp.uxr-admins}
+  tasks:
+    - name: The Team job stamps its scope Roles with the Assignments they derive from
+      vars:
+        _task: >-
+          {{ lookup('file', access_yml) | from_yaml
+             | selectattr('vars', 'defined') | selectattr('vars.sr_source', 'defined') | first }}
+      ansible.builtin.assert:
+        that:
+          - stamp_key in (_task.vars.sr_annotations | default({}))
+          - "'team_assignments' in _task.vars.sr_annotations[stamp_key]"
+        fail_msg: team_provision access.yml no longer passes sr_annotations {{ stamp_key }} to scope_role.yml
+
+    - name: Render alpha while dev names it
+      ansible.builtin.include_tasks: ../../eda/common/tasks/scope_role.yml
+      vars:
+        sr_namespace: entity-uxr-corp
+        sr_source: {kind: Team, name: alpha}
+        sr_grants: "{{ alpha_grants_with_dev }}"
+        sr_annotations: {hybridsovereign.redhat/scope-assignments: dev}
+        sr_apply: false
+
+    - name: Keep alpha's Roles
+      ansible.builtin.set_fact:
+        alpha_roles: "{{ sr_objects | selectattr('kind', 'equalto', 'Role') | list }}"
+        alpha_project_role: "{{ sr_rendered | selectattr('kind', 'equalto', 'Project') | map(attribute='role') | first }}"
+
+    - name: Render beta before dev names it
+      ansible.builtin.include_tasks: ../../eda/common/tasks/scope_role.yml
+      vars:
+        sr_namespace: entity-uxr-corp
+        sr_source: {kind: Team, name: beta}
+        sr_grants: "{{ beta_grants }}"
+        sr_annotations: {hybridsovereign.redhat/scope-assignments: ""}
+        sr_apply: false
+
+    - name: Keep beta's Roles
+      ansible.builtin.set_fact:
+        beta_roles: "{{ sr_objects | selectattr('kind', 'equalto', 'Role') | list }}"
+
+    - name: Every rendered object carries the stamp and the scope annotations
+      vars:
+        # annotation keys contain dots, so read them by key, not with map(attribute=)
+        _stamps: >-
+          {%- set out = {'alpha': [], 'beta': [], 'scoped': 0} -%}
+          {%- for r in alpha_roles -%}{%- set _ = out.alpha.append(r.metadata.annotations[stamp_key]) -%}{%- endfor -%}
+          {%- for r in beta_roles -%}{%- set _ = out.beta.append(r.metadata.annotations[stamp_key]) -%}{%- endfor -%}
+          {%- set n = (alpha_roles + beta_roles) | selectattr('metadata.annotations', 'defined')
+                | map(attribute='metadata.annotations') | map('dict2items') | flatten
+                | selectattr('key', 'equalto', 'hybridsovereign.redhat/scope') | list | length -%}
+          {%- set _ = out.update({'scoped': n}) -%}
+          {{ out }}
+      ansible.builtin.assert:
+        that:
+          - (alpha_roles + beta_roles) | length == 3
+          - _stamps.alpha | unique | list == ['dev']
+          - _stamps.beta | unique | list == ['']
+          - _stamps.scoped | int == 3
+        fail_msg: "{{ (alpha_roles + beta_roles) | map(attribute='metadata') | list | to_nice_yaml }}"
+
+    - name: Other Teams in the namespace (one stamped with another Assignment, one rendered by older content)
+      ansible.builtin.set_fact:
+        other_roles:
+          - metadata:
+              name: shc-scope-team-delta-00000000
+              annotations:
+                hybridsovereign.redhat/scope-source-name: delta
+                hybridsovereign.redhat/scope: Project/api edit uxr-corp.uxr-devs
+                hybridsovereign.redhat/scope-assignments: dev-2,ops
+          - metadata:
+              name: shc-scope-team-gamma-00000000
+              annotations:
+                hybridsovereign.redhat/scope-source-name: gamma
+                hybridsovereign.redhat/scope: Project/api edit uxr-corp.uxr-devs
+
+    - name: Assignment dev now names beta
+      ansible.builtin.include_tasks: ../../eda/common/tasks/wake_assignment_teams.yml
+      vars:
+        wat_namespace: entity-uxr-corp
+        wat_assignment: dev
+        wat_team: beta
+        wat_roles: "{{ alpha_roles + beta_roles + other_roles }}"
+        wat_apply: false
+
+    - name: The old Team, the new Team and the unstamped Team are woken; delta is not
+      ansible.builtin.assert:
+        that: wat_teams == ['alpha', 'beta', 'gamma']
+        fail_msg: "woken: {{ wat_teams }}"
+
+    - name: Assignment dev is deleted (teardown, no Team named any more)
+      ansible.builtin.include_tasks: ../../eda/common/tasks/wake_assignment_teams.yml
+      vars:
+        wat_namespace: entity-uxr-corp
+        wat_assignment: dev
+        wat_team: ""
+        wat_roles: "{{ alpha_roles + beta_roles + other_roles }}"
+        wat_apply: false
+
+    - name: The Team whose Roles derive from dev is still woken
+      ansible.builtin.assert:
+        that: wat_teams == ['alpha', 'gamma']
+        fail_msg: "woken: {{ wat_teams }}"
+
+    - name: Re-render alpha after the move (its Assignments list is empty now)
+      ansible.builtin.include_tasks: ../../eda/common/tasks/scope_role.yml
+      vars:
+        sr_namespace: entity-uxr-corp
+        sr_source: {kind: Team, name: alpha}
+        sr_grants: "{{ alpha_grants_without_dev }}"
+        sr_annotations: {hybridsovereign.redhat/scope-assignments: ""}
+        sr_apply: false
+
+    - name: The Project Role is no longer rendered, so the prune step removes it
+      ansible.builtin.assert:
+        that:
+          - alpha_project_role not in (sr_rendered | map(attribute='role') | list)
+          - sr_rendered | map(attribute='kind') | list == ['Team']
+          - alpha_project_role in (alpha_roles | map(attribute='metadata.name') | list)
+        fail_msg: "rendered: {{ sr_rendered | map(attribute='role') | list }}"

@@ -261,7 +261,7 @@ run_tenantprofile_checks() {
     log_skip "ansible-playbook not installed: scope-role render and site summary tests"
   else
     local t
-    for t in tests/access/scope-role-render.yml tests/tenantprofile/site-summary.yml; do
+    for t in tests/access/scope-role-render.yml tests/access/assignment-move.yml tests/tenantprofile/site-summary.yml; do
       if (cd "${REPO_ROOT}" && ansible-playbook -i localhost, -c local "${t}" </dev/null) >/tmp/shc-btp-test.log 2>&1; then
         log_pass "${t}"
       else

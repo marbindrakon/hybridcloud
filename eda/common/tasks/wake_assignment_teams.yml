@@ -1,8 +1,13 @@
 ---
 # A Team's access fields reach the Projects and the Assignments of the Assignments that name it (spec.team), so an
 # Assignment change must refresh the Team's scope roles: nudge the Team it names now and every Team whose scope
-# roles still list this Assignment (it named another Team before, or it is going away).
-# Input: wat_namespace, wat_assignment (name), wat_team (spec.team now; '' when none or when the Assignment is gone).
+# roles were derived from this Assignment (it named another Team before, or it is going away). Every Role of a Team
+# carries the annotation hybridsovereign.redhat/scope-assignments (the Assignments it was derived from), whichever
+# access fields the Team uses; a Team Role without it (rendered by older content) wakes its Team, which re-stamps it.
+# Input:  wat_namespace, wat_assignment (name), wat_team (spec.team now; '' when none or when the Assignment is gone)
+#         wat_roles  optional: the Team scope Roles to match (default: read from the namespace)
+#         wat_apply  default true; false = compute wat_teams only, nudge nothing
+# Output: wat_teams (names of the Teams to wake)
 - name: Find the Teams whose scope roles list Assignment {{ wat_assignment }}
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
@@ -15,22 +20,35 @@
       - app.kubernetes.io/managed-by=shc-access
       - hybridsovereign.redhat/scope-source-kind=Team
   register: _wat_roles
+  when: wat_roles is not defined
+
+- name: The Teams to wake
+  vars:
+    _roles: "{{ wat_roles if wat_roles is defined else (_wat_roles.resources | default([])) }}"
+  ansible.builtin.set_fact:
+    wat_teams: >-
+      {%- set names = [] -%}
+      {%- if wat_team | default('', true) -%}{%- set _ = names.append(wat_team) -%}{%- endif -%}
+      {%- for r in _roles -%}
+        {%- set a = r.metadata.annotations | default({}, true) -%}
+        {%- set src = a['hybridsovereign.redhat/scope-source-name'] | default('') -%}
+        {%- if 'hybridsovereign.redhat/scope-assignments' in a -%}
+          {%- if wat_assignment in (a['hybridsovereign.redhat/scope-assignments'] | default('', true)).split(',') -%}
+            {%- set _ = names.append(src) -%}
+          {%- endif -%}
+        {%- else -%}
+          {%- set _ = names.append(src) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ names | reject('equalto', '') | unique | sort | list }}
 
 - name: Wake those Teams
   ansible.builtin.include_tasks: nudge_cr.yml
   vars:
     nudge_crs: >-
-      {%- set names = [] -%}
-      {%- if wat_team | default('', true) -%}{%- set _ = names.append(wat_team) -%}{%- endif -%}
-      {%- for r in _wat_roles.resources | default([]) -%}
-        {%- set a = r.metadata.annotations | default({}, true) -%}
-        {%- set scope = a['hybridsovereign.redhat/scope'] | default('') -%}
-        {%- if scope.startswith('Assignment/') and wat_assignment in (scope.split(' ')[0][11:]).split(',') -%}
-          {%- set _ = names.append(a['hybridsovereign.redhat/scope-source-name'] | default('')) -%}
-        {%- endif -%}
-      {%- endfor -%}
       {%- set out = [] -%}
-      {%- for n in names | reject('equalto', '') | unique -%}
+      {%- for n in wat_teams -%}
         {%- set _ = out.append({'kind': 'Team', 'namespace': wat_namespace, 'name': n}) -%}
       {%- endfor -%}
       {{ out }}
+  when: wat_apply | default(true) | bool
