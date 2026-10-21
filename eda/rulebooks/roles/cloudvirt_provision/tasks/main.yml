@@ -162,7 +162,8 @@
         cv_status: >-
           {{ {'entity': fab_entity,
               'site': {'name': cv_site_name,
-                       'endpoint': ((ci_obj.status | default({}, true)).site | default({}, true)).endpoint | default('', true)},
+                       'endpoint': ((ci_obj.status | default({}, true)).site | default({}, true)).endpoint | default('', true),
+                       'console': ((ci_obj.status | default({}, true)).site | default({}, true)).console | default('', true)},
               'storageClass': fab_spec.storageClass | default((ci_spec.openshift | default({})).storageClass | default(''), true),
               'namespaces': cv_ns_status} }}
 
@@ -290,6 +291,9 @@
 
         - name: Tenant access to the namespaces (sign-in groups, RoleBindings)
           ansible.builtin.include_tasks: access.yml
+
+        - name: How tenants reach the environment (status.endpoints)
+          ansible.builtin.include_tasks: endpoints.yml
       always:
         - name: Remove the site kubeconfig
           ansible.builtin.file:
@@ -309,7 +313,7 @@
           ('; access for ' ~ cv_access.groups | join(', ')) if cv_access.groups | default([]) | length > 0 else '; no tenant access granted' }}{{
           ('; ' ~ cv_access_waiting | join('; ')) if cv_access_waiting | default([]) | length > 0 else '' }}
         fab_status: >-
-          {{ cv_status | combine({'access': cv_access})
+          {{ cv_status | combine({'access': cv_access}) | combine({'endpoints': cv_endpoints | default({})})
              | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {})
              | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {}) }}
 

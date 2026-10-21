@@ -11,6 +11,10 @@ import {
   TextInput,
 } from '@patternfly/react-core';
 import { updateDashboardResource, useK8sResourceList } from '../hooks/k8s';
+import { RbacMultiSelect } from '../components/RbacMultiSelect';
+import { errorText } from '../access/errorText';
+import { causeLines, fieldErrorsFrom } from './apiErrors';
+import { useServerCheckWith } from './useServerCheck';
 import { HybridSovereignKind, K8sResource } from '../types';
 import { useTranslation } from '../i18n';
 import { ListTextArea } from '../components/ListTextArea';
@@ -141,6 +145,54 @@ function ObjectListField({
   );
 }
 
+/** Select of the names of a kind in the object's namespace (typed name when the list cannot be read). */
+function RefNameField({
+  id,
+  label,
+  refKind,
+  namespace,
+  value,
+  disabled,
+  emptyLabel,
+  hint,
+  error,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  refKind: HybridSovereignKind;
+  namespace: string;
+  value: string;
+  disabled: boolean;
+  emptyLabel?: string;
+  hint: React.ReactNode;
+  error?: string;
+  onChange: (v: string) => void;
+}): React.ReactElement {
+  const list = useK8sResourceList<K8sResource>(refKind, {
+    namespace: PLATFORM_KINDS.includes(refKind) ? PLATFORM_NS : namespace,
+    enabled: !!namespace && !disabled,
+  });
+  const names = list.items.map((i) => i.metadata.name);
+  return (
+    <FormGroup label={label} fieldId={id}>
+      {list.error || disabled ? (
+        <TextInput id={id} value={value} isDisabled={disabled} onChange={(_e, v) => onChange(v.trim())} validated={error ? 'error' : 'default'} />
+      ) : (
+        <FormSelect id={id} value={value} onChange={(_e, v) => onChange(v)} aria-label={label} validated={error ? 'error' : 'default'}>
+          <FormSelectOption value="" label={emptyLabel ?? '—'} />
+          {value && !names.includes(value) && <FormSelectOption value={value} label={value} />}
+          {names.map((n) => (
+            <FormSelectOption key={n} value={n} label={n} />
+          ))}
+        </FormSelect>
+      )}
+      {error && <p className="pf-v6-c-helper-text__item-text sc-field-error" style={{ color: 'var(--pf-t--global--text--color--status--danger--default)' }}>{error}</p>}
+      {hint}
+    </FormGroup>
+  );
+}
+
 export function GenericSpecEditor({
   kind,
   namespace,
@@ -153,12 +205,25 @@ export function GenericSpecEditor({
   const meta = KIND_SPEC_META[kind];
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const original = useMemo(() => (item.spec as Record<string, unknown>) ?? {}, [item]);
   const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...original }));
+  /** JSON fields keep the raw text while typing; parsed on every change, the error stays on the field. */
+  const [jsonText, setJsonText] = useState<Record<string, string>>({});
+  const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({});
+  const rbacs = useK8sResourceList<K8sResource>('Rbac', {
+    namespace,
+    enabled: !!namespace && (meta?.fields ?? []).some((f) => f.widget === 'rbacRefList' || f.widget === 'rbacRef'),
+  });
+  const rbacOptions = rbacs.items.map((i) => ({ value: i.metadata.name, label: i.metadata.name }));
 
+  // A polled object refreshes `item`: reset the draft only when the stored spec really changed.
+  const originalKey = JSON.stringify(original);
   useEffect(() => {
     setDraft({ ...original });
-  }, [original]);
+    setJsonText({});
+    setJsonErrors({});
+  }, [originalKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allFields = useMemo(
     () => (meta?.fields ?? []).filter((f) => audience === 'admin' || !f.adminOnly),
@@ -200,27 +265,52 @@ export function GenericSpecEditor({
   };
   const hasInvalid = fields.some((f) => invalidNumber(f, getAtPath(draft, f.path)));
 
+  /** The spec that Save sends: fields hidden by their condition (e.g. the other transport's settings) removed. */
+  const specToSend = (): Record<string, unknown> => {
+    let spec = draft;
+    for (const f of allFields) {
+      if (!f.clearWhenHidden || isSpecFieldVisible(f, draft)) continue;
+      const path = typeof f.clearWhenHidden === 'string' ? f.clearWhenHidden : f.path;
+      spec = setAtPath(spec, path, null);
+    }
+    return spec;
+  };
+  const dirty = JSON.stringify(draft) !== originalKey;
+  const hasJsonErrors = Object.keys(jsonErrors).length > 0;
+  const editable = !readOnly && fields.some((f) => !isLocked(f));
+
+  // Server dry run of the change before Save is offered (UX-049): refusals land on their fields.
+  const checkKey = editable && dirty && !hasInvalid && !hasJsonErrors ? `${kind}/${item.metadata.name}:${JSON.stringify(specToSend())}` : null;
+  const check = useServerCheckWith(checkKey, (opts) =>
+    updateDashboardResource(kind, item.metadata.name, namespace, { spec: specToSend() }, opts),
+  );
+  const fieldMap = Object.fromEntries(fields.map((f) => [`spec.${f.path}`, f.path]));
+  const fieldErrors = fieldErrorsFrom(check.error, fieldMap);
+  const checkText = check.error ? errorText(check.error, t, { action: 'action' }) : null;
+
   const save = async () => {
+    if (!check.passed) return;
     setSaving(true);
     setError(null);
+    setSaved(false);
     try {
-      // Fields hidden by their condition (e.g. the other transport's settings) are removed.
-      let spec = draft;
-      for (const f of allFields) {
-        if (!f.clearWhenHidden || isSpecFieldVisible(f, draft)) continue;
-        const path = typeof f.clearWhenHidden === 'string' ? f.clearWhenHidden : f.path;
-        spec = setAtPath(spec, path, null);
-      }
-      await updateDashboardResource(kind, item.metadata.name, namespace, { spec });
+      await updateDashboardResource(kind, item.metadata.name, namespace, { spec: specToSend() });
+      setSaved(true);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('form.updateFailed'));
+      const txt = errorText(err, t, { action: 'action' });
+      setError([txt.title, txt.body].filter(Boolean).join(' '));
     } finally {
       setSaving(false);
     }
   };
 
-  const editable = !readOnly && fields.some((f) => !isLocked(f));
+  const reset = () => {
+    setDraft({ ...original });
+    setJsonText({});
+    setJsonErrors({});
+    setError(null);
+  };
 
   return (
     <Form className="sc-form" onSubmit={(e) => e.preventDefault()}>
@@ -286,26 +376,68 @@ export function GenericSpecEditor({
         }
 
         if (field.widget === 'json') {
+          // The raw text stays while typing (it used to snap back on every invalid keystroke, UX-049).
           const text =
-            typeof raw === 'string' ? raw : raw == null ? '' : JSON.stringify(raw, null, 2);
+            jsonText[field.path] ?? (typeof raw === 'string' ? raw : raw == null ? '' : JSON.stringify(raw, null, 2));
           return (
             <FormGroup key={field.path} label={label} fieldId={id}>
               <TextArea
                 id={id}
                 value={text}
                 isDisabled={locked}
+                validated={jsonErrors[field.path] ? 'error' : 'default'}
                 onChange={(_e, v) => {
+                  setJsonText((prev) => ({ ...prev, [field.path]: v }));
                   try {
                     setField(field, v.trim() ? JSON.parse(v) : undefined);
-                    setError(null);
+                    setJsonErrors(({ [field.path]: _drop, ...rest }) => rest);
                   } catch {
-                    setError(t('form.invalidJson', { field: label }));
+                    setJsonErrors((prev) => ({ ...prev, [field.path]: t('form.invalidJson', { field: label }) }));
                   }
                 }}
                 rows={6}
               />
+              {jsonErrors[field.path] && (
+                <p className="sc-field-error" style={{ color: 'var(--pf-t--global--text--color--status--danger--default)' }}>
+                  {jsonErrors[field.path]}
+                </p>
+              )}
               {hint}
             </FormGroup>
+          );
+        }
+
+        if (field.widget === 'rbacRefList') {
+          const list = Array.isArray(raw) ? raw.map(String) : [];
+          return (
+            <RbacMultiSelect
+              key={field.path}
+              id={id}
+              label={label}
+              value={list}
+              onChange={(next) => setField(field, next)}
+              options={rbacOptions}
+              helperText={help}
+              error={fieldErrors.byField[field.path]}
+            />
+          );
+        }
+
+        if (field.widget === 'rbacRef' || field.widget === 'refName') {
+          return (
+            <RefNameField
+              key={field.path}
+              id={id}
+              label={label}
+              refKind={field.widget === 'rbacRef' ? 'Rbac' : (field.refKind ?? 'Rbac')}
+              namespace={namespace}
+              value={String(raw ?? '')}
+              disabled={locked}
+              emptyLabel={t('form.optionalNone')}
+              hint={hint}
+              error={fieldErrors.byField[field.path]}
+              onChange={(v) => setField(field, v)}
+            />
           );
         }
 
@@ -411,10 +543,36 @@ export function GenericSpecEditor({
           </FormGroup>
         );
       })}
+      {checkText && (
+        <Alert variant="danger" isInline isPlain className="sc-mb" title={t('form.serverRefused')}>
+          {[checkText.body || checkText.title, ...causeLines(fieldErrors.other)].filter(Boolean).join(' ')}
+        </Alert>
+      )}
+      {check.warnings.length > 0 && (
+        <Alert variant="warning" isInline isPlain className="sc-mb" title={t('form.apiWarnings')}>
+          <ul>
+            {check.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+      {saved && !dirty && <Alert variant="success" isInline isPlain className="sc-mb" title={t('form.saved')} />}
       {!readOnly && (
-        <Button variant="primary" isDisabled={saving || !editable || hasInvalid} onClick={save}>
-          {saving ? t('form.saving') : t('common.save')}
-        </Button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <Button
+            variant="primary"
+            isAriaDisabled={saving || !editable || hasInvalid || hasJsonErrors || !dirty || !check.passed}
+            isLoading={saving || (dirty && check.checking)}
+            onClick={() => void save()}
+          >
+            {saving ? t('form.saving') : t('common.save')}
+          </Button>
+          <Button variant="link" isDisabled={!dirty || saving} onClick={reset}>
+            {t('form.reset')}
+          </Button>
+          {dirty && check.checking && <span className="sc-text-muted">{t('form.checking')}</span>}
+        </div>
       )}
     </Form>
   );

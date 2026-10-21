@@ -290,7 +290,10 @@
     "egressRequested": "requested",
     "namespacesReady": "{{ready}}/{{total}} ready",
     "project": "Project",
-    "domain": "Domain"
+    "domain": "Domain",
+    "reason": "Reason",
+    "age": "Age",
+    "deleteRow": "Delete {{name}}"
   },
   "form": {
     "required": "Required",
@@ -412,7 +415,24 @@
     "publicCloudBillable": "Billable: resources in this environment are charged to this tenant.",
     "apiWarnings": "The platform accepted this with warnings",
     "createBlockedBy": "Not ready yet:",
-    "checking": "Checking with the platform…"
+    "checking": "Checking with the platform…",
+    "blockName": "Enter a name",
+    "blockRequired": "Fill in the required fields",
+    "blockServer": "The platform refused it: {{reason}}",
+    "nameRule": {
+      "max": "At most {{max}} characters.",
+      "pattern": "Lowercase letters, digits and hyphens; starts and ends with a letter or digit.",
+      "doubleHyphen": "No two hyphens in a row (the name becomes a namespace)."
+    },
+    "nameHelp": "Lowercase letters, digits and hyphens; it cannot be changed later.",
+    "entityNameHelp": "Becomes the tenant namespace {{namespace}}; at most 56 characters, no dots, no \"--\".",
+    "created": "{{kind}} {{name}} created",
+    "submitted": "Created",
+    "submitFailed": "Not created",
+    "storageClassDefault": "{{name}} (site default)",
+    "saved": "Saved. The platform applies the change; the status shows when it is done.",
+    "reset": "Reset",
+    "serverRefused": "The platform refused the change"
   },
   "fields": {
     "description": "Description",
@@ -504,7 +524,6 @@
     "vaultOpsRbac": "Vault ops RBAC",
     "vaultDeveloperRbac": "Vault developer RBAC",
     "aapViewerRbac": "AAP viewer RBAC",
-    "awsAccountId": "AWS account ID",
     "transport": "Transport",
     "bootImage": "VM boot image",
     "cloudInfraEntityRefsHelp": "Entities whose cloud projects may use this site. Empty means every entity.",
@@ -525,7 +544,6 @@
     "storageClass": "Storage class",
     "vmNamespaces": "VM namespaces",
     "vmNamespacesHelp": "The environment's VM namespaces (1 to 16). A namespace with a network gets that Hybrid Network once a Network Placement puts it on this environment; until then its VMs don't start. A namespace's network cannot change: add a namespace, move the VMs, remove the old one. A namespace is removed only when it has no VMs.",
-    "awsBaseDomainHelp": "Parent Route53 domain for tenant projects.",
     "bfd": "BFD",
     "bfdHelp": "Bidirectional Forwarding Detection on the site's BGP sessions, so the site stops using a failed node within about a second.",
     "bgpPasswordVaultPath": "BGP password (Vault path)",
@@ -545,7 +563,6 @@
     "credentialsRefEditHelp": "Vault KV path holding the site's infrastructure credential. Not needed for an OpenShift site whose cluster is local.",
     "credentialsRefHelp_openstack": "Vault KV path holding a cloud-admin clouds.yaml (key clouds.yaml; key ca.crt when the API certificate is not publicly trusted).",
     "credentialsRefHelp_openshift": "Vault KV path holding the cluster's kubeconfig (key kubeconfig). Not needed when the cluster is local.",
-    "credentialsRefHelp_aws": "Vault KV path holding the keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.",
     "dnsCreateProject": "Create the DNS project",
     "dnsMode": "Environment DNS zones",
     "dnsModeNative": "native: in this site's own DNS service",
@@ -650,11 +667,15 @@
     "gcpAttachment": "Attachment",
     "gcpAttachmentHelp": "How tenant networks in this region attach to the fabric.",
     "gcpAttachmentVpn": "HA VPN with BGP",
-    "gcpAttachmentInterconnect": "Cloud Interconnect",
+    "gcpAttachmentInterconnect": "Cloud Interconnect (not available yet)",
     "cloudGcpSiteHelp": "The Google Cloud site (CloudInfrastructure of type gcp) this environment lives in; the platform assigns the project.",
     "publish": "Publish",
     "publishExternal": "External (internet-facing)",
-    "publishInternal": "Internal (network only)"
+    "publishInternal": "Internal (network only)",
+    "signInGroups": "Groups that can sign in to this environment",
+    "signInGroupsHelp": "Members can sign in to the site console and work in the VM namespaces. Pre-filled with your access groups in this tenant.",
+    "publicCloudSiteHelp": "The platform reaches this region with its own workload identity; no keys are stored. Tenant environments here get accounts or projects the platform assigns.",
+    "cloudAwsSiteHelp": "The AWS site this environment lives in; the platform assigns the account."
   },
   "detail": {
     "allocated": "Allocated",
@@ -700,7 +721,7 @@
     "pool": "Pool",
     "poolUse": "Pool use",
     "ready": "Ready",
-    "realization": "Realization (informational)",
+    "realization": "Realization (platform detail)",
     "realizationHelp": "How the platform realized this object. Informational; it depends on the platform and may change.",
     "addressSpace": "Address space",
     "addressSpacePending": "Not in use yet (being added, or refused): {{prefixes}}",
@@ -735,7 +756,26 @@
     "waitingFor": "Waiting for",
     "wireguard": "WireGuard tunnel",
     "wireguardNodes": "WireGuard keys per node",
-    "wireguardPeers": "WireGuard peers per node"
+    "wireguardPeers": "WireGuard peers per node",
+    "name": "Name",
+    "namespace": "Namespace",
+    "labels": "Labels",
+    "noData": "No more details.",
+    "noConditions": "No conditions reported.",
+    "subtitle": "{{kind}} in {{namespace}}",
+    "backTo": "Back to {{parent}}",
+    "retryNow": "Retry now",
+    "retryQueued": "Retry queued",
+    "apiKind": "API kind: {{kind}}",
+    "actionFailed": "The action did not go through",
+    "overviewTab": "Overview",
+    "configurationTab": "Configuration",
+    "conditionsTab": "Conditions",
+    "jsonTab": "JSON",
+    "diagnostics": "Diagnostics (platform administrators)",
+    "deleteTitle": "Delete {{kind}} {{name}}?",
+    "deleteBody": "This deletes {{name}} from {{namespace}}. The page shows the progress until it is gone.",
+    "deleting": "Deleting…"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1020,5 +1060,55 @@
     "notAttached": "Not attached anywhere",
     "notAttachedBody": "Attach this network to an environment to use it there.",
     "waitingForNetwork": "A namespace of this environment names network {{network}}, which is not attached yet."
+  },
+  "callout": {
+    "since": "since {{time}}",
+    "waiting": "Waiting",
+    "creating": "Being created",
+    "updating": "Applying a change",
+    "failed": "Could not be completed",
+    "degraded": "Working with reduced health",
+    "deleting": "Being deleted",
+    "waitsFor": "The delete waits for:",
+    "changeNotApplied": "Change not applied: {{reason}}",
+    "platformActs": "The platform team acts on this.",
+    "youAct": "You can fix this: change the object or what it refers to."
+  },
+  "toasts": {
+    "ready": "{{kind}} {{name}} is ready",
+    "failed": "{{kind}} {{name}} failed",
+    "deleted": "{{kind}} {{name}} deleted"
+  },
+  "wayin": {
+    "title": "How to use it",
+    "open": {
+      "CloudVirt": "Open OpenShift Virtualization console",
+      "CloudOSO": "Open OpenStack dashboard",
+      "CloudAWS": "Open AWS console",
+      "CloudGCP": "Open Google Cloud console"
+    },
+    "notPublished": "The site console is not published for this environment yet.",
+    "noConsoleSignIn": "Console sign-in is not offered for this environment yet.",
+    "signInWith": "Sign in",
+    "signInButton": "with the button {{name}}",
+    "signInNotOffered": "Human sign-in is not offered; use the API with an application credential.",
+    "api": "API endpoint",
+    "namespaces": "Your VMs live in",
+    "project": "Project",
+    "domain": "Domain",
+    "location": "Location",
+    "signInGroups": "Groups that can sign in",
+    "you": "You",
+    "youAreIn": "You are in {{groups}}.",
+    "youAreNotIn": "You are not in any of these groups; ask your tenant's access administrator.",
+    "virtScope": "Sovereign Cloud does not create VMs, volumes or security groups; create them in the site console.",
+    "openstackScope": "Sovereign Cloud creates the project; servers, volumes and security groups are made with the OpenStack API or dashboard."
+  },
+  "review": {
+    "title": "Review",
+    "creates": "Creates {{kind}} {{name}} in {{namespace}}.",
+    "createsOnSite": "Creates {{kind}} {{name}} in {{namespace}} on site {{site}}.",
+    "virtNetworks": "VM namespaces and their networks: {{list}}. Each network must also be attached to this environment.",
+    "attaches": "Attaches network {{network}} to {{environment}}."
   }
 }

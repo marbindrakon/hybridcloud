@@ -290,7 +290,10 @@
     "egressRequested": "demandée",
     "namespacesReady": "{{ready}}/{{total}} prêts",
     "project": "Projet",
-    "domain": "Domaine"
+    "domain": "Domaine",
+    "reason": "Raison",
+    "age": "Âge",
+    "deleteRow": "Supprimer {{name}}"
   },
   "form": {
     "entityListRestricted": "Seule l'entité à laquelle vous avez accès est affichée — la liste complète nécessite un accès plateforme.",
@@ -412,7 +415,24 @@
     "publicCloudBillable": "Facturable : les ressources de cet environnement sont à la charge de ce locataire.",
     "apiWarnings": "La plateforme a accepté avec des avertissements",
     "createBlockedBy": "Pas encore prêt :",
-    "checking": "Vérification auprès de la plateforme…"
+    "checking": "Vérification auprès de la plateforme…",
+    "blockName": "Saisissez un nom",
+    "blockRequired": "Remplissez les champs obligatoires",
+    "blockServer": "La plateforme l'a refusé : {{reason}}",
+    "nameRule": {
+      "max": "{{max}} caractères au plus.",
+      "pattern": "Minuscules, chiffres et tirets ; commence et finit par une lettre ou un chiffre.",
+      "doubleHyphen": "Pas deux tirets de suite (le nom devient un namespace)."
+    },
+    "nameHelp": "Minuscules, chiffres et tirets ; il ne pourra plus être changé.",
+    "entityNameHelp": "Devient le namespace du locataire {{namespace}} ; 56 caractères au plus, sans point ni \"--\".",
+    "created": "{{kind}} {{name}} créé",
+    "submitted": "Créé",
+    "submitFailed": "Non créé",
+    "storageClassDefault": "{{name}} (par défaut du site)",
+    "saved": "Enregistré. La plateforme applique le changement ; l'état indique quand c'est fait.",
+    "reset": "Réinitialiser",
+    "serverRefused": "La plateforme a refusé le changement"
   },
   "fields": {
     "description": "Description",
@@ -504,7 +524,6 @@
     "vaultOpsRbac": "RBAC ops Vault",
     "vaultDeveloperRbac": "RBAC développeur Vault",
     "aapViewerRbac": "RBAC lecteur AAP",
-    "awsAccountId": "ID compte AWS",
     "transport": "Transport",
     "bootImage": "Image de démarrage des VM",
     "cloudInfraEntityRefsHelp": "Entités dont les projets cloud peuvent utiliser ce site. Vide signifie toutes les entités.",
@@ -525,7 +544,6 @@
     "storageClass": "Classe de stockage",
     "vmNamespaces": "Espaces de noms VM",
     "vmNamespacesHelp": "Les espaces de noms des VM de l'environnement (1 à 16). Un espace de noms avec un réseau reçoit ce Hybrid Network dès qu'un Network Placement le place sur cet environnement ; d'ici là, ses VM ne démarrent pas. Le réseau d'un espace de noms ne peut pas changer : ajoutez un espace de noms, déplacez les VM, supprimez l'ancien. Un espace de noms n'est supprimé que s'il n'a plus de VM.",
-    "awsBaseDomainHelp": "Domaine Route53 parent des projets locataires.",
     "bfd": "BFD",
     "bfdHelp": "Détection BFD sur les sessions BGP du site : le site cesse d'utiliser un nœud en panne en une seconde environ.",
     "bgpPasswordVaultPath": "Mot de passe BGP (chemin Vault)",
@@ -545,7 +563,6 @@
     "credentialsRefEditHelp": "Chemin KV Vault de l'identifiant d'infrastructure du site. Inutile pour un site OpenShift dont le cluster est local.",
     "credentialsRefHelp_openstack": "Chemin KV Vault d'un clouds.yaml d'administration du cloud (clé clouds.yaml ; clé ca.crt si le certificat de l'API n'est pas reconnu publiquement).",
     "credentialsRefHelp_openshift": "Chemin KV Vault du kubeconfig du cluster (clé kubeconfig). Inutile si le cluster est local.",
-    "credentialsRefHelp_aws": "Chemin KV Vault contenant les clés AWS_ACCESS_KEY_ID et AWS_SECRET_ACCESS_KEY.",
     "dnsCreateProject": "Créer le projet DNS",
     "dnsMode": "Zones DNS des environnements",
     "dnsModeNative": "native : dans le service DNS du site",
@@ -650,11 +667,15 @@
     "gcpAttachment": "Rattachement",
     "gcpAttachmentHelp": "Comment les réseaux des locataires de cette région rejoignent la fabric.",
     "gcpAttachmentVpn": "HA VPN avec BGP",
-    "gcpAttachmentInterconnect": "Cloud Interconnect",
+    "gcpAttachmentInterconnect": "Cloud Interconnect (pas encore disponible)",
     "cloudGcpSiteHelp": "Le site Google Cloud (CloudInfrastructure de type gcp) de cet environnement ; la plateforme attribue le projet.",
     "publish": "Publication",
     "publishExternal": "Externe (exposé sur Internet)",
-    "publishInternal": "Interne (réseau seulement)"
+    "publishInternal": "Interne (réseau seulement)",
+    "signInGroups": "Groupes autorisés à se connecter à cet environnement",
+    "signInGroupsHelp": "Les membres peuvent se connecter à la console du site et travailler dans les namespaces de VM. Prérempli avec vos groupes d'accès dans ce locataire.",
+    "publicCloudSiteHelp": "La plateforme atteint cette région avec sa propre identité de charge de travail ; aucune clé n'est stockée. Les environnements des locataires y reçoivent des comptes ou projets attribués par la plateforme.",
+    "cloudAwsSiteHelp": "Le site AWS de cet environnement ; la plateforme attribue le compte."
   },
   "detail": {
     "allocated": "Alloués",
@@ -700,7 +721,7 @@
     "pool": "Pool",
     "poolUse": "Utilisation des pools",
     "ready": "Prêt",
-    "realization": "Réalisation (informatif)",
+    "realization": "Réalisation (détail plateforme)",
     "realizationHelp": "Comment la plateforme a réalisé cet objet. Informatif ; dépend de la plateforme et peut changer.",
     "addressSpace": "Espace d'adressage",
     "addressSpacePending": "Pas encore en service (en cours d'ajout, ou refusé) : {{prefixes}}",
@@ -735,7 +756,26 @@
     "waitingFor": "En attente de",
     "wireguard": "Tunnel WireGuard",
     "wireguardNodes": "Clés WireGuard par nœud",
-    "wireguardPeers": "Pairs WireGuard par nœud"
+    "wireguardPeers": "Pairs WireGuard par nœud",
+    "name": "Nom",
+    "namespace": "Namespace",
+    "labels": "Labels",
+    "noData": "Pas d'autres détails.",
+    "noConditions": "Aucune condition signalée.",
+    "subtitle": "{{kind}} dans {{namespace}}",
+    "backTo": "Retour à {{parent}}",
+    "retryNow": "Réessayer maintenant",
+    "retryQueued": "Nouvel essai en file",
+    "apiKind": "Type d'API : {{kind}}",
+    "actionFailed": "L'action n'a pas abouti",
+    "overviewTab": "Vue d'ensemble",
+    "configurationTab": "Configuration",
+    "conditionsTab": "Conditions",
+    "jsonTab": "JSON",
+    "diagnostics": "Diagnostic (administrateurs de la plateforme)",
+    "deleteTitle": "Supprimer {{kind}} {{name}} ?",
+    "deleteBody": "Supprime {{name}} de {{namespace}}. La page affiche la progression jusqu'à sa disparition.",
+    "deleting": "Suppression…"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1020,5 +1060,55 @@
     "notAttached": "Attaché nulle part",
     "notAttachedBody": "Attachez ce réseau à un environnement pour l'y utiliser.",
     "waitingForNetwork": "Un namespace de cet environnement nomme le réseau {{network}}, qui n'est pas encore attaché."
+  },
+  "callout": {
+    "since": "depuis {{time}}",
+    "waiting": "En attente",
+    "creating": "Création en cours",
+    "updating": "Application d'un changement",
+    "failed": "N'a pas pu aboutir",
+    "degraded": "Fonctionne en mode dégradé",
+    "deleting": "Suppression en cours",
+    "waitsFor": "La suppression attend :",
+    "changeNotApplied": "Changement non appliqué : {{reason}}",
+    "platformActs": "L'équipe plateforme s'en occupe.",
+    "youAct": "Vous pouvez corriger : modifiez l'objet ou ce qu'il référence."
+  },
+  "toasts": {
+    "ready": "{{kind}} {{name}} est prêt",
+    "failed": "{{kind}} {{name}} a échoué",
+    "deleted": "{{kind}} {{name}} supprimé"
+  },
+  "wayin": {
+    "title": "Comment l'utiliser",
+    "open": {
+      "CloudVirt": "Ouvrir la console OpenShift Virtualization",
+      "CloudOSO": "Ouvrir le tableau de bord OpenStack",
+      "CloudAWS": "Ouvrir la console AWS",
+      "CloudGCP": "Ouvrir la console Google Cloud"
+    },
+    "notPublished": "La console du site n'est pas encore publiée pour cet environnement.",
+    "noConsoleSignIn": "La connexion à la console n'est pas encore proposée pour cet environnement.",
+    "signInWith": "Connexion",
+    "signInButton": "avec le bouton {{name}}",
+    "signInNotOffered": "La connexion humaine n'est pas proposée ; utilisez l'API avec un identifiant d'application.",
+    "api": "Point d'accès API",
+    "namespaces": "Vos VM sont dans",
+    "project": "Projet",
+    "domain": "Domaine",
+    "location": "Emplacement",
+    "signInGroups": "Groupes autorisés à se connecter",
+    "you": "Vous",
+    "youAreIn": "Vous êtes dans {{groups}}.",
+    "youAreNotIn": "Vous n'êtes dans aucun de ces groupes ; demandez à l'administrateur des accès de votre locataire.",
+    "virtScope": "Sovereign Cloud ne crée ni VM, ni volumes, ni groupes de sécurité ; créez-les dans la console du site.",
+    "openstackScope": "Sovereign Cloud crée le projet ; serveurs, volumes et groupes de sécurité se créent avec l'API ou le tableau de bord OpenStack."
+  },
+  "review": {
+    "title": "Vérification",
+    "creates": "Crée {{kind}} {{name}} dans {{namespace}}.",
+    "createsOnSite": "Crée {{kind}} {{name}} dans {{namespace}} sur le site {{site}}.",
+    "virtNetworks": "Namespaces de VM et leurs réseaux : {{list}}. Chaque réseau doit aussi être attaché à cet environnement.",
+    "attaches": "Attache le réseau {{network}} à {{environment}}."
   }
 }

@@ -1,0 +1,19 @@
+---
+# How tenants reach this environment (status.endpoints): the site console opened on the environment's first
+# namespace, the site API, the sign-in button of the tenant realm on the site, the groups that can sign in,
+# the site namespaces and where the site is. From the site object (its probe publishes console and signIn)
+# and the access grants (access.yml). Sets cv_endpoints.
+- name: Set the environment's way in
+  vars:
+    _site: "{{ (ci_obj.status | default({}, true)).site | default({}, true) }}"
+    _site_ns: "{{ cv_ns_status | map(attribute='namespace') | select | list }}"
+    _console: "{{ _site.console | default('', true) }}"
+  ansible.builtin.set_fact:
+    cv_endpoints: >-
+      {{ {'console': (_console ~ '/k8s/ns/' ~ _site_ns[0] ~ '/kubevirt.io~v1~VirtualMachine')
+                     if (_console | length > 0 and _site_ns | length > 0) else _console,
+          'api': _site.endpoint | default('', true),
+          'signIn': {'method': 'TenantSSO', 'idpName': (_site.signIn | default({}, true)).idpName | default('', true)},
+          'signInGroups': (cv_access | default({})).groups | default([]),
+          'project': _site_ns,
+          'location': (ci_obj.spec | default({}, true)).displayName | default(cv_site_name, true)} }}

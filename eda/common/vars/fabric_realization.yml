@@ -38,6 +38,9 @@ fabric_realization_defaults:
     tenantSignIn:
       realm: sovereign-tenants
       clientId: "openshift-{cluster}"
+      # name of the sign-in button on the site's login page (the site OAuth identity provider of the client
+      # above); read from the site when it can be, else this; empty = the realm name
+      idpName: ""
       editRole: edit
       viewRole: view
   # address management of the HybridNetworks (files/shc_ipam.py): where each network's space and its placements'

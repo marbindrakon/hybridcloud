@@ -1,0 +1,58 @@
+---
+# The way in to an OpenShift site for tenants (read only, never fails the probe): the web console URL and
+# the name of the sign-in button of the tenant realm's identity provider on the site's login page.
+# Sources: consoles.config.openshift.io/cluster and oauths.config.openshift.io/cluster (the identity
+# provider whose OpenID clientID is the site's tenant sign-in client); fallbacks: the console URL derived
+# from the API URL (https://api.<x>:6443 -> https://console-openshift-console.apps.<x>) and the
+# realization parameter openshift.tenantSignIn.idpName (default: the realm name).
+# Needs: ci_k8s, ci_endpoint, ci_ocp; the installation's fabric_realization (optional). Sets: ci_wayin.
+- name: Load the realization defaults (tenant sign-in parameters)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: Read the site console
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: config.openshift.io/v1
+    kind: Console
+    name: cluster
+  register: _ci_console
+  failed_when: false
+
+- name: Read the site OAuth configuration
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: config.openshift.io/v1
+    kind: OAuth
+    name: cluster
+  register: _ci_oauth
+  failed_when: false
+
+- name: Work out the site's way in
+  vars:
+    _real: "{{ fabric_realization_defaults | default({}) | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _signin: "{{ (_real.openshift | default({})).tenantSignIn | default({}) }}"
+    # same client name as the CloudVirt access job: the site's clusterRef, else the site's own name
+    _cluster: "{{ ci_ocp.clusterRef | default(cloudinfrastructure_cr_name, true) }}"
+    _client: "{{ (_signin.clientId | default('openshift-{cluster}')) | replace('{cluster}', _cluster) }}"
+    _idps: "{{ ((_ci_oauth.resources | default([]) | first | default({})).spec | default({})).identityProviders | default([]) }}"
+    _idp_match: "{{ _idps | selectattr('openID', 'defined') | selectattr('openID.clientID', 'defined') | selectattr('openID.clientID', 'equalto', _client) | list }}"
+    _console_read: "{{ ((_ci_console.resources | default([]) | first | default({})).status | default({})).consoleURL | default('') }}"
+    _api_host: "{{ (ci_endpoint | default('') | trim | urlsplit('hostname')) if (ci_endpoint | default('') | trim) is match('https?://') else '' }}"
+    _console_derived: >-
+      {{ ('https://console-openshift-console.apps.' ~ (_api_host | regex_replace('^api\.', '')))
+         if (_api_host | default('') | regex_search('^api\.')) else '' }}
+  ansible.builtin.set_fact:
+    ci_wayin:
+      console: "{{ _console_read if (_console_read | length > 0) else _console_derived }}"
+      consoleSource: "{{ 'site' if (_console_read | length > 0) else ('derived' if (_console_derived | length > 0) else 'none') }}"
+      signIn:
+        clientId: "{{ _client }}"
+        idpName: >-
+          {{ (_idp_match | first).name if (_idp_match | length > 0)
+             else (_signin.idpName | default('', true) or _signin.realm | default('')) }}
+        idpSource: "{{ 'site' if (_idp_match | length > 0) else 'realization' }}"

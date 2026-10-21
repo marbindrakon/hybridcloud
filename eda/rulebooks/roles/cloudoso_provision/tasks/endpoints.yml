@@ -1,0 +1,16 @@
+---
+# How tenants reach this environment (status.endpoints): the site's Keystone endpoint, the project and its
+# domain, the region and the sign-in method. No Vault path or credential reference. Human sign-in to the
+# OpenStack dashboard is not offered by this platform yet (signIn.method NotAvailable); a site that
+# publishes a dashboard URL (status.site.console) is passed on. Sets oso_endpoints.
+- name: Set the environment's way in
+  vars:
+    _site: "{{ ((ci_obj | default({})).status | default({}, true)).site | default({}, true) }}"
+  ansible.builtin.set_fact:
+    oso_endpoints: >-
+      {{ {'console': _site.console | default('', true),
+          'api': _site.endpoint | default('', true),
+          'signIn': {'method': 'NotAvailable'},
+          'project': oso_project_name,
+          'domain': oso_domain_name,
+          'location': _site.region | default(((ci_obj | default({})).spec | default({}, true)).displayName | default(oso_cloudinfra_name, true), true)} }}

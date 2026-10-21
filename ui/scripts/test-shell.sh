@@ -23,6 +23,7 @@ entries=(
   "status/phase.ts:phase"
   "hooks/fetchState.ts:fetchState"
   "forms/apiErrors.ts:apiErrors"
+  "status/completion.ts:completion"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

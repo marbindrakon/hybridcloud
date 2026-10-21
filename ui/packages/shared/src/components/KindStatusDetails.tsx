@@ -24,6 +24,7 @@ import type {
 import { useTranslation } from '../i18n';
 import { formatRelativeTime } from '../list/listColumns';
 import { deletionBlockers } from '../status/phase';
+import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHiddenPaths';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -50,24 +51,8 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
 /** Status keys shown by the common blocks on every kind. */
 export const COMMON_STATUS_KEYS = ['waitingFor', 'deletionBlockedBy', 'realization', 'conditions', 'edaJobs'];
 
-/**
- * Paths never shown on tenant pages: platform credentials and Vault path references (spec and
- * status). Tenant-supplied required inputs (CloudAWS spec.vaultPath) stay visible.
- */
-export const TENANT_HIDDEN_PATHS: Partial<Record<HybridSovereignKind, string[]>> = {
-  CloudOSO: ['spec.vaultPath', 'spec.route53VaultPath'],
-  PlatformOpenshift: [
-    'spec.openstack.pullSecretVaultPath',
-    'spec.openstack.sshKeyVaultPath',
-    'status.adminPasswordVaultPath',
-    'status.kubeconfigVaultPath',
-    'status.secretsVaultPath',
-  ],
-  CloudInfrastructure: ['spec.credentialsRef', 'spec.openshift.fabricCredentialsRef'],
-  HybridFabric: ['spec.borderGateway.credentialsRef', 'spec.bgp'],
-  CloudGateway: ['spec.bgp'],
-  TransportLink: ['spec.vaultConfigRef'],
-};
+/** Paths never shown on tenant pages (one list for the UI: security/tenantHiddenPaths.ts). */
+export { TENANT_HIDDEN_PATHS };
 
 /** Copy of the object without the paths tenants must not see. */
 export function redactForTenant<T extends K8sResource>(kind: HybridSovereignKind, item: T): T {
@@ -83,6 +68,19 @@ export function redactForTenant<T extends K8sResource>(kind: HybridSovereignKind
     }
     if (cur) delete cur[parts[parts.length - 1]];
   }
+  // Status keys that look like Vault paths or secret references never reach a tenant page, at any depth.
+  const scrub = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(scrub);
+    if (!v || typeof v !== 'object') return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (TENANT_SECRET_KEY_RE.test(k)) continue;
+      out[k] = scrub(val);
+    }
+    return out;
+  };
+  const withStatus = copy as unknown as { status?: unknown };
+  if (withStatus.status) withStatus.status = scrub(withStatus.status);
   return copy;
 }
 
@@ -772,7 +770,15 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
       <Facts>
         <Fact label={t('fields.site')}>{st.site?.name || spec.cloudRef?.name}</Fact>
         <Fact label={t('detail.siteConsole')}>
-          <Link href={typeof st.site?.console === 'string' ? st.site.console : undefined} />
+          <Link
+            href={
+              typeof st.endpoints?.console === 'string'
+                ? st.endpoints.console
+                : typeof st.site?.console === 'string'
+                  ? st.site.console
+                  : undefined
+            }
+          />
         </Fact>
         <Fact label={t('detail.endpoint')}>
           <Link href={typeof st.site?.endpoint === 'string' ? st.site.endpoint : undefined} />

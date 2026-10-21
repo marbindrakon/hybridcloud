@@ -11,7 +11,9 @@ export const DEFAULT_GATEWAY_TRANSPORT: GatewayTransport = 'none';
 export const DEFAULT_GATEWAY_BFD = true;
 
 /** CloudInfrastructure.spec.type */
-export const CLOUD_INFRASTRUCTURE_TYPES: CloudInfrastructureType[] = ['openstack', 'openshift', 'aws', 'external'];
+export const CLOUD_INFRASTRUCTURE_TYPES: CloudInfrastructureType[] = ['openstack', 'openshift', 'aws', 'gcp', 'external'];
+/** CloudInfrastructure.spec.gcp.attachment values; interconnect is declared in the API but not available yet. */
+export const GCP_ATTACHMENTS = ['vpn', 'interconnect'] as const;
 /** CloudInfrastructure.spec.openshift.clusterRef (CRD default local) */
 export const DEFAULT_OPENSHIFT_CLUSTER_REF = 'local';
 /** CloudInfrastructure.spec.dns defaults */
@@ -46,7 +48,8 @@ export function cloudInfrastructureNeedsCredentials(
   type: CloudInfrastructureType | string,
   clusterRef?: string,
 ): boolean {
-  if (type === 'openstack' || type === 'aws') return true;
+  // aws and gcp: the platform reaches them with its own workload identity (no stored keys).
+  if (type === 'openstack') return true;
   if (type === 'openshift') return !!clusterRef && clusterRef !== DEFAULT_OPENSHIFT_CLUSTER_REF;
   return false;
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Form,
   FormGroup,
@@ -13,7 +13,16 @@ import {
   FormSelect,
   FormSelectOption,
   ExpandableSection,
+  FormHelperText,
+  HelperText,
+  HelperTextItem,
 } from '@patternfly/react-core';
+import { useServerCheck } from '../forms/useServerCheck';
+import { ReviewPanel } from '../forms/ReviewPanel';
+import { causeLines, fieldErrorsFrom } from '../forms/apiErrors';
+import { errorText } from '../access/errorText';
+import { pushToast } from './ToastHost';
+import { usualCreateDuration } from '../status/durations';
 import { createDashboardResource, useK8sResourceList } from '../hooks/k8s';
 import { HybridSovereignKind, K8sResource } from '../types';
 import { PageHeader } from './PageHeader';
@@ -67,6 +76,19 @@ export interface CreateResourceFormProps {
   onCancel: () => void;
   /** Who is creating: tenant pages never offer platform kinds (default tenant). */
   audience?: 'admin' | 'tenant';
+  /** The new object's page; after Create the form goes there instead of the list. */
+  detailPathFor?: (name: string) => string | undefined;
+}
+
+/** DNS-1123 label (most kinds); Entity names are shorter and never hold "--" (they become namespaces). */
+const DNS_LABEL_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+function nameProblem(kind: HybridSovereignKind, name: string): string | null {
+  if (!name) return null;
+  const max = kind === 'Entity' ? 56 : 63;
+  if (name.length > max) return `max:${max}`;
+  if (!DNS_LABEL_RE.test(name)) return 'pattern';
+  if (kind === 'Entity' && name.includes('--')) return 'doubleHyphen';
+  return null;
 }
 
 /** Kinds that live in the platform namespace and only platform admins create. */
@@ -237,6 +259,7 @@ export function CreateResourceForm({
   onSuccess,
   onCancel,
   audience = 'tenant',
+  detailPathFor,
 }: CreateResourceFormProps): React.ReactElement {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -258,6 +281,7 @@ export function CreateResourceForm({
   const [quayConfig, setQuayConfig] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [nameTouched, setNameTouched] = useState(false);
   // TransportLink
   const [fabricRef, setFabricRef] = useState('');
   const [gatewayRef, setGatewayRef] = useState('');
@@ -693,23 +717,47 @@ export function CreateResourceForm({
     return true;
   };
 
+  // Client-side checks first (inline), then a server dry run of the exact object (Q8, UX-040).
+  const targetNs = isPlatformForm ? PLATFORM_NAMESPACE : entityNs;
+  const nameIssue = nameProblem(kind, name);
+  const clientValid = canSubmit() && !nameIssue && !!targetNs;
+  const specNow = clientValid ? buildSpec() : null;
+  const checkBody = useMemo(
+    () => (clientValid && specNow ? { name, namespace: targetNs, spec: specNow } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clientValid, name, targetNs, JSON.stringify(specNow)],
+  );
+  const check = useServerCheck(kind, checkBody, clientValid);
+  const checkErrors = fieldErrorsFrom(check.error, { 'metadata.name': 'name' });
+  const checkText = check.error ? errorText(check.error, t, { kindLabel: t(`kindsOne.${kind}`, { defaultValue: kind }), action: 'action' }) : null;
+  const blockers: string[] = [];
+  if (!name) blockers.push(t('form.blockName'));
+  else if (nameIssue) blockers.push(t(`form.nameRule.${nameIssue.split(':')[0]}`, { max: nameIssue.split(':')[1] }));
+  if (name && !nameIssue && !canSubmit()) blockers.push(t('form.blockRequired'));
+  if (checkText) blockers.push(t('form.blockServer', { reason: [checkText.body || checkText.title, ...causeLines(checkErrors.other)].filter(Boolean).join(' ') }));
+  const canCreate = clientValid && check.passed && !submitting;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit()) return;
+    if (!canCreate || !targetNs) return;
     setSubmitting(true);
     setResult(null);
     try {
-      const targetNs = isPlatformForm ? PLATFORM_NAMESPACE : entityNs;
-      if (!targetNs) {
-        throw new Error('Namespace is required');
-      }
       await createDashboardResource(kind, { name, namespace: targetNs, spec: buildSpec() }, targetNs);
-      setResult({ ok: true, message: `${kind} "${name}" submitted.` });
-      setTimeout(() => onSuccess(listPath), 1200);
+      const usual = usualCreateDuration(kind);
+      pushToast({
+        variant: 'success',
+        title: t('form.created', { kind: t(`kindsOne.${kind}`, { defaultValue: kind }), name }),
+        body: usual ? t(usual.key, { defaultValue: usual.defaultValue }) : undefined,
+      });
+      // Stay with the new object: its page shows the progress (UX-090).
+      onSuccess(detailPathFor?.(name) ?? listPath);
     } catch (err) {
+      const txt = errorText(err, t, { kindLabel: t(`kindsOne.${kind}`, { defaultValue: kind }), action: 'action' });
+      const fe = fieldErrorsFrom(err, { 'metadata.name': 'name' });
       setResult({
         ok: false,
-        message: err instanceof Error ? err.message : 'Submit failed',
+        message: [txt.body || txt.title, fe.byField.name, ...causeLines(fe.other)].filter(Boolean).join(' '),
       });
     } finally {
       setSubmitting(false);
@@ -738,7 +786,7 @@ export function CreateResourceForm({
       {result && (
         <Alert
           variant={result.ok ? 'success' : 'danger'}
-          title={result.ok ? 'Submitted' : 'Submission failed'}
+          title={result.ok ? t('form.submitted') : t('form.submitFailed')}
           isInline
           className="sc-mb"
         >
@@ -763,8 +811,33 @@ export function CreateResourceForm({
                 />
               )}
 
-              <FormGroup label="Name" isRequired fieldId="name">
-                <TextInput id="name" value={name} onChange={(_e, v) => setName(v)} isRequired />
+              <FormGroup label={t('common.name')} isRequired fieldId="name">
+                <TextInput
+                  id="name"
+                  value={name}
+                  onChange={(_e, v) => setName(v)}
+                  onBlur={() => setNameTouched(true)}
+                  isRequired
+                  validated={(nameTouched && nameIssue) || checkErrors.byField.name ? 'error' : 'default'}
+                  aria-describedby="name-help"
+                />
+                <FormHelperText>
+                  <HelperText id="name-help">
+                    {nameTouched && nameIssue ? (
+                      <HelperTextItem variant="error">
+                        {t(`form.nameRule.${nameIssue.split(':')[0]}`, { max: nameIssue.split(':')[1] })}
+                      </HelperTextItem>
+                    ) : checkErrors.byField.name ? (
+                      <HelperTextItem variant="error">{checkErrors.byField.name}</HelperTextItem>
+                    ) : (
+                      <HelperTextItem>
+                        {type === 'entity'
+                          ? t('form.entityNameHelp', { namespace: `entity-${name || '<name>'}` })
+                          : t('form.nameHelp')}
+                      </HelperTextItem>
+                    )}
+                  </HelperText>
+                </FormHelperText>
               </FormGroup>
 
               {type === 'entity' && (
@@ -1050,6 +1123,7 @@ export function CreateResourceForm({
                   namespace={entityNs}
                   entityName={currentEntityName}
                   onChange={setNetworkSpec}
+                  audience={audience}
                 />
               )}
 
@@ -1336,14 +1410,44 @@ export function CreateResourceForm({
                 </>
               )}
 
+              {clientValid && <ReviewPanel kind={kind} name={name} namespace={targetNs} spec={specNow} />}
+              {check.warnings.length > 0 && (
+                <Alert variant="warning" isInline isPlain title={t('form.apiWarnings')} className="sc-mb">
+                  <ul>
+                    {check.warnings.map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </ul>
+                </Alert>
+              )}
               <ActionGroup>
-                <Button variant="primary" type="submit" isLoading={submitting} isDisabled={!canSubmit()}>
-                  Create
+                <Button
+                  variant="primary"
+                  type="submit"
+                  isLoading={submitting || (clientValid && check.checking)}
+                  isAriaDisabled={!canCreate}
+                  aria-describedby="create-blockers"
+                >
+                  {t('common.create')}
                 </Button>
                 <Button variant="link" onClick={onCancel}>
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
               </ActionGroup>
+              <div id="create-blockers" className="sc-text-muted" aria-live="polite">
+                {clientValid && check.checking ? (
+                  t('form.checking')
+                ) : blockers.length ? (
+                  <>
+                    {t('form.createBlockedBy')}
+                    <ul>
+                      {blockers.map((b) => (
+                        <li key={b}>{b}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </div>
             </Form>
           </CardBody>
         </Card>

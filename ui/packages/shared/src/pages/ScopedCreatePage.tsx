@@ -56,6 +56,7 @@ export function ScopedCreatePage({ persona }: { persona: 'tenant' | 'platform' }
       namespace={namespace}
       listPath={listPath}
       onSuccess={(path) => navigate(path)}
+      detailPathFor={(name) => nav.routeFor(kind, name)}
       onCancel={() => navigate(listPath)}
       audience={host === 'admin-dashboard' || host === 'admin-console' ? 'admin' : 'tenant'}
     />
