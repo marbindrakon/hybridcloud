@@ -25,6 +25,9 @@ vault_services_client_id: "vault"
 vault_admin_group: "sovereign-admin"
 admin_policy_name: "sovereign-admin-policy"
 oidc_role_name: "sovereign-admin"
+# The value of the groups claim (full group path, as the client's groups mapper emits it) that a token must
+# carry to use the admin role; the role's bound_claims and the central external group alias use it.
+vault_admin_group_claim: "/{{ vault_admin_group }}"
 
 # Default redirect URIs for Vault UI (central + services routes + CLI).
 # Lab route callbacks come from env (VAULT_CENTRAL_URL / VAULT_SERVICES_URL).
