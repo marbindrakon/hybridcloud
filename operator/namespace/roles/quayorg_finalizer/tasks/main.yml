@@ -23,7 +23,12 @@
       vars:
         operator_event_reason: "QuayOrgDeleteRequested"
         operator_event_action: "Delete"
-        operator_event_note: "{{ _hybridsovereign_redhat_quayorg.spec | to_json }}"
+        # The note carries the connection the object recorded: a released object has no status left.
+        operator_event_note: >-
+          {{ (_hybridsovereign_redhat_quayorg.spec | default({}, true))
+             | combine({'quayConfig': ((_hybridsovereign_redhat_quayorg.status | default({}, true)).config
+                               | default(_hybridsovereign_redhat_quayorg.spec.quayConfig | default(''), true))})
+             | to_json }}
         operator_reporting_controller: plugin-quay-operator
         operator_event_regarding:
           apiVersion: hybridsovereign.redhat/v1alpha1

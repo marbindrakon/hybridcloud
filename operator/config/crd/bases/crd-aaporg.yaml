@@ -70,8 +70,9 @@ spec:
                   description: >-
                     Optional. The automation connection (an AAPConfig in the platform's
                     integration namespace) this organization is created through. When omitted
-                    the platform uses its default connection; the one used is reported in
-                    status.config.
+                    the platform's default connection is taken once, when the organization is
+                    first set up, and kept: the one used is reported in status.config, and the
+                    organization stays on it when the platform's default changes later.
                 aapAdminRbac:
                   type: array
                   items:
