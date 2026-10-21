@@ -1,64 +1,13 @@
-import https from "https";
-import fs from "fs";
-
-const SA_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
-
-let cachedCA = undefined;
-let caLoaded = false;
-
-function getCACert() {
-  if (caLoaded) return cachedCA;
-  try {
-    cachedCA = fs.readFileSync(SA_CA_PATH);
-  } catch {
-    cachedCA = undefined;
-  }
-  caLoaded = true;
-  return cachedCA;
-}
+import { k8sRequest as upstreamRequest, userToken } from "../../shared/server/upstream.js";
+import { sendUpstreamError } from "../../shared/server/errors.js";
 
 function userAccessToken(req) {
-  const raw = req.headers["x-forwarded-access-token"];
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  return raw.trim();
+  return userToken(req);
 }
 
+/** Positional form kept for the curated handlers below; see shared/server/upstream.js. */
 function k8sRequest(apiServer, reqPath, method, bearerToken, body, contentType) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(reqPath, apiServer);
-    const opts = {
-      hostname: url.hostname,
-      port: url.port || 443,
-      path: url.pathname + url.search,
-      method,
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-        "Content-Type": contentType || "application/json",
-      },
-      rejectUnauthorized: !!getCACert(),
-      ca: getCACert(),
-      timeout: 15000,
-    };
-    const req = https.request(opts, (res) => {
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => {
-        try {
-          resolve({ status: res.statusCode, body: JSON.parse(data) });
-        } catch {
-          resolve({ status: res.statusCode, body: data });
-        }
-      });
-    });
-    req.on("timeout", () => {
-      req.destroy();
-      reject(new Error("K8s API request timed out"));
-    });
-    req.on("error", reject);
-    if (body) req.write(JSON.stringify(body));
-    req.end();
-  });
+  return upstreamRequest({ apiServer, path: reqPath, method, token: bearerToken, body, contentType });
 }
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
@@ -490,14 +439,11 @@ export function createK8sHandlers(apiServer) {
       if (!token) return res.status(401).json({ message: "Unauthorized" });
       try {
         const resp = await k8sRequest(apiServer, ENTITIES_PATH, "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list entities from cluster" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("Entity list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -511,10 +457,9 @@ export function createK8sHandlers(apiServer) {
         `/api/v1/namespaces?labelSelector=${encodeURIComponent(ENTITY_NS_LABEL_SELECTOR)}`;
       try {
         const resp = await k8sRequest(apiServer, path, "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
         if (resp.status >= 400) {
           console.error("listNamespaces: K8s API returned", resp.status, JSON.stringify(resp.body).slice(0, 200));
-          return res.status(502).json({ message: "Failed to list namespaces from cluster" });
+          return sendUpstreamError(res, resp);
         }
         const items = Array.isArray(resp.body?.items) ? resp.body.items : [];
         const names = items
@@ -523,7 +468,7 @@ export function createK8sHandlers(apiServer) {
         res.json(names.map((name) => ({ name })));
       } catch (err) {
         console.error("Namespace list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -532,10 +477,7 @@ export function createK8sHandlers(apiServer) {
       if (!token) return res.status(401).json({ message: "Unauthorized" });
       try {
         const resp = await k8sRequest(apiServer, RBAC_CONFIGS_PATH, "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list RbacConfigs" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         const items = Array.isArray(resp.body?.items) ? resp.body.items : [];
         const configs = items
           .filter((i) => i.status?.ready)
@@ -547,7 +489,7 @@ export function createK8sHandlers(apiServer) {
         res.json(configs);
       } catch (err) {
         console.error("RbacConfig list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -562,14 +504,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, rbacsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list Rbac resources from cluster" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("Rbac list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -585,10 +524,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const path = `${rbacsCollectionPath(namespace)}?limit=100`;
         const resp = await k8sRequest(apiServer, path, "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to search Rbac resources" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         const items = Array.isArray(resp.body?.items) ? resp.body.items : [];
         const names = items
           .map((i) => i.metadata?.name)
@@ -596,7 +532,7 @@ export function createK8sHandlers(apiServer) {
         res.json(names.slice(0, 15));
       } catch (err) {
         console.error("Rbac search error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -616,15 +552,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${rbacsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: `Rbac '${name}' not found` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to fetch Rbac from cluster" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Rbac get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -669,17 +601,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, rbacsCollectionPath(namespace), "POST", token, rbac);
-        if (resp.status === 409) return res.status(409).json({ message: `Rbac '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({
-            message: typeof resp.body?.message === "string" ? resp.body.message : "Failed to create Rbac",
-          });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("Rbac create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -699,15 +625,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${rbacsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: `Rbac '${name}' not found` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to delete Rbac" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `Rbac '${name}' deleted` });
       } catch (err) {
         console.error("Rbac delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -720,12 +642,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, vaultsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list Vaults" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("Vault list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -738,12 +659,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, teamsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list Teams" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("Team list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -756,12 +676,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, assignmentsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list Assignments" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("Assignment list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -775,13 +694,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${assignmentsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch Assignment" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Assignment get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -794,12 +711,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, projectsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list Projects" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("Project list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -812,14 +728,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, platformopenshiftsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list PlatformOpenshifts" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("PlatformOpenshift list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -832,12 +745,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, cloudososCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list CloudOSOs" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("CloudOSO list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -865,13 +777,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, teamsCollectionPath(namespace), "POST", token, team);
-        if (resp.status === 409) return res.status(409).json({ message: `Team '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to create Team" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("Team create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -885,13 +795,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${teamsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete Team" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `Team '${name}' deleted` });
       } catch (err) {
         console.error("Team delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -915,13 +823,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, projectsCollectionPath(namespace), "POST", token, project);
-        if (resp.status === 409) return res.status(409).json({ message: `Project '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to create Project" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("Project create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -935,13 +841,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${projectsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete Project" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `Project '${name}' deleted` });
       } catch (err) {
         console.error("Project delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -955,13 +859,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${projectsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get Project" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Project get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -977,13 +879,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${projectsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, { spec }, "application/merge-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch Project" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Project patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1007,13 +907,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, assignmentsCollectionPath(namespace), "POST", token, assignment);
-        if (resp.status === 409) return res.status(409).json({ message: `Assignment '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to create Assignment" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("Assignment create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1027,13 +925,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${assignmentsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete Assignment" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `Assignment '${name}' deleted` });
       } catch (err) {
         console.error("Assignment delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1048,8 +944,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const getPath = `${assignmentsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const getCurrent = await k8sRequest(apiServer, getPath, "GET", token);
-        if (getCurrent.status === 404) return res.status(404).json({ message: "Not found" });
-        if (getCurrent.status >= 400) return res.status(502).json({ message: "Failed to fetch Assignment" });
+        if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
 
         const updated = {
           apiVersion: "hybridsovereign.redhat/v1alpha1",
@@ -1066,14 +961,11 @@ export function createK8sHandlers(apiServer) {
           },
         };
         const resp = await k8sRequest(apiServer, getPath, "PUT", token, updated);
-        if (resp.status === 409) return res.status(409).json({ message: "Conflict - resource was modified" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to update" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Assignment update error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1094,15 +986,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, platformopenshiftsCollectionPath(namespace), "POST", token, obj);
-        if (resp.status === 409) return res.status(409).json({ message: `PlatformOpenshift '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create PlatformOpenshift" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("PlatformOpenshift create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1116,13 +1004,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${platformopenshiftsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete PlatformOpenshift" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `PlatformOpenshift '${name}' deleted` });
       } catch (err) {
         console.error("PlatformOpenshift delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1136,13 +1022,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${platformopenshiftsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get PlatformOpenshift" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("PlatformOpenshift get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1162,13 +1046,11 @@ export function createK8sHandlers(apiServer) {
         // The editor sends the whole spec: replace it (fields left out are removed).
         const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch PlatformOpenshift" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("PlatformOpenshift patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1189,15 +1071,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, cloudososCollectionPath(namespace), "POST", token, obj);
-        if (resp.status === 409) return res.status(409).json({ message: `CloudOSO '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create CloudOSO" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("CloudOSO create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1211,13 +1089,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudososCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete CloudOSO" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `CloudOSO '${name}' deleted` });
       } catch (err) {
         console.error("CloudOSO delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1231,13 +1107,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudososCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get CloudOSO" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudOSO get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1257,13 +1131,11 @@ export function createK8sHandlers(apiServer) {
         // The editor sends the whole spec: replace it (fields left out are removed).
         const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch CloudOSO" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudOSO patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1275,8 +1147,7 @@ export function createK8sHandlers(apiServer) {
         if (resp.status === 404) {
           return res.json({ providers: [], vms: {} });
         }
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get MTV catalog ConfigMap" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         const raw = resp.body?.data?.["catalog.json"] || "{}";
         try {
           res.json(JSON.parse(raw));
@@ -1285,7 +1156,7 @@ export function createK8sHandlers(apiServer) {
         }
       } catch (err) {
         console.error("MTV catalog error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1298,12 +1169,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, openstackmigrationsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list OpenStackMigrations" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("OpenStackMigration list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1340,15 +1210,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, openstackmigrationsCollectionPath(namespace), "POST", token, cr);
-        if (resp.status === 409) return res.status(409).json({ message: `OpenStackMigration '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create OpenStackMigration" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("OpenStackMigration create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1362,13 +1228,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${openstackmigrationsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete OpenStackMigration" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `OpenStackMigration '${name}' deleted` });
       } catch (err) {
         console.error("OpenStackMigration delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1382,13 +1246,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${openstackmigrationsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch OpenStackMigration" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("OpenStackMigration get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1401,12 +1263,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, cloudawssCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list CloudAWSs" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("CloudAWS list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1427,15 +1288,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, cloudawssCollectionPath(namespace), "POST", token, obj);
-        if (resp.status === 409) return res.status(409).json({ message: `CloudAWS '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create CloudAWS" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("CloudAWS create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1449,13 +1306,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudawssCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get CloudAWS" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudAWS get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1475,13 +1330,11 @@ export function createK8sHandlers(apiServer) {
         // The editor sends the whole spec: replace it (fields left out are removed).
         const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch CloudAWS" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudAWS patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1495,13 +1348,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudawssCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete CloudAWS" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `CloudAWS '${name}' deleted` });
       } catch (err) {
         console.error("CloudAWS delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1514,12 +1365,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, cloudgcpsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list CloudGCPs" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("CloudGCP list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1540,15 +1390,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, cloudgcpsCollectionPath(namespace), "POST", token, obj);
-        if (resp.status === 409) return res.status(409).json({ message: `CloudGCP '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create CloudGCP" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("CloudGCP create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1562,13 +1408,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudgcpsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get CloudGCP" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudGCP get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1588,13 +1432,11 @@ export function createK8sHandlers(apiServer) {
         // The editor sends the whole spec: replace it (fields left out are removed).
         const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch CloudGCP" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudGCP patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1608,13 +1450,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudgcpsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete CloudGCP" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `CloudGCP '${name}' deleted` });
       } catch (err) {
         console.error("CloudGCP delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1628,12 +1468,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, cloudvirtsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list CloudVirts" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("CloudVirt list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1654,15 +1493,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, cloudvirtsCollectionPath(namespace), "POST", token, obj);
-        if (resp.status === 409) return res.status(409).json({ message: `CloudVirt '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create CloudVirt" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("CloudVirt create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1676,13 +1511,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudvirtsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get CloudVirt" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudVirt get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1702,13 +1535,11 @@ export function createK8sHandlers(apiServer) {
         // The editor sends the whole spec: replace it (fields left out are removed).
         const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch CloudVirt" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("CloudVirt patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1722,13 +1553,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${cloudvirtsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete CloudVirt" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `CloudVirt '${name}' deleted` });
       } catch (err) {
         console.error("CloudVirt delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1741,12 +1570,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, hybridnetworksCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list HybridNetworks" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("HybridNetwork list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1760,13 +1588,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${hybridnetworksCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get HybridNetwork" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("HybridNetwork get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1787,15 +1613,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, hybridnetworksCollectionPath(namespace), "POST", token, obj);
-        if (resp.status === 409) return res.status(409).json({ message: `HybridNetwork '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create HybridNetwork" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("HybridNetwork create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1815,13 +1637,11 @@ export function createK8sHandlers(apiServer) {
         // The editor sends the whole spec: replace it (fields left out are removed).
         const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to patch HybridNetwork" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("HybridNetwork patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1835,13 +1655,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${hybridnetworksCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete HybridNetwork" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `HybridNetwork '${name}' deleted` });
       } catch (err) {
         console.error("HybridNetwork delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1854,12 +1672,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, networkplacementsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list NetworkPlacements" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("NetworkPlacement list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1873,13 +1690,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${networkplacementsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to get NetworkPlacement" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("NetworkPlacement get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1900,15 +1715,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, networkplacementsCollectionPath(namespace), "POST", token, obj);
-        if (resp.status === 409) return res.status(409).json({ message: `NetworkPlacement '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create NetworkPlacement" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("NetworkPlacement create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1922,13 +1733,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${networkplacementsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete NetworkPlacement" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `NetworkPlacement '${name}' deleted` });
       } catch (err) {
         console.error("NetworkPlacement delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1947,13 +1756,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, vaultsCollectionPath(namespace), "POST", token, vault);
-        if (resp.status === 409) return res.status(409).json({ message: `Vault '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to create Vault" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("Vault create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1967,13 +1774,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${vaultsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete Vault" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `Vault '${name}' deleted` });
       } catch (err) {
         console.error("Vault delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -1987,13 +1792,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${vaultsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch Vault" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Vault get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2006,12 +1809,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, vaultKVsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list VaultKVs" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("VaultKV list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2034,13 +1836,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, vaultKVsCollectionPath(namespace), "POST", token, vaultKV);
-        if (resp.status === 409) return res.status(409).json({ message: `VaultKV '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to create VaultKV" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("VaultKV create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2054,13 +1854,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${vaultKVsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete VaultKV" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `VaultKV '${name}' deleted` });
       } catch (err) {
         console.error("VaultKV delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2069,10 +1867,7 @@ export function createK8sHandlers(apiServer) {
       if (!token) return res.status(401).json({ message: "Unauthorized" });
       try {
         const resp = await k8sRequest(apiServer, AAP_CONFIGS_PATH, "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list AAPConfigs" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         const items = Array.isArray(resp.body?.items) ? resp.body.items : [];
         const configs = items
           .filter((i) => i.status?.ready)
@@ -2084,7 +1879,7 @@ export function createK8sHandlers(apiServer) {
         res.json(configs);
       } catch (err) {
         console.error("AAPConfig list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2099,14 +1894,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, aaporgsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list AAPOrgs" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("AAPOrg list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2147,17 +1939,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, aaporgsCollectionPath(namespace), "POST", token, aapOrg);
-        if (resp.status === 409) return res.status(409).json({ message: `AAPOrg '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({
-            message: typeof resp.body?.message === "string" ? resp.body.message : "Failed to create AAPOrg",
-          });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("AAPOrg create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2171,13 +1957,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${aaporgsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete AAPOrg" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `AAPOrg '${name}' deleted` });
       } catch (err) {
         console.error("AAPOrg delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2186,10 +1970,7 @@ export function createK8sHandlers(apiServer) {
       if (!token) return res.status(401).json({ message: "Unauthorized" });
       try {
         const resp = await k8sRequest(apiServer, QUAY_CONFIGS_PATH, "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list QuayConfigs" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         const items = Array.isArray(resp.body?.items) ? resp.body.items : [];
         const configs = items
           .filter((i) => i.status?.ready)
@@ -2201,7 +1982,7 @@ export function createK8sHandlers(apiServer) {
         res.json(configs);
       } catch (err) {
         console.error("QuayConfig list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2216,14 +1997,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, quayorgsCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: "Failed to list QuayOrgs" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("QuayOrg list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2267,17 +2045,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, quayorgsCollectionPath(namespace), "POST", token, quayOrg);
-        if (resp.status === 409) return res.status(409).json({ message: `QuayOrg '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({
-            message: typeof resp.body?.message === "string" ? resp.body.message : "Failed to create QuayOrg",
-          });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("QuayOrg create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2291,13 +2063,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${quayorgsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "DELETE", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to delete QuayOrg" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json({ message: `QuayOrg '${name}' deleted` });
       } catch (err) {
         console.error("QuayOrg delete error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2312,8 +2082,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${teamsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (getCurrent.status === 404) return res.status(404).json({ message: "Not found" });
-        if (getCurrent.status >= 400) return res.status(502).json({ message: "Failed to fetch Team" });
+        if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
         const updated = {
           ...current,
@@ -2332,12 +2101,11 @@ export function createK8sHandlers(apiServer) {
           },
         };
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
-        if (resp.status === 409) return res.status(409).json({ message: "Conflict" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to update Team" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Team update error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2351,13 +2119,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${teamsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch Team" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Team get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2372,8 +2138,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${rbacsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (getCurrent.status === 404) return res.status(404).json({ message: "Not found" });
-        if (getCurrent.status >= 400) return res.status(502).json({ message: "Failed to fetch Rbac" });
+        if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
         const rbacSpec = { ...current.spec };
         if (typeof spec?.config === "string" && spec.config.trim() && CONFIG_PATTERN.test(spec.config.trim())) {
@@ -2385,12 +2150,11 @@ export function createK8sHandlers(apiServer) {
         }
         const updated = { ...current, metadata: { ...current.metadata }, spec: rbacSpec };
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
-        if (resp.status === 409) return res.status(409).json({ message: "Conflict" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to update Rbac" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Rbac update error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2405,8 +2169,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${vaultKVsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (getCurrent.status === 404) return res.status(404).json({ message: "Not found" });
-        if (getCurrent.status >= 400) return res.status(502).json({ message: "Failed to fetch VaultKV" });
+        if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
         const adminCheck = validateRbacNameList(spec?.vaultAdminRbac, "spec.vaultAdminRbac");
         if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
@@ -2422,12 +2185,11 @@ export function createK8sHandlers(apiServer) {
           },
         };
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
-        if (resp.status === 409) return res.status(409).json({ message: "Conflict" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to update VaultKV" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("VaultKV update error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2441,13 +2203,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${vaultKVsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch VaultKV" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("VaultKV get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2462,8 +2222,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${aaporgsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (getCurrent.status === 404) return res.status(404).json({ message: "Not found" });
-        if (getCurrent.status >= 400) return res.status(502).json({ message: "Failed to fetch AAPOrg" });
+        if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
         const adminCheck = validateRbacNameList(spec?.aapAdminRbac, "spec.aapAdminRbac");
         if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
@@ -2480,12 +2239,11 @@ export function createK8sHandlers(apiServer) {
           },
         };
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
-        if (resp.status === 409) return res.status(409).json({ message: "Conflict" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to update AAPOrg" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("AAPOrg update error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2499,13 +2257,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${aaporgsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch AAPOrg" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("AAPOrg get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2520,8 +2276,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${quayorgsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (getCurrent.status === 404) return res.status(404).json({ message: "Not found" });
-        if (getCurrent.status >= 400) return res.status(502).json({ message: "Failed to fetch QuayOrg" });
+        if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
         const adminCheck = validateRbacNameList(spec?.quayAdminRbac, "spec.quayAdminRbac");
         if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
@@ -2540,12 +2295,11 @@ export function createK8sHandlers(apiServer) {
           },
         };
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
-        if (resp.status === 409) return res.status(409).json({ message: "Conflict" });
-        if (resp.status >= 400) return res.status(502).json({ message: resp.body?.message || "Failed to update QuayOrg" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("QuayOrg update error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2559,13 +2313,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${quayorgsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch QuayOrg" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("QuayOrg get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2578,12 +2330,11 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, personasCollectionPath(namespace), "GET", token);
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to list Personas" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body?.items || []);
       } catch (err) {
         console.error("Persona list error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2597,13 +2348,11 @@ export function createK8sHandlers(apiServer) {
       try {
         const urlPath = `${personasCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) return res.status(502).json({ message: "Failed to fetch Persona" });
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Persona get error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2630,15 +2379,11 @@ export function createK8sHandlers(apiServer) {
       };
       try {
         const resp = await k8sRequest(apiServer, personasCollectionPath(namespace), "POST", token, persona);
-        if (resp.status === 409) return res.status(409).json({ message: `Persona '${name}' already exists` });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to create Persona" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.status(201).json(resp.body);
       } catch (err) {
         console.error("Persona create error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2657,15 +2402,11 @@ export function createK8sHandlers(apiServer) {
       const patchBody = { metadata: { annotations } };
       try {
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patchBody, "application/merge-patch+json");
-        if (resp.status === 404) return res.status(404).json({ message: "Not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          return res.status(502).json({ message: resp.body?.message || "Failed to patch Persona annotations" });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
         console.error("Persona annotation patch error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
@@ -2721,82 +2462,13 @@ export function createK8sHandlers(apiServer) {
           patchBody,
           "application/merge-patch+json",
         );
-        if (resp.status === 404) return res.status(404).json({ message: "Resource not found" });
-        if (resp.status === 403) return res.status(403).json({ message: "Forbidden" });
-        if (resp.status >= 400) {
-          const msg = typeof resp.body?.message === "string" ? resp.body.message : "Failed to patch annotation";
-          return res.status(502).json({ message: msg });
-        }
+        if (resp.status >= 400) return sendUpstreamError(res, resp, { kind, verb: "patch", namespace, name });
         res.json({ message: "Annotation patched", resource: resp.body });
       } catch (err) {
         console.error("patchAnnotation error:", err.message);
-        res.status(502).json({ message: "Failed to communicate with cluster API" });
+        sendUpstreamError(res, err);
       }
     },
 
-    async getPermissions(req, res) {
-      const token = userAccessToken(req);
-      if (!token) return res.status(401).json({ message: "Unauthorized" });
-      const namespace = req.query.namespace;
-      if (!namespace || !NS_PATTERN.test(namespace)) {
-        return res.status(400).json({ message: "Invalid namespace" });
-      }
-
-      const RESOURCE_TYPES = [
-        { resource: "cloudosos",           group: "hybridsovereign.redhat" },
-        { resource: "cloudawss",           group: "hybridsovereign.redhat" },
-        { resource: "cloudgcps",           group: "hybridsovereign.redhat" },
-        { resource: "cloudvirts",          group: "hybridsovereign.redhat" },
-        { resource: "hybridnetworks",      group: "hybridsovereign.redhat" },
-        { resource: "networkplacements",   group: "hybridsovereign.redhat" },
-        { resource: "platformopenshifts",  group: "hybridsovereign.redhat" },
-        { resource: "vaultkvs",            group: "hybridsovereign.redhat" },
-        { resource: "vaults",              group: "hybridsovereign.redhat" },
-        { resource: "aaporgs",             group: "hybridsovereign.redhat" },
-        { resource: "quayorgs",            group: "hybridsovereign.redhat" },
-        { resource: "projects",            group: "hybridsovereign.redhat" },
-        { resource: "teams",               group: "hybridsovereign.redhat" },
-        { resource: "assignments",         group: "hybridsovereign.redhat" },
-        { resource: "rbacs",               group: "hybridsovereign.redhat" },
-        { resource: "personas",            group: "hybridsovereign.redhat" },
-      ];
-      const VERBS = ["list", "create", "delete"];
-      const SSAR_PATH = "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews";
-
-      async function checkOne(resource, group, verb) {
-        try {
-          const body = {
-            apiVersion: "authorization.k8s.io/v1",
-            kind: "SelfSubjectAccessReview",
-            spec: {
-              resourceAttributes: {
-                namespace,
-                verb,
-                group,
-                resource,
-              },
-            },
-          };
-          const resp = await k8sRequest(apiServer, SSAR_PATH, "POST", token, body);
-          return resp.status === 201 && resp.body?.status?.allowed === true;
-        } catch {
-          return false;
-        }
-      }
-
-      try {
-        const permissions = {};
-        for (const { resource, group } of RESOURCE_TYPES) {
-          permissions[resource] = {};
-          for (const verb of VERBS) {
-            permissions[resource][verb] = await checkOne(resource, group, verb);
-          }
-        }
-        res.json(permissions);
-      } catch (err) {
-        console.error("getPermissions error:", err.message);
-        res.status(502).json({ message: "Failed to check permissions" });
-      }
-    },
   };
 }

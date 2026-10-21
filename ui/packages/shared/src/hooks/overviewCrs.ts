@@ -6,11 +6,17 @@ import {
   K8sResource,
 } from '../types';
 import { getK8sClientConfig } from './k8s';
+import { errorFromResponse, networkError } from './errors';
 
 export interface OverviewCRsResult {
   items: K8sResource[];
   loading: boolean;
   error: Error | null;
+  /**
+   * Kinds the user may not list in at least one namespace that was read. Counts
+   * for these kinds are incomplete: show a lock, never a zero (UX-057).
+   */
+  forbiddenKinds: HybridSovereignKind[];
   refresh: () => void;
 }
 
@@ -67,23 +73,64 @@ function entityNamespaceFrom(item: K8sResource): string {
   return `entity-${item.metadata.name}`;
 }
 
+interface KindList {
+  kind: HybridSovereignKind;
+  items: K8sResource[];
+  /** 403: the user may not list this kind here. */
+  forbidden: boolean;
+}
+
+/** Thrown inside withRetry for answers that will not change on a retry. */
+class FinalAnswer extends Error {
+  constructor(readonly result: KindList) {
+    super('final');
+  }
+}
+
 async function listKindInNamespace(
   kind: HybridSovereignKind,
   namespace: string,
   fetchFn: typeof fetch,
   baseUrl: string,
   headers: Record<string, string>,
-): Promise<K8sResource[]> {
+): Promise<KindList> {
   const plural = KIND_PLURALS[kind];
   const url = `${baseUrl}/apis/${API_VERSION_FULL}/namespaces/${encodeURIComponent(namespace)}/${plural}`;
-  const r = await fetchFn(url, { headers });
+  let r: Response;
+  try {
+    r = await fetchFn(url, { headers });
+  } catch (err) {
+    throw networkError(err, { kind, verb: 'list', namespace });
+  }
   if (!r.ok) {
-    // Missing CRD / no access / empty ns — treat as empty so Overview stays usable
-    if (r.status === 404 || r.status === 403) return [];
-    throw new Error(`K8s API error ${r.status}: ${r.statusText} (${kind}@${namespace})`);
+    // 403 is an access limit (reported, never shown as zero); 404 is a kind
+    // that is not installed or a namespace that is gone: nothing to count.
+    if (r.status === 403) throw new FinalAnswer({ kind, items: [], forbidden: true });
+    if (r.status === 404) throw new FinalAnswer({ kind, items: [], forbidden: false });
+    throw await errorFromResponse(r, { kind, verb: 'list', namespace });
   }
   const data = (await r.json()) as { items?: K8sResource[] };
-  return (data.items ?? []).map((item) => ({ ...item, kind: item.kind || kind }));
+  return {
+    kind,
+    items: (data.items ?? []).map((item) => ({ ...item, kind: item.kind || kind })),
+    forbidden: false,
+  };
+}
+
+/** listKindInNamespace with retries for transient failures only. */
+async function listKind(
+  kind: HybridSovereignKind,
+  namespace: string,
+  fetchFn: typeof fetch,
+  baseUrl: string,
+  headers: Record<string, string>,
+): Promise<KindList> {
+  try {
+    return await withRetry(() => listKindInNamespace(kind, namespace, fetchFn, baseUrl, headers));
+  } catch (err) {
+    if (err instanceof FinalAnswer) return err.result;
+    throw err;
+  }
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -92,6 +139,7 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (err) {
+      if (err instanceof FinalAnswer) throw err;
       lastErr = err;
       if (attempt < RETRY_ATTEMPTS - 1) {
         await sleep(RETRY_BASE_MS * 2 ** attempt);
@@ -108,47 +156,45 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
  * list URLs on namespaced CRDs (`/apis/.../teams`). That showed as zero KPIs
  * and "Unable to load topology" on first login.
  */
+export interface OverviewFetchResult {
+  items: K8sResource[];
+  forbiddenKinds: HybridSovereignKind[];
+}
+
 export async function fetchOverviewCRs(
   fetchFn: typeof fetch,
   baseUrl: string,
   headers: Record<string, string>,
-): Promise<K8sResource[]> {
-  const entities = await withRetry(() =>
-    listKindInNamespace('Entity', PLATFORM_NS, fetchFn, baseUrl, headers),
-  );
+): Promise<OverviewFetchResult> {
+  const entityList = await listKind('Entity', PLATFORM_NS, fetchFn, baseUrl, headers);
+  const entities = entityList.items;
 
   const entityNamespaces = Array.from(
     new Set(entities.map(entityNamespaceFrom).filter(Boolean)),
   );
 
+  // A transient failure of one list is not fatal for the overview; it is
+  // counted as unreadable so the counters show a lock instead of a zero.
+  const safe = (kind: HybridSovereignKind, ns: string) =>
+    listKind(kind, ns, fetchFn, baseUrl, headers).catch(
+      (): KindList => ({ kind, items: [], forbidden: true }),
+    );
+
   const platformLists = PLATFORM_KINDS.filter((k) => k !== 'Entity').map((kind) =>
-    withRetry(() => listKindInNamespace(kind, PLATFORM_NS, fetchFn, baseUrl, headers)).catch(
-      () => [] as K8sResource[],
-    ),
+    safe(kind, PLATFORM_NS),
   );
+  const pluginLists = PLUGIN_KINDS.map((kind) => safe(kind, PLUGINS_NS));
+  const tenantLists = entityNamespaces.flatMap((ns) => ENTITY_KINDS.map((kind) => safe(kind, ns)));
 
-  const pluginLists = PLUGIN_KINDS.map((kind) =>
-    withRetry(() => listKindInNamespace(kind, PLUGINS_NS, fetchFn, baseUrl, headers)).catch(
-      () => [] as K8sResource[],
-    ),
-  );
-
-  const tenantLists = entityNamespaces.flatMap((ns) =>
-    ENTITY_KINDS.map((kind) =>
-      withRetry(() => listKindInNamespace(kind, ns, fetchFn, baseUrl, headers)).catch(
-        () => [] as K8sResource[],
-      ),
-    ),
-  );
-
-  const lists = await Promise.all([...platformLists, ...pluginLists, ...tenantLists]);
-  return [...entities, ...lists.flat()];
+  const lists = [entityList, ...(await Promise.all([...platformLists, ...pluginLists, ...tenantLists]))];
+  const forbiddenKinds = Array.from(new Set(lists.filter((l) => l.forbidden).map((l) => l.kind)));
+  return { items: lists.flatMap((l) => l.items), forbiddenKinds };
 }
 
 /**
- * Aggregated CR fetch for admin Overview.
- * - dashboard style: Express `/api/overview/crs`
- * - raw / console style: namespaced lists (never cluster-scoped plurals)
+ * Aggregated CR fetch for the admin overviews: namespaced lists with the
+ * caller's token through the host's raw API proxy (never cluster-scoped
+ * plurals, never a service-account aggregator).
  */
 export function useOverviewCRs(
   pollIntervalMs = 0,
@@ -158,6 +204,7 @@ export function useOverviewCRs(
   const [items, setItems] = useState<K8sResource[]>([]);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<Error | null>(null);
+  const [forbiddenKinds, setForbiddenKinds] = useState<HybridSovereignKind[]>([]);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
@@ -174,29 +221,19 @@ export function useOverviewCRs(
     if (cfg.token) headers.Authorization = `Bearer ${cfg.token}`;
     const fetchFn = cfg.fetchFn ?? fetch;
 
-    const run = async () => {
-      if (cfg.apiStyle === 'dashboard') {
-        const r = await withRetry(async () => {
-          const resp = await fetchFn('/api/overview/crs', { headers });
-          if (!resp.ok) throw new Error(`K8s API error ${resp.status}: ${resp.statusText}`);
-          return resp;
-        });
-        const data: unknown = await r.json();
-        return Array.isArray(data) ? (data as K8sResource[]) : [];
-      }
-
-      const base = cfg.baseUrl ?? '/api/kubernetes';
-      return fetchOverviewCRs(fetchFn, base, headers);
-    };
-
-    run()
+    const base = cfg.baseUrl ?? '/api/kubernetes';
+    fetchOverviewCRs(fetchFn, base, headers)
       .then((data) => {
         if (cancelled) return;
-        setItems(data);
+        setItems(data.items);
+        setForbiddenKinds(data.forbiddenKinds);
         setError(null);
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err);
+        if (cancelled) return;
+        setItems([]);
+        setForbiddenKinds([]);
+        setError(err);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -213,5 +250,5 @@ export function useOverviewCRs(
     return () => clearInterval(id);
   }, [pollIntervalMs, refresh, enabled]);
 
-  return { items, loading, error, refresh };
+  return { items, loading, error, forbiddenKinds, refresh };
 }

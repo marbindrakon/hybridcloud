@@ -7,8 +7,8 @@ import {
   CardHeader,
   Button,
   Spinner,
-  Alert,
   Label,
+  Tooltip,
   Flex,
   FlexItem,
   Progress,
@@ -18,6 +18,7 @@ import {
   SyncIcon,
   ExclamationTriangleIcon,
   TopologyIcon,
+  LockIcon,
 } from '@patternfly/react-icons';
 import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { Link, useNavigate } from 'react-router-dom';
@@ -34,6 +35,9 @@ import {
   useTranslation,
   TENANT_OVERVIEW_KINDS,
   HybridSovereignKind,
+  classifyError,
+  UnavailableState,
+  usePermission,
 } from '@hybridsovereign/shared';
 
 interface TenantOverviewPageProps {
@@ -59,6 +63,28 @@ const KIND_PATH: Partial<Record<HybridSovereignKind, string>> = {
   HybridNetwork: '/networks',
   NetworkPlacement: '/placements',
 };
+
+/** A self-service card that is disabled, with the role named, when the user may not create the kind. */
+function SelfServiceCard({ kind, labelKey, onOpen }: { kind: HybridSovereignKind; labelKey: string; onOpen: () => void }): React.ReactElement {
+  const { t } = useTranslation();
+  const { allowed, loading } = usePermission(kind, 'create');
+  const card = (
+    <Card
+      isSelectable={allowed}
+      isCompact
+      isDisabled={!allowed}
+      className={`sc-action-card${allowed ? '' : ' sc-action-card--disabled'}`}
+      onClick={allowed ? onOpen : undefined}
+    >
+      <CardTitle>
+        <KindIcon kind={kind} size="sm" />
+        {t(labelKey)}
+      </CardTitle>
+    </Card>
+  );
+  if (allowed) return card;
+  return <Tooltip content={loading ? t('access.checking') : t('access.notAllowed')}>{card}</Tooltip>;
+}
 
 function bucket(items: K8sResource[]) {
   let ready = 0;
@@ -127,10 +153,12 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
   );
   const overall = bucket(all);
   const loading = TENANT_OVERVIEW_KINDS.some((k) => hookByKind[k]?.loading);
-  // A kind the user's role doesn't cover answers 403: that kind is simply not theirs, not a proxy failure.
+  // A kind the user's role doesn't cover answers 403: it is shown locked, never as zero (UX-057).
+  const isLocked = (k: HybridSovereignKind) => classifyError(hookByKind[k]?.error) === 'forbidden';
+  const lockedKinds = TENANT_OVERVIEW_KINDS.filter((k) => hookByKind[k]?.error && isLocked(k));
   const firstError =
     TENANT_OVERVIEW_KINDS.map((k) => hookByKind[k]?.error).find(
-      (e) => !!e && !/K8s API error 403\b/.test(e.message),
+      (e) => !!e && classifyError(e) !== 'forbidden',
     ) ?? null;
   const failedItems = all
     .filter((i) => normalizeHealth(i.status?.ready, i.status?.status) === 'failed')
@@ -158,11 +186,7 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
         }
       />
 
-      {firstError && (
-        <Alert variant="warning" isInline title={t('common.k8sUnavailable')} className="sc-mb">
-          {firstError.message}
-        </Alert>
-      )}
+      {firstError && <UnavailableState error={firstError} onRetry={refreshAll} />}
 
       {loading && all.length === 0 ? (
         <Spinner />
@@ -173,6 +197,11 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
               <CardTitle>{t('pages.platformHealth')}</CardTitle>
               <CardBody>
                 <HealthDonut ready={overall.ready} failed={overall.failed} pending={overall.pending} />
+                {lockedKinds.length > 0 && (
+                  <p className="sc-muted">
+                    <LockIcon /> {t('access.kindsNotVisible', { count: lockedKinds.length })}
+                  </p>
+                )}
               </CardBody>
             </Card>
             <div className="sc-inventory-grid">
@@ -184,6 +213,7 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
                     count={lists[kind]?.length ?? 0}
                     hint={`${bucket(lists[kind] ?? []).ready} ${t('status.ready')}`}
                     kind={kind}
+                    locked={isLocked(kind)}
                     href={KIND_PATH[kind]}
                   />
                 ),
@@ -202,18 +232,7 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
               { labelKey: 'nav.networkPlacements', path: '/create/networkplacement', kind: 'NetworkPlacement' as const },
               { labelKey: 'nav.assignments', path: '/create/assignment', kind: 'Assignment' as const },
             ].map((a) => (
-              <Card
-                key={a.path}
-                isSelectable
-                isCompact
-                className="sc-action-card"
-                onClick={() => navigate(a.path)}
-              >
-                <CardTitle>
-                  <KindIcon kind={a.kind} size="sm" />
-                  {t(a.labelKey)}
-                </CardTitle>
-              </Card>
+              <SelfServiceCard key={a.path} kind={a.kind} labelKey={a.labelKey} onOpen={() => navigate(a.path)} />
             ))}
           </div>
 
@@ -281,6 +300,23 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
                 {kindRows.map((row) => {
                   const b = bucket(lists[row.kind] ?? []);
                   const health = b.total === 0 ? 0 : Math.round((b.ready / b.total) * 100);
+                  if (isLocked(row.kind)) {
+                    return (
+                      <Tr key={row.kind}>
+                        <Td>
+                          <span className="sc-kind-cell">
+                            <KindIcon kind={row.kind} size="sm" />
+                            {row.label}
+                          </span>
+                        </Td>
+                        <Td colSpan={5}>
+                          <span className="sc-muted">
+                            <LockIcon /> {t('access.noAccess')}
+                          </span>
+                        </Td>
+                      </Tr>
+                    );
+                  }
                   return (
                     <Tr key={row.kind}>
                       <Td>

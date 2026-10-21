@@ -70,6 +70,9 @@ export interface EntitySpec {
   billingID?: string;
   websiteLink?: string;
   namespaceRbac?: EntityNamespaceRbac;
+  displayName?: string;
+  contacts?: { name: string; email?: string; url?: string }[];
+  allowedSites?: string[];
 }
 
 export type Entity = K8sResource<EntitySpec>;
@@ -675,6 +678,7 @@ export type UIHealthChecker = K8sResource<UIHealthCheckerSpec>;
 /** Union of all Hybrid Sovereign CR kinds */
 export type HybridSovereignKind =
   | 'Entity'
+  | 'TenantProfile'
   | 'Team'
   | 'Assignment'
   | 'Project'
@@ -704,6 +708,7 @@ export type HybridSovereignKind =
 /** Plural resource names for K8s API paths */
 export const KIND_PLURALS: Record<HybridSovereignKind, string> = {
   Entity: 'entities',
+  TenantProfile: 'tenantprofiles',
   Team: 'teams',
   Assignment: 'assignments',
   Project: 'projects',

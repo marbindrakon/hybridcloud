@@ -21,6 +21,11 @@ let permissionsBaseUrl = '/api/k8s';
 let permissionsStyle: PermissionsClientStyle = 'can-i';
 let permissionsFetch: typeof fetch = fetch;
 
+/** How the host checks permissions: `can-i` = dashboard server, `ssar` = raw reviews (console). */
+export function getPermissionsClientStyle(): PermissionsClientStyle {
+  return permissionsStyle;
+}
+
 export function configurePermissionsClient(
   baseUrl: string,
   options?: { style?: PermissionsClientStyle; fetchFn?: typeof fetch },

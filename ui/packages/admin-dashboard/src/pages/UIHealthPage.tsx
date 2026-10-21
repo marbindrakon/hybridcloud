@@ -13,6 +13,7 @@ import {
   PageHeader,
   useK8sResourceList,
   useTranslation,
+  UnavailableState,
 } from '@hybridsovereign/shared';
 
 type ProbeResult = {
@@ -150,11 +151,7 @@ export function UIHealthPage(): React.ReactElement {
         }
       />
 
-      {error && (
-        <Alert variant="warning" isInline title={t('common.k8sUnavailable')} className="sc-mb">
-          {error.message}
-        </Alert>
-      )}
+      {error && <UnavailableState error={error} kind="UIHealthChecker" />}
 
       {probeError && (
         <Alert variant="danger" isInline title={t('pages.uiHealthProbeFailed')} className="sc-mb">

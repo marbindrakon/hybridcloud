@@ -37,10 +37,6 @@ spec:
         - name: oauth-client-secret
           secret:
             secretName: {{ include "dashboard.name" . }}-oauth-client
-        - name: central-reader
-          secret:
-            secretName: dashboard-central-reader
-            optional: true
       containers:
         - name: oauth-proxy
           image: {{ .Values.oauthProxy.image }}
@@ -70,6 +66,15 @@ spec:
             - --pass-basic-auth=false
             - --skip-auth-regex=^/healthz$
             - --skip-provider-button=true
+            {{- with .Values.oauthProxy.logoutUrl }}
+            - --logout-url={{ . }}
+            {{- end }}
+            {{- with .Values.oauthProxy.openshiftSar }}
+            {{- /* Platform administrators only: a session whose user fails this review gets 403 from the
+                 proxy; bearer tokens (the console's plugin proxy) are accepted with the same review. */}}
+            - --openshift-sar={{ toJson . }}
+            - --openshift-delegate-urls={{ dict "/" . | toJson }}
+            {{- end }}
           volumeMounts:
             - name: proxy-tls
               mountPath: /etc/tls/private
@@ -105,13 +110,13 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
-          volumeMounts:
-            - name: central-reader
-              mountPath: /etc/central-reader
-              readOnly: true
           env:
             - name: PORT
               value: "8080"
+            {{- with .Values.oauthProxy.openshiftSar }}
+            - name: SHC_PLATFORM_SAR
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- range $key, $val := .Values.env }}
             - name: {{ $key }}
               value: {{ $val | quote }}
