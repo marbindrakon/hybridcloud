@@ -957,6 +957,7 @@ export function CreateResourceForm({
                   <FormGroup label="Enable Argo CD" fieldId="argo">
                     <Switch
                       id="argo"
+                      aria-label={t('fields.argo')}
                       isChecked={argoEnabled}
                       onChange={(_e, checked) => setArgoEnabled(checked)}
                     />
@@ -964,6 +965,7 @@ export function CreateResourceForm({
                   <FormGroup label="Enable Istio" fieldId="istio">
                     <Switch
                       id="istio"
+                      aria-label={t('fields.istio')}
                       isChecked={istioEnabled}
                       onChange={(_e, checked) => setIstioEnabled(checked)}
                     />
