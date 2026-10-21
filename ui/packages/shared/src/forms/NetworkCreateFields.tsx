@@ -38,6 +38,7 @@ import {
   ASN_MAX,
   ASN_MIN,
   CLOUD_INFRASTRUCTURE_TYPES,
+  GCP_ATTACHMENTS,
   DEFAULT_CLOUDVIRT_NAMESPACES,
   DEFAULT_CREATE_PROJECT_DOMAIN,
   DEFAULT_EXTERNAL_EVPN,
@@ -294,10 +295,10 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
   const [bootImage, setBootImage] = useState('');
   const [storageClass, setStorageClass] = useState('');
   const [fabricCredVault, setFabricCredVault] = useState('');
-  // aws
-  const [awsAccount, setAwsAccount] = useState('');
+  // aws, gcp: a region (the platform's own workload identity reaches it; no stored keys)
   const [awsRegion, setAwsRegion] = useState('');
-  const [awsBaseDomain, setAwsBaseDomain] = useState('');
+  const [gcpRegion, setGcpRegion] = useState('');
+  const [gcpAttachment, setGcpAttachment] = useState<string>('vpn');
   // external
   const [evpn, setEvpn] = useState(DEFAULT_EXTERNAL_EVPN);
   // dns (openstack, openshift)
@@ -309,13 +310,13 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
   const [dnsZoneQuota, setDnsZoneQuota] = useState(String(DEFAULT_SITE_DNS.zoneQuota));
 
   const needsCreds = cloudInfrastructureNeedsCredentials(type, clusterRef.trim());
-  const showCreds = type !== 'external';
+  const showCreds = type === 'openstack' || type === 'openshift';
   const hasDns = type === 'openstack' || type === 'openshift';
-  const awsAccountOk = /^[0-9]{12}$/.test(awsAccount.trim());
   const zoneQuotaOk = !dnsZoneQuota.trim() || isIntInRange(dnsZoneQuota, 1, Number.MAX_SAFE_INTEGER);
 
   let valid = !needsCreds || !!credVault.trim();
-  if (type === 'aws' && (!awsAccountOk || !awsRegion.trim())) valid = false;
+  if (type === 'aws' && !awsRegion.trim()) valid = false;
+  if (type === 'gcp' && (!gcpRegion.trim() || gcpAttachment !== 'vpn')) valid = false;
   if (hasDns && dnsMode === 'native' && !dnsProject.trim()) valid = false;
   if (hasDns && !zoneQuotaOk) valid = false;
 
@@ -337,15 +338,8 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
       if (fabricCredVault.trim()) ocp.fabricCredentialsRef = { vaultPath: fabricCredVault.trim() };
       return { openshift: ocp };
     }
-    if (type === 'aws') {
-      return {
-        aws: {
-          accountId: awsAccount.trim(),
-          region: awsRegion.trim(),
-          ...(awsBaseDomain.trim() ? { baseDomain: awsBaseDomain.trim() } : {}),
-        },
-      };
-    }
+    if (type === 'aws') return { aws: { region: awsRegion.trim() } };
+    if (type === 'gcp') return { gcp: { region: gcpRegion.trim(), attachment: gcpAttachment } };
     return { external: { evpn } };
   };
 
@@ -466,21 +460,29 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
       )}
 
       {type === 'aws' && (
+        <FormGroup label={t('fields.region')} fieldId="ci-aws-region" isRequired>
+          <TextInput id="ci-aws-region" value={awsRegion} onChange={(_e, v) => setAwsRegion(v)} />
+          <Help>{t('fields.publicCloudSiteHelp')}</Help>
+        </FormGroup>
+      )}
+
+      {type === 'gcp' && (
         <>
-          <FormGroup label={t('fields.awsAccountId')} fieldId="ci-aws-account" isRequired>
-            <TextInput
-              id="ci-aws-account"
-              value={awsAccount}
-              onChange={(_e, v) => setAwsAccount(v)}
-              validated={!awsAccount || awsAccountOk ? 'default' : 'error'}
-            />
+          <FormGroup label={t('fields.region')} fieldId="ci-gcp-region" isRequired>
+            <TextInput id="ci-gcp-region" value={gcpRegion} onChange={(_e, v) => setGcpRegion(v)} />
+            <Help>{t('fields.publicCloudSiteHelp')}</Help>
           </FormGroup>
-          <FormGroup label={t('fields.region')} fieldId="ci-aws-region" isRequired>
-            <TextInput id="ci-aws-region" value={awsRegion} onChange={(_e, v) => setAwsRegion(v)} />
-          </FormGroup>
-          <FormGroup label={t('fields.baseDomain')} fieldId="ci-aws-base">
-            <TextInput id="ci-aws-base" value={awsBaseDomain} onChange={(_e, v) => setAwsBaseDomain(v)} />
-            <Help>{t('fields.awsBaseDomainHelp')}</Help>
+          <FormGroup label={t('fields.gcpAttachment')} fieldId="ci-gcp-attachment" isRequired>
+            <FormSelect id="ci-gcp-attachment" value={gcpAttachment} onChange={(_e, v) => setGcpAttachment(v)}>
+              {GCP_ATTACHMENTS.map((a) => (
+                <FormSelectOption
+                  key={a}
+                  value={a}
+                  label={a === 'vpn' ? t('fields.gcpAttachmentVpn') : t('fields.gcpAttachmentInterconnect')}
+                  isDisabled={a !== 'vpn'}
+                />
+              ))}
+            </FormSelect>
           </FormGroup>
         </>
       )}

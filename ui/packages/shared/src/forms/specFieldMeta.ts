@@ -90,7 +90,8 @@ const cinfraOpenshift = whenType('type', 'openshift');
 const cinfraAws = whenType('type', 'aws');
 const cinfraGcp = whenType('type', 'gcp');
 const cinfraExternal = whenType('type', 'external');
-const cinfraCreds = whenType('type', ['openstack', 'openshift', 'aws']);
+// aws and gcp sites use the platform's workload identity (no stored credential)
+const cinfraCreds = whenType('type', ['openstack', 'openshift']);
 const cinfraDns = whenType('type', ['openstack', 'openshift']);
 const dnsNative = whenType('dns.mode', 'native');
 const poOpenstack = whenType('type', 'openstack');
@@ -252,9 +253,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         visibleWhen: cinfraOpenshift,
         adminOnly: true,
       },
-      { path: 'aws.accountId', labelKey: 'fields.awsAccountId', widget: 'text', visibleWhen: cinfraAws },
       { path: 'aws.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraAws },
-      { path: 'aws.baseDomain', labelKey: 'fields.baseDomain', widget: 'text', helpKey: 'fields.awsBaseDomainHelp', visibleWhen: cinfraAws, omitWhenEmpty: true },
       { path: 'gcp.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraGcp },
       {
         path: 'gcp.attachment',
@@ -322,11 +321,9 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
     ],
   },
   CloudAWS: {
+    // The API has the site only; the platform assigns the account (UX-038).
     fields: [
-      { path: 'account', labelKey: 'fields.account', widget: 'text' },
-      { path: 'vaultPath', labelKey: 'fields.vaultPath', widget: 'text' },
-      { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text' },
-      { path: 'landingzone', labelKey: 'fields.landingzone', widget: 'text' },
+      { path: 'cloudRef', labelKey: 'fields.site', widget: 'namedRef', immutable: true, helpKey: 'fields.cloudAwsSiteHelp' },
     ],
   },
   CloudGCP: {
