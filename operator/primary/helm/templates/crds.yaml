@@ -338,6 +338,9 @@ spec:
                 loginUrl:
                   type: string
                   description: OIDC login URL for accessing this org.
+                orgUrl:
+                  type: string
+                  description: Link to this organization in the automation platform's web console.
                 adminGroups:
                   type: array
                   items:

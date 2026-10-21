@@ -68,6 +68,24 @@
     - name: Configure KV engine, policies, and identity groups
       ansible.builtin.include_tasks: kv_engine.yml
 
+    - name: Granted access groups that exist
+      ansible.builtin.set_fact:
+        vaultkv_granted_rbacs: >-
+          {{ ((admin_rbac_crs | default({})).results | default([]) + (reader_rbac_crs | default({})).results | default([])
+              + (ops_rbac_crs | default({})).results | default([]) + (developer_rbac_crs | default({})).results | default([]))
+             | selectattr('resources', 'defined') | map(attribute='resources') | flatten
+             | selectattr('status.group', 'defined') | unique(attribute='metadata.name') | list }}
+
+    # Ready only with a mapped access group and the groups claim verified for a member (or no member yet)
+    - name: Check sign-in for the granted access groups
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/tool_org_signin_status.yml"
+      vars:
+        tos_kind: VaultKV
+        tos_fields: [spec.vaultAdminRbac, spec.vaultReaderRbac, spec.vaultOpsRbac, spec.vaultDeveloperRbac]
+        tos_rbacs: "{{ vaultkv_granted_rbacs }}"
+        tos_mapping_failed: "{{ vaultkv_mapping_failed | default(true) | bool }}"
+        tos_client: "{{ vault_status.oidcClientId | default('') }}"
+
     - name: Set reconciliation timestamp
       ansible.builtin.set_fact:
         vaultkv_status_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -92,16 +110,13 @@
           readerRbacGroups: "{{ reader_group_paths }}"
           opsRbacGroups: "{{ ops_group_paths }}"
           developerRbacGroups: "{{ developer_group_paths }}"
-          loginUrl: "{{ vault_external_url }}/ui/vault/auth/oidc/oidc/callback"
+          loginUrl: "{{ vault_external_url | regex_replace('/$', '') }}/ui/vault/auth?with=oidc"
           vaultUrl: "{{ vault_external_url }}"
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ vaultkv_status_time }}"
-              reason: EDASucceeded
-              message: >-
-                KV engine '{{ kv_path }}' configured by EDA.
-                Login at {{ vault_external_url }} using OIDC method.
+          conditions: >-
+            {{ [{'type': 'Ready', 'status': 'True', 'lastTransitionTime': vaultkv_status_time,
+                 'reason': tool_org_ready_reason,
+                 'message': 'KV engine ' ~ kv_path ~ ' configured by EDA. Sign in at ' ~ vault_external_url ~ ' with OIDC.'}]
+               + ([tool_org_signin_condition] if tool_org_signin_condition | default({}) | length > 0 else []) }}
 
   rescue:
     - name: Mark VaultKV as failed on services cluster
@@ -113,10 +128,15 @@
         cr_namespace: "{{ vaultkv_cr_namespace }}"
         cr_status_body:
           status: failed
-          reason: ProvisionFailed
+          reason: "{{ tool_org_failure_reason | default('ProvisionFailed') }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          conditions: >-
+            {{ [{'type': 'Ready', 'status': 'False', 'lastTransitionTime': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z'),
+                 'reason': tool_org_failure_reason | default('ProvisionFailed'),
+                 'message': ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed'))}]
+               + ([tool_org_signin_condition] if tool_org_signin_condition | default({}) | length > 0 else []) }}
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 

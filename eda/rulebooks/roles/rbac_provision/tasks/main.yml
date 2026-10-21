@@ -120,7 +120,7 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
       vars:
         krt_purpose: membership
-        krt_rbac_config: "{{ rbac_cfg_lookup.resources[0].metadata.name | default(rbac_spec.config | default('keycloak-sovereign-tenants-services', true), true) }}"
+        krt_rbac_config: "{{ rbac_cfg_lookup.resources[0].metadata.name }}"
         krt_url: "{{ svc_keycloak_url }}"
         krt_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
         krt_token_fact: svc_access_token
@@ -178,7 +178,7 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
       vars:
         krt_purpose: membership
-        krt_rbac_config: "{{ rbac_cfg_lookup.resources[0].metadata.name | default(rbac_spec.config | default('keycloak-sovereign-tenants-services', true), true) }}"
+        krt_rbac_config: "{{ rbac_cfg_lookup.resources[0].metadata.name }}"
         krt_url: "{{ svc_keycloak_url }}"
         krt_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
         krt_token_fact: svc_access_token

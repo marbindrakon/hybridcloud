@@ -1,0 +1,151 @@
+---
+# Check that a member of a granted access group would carry that group in the sign-in token of a tool's client
+# (Vault, AAP, Quay). Read-only: Keycloak's example-token endpoint of the client, for one member of one granted
+# group; nobody signs in and nothing is written.
+#
+# Inputs:
+#   kvg_client       clientId of the tool's sign-in client in the tenant realm
+#   kvg_rbacs        the granted Rbac objects (as read from the API; status.group, status.groupId, status.config)
+#   kvg_rbac_config  optional: the RbacConfig whose realm automation client is used (default: the first granted
+#                    Rbac's status.config, then the platform default of obtain_keycloak_realm_token.yml)
+# Sets:
+#   kvg_verified  true when the member's example token carries the group path
+#   kvg_reason    GroupClaimVerified | NoMembersYet | ClaimMissing | MapperMissing | AccessNotMapped
+#   kvg_group     the group path that was checked ('' when none)
+#   kvg_mapper    true when the client has the groups mapper (full paths)
+# Only ids, client ids and group paths reach the job output (the example token holds personal data: no_log).
+#
+# The realm token is the membership automation client's: the example-token endpoint needs to view the client
+# (view-clients) and the user (view-users) with one token (rbacconfig_provision defaults).
+- name: Load the groups mapper definition
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/keycloak_group_mapper.yml"
+
+- name: Granted groups to check
+  ansible.builtin.set_fact:
+    _kvg_groups: >-
+      {%- set out = [] -%}
+      {%- for r in kvg_rbacs | default([]) -%}
+        {%- set st = r.status | default({}, true) -%}
+        {%- if (st.group | default('', true)) | length > 0 and (st.groupId | default('', true)) | length > 0 -%}
+          {%- set _ = out.append({'path': '/' ~ (st.group | regex_replace('^/+', '')), 'id': st.groupId,
+                                   'config': st.config | default('', true)}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    kvg_verified: false
+    kvg_reason: AccessNotMapped
+    kvg_group: ""
+    kvg_mapper: false
+
+- name: Check the sign-in claim
+  when: _kvg_groups | length > 0
+  block:
+    - name: Obtain the realm token for the check
+      ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
+      vars:
+        krt_purpose: membership
+        krt_rbac_config: "{{ kvg_rbac_config | default(_kvg_groups[0].config, true) }}"
+        krt_token_fact: _kvg_token
+
+    - name: Read the sign-in client {{ kvg_client }}
+      ansible.builtin.uri:
+        url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm_name }}/clients?clientId={{ kvg_client | urlencode }}"
+        headers: {Authorization: "Bearer {{ _kvg_token }}"}
+        validate_certs: false
+        status_code: [200]
+      register: _kvg_client
+
+    - name: Does {{ kvg_client }} carry the groups claim with full paths
+      vars:
+        _c: "{{ (_kvg_client.json | default([]) + [{}]) | first }}"
+        _want: "{{ keycloak_group_mapper.config }}"
+      ansible.builtin.set_fact:
+        _kvg_client_uuid: "{{ _c.id | default('') }}"
+        kvg_mapper: >-
+          {%- set ns = namespace(ok=false) -%}
+          {%- for m in _c.protocolMappers | default([], true) if m.protocolMapper | default('') == keycloak_group_mapper.protocolMapper -%}
+            {%- set cfg = m.config | default({}, true) -%}
+            {%- if cfg['claim.name'] | default('') == _want['claim.name']
+                  and (cfg['full.path'] | default('') | string | lower) == (_want['full.path'] | string | lower)
+                  and (cfg['id.token.claim'] | default('true') | string | lower) == 'true' -%}
+              {%- set ns.ok = true -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.ok }}
+
+    - name: Find a member of a granted group
+      ansible.builtin.uri:
+        url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ item.id }}/members?first=0&max=1&briefRepresentation=true"
+        headers: {Authorization: "Bearer {{ _kvg_token }}"}
+        validate_certs: false
+        status_code: [200, 404]
+      loop: "{{ _kvg_groups }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: _kvg_members
+      when: _kvg_client_uuid | length > 0
+
+    - name: Pick the first group that has a member
+      ansible.builtin.set_fact:
+        _kvg_pick: >-
+          {%- set ns = namespace(p={}) -%}
+          {%- for res in _kvg_members.results | default([]) if not ns.p and res.status | default(0) == 200
+                and res.json | default([]) | length > 0 -%}
+            {%- set ns.p = {'path': res.item.path, 'user': res.json[0].id} -%}
+          {%- endfor -%}
+          {{ ns.p }}
+
+    - name: The client is missing or has no groups claim
+      ansible.builtin.set_fact:
+        kvg_reason: MapperMissing
+      when: _kvg_client_uuid | length == 0 or not (kvg_mapper | bool)
+
+    - name: No granted group has a member yet
+      ansible.builtin.set_fact:
+        kvg_reason: NoMembersYet
+      when: kvg_reason != 'MapperMissing' and _kvg_pick | length == 0
+
+    - name: Ask Keycloak for the member's example sign-in token
+      ansible.builtin.uri:
+        url: >-
+          {{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm_name }}/clients/{{ _kvg_client_uuid
+          }}/evaluate-scopes/generate-example-id-token?scope=openid&userId={{ _kvg_pick.user }}
+        headers: {Authorization: "Bearer {{ _kvg_token }}"}
+        validate_certs: false
+        status_code: [200, 403]
+      register: _kvg_example
+      no_log: true
+      when: _kvg_client_uuid | length > 0 and _kvg_pick | length > 0
+
+    - name: Refuse to guess when Keycloak denies the check
+      ansible.builtin.fail:
+        msg: >-
+          The sign-in check of client {{ kvg_client }} was refused by Keycloak (HTTP 403): the realm membership
+          automation client needs view-clients and view-users (reconcile the RbacConfig).
+      when: _kvg_example.status | default(0) == 403
+
+    - name: Record the result
+      ansible.builtin.set_fact:
+        kvg_group: "{{ _kvg_pick.path | default('') }}"
+        kvg_verified: >-
+          {{ _kvg_example.status | default(0) == 200
+             and (_kvg_pick.path in ((_kvg_example.json | default({})).groups | default([], true))) }}
+      when: _kvg_example.status | default(0) == 200
+
+    - name: Name the outcome
+      ansible.builtin.set_fact:
+        kvg_reason: "{{ 'GroupClaimVerified' if kvg_verified | bool else 'ClaimMissing' }}"
+        _kvg_example: {}
+      when: _kvg_pick | length > 0 and _kvg_client_uuid | length > 0 and (kvg_mapper | bool or kvg_verified | bool)
+
+  always:
+    - name: Forget the realm token of the check
+      ansible.builtin.set_fact:
+        _kvg_token: ""
+        _kvg_example: {}
+      no_log: true
+
+- name: Sign-in check of {{ kvg_client }}
+  ansible.builtin.debug:
+    msg: "client={{ kvg_client }} group={{ kvg_group }} mapper={{ kvg_mapper }} result={{ kvg_reason }}"
