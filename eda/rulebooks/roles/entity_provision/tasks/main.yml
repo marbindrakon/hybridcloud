@@ -140,6 +140,13 @@
         es_wanted: []
       when: entity_spec.namespaceRbac is not defined
 
+    - name: Without namespaceRbac, remove the entity's named roles
+      ansible.builtin.include_tasks: prune_roles.yml
+      vars:
+        _keep_roles: []
+        _keep_bindings: []
+      when: entity_spec.namespaceRbac is not defined
+
     - name: Get current timestamp for status
       ansible.builtin.set_fact:
         entity_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"

@@ -27,7 +27,7 @@ are reported as `known` while they fail and as `fixed` once they pass.
 
 | Source | What it checks |
 |---|---|
-| generated | Every access group `<entity>.<rbac>` mapped in `Entity.spec.namespaceRbac` gets exactly the verbs of its roles (`eda/rulebooks/roles/entity_provision/vars/main.yml`, `entity_named_roles`: crud = get, list, watch, create, update, patch, delete; read = get, list, watch; `<kind>/status` read) in `entity-<entity>`, and nothing else of the `hybridsovereign.redhat` API group there. |
+| generated | Every access group `<entity>.<rbac>` mapped in `Entity.spec.namespaceRbac` gets exactly the verbs of its roles (`eda/rulebooks/roles/entity_provision/vars/main.yml`, `entity_named_roles`: crud = get, list, watch, create, update, patch, delete; read = get, list, watch; `<kind>/status` read) plus the tenant baseline of `eda/common/vars/scope_levels.yml` (`tenantprofiles` get, list, watch) in `entity-<entity>`, and nothing else of the `hybridsovereign.redhat` API group there. |
 | `cases/negative.yaml` | A signed-in user with no role sees no SHC object in the tenant, platform and plugins namespaces; no access group reads Secrets, creates or execs into pods, writes RoleBindings, escalates Roles, binds admin/cluster-admin, edits its namespace or reads Entities; a tenant's admins get nothing in another tenant. |
 | `cases/automation.yaml` | The platform automation account (`system:serviceaccount:open-cluster-management-agent-addon:shc-automation`) can do what the EDA jobs do on services and cannot create ClusterRoleBindings, bind cluster-admin, touch nodes, escalate Roles or exec into pods. |
 | `cases/<other>.yaml` | Added by the streams that own those rows (tenant profile, scope roles, security closures). |

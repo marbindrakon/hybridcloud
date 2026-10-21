@@ -85,17 +85,17 @@ deprecated and left out):
 <!-- roles:begin -->
 | Role | Key in `spec.namespaceRbac` | Create, change and delete | Read |
 |---|---|---|---|
-| Tenant admin | `entityAdmin` | OpenStack environments, OpenShift Virtualization environments, networks, network placements, edge connections, AWS environments, OpenShift clusters, KV secrets engines, Vaults, Quay organizations, AAP organizations, app projects, team setups, cluster assignments, access groups | the same |
-| Auditor | `auditor` | - | OpenStack environments, OpenShift Virtualization environments, networks, network placements, edge connections, AWS environments, OpenShift clusters, KV secrets engines, Vaults, Quay organizations, AAP organizations, app projects, team setups, cluster assignments, access groups |
+| Tenant admin | `entityAdmin` | OpenStack environments, OpenShift Virtualization environments, networks, network placements, edge connections, AWS environments, Google Cloud environments, OpenShift clusters, KV secrets engines, Vaults, Quay organizations, AAP organizations, app projects, team setups, cluster assignments, access groups, VM migrations to OpenStack | the same |
+| Auditor | `auditor` | - | OpenStack environments, OpenShift Virtualization environments, networks, network placements, edge connections, AWS environments, Google Cloud environments, OpenShift clusters, KV secrets engines, Vaults, Quay organizations, AAP organizations, app projects, team setups, cluster assignments, access groups, VM migrations to OpenStack |
 | OpenStack environment admin | `cloudOSOAdmin` | OpenStack environments | access groups |
 | OpenStack environment viewer | `cloudOSOView` | - | OpenStack environments, access groups |
 | VM environment admin | `cloudVirtAdmin` | OpenShift Virtualization environments | access groups |
 | VM environment viewer | `cloudVirtView` | - | OpenShift Virtualization environments, access groups |
-| Network admin | `networkAdmin` | networks, network placements, edge connections | OpenStack environments, OpenShift Virtualization environments, access groups |
+| Network admin | `networkAdmin` | networks, network placements, edge connections | OpenStack environments, OpenShift Virtualization environments, AWS environments, Google Cloud environments, access groups |
 | Network viewer | `networkView` | - | networks, network placements, edge connections, access groups |
 | AWS environment admin | `cloudAWSAdmin` | AWS environments | access groups |
 | AWS environment viewer | `cloudAWSView` | - | AWS environments, access groups |
-| OpenShift cluster admin | `platformOpenshiftAdmin` | OpenShift clusters | OpenStack environments, AWS environments, access groups |
+| OpenShift cluster admin | `platformOpenshiftAdmin` | OpenShift clusters | OpenStack environments, AWS environments, Google Cloud environments, access groups |
 | OpenShift cluster viewer | `platformOpenshiftView` | - | OpenShift clusters, access groups |
 | Team setup admin | `teamAdmin` | team setups | cluster assignments, access groups |
 | Team setup viewer | `teamView` | - | team setups, cluster assignments, access groups |

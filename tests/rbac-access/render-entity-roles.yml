@@ -37,6 +37,7 @@
           vars:
             entity_cr_name: "{{ render_entity }}"
             entity_namespace: "entity-{{ render_entity }}"
+            shc_common_dir: "{{ playbook_dir }}/../../eda/common"
             entity_spec:
               namespaceRbac: "{{ render_namespace_rbac }}"
       always:

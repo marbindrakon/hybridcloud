@@ -9,6 +9,7 @@ entity_named_roles:
       - networkplacements
       - attachmentcircuits
       - cloudawss
+      - cloudgcps
       - platformopenshifts
       - vaultkvs
       - vaults
@@ -18,6 +19,7 @@ entity_named_roles:
       - teams
       - assignments
       - rbacs
+      - openstackmigrations
     read_resources: []
 
   - spec_key: auditor
@@ -30,6 +32,7 @@ entity_named_roles:
       - networkplacements
       - attachmentcircuits
       - cloudawss
+      - cloudgcps
       - platformopenshifts
       - vaultkvs
       - vaults
@@ -39,6 +42,7 @@ entity_named_roles:
       - teams
       - assignments
       - rbacs
+      - openstackmigrations
 
   - spec_key: BobsTeam
     role_name: bobs-team
@@ -50,6 +54,7 @@ entity_named_roles:
       - networkplacements
       - attachmentcircuits
       - cloudawss
+      - cloudgcps
       - platformopenshifts
       - vaultkvs
       - vaults
@@ -59,6 +64,7 @@ entity_named_roles:
       - teams
       - assignments
       - rbacs
+      - openstackmigrations
 
   - spec_key: cloudOSOAdmin
     role_name: cloudoso-admin
@@ -83,7 +89,7 @@ entity_named_roles:
   - spec_key: networkAdmin
     role_name: network-admin
     crud_resources: [hybridnetworks, networkplacements, attachmentcircuits]
-    read_resources: [cloudosos, cloudvirts, rbacs]
+    read_resources: [cloudosos, cloudvirts, cloudawss, cloudgcps, rbacs]
 
   - spec_key: networkView
     role_name: network-view
@@ -103,7 +109,7 @@ entity_named_roles:
   - spec_key: platformOpenshiftAdmin
     role_name: platformopenshift-admin
     crud_resources: [platformopenshifts]
-    read_resources: [cloudosos, cloudawss, rbacs]
+    read_resources: [cloudosos, cloudawss, cloudgcps, rbacs]
 
   - spec_key: platformOpenshiftView
     role_name: platformopenshift-view

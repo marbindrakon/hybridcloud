@@ -8,7 +8,8 @@ Rows:
   generated  From the tenant's Entity spec.namespaceRbac and the role matrix the EDA jobs render
              (eda/rulebooks/roles/entity_provision/vars/main.yml, entity_named_roles): each access group
              <entity>.<rbac> gets exactly its roles' verbs on its roles' kinds in entity-<entity> (crud = get, list,
-             watch, create, update, patch, delete; read = get, list, watch; <kind>/status get), and is denied every
+             watch, create, update, patch, delete; read = get, list, watch; <kind>/status get) plus the tenant
+             baseline of eda/common/vars/scope_levels.yml (tenantprofiles get, list, watch), and is denied every
              other (kind, verb) of the API group there. Kinds come from the CRD sources.
   cases      tests/rbac-access/cases/*.yaml, each a list of
                {id, resolves: [UX-..], principal: {user?, groups: [...]}, namespace, resource: {group, resource,
@@ -59,6 +60,7 @@ AUTOMATION = "system:serviceaccount:open-cluster-management-agent-addon:shc-auto
 CRUD = ["get", "list", "watch", "create", "update", "patch", "delete"]
 READ = ["get", "list", "watch"]
 ROLE_VARS = ROOT / "eda/rulebooks/roles/entity_provision/vars/main.yml"
+SCOPE_LEVELS = ROOT / "eda/common/vars/scope_levels.yml"
 CRD_SOURCES = ROOT / "operator/config/crd/bases"
 
 
@@ -73,6 +75,13 @@ def shc_kinds():
 
 def role_matrix():
     return yaml.safe_load(ROLE_VARS.read_text())["entity_named_roles"]
+
+
+def baseline_rules():
+    """The tenant baseline every tenant Role carries (eda/common/vars/scope_levels.yml)."""
+    if not SCOPE_LEVELS.exists():
+        return []
+    return yaml.safe_load(SCOPE_LEVELS.read_text()).get("tenant_baseline_rules") or []
 
 
 class Api:
@@ -120,6 +129,12 @@ def generated_rows(entity, ns_rbac, kinds):
     ns = f"entity-{entity}"
     for g, keys in sorted(by_group.items()):
         allowed = {}
+        if any(k in roles for k in keys):
+            for rule in baseline_rules():
+                if GROUP in rule.get("apiGroups", []):
+                    for res in rule.get("resources", []):
+                        plural, _, sub = res.partition("/")
+                        allowed.setdefault((plural, sub), set()).update(rule.get("verbs", []))
         for k in keys:
             r = roles.get(k)
             if r is None:
