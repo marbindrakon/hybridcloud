@@ -1132,5 +1132,14 @@
     "createsOnSite": "Crée {{kind}} {{name}} dans {{namespace}} sur le site {{site}}.",
     "virtNetworks": "Namespaces de VM et leurs réseaux : {{list}}. Chaque réseau doit aussi être attaché à cet environnement.",
     "attaches": "Attache le réseau {{network}} à {{environment}}."
+  },
+  "gettingStarted": {
+    "title": "Pour commencer",
+    "intro": "Sovereign Cloud donne à votre locataire des réseaux qui s'étendent sur des sites et des environnements sur ces sites. Un réseau attaché à deux environnements les relie.",
+    "step1": "Créer un réseau (un espace d'adresses pour vos charges de travail)",
+    "step2": "Créer un environnement sur un site (par exemple OpenShift Virtualization)",
+    "step3": "Attacher le réseau à l'environnement (onglet Réseaux de l'environnement)",
+    "step4": "Ouvrir la console du site depuis la page de l'environnement et se connecter",
+    "dismiss": "Masquer Pour commencer"
   }
 }

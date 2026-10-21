@@ -1132,5 +1132,14 @@
     "createsOnSite": "Creates {{kind}} {{name}} in {{namespace}} on site {{site}}.",
     "virtNetworks": "VM namespaces and their networks: {{list}}. Each network must also be attached to this environment.",
     "attaches": "Attaches network {{network}} to {{environment}}."
+  },
+  "gettingStarted": {
+    "title": "Getting started",
+    "intro": "Sovereign Cloud gives your tenant networks that span sites and environments on those sites. A network attached to two environments connects them.",
+    "step1": "Create a network (an address space for your workloads)",
+    "step2": "Create an environment on a site (for example OpenShift Virtualization)",
+    "step3": "Attach the network to the environment (the environment's Networks tab)",
+    "step4": "Open the site console from the environment page and sign in",
+    "dismiss": "Hide getting started"
   }
 }

@@ -70,3 +70,4 @@ export { ToastHost, pushToast, dismissToast } from './ToastHost';
 export type { Toast, ToastVariant } from './ToastHost';
 export { StatusCallout } from './StatusCallout';
 export { WayInPanel } from './WayInPanel';
+export { GettingStartedCard } from './GettingStartedCard';
