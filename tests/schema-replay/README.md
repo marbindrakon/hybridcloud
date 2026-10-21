@@ -55,7 +55,8 @@ wrong before the change ships.
 
 ```
 tests/schema-replay/selftest.sh OUT_DIR/objects        # a removed status field must show as pruned, a refusing CEL rule as rejections
-tests/schema-replay/test-policies.sh OUT_DIR/objects <primary values.yaml>   # shc-fabric-ledger-guard + shc-gitops-managed behaviour (Warn and Deny)
+tests/schema-replay/test-policies.sh OUT_DIR/objects <primary values.yaml>   # shc-fabric-ledger-guard, shc-gitops-managed (Warn and Deny), shc-gitops-delete-guard behaviour
+#   POLICY_CHECK_ARGS="--unmarked <kind>/<ns>/<name>" also checks that an object without the managed-by label can be deleted
 python3 -m unittest discover -s tests/schema-replay -p 'test_*.py'          # ledger allocation count
 make replay OBJECTS=OUT_DIR/objects BASELINE_CRDS=OUT_DIR/crds
 ```

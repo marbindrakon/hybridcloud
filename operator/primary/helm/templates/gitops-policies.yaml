@@ -1,6 +1,7 @@
 {{- /*
 Admission policies for the platform objects this chart renders from values (templates/cloud-*.yaml,
-hybrid-fabrics.yaml, provider-edges.yaml, plugin-configs.yaml). Mode per policy in values admission.<policy>.mode
+hybrid-fabrics.yaml, provider-edges.yaml, plugin-configs.yaml): shc-fabric-ledger-guard, shc-gitops-managed
+(updates) and shc-gitops-delete-guard (deletes). Mode per policy in values admission.<policy>.mode
 (Warn: [Warn, Audit] and failurePolicy Ignore; Deny: [Deny, Audit] and failurePolicy Fail). Exempt usernames
 and groups come from the shared helpers in _helpers.tpl.
 */}}
@@ -146,4 +147,67 @@ metadata:
 spec:
   policyName: shc-gitops-managed
   validationActions: {{ include "primary-operator.vapActions" $a.gitopsManaged.mode }}
+{{- end }}
+{{- if $a.gitopsDeleteGuard.enabled }}
+---
+# shc-gitops-delete-guard: an object labelled hybridsovereign.redhat/managed-by: gitops cannot be deleted by
+# anyone but the platform automation, the GitOps controller or the cluster's namespace and garbage collectors.
+# Deleting it starts its teardown (a site, a gateway, a plugin configuration) before GitOps creates it again, so
+# a Warn would not stop the harm; remove the object from Git instead. Break glass: set a non-empty annotation
+# hybridsovereign.redhat/gitops-override: "<reason>" on the object first, then delete it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-gitops-delete-guard
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $a.gitopsDeleteGuard.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [hybridsovereign.redhat]
+        apiVersions: ["*"]
+        operations: [DELETE]
+        resources: [cloudinfrastructures, cloudgateways, hybridfabrics, provideredges, dnsconfigs, rbacconfigs, aapconfigs, quayconfigs]
+  matchConditions:
+    - name: gitops-managed
+      expression: >-
+        has(oldObject.metadata.labels)
+        && 'hybridsovereign.redhat/managed-by' in oldObject.metadata.labels
+        && oldObject.metadata.labels['hybridsovereign.redhat/managed-by'] == 'gitops'
+    - name: not-exempt
+      expression: >-
+        !({{ include "primary-operator.isAutomationCEL" . }} || {{ include "primary-operator.isGitopsCEL" . }}
+          || request.userInfo.username in {{ include "primary-operator.celStringList" $a.systemDeleters }})
+  variables:
+    - name: annotations
+      expression: >-
+        has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}
+    - name: override
+      expression: >-
+        'hybridsovereign.redhat/gitops-override' in variables.annotations
+        && variables.annotations['hybridsovereign.redhat/gitops-override'] != ''
+    - name: source
+      expression: >-
+        'hybridsovereign.redhat/gitops-source' in variables.annotations
+        ? variables.annotations['hybridsovereign.redhat/gitops-source'] : 'the platform values'
+  validations:
+    - expression: variables.override
+      messageExpression: >-
+        'This ' + oldObject.kind + ' is managed in Git (' + variables.source + '). Remove it from Git instead; '
+        + 'deleting it here starts its teardown before GitOps creates it again. To delete it anyway, set the '
+        + 'annotation hybridsovereign.redhat/gitops-override to the reason first.'
+      # Invalid (HTTP 422), not Forbidden: the requester may delete such objects in general; the dashboards show
+      # this message for a refused request, and a role hint for a 403
+      reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-gitops-delete-guard
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-gitops-delete-guard
+  validationActions: {{ include "primary-operator.vapActions" $a.gitopsDeleteGuard.mode }}
 {{- end }}

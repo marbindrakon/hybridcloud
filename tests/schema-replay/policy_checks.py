@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Behaviour of the GitOps admission policies (shc-fabric-ledger-guard, shc-gitops-managed) in a replay cluster.
+"""Behaviour of the GitOps admission policies (shc-fabric-ledger-guard, shc-gitops-managed, shc-gitops-delete-guard)
+in a replay cluster.
 
 Run by test-policies.sh through `replay.py --exec`: KUBECONFIG points at the throwaway API server that holds the
 baseline objects and the rendered policies; REPLAY_KUBECTL is the kubectl to use. Every request that could change
 an object is a server-side dry run, so the checks can run in any order.
 
-usage: policy_checks.py --gitops-mode Warn|Deny [--fabric NS/NAME] [--object KIND/NS/NAME]
+usage: policy_checks.py --gitops-mode Warn|Deny [--fabric NS/NAME] [--object KIND/NS/NAME] [--unmarked KIND/NS/NAME]
 """
 import argparse
 import json
@@ -15,6 +16,7 @@ import sys
 
 AUTOMATION = "system:serviceaccount:open-cluster-management-agent-addon:shc-automation"
 ARGO = "system:serviceaccount:kube-system:argocd-manager"
+NS_CONTROLLER = "system:serviceaccount:kube-system:namespace-controller"
 USER = "replay-tenant-user"
 RESULTS = []
 
@@ -37,7 +39,7 @@ def setup(fabric, obj):
                "metadata": {"name": "replay-policy-users"},
                "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"},
                "subjects": [{"apiGroup": "rbac.authorization.k8s.io", "kind": "User", "name": u}
-                            for u in (USER, AUTOMATION, ARGO)]}
+                            for u in (USER, AUTOMATION, ARGO, NS_CONTROLLER)]}
     rc, _, err = kubectl(["apply", "-f", "-"], body=binding)
     if rc:
         sys.exit(f"policy_checks: binding: {err}")
@@ -106,15 +108,42 @@ def gitops_checks(mode, kind, ns, name):
     check("P4 does not match status writes", rc == 0 and "managed in Git" not in err, err.strip())
 
 
+def delete_guard_checks(kind, ns, name, unmarked):
+    def delete_dry(k, n, nm, as_user=USER):
+        return kubectl(["-n", n, "delete", k, nm, "--dry-run=server"], as_user=as_user)
+
+    rc, _, err = delete_dry(kind, ns, name)
+    check("delete guard denies deleting a GitOps-managed object, naming the Git source",
+          rc != 0 and "managed in Git" in err and "test-app/" in err, err.strip())
+    for who in (AUTOMATION, ARGO, NS_CONTROLLER):
+        rc, _, err = delete_dry(kind, ns, name, who)
+        check(f"delete guard exempts {who}", rc == 0, err.strip())
+    if unmarked:
+        uk, uns, un = unmarked.split("/")
+        rc, _, err = delete_dry(uk, uns, un)
+        check("delete guard does not match an object without the managed-by label", rc == 0, err.strip())
+    rc, _, err = kubectl(["-n", ns, "annotate", kind, name, "hybridsovereign.redhat/gitops-override=replay test",
+                          "--overwrite"])
+    if rc:
+        check("delete guard: set the override annotation", False, err.strip())
+        return
+    rc, _, err = delete_dry(kind, ns, name)
+    check("delete guard break-glass override annotation lets the delete through", rc == 0, err.strip())
+    kubectl(["-n", ns, "annotate", kind, name, "hybridsovereign.redhat/gitops-override-"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gitops-mode", choices=("Warn", "Deny"), required=True)
     ap.add_argument("--fabric", default="sovereign-cloud/lab")
     ap.add_argument("--object", default="cloudinfrastructure/sovereign-cloud/iaas1")
+    ap.add_argument("--unmarked", default="",
+                    help="KIND/NS/NAME of an object of a guarded kind without the managed-by label (optional)")
     a = ap.parse_args()
     fns, fname, kind, ons, oname = setup(a.fabric, a.object)
     fabric_checks(fns, fname)
     gitops_checks(a.gitops_mode, kind, ons, oname)
+    delete_guard_checks(kind, ons, oname, a.unmarked)
     failed = [n for n, ok in RESULTS if not ok]
     print(f"policy_checks: {len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
     return 1 if failed else 0

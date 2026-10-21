@@ -91,6 +91,12 @@ admission:
   platformOnlyFields: {enabled: true, mode: Warn}        # shc-platform-only-fields
   gitopsManaged: {enabled: true, mode: Warn}             # shc-gitops-managed
   fabricLedgerGuard: {enabled: true, mode: Deny}         # shc-fabric-ledger-guard
+  gitopsDeleteGuard: {enabled: true, mode: Deny}         # shc-gitops-delete-guard
+  # Exact usernames of the cluster's own deleters (namespace deletion, owner-reference cleanup); exempt from
+  # shc-gitops-delete-guard only.
+  systemDeleters:
+    - system:serviceaccount:kube-system:namespace-controller
+    - system:serviceaccount:kube-system:generic-garbage-collector
   accessFieldLadder: {enabled: true, mode: Deny}         # shc-access-field-ladder (Team/Project access lists)
 # Argo CD application name written into the gitops-source annotation of GitOps-owned objects.
 gitopsSource:
