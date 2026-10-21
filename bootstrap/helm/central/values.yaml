@@ -2678,7 +2678,8 @@ iaasClusterDefaults:
   # limited to it); NADs/UDNs in those namespaces are denied by an admission policy on the cluster.
   fabricAccess:
     enabled: false
-    serviceAccount: shc-fabric
+    # OD12a: the platform automation account (was shc-fabric; same rules, same Vault key cloudinfra/<site>-fabric)
+    serviceAccount: shc-automation
     tokenValidity: 168h
     # BF-09 step 1: the PushSecret no longer deletes the Vault key when it goes, so renaming the account (step 2)
     # cannot remove cloudinfra/<site>-fabric between the old PushSecret's prune and the new one's push
@@ -5414,7 +5415,7 @@ hybridsovereignPrimaryOperator:
           openshift:
             clusterRef: iaas1
             storageClass: ocs-external-storagecluster-ceph-rbd
-            fabricCredentialsRef: {vaultPath: cloudinfra/iaas1-fabric}   # P7.3.2: write MSA shc-fabric
+            fabricCredentialsRef: {vaultPath: cloudinfra/iaas1-fabric}   # P7.3.2: write MSA (shc-automation)
           dns: {mode: platform}   # CloudVirt zones held by the platform (TENANT-DNS D3)
       edge1:
         spec:
@@ -5424,7 +5425,7 @@ hybridsovereignPrimaryOperator:
           openshift:
             clusterRef: edge1
             storageClass: ocs-external-storagecluster-ceph-rbd
-            fabricCredentialsRef: {vaultPath: cloudinfra/edge1-fabric}   # P7.3.2: write MSA shc-fabric
+            fabricCredentialsRef: {vaultPath: cloudinfra/edge1-fabric}   # P7.3.2: write MSA (shc-automation)
           dns: {mode: platform}
       # Billable (AWS us-east-2, owner account): brought into Git with its live spec verbatim (it had been applied
       # by hand). No keys anywhere: the jobs reach AWS through web identity (AssumeRole) per CloudAWS.
