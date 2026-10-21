@@ -869,5 +869,16 @@
     "networkDelete": "Habituellement 15 à 35 minutes après la suppression de ses placements réseau.",
     "placementDelete": "Habituellement 5 à 20 minutes.",
     "entityDelete": "Dure le temps de supprimer tout ce que le locataire détient."
+  },
+  "sites": {
+    "billable": "Facturable : à la charge de ce locataire",
+    "unavailable": "indisponible pour le moment",
+    "typeName": "Saisissez le nom du site donné par l'équipe plateforme.",
+    "platformDefault": "Le site par défaut de la plateforme",
+    "choose": "Choisir un site",
+    "noneOfType": "Aucun site de ce type n'est disponible pour ce locataire. Contactez l'équipe plateforme.",
+    "capVirtualization": "Machines virtuelles",
+    "capNetworking": "Réseaux hybrides",
+    "capDns": "DNS"
   }
 }

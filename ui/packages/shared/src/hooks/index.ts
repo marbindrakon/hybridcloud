@@ -57,3 +57,5 @@ export {
 export type { EntityOption, UseEntityOptionsOptions, UseEntityOptionsResult } from './entityOptions';
 export { useScopedResourceList } from './scopedList';
 export type { ScopedListResult } from './scopedList';
+export { useTenantProfile, sitesOfProfile } from './tenantProfile';
+export type { UseTenantProfileResult } from './tenantProfile';

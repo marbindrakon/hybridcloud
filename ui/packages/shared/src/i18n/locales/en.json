@@ -869,5 +869,16 @@
     "networkDelete": "Usually 15–35 minutes after its network placements are gone.",
     "placementDelete": "Usually 5–20 minutes.",
     "entityDelete": "Takes as long as deleting everything the tenant holds."
+  },
+  "sites": {
+    "billable": "Billable: charges to this tenant",
+    "unavailable": "not available now",
+    "typeName": "Type the site name your platform team gave you.",
+    "platformDefault": "The platform's default site",
+    "choose": "Choose a site",
+    "noneOfType": "No site of this type is available to this tenant. Ask the platform team.",
+    "capVirtualization": "Virtual machines",
+    "capNetworking": "Hybrid networks",
+    "capDns": "DNS"
   }
 }

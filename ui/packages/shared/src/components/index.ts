@@ -61,3 +61,5 @@ export {
   TENANT_HIDDEN_PATHS,
 } from './KindStatusDetails';
 export type { KindStatusDetailsProps } from './KindStatusDetails';
+export { SitePicker, siteOptionLabel } from './SitePicker';
+export type { SitePickerProps } from './SitePicker';
