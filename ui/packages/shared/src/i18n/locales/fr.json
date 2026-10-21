@@ -415,7 +415,20 @@
     "publicCloudBillable": "Facturable : les ressources de cet environnement sont à la charge de ce locataire.",
     "apiWarnings": "La plateforme a accepté avec des avertissements",
     "createBlockedBy": "Pas encore prêt :",
-    "checking": "Vérification auprès de la plateforme…"
+    "checking": "Vérification auprès de la plateforme…",
+    "blockName": "Saisissez un nom",
+    "blockRequired": "Remplissez les champs obligatoires",
+    "blockServer": "La plateforme l'a refusé : {{reason}}",
+    "nameRule": {
+      "max": "{{max}} caractères au plus.",
+      "pattern": "Minuscules, chiffres et tirets ; commence et finit par une lettre ou un chiffre.",
+      "doubleHyphen": "Pas deux tirets de suite (le nom devient un namespace)."
+    },
+    "nameHelp": "Minuscules, chiffres et tirets ; il ne pourra plus être changé.",
+    "entityNameHelp": "Devient le namespace du locataire {{namespace}} ; 56 caractères au plus, sans point ni \"--\".",
+    "created": "{{kind}} {{name}} créé",
+    "submitted": "Créé",
+    "submitFailed": "Non créé"
   },
   "fields": {
     "description": "Description",
@@ -1085,5 +1098,12 @@
     "youAreNotIn": "Vous n'êtes dans aucun de ces groupes ; demandez à l'administrateur des accès de votre locataire.",
     "virtScope": "Sovereign Cloud ne crée ni VM, ni volumes, ni groupes de sécurité ; créez-les dans la console du site.",
     "openstackScope": "Sovereign Cloud crée le projet ; serveurs, volumes et groupes de sécurité se créent avec l'API ou le tableau de bord OpenStack."
+  },
+  "review": {
+    "title": "Vérification",
+    "creates": "Crée {{kind}} {{name}} dans {{namespace}}.",
+    "createsOnSite": "Crée {{kind}} {{name}} dans {{namespace}} sur le site {{site}}.",
+    "virtNetworks": "Namespaces de VM et leurs réseaux : {{list}}. Chaque réseau doit aussi être attaché à cet environnement.",
+    "attaches": "Attache le réseau {{network}} à {{environment}}."
   }
 }

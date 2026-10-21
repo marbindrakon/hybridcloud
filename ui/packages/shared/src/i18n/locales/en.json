@@ -415,7 +415,20 @@
     "publicCloudBillable": "Billable: resources in this environment are charged to this tenant.",
     "apiWarnings": "The platform accepted this with warnings",
     "createBlockedBy": "Not ready yet:",
-    "checking": "Checking with the platform…"
+    "checking": "Checking with the platform…",
+    "blockName": "Enter a name",
+    "blockRequired": "Fill in the required fields",
+    "blockServer": "The platform refused it: {{reason}}",
+    "nameRule": {
+      "max": "At most {{max}} characters.",
+      "pattern": "Lowercase letters, digits and hyphens; starts and ends with a letter or digit.",
+      "doubleHyphen": "No two hyphens in a row (the name becomes a namespace)."
+    },
+    "nameHelp": "Lowercase letters, digits and hyphens; it cannot be changed later.",
+    "entityNameHelp": "Becomes the tenant namespace {{namespace}}; at most 56 characters, no dots, no \"--\".",
+    "created": "{{kind}} {{name}} created",
+    "submitted": "Created",
+    "submitFailed": "Not created"
   },
   "fields": {
     "description": "Description",
@@ -1085,5 +1098,12 @@
     "youAreNotIn": "You are not in any of these groups; ask your tenant's access administrator.",
     "virtScope": "Sovereign Cloud does not create VMs, volumes or security groups; create them in the site console.",
     "openstackScope": "Sovereign Cloud creates the project; servers, volumes and security groups are made with the OpenStack API or dashboard."
+  },
+  "review": {
+    "title": "Review",
+    "creates": "Creates {{kind}} {{name}} in {{namespace}}.",
+    "createsOnSite": "Creates {{kind}} {{name}} in {{namespace}} on site {{site}}.",
+    "virtNetworks": "VM namespaces and their networks: {{list}}. Each network must also be attached to this environment.",
+    "attaches": "Attaches network {{network}} to {{environment}}."
   }
 }
