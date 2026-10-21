@@ -413,6 +413,16 @@ export async function createDashboardResource(
   });
 }
 
+/** One list request (curated route or raw API, as configured); throws K8sApiError. */
+export async function fetchResourceList<T extends K8sResource>(
+  kind: HybridSovereignKind,
+  options: UseK8sResourceListOptions = {},
+): Promise<T[]> {
+  const url = buildListUrl(kind, options);
+  const data = await k8sFetchJson<unknown>(url, undefined, { kind, verb: 'list', namespace: options.namespace });
+  return normalizeListPayload<T>(data);
+}
+
 /** List Hybrid Sovereign CRs of a given kind */
 export function useK8sResourceList<T extends K8sResource>(
   kind: HybridSovereignKind,

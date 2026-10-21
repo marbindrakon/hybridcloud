@@ -6,6 +6,7 @@ export {
   forceReconcile,
   getK8sClientConfig,
   k8sFetchJson,
+  fetchResourceList,
   updateDashboardResource,
   useCanI,
   useK8sResource,
@@ -52,3 +53,5 @@ export {
 export type { EntityOption, UseEntityOptionsOptions, UseEntityOptionsResult } from './entityOptions';
 export { useEntityNamespace } from './entityNamespace';
 export type { UseEntityNamespaceOptions, UseEntityNamespaceResult } from './entityNamespace';
+export { useScopedResourceList } from './scopedList';
+export type { ScopedListResult } from './scopedList';

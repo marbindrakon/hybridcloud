@@ -46,6 +46,3 @@ tenant-console-plugin:src/App.tsx: TS2322: Type '"light"' is not assignable to t
 tenant-console-plugin:src/App.tsx: TS2786: 'Button' cannot be used as a JSX component.
 tenant-console-plugin:src/components/TenantOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
 tenant-console-plugin:src/components/TenantTeamsPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
-tenant-dashboard:src/App.tsx: TS2322: Type '{ children: Element[]; className: string; header: Element; sidebar: Element; isManagedSidebar: true; }' is not assignable to type 'IntrinsicAttributes & IntrinsicClassAttributes<Page> & Pick<Readonly<PageProps>, never> & InexactPartial<...> & InexactPartial<...>'.
-tenant-dashboard:src/App.tsx: TS2322: Type '{ children: Element; theme: ThemeMode; isSidebarOpen: boolean; id: string; }' is not assignable to type 'IntrinsicAttributes & PageSidebarProps'.
-tenant-dashboard:src/App.tsx: TS2769: No overload matches this call.

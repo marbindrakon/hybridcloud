@@ -4,6 +4,7 @@ export * from './scope';
 export * from './access';
 export * from './nav';
 export * from './shell';
+export * from './pages';
 export * from './theme';
 export * from './components';
 export * from './icons';

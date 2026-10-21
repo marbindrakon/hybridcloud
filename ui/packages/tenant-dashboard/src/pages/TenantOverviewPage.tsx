@@ -38,31 +38,15 @@ import {
   classifyError,
   UnavailableState,
   usePermission,
+  useTenantScope,
+  useNav,
+  useBreadcrumbs,
+  useDocumentTitle,
+  tenantLabel,
 } from '@hybridsovereign/shared';
 
-interface TenantOverviewPageProps {
-  namespace: string;
-}
-
-const KIND_PATH: Partial<Record<HybridSovereignKind, string>> = {
-  Team: '/teams',
-  Project: '/projects',
-  PlatformOpenshift: '/platforms',
-  Assignment: '/assignments',
-  CloudOSO: '/cloudoso',
-  CloudAWS: '/cloudaws',
-  CloudGCP: '/cloudgcp',
-  CloudVirt: '/cloudvirt',
-  OpenStackMigration: '/migrations',
-  Persona: '/personas',
-  Rbac: '/rbac',
-  Vault: '/vaults',
-  VaultKV: '/vaultkvs',
-  AAPOrg: '/aaporgs',
-  QuayOrg: '/quayorgs',
-  HybridNetwork: '/networks',
-  NetworkPlacement: '/placements',
-};
+/** Kinds of the overview that still have a page (Persona has none). */
+const OVERVIEW_KINDS = TENANT_OVERVIEW_KINDS.filter((k) => k !== 'Persona');
 
 /** A self-service card that is disabled, with the role named, when the user may not create the kind. */
 function SelfServiceCard({ kind, labelKey, onOpen }: { kind: HybridSovereignKind; labelKey: string; onOpen: () => void }): React.ReactElement {
@@ -99,10 +83,16 @@ function bucket(items: K8sResource[]) {
   return { ready, failed, pending, total: items.length };
 }
 
-export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): React.ReactElement {
+export function TenantOverviewPage(): React.ReactElement {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const opts = { namespace };
+  const nav = useNav();
+  const { scope, namespace: scopeNamespace } = useTenantScope();
+  const namespace = scopeNamespace ?? '';
+  const crumbs = useBreadcrumbs('home');
+  useDocumentTitle('home');
+  const opts = { namespace, enabled: !!namespace };
+  const kindPath = (kind: HybridSovereignKind): string => nav.routeFor(kind) ?? nav.pathFor('home');
 
   const teams = useK8sResourceList<K8sResource>('Team', opts);
   const projects = useK8sResourceList<K8sResource>('Project', opts);
@@ -113,7 +103,6 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
   const cloudgcp = useK8sResourceList<K8sResource>('CloudGCP', opts);
   const cloudvirt = useK8sResourceList<K8sResource>('CloudVirt', opts);
   const migrations = useK8sResourceList<K8sResource>('OpenStackMigration', opts);
-  const personas = useK8sResourceList<K8sResource>('Persona', opts);
   const rbacs = useK8sResourceList<K8sResource>('Rbac', opts);
   const vaults = useK8sResourceList<K8sResource>('Vault', opts);
   const vaultkvs = useK8sResourceList<K8sResource>('VaultKV', opts);
@@ -132,7 +121,6 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
     CloudGCP: cloudgcp,
     CloudVirt: cloudvirt,
     OpenStackMigration: migrations,
-    Persona: personas,
     Rbac: rbacs,
     Vault: vaults,
     VaultKV: vaultkvs,
@@ -143,21 +131,21 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
   };
 
   const lists: Record<string, K8sResource[]> = Object.fromEntries(
-    TENANT_OVERVIEW_KINDS.map((k) => [k, hookByKind[k]?.items ?? []]),
+    OVERVIEW_KINDS.map((k) => [k, hookByKind[k]?.items ?? []]),
   );
 
   const all = useMemo(
-    () => TENANT_OVERVIEW_KINDS.flatMap((k) => hookByKind[k]?.items ?? []),
+    () => OVERVIEW_KINDS.flatMap((k) => hookByKind[k]?.items ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    TENANT_OVERVIEW_KINDS.map((k) => hookByKind[k]?.items),
+    OVERVIEW_KINDS.map((k) => hookByKind[k]?.items),
   );
   const overall = bucket(all);
-  const loading = TENANT_OVERVIEW_KINDS.some((k) => hookByKind[k]?.loading);
+  const loading = OVERVIEW_KINDS.some((k) => hookByKind[k]?.loading);
   // A kind the user's role doesn't cover answers 403: it is shown locked, never as zero (UX-057).
   const isLocked = (k: HybridSovereignKind) => classifyError(hookByKind[k]?.error) === 'forbidden';
-  const lockedKinds = TENANT_OVERVIEW_KINDS.filter((k) => hookByKind[k]?.error && isLocked(k));
+  const lockedKinds = OVERVIEW_KINDS.filter((k) => hookByKind[k]?.error && isLocked(k));
   const firstError =
-    TENANT_OVERVIEW_KINDS.map((k) => hookByKind[k]?.error).find(
+    OVERVIEW_KINDS.map((k) => hookByKind[k]?.error).find(
       (e) => !!e && classifyError(e) !== 'forbidden',
     ) ?? null;
   const failedItems = all
@@ -165,20 +153,21 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
     .slice(0, 12);
 
   const refreshAll = () => {
-    TENANT_OVERVIEW_KINDS.forEach((k) => hookByKind[k]?.refresh());
+    OVERVIEW_KINDS.forEach((k) => hookByKind[k]?.refresh());
   };
 
-  const kindRows = TENANT_OVERVIEW_KINDS.map((kind) => ({
+  const kindRows = OVERVIEW_KINDS.map((kind) => ({
     kind,
     label: t(`kinds.${kind}`),
-    path: KIND_PATH[kind] ?? '/',
+    path: kindPath(kind),
   }));
 
   return (
     <>
       <PageHeader
-        title={t('pages.overviewTitle')}
-        subtitle={`Entity namespace ${namespace}`}
+        title={scope.kind === 'tenant' ? tenantLabel(scope.tenant) : t('pages.overviewTitle')}
+        subtitle={`${t('scope.tenantNamespace')}: ${namespace}`}
+        breadcrumbs={crumbs}
         actions={
           <Button variant="secondary" icon={<SyncIcon />} onClick={refreshAll}>
             {t('common.refresh')}
@@ -214,7 +203,7 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
                     hint={`${bucket(lists[kind] ?? []).ready} ${t('status.ready')}`}
                     kind={kind}
                     locked={isLocked(kind)}
-                    href={KIND_PATH[kind]}
+                    href={kindPath(kind)}
                   />
                 ),
               )}
@@ -226,11 +215,11 @@ export function TenantOverviewPage({ namespace }: TenantOverviewPageProps): Reac
           </Title>
           <div className="sc-card-grid sc-mb">
             {[
-              { labelKey: 'nav.teams', path: '/create/team', kind: 'Team' as const },
-              { labelKey: 'nav.projects', path: '/create/project', kind: 'Project' as const },
-              { labelKey: 'nav.hybridNetworks', path: '/create/hybridnetwork', kind: 'HybridNetwork' as const },
-              { labelKey: 'nav.networkPlacements', path: '/create/networkplacement', kind: 'NetworkPlacement' as const },
-              { labelKey: 'nav.assignments', path: '/create/assignment', kind: 'Assignment' as const },
+              { labelKey: 'nav.networks', path: nav.createPathFor('hybridnetwork') ?? '', kind: 'HybridNetwork' as const },
+              { labelKey: 'nav.envVm', path: nav.createPathFor('cloudvirt') ?? '', kind: 'CloudVirt' as const },
+              { labelKey: 'nav.teams', path: nav.createPathFor('team') ?? '', kind: 'Team' as const },
+              { labelKey: 'nav.projects', path: nav.createPathFor('project') ?? '', kind: 'Project' as const },
+              { labelKey: 'nav.assignments', path: nav.createPathFor('assignment') ?? '', kind: 'Assignment' as const },
             ].map((a) => (
               <SelfServiceCard key={a.path} kind={a.kind} labelKey={a.labelKey} onOpen={() => navigate(a.path)} />
             ))}

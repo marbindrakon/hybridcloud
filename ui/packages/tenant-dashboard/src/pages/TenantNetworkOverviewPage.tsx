@@ -9,40 +9,37 @@ import {
   PageHeader,
   useNetworkOverviewCRs,
   useTranslation,
+  useTenantScope,
+  useNav,
+  useBreadcrumbs,
+  useDocumentTitle,
 } from '@hybridsovereign/shared';
 
-export interface TenantNetworkOverviewPageProps {
-  namespace: string;
-}
-
 /**
- * Tenant-scoped Network Overview.
+ * Tenant-scoped network map.
  *
  * The fabric, its gateways and the attached sites are platform-owned and shown
- * read-only for context; only this entity's HybridNetworks appear as rows, so a
+ * read-only for context; only this tenant's networks appear as rows, so a
  * tenant sees where their own networks land without seeing other tenants'.
  */
-const TENANT_DETAIL: Partial<Record<HybridSovereignKind, string>> = {
-  HybridNetwork: '/networks',
-  NetworkPlacement: '/placements',
-};
-
-export function TenantNetworkOverviewPage({
-  namespace,
-}: TenantNetworkOverviewPageProps): React.ReactElement {
+export function TenantNetworkOverviewPage(): React.ReactElement {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { items, loading, error, refresh } = useNetworkOverviewCRs(namespace);
+  const nav = useNav();
+  const { namespace } = useTenantScope();
+  const crumbs = useBreadcrumbs('network-map');
+  useDocumentTitle('network-map');
+  const { items, loading, error, refresh } = useNetworkOverviewCRs(namespace ?? '');
   const onSelect = (kind: HybridSovereignKind, item: K8sResource) => {
-    const base = TENANT_DETAIL[kind];
-    if (base) navigate(`${base}/${encodeURIComponent(item.metadata.name)}`);
+    const href = nav.routeFor(kind, item.metadata.name);
+    if (href) navigate(href);
   };
 
   return (
     <>
       <PageHeader
-        title={t('nav.networkOverview')}
-        subtitle={`Entity namespace ${namespace}`}
+        title={t('nav.networkMap')}
+        breadcrumbs={crumbs}
         actions={
           <Button variant="secondary" icon={<SyncIcon />} onClick={refresh} isDisabled={loading}>
             {t('common.refresh')}

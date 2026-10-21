@@ -1,0 +1,91 @@
+import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Alert } from '@patternfly/react-core';
+import { PlusCircleIcon } from '@patternfly/react-icons';
+import { useTranslation } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
+import { FilterToolbar, type StatusFilter } from '../components/FilterToolbar';
+import { normalizeHealth } from '../components/StatusBadge';
+import { ResourceListTable, filterResourcesByQuery } from '../components/ResourceListTable';
+import { GatedButton } from '../access/GatedButton';
+import { useScopedResourceList } from '../hooks/scopedList';
+import { useBreadcrumbs, useDocumentTitle, useNav } from '../nav/useNav';
+import type { K8sResource } from '../types';
+import { usePageEntry } from './usePageEntry';
+
+export interface ScopedListPageProps {
+  entryId: string;
+  /** Extra content under the header (for example tabs). */
+  children?: React.ReactNode;
+  hideHeader?: boolean;
+}
+
+/**
+ * The list page of a registry entry in the current scope. In All tenants
+ * scope it is read-only and shows the namespace column; detail links open the
+ * object in its own tenant.
+ */
+export function ScopedListPage({ entryId, children, hideHeader = false }: ScopedListPageProps): React.ReactElement {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const nav = useNav();
+  const { entry, kind, namespace, allTenants, platform, detailHref } = usePageEntry(entryId);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const crumbs = useBreadcrumbs(entryId);
+  useDocumentTitle(entryId);
+  const list = useScopedResourceList<K8sResource>(kind ?? 'Entity', { namespace, enabled: !!kind });
+
+  const filtered = useMemo(() => {
+    if (!kind) return [];
+    return filterResourcesByQuery(list.items, kind, search, allTenants).filter((item) =>
+      statusFilter === 'all' ? true : normalizeHealth(item.status?.ready, item.status?.status) === statusFilter,
+    );
+  }, [list.items, kind, search, statusFilter, allTenants]);
+
+  if (!entry || !kind) return <Alert variant="danger" isInline title={t('common.pageNotFound')} />;
+  const title = t(entry.labelKey);
+  const createHref = entry.createForm ? nav.createPathFor(entry.createForm) : undefined;
+
+  return (
+    <>
+      {!hideHeader && (
+        <PageHeader
+          title={title}
+          breadcrumbs={crumbs}
+          actions={
+            createHref && !allTenants ? (
+              <GatedButton kind={kind} verb="create" variant="primary" icon={<PlusCircleIcon />} onClick={() => navigate(createHref)}>
+                {t('common.create')}
+              </GatedButton>
+            ) : undefined
+          }
+        />
+      )}
+      {allTenants && (
+        <Alert variant="info" isInline isPlain title={t('access.readOnlyAllTenants')} className="sc-mb" />
+      )}
+      {children}
+      <FilterToolbar
+        search={search}
+        onSearchChange={setSearch}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        onRefresh={list.refresh}
+        searchPlaceholder={t('common.filterResources')}
+      />
+      <ResourceListTable
+        kind={kind}
+        items={filtered}
+        loading={list.loading}
+        error={list.error}
+        showNamespace={allTenants || platform}
+        linkMode="router"
+        detailHref={detailHref}
+        enableDelete={!allTenants}
+        onDeleted={list.refresh}
+        onRetry={list.refresh}
+      />
+    </>
+  );
+}
