@@ -23,8 +23,8 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            VaultKV creates a KV v2 secrets engine in a tenant Vault and configures
-            OIDC-based access policies for RBAC groups.
+            A KV secrets engine: a set of secrets in the tenant's Vault with access for the tenant's
+            access groups, comparable to a set of AWS Secrets Manager secrets or an Azure Key Vault.
           type: object
           required:
             - spec
@@ -36,36 +36,43 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired KV secrets engine configuration
+              description: The secrets engine and who gets which access.
               type: object
               required:
                 - vault
               properties:
                 vault:
-                  description: Name of a Vault CR in the same namespace
+                  description: Name of the Vault (Vault object) in this namespace.
                   type: string
                 vaultAdminRbac:
-                  description: Array of Rbac CR names that get admin access to this KV
+                  description: >-
+                    Access groups (Rbac names in this namespace) whose members can manage the
+                    secrets and their policies.
                   type: array
                   items:
                     type: string
                 vaultReaderRbac:
-                  description: Array of Rbac CR names that get read-only access to this KV
+                  description: >-
+                    Access groups (Rbac names in this namespace) whose members can read the secrets.
                   type: array
                   items:
                     type: string
                 vaultOpsRbac:
-                  description: Array of Rbac CR names that get ops access (full CRUD on secrets, no policy management)
+                  description: >-
+                    Access groups (Rbac names in this namespace) whose members can create, read,
+                    change and delete secrets, but not change policies.
                   type: array
                   items:
                     type: string
                 vaultDeveloperRbac:
-                  description: Array of Rbac CR names that get developer access (read + create new secrets, no delete)
+                  description: >-
+                    Access groups (Rbac names in this namespace) whose members can read secrets and
+                    create new ones, but not delete them.
                   type: array
                   items:
                     type: string
             status:
-              description: Observed state after reconciliation
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 status:
@@ -79,9 +86,10 @@ spec:
                   type: string
                   description: Human-readable status message (set on failure)
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 kvPath:
-                  description: KV v2 engine mount path in Vault
+                  description: Mount path of the secrets engine in the Vault.
                   type: string
                 adminPolicy:
                   description: Vault policy name for admin access
@@ -90,65 +98,85 @@ spec:
                   description: Vault policy name for reader access
                   type: string
                 adminRbacGroups:
-                  description: Keycloak groups mapped to admin policy
+                  description: Sign-in groups mapped to the admin policy.
                   type: array
                   items:
                     type: string
                 readerRbacGroups:
-                  description: Keycloak groups mapped to reader policy
+                  description: Sign-in groups mapped to the reader policy.
                   type: array
                   items:
                     type: string
                 opsRbacGroups:
-                  description: Keycloak groups mapped to ops policy
+                  description: Sign-in groups mapped to the ops policy.
                   type: array
                   items:
                     type: string
                 developerRbacGroups:
-                  description: Keycloak groups mapped to developer policy
+                  description: Sign-in groups mapped to the developer policy.
                   type: array
                   items:
                     type: string
                 loginUrl:
-                  description: URL for OIDC login to this Vault
+                  description: URL to sign in to this secrets engine.
                   type: string
                 vaultUrl:
                   description: URL of the parent Vault instance
                   type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

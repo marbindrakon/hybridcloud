@@ -21,8 +21,9 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            RbacConfig connects the operator to a Keycloak deployment and provisions realm clients
-            used by tenant-scoped Rbac resources.
+            An identity provider connection: how the platform reaches the sign-in directory that
+            holds the tenants' access groups, comparable to the identity source of AWS IAM Identity
+            Center. Platform-owned; created in the integrations namespace sovereign-cloud-plugins.
           type: object
           required:
             - spec
@@ -34,70 +35,98 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired Keycloak linkage configuration
+              description: The connection.
               type: object
               required:
                 - type
                 - secret
               properties:
                 type:
-                  description: Authentication backend type (must be keycloak)
+                  description: Kind of sign-in directory. The only value is keycloak.
                   type: string
                 secret:
                   description: >-
-                    Name of a Secret (in the same namespace as this CR) containing Keycloak admin credentials
+                    Name of a Secret in the same namespace that holds the directory's admin
+                    credentials. Its content is never copied into status.
                   type: string
             status:
-              description: Observed state after reconciliation
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 clientId:
+                  description: Client the platform uses in the sign-in directory.
                   type: string
                 clientSecretName:
+                  description: Name of the Secret that holds that client's credentials.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 status:
+                  description: Short state word written by the platform's automation.
                   type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

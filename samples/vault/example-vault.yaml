@@ -1,0 +1,11 @@
+# A Vault of the tenant's own. spec.rbacConfig names the platform's identity provider connection:
+# ask the platform team for its name.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Vault
+metadata:
+  name: example-vault
+  namespace: entity-example-corp
+spec:
+  ha: true
+  rbacConfig: example-identity

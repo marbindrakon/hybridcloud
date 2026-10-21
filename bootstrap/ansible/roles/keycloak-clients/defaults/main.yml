@@ -6,5 +6,19 @@ keycloak_clients: []
 #   - realm: sovereign-central
 #     client_id: quay-central
 #     name: "Quay Central"
-#     redirect_uris:
-#       - "https://quay.example.com/*"
+#     redirect_uris:                       # exact callbacks; '*', '.../*' and relative URIs are refused
+#       - "https://quay.example.com/oauth2/sso/callback"
+#     web_origins: ["+"]                   # default ["+"] (the redirect URIs' origins)
+#     root_url: "https://quay.example.com" # optional
+#     direct_access_grants: false          # default false (no password grant)
+#     service_accounts: false              # default false on create; converged only when declared
+#     standard_flow: true                  # converged only when declared
+#     allow_wildcard_redirect: false       # true: accept '*' style redirects for this client (discouraged)
+#     protocol_mappers: []                 # ProtocolMapperRepresentation list
+
+# true (env KEYCLOAK_CONVERGE): existing clients are brought to the declared fields (redirect URIs, web origins,
+# root URL, direct access grants, and service accounts / standard flow when declared) and same-named protocol
+# mappers to the declared config. false: existing clients are only read (their secrets) and missing mappers added.
+keycloak_clients_converge: "{{ lookup('env', 'KEYCLOAK_CONVERGE') | default('false', true) | bool }}"
+# true (env KEYCLOAK_PLAN_ONLY): print "<realm>/<client>: fields that would change", write nothing to existing clients
+keycloak_clients_plan_only: "{{ lookup('env', 'KEYCLOAK_PLAN_ONLY') | default('false', true) | bool }}"

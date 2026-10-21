@@ -69,3 +69,28 @@ hybridFabrics: {}
 cloudGateways: {}
 # shc (P9): provider edges for attachment circuits (templates/provider-edges.yaml), same shape
 providerEdges: {}
+
+# Admission policies (ValidatingAdmissionPolicy) installed with this chart.
+# mode Warn renders validationActions [Warn, Audit] with failurePolicy Ignore;
+# mode Deny renders [Deny, Audit] with failurePolicy Fail.
+admission:
+  # Exact usernames of platform automation; never kube:admin.
+  automationUsernames:
+    - system:serviceaccount:open-cluster-management-agent-addon:shc-automation
+    - system:serviceaccount:sovereign-cloud:hybridsovereign-primary-operator
+  # Exact usernames of the GitOps controller (exempt from shc-gitops-managed only).
+  gitopsUsernames:
+    - system:serviceaccount:kube-system:argocd-manager
+  # Service account of the per-tenant namespace operators (system:serviceaccount:entity-<e>:<name>).
+  namespaceOperatorServiceAccount: hybridsovereign-namespace-operator
+  # Groups with platform authority.
+  platformGroups:
+    - system:cluster-admins
+    - sovereign-admin
+  namespaceLabelIntegrity: {enabled: true, mode: Warn}   # shc-namespace-label-integrity
+  platformOnlyFields: {enabled: true, mode: Warn}        # shc-platform-only-fields
+  gitopsManaged: {enabled: true, mode: Warn}             # shc-gitops-managed
+  fabricLedgerGuard: {enabled: true, mode: Deny}         # shc-fabric-ledger-guard
+# Argo CD application name written into the gitops-source annotation of GitOps-owned objects.
+gitopsSource:
+  app: ""

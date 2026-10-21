@@ -1,0 +1,17 @@
+# A cluster assignment (Assignment): puts the team setup example-team and the app project
+# example-app on the OpenShift cluster example-cluster, and says who gets which access there.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Assignment
+metadata:
+  name: example-team-on-cluster
+  namespace: entity-example-corp
+spec:
+  team: example-team
+  projects:
+    - example-app
+  openshift: example-cluster
+  toolRbac:
+    assignmentAdmin: example-admins
+    assignmentDeveloper: example-developers
+    assignmentViewer: example-auditors

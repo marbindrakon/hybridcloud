@@ -1,0 +1,19 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# A site (CloudInfrastructure) of type openshift: an OpenShift cluster with OpenShift
+# Virtualization. entityRefs lists the tenants that may use it (empty: every tenant).
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudInfrastructure
+metadata:
+  name: site-vm
+  namespace: sovereign-cloud
+spec:
+  type: openshift
+  displayName: Example VM site
+  credentialsRef:
+    vaultPath: sites/site-vm/credentials
+  entityRefs:
+    - name: example-corp
+  openshift:
+    storageClass: example-storage

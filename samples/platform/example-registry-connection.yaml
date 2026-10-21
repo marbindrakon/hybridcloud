@@ -1,0 +1,12 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# A registry connection (QuayConfig).
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: QuayConfig
+metadata:
+  name: example-registry-connection
+  namespace: sovereign-cloud-plugins
+spec:
+  secret: example-quay-admin
+  rbacConfig: example-identity

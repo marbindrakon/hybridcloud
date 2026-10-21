@@ -2,7 +2,7 @@
 Tenant access (shc P7.3.7, design/P7-PLAN.md §12.4 e / §12.15). Tenants sign in to this cluster through the platform's
 tenant realm (OpenID; the client's roles become the user's groups, <entity>.<rbac>) and get access only through
 the RoleBindings the CloudVirt jobs put in their VM namespaces. Nobody else may create projects
-(self-provisioners emptied), and in CloudVirt namespaces only the platform may manage network attachments and
+(templates/self-provisioners.yaml), and in CloudVirt namespaces only the platform may manage network attachments and
 user-defined networks (a namespace's network is the platform's choice). Certs layer: the client secret comes from
 Vault through the cluster's ClusterSecretStore.
 */}}
@@ -58,23 +58,6 @@ spec:
           name: [name]
           email: [email]
           groups: [groups]
-{{- if not $t.selfProvisioners }}
----
-# nobody gets to create projects: the platform creates the tenants' namespaces (autoupdate false keeps the API
-# server from restoring the default subjects)
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: self-provisioners
-  annotations:
-    rbac.authorization.kubernetes.io/autoupdate: "false"
-    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: self-provisioner
-subjects: []
-{{- end }}
 {{- if $t.networkGuard }}
 ---
 apiVersion: admissionregistration.k8s.io/v1

@@ -151,7 +151,24 @@
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
       when: amq_kafka_enabled | default(true) | bool
 
-    # Retry now: the request is handled once its event is published (the annotation is never cleared).
+    # Retry now: the request is handled once its event is published (the annotation is never cleared,
+    # except the legacy literal "true", which is removed instead of recorded; see reconcile_request.yml).
+    - name: Remove a handled legacy Retry-now request ("true")
+      kubernetes.core.k8s:
+        state: patched
+        api_version: "{{ operator_event_regarding.apiVersion }}"
+        kind: "{{ operator_event_regarding.kind }}"
+        name: "{{ operator_event_regarding.name }}"
+        namespace: "{{ operator_event_regarding.namespace }}"
+        definition:
+          metadata:
+            annotations:
+              ansible.sdk.operatorframework.io/reconcileNow: null
+      when:
+        - amq_kafka_enabled | default(true) | bool
+        - reconcile_now | default(false) | bool
+        - reconcile_request_legacy | default(false) | bool
+
     - name: Record the handled Retry-now request
       operator_sdk.util.k8s_status:
         api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -159,11 +176,12 @@
         name: "{{ operator_event_regarding.name }}"
         namespace: "{{ operator_event_regarding.namespace }}"
         status:
-          lastHandledReconcileRequest: "{{ reconcile_request }}"
+          lastHandledReconcileRequest: "{{ reconcile_request | string }}"
       when:
         - amq_kafka_enabled | default(true) | bool
         - reconcile_now | default(false) | bool
-        - (reconcile_request | default('')) | length > 0
+        - not (reconcile_request_legacy | default(false) | bool)
+        - (reconcile_request | default('') | string) | length > 0
 
     # A new request on a deleting CR starts the teardown attempts again.
     - name: Reset the teardown retry count

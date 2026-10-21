@@ -948,7 +948,6 @@
   "kindsOne": {
     "Entity": "Locataire",
     "CloudInfrastructure": "Site",
-    "CloudGateway": "Passerelle de site",
     "HybridFabric": "Fabric",
     "ProviderEdge": "Bordure opérateur",
     "CloudVirt": "Environnement OpenShift Virtualization",
@@ -974,7 +973,6 @@
     "OpenStackMigration": "Migration de VM vers OpenStack",
     "UIHealthChecker": "Contrôle de point d'accès",
     "TransportLink": "Lien de transport",
-    "Persona": "Persona",
     "TenantProfile": "Profil du locataire"
   },
   "phase": {

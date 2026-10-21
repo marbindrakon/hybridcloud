@@ -2116,16 +2116,19 @@ export function createK8sHandlers(apiServer) {
       if (annotation !== RECONCILE_ANNOTATION) {
         return res.status(400).json({ message: "Unsupported annotation" });
       }
-      if (typeof value !== "string" || !value.trim()) {
-        return res.status(400).json({ message: "value must be a non-empty string" });
+      if (value !== undefined && typeof value !== "string") {
+        return res.status(400).json({ message: "value must be a string" });
       }
       const plural = KIND_PLURALS[kind];
       const urlPath =
         `/apis/${group}/${version}/namespaces/${encodeURIComponent(namespace)}/${plural}/${encodeURIComponent(name)}`;
+      // A Retry-now request is honoured once per distinct value (the operator records it in
+      // status.lastHandledReconcileRequest and keeps the annotation), so the server always writes a
+      // fresh timestamp, whatever the client sent (older clients send the literal "true").
       const patchBody = {
         metadata: {
           annotations: {
-            [annotation]: value,
+            [annotation]: new Date().toISOString(),
           },
         },
       };

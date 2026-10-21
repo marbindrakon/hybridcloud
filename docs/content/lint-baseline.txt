@@ -1,0 +1,144 @@
+# Accepted banned-word hits in UI strings and CRD text, written by check-content.py --write-baseline.
+# A new hit fails the lint; a fixed hit must be removed from this file, so the list only shrinks.
+# file<TAB>key<TAB>word<TAB>count
+operator/config/crd/bases/crd-project.yaml	Project spec.projectAdmin	CR	1
+operator/config/crd/bases/crd-project.yaml	Project spec.projectDeveloperRbac	CR	1
+operator/config/crd/bases/crd-project.yaml	Project spec.projectViewerRbac	CR	1
+operator/config/crd/bases/crd-project.yaml	Project spec.rbacConfig	CR	1
+operator/config/crd/bases/crd-team.yaml	Team spec.rbacConfig	CR	1
+operator/config/crd/bases/crd-team.yaml	Team spec.teamAdmin	CR	1
+operator/config/crd/bases/crd-team.yaml	Team spec.teamMemberRbac	CR	1
+operator/config/crd/bases/crd-team.yaml	Team spec.teamViewerRbac	CR	1
+ui/packages/admin-console-plugin/console-extensions.json	[10].properties.name	Site gateways	1
+ui/packages/shared/src/i18n/locales/en.json	common.entity	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	common.entityNamespace	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	detail.backendReady	Backend	1
+ui/packages/shared/src/i18n/locales/en.json	detail.egress_pending	pending	1
+ui/packages/shared/src/i18n/locales/en.json	detail.l2Vni	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.aapAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.aapJobExecutorRbac	AAP job	1
+ui/packages/shared/src/i18n/locales/en.json	fields.aapJobExecutorRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.aapViewerRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.assignmentAdmin	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.assignmentDeveloper	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.assignmentOps	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.assignmentViewer	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.backendKind	Backend	1
+ui/packages/shared/src/i18n/locales/en.json	fields.backendName	Backend	1
+ui/packages/shared/src/i18n/locales/en.json	fields.cloudInfraEntityRefsHelp	Entities	1
+ui/packages/shared/src/i18n/locales/en.json	fields.clusterAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.clusterDeveloperRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.clusterOperatorRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.clusterViewerRbac	CR	1
+ui/packages/shared/src/i18n/locales/en.json	fields.clusterViewerRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.clusterViewerRbacTool	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.clusterViewerRbacTool	Spoke	1
+ui/packages/shared/src/i18n/locales/en.json	fields.editRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.editRbacHelp	Rbac	1
+ui/packages/shared/src/i18n/locales/en.json	fields.entity	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	fields.entityRefs	Entities	1
+ui/packages/shared/src/i18n/locales/en.json	fields.fabricEntityRefsHelp	Entities	1
+ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPool	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPoolEnd	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPoolStart	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.networkViewerRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.personaType	Persona	1
+ui/packages/shared/src/i18n/locales/en.json	fields.quayAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.quayCreatorRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.quayMemberRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.rbacConfig	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.vaultAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.vaultDeveloperRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.vaultOpsRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.vaultReaderRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.viewRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	fields.viewRbacHelp	Rbac	1
+ui/packages/shared/src/i18n/locales/en.json	form.entityListRestricted	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	form.entityListUnavailable	Entity	2
+ui/packages/shared/src/i18n/locales/en.json	form.entityNamePlaceholder	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	form.entityNone	Entities	1
+ui/packages/shared/src/i18n/locales/en.json	form.entityNone	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	form.entitySelectPlaceholder	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	form.groups	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	form.placementImmutable	backend	1
+ui/packages/shared/src/i18n/locales/en.json	form.selectRbac	Rbac	1
+ui/packages/shared/src/i18n/locales/en.json	hybridTopology.entityGroup	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	hybridTopology.networkTableCaption	backend	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.CloudOSO	Cloud OSO	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.CloudOSO	OSO	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.CloudVirt	Cloud Virt	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.Entity	Entities	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.Persona	Personas	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.PlatformOpenshift	Platform Openshift	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.Rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.RbacConfig	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	list.backend	Backend	1
+ui/packages/shared/src/i18n/locales/en.json	list.entities	Entities	1
+ui/packages/shared/src/i18n/locales/en.json	list.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	list.rbacConfig	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	nav.cloudVirt	Openshift Virt	1
+ui/packages/shared/src/i18n/locales/en.json	nav.entities	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	nav.gateways	Site gateways	1
+ui/packages/shared/src/i18n/locales/en.json	nav.hybridVpc	Hybrid VPC	1
+ui/packages/shared/src/i18n/locales/en.json	nav.iaasNetworking	IAAS	1
+ui/packages/shared/src/i18n/locales/en.json	nav.iaasPlatform	IAAS	1
+ui/packages/shared/src/i18n/locales/en.json	nav.personas	Personas	1
+ui/packages/shared/src/i18n/locales/en.json	nav.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	networkOverview.entity	Entity	1
+ui/packages/shared/src/i18n/locales/en.json	networkOverview.state_pending	Pending	1
+ui/packages/shared/src/i18n/locales/en.json	pages.operatorsSubtitle	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	pages.pendingCount	Pending	1
+ui/packages/shared/src/i18n/locales/en.json	pages.uiHealthPodNoteBody	CRs	1
+ui/packages/shared/src/i18n/locales/fr.json	detail.backendReady	Backend	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.aapAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.aapJobExecutorRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.aapViewerRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.assignmentAdmin	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.assignmentDeveloper	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.assignmentOps	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.assignmentViewer	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.backendKind	backend	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.backendName	Backend	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.clusterAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.clusterDeveloperRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.clusterOperatorRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.clusterViewerRbac	CR	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.clusterViewerRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.clusterViewerRbacTool	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.clusterViewerRbacTool	spoke	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.editRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.editRbacHelp	Rbac	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.networkViewerRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.quayAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.quayCreatorRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.quayMemberRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.rbacConfig	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.vaultAdminRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.vaultDeveloperRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.vaultOpsRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.vaultReaderRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.viewRbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	fields.viewRbacHelp	Rbac	1
+ui/packages/shared/src/i18n/locales/fr.json	form.groups	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	form.placementImmutable	backend	1
+ui/packages/shared/src/i18n/locales/fr.json	form.selectRbac	Rbac	1
+ui/packages/shared/src/i18n/locales/fr.json	hybridTopology.networkTableCaption	backend	1
+ui/packages/shared/src/i18n/locales/fr.json	kinds.CloudOSO	Cloud OSO	1
+ui/packages/shared/src/i18n/locales/fr.json	kinds.CloudOSO	OSO	1
+ui/packages/shared/src/i18n/locales/fr.json	kinds.CloudVirt	Cloud Virt	1
+ui/packages/shared/src/i18n/locales/fr.json	kinds.Persona	Personas	1
+ui/packages/shared/src/i18n/locales/fr.json	kinds.Rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	kinds.RbacConfig	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	list.backend	Backend	1
+ui/packages/shared/src/i18n/locales/fr.json	list.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	list.rbacConfig	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.hybridVpc	Hybrid VPC	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.iaasNetworking	IAAS	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.iaasPlatform	IAAS	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.personas	Personas	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	pages.operatorsSubtitle	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	pages.personasSubtitle	Personas	1
+ui/packages/shared/src/i18n/locales/fr.json	pages.uiHealthPodNoteBody	CR	1

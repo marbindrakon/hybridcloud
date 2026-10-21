@@ -70,6 +70,9 @@
           Namespace {{ cloudoso_cr_namespace }} is missing label
           hybridsovereign.redhat/entity. Cannot provision CloudOSO.
 
+    - name: Refuse a name another tenant already uses
+      ansible.builtin.include_tasks: name_unique.yml
+
     # shc (P7.1): the site (CloudInfrastructure) and its account and settings
     - name: Resolve the CloudOSO's site
       ansible.builtin.include_tasks: cloudref.yml
@@ -116,8 +119,9 @@
           apiVIP: "{{ oso_api_vip }}"
           ingressVIP: "{{ oso_ingress_vip }}"
           externalNetwork: "{{ oso_external_network }}"
-          # shc (§11.6 phase C): what provision created, for teardown
-          accountVaultPath: "{{ oso_record.accountVaultPath }}"
+          # what provision created, for teardown: ids only. Accounts and Vault paths are derived again where they
+          # are needed (eda/common/tasks/resolve_cloudoso_accounts.yml); null removes the keys older runs wrote.
+          accountVaultPath: null
           appCredentialId: "{{ oso_record.appCredentialId }}"
           apiFloatingIPId: "{{ oso_record.apiFloatingIPId }}"
           ingressFloatingIPId: "{{ oso_record.ingressFloatingIPId }}"
@@ -125,8 +129,8 @@
           dnsZoneId: "{{ oso_record.dnsZoneId }}"
           dnsZoneName: "{{ oso_record.dnsZoneName }}"
           dnsProjectId: "{{ oso_record.dnsProjectId }}"
-          route53VaultPath: "{{ oso_record.route53VaultPath }}"
-          vaultPaths: "{{ oso_record.vaultPaths }}"
+          route53VaultPath: null
+          vaultPaths: null
           # design/TENANT-DNS.md: the environment zone ({} without one)
           dns: "{{ oso_record.dns }}"
           conditions:
@@ -157,7 +161,7 @@
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ cloudoso_failure_reason | default('EDAFailed') }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined

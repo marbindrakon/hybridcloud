@@ -1,6 +1,6 @@
 # Hybrid Sovereign UI
 
-PatternFly 5 monorepo for Hybrid Sovereign Cloud dashboards and OpenShift console plugins.
+PatternFly 6 monorepo for Hybrid Sovereign Cloud dashboards (React 18) and OpenShift console plugins (React 17).
 
 ## Packages
 

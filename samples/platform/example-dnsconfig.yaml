@@ -1,0 +1,17 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# Tenant DNS settings (DNSConfig): every environment gets the zone
+# <environment>.<tenant>.tenants.example.com.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: DNSConfig
+metadata:
+  name: example-tenant-dns
+  namespace: sovereign-cloud-plugins
+spec:
+  domain: tenants.example.com
+  provider: designate
+  secret: dns/example-tenant-dns
+  designate:
+    projectId: "00000000000000000000000000000000"
+    zoneId: "00000000-0000-0000-0000-000000000000"

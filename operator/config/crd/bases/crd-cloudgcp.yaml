@@ -23,9 +23,11 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            An entity's environment in a Google Cloud site: a project the platform assigns and enters with its own
-            identity (no stored keys), and the environment's public DNS zone (Cloud DNS), delegated from the tenant
-            zone. Networks are placed into it with NetworkPlacement (backend kind CloudGCP), one VPC per placement.
+            A Google Cloud environment: the tenant's environment on a Google Cloud site, comparable
+            to a Google Cloud project. It is a project the platform assigns and enters with its own
+            identity (no stored keys), with the environment's public DNS zone (Cloud DNS), delegated
+            from the tenant zone. Networks are placed into it with NetworkPlacement
+            (spec.backend.kind CloudGCP), one VPC per placement.
           type: object
           required:
             - spec
@@ -37,6 +39,7 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required: [cloudRef]
               properties:
@@ -56,10 +59,12 @@ spec:
                       message: spec.cloudRef is immutable
                   properties:
                     name:
+                      description: Name of the referenced object.
                       type: string
                       minLength: 1
                       maxLength: 253
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 name:
@@ -101,42 +106,63 @@ spec:
                   type: string
                   description: Human-readable status message (set on failure)
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

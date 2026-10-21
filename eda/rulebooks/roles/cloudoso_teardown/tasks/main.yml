@@ -38,24 +38,22 @@
         name: "{{ cloudoso_cr_namespace }}"
       register: ns_info
 
-    # shc (P7.1): a provision that failed before recording its account: take the account and domain
-    # from the CloudOSO's site (spec.cloudRef, status.cloudInfrastructure or the installation default).
-    - name: Find the CloudOSO's site when no account was recorded
+    # The account, the DNS account and the Vault paths are derived from the CloudOSO's site and the DNSConfig it
+    # recorded (the status holds ids only); an object not yet migrated is read from its old status keys.
+    - name: Resolve the CloudOSO's accounts and Vault paths
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloudoso_accounts.yml"
       vars:
-        _cr: "{{ cloudoso_cr_lookup.resources | default([]) | first | default({}) }}"
-        _default: "{{ cloudoso_defaults.cloudRef | default('', true) }}"
-      ansible.builtin.set_fact:
-        cloudoso_td_site: >-
-          {{ ((_cr.status | default({})).accountVaultPath | default('', true) | length > 0) | ternary('',
-             ((_cr.spec | default({})).cloudRef | default({}, true)).name | default('', true)
-             or (_cr.status | default({})).cloudInfrastructure | default('', true)
-             or (_default.name | default('') if _default is mapping else _default)) }}
+        rca_cr: "{{ cloudoso_cr_lookup.resources | default([]) | first | default({}) }}"
 
-    - name: Read the CloudOSO's site
+    # a provision that failed before recording its project domain: the site's
+    - name: Read the CloudOSO's site for the project domain
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
       vars:
-        ci_ref_name: "{{ cloudoso_td_site }}"
-      when: cloudoso_td_site | length > 0
+        ci_ref_name: "{{ rca_site }}"
+      when:
+        - rca_site | length > 0
+        - ((cloudoso_cr_lookup.resources | default([]) | first | default({})).status | default({}, true)).domainName
+          | default('', true) | length == 0
 
     - name: Set CloudOSO teardown facts from the recorded status
       vars:
@@ -65,13 +63,10 @@
         _entity: >-
           {{ (ns_info.resources | default([]) | first | default({})).metadata.labels['hybridsovereign.redhat/entity']
              | default(cloudoso_cr_namespace | regex_replace('^entity-', '')) }}
-        _site_vault: "{{ ((ci_spec | default({})).credentialsRef | default({})).vaultPath | default('') if cloudoso_td_site | length > 0 else '' }}"
-        _site_domain: "{{ ((ci_spec | default({})).openstack | default({})).projectDomain | default('') if cloudoso_td_site | length > 0 else '' }}"
+        _site_domain: "{{ ((ci_spec | default({})).openstack | default({})).projectDomain | default('') if rca_site | length > 0 else '' }}"
       ansible.builtin.set_fact:
         cloudoso_entity_for_status: "{{ _st.entity | default(_entity) }}"
-        oso_vault_path: >-
-          {{ _st.accountVaultPath | default(_site_vault, true)
-             | default(_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true), true) }}
+        oso_vault_path: "{{ rca_account_vault_path }}"
         oso_project_domain: >-
           {{ _st.domainName | default(_site_domain, true)
              | default(_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true), true) }}
@@ -86,8 +81,9 @@
         oso_dns_project_id: "{{ _st.dnsProjectId | default('') }}"
         oso_domain: "{{ _st.domain | default('') }}"
         oso_base_domain: "{{ _spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
-        oso_route53_vault_path: "{{ _st.route53VaultPath | default(_spec.route53VaultPath | default(''), true) }}"
-        oso_vault_paths: "{{ _st.vaultPaths | default(['oso/projects/' ~ cloudoso_cr_name ~ '/clouds-config'], true) }}"
+        oso_route53_vault_path: "{{ rca_route53_vault_path }}"
+        oso_vault_paths: "{{ rca_clouds_config_paths if rca_clouds_config_paths | length > 0 else ['oso/projects/' ~ cloudoso_cr_name ~ '/clouds-config'] }}"
+        oso_dns_config_secret: "{{ rca_dns_config_secret }}"
 
     - name: Tear down the OpenStack project
       when: oso_vault_path | length > 0 and oso_project_domain | length > 0
@@ -168,7 +164,7 @@
     - name: Load the DNSConfig account for the delegation
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
-        os_account_vault_path: "{{ oso_env_dns.dnsConfigSecret }}"
+        os_account_vault_path: "{{ oso_dns_config_secret }}"
         os_account_tag: "cloudoso-teardown-dns-{{ cloudoso_cr_name }}"
       when: (oso_env_dns.zoneId | default('')) | length > 0 and (oso_env_dns.delegated | default(false) | bool)
 
@@ -196,10 +192,49 @@
       ansible.builtin.set_fact:
         teardown_step: vault
 
+    # The clouds-config path is name-only: keep it while another tenant's same-named environment uses it
+    # (realized: it has a project and was not refused for its name, and is not being deleted).
+    - name: List the environments with this name
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudOSO
+        field_selectors:
+          - "metadata.name={{ cloudoso_cr_name }}"
+      register: cloudoso_same_name
+
+    - name: Find the other tenants' environments with this name
+      vars:
+        _others: "{{ cloudoso_same_name.resources | default([]) | rejectattr('metadata.namespace', 'equalto', cloudoso_cr_namespace) | list }}"
+      ansible.builtin.set_fact:
+        cloudoso_name_in_use: >-
+          {%- set ns = namespace(used=false) -%}
+          {%- for o in _others if o.metadata.deletionTimestamp is not defined -%}
+            {%- set st = o.status | default({}, true) -%}
+            {%- set ready = (st.conditions | default([], true)) | selectattr('type', 'equalto', 'Ready') | list -%}
+            {%- if (st.projectId | default('', true)) | length > 0 and not (ready and ((ready | first).reason | default('')) == 'NameInUse') -%}
+              {%- set ns.used = true -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.used }}
+        # the oldest one refused for this name gets its turn once this one is gone
+        cloudoso_name_waiting: >-
+          {%- set out = [] -%}
+          {%- for o in _others | sort(attribute='metadata.creationTimestamp') if o.metadata.deletionTimestamp is not defined -%}
+            {%- set ready = ((o.status | default({}, true)).conditions | default([], true)) | selectattr('type', 'equalto', 'Ready') | list -%}
+            {%- if ready and ((ready | first).reason | default('')) == 'NameInUse' -%}
+              {%- set _ = out.append({'kind': 'CloudOSO', 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out[:1] }}
+
     - name: Delete the project's Vault paths
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
       vars:
         vault_kv_delete_paths: "{{ oso_vault_paths }}"
+      when: not (cloudoso_name_in_use | bool)
 
     - name: Get deletion reconcile timestamp
       ansible.builtin.set_fact:
@@ -227,6 +262,13 @@
             CloudOSO {{ cloudoso_cr_name }} teardown complete.
             {{ ('Default security group ' ~ (cloudoso_leftover_sgs | join(', ')) ~
                 ' is left for a cloud admin (Neutron reserves that delete).') if cloudoso_leftover_sgs else '' }}
+
+    # after deletionComplete, so the waiting environment no longer counts this one as the name's holder
+    - name: Give the name to the environment that waits for it
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: "{{ cloudoso_name_waiting }}"
+      when: cloudoso_name_waiting | length > 0
 
   rescue:
     - name: Mark CloudOSO delete as failed on services cluster

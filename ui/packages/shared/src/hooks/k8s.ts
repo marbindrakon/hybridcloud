@@ -222,7 +222,11 @@ async function write<T>(url: string, init: RequestInit, opts: WriteOptions | und
   return answer.body;
 }
 
-/** Force reconcile by setting the operator reconcileNow annotation */
+/**
+ * Retry now: write a new value to the operator's reconcileNow annotation. The operator handles each
+ * distinct value once (status.lastHandledReconcileRequest) and keeps the annotation, so every request
+ * writes a fresh timestamp (the dashboard server substitutes its own).
+ */
 export async function forceReconcile(
   kind: HybridSovereignKind,
   name: string,
@@ -239,7 +243,6 @@ export async function forceReconcile(
         name,
         namespace,
         annotation: RECONCILE_ANNOTATION,
-        // Any new value is a request; the controller records the one it handled (Retry now).
         value: new Date().toISOString(),
       }),
     });

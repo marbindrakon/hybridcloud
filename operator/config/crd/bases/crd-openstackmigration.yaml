@@ -24,9 +24,10 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            OpenStackMigration requests migration of a VM from VMware (via MTV catalog
-            or explicit plan) to a CloudOSO OpenStack project. EDA runs os-migrate
-            playbooks after resolving credentials from Vault.
+            Experimental. A VM migration to OpenStack: moves one virtual machine from VMware into an
+            OpenStack environment (CloudOSO) of the tenant, comparable to AWS Application Migration
+            Service or Azure Migrate. The platform's automation runs the migration with credentials
+            it reads from its secret store; the spec holds no secrets.
           type: object
           required:
             - spec
@@ -38,7 +39,7 @@ spec:
             metadata:
               type: object
             spec:
-              description: Migration request parameters
+              description: What to migrate and where to.
               type: object
               required:
                 - vmName
@@ -46,17 +47,20 @@ spec:
               properties:
                 source:
                   type: string
-                  description: MTV Provider CR name (forklift.konveyor.io/v1beta1) for UI catalog selection
+                  description: >-
+                    Name of the migration provider (a forklift.konveyor.io Provider) that lists the
+                    VM.
                 providerNamespace:
                   type: string
-                  description: Namespace of the MTV Provider CR
+                  description: Namespace of that provider.
                   default: openshift-mtv
                 vmName:
                   type: string
                   description: Virtual machine name to migrate
                 cloudoso:
                   type: string
-                  description: Target CloudOSO CR name in the same entity namespace
+                  description: >-
+                    Name of the target OpenStack environment (CloudOSO) in this namespace.
                 plan:
                   description: Detailed os-migrate migration plan (Vault refs only — no secrets in spec)
                   type: object
@@ -129,7 +133,7 @@ spec:
                       enum: [auto, existing, specify]
                       default: auto
             status:
-              description: Observed migration state populated by operator and EDA
+              description: Observed state of the migration, written by the platform. Do not edit.
               type: object
               properties:
                 name:
@@ -178,49 +182,74 @@ spec:
                   type: string
                   description: Lifecycle status (reconciling, ready, failed)
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
               x-kubernetes-preserve-unknown-fields: true

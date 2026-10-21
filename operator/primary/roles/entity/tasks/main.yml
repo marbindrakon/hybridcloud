@@ -123,7 +123,7 @@
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: OperatorFailed
+              reason: "{{ entity_failure_reason | default('OperatorFailed') }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('Reconciliation failed')) }}"
       ignore_errors: true
 

@@ -1,0 +1,12 @@
+# An OpenStack environment (CloudOSO) on the site site-osp. The site supplies every site setting;
+# set only cloudRef and the project name hint.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudOSO
+metadata:
+  name: example-osp
+  namespace: entity-example-corp
+spec:
+  cloudRef:
+    name: site-osp
+  project: example-osp

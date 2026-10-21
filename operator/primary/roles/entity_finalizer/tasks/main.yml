@@ -4,6 +4,22 @@
       ansible.builtin.set_fact:
         entity_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # The tenant namespace is this Entity's only when it carries this Entity's label (a namespace that existed
+    # before the Entity was refused, never adopted): otherwise nothing in it is touched or deleted.
+    - name: Read the tenant namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "entity-{{ ansible_operator_meta.name }}"
+      register: _entity_ns_info
+
+    - name: Decide whether the tenant namespace belongs to this Entity
+      ansible.builtin.set_fact:
+        entity_ns_owned: >-
+          {{ (_entity_ns_info.resources | length == 0)
+             or (((_entity_ns_info.resources[0].metadata.labels | default({}, true))['hybridsovereign.redhat/entity']
+                  | default('')) == ansible_operator_meta.name) }}
+
     - name: Mark Entity as awaiting EDA delete
       operator_sdk.util.k8s_status:
         api_version: hybridsovereign.redhat/v1alpha1
@@ -44,6 +60,7 @@
             labels:
               hybridsovereign.redhat/deleting: "true"
       failed_when: false
+      when: entity_ns_owned | bool
 
     - name: Read the teardown tiers from the CRDs
       kubernetes.core.k8s_info:
@@ -105,6 +122,7 @@
       loop: "{{ (_entity_tiers | flatten) + _entity_untiered_kinds }}"
       register: _entity_crs
       failed_when: false
+      when: entity_ns_owned | bool
 
     - name: Find the first tier that still has CRs
       ansible.builtin.set_fact:
@@ -290,6 +308,7 @@
     name: hybridsovereign-namespace-operator
     namespace: "{{ entity_tenant_namespace }}"
   ignore_errors: true
+  when: entity_ns_owned | default(true) | bool
 
 - name: Remove namespace operator ClusterRoleBinding
   kubernetes.core.k8s:
@@ -307,6 +326,7 @@
     name: hybridsovereign-namespace-operator
     namespace: "{{ entity_tenant_namespace }}"
   ignore_errors: true
+  when: entity_ns_owned | default(true) | bool
 
 - name: Remove namespace operator Role
   kubernetes.core.k8s:
@@ -316,6 +336,7 @@
     name: hybridsovereign-namespace-operator
     namespace: "{{ entity_tenant_namespace }}"
   ignore_errors: true
+  when: entity_ns_owned | default(true) | bool
 
 - name: Remove AMQ producer credentials from entity tenant namespace
   kubernetes.core.k8s:
@@ -325,6 +346,7 @@
     name: amq-producer-credentials
     namespace: "{{ entity_tenant_namespace }}"
   ignore_errors: true
+  when: entity_ns_owned | default(true) | bool
 
 - name: Remove namespace operator ServiceAccount
   kubernetes.core.k8s:
@@ -334,6 +356,7 @@
     name: hybridsovereign-namespace-operator
     namespace: "{{ entity_tenant_namespace }}"
   ignore_errors: true
+  when: entity_ns_owned | default(true) | bool
 
 - name: Remove entity tenant namespace
   kubernetes.core.k8s:
@@ -342,6 +365,7 @@
     kind: Namespace
     name: "{{ entity_tenant_namespace }}"
   ignore_errors: true
+  when: entity_ns_owned | default(true) | bool
 
 - name: Block finalizer until EDA completes deletion
   ansible.builtin.fail:
