@@ -1,0 +1,696 @@
+[
+ {
+  "name": "deleting-wins-over-ready",
+  "object": {
+   "metadata": {
+    "name": "deleting-wins-over-ready",
+    "generation": 1,
+    "deletionTimestamp": "2026-10-21T10:00:00Z"
+   },
+   "status": {
+    "ready": true,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "Ready",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Deleting"
+  }
+ },
+ {
+  "name": "deleting-wins-over-stalled",
+  "object": {
+   "metadata": {
+    "name": "deleting-wins-over-stalled",
+    "generation": 1,
+    "deletionTimestamp": "2026-10-21T10:00:00Z"
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Stalled",
+      "status": "True",
+      "reason": "TeardownFailed",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Deleting"
+  }
+ },
+ {
+  "name": "deleting-no-status",
+  "object": {
+   "metadata": {
+    "name": "deleting-no-status",
+    "generation": 1,
+    "deletionTimestamp": "2026-10-21T10:00:00Z"
+   },
+   "status": {}
+  },
+  "expect": {
+   "phase": "Deleting"
+  }
+ },
+ {
+  "name": "stalled-true",
+  "object": {
+   "metadata": {
+    "name": "stalled-true",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Stalled",
+      "status": "True",
+      "reason": "TeardownFailed",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     },
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "Ready",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Failed"
+  }
+ },
+ {
+  "name": "ready-condition",
+  "object": {
+   "metadata": {
+    "name": "ready-condition",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "Ready",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Ready"
+  }
+ },
+ {
+  "name": "ready-legacy-eda-succeeded",
+  "object": {
+   "metadata": {
+    "name": "ready-legacy-eda-succeeded",
+    "generation": 1
+   },
+   "status": {
+    "ready": true,
+    "status": "ready",
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "EDASucceeded",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Ready"
+  }
+ },
+ {
+  "name": "ready-legacy-bool-only",
+  "object": {
+   "metadata": {
+    "name": "ready-legacy-bool-only",
+    "generation": 1
+   },
+   "status": {
+    "ready": true,
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Ready"
+  }
+ },
+ {
+  "name": "ready-condition-wins-over-legacy-bool",
+  "object": {
+   "metadata": {
+    "name": "ready-condition-wins-over-legacy-bool",
+    "generation": 1
+   },
+   "status": {
+    "ready": true,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "WaitingForGateway",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Waiting"
+  }
+ },
+ {
+  "name": "ready-degraded",
+  "object": {
+   "metadata": {
+    "name": "ready-degraded",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "Ready",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     },
+     {
+      "type": "Degraded",
+      "status": "True",
+      "reason": "RoutesMissing",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Degraded"
+  }
+ },
+ {
+  "name": "ready-degraded-false",
+  "object": {
+   "metadata": {
+    "name": "ready-degraded-false",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "Ready",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     },
+     {
+      "type": "Degraded",
+      "status": "False",
+      "reason": "AsExpected",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Ready"
+  }
+ },
+ {
+  "name": "ready-generation-lag",
+  "object": {
+   "metadata": {
+    "name": "ready-generation-lag",
+    "generation": 3
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "Ready",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 2
+   }
+  },
+  "expect": {
+   "phase": "Updating"
+  }
+ },
+ {
+  "name": "ready-no-observed-generation",
+  "object": {
+   "metadata": {
+    "name": "ready-no-observed-generation",
+    "generation": 4
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "True",
+      "reason": "Ready",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Ready"
+  }
+ },
+ {
+  "name": "legacy-failed",
+  "object": {
+   "metadata": {
+    "name": "legacy-failed",
+    "generation": 1
+   },
+   "status": {
+    "status": "failed",
+    "ready": false,
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Failed"
+  }
+ },
+ {
+  "name": "failed-reason-class",
+  "object": {
+   "metadata": {
+    "name": "failed-reason-class",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "InvalidSpec",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Failed"
+  }
+ },
+ {
+  "name": "failed-reason-never-realized",
+  "object": {
+   "metadata": {
+    "name": "failed-reason-never-realized",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "CredentialsInvalid",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Failed"
+  }
+ },
+ {
+  "name": "blocked-reason",
+  "object": {
+   "metadata": {
+    "name": "blocked-reason",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "UnknownKind",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Failed"
+  }
+ },
+ {
+  "name": "legacy-pending",
+  "object": {
+   "metadata": {
+    "name": "legacy-pending",
+    "generation": 1
+   },
+   "status": {
+    "status": "pending",
+    "ready": false,
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Waiting"
+  }
+ },
+ {
+  "name": "waiting-reason-class",
+  "object": {
+   "metadata": {
+    "name": "waiting-reason-class",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "WaitingForFabric",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Waiting"
+  }
+ },
+ {
+  "name": "waiting-delete-requested-not-deleting",
+  "object": {
+   "metadata": {
+    "name": "waiting-delete-requested-not-deleting",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "NetworkPlacementDeleteRequested",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Creating"
+  }
+ },
+ {
+  "name": "never-realized-queued",
+  "object": {
+   "metadata": {
+    "name": "never-realized-queued",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "AwaitingEDA",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Creating"
+  }
+ },
+ {
+  "name": "never-realized-empty-status",
+  "object": {
+   "metadata": {
+    "name": "never-realized-empty-status",
+    "generation": 1
+   },
+   "status": {}
+  },
+  "expect": {
+   "phase": "Creating"
+  }
+ },
+ {
+  "name": "never-realized-observed-zero",
+  "object": {
+   "metadata": {
+    "name": "never-realized-observed-zero",
+    "generation": 1
+   },
+   "status": {
+    "observedGeneration": 0,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "JobRunning",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Creating"
+  }
+ },
+ {
+  "name": "realized-flag-in-progress",
+  "object": {
+   "metadata": {
+    "name": "realized-flag-in-progress",
+    "generation": 1
+   },
+   "status": {
+    "realized": true,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "InProgress",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Updating"
+  }
+ },
+ {
+  "name": "observed-in-progress",
+  "object": {
+   "metadata": {
+    "name": "observed-in-progress",
+    "generation": 2
+   },
+   "status": {
+    "observedGeneration": 1,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "JobRunning",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Updating"
+  }
+ },
+ {
+  "name": "legacy-reconciling-observed",
+  "object": {
+   "metadata": {
+    "name": "legacy-reconciling-observed",
+    "generation": 1
+   },
+   "status": {
+    "status": "reconciling",
+    "ready": false,
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Updating"
+  }
+ },
+ {
+  "name": "legacy-reconciling-new",
+  "object": {
+   "metadata": {
+    "name": "legacy-reconciling-new",
+    "generation": 1
+   },
+   "status": {
+    "status": "reconciling",
+    "ready": false
+   }
+  },
+  "expect": {
+   "phase": "Creating"
+  }
+ },
+ {
+  "name": "unknown-reason-never-realized",
+  "object": {
+   "metadata": {
+    "name": "unknown-reason-never-realized",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "SomethingNew",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Creating"
+  }
+ },
+ {
+  "name": "unknown-reason-realized",
+  "object": {
+   "metadata": {
+    "name": "unknown-reason-realized",
+    "generation": 1
+   },
+   "status": {
+    "observedGeneration": 1,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "SomethingNew",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Updating"
+  }
+ },
+ {
+  "name": "legacy-only-conditions",
+  "object": {
+   "metadata": {
+    "name": "legacy-only-conditions",
+    "generation": 1
+   },
+   "status": {
+    "ready": true,
+    "observedGeneration": 1,
+    "conditions": [
+     {
+      "type": "Running",
+      "status": "True",
+      "reason": "Successful",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     },
+     {
+      "type": "Successful",
+      "status": "True",
+      "reason": "Successful",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     },
+     {
+      "type": "Failure",
+      "status": "False",
+      "reason": "",
+      "message": "",
+      "lastTransitionTime": "2026-10-21T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Ready"
+  }
+ },
+ {
+  "name": "ready-status-string-lowercase",
+  "object": {
+   "metadata": {
+    "name": "ready-status-string-lowercase",
+    "generation": 1
+   },
+   "status": {
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "true",
+      "reason": "Ready"
+     }
+    ],
+    "observedGeneration": 1
+   }
+  },
+  "expect": {
+   "phase": "Ready"
+  }
+ }
+]

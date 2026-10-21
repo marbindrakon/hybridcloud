@@ -189,6 +189,25 @@ EOF
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Phase 5: Python unit tests (status library, watches, tenancy) ───────────
+run_unit_tests() {
+  log_info "Python unit tests — tests/unit"
+  if ! require_cmd python3; then
+    return
+  fi
+  if (cd "${REPO_ROOT}" && python3 -m unittest discover -s tests/unit) >/tmp/shc-unit-tests.log 2>&1; then
+    log_pass "unit tests ($(grep -Eo 'Ran [0-9]+ tests' /tmp/shc-unit-tests.log))"
+  else
+    log_fail "unit tests"
+    tail -20 /tmp/shc-unit-tests.log || true
+  fi
+  if "${REPO_ROOT}/scripts/sync-shc-status.sh" --check; then
+    log_pass "status library copies in shc-cluster-base match the collection"
+  else
+    log_fail "status library copies drifted (run scripts/sync-shc-status.sh)"
+  fi
+}
+
 main() {
   echo "Hybrid Sovereign Test Runner"
   echo "Repository: ${REPO_ROOT}"
@@ -202,6 +221,8 @@ main() {
   run_secret_scan
   echo ""
   run_script_permissions
+  echo ""
+  run_unit_tests
   echo ""
   print_manual_gates
   echo ""
