@@ -52,11 +52,14 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            QuayOrg creates an organization in Quay and configures OIDC-based
-            team memberships for admin, creator, and member roles.
+            A Quay organization: the tenant's organization in the platform's Red Hat Quay registry,
+            comparable to an Amazon ECR registry, an Artifact Registry repository or an Azure
+            Container Registry. Members of the tenant's access groups sign in with their platform
+            identity.
           type: object
           properties:
             spec:
+              description: The organization and who gets which access.
               type: object
               required:
                 - quayConfig
@@ -71,23 +74,24 @@ spec:
                   items:
                     type: string
                   description: >-
-                    Array of Rbac CR names whose Keycloak groups receive Quay
-                    organization admin role.
+                    Access groups (Rbac names in this namespace) whose members are admins of the
+                    organization.
                 quayCreatorRbac:
                   type: array
                   items:
                     type: string
                   description: >-
-                    Array of Rbac CR names whose Keycloak groups receive Quay
-                    organization creator role.
+                    Access groups (Rbac names in this namespace) whose members can create
+                    repositories.
                 quayMemberRbac:
                   type: array
                   items:
                     type: string
                   description: >-
-                    Array of Rbac CR names whose Keycloak groups receive Quay
-                    organization member role.
+                    Access groups (Rbac names in this namespace) whose members can read and push to
+                    the organization's repositories.
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 status:
@@ -101,41 +105,62 @@ spec:
                   type: string
                   description: Human-readable status message (set on failure)
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
                 orgName:
                   type: string
@@ -153,23 +178,23 @@ spec:
                   type: array
                   items:
                     type: string
-                  description: Keycloak groups mapped as org admins.
+                  description: Sign-in groups mapped to organization admin.
                 creatorGroups:
                   type: array
                   items:
                     type: string
-                  description: Keycloak groups mapped as org creators.
+                  description: Sign-in groups mapped to creator.
                 memberGroups:
                   type: array
                   items:
                     type: string
-                  description: Keycloak groups mapped as org members.
+                  description: Sign-in groups mapped to member.
                 teams:
                   type: string
                   description: JSON summary of team mappings.
                 entity:
                   type: string
-                  description: Entity this org belongs to.
+                  description: The tenant this organization belongs to.
                 message:
                   type: string
                   description: Human-readable status message.

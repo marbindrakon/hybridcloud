@@ -38,6 +38,8 @@ WIDTH = 100
 # Descriptions of the status and metadata leaves most kinds share. `fill` writes one only where a
 # node has no description yet, so it is safe to re-run after a kind gains new status fields.
 COMMON = {
+    "spec": "Desired state of this object.",
+    "spec.description": "What this object is for, in a few words.",
     "status": "Observed state, written by the platform. Do not edit.",
     "status.status": "Short state word written by the platform's automation.",
     "status.ready": "True when the platform finished creating or updating this object.",
@@ -70,6 +72,20 @@ COMMON = {
     "status.conditions[].lastTransitionTime": "When the condition last changed status.",
     "status.conditions[].observedGeneration": "The metadata.generation the condition describes.",
 }
+
+# Descriptions by the last segments of a path, for references (`fabricRef.name`, ...).
+COMMON_SUFFIX = {
+    "Ref.name": "Name of the referenced object.",
+}
+
+
+def common_text(path):
+    if path in COMMON:
+        return COMMON[path]
+    last = path.rsplit(".", 2)[-2:]
+    if len(last) == 2 and last[0].endswith("Ref") and last[1] == "name":
+        return COMMON_SUFFIX["Ref.name"]
+    return None
 
 
 # ---------------------------------------------------------------- loading
@@ -305,7 +321,7 @@ def cmd_fill(args):
             todo = {}
             for schema in _schemas(doc):
                 for p, node in walk(schema):
-                    text = COMMON.get(p)
+                    text = common_text(p)
                     if text and "description" not in node:
                         todo[p] = text
             if not todo:

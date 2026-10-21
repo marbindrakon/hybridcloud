@@ -23,11 +23,14 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            A tenant's virtual machine environment on a platform OpenShift Virtualization site (a CloudInfrastructure
-            of type openshift). VMs run in the environment's namespaces on the site, with the limits and access given
-            here. A namespace either uses the site's default network or is bound to one HybridNetwork (its VMs' only
-            network on the fabric); the network is fixed when the namespace is created. Tenants sign in to the site's
-            console with their platform identity and see only their own VM namespaces.
+            An OpenShift Virtualization environment (VM environment): the tenant's virtual machine
+            environment on a platform OpenShift Virtualization site, comparable to an AWS account in
+            one Region, a Google Cloud project or an OpenStack project with its quota. VMs run in
+            the environment's namespaces on the site (a CloudInfrastructure of type openshift), with
+            the limits and access given here. A namespace either uses the site's default network or
+            is bound to one HybridNetwork (its VMs' only network on the fabric); the network is
+            fixed when the namespace is created. Tenants sign in to the site's console with their
+            platform identity and see only their own VM namespaces.
           type: object
           required:
             - spec
@@ -39,6 +42,7 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required: [cloudRef]
               properties:
@@ -48,6 +52,7 @@ spec:
                     When true, deleting the tenant does not delete this object; the tenant deletion
                     waits until protection is turned off.
                 description:
+                  description: What this object is for, in a few words.
                   type: string
                   maxLength: 512
                 cloudRef:
@@ -61,6 +66,7 @@ spec:
                       message: spec.cloudRef is immutable
                   properties:
                     name:
+                      description: Name of the referenced object.
                       type: string
                       minLength: 1
                       maxLength: 253
@@ -118,21 +124,26 @@ spec:
                       description: Number of VirtualMachines.
                 toolRbac:
                   type: object
-                  description: Who gets access to the VM namespaces on the site (Rbac CR names in this namespace).
+                  description: >-
+                    Who gets access to the VM namespaces on the site (access groups, Rbac names in
+                    this namespace).
                   properties:
                     editRbac:
                       type: array
                       description: >-
-                        Rbac CRs whose groups can create, change and delete VMs and their disks and use the VM
-                        consoles. They cannot change the namespaces' network attachment.
+                        Access groups whose members can create, change and delete VMs and their
+                        disks and use the VM consoles. They cannot change the namespaces' network
+                        attachment.
                       items:
                         type: string
                     viewRbac:
                       type: array
-                      description: Rbac CRs whose groups get read-only access to the VM namespaces.
+                      description: >-
+                        Access groups whose members get read-only access to the VM namespaces.
                       items:
                         type: string
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 entity:
@@ -175,57 +186,82 @@ spec:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 waitingFor:
                   type: array
                   items:
                     type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 deletionBlockedBy:
                   type: array
                   items:
                     type: string
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

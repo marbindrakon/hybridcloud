@@ -50,6 +50,7 @@ STRICT_KINDS = {"Entity", "Rbac", "RbacConfig", "Team", "Project", "Assignment",
                 "PlatformOpenshift", "CloudOSO", "Persona", "TransportLink"}
 STATE_PREFIX = {"not-implemented": "Not implemented.", "deprecated": "Deprecated.",
                 "experimental": "Experimental."}
+FIELD_PATH = re.compile(r"\b(spec|status|metadata)(\.[A-Za-z0-9_\[\]]+)+")
 GENERATORS = [["scripts/gen-role-table.py", "--check"]]
 
 
@@ -169,6 +170,7 @@ def check_crds(rep, terms, rules, crd_rules, labs):
             for p, node in _walk(schema):
                 d = node.get("description")
                 if d:
+                    d = FIELD_PATH.sub("<field>", d)  # field names are API, not words
                     where = f"{rel} {kind} {p}"
                     for r in rules + crd_rules:
                         if r.applies("crd", tenant, str(rel)):

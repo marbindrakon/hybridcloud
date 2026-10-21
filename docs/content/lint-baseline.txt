@@ -1,42 +1,14 @@
 # Accepted banned-word hits in UI strings and CRD text, written by check-content.py --write-baseline.
 # A new hit fails the lint; a fixed hit must be removed from this file, so the list only shrinks.
 # file<TAB>key<TAB>word<TAB>count
-operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapAdminRbac	CR	1
-operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapJobExecutorRbac	AAP job	1
-operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapJobExecutorRbac	CR	1
-operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapViewerRbac	CR	1
-operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS .	backend	1
-operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS status.awsHelperName	AWSHelper	1
-operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS status.awsHelperName	CR	1
-operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS status.slug	AWSHelper	1
-operator/config/crd/bases/crd-cloudgcp.yaml	CloudGCP .	backend	1
-operator/config/crd/bases/crd-cloudvirt.yaml	CloudVirt spec.toolRbac	CR	1
-operator/config/crd/bases/crd-cloudvirt.yaml	CloudVirt spec.toolRbac.editRbac	CRs	1
-operator/config/crd/bases/crd-cloudvirt.yaml	CloudVirt spec.toolRbac.viewRbac	CRs	1
-operator/config/crd/bases/crd-hybridnetwork.yaml	HybridNetwork spec.networkViewerRbac	CR	1
-operator/config/crd/bases/crd-networkplacement.yaml	NetworkPlacement spec.ipv6	backend	1
-operator/config/crd/bases/crd-networkplacement.yaml	NetworkPlacement status.site	backend	1
-operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration .	EDA	1
-operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration spec.cloudoso	CR	1
-operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration spec.providerNamespace	CR	1
-operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration spec.source	CR	1
-operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration status	EDA	1
 operator/config/crd/bases/crd-project.yaml	Project spec.projectAdmin	CR	1
 operator/config/crd/bases/crd-project.yaml	Project spec.projectDeveloperRbac	CR	1
 operator/config/crd/bases/crd-project.yaml	Project spec.projectViewerRbac	CR	1
 operator/config/crd/bases/crd-project.yaml	Project spec.rbacConfig	CR	1
-operator/config/crd/bases/crd-quayorg.yaml	QuayOrg spec.quayAdminRbac	CR	1
-operator/config/crd/bases/crd-quayorg.yaml	QuayOrg spec.quayCreatorRbac	CR	1
-operator/config/crd/bases/crd-quayorg.yaml	QuayOrg spec.quayMemberRbac	CR	1
 operator/config/crd/bases/crd-team.yaml	Team spec.rbacConfig	CR	1
 operator/config/crd/bases/crd-team.yaml	Team spec.teamAdmin	CR	1
 operator/config/crd/bases/crd-team.yaml	Team spec.teamMemberRbac	CR	1
 operator/config/crd/bases/crd-team.yaml	Team spec.teamViewerRbac	CR	1
-operator/config/crd/bases/crd-vaultkv.yaml	VaultKV spec.vault	CR	1
-operator/config/crd/bases/crd-vaultkv.yaml	VaultKV spec.vaultAdminRbac	CR	1
-operator/config/crd/bases/crd-vaultkv.yaml	VaultKV spec.vaultDeveloperRbac	CR	1
-operator/config/crd/bases/crd-vaultkv.yaml	VaultKV spec.vaultOpsRbac	CR	1
-operator/config/crd/bases/crd-vaultkv.yaml	VaultKV spec.vaultReaderRbac	CR	1
 ui/packages/admin-console-plugin/console-extensions.json	[10].properties.name	Site gateways	1
 ui/packages/shared/src/i18n/locales/en.json	common.entity	Entity	1
 ui/packages/shared/src/i18n/locales/en.json	common.entityNamespace	Entity	1
