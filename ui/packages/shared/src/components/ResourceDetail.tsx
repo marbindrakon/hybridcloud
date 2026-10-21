@@ -276,12 +276,7 @@ export function ResourceDetail({
       />
 
       <div className="sc-detail__badges" style={{ marginBottom: '1rem' }}>
-        <StatusBadge
-          status={resource.status?.status}
-          ready={resource.status?.ready}
-          message={resource.status?.message}
-          lastTransition={resource.status?.lastReconciledAt}
-        />
+        <StatusBadge item={resource} />
         <Label color="grey" isCompact>
           {kind}
         </Label>

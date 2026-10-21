@@ -213,7 +213,7 @@ export function ResourceListTable({
   const healthCounts = useMemo(() => {
     const counts = { ready: 0, failed: 0, pending: 0, reconciling: 0 };
     for (const item of items) {
-      const h = normalizeHealth(item.status?.ready, item.status?.status);
+      const h = normalizeHealth(item);
       if (h in counts) counts[h as keyof typeof counts] += 1;
     }
     return counts;
@@ -391,12 +391,7 @@ export function ResourceListTable({
                       if (col.id === 'status') {
                         return (
                           <Td key={col.id} dataLabel={t(col.labelKey)}>
-                            <StatusBadge
-                              status={item.status?.status}
-                              ready={item.status?.ready}
-                              message={item.status?.message}
-                              lastTransition={item.status?.lastReconciledAt}
-                            />
+                            <StatusBadge item={item} />
                           </Td>
                         );
                       }
@@ -429,12 +424,7 @@ export function ResourceListTable({
                         <ExpandableRowContent>
                           <div className="sc-list-expand">
                             <div className="sc-list-expand__header">
-                              <StatusBadge
-                                status={item.status?.status}
-                                ready={item.status?.ready}
-                                message={item.status?.message}
-                                lastTransition={item.status?.lastReconciledAt}
-                              />
+                              <StatusBadge item={item} />
                               <span className="sc-list-expand__title">{item.metadata.name}</span>
                             </div>
                             {expandRows.length === 0 ? (

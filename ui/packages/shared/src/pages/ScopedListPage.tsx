@@ -46,7 +46,7 @@ export function ScopedListPage({ entryId, children, hideHeader = false }: Scoped
   const filtered = useMemo(() => {
     if (!kind) return [];
     return filterResourcesByQuery(list.items, kind, search, allTenants).filter((item) =>
-      statusFilter === 'all' ? true : normalizeHealth(item.status?.ready, item.status?.status) === statusFilter,
+      statusFilter === 'all' ? true : normalizeHealth(item) === statusFilter,
     );
   }, [list.items, kind, search, statusFilter, allTenants]);
 

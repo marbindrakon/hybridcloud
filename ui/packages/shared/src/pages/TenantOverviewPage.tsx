@@ -68,7 +68,7 @@ function bucket(items: K8sResource[]) {
   let failed = 0;
   let pending = 0;
   for (const i of items) {
-    const h = normalizeHealth(i.status?.ready, i.status?.status);
+    const h = normalizeHealth(i);
     if (h === 'ready') ready += 1;
     else if (h === 'failed') failed += 1;
     else pending += 1;
@@ -142,7 +142,7 @@ export function TenantOverviewPage(): React.ReactElement {
       (e) => !!e && classifyError(e) !== 'forbidden',
     ) ?? null;
   const failedItems = all
-    .filter((i) => normalizeHealth(i.status?.ready, i.status?.status) === 'failed')
+    .filter((i) => normalizeHealth(i) === 'failed')
     .slice(0, 12);
 
   const refreshAll = () => {
@@ -248,11 +248,7 @@ export function TenantOverviewPage(): React.ReactElement {
                           <Td>{item.kind}</Td>
                           <Td>{item.metadata.name}</Td>
                           <Td>
-                            <StatusBadge
-                              status={item.status?.status}
-                              ready={item.status?.ready}
-                              message={item.status?.message}
-                            />
+                            <StatusBadge item={item} />
                           </Td>
                         </Tr>
                       ))}

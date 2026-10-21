@@ -57,12 +57,17 @@
     "refreshFailedShowing": "Showing what was loaded at {{time}}."
   },
   "status": {
-    "all": "all",
-    "ready": "ready",
-    "failed": "failed",
-    "pending": "pending",
-    "reconciling": "reconciling",
-    "unknown": "unknown"
+    "all": "All",
+    "ready": "Ready",
+    "failed": "Needs attention",
+    "pending": "Waiting",
+    "reconciling": "In progress",
+    "unknown": "Unknown",
+    "summary": "What is happening",
+    "reason": "Reason",
+    "since": "Since",
+    "title": "Status: {{phase}}",
+    "badgeAria": "Status: {{phase}}. Show details"
   },
   "nav": {
     "overview": "Overview",
@@ -968,5 +973,14 @@
     "TransportLink": "Transport link",
     "Persona": "Persona",
     "TenantProfile": "Tenant profile"
+  },
+  "phase": {
+    "Waiting": "Waiting",
+    "Creating": "Creating",
+    "Updating": "Updating",
+    "Ready": "Ready",
+    "Degraded": "Degraded",
+    "Failed": "Failed",
+    "Deleting": "Deleting"
   }
 }

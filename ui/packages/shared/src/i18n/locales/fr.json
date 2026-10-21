@@ -57,12 +57,17 @@
     "refreshFailedShowing": "Affichage des données chargées à {{time}}."
   },
   "status": {
-    "all": "tous",
-    "ready": "prêt",
-    "failed": "échec",
-    "pending": "en attente",
-    "reconciling": "réconciliation",
-    "unknown": "inconnu"
+    "all": "Tous",
+    "ready": "Prêt",
+    "failed": "À traiter",
+    "pending": "En attente",
+    "reconciling": "En cours",
+    "unknown": "Inconnu",
+    "summary": "Ce qui se passe",
+    "reason": "Raison",
+    "since": "Depuis",
+    "title": "État : {{phase}}",
+    "badgeAria": "État : {{phase}}. Afficher les détails"
   },
   "nav": {
     "overview": "Vue d'ensemble",
@@ -968,5 +973,14 @@
     "TransportLink": "Lien de transport",
     "Persona": "Persona",
     "TenantProfile": "Profil du locataire"
+  },
+  "phase": {
+    "Waiting": "En attente",
+    "Creating": "Création",
+    "Updating": "Mise à jour",
+    "Ready": "Prêt",
+    "Degraded": "Dégradé",
+    "Failed": "Échec",
+    "Deleting": "Suppression"
   }
 }
