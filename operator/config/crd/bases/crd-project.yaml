@@ -56,20 +56,49 @@ spec:
                   description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
                   type: string
                 projectAdmin:
-                  description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
+                  description: >-
+                    Access groups (names of Rbac objects in this namespace) that may view, change
+                    and delete this app project, including its three access lists. Interim form of a
+                    resource-scoped role assignment: it grants access to these objects on the
+                    services cluster only and nothing on clusters (cluster access comes from a
+                    cluster assignment's spec.toolRbac). Changes to this list are accepted only from
+                    users allowed to delete this app project.
                   type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: set
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 projectDeveloperRbac:
-                  description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
+                  description: >-
+                    Access groups (names of Rbac objects in this namespace) that may view and change
+                    this app project but not its access lists. Interim form of a resource-scoped
+                    role assignment: it grants access to these objects on the services cluster only
+                    and nothing on clusters (cluster access comes from a cluster assignment's
+                    spec.toolRbac). Changes to this list are accepted only from users allowed to
+                    delete this app project.
                   type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: set
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 projectViewerRbac:
-                  description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
+                  description: >-
+                    Access groups (names of Rbac objects in this namespace) that may view this app
+                    project. Interim form of a resource-scoped role assignment: it grants access to
+                    these objects on the services cluster only and nothing on clusters (cluster
+                    access comes from a cluster assignment's spec.toolRbac). Changes to this list
+                    are accepted only from users allowed to delete this app project.
                   type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: set
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
