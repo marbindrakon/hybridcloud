@@ -1,5 +1,30 @@
 import { k8sRequest as upstreamRequest, userToken } from "../../shared/server/upstream.js";
 import { sendUpstreamError } from "../../shared/server/errors.js";
+import {
+  NAME_PATTERN,
+  NS_PATTERN,
+  CONFIG_PATTERN,
+  TEAM_RBAC_KEYS,
+  VAULTKV_ROLE_KEYS,
+  AAPORG_ROLE_KEYS,
+  QUAYORG_ROLE_KEYS,
+  keepPlatformOnlyFields,
+  sanitizeAAPOrgSpec,
+  sanitizeAssignmentSpec,
+  sanitizeCloudAWSSpec,
+  sanitizeCloudGCPSpec,
+  sanitizeCloudOSOSpec,
+  sanitizeCloudVirtSpec,
+  sanitizeHybridNetworkSpec,
+  sanitizeNetworkPlacementSpec,
+  sanitizePlatformOpenshiftSpec,
+  sanitizeProjectSpec,
+  sanitizeQuayOrgSpec,
+  sanitizeRbacSpec,
+  sanitizeVaultKVSpec,
+  sanitizeVaultSpec,
+} from "./sanitizers.js";
+import { recordUpstreamWarnings, upstreamWriteQuery } from "./writeOptions.js";
 
 function userAccessToken(req) {
   return userToken(req);
@@ -7,305 +32,22 @@ function userAccessToken(req) {
 
 /** Positional form kept for the curated handlers below; see shared/server/upstream.js. */
 function k8sRequest(apiServer, reqPath, method, bearerToken, body, contentType) {
-  return upstreamRequest({ apiServer, path: reqPath, method, token: bearerToken, body, contentType });
+  // Writes to the platform API carry fieldValidation=Strict (and dryRun=All for a dry-run request);
+  // upstream Warning headers are passed back to the browser (writeOptions.js).
+  const query = upstreamWriteQuery(method, reqPath);
+  return upstreamRequest({ apiServer, path: reqPath, method, token: bearerToken, body, contentType, query }).then((resp) => {
+    recordUpstreamWarnings(resp?.warnings);
+    return resp;
+  });
 }
-
-const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
-// Team RBAC lists (teamAdmin, teamMemberRbac, teamViewerRbac): Rbac CR names in the Team's namespace.
-const TEAM_RBAC_KEYS = ["teamAdmin", "teamMemberRbac", "teamViewerRbac"];
-function teamRbacList(v) {
-  return Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && NAME_PATTERN.test(x)))] : undefined;
-}
-const NS_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-const CONFIG_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
 
 const ENTITY_NS_LABEL_SELECTOR = "hybridsovereign.redhat/entity";
 
 const PLUGINS_NS = "sovereign-cloud-plugins";
 const RECONCILE_ANNOTATION = "ansible.sdk.operatorframework.io/reconcileNow";
-/**
- * Spec sanitizers. Create and update endpoints accept exactly the fields of this platform's CRDs
- * and pass them through; unknown fields are dropped, wrong types are refused, and nothing the CRD
- * does not require is required here (the API server applies the CRD defaults and rules).
- * Each returns { spec } or { error }.
- */
-function isObject(v) {
-  return v != null && typeof v === "object" && !Array.isArray(v);
-}
 
-/** Non-empty trimmed strings of the listed keys. */
-function pickStrings(src, keys) {
-  const out = {};
-  for (const k of keys) {
-    const v = src?.[k];
-    if (typeof v === "string" && v.trim()) out[k] = v.trim();
-  }
-  return out;
-}
-
-/** List of non-empty trimmed strings, or undefined when absent/empty; false when not a string list. */
-function stringList(v) {
-  if (v == null) return undefined;
-  if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) return false;
-  const out = v.map((x) => x.trim()).filter(Boolean);
-  return out.length ? out : undefined;
-}
-
-/** Integer in [min, max], undefined when absent, false when invalid. */
-function intIn(v, min, max) {
-  if (v == null || v === "") return undefined;
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isInteger(n) && n >= min && n <= max ? n : false;
-}
-
-/** `{ name }` reference: null when absent, false when invalid. */
-function sanitizeNameRef(raw) {
-  if (raw == null) return null;
-  if (!isObject(raw) || typeof raw.name !== "string") return false;
-  const name = raw.name.trim();
-  if (!name || name.length > 253 || !NAME_PATTERN.test(name)) return false;
-  return { name };
-}
-
-/** spec.cloudRef of a tenant cloud project: a CloudInfrastructure in the platform namespace. */
-function sanitizeCloudRef(raw) {
-  return sanitizeNameRef(raw);
-}
-
-function sanitizePlatformOpenshiftSpec(raw) {
-  if (!isObject(raw)) return { error: "spec must be an object" };
-  const spec = {};
-  if (raw.type != null) {
-    if (raw.type !== "openstack" && raw.type !== "aws" && raw.type !== "gcp") return { error: "spec.type must be openstack, aws or gcp" };
-    spec.type = raw.type;
-  }
-  if (raw.openstack != null) {
-    if (!isObject(raw.openstack)) return { error: "spec.openstack must be an object" };
-    const os = pickStrings(raw.openstack, [
-      "environment",
-      "controlPlaneFlavor",
-      "workerFlavor",
-      "externalNetwork",
-      "ocpImageSet",
-      "pullSecretVaultPath",
-      "pullSecretVaultProperty",
-      "sshKeyVaultPath",
-      "glanceImageOverride",
-      "trustBundle",
-    ]);
-    const cp = intIn(raw.openstack.controlPlaneCount, 1, 1000);
-    const workers = intIn(raw.openstack.workerCount, 0, 1000);
-    if (cp === false || workers === false) return { error: "spec.openstack node counts must be integers" };
-    if (cp !== undefined) os.controlPlaneCount = cp;
-    if (workers !== undefined) os.workerCount = workers;
-    spec.openstack = os;
-  }
-  if (raw.aws != null) {
-    if (!isObject(raw.aws)) return { error: "spec.aws must be an object" };
-    const aws = pickStrings(raw.aws, ["environment", "region", "controllerFlavor", "workerFlavor"]);
-    if (!aws.environment) return { error: "spec.aws.environment is required" };
-    if (raw.aws.clusterType != null) {
-      if (raw.aws.clusterType !== "standalone" && raw.aws.clusterType !== "ha") {
-        return { error: "spec.aws.clusterType must be standalone or ha" };
-      }
-      aws.clusterType = raw.aws.clusterType;
-    }
-    const cp = intIn(raw.aws.controlPlaneCount, 0, 1000);
-    const workers = intIn(raw.aws.workerCount, 0, 1000);
-    if (cp === false || workers === false) return { error: "spec.aws node counts must be integers" };
-    if (cp !== undefined) aws.controlPlaneCount = cp;
-    if (workers !== undefined) aws.workerCount = workers;
-    spec.aws = aws;
-  }
-  if (raw.gcp != null) {
-    if (!isObject(raw.gcp)) return { error: "spec.gcp must be an object" };
-    const gcp = pickStrings(raw.gcp, ["environment", "region", "controllerFlavor", "workerFlavor", "network"]);
-    if (!gcp.environment) return { error: "spec.gcp.environment is required" };
-    if (raw.gcp.publish != null) {
-      if (raw.gcp.publish !== "External" && raw.gcp.publish !== "Internal") return { error: "spec.gcp.publish must be External or Internal" };
-      gcp.publish = raw.gcp.publish;
-    }
-    const cp = intIn(raw.gcp.controlPlaneCount, 0, 1000);
-    const workers = intIn(raw.gcp.workerCount, 0, 1000);
-    if (cp === false || workers === false) return { error: "spec.gcp node counts must be integers" };
-    if (cp !== undefined) gcp.controlPlaneCount = cp;
-    if (workers !== undefined) gcp.workerCount = workers;
-    spec.gcp = gcp;
-  }
-  if (raw.toolRbac != null) {
-    if (!isObject(raw.toolRbac)) return { error: "spec.toolRbac must be an object" };
-    const toolRbac = {};
-    for (const key of ["clusterAdminRbac", "clusterOperatorRbac", "clusterDeveloperRbac", "clusterViewerRbac"]) {
-      const list = stringList(raw.toolRbac[key]);
-      if (list === false) return { error: `spec.toolRbac.${key} must be a list of Rbac names` };
-      if (list) toolRbac[key] = list;
-    }
-    if (Object.keys(toolRbac).length) spec.toolRbac = toolRbac;
-  }
-  const viewers = stringList(raw.clusterViewerRbac);
-  if (viewers === false) return { error: "spec.clusterViewerRbac must be a list of Rbac names" };
-  if (viewers) spec.clusterViewerRbac = viewers;
-  return { spec };
-}
-
-function sanitizeCloudOSOSpec(raw) {
-  if (!isObject(raw)) return { error: "spec must be an object" };
-  const spec = pickStrings(raw, [
-    "project",
-    "vaultPath",
-    "baseDomain",
-    "projectDomain",
-    "externalNetwork",
-    "regionName",
-    "route53VaultPath",
-    "landingzone",
-    "designateZoneId",
-    "designateProjectId",
-    "vrfId",
-  ]);
-  const cloudRef = sanitizeCloudRef(raw.cloudRef);
-  if (cloudRef === false) return { error: "spec.cloudRef.name is invalid" };
-  if (cloudRef) spec.cloudRef = cloudRef;
-  if (raw.dnsProvider != null && raw.dnsProvider !== "") {
-    if (!["designate", "route53", "none"].includes(raw.dnsProvider)) {
-      return { error: "spec.dnsProvider must be designate, route53 or none" };
-    }
-    spec.dnsProvider = raw.dnsProvider;
-  }
-  if (raw.enableVRF != null) {
-    if (typeof raw.enableVRF !== "boolean") return { error: "spec.enableVRF must be a boolean" };
-    spec.enableVRF = raw.enableVRF;
-  }
-  return { spec };
-}
-
-function sanitizeCloudAWSSpec(raw) {
-  if (!isObject(raw)) return { error: "spec must be an object" };
-  const spec = pickStrings(raw, ["account", "vaultPath", "baseDomain", "landingzone"]);
-  if (!spec.account || !spec.vaultPath || !spec.baseDomain) {
-    return { error: "spec.account, spec.vaultPath and spec.baseDomain are required" };
-  }
-  return { spec };
-}
-
-function sanitizeCloudGCPSpec(raw) {
-  if (!isObject(raw)) return { error: "spec must be an object" };
-  const spec = {};
-  const cloudRef = sanitizeCloudRef(raw.cloudRef);
-  if (!cloudRef) return { error: "spec.cloudRef.name (a CloudInfrastructure of type gcp) is required" };
-  spec.cloudRef = cloudRef;
-  return { spec };
-}
-
-const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
-
-function sanitizeCloudVirtSpec(raw) {
-  if (!isObject(raw)) return { error: "spec must be an object" };
-  const spec = pickStrings(raw, ["description", "storageClass"]);
-  const cloudRef = sanitizeCloudRef(raw.cloudRef);
-  if (!cloudRef) return { error: "spec.cloudRef.name (a CloudInfrastructure of type openshift) is required" };
-  spec.cloudRef = cloudRef;
-  if (raw.namespaces != null) {
-    if (!Array.isArray(raw.namespaces)) return { error: "spec.namespaces must be a list" };
-    const namespaces = [];
-    for (const n of raw.namespaces) {
-      if (!isObject(n) || typeof n.name !== "string" || !DNS_LABEL.test(n.name.trim()) || n.name.trim().length > 30) {
-        return { error: "each spec.namespaces[].name must be a DNS label of at most 30 characters" };
-      }
-      const item = { name: n.name.trim() };
-      if (n.network != null && n.network !== "") {
-        if (typeof n.network !== "string" || !NAME_PATTERN.test(n.network.trim())) {
-          return { error: "spec.namespaces[].network must be a HybridNetwork name" };
-        }
-        item.network = n.network.trim();
-      }
-      namespaces.push(item);
-    }
-    spec.namespaces = namespaces;
-  }
-  if (raw.quota != null) {
-    if (!isObject(raw.quota)) return { error: "spec.quota must be an object" };
-    const quota = {};
-    for (const key of ["cpu", "memory", "storage"]) {
-      const v = raw.quota[key];
-      if (v == null || v === "") continue;
-      if (typeof v === "number" && Number.isFinite(v)) quota[key] = v;
-      else if (typeof v === "string" && v.trim()) quota[key] = v.trim();
-      else return { error: `spec.quota.${key} must be a quantity` };
-    }
-    const vms = intIn(raw.quota.virtualMachines, 0, Number.MAX_SAFE_INTEGER);
-    if (vms === false) return { error: "spec.quota.virtualMachines must be an integer of at least 0" };
-    if (vms !== undefined) quota.virtualMachines = vms;
-    if (Object.keys(quota).length) spec.quota = quota;
-  }
-  if (raw.toolRbac != null) {
-    if (!isObject(raw.toolRbac)) return { error: "spec.toolRbac must be an object" };
-    const toolRbac = {};
-    for (const key of ["editRbac", "viewRbac"]) {
-      const list = stringList(raw.toolRbac[key]);
-      if (list === false) return { error: `spec.toolRbac.${key} must be a list of Rbac names` };
-      if (list) toolRbac[key] = list;
-    }
-    if (Object.keys(toolRbac).length) spec.toolRbac = toolRbac;
-  }
-  return { spec };
-}
-
-function sanitizeHybridNetworkSpec(raw) {
-  if (!isObject(raw)) return { error: "spec must be an object" };
-  const spec = pickStrings(raw, ["description"]);
-  // the address space; the API checks the prefixes themselves
-  const prefixes = stringList(raw.prefixes);
-  if (!prefixes) return { error: "spec.prefixes must be a non-empty list of IPv4/IPv6 prefixes" };
-  spec.prefixes = prefixes;
-  const fabricRef = sanitizeNameRef(raw.fabricRef);
-  if (fabricRef === false) return { error: "spec.fabricRef.name is invalid" };
-  if (fabricRef) spec.fabricRef = fabricRef;
-  const mtu = intIn(raw.mtu, 1280, 9216);
-  if (mtu === false) return { error: "spec.mtu must be an integer from 1280 to 9216" };
-  if (mtu !== undefined) spec.mtu = mtu;
-  const viewers = stringList(raw.networkViewerRbac);
-  if (viewers === false) return { error: "spec.networkViewerRbac must be a list of Rbac names" };
-  if (viewers) spec.networkViewerRbac = viewers;
-  if (raw.egress != null) {
-    if (!isObject(raw.egress)) return { error: "spec.egress must be an object" };
-    if (raw.egress.internet != null) {
-      if (typeof raw.egress.internet !== "boolean") return { error: "spec.egress.internet must be a boolean" };
-      spec.egress = { internet: raw.egress.internet };
-    }
-  }
-  return { spec };
-}
-
-function sanitizeNetworkPlacementSpec(raw) {
-  if (!isObject(raw)) return { error: "spec must be an object" };
-  const network = typeof raw.network === "string" ? raw.network.trim() : "";
-  if (!network || !NAME_PATTERN.test(network)) return { error: "spec.network (a HybridNetwork name) is required" };
-  const backend = raw.backend;
-  if (!isObject(backend) || (backend.kind !== "CloudOSO" && backend.kind !== "CloudVirt")) {
-    return { error: "spec.backend.kind must be CloudOSO or CloudVirt" };
-  }
-  const backendName = typeof backend.name === "string" ? backend.name.trim() : "";
-  if (!backendName || !NAME_PATTERN.test(backendName)) return { error: "spec.backend.name is required" };
-  const spec = { network, backend: { kind: backend.kind, name: backendName } };
-  // a placement's subnet per family: a size and/or a pinned prefix (the API checks both)
-  for (const family of ["ipv4", "ipv6"]) {
-    const req = raw[family];
-    if (req == null) continue;
-    if (!isObject(req)) return { error: `spec.${family} must be an object` };
-    const out = {};
-    const length = intIn(req.prefixLength, 0, 128);
-    if (length === false) return { error: `spec.${family}.prefixLength must be an integer` };
-    if (length !== undefined) out.prefixLength = length;
-    if (req.prefix != null) {
-      if (typeof req.prefix !== "string" || !req.prefix.trim()) return { error: `spec.${family}.prefix must be a prefix` };
-      out.prefix = req.prefix.trim();
-    }
-    if (!Object.keys(out).length) return { error: `spec.${family} needs prefixLength or prefix` };
-    spec[family] = out;
-  }
-  if (!spec.ipv4) return { error: "spec.ipv4 (a prefixLength or a pinned prefix) is required" };
-  return { spec };
+function teamRbacList(v) {
+  return Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && NAME_PATTERN.test(x)))] : undefined;
 }
 
 const KIND_PLURALS = {
@@ -410,25 +152,6 @@ export function createK8sHandlers(apiServer) {
   }
   function personasCollectionPath(namespace) {
     return `/apis/hybridsovereign.redhat/v1alpha1/namespaces/${encodeURIComponent(namespace)}/personas`;
-  }
-
-  function validateRbacNameList(arr, fieldLabel) {
-    if (arr == null) return { ok: true, value: [] };
-    if (!Array.isArray(arr)) {
-      return { ok: false, message: `${fieldLabel} must be an array of Rbac names` };
-    }
-    const out = [];
-    for (const item of arr) {
-      if (typeof item !== "string") {
-        return { ok: false, message: `Invalid Rbac name in ${fieldLabel}` };
-      }
-      const t = item.trim();
-      if (!NAME_PATTERN.test(t)) {
-        return { ok: false, message: `Invalid Rbac name in ${fieldLabel}` };
-      }
-      out.push(t);
-    }
-    return { ok: true, value: out };
   }
 
   const ENTITIES_PATH = "/apis/hybridsovereign.redhat/v1alpha1/entities";
@@ -573,20 +296,10 @@ export function createK8sHandlers(apiServer) {
       if (!NS_PATTERN.test(namespace)) {
         return res.status(400).json({ message: "namespace must be a valid namespace name" });
       }
-      const config = spec.config;
-      if (typeof config !== "string" || !config.trim()) {
-        return res.status(400).json({ message: "spec.config is required" });
-      }
-      const trimmedConfig = config.trim();
-      if (!CONFIG_PATTERN.test(trimmedConfig)) {
-        return res.status(400).json({
-          message: "spec.config must be a valid RbacConfig resource name (lowercase, hyphens)",
-        });
-      }
-      const rbacSpec = { config: trimmedConfig };
-      if (typeof spec.description === "string" && spec.description.trim()) {
-        rbacSpec.description = spec.description.trim();
-      }
+      // spec.config is optional: the platform uses its default identity provider connection.
+      const clean = sanitizeRbacSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      const rbacSpec = clean.spec;
       const rbac = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "Rbac",
@@ -810,16 +523,14 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      // All three access lists are written (the interim form of a role assignment on the project).
+      const clean = sanitizeProjectSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       const project = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "Project",
         metadata: { name, namespace },
-        spec: {
-          ...(spec?.description ? { description: spec.description } : {}),
-          ...(spec?.displayName ? { displayName: spec.displayName } : {}),
-          ...(spec?.rbacConfig ? { rbacConfig: spec.rbacConfig } : {}),
-          ...(Array.isArray(spec?.projectAdmin) && spec.projectAdmin.length ? { projectAdmin: spec.projectAdmin } : {}),
-        },
+        spec: clean.spec,
       };
       try {
         const resp = await k8sRequest(apiServer, projectsCollectionPath(namespace), "POST", token, project);
@@ -878,7 +589,9 @@ export function createK8sHandlers(apiServer) {
       if (!spec) return res.status(400).json({ message: "spec is required" });
       try {
         const urlPath = `${projectsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
-        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, { spec }, "application/merge-patch+json");
+        const clean = sanitizeProjectSpec(spec, { update: true });
+        if (clean.error) return res.status(400).json({ message: clean.error });
+        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, { spec: clean.spec }, "application/merge-patch+json");
         if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
       } catch (err) {
@@ -894,16 +607,13 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace) return res.status(400).json({ message: "name and namespace required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      const clean = sanitizeAssignmentSpec(spec || {});
+      if (clean.error) return res.status(400).json({ message: clean.error });
       const assignment = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "Assignment",
         metadata: { name, namespace },
-        spec: {
-          ...(spec?.team ? { team: spec.team } : {}),
-          ...(Array.isArray(spec?.projects) && spec.projects.length ? { projects: spec.projects } : {}),
-          ...(typeof spec?.openshift === "string" && spec.openshift.trim() ? { openshift: spec.openshift.trim() } : {}),
-          ...(spec?.toolRbac && typeof spec.toolRbac === "object" ? { toolRbac: spec.toolRbac } : {}),
-        },
+        spec: clean.spec,
       };
       try {
         const resp = await k8sRequest(apiServer, assignmentsCollectionPath(namespace), "POST", token, assignment);
@@ -942,6 +652,8 @@ export function createK8sHandlers(apiServer) {
       if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
       try {
+        const clean = sanitizeAssignmentSpec(spec || {});
+        if (clean.error) return res.status(400).json({ message: clean.error });
         const getPath = `${assignmentsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const getCurrent = await k8sRequest(apiServer, getPath, "GET", token);
         if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
@@ -954,11 +666,8 @@ export function createK8sHandlers(apiServer) {
             namespace,
             resourceVersion: getCurrent.body.metadata.resourceVersion,
           },
-          spec: {
-            ...(spec?.team ? { team: spec.team } : {}),
-            ...(Array.isArray(spec?.projects) && spec.projects.length ? { projects: spec.projects } : {}),
-            ...(typeof spec?.openshift === "string" && spec.openshift.trim() ? { openshift: spec.openshift.trim() } : {}),
-          },
+          // The edit sends the whole spec, toolRbac included (it was dropped before).
+          spec: clean.spec,
         };
         const resp = await k8sRequest(apiServer, getPath, "PUT", token, updated);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
@@ -1043,8 +752,15 @@ export function createK8sHandlers(apiServer) {
       if (clean.error) return res.status(400).json({ message: clean.error });
       try {
         const urlPath = `${platformopenshiftsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
-        // The editor sends the whole spec: replace it (fields left out are removed).
-        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
+        // The editor sends the whole spec: replace it (fields left out are removed), except the
+        // platform-only fields, which keep their stored values.
+        const current = await k8sRequest(apiServer, urlPath, "GET", token);
+        if (current.status >= 400) return sendUpstreamError(res, current);
+        const value = keepPlatformOnlyFields("PlatformOpenshift", clean.spec, current.body?.spec);
+        const patch = [
+          { op: "test", path: "/metadata/resourceVersion", value: current.body?.metadata?.resourceVersion },
+          { op: "replace", path: "/spec", value },
+        ];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
@@ -1128,8 +844,15 @@ export function createK8sHandlers(apiServer) {
       if (clean.error) return res.status(400).json({ message: clean.error });
       try {
         const urlPath = `${cloudososCollectionPath(namespace)}/${encodeURIComponent(name)}`;
-        // The editor sends the whole spec: replace it (fields left out are removed).
-        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
+        // The editor sends the whole spec: replace it (fields left out are removed), except the
+        // platform-only fields, which keep their stored values.
+        const current = await k8sRequest(apiServer, urlPath, "GET", token);
+        if (current.status >= 400) return sendUpstreamError(res, current);
+        const value = keepPlatformOnlyFields("CloudOSO", clean.spec, current.body?.spec);
+        const patch = [
+          { op: "test", path: "/metadata/resourceVersion", value: current.body?.metadata?.resourceVersion },
+          { op: "replace", path: "/spec", value },
+        ];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
@@ -1748,11 +1471,13 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace || !spec) return res.status(400).json({ message: "name, namespace, spec required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      const clean = sanitizeVaultSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       const vault = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "Vault",
         metadata: { name, namespace },
-        spec: { ha: spec.ha !== false, rbacConfig: spec.rbacConfig },
+        spec: clean.spec,
       };
       try {
         const resp = await k8sRequest(apiServer, vaultsCollectionPath(namespace), "POST", token, vault);
@@ -1824,15 +1549,13 @@ export function createK8sHandlers(apiServer) {
       if (!name || !namespace || !spec) return res.status(400).json({ message: "name, namespace, spec required" });
       if (!NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
       if (!NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      const clean = sanitizeVaultKVSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       const vaultKV = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "VaultKV",
         metadata: { name, namespace },
-        spec: {
-          vault: spec.vault,
-          vaultAdminRbac: spec.vaultAdminRbac || [],
-          vaultReaderRbac: spec.vaultReaderRbac || [],
-        },
+        spec: clean.spec,
       };
       try {
         const resp = await k8sRequest(apiServer, vaultKVsCollectionPath(namespace), "POST", token, vaultKV);
@@ -1915,27 +1638,14 @@ export function createK8sHandlers(apiServer) {
       if (!NS_PATTERN.test(namespace)) {
         return res.status(400).json({ message: "namespace must be a valid namespace name" });
       }
-      const aapConfig = spec.aapConfig;
-      if (typeof aapConfig !== "string" || !aapConfig.trim()) {
-        return res.status(400).json({ message: "spec.aapConfig is required" });
-      }
-      const trimmedConfig = aapConfig.trim();
-      if (!CONFIG_PATTERN.test(trimmedConfig)) {
-        return res.status(400).json({ message: "spec.aapConfig must be a valid resource name" });
-      }
-      const adminCheck = validateRbacNameList(spec.aapAdminRbac, "spec.aapAdminRbac");
-      if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
-      const execCheck = validateRbacNameList(spec.aapJobExecutorRbac, "spec.aapJobExecutorRbac");
-      if (!execCheck.ok) return res.status(400).json({ message: execCheck.message });
+      // spec.aapConfig is optional: the platform uses its default automation connection.
+      const clean = sanitizeAAPOrgSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       const aapOrg = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "AAPOrg",
         metadata: { name, namespace },
-        spec: {
-          aapConfig: trimmedConfig,
-          aapAdminRbac: adminCheck.value,
-          aapJobExecutorRbac: execCheck.value,
-        },
+        spec: clean.spec,
       };
       try {
         const resp = await k8sRequest(apiServer, aaporgsCollectionPath(namespace), "POST", token, aapOrg);
@@ -2018,30 +1728,14 @@ export function createK8sHandlers(apiServer) {
       if (!NS_PATTERN.test(namespace)) {
         return res.status(400).json({ message: "namespace must be a valid namespace name" });
       }
-      const quayConfig = spec.quayConfig;
-      if (typeof quayConfig !== "string" || !quayConfig.trim()) {
-        return res.status(400).json({ message: "spec.quayConfig is required" });
-      }
-      const trimmedConfig = quayConfig.trim();
-      if (!CONFIG_PATTERN.test(trimmedConfig)) {
-        return res.status(400).json({ message: "spec.quayConfig must be a valid resource name" });
-      }
-      const adminCheck = validateRbacNameList(spec.quayAdminRbac, "spec.quayAdminRbac");
-      if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
-      const creatorCheck = validateRbacNameList(spec.quayCreatorRbac, "spec.quayCreatorRbac");
-      if (!creatorCheck.ok) return res.status(400).json({ message: creatorCheck.message });
-      const memberCheck = validateRbacNameList(spec.quayMemberRbac, "spec.quayMemberRbac");
-      if (!memberCheck.ok) return res.status(400).json({ message: memberCheck.message });
+      // spec.quayConfig is optional: the platform uses its default registry connection.
+      const clean = sanitizeQuayOrgSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
       const quayOrg = {
         apiVersion: "hybridsovereign.redhat/v1alpha1",
         kind: "QuayOrg",
         metadata: { name, namespace },
-        spec: {
-          quayConfig: trimmedConfig,
-          quayAdminRbac: adminCheck.value,
-          quayCreatorRbac: creatorCheck.value,
-          quayMemberRbac: memberCheck.value,
-        },
+        spec: clean.spec,
       };
       try {
         const resp = await k8sRequest(apiServer, quayorgsCollectionPath(namespace), "POST", token, quayOrg);
@@ -2171,19 +1865,15 @@ export function createK8sHandlers(apiServer) {
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
         if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
-        const adminCheck = validateRbacNameList(spec?.vaultAdminRbac, "spec.vaultAdminRbac");
-        if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
-        const readerCheck = validateRbacNameList(spec?.vaultReaderRbac, "spec.vaultReaderRbac");
-        if (!readerCheck.ok) return res.status(400).json({ message: readerCheck.message });
+        // A role list in the request replaces the stored one (empty clears it); an absent list is kept.
+        const clean = sanitizeVaultKVSpec(spec || {}, { update: true });
+        if (clean.error) return res.status(400).json({ message: clean.error });
         const updated = {
           ...current,
           metadata: { ...current.metadata },
-          spec: {
-            ...current.spec,
-            vaultAdminRbac: adminCheck.value.length ? adminCheck.value : (current.spec?.vaultAdminRbac || []),
-            vaultReaderRbac: readerCheck.value.length ? readerCheck.value : (current.spec?.vaultReaderRbac || []),
-          },
+          spec: { ...current.spec, ...clean.spec },
         };
+        for (const k of VAULTKV_ROLE_KEYS) if (Array.isArray(updated.spec[k]) && !updated.spec[k].length) delete updated.spec[k];
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
@@ -2224,20 +1914,14 @@ export function createK8sHandlers(apiServer) {
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
         if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
-        const adminCheck = validateRbacNameList(spec?.aapAdminRbac, "spec.aapAdminRbac");
-        if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
-        const execCheck = validateRbacNameList(spec?.aapJobExecutorRbac, "spec.aapJobExecutorRbac");
-        if (!execCheck.ok) return res.status(400).json({ message: execCheck.message });
+        const clean = sanitizeAAPOrgSpec(spec || {}, { update: true });
+        if (clean.error) return res.status(400).json({ message: clean.error });
         const updated = {
           ...current,
           metadata: { ...current.metadata },
-          spec: {
-            ...current.spec,
-            aapAdminRbac: adminCheck.value,
-            aapJobExecutorRbac: execCheck.value,
-            ...(typeof spec?.description === "string" ? { description: spec.description } : {}),
-          },
+          spec: { ...current.spec, ...clean.spec },
         };
+        for (const k of AAPORG_ROLE_KEYS) if (Array.isArray(updated.spec[k]) && !updated.spec[k].length) delete updated.spec[k];
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);
@@ -2278,22 +1962,14 @@ export function createK8sHandlers(apiServer) {
         const getCurrent = await k8sRequest(apiServer, urlPath, "GET", token);
         if (getCurrent.status >= 400) return sendUpstreamError(res, getCurrent);
         const current = getCurrent.body;
-        const adminCheck = validateRbacNameList(spec?.quayAdminRbac, "spec.quayAdminRbac");
-        if (!adminCheck.ok) return res.status(400).json({ message: adminCheck.message });
-        const creatorCheck = validateRbacNameList(spec?.quayCreatorRbac, "spec.quayCreatorRbac");
-        if (!creatorCheck.ok) return res.status(400).json({ message: creatorCheck.message });
-        const memberCheck = validateRbacNameList(spec?.quayMemberRbac, "spec.quayMemberRbac");
-        if (!memberCheck.ok) return res.status(400).json({ message: memberCheck.message });
+        const clean = sanitizeQuayOrgSpec(spec || {}, { update: true });
+        if (clean.error) return res.status(400).json({ message: clean.error });
         const updated = {
           ...current,
           metadata: { ...current.metadata },
-          spec: {
-            ...current.spec,
-            quayAdminRbac: adminCheck.value,
-            quayCreatorRbac: creatorCheck.value,
-            quayMemberRbac: memberCheck.value,
-          },
+          spec: { ...current.spec, ...clean.spec },
         };
+        for (const k of QUAYORG_ROLE_KEYS) if (Array.isArray(updated.spec[k]) && !updated.spec[k].length) delete updated.spec[k];
         const resp = await k8sRequest(apiServer, urlPath, "PUT", token, updated);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
         res.json(resp.body);

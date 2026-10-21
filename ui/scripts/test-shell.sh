@@ -31,6 +31,9 @@ for e in "${entries[@]}"; do
     --outfile="$out/$name.mjs" || exit 1
 done
 
+# Spec schemas of the platform CRDs (sanitizer drift test).
+python3 -I "$here/crd-spec-schemas.py" > "$out/crd-specs.json" || exit 1
+export CRD_SPECS_JSON="$out/crd-specs.json"
 export SHELL_BUNDLE_DIR="$out"
 export UI_ROOT="$ui"
 rc=0

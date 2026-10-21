@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createK8sHandlers } from "./k8s-proxy.js";
+import { isDryRunRequest, writeOptionsMiddleware } from "./writeOptions.js";
 import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
 import { createPermissionsHandler } from "../../shared/server/permissions.js";
 import { mountSessionRoutes } from "../../shared/server/session.js";
@@ -57,7 +58,18 @@ const mutationLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  // The forms' server dry runs persist nothing; they have their own budget below.
+  skip: (req) => isDryRunRequest(req),
   message: { message: "Too many write requests, please try again later" },
+});
+
+const dryRunLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 240,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !isDryRunRequest(req),
+  message: { message: "Too many checks, please try again later" },
 });
 
 app.use("/api/", apiLimiter);
@@ -80,6 +92,9 @@ app.use(
     ],
   }),
 );
+
+// Strict field validation, dry runs and Warning headers for the curated write routes.
+app.use("/api/", dryRunLimiter, writeOptionsMiddleware);
 
 function requireAuth(req, res, next) {
   const raw = req.headers["x-forwarded-access-token"];
