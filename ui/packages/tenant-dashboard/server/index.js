@@ -238,6 +238,9 @@ app.post("/api/k8s/patch-annotation", requireAuth, mutationLimiter, k8s.patchAnn
 // Transparent K8s API proxy used by PatternFly UI shared hooks (/api/k8s/apis/...)
 app.use("/api/k8s", requireAuth, createApiK8sProxy(OCP_API));
 
+// Unknown API paths answer 404 JSON instead of falling through to the SPA.
+app.all("/api/{*rest}", (_req, res) => res.status(404).json({ kind: "Status", apiVersion: "v1", status: "Failure", code: 404, reason: "NotFound", message: "Not found" }));
+
 const distPath = path.resolve(__dirname, "../dist");
 app.use(
   express.static(distPath, {

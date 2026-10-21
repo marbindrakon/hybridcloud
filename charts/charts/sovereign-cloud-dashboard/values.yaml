@@ -22,6 +22,14 @@ oauthProxy:
     # Vault path must contain keys: client_secret, cookie_secret
     vaultPath: "central/data/dashboard-oauth"
     refreshInterval: "1h"
+  # Access review a user must pass to use this dashboard (oauth-proxy --openshift-sar and
+  # --openshift-delegate-urls; the server re-checks it per request). Keys: namespace,
+  # resource, resourceAPIGroup, verb (optionally name). Empty = no review (not recommended).
+  openshiftSar:
+    namespace: sovereign-cloud
+    resource: hybridfabrics
+    resourceAPIGroup: hybridsovereign.redhat
+    verb: list
 
 replicas: 1
 
@@ -38,5 +46,4 @@ resources:
     memory: 128Mi
 
 env:
-  ENTITY_NAMESPACE: sovereign-cloud
   NODE_ENV: production

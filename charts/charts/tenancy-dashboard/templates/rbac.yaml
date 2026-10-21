@@ -5,43 +5,9 @@ metadata:
   labels:
     {{- include "tenancy-dashboard.labels" . | nindent 4 }}
 rules:
-  - apiGroups:
-      - hybridsovereign.redhat
-    resources:
-      - rbacs
-      - rbacs/status
-      - rbacconfigs
-      - rbacconfigs/status
-      - vaults
-      - vaults/status
-      - aaps
-      - aaps/status
-      - quays
-      - quays/status
-      - teams
-      - teams/status
-      - assignments
-      - assignments/status
-      - projects
-      - projects/status
-      - platformopenshifts
-      - platformopenshifts/status
-      - cloudosos
-      - cloudosos/status
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - delete
-  - apiGroups:
-      - ""
-    resources:
-      - users
-      - groups
-      - serviceaccounts
-    verbs:
-      - impersonate
+  # The server answers every request with the caller's own token. Its service
+  # account needs no read access and no impersonation; the access review below
+  # is kept for the self-checks of the pod.
   - apiGroups:
       - authorization.k8s.io
     resources:
