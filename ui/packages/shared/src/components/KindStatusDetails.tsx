@@ -45,7 +45,8 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
     'validated',
     'lastValidatedAt',
   ],
-  CloudVirt: ['site', 'namespaces', 'dns', 'storageClass'],
+  // access: shown by the way-in panel (groups that can sign in)
+  CloudVirt: ['site', 'namespaces', 'dns', 'storageClass', 'access'],
 };
 
 /** Status keys shown by the common blocks on every kind. */

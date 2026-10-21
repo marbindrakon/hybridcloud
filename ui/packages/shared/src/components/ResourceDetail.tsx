@@ -65,7 +65,7 @@ export interface ResourceDetailProps {
  * them under Diagnostics).
  */
 const CONTRACT_KEYS = ['phase', 'phaseSince', 'summary', 'endpoints', 'config', 'lastHandledReconcileRequest', 'retry'];
-const DIAGNOSTIC_KEYS = ['delivery', 'edaJobs', 'observedGeneration', 'lastReconciledAt', 'status', 'ready', 'message'];
+const DIAGNOSTIC_KEYS = ['delivery', 'edaJobs', 'observedGeneration', 'lastReconciledAt', 'status', 'ready', 'message', 'realized'];
 
 function formatValue(val: unknown): React.ReactNode {
   if (val === null || val === undefined || val === '') {
