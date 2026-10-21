@@ -1,0 +1,138 @@
+---
+# The Team's access fields (spec.teamAdmin, teamMemberRbac, teamViewerRbac): the interim form of a resource-scoped
+# role assignment, realized on the services cluster only (nothing on clusters; cluster access is the Assignment's
+# spec.toolRbac). "The Team's Projects" = the union of spec.projects of the Assignments whose spec.team names it.
+#   teamAdmin       edit the Team and its Projects, view its Assignments
+#   teamMemberRbac  view the Team, edit its Projects
+#   teamViewerRbac  view the Team, its Assignments and its Projects
+# No Team field grants delete, or update on an Assignment. Changes to the lists themselves are guarded by the
+# admission policy shc-access-field-ladder (only users allowed to delete the Team).
+#
+# Input:  team_cr_name, team_cr_namespace, team_entity, team_spec (the live spec)
+# Output: team_access_condition (condition AccessGranted), team_access_rendered (scope_role.yml sr_rendered)
+- name: The Team's access groups
+  ansible.builtin.set_fact:
+    _ta_fields:
+      admin: "{{ team_spec.teamAdmin | default([], true) | unique | list }}"
+      member: "{{ team_spec.teamMemberRbac | default([], true) | unique | list }}"
+      viewer: "{{ team_spec.teamViewerRbac | default([], true) | unique | list }}"
+
+- name: List the Assignments in the namespace
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Assignment
+    namespace: "{{ team_cr_namespace }}"
+  register: _ta_assignments
+
+- name: The Team's Assignments and Projects
+  vars:
+    _mine: >-
+      {{ _ta_assignments.resources | default([])
+         | rejectattr('metadata.deletionTimestamp', 'defined')
+         | selectattr('spec.team', 'defined') | selectattr('spec.team', 'equalto', team_cr_name) | list }}
+  ansible.builtin.set_fact:
+    team_assignments: "{{ _mine | map(attribute='metadata.name') | sort | list }}"
+    team_projects: "{{ _mine | map(attribute='spec') | map(attribute='projects', default=[]) | flatten | unique | sort | list }}"
+
+- name: Read the named Rbac CRs
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Rbac
+    name: "{{ item }}"
+    namespace: "{{ team_cr_namespace }}"
+  loop: "{{ (_ta_fields.admin + _ta_fields.member + _ta_fields.viewer) | unique | list }}"
+  register: _ta_rbacs
+
+# members of an Rbac's Keycloak group sign in to services with the group <entity>.<rbac>
+- name: Access groups with a Keycloak group, and the ones still waiting
+  ansible.builtin.set_fact:
+    team_signin_wanted: >-
+      {%- set out = [] -%}
+      {%- for r in _ta_rbacs.results | default([]) -%}
+        {%- set cr = (r.resources | default([]) + [{}]) | first -%}
+        {%- set path = (cr.status | default({}, true)).group | default('', true) -%}
+        {%- if path and cr.metadata.deletionTimestamp is not defined -%}
+          {%- set _ = out.append({'rbac': r.item, 'path': path if path.startswith('/') else '/' ~ path,
+                                  'group': team_entity ~ '.' ~ r.item}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Split ready and waiting access groups
+  ansible.builtin.set_fact:
+    _ta_ready: "{{ team_signin_wanted | map(attribute='rbac') | list }}"
+    team_access_waiting: >-
+      {{ (_ta_fields.admin + _ta_fields.member + _ta_fields.viewer) | unique
+         | reject('in', team_signin_wanted | map(attribute='rbac') | list) | list }}
+
+- name: Tenant sign-in groups of the Team
+  ansible.builtin.include_tasks: signin.yml
+
+- name: Resource-scoped grants of the Team's fields
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/scope_role.yml"
+  vars:
+    sr_namespace: "{{ team_cr_namespace }}"
+    sr_entity: "{{ team_entity }}"
+    sr_source: {kind: Team, name: "{{ team_cr_name }}"}
+    sr_grants: >-
+      {%- set out = [] -%}
+      {%- for r in _ta_fields.admin if r in _ta_ready -%}
+        {%- set g = team_entity ~ '.' ~ r -%}
+        {%- set _ = out.extend([{'kind': 'Team', 'names': [team_cr_name], 'level': 'edit', 'group': g},
+                                {'kind': 'Project', 'names': team_projects, 'level': 'edit', 'group': g},
+                                {'kind': 'Assignment', 'names': team_assignments, 'level': 'view', 'group': g}]) -%}
+      {%- endfor -%}
+      {%- for r in _ta_fields.member if r in _ta_ready -%}
+        {%- set g = team_entity ~ '.' ~ r -%}
+        {%- set _ = out.extend([{'kind': 'Team', 'names': [team_cr_name], 'level': 'view', 'group': g},
+                                {'kind': 'Project', 'names': team_projects, 'level': 'edit', 'group': g}]) -%}
+      {%- endfor -%}
+      {%- for r in _ta_fields.viewer if r in _ta_ready -%}
+        {%- set g = team_entity ~ '.' ~ r -%}
+        {%- set _ = out.extend([{'kind': 'Team', 'names': [team_cr_name], 'level': 'view', 'group': g},
+                                {'kind': 'Assignment', 'names': team_assignments, 'level': 'view', 'group': g},
+                                {'kind': 'Project', 'names': team_projects, 'level': 'view', 'group': g}]) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Keep what was granted
+  ansible.builtin.set_fact:
+    team_access_rendered: "{{ sr_rendered }}"
+
+# before the scope roles: one viewer Role/RoleBinding per Team (<team>-team-viewer, label managed-by team-operator)
+- name: Remove the old per-Team viewer RoleBinding and Role
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    state: absent
+    api_version: rbac.authorization.k8s.io/v1
+    kind: "{{ item }}"
+    name: "{{ team_cr_name }}-team-viewer"
+    namespace: "{{ team_cr_namespace }}"
+  loop: [RoleBinding, Role]
+  when: sr_apply | default(true) | bool
+
+- name: The Team's access condition
+  vars:
+    _say: >-
+      {%- set parts = [] -%}
+      {%- for label, key in [['Team admins', 'admin'], ['members', 'member'], ['viewers', 'viewer']] -%}
+        {%- if _ta_fields[key] -%}{%- set _ = parts.append(label ~ ': ' ~ _ta_fields[key] | join(', ')) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ parts | join('; ') }}
+  ansible.builtin.set_fact:
+    team_access_condition:
+      type: AccessGranted
+      status: "{{ 'False' if team_access_waiting | length > 0 else 'True' }}"
+      reason: "{{ 'WaitingForAccessGroup' if team_access_waiting | length > 0 else 'Granted' }}"
+      message: >-
+        {{ ('Waiting for the access groups ' ~ (team_access_waiting | join(', ')) ~ ' to be ready. ')
+           if team_access_waiting | length > 0 else '' }}{{ (_say ~ '.') if _say | length > 0
+           else 'No access groups are named; only the tenant-wide roles apply.' }}

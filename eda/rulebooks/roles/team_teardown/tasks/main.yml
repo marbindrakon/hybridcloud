@@ -34,6 +34,15 @@
         ssg_wanted: []
       when: team_entity | length > 0
 
+    # the Team's resource-scoped Roles and RoleBindings (common/tasks/scope_role.yml with no grants removes them)
+    - name: Remove the Team's scope roles
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/scope_role.yml"
+      vars:
+        sr_namespace: "{{ team_cr_namespace }}"
+        sr_source: {kind: Team, name: "{{ team_cr_name }}"}
+        sr_grants: []
+
+    # older releases: one viewer Role/RoleBinding per Team
     - name: Find per-CR Team viewer RoleBindings by label
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -88,8 +97,7 @@
           ready: false
           deletionComplete: true
           lastReconciledAt: "{{ team_delete_transition_time }}"
-          message: >-
-            Team {{ team_cr_name }} finalized — viewer Role, RoleBinding and sign-in groups removed by EDA
+          message: The team setup's access roles and sign-in groups are removed.
 
   rescue:
     - name: Mark Team delete as failed on services cluster
