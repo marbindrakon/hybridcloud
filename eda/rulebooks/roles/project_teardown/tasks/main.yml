@@ -8,6 +8,39 @@
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
+    - name: Read the namespace of the Project
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Namespace
+        name: "{{ project_cr_namespace }}"
+      register: project_target_ns
+
+    - name: The Project's entity
+      ansible.builtin.set_fact:
+        project_entity: >-
+          {{ ((project_target_ns.resources | first).metadata.labels | default({}, true))['hybridsovereign.redhat/entity'] | default('')
+             if project_target_ns.resources | default([]) | length > 0 else '' }}
+
+    - name: Release the Project's sign-in groups
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        ssg_entity: "{{ project_entity }}"
+        ssg_owner: "Project/{{ project_cr_name }}"
+        ssg_label: "Project {{ project_cr_name }}"
+        ssg_wanted: []
+      when: project_entity | length > 0
+
+    # the Project's resource-scoped Roles and RoleBindings (common/tasks/scope_role.yml with no grants removes them)
+    - name: Remove the Project's scope roles
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/scope_role.yml"
+      vars:
+        sr_namespace: "{{ project_cr_namespace }}"
+        sr_source: {kind: Project, name: "{{ project_cr_name }}"}
+        sr_grants: []
+
     - name: Get current timestamp for status
       ansible.builtin.set_fact:
         project_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -24,7 +57,7 @@
           ready: false
           deletionComplete: true
           lastReconciledAt: "{{ project_delete_transition_time }}"
-          message: Project {{ project_cr_name }} deleted by EDA
+          message: The app project's access roles and sign-in groups are removed.
 
   rescue:
     - name: Mark Project delete as failed on services cluster

@@ -1,0 +1,90 @@
+---
+# The Project's access fields (spec.projectAdmin, projectDeveloperRbac, projectViewerRbac): the interim form of a
+# resource-scoped role assignment on this one Project, realized on the services cluster only (nothing on clusters).
+#   projectAdmin          admin (view, change, delete) - and so may change the three lists (shc-access-field-ladder)
+#   projectDeveloperRbac  edit (view, change)
+#   projectViewerRbac     view
+#
+# Input:  project_cr_name, project_cr_namespace, project_entity, project_spec (the live spec)
+# Output: project_access_condition (condition AccessGranted), project_access_rendered
+- name: The Project's access groups
+  ansible.builtin.set_fact:
+    _pa_fields:
+      admin: "{{ project_spec.projectAdmin | default([], true) | unique | list }}"
+      developer: "{{ project_spec.projectDeveloperRbac | default([], true) | unique | list }}"
+      viewer: "{{ project_spec.projectViewerRbac | default([], true) | unique | list }}"
+
+- name: Read the named Rbac CRs
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Rbac
+    name: "{{ item }}"
+    namespace: "{{ project_cr_namespace }}"
+  loop: "{{ (_pa_fields.admin + _pa_fields.developer + _pa_fields.viewer) | unique | list }}"
+  register: _pa_rbacs
+
+# members of an Rbac's Keycloak group sign in to services with the group <entity>.<rbac>
+- name: Access groups with a Keycloak group
+  ansible.builtin.set_fact:
+    project_signin_wanted: >-
+      {%- set out = [] -%}
+      {%- for r in _pa_rbacs.results | default([]) -%}
+        {%- set cr = (r.resources | default([]) + [{}]) | first -%}
+        {%- set path = (cr.status | default({}, true)).group | default('', true) -%}
+        {%- if path and cr.metadata.deletionTimestamp is not defined -%}
+          {%- set _ = out.append({'rbac': r.item, 'path': path if path.startswith('/') else '/' ~ path,
+                                  'group': project_entity ~ '.' ~ r.item}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Split ready and waiting access groups
+  ansible.builtin.set_fact:
+    _pa_ready: "{{ project_signin_wanted | map(attribute='rbac') | list }}"
+    project_access_waiting: >-
+      {{ (_pa_fields.admin + _pa_fields.developer + _pa_fields.viewer) | unique
+         | reject('in', project_signin_wanted | map(attribute='rbac') | list) | list }}
+
+- name: Tenant sign-in groups of the Project
+  ansible.builtin.include_tasks: signin.yml
+
+- name: Resource-scoped grants of the Project's fields
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/scope_role.yml"
+  vars:
+    sr_namespace: "{{ project_cr_namespace }}"
+    sr_entity: "{{ project_entity }}"
+    sr_source: {kind: Project, name: "{{ project_cr_name }}"}
+    sr_grants: >-
+      {%- set out = [] -%}
+      {%- for key, level in [['admin', 'admin'], ['developer', 'edit'], ['viewer', 'view']] -%}
+        {%- for r in _pa_fields[key] if r in _pa_ready -%}
+          {%- set _ = out.append({'kind': 'Project', 'names': [project_cr_name], 'level': level,
+                                  'group': project_entity ~ '.' ~ r}) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Keep what was granted
+  ansible.builtin.set_fact:
+    project_access_rendered: "{{ sr_rendered }}"
+
+- name: The Project's access condition
+  vars:
+    _say: >-
+      {%- set parts = [] -%}
+      {%- for label, key in [['Project admins', 'admin'], ['developers', 'developer'], ['viewers', 'viewer']] -%}
+        {%- if _pa_fields[key] -%}{%- set _ = parts.append(label ~ ': ' ~ _pa_fields[key] | join(', ')) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ parts | join('; ') }}
+  ansible.builtin.set_fact:
+    project_access_condition:
+      type: AccessGranted
+      status: "{{ 'False' if project_access_waiting | length > 0 else 'True' }}"
+      reason: "{{ 'WaitingForAccessGroup' if project_access_waiting | length > 0 else 'Granted' }}"
+      message: >-
+        {{ ('Waiting for the access groups ' ~ (project_access_waiting | join(', ')) ~ ' to be ready. ')
+           if project_access_waiting | length > 0 else '' }}{{ (_say ~ '.') if _say | length > 0
+           else 'No access groups are named; only the tenant-wide roles apply.' }}

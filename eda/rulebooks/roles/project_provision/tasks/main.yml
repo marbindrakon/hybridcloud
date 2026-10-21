@@ -42,8 +42,17 @@
       ansible.builtin.set_fact:
         project_entity: "{{ ns_info.resources[0].metadata.labels['hybridsovereign.redhat/entity'] | default('') }}"
         project_billing_id: "{{ ns_info.resources[0].metadata.labels['hybridsovereign.redhat/billing-id'] | default('') }}"
-        project_description: "{{ ns_info.resources[0].metadata.annotations['hybridsovereign.redhat/description'] | default('') }}"
+        project_description: "{{ (ns_info.resources[0].metadata.annotations | default({}, true))['hybridsovereign.redhat/description'] | default('') }}"
         project_generation: "{{ project_cr.resources[0].metadata.generation | default(0) | int }}"
+
+    - name: Refuse a Project outside an entity namespace
+      ansible.builtin.fail:
+        msg: "Project {{ project_cr_name }}: namespace {{ project_cr_namespace }} has no hybridsovereign.redhat/entity label"
+      when: project_entity | length == 0
+
+    # the access fields: sign-in groups and resource-scoped Roles on services (access.yml)
+    - name: Grant the Project's access groups
+      ansible.builtin.include_tasks: access.yml
 
     - name: Get current timestamp
       ansible.builtin.set_fact:
@@ -72,7 +81,8 @@
               status: "True"
               lastTransitionTime: "{{ project_status_transition_time }}"
               reason: EDASucceeded
-              message: Project {{ project_cr_name }} provisioned by EDA
+              message: The project is ready.
+            - "{{ project_access_condition | combine({'lastTransitionTime': project_status_transition_time}) }}"
 
   rescue:
     - name: Mark Project as failed on services cluster
