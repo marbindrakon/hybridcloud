@@ -30,6 +30,12 @@ kinds:
       gcp: a Google Cloud project under a folder
       azure: an Azure subscription
       openstack: an OpenStack domain
+  TenantProfile:
+    term: tenant profile
+    plural: tenant profiles
+    audience: tenant
+    state: current
+    note: Read-only; the platform writes it. One per tenant namespace, named shc.
   CloudInfrastructure:
     term: site
     plural: sites
