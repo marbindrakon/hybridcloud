@@ -36,7 +36,8 @@ export function ScopedListPage({ entryId, children, hideHeader = false }: Scoped
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const crumbs = useBreadcrumbs(entryId);
   useDocumentTitle(entryId);
-  const list = useScopedResourceList<K8sResource>(kind ?? 'Entity', { namespace, enabled: !!kind });
+  // Refresh every 5 s while a row is in flight (Creating, Deleting, ...), else every 30 s (Q10).
+  const list = useScopedResourceList<K8sResource>(kind ?? 'Entity', { namespace, enabled: !!kind, pollWhileInFlight: true });
   // A list the user may not read can still hold objects shared with them by name (NC-13).
   const forbidden = !!list.error && classifyError(list.error) === 'forbidden';
   const shared = useSharedWithYou(kind ?? 'Entity', namespace, forbidden && !allTenants && !!kind);
@@ -45,7 +46,7 @@ export function ScopedListPage({ entryId, children, hideHeader = false }: Scoped
   const filtered = useMemo(() => {
     if (!kind) return [];
     return filterResourcesByQuery(list.items, kind, search, allTenants).filter((item) =>
-      statusFilter === 'all' ? true : normalizeHealth(item.status?.ready, item.status?.status) === statusFilter,
+      statusFilter === 'all' ? true : normalizeHealth(item) === statusFilter,
     );
   }, [list.items, kind, search, statusFilter, allTenants]);
 
@@ -94,6 +95,7 @@ export function ScopedListPage({ entryId, children, hideHeader = false }: Scoped
         enableDelete={!allTenants && !showShared}
         onDeleted={list.refresh}
         onRetry={list.refresh}
+        refreshError={showShared ? null : list.refreshError}
       />
     </>
   );

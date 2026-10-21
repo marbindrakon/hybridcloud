@@ -15,10 +15,44 @@ export interface OperatorStatus {
   entity?: string;
   /** What a pending object waits for */
   waitingFor?: string[];
-  /** What a requested delete waits for */
-  deletionBlockedBy?: string[];
+  /** What a requested delete waits for (typed entries; older objects hold names) */
+  deletionBlockedBy?: Array<string | { kind?: string; name?: string; namespace?: string; reason?: string }>;
   deletionComplete?: boolean;
   edaJobs?: EdaJobStatus[];
+  /** Stored phase (Waiting, Creating, Updating, Ready, Degraded, Failed, Deleting) */
+  phase?: string;
+  /** When the phase last changed (RFC 3339 UTC) */
+  phaseSince?: string;
+  /** One tenant-safe line saying what is going on */
+  summary?: string;
+  /** Last Retry now request the controller picked up */
+  lastHandledReconcileRequest?: string;
+  /** How to reach and sign in to an environment */
+  endpoints?: EnvironmentEndpoints;
+  /** The integration connection the platform used when the object names none */
+  config?: string;
+  /** Platform realization detail (shown collapsed) */
+  realization?: Record<string, unknown>;
+}
+
+/** How to reach an environment (status.endpoints). */
+export interface EnvironmentEndpoints {
+  /** Web console of the environment, when the site offers one */
+  console?: string;
+  /** API endpoint (Kubernetes API, Keystone, cloud API) */
+  api?: string;
+  signIn?: {
+    /** TenantSSO (the tenant's sign-in), ApplicationCredential, NotAvailable */
+    method?: string;
+    /** Name of the sign-in button on the site's login page */
+    idpName?: string;
+  };
+  /** Groups whose members can sign in */
+  signInGroups?: string[];
+  /** Site namespaces or the cloud project */
+  project?: string | string[];
+  domain?: string;
+  location?: string;
 }
 
 /** One automation job run recorded on the object */
@@ -43,7 +77,10 @@ export interface ObjectMeta {
   namespace?: string;
   uid?: string;
   generation?: number;
+  resourceVersion?: string;
   creationTimestamp?: string;
+  /** Set when a delete was requested; the object stays until its finalizers finish */
+  deletionTimestamp?: string;
   labels?: Record<string, string>;
   annotations?: Record<string, string>;
 }

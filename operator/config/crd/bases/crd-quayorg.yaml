@@ -61,14 +61,14 @@ spec:
             spec:
               description: The organization and who gets which access.
               type: object
-              required:
-                - quayConfig
               properties:
                 quayConfig:
                   type: string
                   description: >-
-                    Name of the QuayConfig in sovereign-cloud-plugins that provides
-                    Quay connection configuration.
+                    Optional. The registry connection (a QuayConfig in the platform's
+                    integration namespace) this organization is created through. When omitted
+                    the platform uses its default connection; the one used is reported in
+                    status.config.
                 quayAdminRbac:
                   type: array
                   items:

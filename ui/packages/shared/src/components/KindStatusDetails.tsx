@@ -23,6 +23,7 @@ import type {
 } from '../types';
 import { useTranslation } from '../i18n';
 import { formatRelativeTime } from '../list/listColumns';
+import { deletionBlockers } from '../status/phase';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -195,7 +196,9 @@ function RelativeTime({ iso }: { iso?: string }): React.ReactElement {
 export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactElement | null {
   const { t } = useTranslation();
   const waiting = Array.isArray(item.status?.waitingFor) ? item.status?.waitingFor ?? [] : [];
-  const blocked = Array.isArray(item.status?.deletionBlockedBy) ? item.status?.deletionBlockedBy ?? [] : [];
+  const blocked = deletionBlockers(item).map((b) =>
+    [b.kind, b.namespace && b.name ? `${b.namespace}/${b.name}` : b.name].filter(Boolean).join(' '),
+  );
   if (!waiting.length && !blocked.length) return null;
   return (
     <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '1rem' }}>
@@ -211,8 +214,8 @@ export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactEl
       {blocked.length > 0 && (
         <Alert variant="warning" isInline isPlain title={t('detail.deletionBlockedBy')}>
           <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
-            {blocked.map((w) => (
-              <li key={w}>{w}</li>
+            {blocked.map((w, i) => (
+              <li key={`${w}-${i}`}>{w}</li>
             ))}
           </ul>
         </Alert>

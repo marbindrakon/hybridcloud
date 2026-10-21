@@ -63,7 +63,6 @@ ui/packages/shared/src/i18n/locales/en.json	form.entitySelectPlaceholder	Entity	
 ui/packages/shared/src/i18n/locales/en.json	form.groups	RBAC	1
 ui/packages/shared/src/i18n/locales/en.json	form.placementImmutable	backend	1
 ui/packages/shared/src/i18n/locales/en.json	form.selectRbac	Rbac	1
-ui/packages/shared/src/i18n/locales/en.json	form.teamRbacHelp	RBAC	3
 ui/packages/shared/src/i18n/locales/en.json	hybridTopology.entityGroup	Entity	1
 ui/packages/shared/src/i18n/locales/en.json	hybridTopology.networkTableCaption	backend	1
 ui/packages/shared/src/i18n/locales/en.json	kinds.CloudOSO	Cloud OSO	1
@@ -91,8 +90,6 @@ ui/packages/shared/src/i18n/locales/en.json	networkOverview.state_pending	Pendin
 ui/packages/shared/src/i18n/locales/en.json	pages.operatorsSubtitle	RBAC	1
 ui/packages/shared/src/i18n/locales/en.json	pages.pendingCount	Pending	1
 ui/packages/shared/src/i18n/locales/en.json	pages.uiHealthPodNoteBody	CRs	1
-ui/packages/shared/src/i18n/locales/en.json	status.pending	pending	1
-ui/packages/shared/src/i18n/locales/en.json	status.reconciling	reconciling	1
 ui/packages/shared/src/i18n/locales/fr.json	detail.backendReady	Backend	1
 ui/packages/shared/src/i18n/locales/fr.json	fields.aapAdminRbac	RBAC	1
 ui/packages/shared/src/i18n/locales/fr.json	fields.aapJobExecutorRbac	RBAC	1
@@ -127,7 +124,6 @@ ui/packages/shared/src/i18n/locales/fr.json	fields.viewRbacHelp	Rbac	1
 ui/packages/shared/src/i18n/locales/fr.json	form.groups	RBAC	1
 ui/packages/shared/src/i18n/locales/fr.json	form.placementImmutable	backend	1
 ui/packages/shared/src/i18n/locales/fr.json	form.selectRbac	Rbac	1
-ui/packages/shared/src/i18n/locales/fr.json	form.teamRbacHelp	RBAC	3
 ui/packages/shared/src/i18n/locales/fr.json	hybridTopology.networkTableCaption	backend	1
 ui/packages/shared/src/i18n/locales/fr.json	kinds.CloudOSO	Cloud OSO	1
 ui/packages/shared/src/i18n/locales/fr.json	kinds.CloudOSO	OSO	1

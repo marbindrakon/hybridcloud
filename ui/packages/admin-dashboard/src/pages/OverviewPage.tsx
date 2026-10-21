@@ -49,7 +49,7 @@ function bucket(items: K8sResource[]) {
   let failed = 0;
   let pending = 0;
   for (const i of items) {
-    const h = normalizeHealth(i.status?.ready, i.status?.status);
+    const h = normalizeHealth(i);
     if (h === 'ready') ready += 1;
     else if (h === 'failed') failed += 1;
     else pending += 1;
@@ -82,7 +82,7 @@ export function OverviewPage(): React.ReactElement {
   const failedItems = useMemo(
     () =>
       items
-        .filter((i) => normalizeHealth(i.status?.ready, i.status?.status) === 'failed')
+        .filter((i) => normalizeHealth(i) === 'failed')
         .slice(0, 10),
     [items],
   );
@@ -173,7 +173,7 @@ export function OverviewPage(): React.ReactElement {
               </Title>
               <div className="sc-cluster-grid sc-mb">
                 {platforms.slice(0, 6).map((p) => {
-                  const healthy = normalizeHealth(p.status?.ready, p.status?.status) === 'ready';
+                  const healthy = normalizeHealth(p) === 'ready';
                   return (
                     <Card key={p.metadata.name} className="sc-cluster-card" isCompact>
                       <CardHeader>
@@ -265,11 +265,7 @@ export function OverviewPage(): React.ReactElement {
                             </Td>
                             <Td dataLabel={t('common.namespace')}>{item.metadata.namespace ?? '—'}</Td>
                             <Td dataLabel="Message">
-                              <StatusBadge
-                                status={item.status?.status}
-                                ready={item.status?.ready}
-                                message={item.status?.message}
-                              />
+                              <StatusBadge item={item} />
                             </Td>
                           </Tr>
                         );

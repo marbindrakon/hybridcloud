@@ -60,14 +60,14 @@ spec:
             spec:
               description: The organization and who gets which access.
               type: object
-              required:
-                - aapConfig
               properties:
                 aapConfig:
                   type: string
                   description: >-
-                    Name of the AAPConfig in sovereign-cloud-plugins that provides
-                    AAP connection and auth configuration.
+                    Optional. The automation connection (an AAPConfig in the platform's
+                    integration namespace) this organization is created through. When omitted
+                    the platform uses its default connection; the one used is reported in
+                    status.config.
                 aapAdminRbac:
                   type: array
                   items:

@@ -7,7 +7,11 @@ import {
   MenuToggle,
   Label,
   LabelGroup,
+  FormHelperText,
+  HelperText,
+  HelperTextItem,
 } from '@patternfly/react-core';
+import { useTranslation } from '../i18n';
 import type { MenuToggleElement } from '@patternfly/react-core';
 
 export interface RbacMultiSelectProps {
@@ -18,6 +22,10 @@ export interface RbacMultiSelectProps {
   options: { value: string; label: string }[];
   isRequired?: boolean;
   placeholder?: string;
+  /** One line under the picker (what members of these groups can do). */
+  helperText?: string;
+  /** Field error (for example from the API's refusal). */
+  error?: string;
 }
 
 /** Multi-select dropdown of Rbac CR names (chip + checkbox PatternFly Select). */
@@ -28,9 +36,13 @@ export function RbacMultiSelect({
   onChange,
   options,
   isRequired,
-  placeholder = 'Select RBAC…',
+  placeholder,
+  helperText,
+  error,
 }: RbacMultiSelectProps): React.ReactElement {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
+  const shownPlaceholder = placeholder ?? t('form.accessGroupsPlaceholder');
   const selected = value ?? [];
 
   const toggle = (toggleRef: React.Ref<MenuToggleElement>) => (
@@ -42,10 +54,10 @@ export function RbacMultiSelect({
       aria-label={label}
     >
       {selected.length === 0
-        ? placeholder
+        ? shownPlaceholder
         : selected.length === 1
           ? selected[0]
-          : `${selected.length} selected`}
+          : t('form.nSelected', { count: selected.length })}
     </MenuToggle>
   );
 
@@ -78,7 +90,7 @@ export function RbacMultiSelect({
         <SelectList>
           {options.length === 0 ? (
             <SelectOption isDisabled value="">
-              No Rbac CRs available
+              {t('form.noAccessGroups')}
             </SelectOption>
           ) : (
             options.map((o) => (
@@ -94,6 +106,14 @@ export function RbacMultiSelect({
           )}
         </SelectList>
       </Select>
+      {(helperText || error) && (
+        <FormHelperText>
+          <HelperText id={`${id}-help`}>
+            {error ? <HelperTextItem variant="error">{error}</HelperTextItem> : null}
+            {helperText ? <HelperTextItem>{helperText}</HelperTextItem> : null}
+          </HelperText>
+        </FormHelperText>
+      )}
     </FormGroup>
   );
 }

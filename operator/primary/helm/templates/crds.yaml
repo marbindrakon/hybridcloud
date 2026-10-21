@@ -219,14 +219,14 @@ spec:
             spec:
               description: The organization and who gets which access.
               type: object
-              required:
-                - aapConfig
               properties:
                 aapConfig:
                   type: string
                   description: >-
-                    Name of the AAPConfig in sovereign-cloud-plugins that provides
-                    AAP connection and auth configuration.
+                    Optional. The automation connection (an AAPConfig in the platform's
+                    integration namespace) this organization is created through. When omitted
+                    the platform uses its default connection; the one used is reported in
+                    status.config.
                 aapAdminRbac:
                   type: array
                   items:
@@ -3044,14 +3044,14 @@ spec:
             spec:
               description: The organization and who gets which access.
               type: object
-              required:
-                - quayConfig
               properties:
                 quayConfig:
                   type: string
                   description: >-
-                    Name of the QuayConfig in sovereign-cloud-plugins that provides
-                    Quay connection configuration.
+                    Optional. The registry connection (a QuayConfig in the platform's
+                    integration namespace) this organization is created through. When omitted
+                    the platform uses its default connection; the one used is reported in
+                    status.config.
                 quayAdminRbac:
                   type: array
                   items:
@@ -3227,11 +3227,12 @@ spec:
             spec:
               description: The access group.
               type: object
-              required:
-                - config
               properties:
                 config:
-                  description: Name of an RbacConfig resource in the sovereign-cloud-plugins namespace
+                  description: >-
+                    Optional. The identity provider connection (an RbacConfig in the platform's
+                    integration namespace) this access group uses. When omitted the platform uses
+                    its default connection; the one used is reported in status.config.
                   type: string
                 description:
                   description: >-
@@ -3766,15 +3767,16 @@ spec:
             spec:
               description: The Vault instance.
               type: object
-              required:
-                - rbacConfig
               properties:
                 ha:
                   description: Run Vault highly available. Default true.
                   type: boolean
                   default: true
                 rbacConfig:
-                  description: Name of an RbacConfig in sovereign-cloud-plugins used for OIDC
+                  description: >-
+                    Optional. The identity provider connection (an RbacConfig in the platform's
+                    integration namespace) used for sign-in. When omitted the platform uses its
+                    default connection.
                   type: string
             status:
               description: Observed state, written by the platform. Do not edit.

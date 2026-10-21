@@ -40,15 +40,16 @@ spec:
             spec:
               description: The Vault instance.
               type: object
-              required:
-                - rbacConfig
               properties:
                 ha:
                   description: Run Vault highly available. Default true.
                   type: boolean
                   default: true
                 rbacConfig:
-                  description: Name of an RbacConfig in sovereign-cloud-plugins used for OIDC
+                  description: >-
+                    Optional. The identity provider connection (an RbacConfig in the platform's
+                    integration namespace) used for sign-in. When omitted the platform uses its
+                    default connection.
                   type: string
             status:
               description: Observed state, written by the platform. Do not edit.

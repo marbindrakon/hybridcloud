@@ -52,8 +52,9 @@ test('every Retry now writes a new timestamp, whatever value the client sends', 
     assert.equal(values.length, 3);
     for (const v of values) assert.ok(!Number.isNaN(Date.parse(v)) && v !== 'true', `not a timestamp: ${v}`);
     assert.equal(new Set(values).size, 3, 'repeated requests wrote the same value');
+    // The path is the object; the query carries the write options (fieldValidation=Strict, UFS-F8).
     assert.ok(patches.every((p) => p.method === 'PATCH'
-      && p.url === '/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-uxr-corp/cloudvirts/vm'));
+      && p.url.split('?')[0] === '/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-uxr-corp/cloudvirts/vm'));
   } finally {
     server.close();
   }

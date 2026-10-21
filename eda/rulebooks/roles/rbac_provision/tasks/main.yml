@@ -9,6 +9,19 @@
     - name: Resolve services cluster API connection
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
+    # The identity provider connection is optional on the object: the platform's default is used when it names none.
+    - name: Resolve the identity provider connection
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_integration_config.yml"
+      vars:
+        resolve_config_kind: RbacConfig
+        resolve_config_name: "{{ rbac_spec.config | default('') }}"
+        resolve_config_namespace: "{{ plugin_rbac_operator_namespace }}"
+        resolve_config_required: true
+
+    - name: Use the resolved identity provider connection
+      ansible.builtin.set_fact:
+        rbac_spec: "{{ rbac_spec | combine({'config': resolved_config_name}) }}"
+
     - name: Announce AAP job started in CR status
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
@@ -249,6 +262,7 @@
           group: "{{ rbac_group_path_display }}"
           groupId: "{{ child_group_verify.json.id }}"
           ready: true
+          config: "{{ resolved_config_name }}"
           observedGeneration: "{{ rbac_generation }}"
           lastReconciledAt: "{{ rbac_status_transition_time }}"
           entity: "{{ entity_name }}"
