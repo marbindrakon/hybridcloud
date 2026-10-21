@@ -5,6 +5,9 @@
 | Page | What it covers |
 |---|---|
 | [Getting started](tenant/getting-started.md) | Sign in, find your tenant, a network, a VM environment, the placement, the site console, DNS, adding a colleague, Retry now, deleting. |
+| [Glossary](tenant/glossary.md) | The words, what each is in the API and in other clouds; which project is which; what to create for what. |
+| [Access and delegation](tenant/access-and-delegation.md) | Access groups, tenant roles, access on one object, the access fields of team setups and app projects. |
+| [Status reasons](tenant/status-reasons.md) | States, the reasons and who acts on them, Retry now, deletion order and protection. |
 | [Hybrid networks tutorial](../architecture/docs/tutorial/09-hybrid-networks.md) | Networks across sites, placements on OpenStack and OpenShift Virtualization, internet egress. |
 | [Samples](../samples/README.md) | One example per kind of object. |
 
@@ -14,7 +17,7 @@
 
 | Page | What it covers |
 |---|---|
-| [Onboard a tenant](platform/onboard-a-tenant.md) | Sites, the tenant, access groups, the role table, membership, sign-in checks, offboarding. |
+| [Onboard a tenant](platform/onboard-a-tenant.md) | Sites and allowed sites, the tenant and its profile, access groups, the role table, the access fields, membership, sign-in checks, offboarding. |
 | [Bootstrap](../bootstrap/README.md) | Building the charts and seeding Argo CD on a new installation. |
 | [Disconnected deploy](disconnected-deploy.md) | What a disconnected installation needs. |
 | [Lab configuration policy](lab-config.md) | Where installation-specific values live (never in Git). |
