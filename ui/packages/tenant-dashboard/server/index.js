@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { createK8sHandlers } from "./k8s-proxy.js";
 import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
 import { createPermissionsHandler } from "../../shared/server/permissions.js";
+import { mountSessionRoutes } from "../../shared/server/session.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -106,6 +107,8 @@ app.get("/api/user", requireAuth, (req, res) => {
 });
 
 const k8s = createK8sHandlers(OCP_API);
+
+mountSessionRoutes(app, { apiServer: OCP_API, requireAuth });
 
 // Namespaces & configs
 app.get("/api/entities", requireAuth, k8s.listEntities);

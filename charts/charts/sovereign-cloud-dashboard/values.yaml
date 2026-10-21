@@ -22,6 +22,10 @@ oauthProxy:
     # Vault path must contain keys: client_secret, cookie_secret
     vaultPath: "central/data/dashboard-oauth"
     refreshInterval: "1h"
+  # Absolute URL the browser is sent to after "Sign out" (for example the identity
+  # provider's end-session endpoint, so the next sign-in asks for credentials again).
+  # Empty = back to the sign-in page.
+  logoutUrl: ""
   # Access review a user must pass to use this dashboard (oauth-proxy --openshift-sar and
   # --openshift-delegate-urls; the server re-checks it per request). Keys: namespace,
   # resource, resourceAPIGroup, verb (optionally name). Empty = no review (not recommended).
@@ -47,3 +51,7 @@ resources:
 
 env:
   NODE_ENV: production
+  # Base URL of the documentation for the Help menu (empty = "not configured").
+  SHC_HELP_BASE_URL: ""
+  # OpenShift console URL shown to users (empty = not shown).
+  SHC_CONSOLE_URL: ""

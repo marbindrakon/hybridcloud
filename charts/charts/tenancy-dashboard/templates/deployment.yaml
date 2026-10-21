@@ -66,6 +66,9 @@ spec:
             - --pass-basic-auth=false
             - --skip-auth-regex=^/healthz$
             - --skip-provider-button=true
+            {{- with .Values.oauthProxy.logoutUrl }}
+            - --logout-url={{ . }}
+            {{- end }}
           volumeMounts:
             - name: proxy-tls
               mountPath: /etc/tls/private

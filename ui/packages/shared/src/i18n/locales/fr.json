@@ -831,6 +831,27 @@
   },
   "shell": {
     "notFoundBody": "Cette page n'existe pas ou a été déplacée. Utilisez la navigation ou revenez à l'accueil.",
-    "goHome": "Aller à l'accueil"
+    "goHome": "Aller à l'accueil",
+    "nav": "Navigation Sovereign Cloud",
+    "skipToContent": "Aller au contenu",
+    "help": {
+      "menu": "Aide",
+      "gettingStarted": "Premiers pas en tant que locataire",
+      "glossary": "Glossaire",
+      "onboardTenant": "Intégrer un locataire (guide plateforme)",
+      "allDocs": "Toute la documentation",
+      "notConfigured": "La documentation n'est pas configurée sur cette installation",
+      "notConfiguredHint": "Demandez le lien de la documentation à votre équipe plateforme."
+    },
+    "account": {
+      "menu": "Compte",
+      "signedInAs": "Connecté en tant que",
+      "platformAdmin": "Administrateur de la plateforme",
+      "groups_one": "{{count}} groupe",
+      "groups_other": "{{count}} groupes",
+      "noGroups": "Aucun groupe",
+      "showAllGroups": "Afficher les {{count}} groupes",
+      "signOut": "Se déconnecter"
+    }
   }
 }

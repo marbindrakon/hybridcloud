@@ -831,6 +831,27 @@
   },
   "shell": {
     "notFoundBody": "This page does not exist, or it moved. Use the navigation or go back home.",
-    "goHome": "Go to Home"
+    "goHome": "Go to Home",
+    "nav": "Sovereign Cloud navigation",
+    "skipToContent": "Skip to content",
+    "help": {
+      "menu": "Help",
+      "gettingStarted": "Getting started as a tenant",
+      "glossary": "Glossary",
+      "onboardTenant": "Onboard a tenant (platform guide)",
+      "allDocs": "All documentation",
+      "notConfigured": "Documentation is not configured on this installation",
+      "notConfiguredHint": "Ask your platform team for the documentation link."
+    },
+    "account": {
+      "menu": "Account",
+      "signedInAs": "Signed in as",
+      "platformAdmin": "Platform administrator",
+      "groups_one": "{{count}} group",
+      "groups_other": "{{count}} groups",
+      "noGroups": "No groups",
+      "showAllGroups": "Show all {{count}} groups",
+      "signOut": "Sign out"
+    }
   }
 }

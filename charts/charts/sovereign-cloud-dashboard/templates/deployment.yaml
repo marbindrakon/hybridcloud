@@ -66,6 +66,9 @@ spec:
             - --pass-basic-auth=false
             - --skip-auth-regex=^/healthz$
             - --skip-provider-button=true
+            {{- with .Values.oauthProxy.logoutUrl }}
+            - --logout-url={{ . }}
+            {{- end }}
             {{- with .Values.oauthProxy.openshiftSar }}
             {{- /* Platform administrators only: a session whose user fails this review gets 403 from the
                  proxy; bearer tokens (the console's plugin proxy) are accepted with the same review. */}}
