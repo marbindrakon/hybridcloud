@@ -4,7 +4,7 @@ import rateLimit from "express-rate-limit";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createK8sHandlers } from "./k8s-proxy.js";
-import { createApiK8sProxy } from "./api-k8s-proxy.js";
+import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();

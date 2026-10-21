@@ -6,7 +6,7 @@ import https from "https";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createK8sClient } from "./k8s-proxy.js";
-import { createApiK8sProxy } from "./api-k8s-proxy.js";
+import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
