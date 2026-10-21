@@ -1,5 +1,10 @@
 # Platform RBAC Model — Conceptual Overview
 
+> **Superseded.** This page describes an earlier access model and earlier components. Use
+> [Onboard a tenant](../../../docs/platform/onboard-a-tenant.md) and
+> [Getting started](../../../docs/tenant/getting-started.md); the CRDs and `oc explain` are
+> authoritative.
+
 **Audience:** Platform administrators, architects, onboarding engineers
 
 ## What problem does this solve?
@@ -21,7 +26,7 @@ Layer 2 (Plugin RBAC Operator) — Keycloak group hierarchy
   Entity CR references Rbac CRs → RoleBinding subjects = Keycloak groups
 ```
 
-## The 14 Named Roles
+## The Named Roles
 
 Every entity namespace can have up to 14 K8s Roles automatically managed by the
 Entity operator. Each role maps to a specific responsibility:

@@ -53,11 +53,11 @@ Enable annotation watching for dashboard refresh:
 The event-only pattern:
 
 1. Read CR facts including `observedGeneration`, `ready`, `status`
-2. Detect `reconcileNow` annotation
+2. Detect a new `reconcileNow` value (it differs from `status.lastHandledReconcileRequest`)
 3. Skip if already processed (`observedGeneration >= generation` and `ready: true`)
 4. Set `status: reconciling` with `AwaitingEDA` condition
 5. Emit `events.k8s.io/v1` Event with spec JSON in `note`
-6. Clear `reconcileNow` annotation when set
+6. Record the handled value in `status.lastHandledReconcileRequest` (the annotation stays; a legacy `"true"` is removed)
 
 ### Shrink ClusterRole
 
@@ -100,7 +100,7 @@ Follow the naming convention from event-contract.md (not published in this repos
 | `reportingController` | `<operator-name>-operator` |
 | `type` | `Normal` |
 
-The event forwarder filters on `reportingController` matching `*-operator` and `reason` ending in `Requested`.
+The rulebooks match on `reason` ending in `Requested` (the Event Forwarder that used to filter on `reportingController` is retired).
 
 ---
 
@@ -349,11 +349,11 @@ oc get entity <name> -n sovereign-cloud
 
 ### Forced reconcile
 
-Use the tenancy dashboard Refresh button, or manually patch:
+Use **Retry now** on the object's page, or write a new timestamp yourself:
 
 ```bash
-oc patch entity <name> -n sovereign-cloud --type=merge \
-  -p '{"metadata":{"annotations":{"ansible.sdk.operatorframework.io/reconcileNow":"true"}}}'
+oc annotate entity <name> -n sovereign-cloud \
+  ansible.sdk.operatorframework.io/reconcileNow="$(date -u +%FT%TZ)" --overwrite
 ```
 
 ### Global test suite

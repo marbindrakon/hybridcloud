@@ -19,7 +19,7 @@ The Sovereign Cloud Dashboard is a React/Node.js web application that provides a
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 19, Material UI 9, Vite 8 |
+| Frontend | React 18, PatternFly 6, Vite (shared page library in `ui/packages/shared`) |
 | Backend | Node.js (Express 5) |
 | Auth | OpenShift OAuth via `ose-oauth-proxy` sidecar |
 | API | Kubernetes API (Entity CRD) using the logged-in user's OAuth access token |

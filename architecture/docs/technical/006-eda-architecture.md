@@ -87,7 +87,9 @@ All operators emit `events.k8s.io/v1` Events following a shared contract. See ev
 
 ---
 
-## Event Forwarder Internals
+## Event Forwarder Internals (retired)
+
+> Retired: operators publish to Kafka directly ([retired components](../architecture.md#retired-components)). This section is kept as history.
 
 Source: `eda/event-forwarder/src/forwarder.py`  
 Chart: `bootstrap/helm/charts/event-forwarder/`
@@ -202,13 +204,13 @@ Operators and EDA share CR status fields per operator-eda-handshake.md (not publ
 | 4 | AAP Role | `deletionComplete: true` |
 | 5 | Operator | Finalizer exits; CR garbage collected |
 
-### Forced Reconcile (Dashboard Refresh)
+### Retry now (forced reconcile)
 
 | Step | Actor | Action |
 |------|-------|--------|
-| 1 | Dashboard | PATCH `ansible.sdk.operatorframework.io/reconcileNow: "true"` |
-| 2 | Operator | Detect via `watchAnnotationsChanges`, emit `<Kind>ReconcileRequested` |
-| 3 | Operator | Clear annotation (set to null) |
+| 1 | Dashboard or `oc annotate` | Write a new value (an RFC 3339 timestamp) into `ansible.sdk.operatorframework.io/reconcileNow` |
+| 2 | Operator | Detect via `watchAnnotationsChanges`; the value differs from `status.lastHandledReconcileRequest`, so emit `<Kind>ReconcileRequested` |
+| 3 | Operator | Record the value in `status.lastHandledReconcileRequest`; the annotation stays (a legacy value `"true"` is removed instead) |
 | 4 | EDA | `run_job_template` → full status update as create flow |
 
 ### edaJobs Array (Single Entry)

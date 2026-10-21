@@ -1,5 +1,10 @@
 # Tutorial: Tenancy Dashboard
 
+> **Superseded.** This page describes an earlier access model and earlier components. Use
+> [Onboard a tenant](../../../docs/platform/onboard-a-tenant.md) and
+> [Getting started](../../../docs/tenant/getting-started.md); the CRDs and `oc explain` are
+> authoritative.
+
 ## Overview
 
 The Tenancy Dashboard is the self-service UI for tenant administrators to manage teams, projects, assignments, plugins (Vault, AAP, Quay), and RBAC groups within their entity namespaces. It runs on the services cluster with full CRUD over all `hybridsovereign.redhat` CRs.
@@ -180,12 +185,9 @@ oc label namespace entity-acme-corp \
 
 ### CR creation fails with "Forbidden"
 
-The logged-in user does not have RBAC permissions for the CRD in that namespace. Platform admin must grant the `sovereign-cloud-editor` role:
-
-```bash
-oc adm policy add-role-to-user sovereign-cloud-editor \
-  myuser -n entity-acme-corp
-```
+The logged-in user does not have RBAC permissions for the CRD in that namespace. Ask the platform team to add your
+access group to a role ([Onboard a tenant, step 4](../../../docs/platform/onboard-a-tenant.md#4-give-the-access-groups-roles)),
+or to add you to an access group that holds one.
 
 ### Status stuck at `ready: False`
 

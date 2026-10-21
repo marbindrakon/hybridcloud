@@ -15,7 +15,7 @@ EDA (event-driven automation), and Automation Hub (content management).
 | Hub | Central | `aap` | Content management (optional) |
 | Tenant AAP instance | Services | `aap` | Separate `AnsibleAutomationPlatform` CR for tenant automation via `AAPOrg` plugin |
 
-> **Placement clarification**: Platform EDA automation (event forwarder → Event Stream → EDA activations → AAP job templates) runs entirely on the **central cluster** in namespace `aap`. See [006 EDA Architecture](./006-eda-architecture.md). The services-cluster AAP instance is provisioned by the Plugin AAP operator for tenant-specific automation and is not part of the platform EDA pipeline.
+> **Placement clarification**: Platform EDA automation (operators → Kafka → EDA activations → AAP job templates) runs entirely on the **central cluster** in namespace `aap`. See [006 EDA Architecture](./006-eda-architecture.md). The services-cluster AAP instance is provisioned by the Plugin AAP operator for tenant-specific automation and is not part of the platform EDA pipeline.
 
 ## Chart: `bootstrap/helm/charts/aap`
 

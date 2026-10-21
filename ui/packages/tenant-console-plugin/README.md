@@ -5,7 +5,7 @@ OpenShift 4.x dynamic console plugin for tenant self-service views.
 ## Extensions
 
 - Navigation section: **My Sovereign Cloud**
-- Routes: Overview, My Teams (scaffold pages with self-service placeholders)
+- Routes: the tenant pages of the shared navigation registry (`shared/src/nav/registry.ts`), rendered by the shared page library
 
 ## Build
 

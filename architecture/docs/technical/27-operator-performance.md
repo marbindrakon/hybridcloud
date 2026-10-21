@@ -16,7 +16,7 @@ All operators built by this repository are configured for **10 concurrent reconc
 | `plugin_rbac` | RbacConfig, Rbac | 10 | 1Gi | 2 CRD kinds |
 | `plugin_aap` | AAPConfig, AAPOrg | 10 | 1Gi | 2 CRD kinds |
 | `plugin_quay` | QuayConfig, QuayOrg | 10 | 1Gi | 2 CRD kinds |
-| `plugin_sdx` | Iaac | 1 | 256Mi | Go controller; leader election enabled |
+| `plugin_sdx` (retired) | Iaac | 1 | 256Mi | Go controller; replaced by `iaac-git-sync` |
 | `plugin_vault` | Vault, VaultKV | 10 | **2Gi** | Stateful: deploys Vault instances |
 | `CloudOSO` | CloudOSO | 10 | **2Gi** | Stateful: interacts with OpenStack |
 

@@ -12,17 +12,15 @@ The Tenancy Dashboard is a web UI on the services cluster. It drives tenancy and
 | Namespace | `sovereign-cloud` |
 | Chart | Tenant dashboard chart under `ui/packages/tenant-dashboard` (see make targets) |
 | OCI location | `oci://quay.example.com/hybrid-sovereign/tenancy-dashboard` |
-| Current chart version | 0.9.8 |
-| Current image tag | 3.3.0 |
+| Versions | pinned in `bootstrap/helm/central/values.yaml` (not repeated here) |
 
 ## Technology stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React with MUI (Material UI) |
+| Frontend | React 18, PatternFly 6 (shared page library in `ui/packages/shared`) |
 | Backend | Node.js (Express) |
 | Auth | OpenShift OAuth via `ose-oauth-proxy` sidecar |
-| Theme | Red Hat red palette (`#CC0000` primary) |
 
 ## Features
 

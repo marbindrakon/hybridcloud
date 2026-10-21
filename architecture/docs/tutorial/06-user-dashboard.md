@@ -1,10 +1,15 @@
 # Tutorial: Sovereign Cloud Dashboard (User Dashboard)
 
+> **Superseded.** This page describes an earlier access model and earlier components. Use
+> [Onboard a tenant](../../../docs/platform/onboard-a-tenant.md) and
+> [Getting started](../../../docs/tenant/getting-started.md); the CRDs and `oc explain` are
+> authoritative.
+
 ## Overview
 
 The Sovereign Cloud Dashboard is the management UI for platform administrators to manage tenant `Entity` custom resources. It runs on the services cluster and authenticates users via OpenShift OAuth.
 
-**URL:** `https://sovereign-cloud-dashboard.apps.services.lab.example.com`
+**URL:** `https://sovereign-cloud-dashboard-sovereign-cloud.apps.<services apps domain>/`
 
 ---
 

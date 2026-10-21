@@ -48,7 +48,7 @@
 | 32 | Dashboard Refresh | Rate limiting on API endpoints | ✅ | `apiLimiter` 120/min; `mutationLimiter` 30/min in tenancy dashboard |
 | 33 | Dashboard Refresh | X-Forwarded-Access-Token only | ✅ | k8s-proxy rejects calls without user OAuth token |
 | 34 | Dashboard Refresh | No ServiceAccount token for mutations | ✅ | Refresh PATCH uses logged-in user's token, not pod SA |
-| 35 | Dashboard Refresh | Annotation cleared after reconcile | ✅ | Operator nulls `reconcileNow` after handling |
+| 35 | Retry now | Request recorded after reconcile | ✅ | Operator records the handled value in `status.lastHandledReconcileRequest`; a legacy `"true"` is removed |
 | 36 | Dashboard Refresh | Helmet security headers | ✅ | CSP, HSTS, referrer-policy configured |
 | 37 | Operators (refactored) | Shrunk RBAC (no external API verbs) | ✅ | Entity operator dropped Keycloak/Vault/namespace-create verbs |
 | 38 | Operators (refactored) | Event emission only | ✅ | Create/delete/reconcile events; no provisioning in operator |

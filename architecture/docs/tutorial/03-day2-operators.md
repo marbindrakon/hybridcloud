@@ -1,5 +1,10 @@
 # Day-2 Operations: Custom Operators
 
+> **Superseded.** This page describes an earlier access model and earlier components. Use
+> [Onboard a tenant](../../../docs/platform/onboard-a-tenant.md) and
+> [Getting started](../../../docs/tenant/getting-started.md); the CRDs and `oc explain` are
+> authoritative.
+
 ## Overview
 
 Sovereign Cloud deploys custom Ansible-based operators via the services cluster. This guide covers creating and managing Custom Resources (CRs), upgrading operators, tuning reconciliation, and monitoring.
