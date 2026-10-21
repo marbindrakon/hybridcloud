@@ -5,3 +5,5 @@ cit_referencing_kinds:
   - CloudOSO
   - CloudGateway
   - CloudVirt
+  - CloudAWS
+  - CloudGCP
