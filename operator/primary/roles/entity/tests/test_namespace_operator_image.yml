@@ -1,0 +1,202 @@
+# Image selection of the per-tenant namespace operator (canary annotation), no cluster needed:
+#   NAMESPACE_OPERATOR_IMAGE=quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21 \
+#     ansible-playbook -i localhost, -c local operator/primary/roles/entity/tests/test_namespace_operator_image.yml
+---
+- name: no annotation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21'
+      - entity_ns_operator_image_source == 'default'
+      - (entity_ns_operator_image_rejected | bool) == False
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: empty annotation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: ''
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21'
+      - entity_ns_operator_image_source == 'default'
+      - (entity_ns_operator_image_rejected | bool) == False
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: bare tag
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: img-0.1.22
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.22'
+      - entity_ns_operator_image_source == 'canary'
+      - (entity_ns_operator_image_rejected | bool) == False
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: the default tag
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: img-0.1.21
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21'
+      - entity_ns_operator_image_source == 'default'
+      - (entity_ns_operator_image_rejected | bool) == False
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: full reference, same repository
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: quay.example/shc/hybridsovereign-namespace-operator:img-test
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-test'
+      - entity_ns_operator_image_source == 'canary'
+      - (entity_ns_operator_image_rejected | bool) == False
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: digest, same repository
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: quay.example/shc/hybridsovereign-namespace-operator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      - entity_ns_operator_image_source == 'canary'
+      - (entity_ns_operator_image_rejected | bool) == False
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: other repository
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: quay.io/evil/x:1
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21'
+      - entity_ns_operator_image_source == 'default'
+      - (entity_ns_operator_image_rejected | bool) == True
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: repository prefix
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: quay.example/shc/hybridsovereign-namespace-operator-evil:1
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21'
+      - entity_ns_operator_image_source == 'default'
+      - (entity_ns_operator_image_rejected | bool) == True
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: invalid tag
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: img 1
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21'
+      - entity_ns_operator_image_source == 'default'
+      - (entity_ns_operator_image_rejected | bool) == True
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}
+- name: short digest
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _hybridsovereign_redhat_entity:
+      metadata:
+        name: test-entity
+        namespace: sovereign-cloud
+        annotations:
+          hybridsovereign.redhat/namespace-operator-image: quay.example/shc/hybridsovereign-namespace-operator@sha256:abc
+  tasks:
+  - name: Select
+    ansible.builtin.include_tasks: '{{ playbook_dir }}/../tasks/namespace_operator_image.yml'
+  - name: Check
+    ansible.builtin.assert:
+      that:
+      - entity_ns_operator_image == 'quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21'
+      - entity_ns_operator_image_source == 'default'
+      - (entity_ns_operator_image_rejected | bool) == True
+      fail_msg: got {{ entity_ns_operator_image }} {{ entity_ns_operator_image_source }} rejected={{ entity_ns_operator_image_rejected }}

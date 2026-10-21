@@ -1,0 +1,36 @@
+---
+# Namespace operator image of this tenant (canary). The Entity annotation
+# hybridsovereign.redhat/namespace-operator-image selects it: a bare tag (img-0.1.22) or a full
+# reference in the same repository as the default image (<repo>:<tag> or <repo>@sha256:<digest>).
+# Anything else is refused with a Warning Event NamespaceOperatorImageRejected and the default
+# (NAMESPACE_OPERATOR_IMAGE) is used.
+# Sets entity_ns_operator_image, entity_ns_operator_image_source (canary|default) and entity_ns_operator_image_rejected.
+# Tested by operator/primary/roles/entity/tests/test_namespace_operator_image.yml.
+- name: Select the namespace operator image
+  ansible.builtin.set_fact:
+    entity_ns_operator_default_image: "{{ entity_nsimg_default }}"
+    entity_ns_operator_image_repository: "{{ entity_nsimg_repo }}"
+    entity_ns_operator_image_request: "{{ entity_nsimg_request }}"
+    # The requested image when it is valid, else ''.
+    entity_ns_operator_image_canary: >-
+      {{
+        (entity_nsimg_repo ~ ':' ~ entity_nsimg_request) if (entity_nsimg_request is match('^' ~ entity_nsimg_tag ~ '$'))
+        else entity_nsimg_request if (entity_nsimg_request is match('^' ~ (entity_nsimg_repo | regex_escape) ~ ':' ~ entity_nsimg_tag ~ '$'))
+        else entity_nsimg_request if (entity_nsimg_request is match('^' ~ (entity_nsimg_repo | regex_escape) ~ '@sha256:[0-9a-f]{64}$'))
+        else ''
+      }}
+  vars:
+    entity_nsimg_default: "{{ lookup('env', 'NAMESPACE_OPERATOR_IMAGE') }}"
+    # Repository of the default image: the reference without its tag or digest (a registry port stays).
+    entity_nsimg_repo: "{{ entity_nsimg_default | regex_replace('@sha256:[0-9a-f]+$', '') | regex_replace(':[^:/]+$', '') }}"
+    entity_nsimg_tag: '[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}'
+    entity_nsimg_request: >-
+      {{ ((_hybridsovereign_redhat_entity.metadata.annotations | default({}, true))['hybridsovereign.redhat/namespace-operator-image']
+          | default('', true)) | string | trim }}
+
+- name: Record where the namespace operator image comes from
+  ansible.builtin.set_fact:
+    entity_ns_operator_image: "{{ entity_ns_operator_image_canary if entity_ns_operator_image_canary != '' else entity_ns_operator_default_image }}"
+    entity_ns_operator_image_source: >-
+      {{ 'canary' if (entity_ns_operator_image_canary != '' and entity_ns_operator_image_canary != entity_ns_operator_default_image) else 'default' }}
+    entity_ns_operator_image_rejected: "{{ entity_ns_operator_image_request != '' and entity_ns_operator_image_canary == '' }}"
