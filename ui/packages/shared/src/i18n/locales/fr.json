@@ -722,5 +722,27 @@
     "legendPlacement": "Placement → le site où il aboutit",
     "gatewayTableCaption": "Sites et leurs Cloud Gateways : transport et, pour chaque nœud de bordure, sessions BGP et état du tunnel",
     "networkTableCaption": "Chaque Hybrid Network avec ses placements : backend, site, préfixes, VNI et espaces de noms du site"
+  },
+  "scope": {
+    "tenant": "Locataire",
+    "tenantNamespace": "Espace de noms du locataire",
+    "allTenants": "Tous les locataires",
+    "platform": "Plateforme",
+    "choose": "Choisir un locataire",
+    "search": "Rechercher un locataire",
+    "recent": "Récents",
+    "all": "Tous",
+    "noMatch": "Aucun locataire ne correspond",
+    "noRoleTitle": "Vous n'avez encore de rôle dans aucun locataire",
+    "noRoleBody": "Vous êtes connecté mais vous n'avez encore de rôle dans aucun locataire. Demandez à l'administrateur des accès de votre locataire de vous ajouter à un groupe d'accès.",
+    "signedInAs": "Connecté en tant que {{user}}.",
+    "newGroupHint": "Si vous avez été ajouté à un groupe après votre connexion, déconnectez-vous puis reconnectez-vous.",
+    "noAccessTitle": "Vous n'avez pas accès à {{tenant}}",
+    "noAccessBody": "Ce lien mène à un locataire ou à une zone que votre compte ne peut pas ouvrir.",
+    "openTenant": "Ouvrir {{tenant}}",
+    "chooseTitle": "Choisir un locataire",
+    "chooseBody": "Vous avez accès à plusieurs locataires. Choisissez celui dans lequel travailler ; vous pouvez changer à tout moment dans l'en-tête.",
+    "loading": "Vérification de vos accès",
+    "loadingBody": "Recherche de vos groupes et de vos locataires."
   }
 }

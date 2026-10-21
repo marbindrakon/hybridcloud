@@ -13,13 +13,15 @@ trap 'rm -rf "$out"' EXIT
 # entry (relative to ui/packages/shared/src) -> bundle name
 entries=(
   "hooks/errors.ts:errors"
+  "scope/parseGroups.ts:parseGroups"
+  "scope/ScopeProvider.tsx:scopeProvider"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"
   [ -f "$ui/packages/shared/src/$src" ] || continue
   "$ui/node_modules/.bin/esbuild" "$ui/packages/shared/src/$src" --bundle --format=esm --platform=node \
-    --log-level=warning --external:react --external:react-dom --external:react-i18next --external:i18next \
-    --external:@patternfly/* --outfile="$out/$name.mjs" || exit 1
+    --log-level=warning --external:@patternfly/* --jsx=automatic --loader:.json=json \
+    --outfile="$out/$name.mjs" || exit 1
 done
 
 export SHELL_BUNDLE_DIR="$out"
