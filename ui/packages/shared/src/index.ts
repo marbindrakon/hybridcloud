@@ -11,6 +11,8 @@ export * from './icons';
 export * from './status';
 export * from './forms/specFieldMeta';
 export { GenericSpecEditor } from './forms/GenericSpecEditor';
+export { fieldErrorsFrom, causeLines, normaliseFieldPath } from './forms/apiErrors';
+export type { FieldErrors } from './forms/apiErrors';
 export {
   getListColumns,
   formatRelativeTime,

@@ -6,6 +6,7 @@ export {
   forceReconcile,
   getK8sClientConfig,
   k8sFetchJson,
+  k8sFetchWithWarnings,
   fetchResourceList,
   fetchResource,
   updateDashboardResource,
@@ -16,6 +17,8 @@ export {
 export type {
   K8sApiStyle,
   K8sClientConfig,
+  K8sAnswer,
+  WriteOptions,
   UseK8sResourceListOptions,
   UseK8sResourceListResult,
   UseK8sResourceOptions,

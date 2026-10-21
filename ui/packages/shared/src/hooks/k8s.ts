@@ -6,7 +6,7 @@ import {
   K8sResource,
 } from '../types';
 import { usePermissions } from './permissions';
-import { errorFromResponse, K8sApiErrorContext, networkError } from './errors';
+import { errorFromResponse, K8sApiErrorContext, networkError, parseWarningHeaders } from './errors';
 import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs } from './fetchState';
 import { isInFlight, phaseOf } from '../status/phase';
 
@@ -194,6 +194,34 @@ const UPDATE_METHOD: Partial<Record<HybridSovereignKind, 'PUT' | 'PATCH'>> = {
 
 const RECONCILE_ANNOTATION = 'ansible.sdk.operatorframework.io/reconcileNow';
 
+/** Options of a create or update. */
+export interface WriteOptions {
+  /** Server dry run: the API validates and answers, nothing is persisted. */
+  dryRun?: boolean;
+  /** Called with the API's `Warning` texts of a successful answer. */
+  onWarnings?: (warnings: string[]) => void;
+}
+
+/**
+ * Query of a write: the raw API gets fieldValidation=Strict (unknown or
+ * misspelled fields are refused with their path, never dropped) and dryRun=All
+ * for a dry run; the curated dashboard routes add Strict themselves and only
+ * need dryRun=All.
+ */
+function withWriteQuery(url: string, opts: WriteOptions | undefined, raw: boolean): string {
+  const params: string[] = [];
+  if (raw) params.push('fieldValidation=Strict');
+  if (opts?.dryRun) params.push('dryRun=All');
+  if (!params.length) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}${params.join('&')}`;
+}
+
+async function write<T>(url: string, init: RequestInit, opts: WriteOptions | undefined, ctx: K8sApiErrorContext): Promise<T> {
+  const answer = await k8sFetchWithWarnings<T>(url, init, ctx);
+  if (answer.warnings.length) opts?.onWarnings?.(answer.warnings);
+  return answer.body;
+}
+
 /** Force reconcile by setting the operator reconcileNow annotation */
 export async function forceReconcile(
   kind: HybridSovereignKind,
@@ -211,7 +239,8 @@ export async function forceReconcile(
         name,
         namespace,
         annotation: RECONCILE_ANNOTATION,
-        value: 'true',
+        // Any new value is a request; the controller records the one it handled (Retry now).
+        value: new Date().toISOString(),
       }),
     });
   }
@@ -254,22 +283,26 @@ export async function updateDashboardResource(
   name: string,
   namespace: string,
   body: { spec: unknown },
+  opts?: WriteOptions,
 ): Promise<unknown> {
   const path = DASHBOARD_LIST_PATH[kind];
   const method = UPDATE_METHOD[kind] ?? 'PUT';
+  const ctx = { kind, verb: 'update', namespace, name };
   if (globalK8sConfig.apiStyle === 'dashboard' && path) {
     const url = `${path}/${encodeURIComponent(name)}?namespace=${encodeURIComponent(namespace)}`;
-    return k8sFetchJson(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    return write(
+      withWriteQuery(url, opts, false),
+      { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      opts,
+      ctx,
+    );
   }
-  return k8sFetchJson(buildResourceUrl(kind, name, namespace), {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/merge-patch+json' },
-    body: JSON.stringify(body),
-  });
+  return write(
+    withWriteQuery(buildResourceUrl(kind, name, namespace), opts, true),
+    { method: 'PATCH', headers: { 'Content-Type': 'application/merge-patch+json' }, body: JSON.stringify(body) },
+    opts,
+    ctx,
+  );
 }
 
 const forbiddenListeners = new Set<() => void>();
@@ -282,16 +315,22 @@ export function addForbiddenListener(fn: () => void): () => void {
   };
 }
 
+/** A successful answer with the Kubernetes `Warning` headers that came with it. */
+export interface K8sAnswer<T> {
+  body: T;
+  warnings: string[];
+}
+
 /**
- * Fetch JSON from the configured API base. A failed answer throws `K8sApiError`
- * (status, reason, causes, warnings); a request that never got an answer throws
- * one with status 0.
+ * Fetch JSON from the configured API base and keep the answer's `Warning`
+ * headers. A failed answer throws `K8sApiError` (status, reason, causes,
+ * warnings); a request that never got an answer throws one with status 0.
  */
-export async function k8sFetchJson<T>(
+export async function k8sFetchWithWarnings<T>(
   url: string,
   init?: RequestInit,
   ctx: K8sApiErrorContext = {},
-): Promise<T> {
+): Promise<K8sAnswer<T>> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(init?.headers as Record<string, string> | undefined),
@@ -318,17 +357,31 @@ export async function k8sFetchJson<T>(
     }
     throw await errorFromResponse(response, ctx);
   }
+  const warnings = parseWarningHeaders(response.headers) ?? [];
   // DELETE / some PATCHes return 200 with body, 202 Accepted, or 204 No Content.
   if (response.status === 204 || response.status === 205) {
-    return undefined as T;
+    return { body: undefined as T, warnings };
   }
   const text = await response.text();
-  if (!text) return undefined as T;
+  if (!text) return { body: undefined as T, warnings };
   try {
-    return JSON.parse(text) as T;
+    return { body: JSON.parse(text) as T, warnings };
   } catch {
-    return undefined as T;
+    return { body: undefined as T, warnings };
   }
+}
+
+/**
+ * Fetch JSON from the configured API base. A failed answer throws `K8sApiError`
+ * (status, reason, causes, warnings); a request that never got an answer throws
+ * one with status 0.
+ */
+export async function k8sFetchJson<T>(
+  url: string,
+  init?: RequestInit,
+  ctx: K8sApiErrorContext = {},
+): Promise<T> {
+  return (await k8sFetchWithWarnings<T>(url, init, ctx)).body;
 }
 
 function normalizeListPayload<T>(data: unknown): T[] {
@@ -379,6 +432,7 @@ export async function createDashboardResource(
   kind: HybridSovereignKind,
   body: { name: string; namespace?: string; spec?: unknown } | unknown,
   namespace?: string,
+  opts?: WriteOptions,
 ): Promise<unknown> {
   const path = DASHBOARD_CREATE_PATH[kind];
   if (globalK8sConfig.apiStyle === 'dashboard' && path) {
@@ -393,11 +447,12 @@ export async function createDashboardResource(
     }
     const ns = payload.namespace ?? namespace;
     const url = ns && kind !== 'Entity' ? `${path}?namespace=${encodeURIComponent(ns)}` : path;
-    return k8sFetchJson(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    return write(
+      withWriteQuery(url, opts, false),
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+      opts,
+      { kind, verb: 'create', namespace: ns, name: payload.name },
+    );
   }
   const plural = KIND_PLURALS[kind];
   const base = globalK8sConfig.baseUrl ?? '/api/k8s';
@@ -429,11 +484,12 @@ export async function createDashboardResource(
       : metaNs && kind === 'Entity'
         ? `${base}/apis/${API_VERSION_FULL}/namespaces/${metaNs}/${plural}`
         : `${base}/apis/${API_VERSION_FULL}/${plural}`;
-  return k8sFetchJson(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  return write(
+    withWriteQuery(url, opts, true),
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+    opts,
+    { kind, verb: 'create', namespace: metaNs, name: metaName },
+  );
 }
 
 /** One object by name (curated route or raw API, as configured); throws K8sApiError. */
