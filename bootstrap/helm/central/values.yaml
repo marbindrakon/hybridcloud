@@ -3445,6 +3445,15 @@ dnsForwarderServices:
 shcClusterBaseServices:
   enabled: true
   chartVersion: "0.3.15"  # 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
+  # BF-15: on services the ACM observability addon (endpoint-monitoring-operator) owns
+  # openshift-monitoring/cluster-monitoring-config data and rewrites it in its own normalized form, so Argo's copy
+  # never stays applied (permanent OutOfSync). Ignored, and with RespectIgnoreDifferences not re-applied, while the
+  # addon runs there: remove the entry when observability leaves services (then the chart owns it again).
+  extraIgnoreDifferences:
+    - kind: ConfigMap
+      name: cluster-monitoring-config
+      namespace: openshift-monitoring
+      jsonPointers: [/data]
   syncWaves:
     base: "0"
     certs: "2"
@@ -3515,7 +3524,10 @@ shcClusterBaseServices:
         accountVaultKey: oso/accounts/shc-tenant-admin
         config:
           domain: shc-tenants
-          ignoreProjects: [shc-tenant-dns]
+          # BF-15: the account is Atuin's; CloudOSOs on rhoso-bm are not compared with Atuin's projects
+          cloudInfrastructure: atuin
+          # hybrid-fabric: the fabric's platform project (CloudGateway placement networks), no CloudOSO by design
+          ignoreProjects: [shc-tenant-dns, hybrid-fabric]
           dnsZoneId: b19bb752-5aeb-4187-a303-12f9cb60378e
           dnsProjectId: 5074bdc4023c4fa09405a43ec7bbc6ea
 
