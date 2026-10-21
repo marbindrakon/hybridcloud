@@ -58,8 +58,9 @@
       ansible.builtin.set_fact:
         dnsconfig_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
-    # A periodic re-probe of a Ready DNSConfig keeps ready/conditions/capabilities as they are until the job
-    # reports: consumers keep working while it is re-checked.
+    # A create or a spec change: Ready=False until the job reports. A re-run of a Ready object (Retry now,
+    # a wake from another job, a periodic re-check) keeps ready/conditions as they are until the job
+    # reports, and only Reconciling says that a run is queued (reconcile_keeps_ready, reconcile_request.yml).
     - name: Mark DNSConfig as reconciling
       operator_sdk.util.k8s_status:
         api_version: hybridsovereign.redhat/v1alpha1
@@ -76,7 +77,22 @@
               lastTransitionTime: "{{ dnsconfig_status_transition_time }}"
               reason: AwaitingEDA
               message: Awaiting EDA to probe the DNS service
-      when: not (dnsconfig_ready | bool) or dnsconfig_observed_generation | int < dnsconfig_generation | int
+      when: not (reconcile_keeps_ready | default(false) | bool)
+
+    - name: Mark DNSConfig as queued for a re-run
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: DNSConfig
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          conditions:
+            - type: Reconciling
+              status: "True"
+              lastTransitionTime: "{{ dnsconfig_status_transition_time }}"
+              reason: Queued
+              message: A re-run is queued.
+      when: reconcile_keeps_ready | default(false) | bool
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:

@@ -7,7 +7,8 @@
 # after publishing instead of recording it, so writing "true" again is a new request.
 # Input: reconcile_request_cr (the role's CR, e.g. _hybridsovereign_redhat_hybridnetwork).
 # Sets: reconcile_request (the annotation value, '' when absent), reconcile_request_legacy (the value is
-# "true"), reconcile_now (a new request).
+# "true"), reconcile_now (a new request), reconcile_keeps_ready (the CR is Ready and its current spec was
+# already processed: this run is a re-run, not a create or a spec change).
 - name: Read the Retry-now request
   ansible.builtin.set_fact:
     reconcile_request: >-
@@ -29,3 +30,17 @@
       {%- set handled = (reconcile_request_cr.status | default({}, true)).lastHandledReconcileRequest
                         | default('', true) | string | trim -%}
       {{ (req | length > 0) and ((req | lower) == 'true' or req != handled) }}
+
+# A re-run of a Ready object (Retry now, a wake from another job, a periodic re-check) never flips Ready:
+# the role then records Reconciling=True/Queued instead of Ready=False/AwaitingEDA, and the job's own
+# status writes decide Ready. Ready is the Ready condition, or status.ready when there is no Ready condition.
+- name: Decide whether this run keeps Ready
+  ansible.builtin.set_fact:
+    reconcile_keeps_ready: >-
+      {%- set st = reconcile_request_cr.status | default({}, true) -%}
+      {%- set rc = st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list -%}
+      {%- set ready = ((rc | first).status | default('') | string) == 'True' if rc | length > 0
+                      else (st.ready | default(false, true) | string | lower) == 'true' -%}
+      {%- set gen = (reconcile_request_cr.metadata | default({}, true)).generation | default(0, true) | int -%}
+      {%- set observed = st.observedGeneration | default(0, true) | int -%}
+      {{ ready and gen > 0 and observed >= gen }}

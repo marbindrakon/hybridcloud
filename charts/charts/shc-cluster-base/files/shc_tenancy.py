@@ -31,6 +31,7 @@ import shc_status  # noqa: E402
 
 GROUP = eda_redrive.GROUP
 RECONCILE_NOW = eda_redrive.RECONCILE_NOW
+RECONCILE_REQUEST = eda_redrive.RECONCILE_REQUEST
 RECHECKS = f"{GROUP}/rechecks"
 RECHECKED_AT = f"{GROUP}/recheckedAt"
 OPERATOR = "hybridsovereign-namespace-operator"
@@ -304,7 +305,7 @@ def run_failed_recheck(api, kinds, cfg, now, dry_run):
                 continue
             counts["rechecked"] += 1
             actions.append(f"recheck {k['kind']} {ns}/{name} ({done + 1}/{fcfg['maxRechecks']})")
-            patch_ann({RECONCILE_NOW: stamp(now), RECHECKS: str(done + 1), RECHECKED_AT: stamp(now)})
+            patch_ann({RECONCILE_NOW: RECONCILE_REQUEST, RECHECKS: str(done + 1), RECHECKED_AT: stamp(now)})
     return counts, actions
 
 
