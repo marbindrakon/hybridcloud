@@ -83,6 +83,7 @@
         patch_ignore_not_found: true
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           message: "{{ ansible_failed_result.msg | default('HybridFabric teardown failed') }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"

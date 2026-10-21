@@ -275,6 +275,7 @@
         cr_namespace: "{{ rbac_config_cr_namespace }}"
         cr_status_body:
           status: ready
+          message: The sign-in connection is ready.
           clientId: "{{ rbac_config_cr_name }}"
           clientSecretName: "{{ plugin_generated_secret_name }}"
           ready: true
@@ -298,6 +299,7 @@
         cr_namespace: "{{ rbac_config_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: ProvisionFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"

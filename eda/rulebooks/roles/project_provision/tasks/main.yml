@@ -58,6 +58,7 @@
         cr_namespace: "{{ project_cr_namespace }}"
         cr_status_body:
           status: ready
+          message: The project is ready.
           ready: true
           observedGeneration: "{{ project_generation }}"
           lastReconciledAt: "{{ project_status_transition_time }}"

@@ -98,6 +98,7 @@
         cr_namespace: "{{ quayorg_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA deletion failed')) }}"

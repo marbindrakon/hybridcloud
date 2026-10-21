@@ -78,6 +78,7 @@
         patch_ignore_not_found: true
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           deletionComplete: false
           message: "{{ _msg }}"

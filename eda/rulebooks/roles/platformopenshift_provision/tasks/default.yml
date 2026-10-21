@@ -40,6 +40,7 @@
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
     cr_status_body:
       status: ready
+      message: The cluster is ready.
       ready: true
       observedGeneration: "{{ platformopenshift_generation }}"
       lastReconciledAt: "{{ event_time }}"

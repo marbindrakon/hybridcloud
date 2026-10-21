@@ -103,6 +103,7 @@
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
     cr_status_body:
       status: "{{ 'ready' if cb_cluster_installed | bool else 'failed' }}"
+      reason: "{{ 'Ready' if cb_cluster_installed | bool else 'ProvisionFailed' }}"
       ready: "{{ cb_cluster_installed | bool }}"
       observedGeneration: "{{ platformopenshift_generation }}"
       lastReconciledAt: "{{ event_time }}"

@@ -36,6 +36,7 @@
         cr_namespace: "{{ uihealthchecker_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           message: "{{ ansible_failed_result.msg | default('EDA stub teardown failed') }}"
       ignore_errors: true
