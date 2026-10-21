@@ -1,7 +1,8 @@
 ---
 # shc (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.2/§3.3): first thing in every job playbook
 # (pre_tasks). For an event with an eventId it writes "AAP job started" through patch_cr_status, which
-# records status.delivery.acknowledgedEventId/jobId/jobStartedAt - or ends the job, successfully,
+# records status.delivery.acknowledgedEventId/jobId/jobStartedAt and Reconciling=True/JobRunning
+# (an existing Ready=True stays as it is) - or ends the job, successfully,
 # when a newer request superseded this event. Events without an eventId (older operators) skip this.
 # The roles' own "Announce AAP job started" tasks only ran with env TOWER_JOB_ID, which AAP 2.6 jobs
 # don't have, so nothing acknowledged before.
@@ -27,4 +28,5 @@
         cr_status_body:
           status: reconciling
           ready: false
-          message: AAP job started
+          reason: JobRunning
+          message: Applying the change.

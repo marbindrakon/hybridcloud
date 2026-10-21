@@ -1,159 +1,50 @@
 ---
-- name: "Write status patch script for {{ cr_plural }}/{{ cr_name }}"
-  ansible.builtin.copy:
-    dest: /tmp/patch_status.py
-    mode: "0755"
-    content: |
-      import json, requests, urllib3, sys, datetime, os, traceback
-      urllib3.disable_warnings()
-      try:
-          api_host = os.environ["CR_API_HOST"]
-          token = os.environ["CR_TOKEN"]
-          cr_api = os.environ["CR_API_VERSION"]
-          cr_ns = os.environ["CR_NAMESPACE"]
-          cr_plural = os.environ["CR_PLURAL"]
-          cr_name = os.environ["CR_NAME"]
-          url = f"{api_host}/apis/{cr_api}/namespaces/{cr_ns}/{cr_plural}/{cr_name}/status"
-
-          eda_host = (os.environ.get("EDA_HOST") or os.environ.get("AAP_GATEWAY_URL") or "").rstrip("/")
-          activation_id = os.environ.get("EDA_ACTIVATION_ID", "")
-          activation_name = os.environ.get("EDA_ACTIVATION_NAME", "")
-          cr_action = os.environ.get("CR_ACTION", "reconcile")
-          cr_kind = cr_plural.rstrip("s")
-          now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-          tower_job_id = os.environ.get("TOWER_JOB_ID", "").strip()
-          tower_url = (os.environ.get("TOWER_URL") or os.environ.get("AWX_URL") or "").rstrip("/")
-
-          # shc P7.3.2: "pending" = the job finished but the CR waits for a prerequisite; the event is complete
-          # and the operator publishes again on its reconcilePeriod (status.waitingFor says what for).
-          job_status_map = {"ready": "success", "success": "success", "failed": "failed",
-                            "reconciling": "running", "pending": "waiting"}
-          job_status = job_status_map.get(cr_action, "running")
-
-          job_name = activation_name or f"{cr_kind}-{cr_action}"
-
-          if tower_job_id and tower_url:
-              job_url = f"{tower_url}/execution/jobs/playbook/{tower_job_id}/output"
-              job_id = tower_job_id
-          elif activation_id and str(activation_id) not in ("", "manual"):
-              job_url = f"{eda_host}/#/rulebook-activations/{activation_id}"
-              job_id = activation_id
-          else:
-              job_url = f"{eda_host}/#/rulebook-activations"
-              job_id = job_name
-
-          job_entry = {
-              "name": job_name,
-              "jobId": job_id,
-              "url": job_url,
-              "timestamp": now,
-              "status": job_status,
-          }
-          all_jobs = [job_entry]
-
-          # shc (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.2/§3.3): the operator writes
-          # status.delivery.eventId before it publishes. A job whose event is no longer the CR's
-          # current one was superseded (re-drive, reconcileNow, resync): it must not write status.
-          event_id = os.environ.get("EVENT_ID", "").strip()
-          headers = {"Authorization": f"Bearer {token}"}
-          # shc P7.3.2: CR_PARTIAL=1 merges only the given status fields (a mid-run update): no delivery change
-          # (the event is neither acknowledged again nor completed) and edaJobs is left as it is.
-          partial = os.environ.get("CR_PARTIAL", "").lower() in ("1", "true", "yes")
-          cur_delivery = {}
-          if event_id:
-              cur = requests.get(url, headers=headers, verify=False, timeout=30)
-              if cur.status_code == 200:
-                  cur_delivery = (cur.json().get("status") or {}).get("delivery") or {}
-                  cur_id = cur_delivery.get("eventId", "")
-                  if cur_id and cur_id != event_id:
-                      print(json.dumps({"superseded": True, "eventId": event_id, "currentEventId": cur_id}))
-                      sys.exit(0)
-
-          status_body = json.loads(os.environ["CR_STATUS_BODY"])
-          if event_id and not partial:
-              if cr_action == "reconciling":
-                  # a second "reconciling" patch for the same event keeps jobStartedAt (eda-redrive's stall timer)
-                  if cur_delivery.get("acknowledgedEventId") != event_id:
-                      status_body["delivery"] = {"acknowledgedEventId": event_id, "jobId": str(job_id), "jobStartedAt": now}
-              else:
-                  status_body["delivery"] = {"completedEventId": event_id, "completedAt": now}
-          if "observedGeneration" in status_body:
-              status_body["observedGeneration"] = int(status_body["observedGeneration"])
-          if "conditions" in status_body and isinstance(status_body["conditions"], list):
-              for cond in status_body["conditions"]:
-                  if isinstance(cond, dict) and "status" in cond and not isinstance(cond["status"], str):
-                      cond["status"] = str(cond["status"])
-          if not partial:
-              status_body["edaJobs"] = all_jobs
-          body = json.dumps({"status": status_body})
-
-          resp = requests.patch(url, data=body,
-              headers={**headers, "Content-Type": "application/merge-patch+json"},
-              verify=False, timeout=30)
-
-          try:
-              result = resp.json()
-          except Exception:
-              result = resp.text[:500]
-
-          if isinstance(result, dict):
-              s = result.get("status")
-              if isinstance(s, dict):
-                  status_ready = s.get("ready", False)
-                  status_text = s.get("status", "MISSING")
-              else:
-                  status_ready = False
-                  status_text = str(s)
-          else:
-              status_ready = False
-              status_text = str(result)[:100]
-
-          ignore_not_found = os.environ.get("PATCH_IGNORE_NOT_FOUND", "").lower() in ("1", "true", "yes")
-          out = {"http": resp.status_code, "ready": status_ready, "status": status_text, "edaJobs": len(all_jobs)}
-          if resp.status_code not in (200, 201):
-              if ignore_not_found and resp.status_code == 404:
-                  out["skipped"] = "cr_not_found"
-                  print(json.dumps(out))
-                  sys.exit(0)
-              err_msg = result.get("message", "") if isinstance(result, dict) else str(result)[:200]
-              print(json.dumps(out))
-              print(f"API error ({resp.status_code}): {err_msg}", file=sys.stderr)
-              sys.exit(1)
-          print(json.dumps(out))
-      except Exception as e:
-          print(f"EXCEPTION: {e}", file=sys.stderr)
-          traceback.print_exc(file=sys.stderr)
-          sys.exit(1)
-
-- name: "Patch {{ cr_plural }}/{{ cr_name }} status subresource (with edaJobs)"
-  ansible.builtin.command: python3 /tmp/patch_status.py
-  environment:
-    CR_API_HOST: "{{ services_api_host | trim }}"
-    CR_TOKEN: "{{ services_bearer_token | trim }}"
-    CR_API_VERSION: "{{ cr_api_version }}"
-    CR_NAMESPACE: "{{ cr_namespace }}"
-    CR_PLURAL: "{{ cr_plural }}"
-    CR_NAME: "{{ cr_name }}"
-    CR_STATUS_BODY: "{{ cr_status_body | to_json }}"
-    CR_ACTION: "{{ cr_status_body.status | default('reconcile') }}"
-    EDA_ACTIVATION_ID: "{{ ansible_eda['rulebook_activation_id'] | default('') if ansible_eda is defined else '' }}"
-    EDA_ACTIVATION_NAME: "{{ cr_plural | regex_replace('s$', '') }}-{{ cr_status_body.status | default('provision') }}"
-    EDA_HOST: "{{ eda_dashboard_host | default(aap_ui_url | default('')) }}"
-    TOWER_JOB_ID: "{{ tower_job_id | default(awx_job_id | default('')) | string }}"
-    TOWER_URL: "{{ aap_ui_url | default('') }}"
-    PATCH_IGNORE_NOT_FOUND: "{{ patch_ignore_not_found | default(false) | bool | ternary('1', '0') }}"
-    CR_PARTIAL: "{{ cr_status_partial | default(false) | bool | ternary('1', '0') }}"
-    EVENT_ID: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+# Status writer of every job (status contract: hybridsovereign.shc collection, module cr_status).
+# Inputs (unchanged): cr_api_version, cr_plural, cr_name, cr_namespace, cr_status_body,
+# patch_ignore_not_found (default false), cr_status_partial (default false).
+# Conditions in cr_status_body are merged by type; a legacy body (status: ready|failed|pending|
+# reconciling) gets a Ready condition; status.phase/phaseSince/summary are derived on every write.
+# A job whose event is no longer the object's current event ends here, successfully.
+- name: "Patch {{ cr_plural }}/{{ cr_name }} status subresource"
+  vars:
+    _pcs_action: "{{ cr_status_body.status | default('reconcile') }}"
+    _pcs_tower_job_id: "{{ tower_job_id | default(awx_job_id | default('')) | string | trim }}"
+    _pcs_tower_url: "{{ aap_ui_url | default('') | regex_replace('/$', '') }}"
+    _pcs_activation_id: "{{ (ansible_eda['rulebook_activation_id'] | default('')) if ansible_eda is defined else '' }}"
+    _pcs_eda_host: "{{ eda_dashboard_host | default(aap_ui_url | default('')) | regex_replace('/$', '') }}"
+    _pcs_job_name: "{{ cr_plural | regex_replace('s$', '') }}-{{ _pcs_action }}"
+    _pcs_job:
+      name: "{{ _pcs_job_name }}"
+      jobId: >-
+        {{ _pcs_tower_job_id if (_pcs_tower_job_id | length > 0 and _pcs_tower_url | length > 0)
+           else (_pcs_activation_id | string if (_pcs_activation_id | string) not in ['', 'manual'] else _pcs_job_name) }}
+      url: >-
+        {{ (_pcs_tower_url ~ '/execution/jobs/playbook/' ~ _pcs_tower_job_id ~ '/output')
+           if (_pcs_tower_job_id | length > 0 and _pcs_tower_url | length > 0)
+           else (_pcs_eda_host ~ '/#/rulebook-activations' ~ (('/' ~ _pcs_activation_id) if (_pcs_activation_id | string) not in ['', 'manual'] else '')) }}
+  hybridsovereign.shc.cr_status:
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: "{{ cr_api_version }}"
+    plural: "{{ cr_plural }}"
+    name: "{{ cr_name }}"
+    namespace: "{{ cr_namespace }}"
+    status: "{{ cr_status_body }}"
+    action: "{{ _pcs_action }}"
+    event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+    partial: "{{ cr_status_partial | default(false) | bool }}"
+    ignore_not_found: "{{ patch_ignore_not_found | default(false) | bool }}"
+    give_up_attempts: "{{ teardown_give_up_attempts | default(10) | int }}"
+    job: "{{ _pcs_job }}"
   register: _patch_cr_status_result
-  changed_when: true
-  no_log: false
+  changed_when: _patch_cr_status_result.http | default(0) in [200, 201]
 
 - name: "Log status patch result for {{ cr_plural }}/{{ cr_name }}"
   ansible.builtin.debug:
-    msg: "stdout={{ _patch_cr_status_result.stdout | default('') }} stderr={{ _patch_cr_status_result.stderr | default('') }}"
+    msg: "{{ _patch_cr_status_result.stdout | default('') }}"
 
-# shc (§11.1): a superseded event ends the job here, successfully, before it does any work.
+# A superseded event ends the job here, successfully, before it does any work.
 - name: "End the job: a newer request for {{ cr_plural }}/{{ cr_name }} superseded this event"
   ansible.builtin.meta: end_play
-  when: "'superseded' in (_patch_cr_status_result.stdout | default(''))"
+  when: _patch_cr_status_result.superseded | default(false) | bool
