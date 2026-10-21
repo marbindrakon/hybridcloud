@@ -26,17 +26,23 @@
         ci_ref_namespace: "{{ fabric_platform_namespace }}"
         ci_expected_type: gcp
 
-    - name: Refuse a site of another type or one the Entity may not use
+    # one rule for every environment: spec.entityRefs of the site and Entity spec.allowedSites (fails closed)
+    - name: Check that the tenant may use the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/tenant_site_allowed.yml"
+      vars:
+        tsa_entity: "{{ fab_entity }}"
+        tsa_site: "{{ ca_site_name }}"
+        tsa_site_spec: "{{ ci_spec }}"
+        tsa_platform_namespace: "{{ fabric_platform_namespace }}"
+      when: ci_found
+
+    - name: Refuse a site of another type or one the tenant may not use
       ansible.builtin.set_fact:
-        fab_fail_reason: "{{ 'SiteTypeMismatch' if (ci_found and ci_type != 'gcp') else 'EntityNotAllowed' }}"
+        fab_fail_reason: "{{ 'SiteTypeMismatch' if ci_type != 'gcp' else tsa_reason }}"
         fab_fail_msg: >-
           {{ ('CloudGCP ' ~ fab_name ~ ': CloudInfrastructure ' ~ ca_site_name ~ ' has type ' ~ ci_type ~ ', not gcp')
-             if (ci_found and ci_type != 'gcp')
-             else ('Entity ' ~ fab_entity ~ ' may not use CloudInfrastructure ' ~ ca_site_name ~ ' (spec.entityRefs)') }}
-      when: >-
-        ci_found and (ci_type != 'gcp'
-        or ((ci_spec.entityRefs | default([]) | length > 0)
-            and fab_entity not in (ci_spec.entityRefs | map(attribute='name') | list)))
+             if ci_type != 'gcp' else tsa_message }}
+      when: ci_found and (ci_type != 'gcp' or not (tsa_allowed | default(false) | bool))
 
     - name: Stop on a refused site
       ansible.builtin.fail:

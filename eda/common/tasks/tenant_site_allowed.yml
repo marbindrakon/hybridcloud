@@ -1,0 +1,35 @@
+---
+# May tenant <tsa_entity> use site <tsa_site>? One rule for every environment job, read from the sources of truth with
+# the platform token: the site's spec.entityRefs (empty = every tenant) and the Entity's spec.allowedSites (absent =
+# every site that allows the tenant). Fails closed: an Entity that is missing or being deleted is refused. The
+# tenant's TenantProfile is display only and never read here.
+#
+# Input:  tsa_entity, tsa_site, tsa_site_spec (the CloudInfrastructure spec the caller already read),
+#         tsa_platform_namespace (default fabric_platform_namespace, else sovereign-cloud)
+# Output: tsa_allowed (bool), tsa_reason ('' or SiteNotAllowed), tsa_message (tenant words; '' when allowed)
+- name: Read Entity {{ tsa_entity }}
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Entity
+    name: "{{ tsa_entity }}"
+    namespace: "{{ tsa_platform_namespace | default(fabric_platform_namespace | default('sovereign-cloud', true), true) }}"
+  register: _tsa_entity
+  when: (tsa_entity | default('', true)) | length > 0
+
+- name: Decide
+  vars:
+    _ok: >-
+      {%- set found = _tsa_entity.resources | default([]) -%}
+      {%- set refs = (tsa_site_spec | default({}, true)).entityRefs | default([], true) | map(attribute='name') | list -%}
+      {%- if found | length == 0 or found[0].metadata.deletionTimestamp is defined -%}false
+      {%- elif refs | length > 0 and tsa_entity not in refs -%}false
+      {%- elif (found[0].spec | default({}, true)).allowedSites is defined and found[0].spec.allowedSites is not none
+               and tsa_site not in found[0].spec.allowedSites -%}false
+      {%- else -%}true{%- endif -%}
+  ansible.builtin.set_fact:
+    tsa_allowed: "{{ _ok | bool }}"
+    tsa_reason: "{{ '' if (_ok | bool) else 'SiteNotAllowed' }}"
+    tsa_message: "{{ '' if (_ok | bool) else 'Site ' ~ tsa_site ~ ' is not available to this tenant.' }}"
