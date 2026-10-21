@@ -7,11 +7,14 @@
  * Vault path or a secret reference, and drops the spec fields the platform chooses.
  *
  *   tenantSafe(kind, obj)            one object or a list (kind of the items)
- *   transformBody(path, obj, req)    the hook of createApiK8sProxy: filters GET answers of the two plurals
- *                                    (item, list, /status); refuses a watch on them with 400
+ *   transformBody(path, obj, req)    the hook of createApiK8sProxy: filters every answer that carries one of
+ *                                    the two kinds, found by the object's own kind (the object, a List and
+ *                                    its items, a watch event's object) and by the path (item, list, /status)
+ *                                    for objects without a kind; refuses a watch on the two plurals with 400
  *
  * Other kinds pass unchanged (their status carries no Vault paths). The admin dashboard does not use this.
  */
+import { normaliseK8sPath } from './apiK8sProxy.js';
 
 /** Status keys every kind keeps. */
 export const COMMON_STATUS_KEYS = [
@@ -54,6 +57,13 @@ export const TENANT_HIDDEN_SPEC = {
 export const SECRET_KEY_RE = /VaultPath|VaultProperty|vaultPaths|Secret$/;
 
 const PLURAL_KIND = { cloudosos: 'CloudOSO', platformopenshifts: 'PlatformOpenshift' };
+/** Object kinds (and their list kinds) that are filtered wherever they appear. */
+const FILTERED_KIND = {
+  CloudOSO: 'CloudOSO',
+  CloudOSOList: 'CloudOSO',
+  PlatformOpenshift: 'PlatformOpenshift',
+  PlatformOpenshiftList: 'PlatformOpenshift',
+};
 const PATH_RE = /^\/apis\/hybridsovereign\.redhat\/[^/]+\/(?:watch\/)?(?:namespaces\/[^/]+\/)?(cloudosos|platformopenshifts)(?:\/[^/]+)?(?:\/status)?$/;
 
 function isPlainObject(v) {
@@ -126,22 +136,49 @@ export function tenantSafe(kind, obj) {
   return safeItem(kind, obj);
 }
 
-/** Kind served by a raw API path, or null when the path is not one of the filtered resources. */
+/** Kind served by a raw API path (normalised as the proxy forwards it), or null when it is not a filtered resource. */
 export function filteredKindForPath(path) {
-  const pathname = new URL(path, 'http://x').pathname;
-  const m = PATH_RE.exec(pathname);
+  const norm = normaliseK8sPath(path);
+  if ('error' in norm) return null;
+  const m = PATH_RE.exec(norm.pathname);
   return m ? PLURAL_KIND[m[1]] : null;
 }
 
-/** createApiK8sProxy hook: obj is null for a watch request (refused on the filtered resources). */
+/** Filtered kind of an object by its own kind, else the fallback (the path's kind). */
+function kindOf(obj, fallback) {
+  return (isPlainObject(obj) && FILTERED_KIND[obj.kind]) || fallback || null;
+}
+
+/** A watch event: { type, object } without a kind of its own. */
+function isWatchEvent(obj) {
+  return isPlainObject(obj) && !('kind' in obj) && typeof obj.type === 'string' && 'object' in obj;
+}
+
+/** Tenant-safe copy of any answer: one object, a list (by list kind or item kinds) or a watch event. */
+function safeAnswer(obj, pathKind) {
+  if (!isPlainObject(obj) || obj.kind === 'Status') return obj;
+  if (isWatchEvent(obj)) return { ...obj, object: safeAnswer(obj.object, pathKind) };
+  const kind = kindOf(obj, pathKind);
+  if (Array.isArray(obj.items)) {
+    return {
+      ...obj,
+      items: obj.items.map((item) => {
+        const k = kindOf(item, kind);
+        return k ? safeItem(k, item) : item;
+      }),
+    };
+  }
+  return kind ? safeItem(kind, obj) : obj;
+}
+
+/** createApiK8sProxy hook: obj is null before a watch is forwarded (refused on the filtered resources). */
 export function transformBody(path, obj, _req) {
-  const kind = filteredKindForPath(path);
-  if (!kind) return obj;
+  const pathKind = filteredKindForPath(path);
   if (obj === null) {
+    if (!pathKind) return null;
     const err = new Error('Watching this resource is not available here; reload the list instead.');
     err.status = 400;
     throw err;
   }
-  if (isPlainObject(obj) && obj.kind === 'Status') return obj;
-  return tenantSafe(kind, obj);
+  return safeAnswer(obj, pathKind);
 }
