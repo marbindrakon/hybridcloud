@@ -1821,6 +1821,12 @@ fabricHosts:
     - node: smc-node1
       namespace: openshift-machine-api
       assignmentType: metal3
+    - node: smc-node2
+      namespace: openshift-machine-api
+      assignmentType: metal3
+    - node: smc-node3
+      namespace: openshift-machine-api
+      assignmentType: metal3
     nodes:
       bgw-1:
         labels:
@@ -2268,6 +2274,252 @@ fabricHosts:
                 table-id: 254
         rootDeviceHints:
           serialNumber: CVWL420402GB800RGN
+      smc-node2:
+        labels:
+          compute-model: smc
+          shc.signal9.gg/smc-node: '2'
+        bootMac: 00:25:90:85:20:36
+        bootMode: legacy
+        bmc:
+          url: ipmi://172.18.2.48
+          externalSecret:
+            vaultName: metal/bmc-smc
+            usernameKey: username
+            passwordKey: password
+        network:
+          nmstateConfig:
+            interfaces:
+            - name: eno1
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: eno2
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp131s0f0
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp131s0f1
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: bond0
+              type: bond
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: true
+                dhcp: true
+                auto-dns: false
+                auto-gateway: false
+                auto-routes: false
+              ipv6:
+                enabled: false
+              link-aggregation:
+                mode: active-backup
+                options:
+                  miimon: '100'
+                  primary: eno1
+                port:
+                - eno1
+                - eno2
+            - name: bond1
+              type: bond
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+              link-aggregation:
+                mode: active-backup
+                options:
+                  miimon: '100'
+                  primary: enp131s0f0
+                port:
+                - enp131s0f0
+                - enp131s0f1
+            - name: bond1.233
+              type: vlan
+              state: up
+              mtu: 9100
+              vlan:
+                base-iface: bond1
+                id: 233
+              ipv4:
+                enabled: true
+                dhcp: false
+                address:
+                - ip: 172.18.233.22
+                  prefix-length: 24
+              ipv6:
+                enabled: false
+            - name: bond1.11
+              type: vlan
+              state: up
+              mtu: 9000
+              vlan:
+                base-iface: bond1
+                id: 11
+              ipv4:
+                enabled: true
+                dhcp: false
+                address:
+                - ip: 172.18.5.232
+                  prefix-length: 24
+              ipv6:
+                enabled: false
+            dns-resolver:
+              config:
+                server:
+                - 172.18.42.20
+            routes:
+              config:
+              - destination: 0.0.0.0/0
+                next-hop-address: 172.18.233.1
+                next-hop-interface: bond1.233
+                table-id: 254
+      smc-node3:
+        labels:
+          compute-model: smc
+          shc.signal9.gg/smc-node: '3'
+        bootMac: 00:25:90:85:75:7c
+        bootMode: legacy
+        bmc:
+          url: ipmi://172.18.2.49
+          externalSecret:
+            vaultName: metal/bmc-smc
+            usernameKey: username
+            passwordKey: password
+        network:
+          nmstateConfig:
+            interfaces:
+            - name: eno1
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: eno2
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp131s0f0
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: enp131s0f1
+              type: ethernet
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+            - name: bond0
+              type: bond
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: true
+                dhcp: true
+                auto-dns: false
+                auto-gateway: false
+                auto-routes: false
+              ipv6:
+                enabled: false
+              link-aggregation:
+                mode: active-backup
+                options:
+                  miimon: '100'
+                  primary: eno1
+                port:
+                - eno1
+                - eno2
+            - name: bond1
+              type: bond
+              state: up
+              mtu: 9100
+              ipv4:
+                enabled: false
+              ipv6:
+                enabled: false
+              link-aggregation:
+                mode: active-backup
+                options:
+                  miimon: '100'
+                  primary: enp131s0f0
+                port:
+                - enp131s0f0
+                - enp131s0f1
+            - name: bond1.233
+              type: vlan
+              state: up
+              mtu: 9100
+              vlan:
+                base-iface: bond1
+                id: 233
+              ipv4:
+                enabled: true
+                dhcp: false
+                address:
+                - ip: 172.18.233.23
+                  prefix-length: 24
+              ipv6:
+                enabled: false
+            - name: bond1.11
+              type: vlan
+              state: up
+              mtu: 9000
+              vlan:
+                base-iface: bond1
+                id: 11
+              ipv4:
+                enabled: true
+                dhcp: false
+                address:
+                - ip: 172.18.5.233
+                  prefix-length: 24
+              ipv6:
+                enabled: false
+            dns-resolver:
+              config:
+                server:
+                - 172.18.42.20
+            routes:
+              config:
+              - destination: 0.0.0.0/0
+                next-hop-address: 172.18.233.1
+                next-hop-interface: bond1.233
+                table-id: 254
 
 iaasClusterDefaults:
   enabled: false
