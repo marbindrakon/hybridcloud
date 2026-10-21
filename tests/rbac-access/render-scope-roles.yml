@@ -1,0 +1,91 @@
+---
+# Renders the resource-scoped Roles and RoleBindings of a tenant's Teams and Projects with the production task files
+# (eda/rulebooks/roles/{team,project}_provision/tasks/access.yml -> eda/common/tasks/scope_role.yml) against a
+# THROWAWAY API server, for sar_matrix.py --cluster envtest --render-roles --scope-fixture FILE. The two roles and
+# eda/common are copied to a temporary tree with the sign-in steps (signin.yml: Keycloak client roles, not part of
+# the RBAC matrix) replaced by no-ops; access.yml and scope_role.yml run unchanged.
+# Extra vars: services_api_host, services_bearer_token, render_entity, render_teams, render_projects.
+- name: Render the tenant's scope roles
+  hosts: localhost
+  gather_facts: false
+  vars:
+    render_ns: "entity-{{ render_entity }}"
+  tasks:
+    - name: Temporary tree
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: sar-scope
+      register: render_tmp
+
+    - name: Render, then remove the copy
+      block:
+        - name: Copy the roles and the common tasks
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../eda/{{ item }}/"
+            dest: "{{ render_tmp.path }}/eda/{{ item }}/"
+            mode: "0700"
+          loop: [rulebooks/roles/team_provision, rulebooks/roles/project_provision, common]
+
+        - name: No sign-in groups in the throwaway cluster
+          ansible.builtin.copy:
+            content: "--- []\n"
+            dest: "{{ render_tmp.path }}/eda/rulebooks/roles/{{ item }}/tasks/signin.yml"
+            mode: "0600"
+          loop: [team_provision, project_provision]
+
+        - name: Read the Teams
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: Team
+            name: "{{ item }}"
+            namespace: "{{ render_ns }}"
+          loop: "{{ render_teams | default([]) }}"
+          register: _teams
+
+        - name: Team access as the Team job renders it
+          ansible.builtin.include_role:
+            name: "{{ render_tmp.path }}/eda/rulebooks/roles/team_provision"
+            tasks_from: access.yml
+          vars:
+            team_cr_name: "{{ t.item }}"
+            team_cr_namespace: "{{ render_ns }}"
+            team_entity: "{{ render_entity }}"
+            team_spec: "{{ t.resources[0].spec }}"
+          loop: "{{ _teams.results | default([]) }}"
+          loop_control:
+            loop_var: t
+            label: "{{ t.item }}"
+
+        - name: Read the Projects
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: Project
+            name: "{{ item }}"
+            namespace: "{{ render_ns }}"
+          loop: "{{ render_projects | default([]) }}"
+          register: _projects
+
+        - name: Project access as the Project job renders it
+          ansible.builtin.include_role:
+            name: "{{ render_tmp.path }}/eda/rulebooks/roles/project_provision"
+            tasks_from: access.yml
+          vars:
+            project_cr_name: "{{ p.item }}"
+            project_cr_namespace: "{{ render_ns }}"
+            project_entity: "{{ render_entity }}"
+            project_spec: "{{ p.resources[0].spec }}"
+          loop: "{{ _projects.results | default([]) }}"
+          loop_control:
+            loop_var: p
+            label: "{{ p.item }}"
+      always:
+        - name: Remove the copy
+          ansible.builtin.file:
+            path: "{{ render_tmp.path }}"
+            state: absent

@@ -1,0 +1,236 @@
+# The tenant baseline and the tenant profile (plan be-tenantprofile-catalogue section 4: R1-R6), and the acme-corp
+# demo grants (R16-R22; samples/demo/acme-corp.yaml, only for tenant acme-corp). Format: tests/rbac-access/README.md.
+# envtest for the demo: --entity acme-corp --entity-spec samples/demo/acme-corp.yaml
+#   --scope-fixture samples/demo/acme-corp.yaml --render-roles
+- id: R1-namespace-visible
+  resolves: [UX-002]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: "", resource: namespaces, name: "entity-{entity}"}
+  verbs: [get]
+  expect: allow
+- id: R2-project-visible
+  resolves: [UX-002]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: project.openshift.io, resource: projects, name: "entity-{entity}"}
+  verbs: [get]
+  expect: allow
+- id: R3-tenantprofile-readable
+  resolves: [UX-001, UX-005, UX-039]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles}
+  verbs: [get, list, watch]
+  expect: allow
+- id: R3-tenantprofile-read-only
+  resolves: [UX-100]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles}
+  verbs: [create, update, patch, delete]
+  expect: deny
+- id: R3-tenantprofile-status-read-only
+  resolves: [UX-100]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles, subresource: status}
+  verbs: [update, patch]
+  expect: deny
+- id: R4-no-platform-entities
+  resolves: [UX-100]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: sovereign-cloud
+  resource: {group: hybridsovereign.redhat, resource: entities}
+  verbs: [get, list]
+  expect: deny
+- id: R4-no-platform-sites
+  resolves: [UX-039]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: sovereign-cloud
+  resource: {group: hybridsovereign.redhat, resource: cloudinfrastructures}
+  verbs: [get, list]
+  expect: deny
+- id: R5-not-other-tenant-namespace
+  resolves: [UX-002]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{other_entity}"
+  resource: {group: "", resource: namespaces, name: "entity-{other_entity}"}
+  verbs: [get]
+  expect: deny
+- id: R5-not-other-tenant-profile
+  resolves: [UX-100]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{other_entity}"
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles}
+  verbs: [get, list]
+  expect: deny
+- id: R6-norole-no-profile
+  resolves: [UX-005]
+  principal: {user: uxr-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles}
+  verbs: [get, list]
+  expect: deny
+- id: R6-norole-no-namespace
+  resolves: [UX-005]
+  principal: {user: uxr-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: "", resource: namespaces, name: "entity-{entity}"}
+  verbs: [get]
+  expect: deny
+
+# acme-corp demo (samples/demo/acme-corp.yaml)
+- id: R16-acme-platform-admins
+  resolves: [Q5, UX-010]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:platform-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: rbacs}
+  verbs: [create, update, delete]
+  expect: allow
+- id: R16-acme-platform-admins-environments
+  resolves: [Q5]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:platform-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: cloudvirts}
+  verbs: [create, delete]
+  expect: allow
+- id: R17-acme-infra
+  resolves: [Q5]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:infra}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: hybridnetworks}
+  verbs: [create, update, delete]
+  expect: allow
+- id: R17-acme-infra-no-access-groups
+  resolves: [Q5]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:infra}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: rbacs}
+  verbs: [create, delete]
+  expect: deny
+- id: R18-acme-editors-view-environments
+  resolves: [Q5]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:editors}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: cloudvirts}
+  verbs: [get, list]
+  expect: allow
+- id: R18-acme-editors-no-environment-create
+  resolves: [Q5]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:editors}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: cloudvirts}
+  verbs: [create, delete]
+  expect: deny
+- id: R18-acme-editors-team
+  resolves: [Q5, OD15]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:editors}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform-engineering}
+  verbs: [get, update]
+  expect: allow
+- id: R18-acme-editors-team-no-delete
+  resolves: [Q5, OD15]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:editors}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform-engineering}
+  verbs: [delete]
+  expect: deny
+- id: R18-acme-editors-project-admin
+  resolves: [Q5, OD15]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:editors}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: api-services}
+  verbs: [get, update, delete]
+  expect: allow
+- id: R19-acme-viewers-read
+  resolves: [Q5]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams}
+  verbs: [get, list]
+  expect: allow
+- id: R19-acme-viewers-no-write
+  resolves: [Q5]
+  only_entity: acme-corp
+  principal: {groups: ["{rbac:viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams}
+  verbs: [create, update, delete]
+  expect: deny
+- id: R20-acme-developers-team-and-project
+  resolves: [Q5, OD15, UX-015]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:developers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: api-services}
+  verbs: [get, update, patch]
+  expect: allow
+- id: R20-acme-developers-view-team
+  resolves: [Q5, OD15]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:developers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform-engineering}
+  verbs: [get]
+  expect: allow
+- id: R20-acme-developers-profile
+  resolves: [Q5, UX-001]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:developers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles, name: shc}
+  verbs: [get]
+  expect: allow
+- id: R21-acme-developers-nothing-else
+  resolves: [Q5, OD15]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:developers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: cloudvirts}
+  verbs: [get, list, create]
+  expect: deny
+- id: R21-acme-developers-no-unfiltered-list
+  resolves: [Q5, OD15]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:developers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams}
+  verbs: [list]
+  expect: deny
+- id: R21-acme-developers-no-project-delete
+  resolves: [Q5, OD15]
+  only_entity: acme-corp
+  requires: scope-fixture
+  principal: {groups: ["{rbac:developers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: api-services}
+  verbs: [delete]
+  expect: deny
+- id: R22-acme-no-group-user
+  resolves: [Q5, UX-005]
+  only_entity: acme-corp
+  principal: {user: uxr-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles, name: shc}
+  verbs: [get]
+  expect: deny

@@ -1,0 +1,290 @@
+# Resource-scoped grants of the Team and Project access fields (plan be-tenantprofile-catalogue section 4, rows R7-R15;
+# OD15 revised, OD28). The objects and access groups are those of fixtures/scope-fixture.yaml:
+#   Team platform: teamAdmin team-admins, teamMemberRbac team-members, teamViewerRbac team-viewers;
+#   Assignment platform-dev (team platform, projects webshop, api); Team other + Assignment other-dev (project billing);
+#   Project webshop: projectAdmin project-admins, projectDeveloperRbac project-devs, projectViewerRbac project-viewers.
+# R10b-R10d (who may change the lists) are admission checks: tests/access/test-access-fields.sh.
+# Run them in envtest as tenant sar-scope (only_entity):
+#   sar_matrix.py --cluster envtest --render-roles --entity sar-scope --entity-spec <namespaceRbac file>
+#     --scope-fixture tests/rbac-access/fixtures/scope-fixture.yaml --profile scope-role
+# list with a name = a list that selects that one name (fieldSelector metadata.name); an unfiltered list is denied.
+- id: R7-team-admin-edits-team
+  resolves: [OD15, UX-015]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform}
+  verbs: [get, list, watch, update, patch]
+  expect: allow
+- id: R7-team-admin-edits-team-projects
+  resolves: [OD15, UX-015]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [get, update, patch]
+  expect: allow
+- id: R7-team-admin-edits-team-projects-api
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: api}
+  verbs: [get, update]
+  expect: allow
+- id: R7-team-admin-views-assignment
+  resolves: [OD15, OD28]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: assignments, name: platform-dev}
+  verbs: [get, list, watch]
+  expect: allow
+- id: R7b-team-admin-no-delete
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform}
+  verbs: [delete]
+  expect: deny
+- id: R7b-team-admin-no-project-delete
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [delete]
+  expect: deny
+- id: R7b-team-admin-no-assignment-edit
+  resolves: [OD28]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: assignments, name: platform-dev}
+  verbs: [update, patch, delete]
+  expect: deny
+- id: R8-team-admin-no-create
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams}
+  verbs: [create, list]
+  expect: deny
+- id: R8-team-admin-not-other-team
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: other}
+  verbs: [get, update]
+  expect: deny
+- id: R8-team-admin-not-other-project
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: billing}
+  verbs: [get, update]
+  expect: deny
+- id: R9-team-member-views-team
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-members}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform}
+  verbs: [get, list, watch]
+  expect: allow
+- id: R9-team-member-edits-projects
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-members}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [get, update, patch]
+  expect: allow
+- id: R10-team-member-no-team-edit
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-members}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform}
+  verbs: [update, patch, delete]
+  expect: deny
+- id: R10-team-member-no-project-delete
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-members}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [delete]
+  expect: deny
+- id: R10-team-member-no-assignment
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-members}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: assignments, name: platform-dev}
+  verbs: [get, update]
+  expect: deny
+- id: R11-team-viewer-views-all
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform}
+  verbs: [get, list, watch]
+  expect: allow
+- id: R11-team-viewer-views-assignment
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: assignments, name: platform-dev}
+  verbs: [get]
+  expect: allow
+- id: R11-team-viewer-views-project
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [get]
+  expect: allow
+- id: R11-team-viewer-reads-status
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, subresource: status, name: platform}
+  verbs: [get]
+  expect: allow
+- id: R12-team-viewer-no-edit
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, name: platform}
+  verbs: [update, patch, delete]
+  expect: deny
+- id: R12-team-viewer-no-project-edit
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [update, patch, delete]
+  expect: deny
+- id: R12-team-viewer-no-status-write
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: teams, subresource: status, name: platform}
+  verbs: [update, patch]
+  expect: deny
+- id: R13-project-admin
+  resolves: [OD15, OD28]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:project-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [get, update, patch, delete]
+  expect: allow
+- id: R13-project-admin-not-other
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:project-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: api}
+  verbs: [get, update]
+  expect: deny
+- id: R14-project-developer-edit
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:project-devs}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [get, update, patch]
+  expect: allow
+- id: R14-project-developer-no-delete
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:project-devs}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [delete]
+  expect: deny
+- id: R15-project-viewer
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:project-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [get, list, watch]
+  expect: allow
+- id: R15-project-viewer-no-edit
+  resolves: [OD15]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:project-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: projects, name: webshop}
+  verbs: [update, patch, delete, create]
+  expect: deny
+# every scope Role carries the tenant baseline
+- id: scope-baseline-namespace
+  resolves: [UX-002]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:project-viewers}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: namespaces, name: "entity-{entity}"}
+  verbs: [get]
+  expect: allow
+- id: scope-baseline-tenantprofile
+  resolves: [UX-001, UX-005]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-members}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: tenantprofiles, name: shc}
+  verbs: [get, list, watch]
+  expect: allow
+- id: scope-no-secrets
+  resolves: [I-10]
+  requires: scope-fixture
+  only_entity: sar-scope
+  principal: {groups: ["{rbac:team-admins}", "{rbac:project-admins}", system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: secrets}
+  verbs: [get, list]
+  expect: deny

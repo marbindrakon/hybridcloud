@@ -236,6 +236,42 @@ run_repo_checks() {
 }
 # --- end be-foundations ---
 
+# --- be-tenantprofile-catalogue ---
+# ─── Phase 7: Tenant profile, scope roles, demo tenant ───────────────────────
+run_tenantprofile_checks() {
+  log_info "Tenant profile, scope roles and the demo tenant"
+  if (cd "${REPO_ROOT}" && bash scripts/check-demo-samples.sh) >/tmp/shc-demo-samples.log 2>&1; then
+    log_pass "samples/demo/acme-corp.yaml = the seeded demo"
+  else
+    log_fail "demo copies differ (scripts/check-demo-samples.sh)"
+    tail -20 /tmp/shc-demo-samples.log || true
+  fi
+  if ! command -v ansible-playbook &>/dev/null; then
+    log_skip "ansible-playbook not installed: scope-role render and site summary tests"
+  else
+    local t
+    for t in tests/access/scope-role-render.yml tests/tenantprofile/site-summary.yml; do
+      if (cd "${REPO_ROOT}" && ansible-playbook -i localhost, -c local "${t}" </dev/null) >/tmp/shc-btp-test.log 2>&1; then
+        log_pass "${t}"
+      else
+        log_fail "${t}"
+        grep -E 'FAILED|fatal|msg' /tmp/shc-btp-test.log | head -20 || true
+      fi
+    done
+  fi
+  if [[ -n "${KUBEBUILDER_ASSETS:-}" ]] && command -v helm &>/dev/null; then
+    if (cd "${REPO_ROOT}" && bash tests/access/test-access-fields.sh) >/tmp/shc-access-fields.log 2>&1; then
+      log_pass "shc-access-field-ladder behaviour (envtest, Deny and Warn)"
+    else
+      log_fail "shc-access-field-ladder behaviour (tests/access/test-access-fields.sh)"
+      grep -E 'FAIL|Error' /tmp/shc-access-fields.log | head -20 || true
+    fi
+  else
+    log_skip "shc-access-field-ladder behaviour (needs KUBEBUILDER_ASSETS and helm)"
+  fi
+}
+# --- end be-tenantprofile-catalogue ---
+
 main() {
   echo "Hybrid Sovereign Test Runner"
   echo "Repository: ${REPO_ROOT}"
@@ -253,6 +289,8 @@ main() {
   run_unit_tests
   echo ""
   run_repo_checks
+  echo ""
+  run_tenantprofile_checks
   echo ""
   print_manual_gates
   echo ""

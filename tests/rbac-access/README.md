@@ -15,7 +15,11 @@ python3 -I tests/rbac-access/sar_matrix.py --entity <tenant> [--other-entity <an
 # throwaway API server (envtest, see tests/schema-replay/README.md): the tenant's Roles and RoleBindings are created
 # by the production task file first, so the positive rows are proven without touching a cluster
 KUBEBUILDER_ASSETS=<envtest bin dir> python3 -I tests/rbac-access/sar_matrix.py --cluster envtest --render-roles \
-  --entity <name> --entity-spec <file with spec.namespaceRbac> [--automation-rules <rules.yaml>]
+  --entity <name> --entity-spec <file with spec.namespaceRbac> [--automation-rules <rules.yaml>] \
+  [--scope-fixture <Team/Project/Assignment objects>]   # also renders their scope roles (render-scope-roles.yml)
+
+# the acme-corp demo, all rows
+... --entity acme-corp --entity-spec samples/demo/acme-corp.yaml --scope-fixture samples/demo/acme-corp.yaml
 
 make sar-matrix ENTITY=<tenant> [PROFILE=negative]
 ```
@@ -30,7 +34,9 @@ are reported as `known` while they fail and as `fixed` once they pass.
 | generated | Every access group `<entity>.<rbac>` mapped in `Entity.spec.namespaceRbac` gets exactly the verbs of its roles (`eda/rulebooks/roles/entity_provision/vars/main.yml`, `entity_named_roles`: crud = get, list, watch, create, update, patch, delete; read = get, list, watch; `<kind>/status` read) plus the tenant baseline of `eda/common/vars/scope_levels.yml` (`tenantprofiles` get, list, watch) in `entity-<entity>`, and nothing else of the `hybridsovereign.redhat` API group there. |
 | `cases/negative.yaml` | A signed-in user with no role sees no SHC object in the tenant, platform and plugins namespaces; no access group reads Secrets, creates or execs into pods, writes RoleBindings, escalates Roles, binds admin/cluster-admin, edits its namespace or reads Entities; a tenant's admins get nothing in another tenant. |
 | `cases/automation.yaml` | The platform automation account (`system:serviceaccount:open-cluster-management-agent-addon:shc-automation`) can do what the EDA jobs do on services and cannot create ClusterRoleBindings, bind cluster-admin, touch nodes, escalate Roles or exec into pods. |
-| `cases/<other>.yaml` | Added by the streams that own those rows (tenant profile, scope roles, security closures). |
+| `cases/tenantprofile.yaml` | Every access group sees its tenant namespace, its OpenShift project and the tenant profile, read only, and nothing of the platform or another tenant (R1-R6); the acme-corp demo grants (R16-R22, only for tenant `acme-corp`). |
+| `cases/scope-role.yaml` | The Team and Project access fields (R7-R15) against `fixtures/scope-fixture.yaml`, in envtest as tenant `sar-scope` with `--scope-fixture`. Who may change the lists is an admission check: `tests/access/test-access-fields.sh`. |
+| `cases/<other>.yaml` | Added by the streams that own those rows (security closures). |
 | `--users` | The generated rows again, for real users with the groups the cluster's OpenShift Groups give them (read-only). |
 
 Case format (YAML list):

@@ -16,7 +16,10 @@ Rows:
                 subresource?, name?}, verbs: [...], expect: allow|deny}
              Placeholders: {entity}, {other_entity}, {automation} (the platform automation username),
              {group:<spec_key>} (the first access group mapped to that key; the case is skipped when none is),
-             principal groups ["{group:*}"] = one case per mapped access group,
+             principal groups ["{group:*}"] = one case per mapped access group, {rbac:<name>} = the group
+             <entity>.<name> of that access group; a case with requires: scope-fixture runs only with
+             --scope-fixture (live: the objects must exist under the names the case uses), one with
+             only_entity: <name> only for that tenant,
              resource "@shc-kinds" = every kind of the API group.
 
 Clusters:
@@ -40,6 +43,7 @@ usage: python3 -I tests/rbac-access/sar_matrix.py --entity NAME [--other-entity 
 import argparse
 import copy
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -160,7 +164,7 @@ def generated_rows(entity, ns_rbac, kinds):
     return rows
 
 
-def expand_cases(cases, entity, other, ns_rbac, kinds, source):
+def expand_cases(cases, entity, other, ns_rbac, kinds, source, have_scope_fixture=False):
     groups = access_groups(entity, ns_rbac)
     out = []
     skipped = []
@@ -169,6 +173,7 @@ def expand_cases(cases, entity, other, ns_rbac, kinds, source):
     def subst(v, extra=None):
         if isinstance(v, str):
             s = v.replace("{entity}", entity).replace("{other_entity}", other).replace("{automation}", AUTOMATION)
+            s = re.sub(r"\{rbac:([a-z0-9-]+)\}", lambda m: f"{entity}.{m.group(1)}", s)
             for k, val in (extra or {}).items():
                 s = s.replace(k, val)
             return s
@@ -181,6 +186,13 @@ def expand_cases(cases, entity, other, ns_rbac, kinds, source):
     for c in cases:
         c = copy.deepcopy(c)
         c["source"] = source
+        only = c.pop("only_entity", None)
+        if only and only != entity:
+            skipped.append((c["id"], f"only for tenant {only}"))
+            continue
+        if c.pop("requires", None) == "scope-fixture" and not have_scope_fixture:
+            skipped.append((c["id"], "needs --scope-fixture (the Team/Project objects the case names)"))
+            continue
         pgroups = (c.get("principal") or {}).get("groups") or []
         variants = [dict()]
         if "{group:*}" in pgroups:
@@ -243,15 +255,27 @@ def envtest_cluster(assets, keep):
     return b, replay
 
 
-def render_roles(backend, replay_mod, entity, ns_rbac):
-    """Create the tenant's Roles and RoleBindings in the throwaway cluster with the production task file."""
+ACCESS_FIELDS = ("teamAdmin", "teamMemberRbac", "teamViewerRbac", "projectAdmin", "projectDeveloperRbac",
+                 "projectViewerRbac")
+
+
+def load_scope_fixture(path):
+    """Team/Project/Assignment objects of a multi-document YAML file (other kinds are ignored) for --scope-fixture."""
+    return [d for d in yaml.safe_load_all(Path(path).read_text())
+            if d and d.get("kind") in ("Team", "Project", "Assignment")]
+
+
+def render_roles(backend, replay_mod, entity, ns_rbac, scope_fixture=None):
+    """Create the tenant's Roles and RoleBindings in the throwaway cluster with the production task files (the
+    Entity's named roles; with scope_fixture also the Team/Project scope roles)."""
     kube = replay_mod.Kube(backend.kubeconfig)
     crds = replay_mod.load_crds(ROOT / "operator/primary/helm/templates/crds.yaml")
     kube.apply_docs(list(crds.values()))
     replay_mod.wait_established(kube, list(crds))
     ns = f"entity-{entity}"
     kube.apply_docs([{"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns}}])
-    rbacs = sorted({r for v in (ns_rbac or {}).values() for r in (v or [])})
+    rbacs = sorted({r for v in (ns_rbac or {}).values() for r in (v or [])}
+                   | {r for o in (scope_fixture or []) for f in ACCESS_FIELDS for r in ((o.get("spec") or {}).get(f) or [])})
     for r in rbacs:
         out, _, err = kube.json(["create", "-f", "-"], body={
             "apiVersion": f"{GROUP}/v1alpha1", "kind": "Rbac", "metadata": {"name": r, "namespace": ns},
@@ -272,9 +296,30 @@ def render_roles(backend, replay_mod, entity, ns_rbac):
         os.chmod(vars_file, 0o600)
         r = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local",
                             str(HERE / "render-entity-roles.yml"), "-e", f"@{vars_file}"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if r.returncode != 0:
         raise RuntimeError(f"render-entity-roles.yml failed:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}")
+    if scope_fixture:
+        docs = []
+        for o in scope_fixture:
+            o = copy.deepcopy(o)
+            o.setdefault("apiVersion", f"{GROUP}/v1alpha1")
+            o["metadata"]["namespace"] = ns
+            docs.append(o)
+        kube.apply_docs(docs)
+        with tempfile.TemporaryDirectory() as d:
+            vars_file = Path(d) / "vars.json"
+            vars_file.write_text(json.dumps({
+                "services_api_host": server, "services_bearer_token": token, "services_validate_certs": False,
+                "render_entity": entity,
+                "render_teams": [o["metadata"]["name"] for o in scope_fixture if o["kind"] == "Team"],
+                "render_projects": [o["metadata"]["name"] for o in scope_fixture if o["kind"] == "Project"]}))
+            os.chmod(vars_file, 0o600)
+            r = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local",
+                                str(HERE / "render-scope-roles.yml"), "-e", f"@{vars_file}"],
+                               capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            raise RuntimeError(f"render-scope-roles.yml failed:\n{r.stdout[-3000:]}\n{r.stderr[-2000:]}")
     roles = json.loads(kube.run(["-n", ns, "get", "roles,rolebindings", "-o", "json"]).stdout)["items"]
     return [f"{x['kind']}/{x['metadata']['name']}" for x in roles]
 
@@ -310,12 +355,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--entity", required=True)
     ap.add_argument("--other-entity", default="sar-other-tenant")
-    ap.add_argument("--entity-spec", help="YAML/JSON Entity spec (or a whole Entity) instead of reading the cluster")
+    ap.add_argument("--entity-spec", help="YAML/JSON Entity spec, a whole Entity, or a multi-document file holding one "
+                                           "(e.g. samples/demo/acme-corp.yaml) instead of reading the cluster")
     ap.add_argument("--entity-namespace", default="sovereign-cloud")
     ap.add_argument("--profile", action="append", help="generated and/or case file stems (default: all)")
     ap.add_argument("--cluster", choices=("live", "envtest"), default="live")
     ap.add_argument("--render-roles", action="store_true", help="envtest: render the tenant's Roles first")
     ap.add_argument("--automation-rules", help="envtest: ClusterRole rules (YAML list) bound to the automation user")
+    ap.add_argument("--scope-fixture", help="Team/Project/Assignment objects (YAML): envtest --render-roles creates "
+                                            "them and renders their scope roles; enables cases that require it")
     ap.add_argument("--assets", default=os.environ.get("KUBEBUILDER_ASSETS", ""))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--users", help="comma-separated users: also run the generated rows with their real groups")
@@ -334,8 +382,9 @@ def main():
     report = {"entity": a.entity, "cluster": a.cluster, "rows": [], "skipped": [], "rendered": []}
     try:
         if a.entity_spec:
-            spec = yaml.safe_load(Path(a.entity_spec).read_text()) or {}
-            spec = spec.get("spec", spec)
+            docs = [d for d in yaml.safe_load_all(Path(a.entity_spec).read_text()) if d]
+            ent = next((d for d in docs if d.get("kind") == "Entity"), docs[0] if docs else {})
+            spec = ent.get("spec", ent) if ent.get("kind") == "Entity" or "spec" in ent else ent
         elif a.cluster == "live":
             r = api.run(["-n", a.entity_namespace, "get", f"entities.{GROUP}", a.entity, "-o", "json"])
             if r.returncode != 0:
@@ -345,7 +394,8 @@ def main():
             spec = {}
         ns_rbac = spec.get("namespaceRbac") or {}
         if backend and a.render_roles:
-            report["rendered"] = render_roles(backend, replay_mod, a.entity, ns_rbac)
+            report["rendered"] = render_roles(backend, replay_mod, a.entity, ns_rbac,
+                                              load_scope_fixture(a.scope_fixture) if a.scope_fixture else None)
         if backend and a.automation_rules:
             bind_automation(backend, replay_mod, a.automation_rules)
 
@@ -353,7 +403,8 @@ def main():
         if not profiles or "generated" in profiles:
             rows += generated_rows(a.entity, ns_rbac, kinds)
         for stem, cases in load_cases(profiles - {"generated"} if profiles else None).items():
-            x, skipped = expand_cases(cases, a.entity, a.other_entity, ns_rbac, kinds, stem)
+            x, skipped = expand_cases(cases, a.entity, a.other_entity, ns_rbac, kinds, stem,
+                                      have_scope_fixture=bool(a.scope_fixture))
             rows += x
             report["skipped"] += [{"id": i, "why": w} for i, w in skipped]
         if a.users:
