@@ -111,7 +111,8 @@ class AcknowledgeEventTest(unittest.TestCase):
         out = self.run_ack(self.payload(reason="RbacCreateRequested"), LIVE, [])
         self.assertFalse(out["result"]["released"])
         self.assertEqual(out["result"]["spec"]["name"], "r1-live")
-        self.assertEqual(out["patched"]["reason"], "JobRunning")
+        self.assertEqual(out["patched"]["status"], "reconciling")
+        self.assertNotIn("reason", out["patched"])  # the Reconciling condition carries JobRunning
 
     def test_live_delete_uses_live_spec_not_note(self):
         out = self.run_ack(self.payload(), LIVE, [{"status": {"phase": "Active"}}])

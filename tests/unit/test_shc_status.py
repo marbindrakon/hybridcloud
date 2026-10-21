@@ -110,6 +110,53 @@ class Patch(unittest.TestCase):
         done, _ = S.compute_status_patch(o, {"status": "ready", "ready": True}, {"event_id": "e1"}, NOW)
         self.assertEqual(done["status"]["delivery"], {"completedEventId": "e1", "completedAt": NOW})
 
+    # review be-controller-status c2 F2: a re-run of a Ready object does not flip status.ready either
+    READY = {"ready": True, "status": "ready", "message": "Network is ready.", "observedGeneration": 1,
+             "conditions": [{"type": "Ready", "status": "True", "reason": "Ready", "lastTransitionTime": EARLY}],
+             "phase": "Ready", "phaseSince": EARLY, "delivery": {"eventId": "e2", "completedEventId": "e1"}}
+    ACK = {"status": "reconciling", "ready": False, "message": "Applying the change."}
+
+    def test_rerun_of_ready_object_keeps_legacy_ready(self):
+        o = obj(json.loads(json.dumps(self.READY)))
+        patch, info = S.compute_status_patch(o, dict(self.ACK), {"event_id": "e2"}, NOW)
+        st = patch["status"]
+        for key in ("ready", "status", "reason", "message"):
+            self.assertNotIn(key, st)
+        self.assertEqual(st["delivery"]["acknowledgedEventId"], "e2")
+        self.assertEqual(S.find_condition(st["conditions"], "Ready")["status"], "True")
+        rec = S.find_condition(st["conditions"], "Reconciling")
+        self.assertEqual((rec["status"], rec["reason"]), ("True", "JobRunning"))
+        self.assertEqual(info["phase"], "Ready")
+        merged = S._merge_patch(o["status"], st)
+        self.assertEqual((merged["ready"], merged["status"], merged["message"]), (True, "ready", "Network is ready."))
+
+    def test_rerun_progress_message_goes_on_reconciling(self):
+        o = obj(json.loads(json.dumps(self.READY)))
+        patch, _ = S.compute_status_patch(o, {"status": "reconciling", "ready": False, "message": "Step 2 of 3."},
+                                          {"event_id": "e2"}, NOW)
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Reconciling")["message"], "Step 2 of 3.")
+
+    def test_spec_change_or_not_ready_still_shows_reconciling(self):
+        stale = obj(json.loads(json.dumps(self.READY)), generation=2)
+        not_ready = json.loads(json.dumps(self.READY))
+        not_ready["conditions"][0].update(status="False", reason="AwaitingEDA")
+        for o in (stale, obj(not_ready)):
+            patch, _ = S.compute_status_patch(o, dict(self.ACK), {"event_id": "e2"}, NOW)
+            self.assertEqual((patch["status"]["ready"], patch["status"]["status"]), (False, "reconciling"))
+
+    def test_body_ready_condition_is_not_overridden(self):
+        o = obj(json.loads(json.dumps(self.READY)))
+        body = dict(self.ACK, conditions=[{"type": "Ready", "status": "False", "reason": "ProvisionFailed"}])
+        patch, _ = S.compute_status_patch(o, body, {"event_id": "e2"}, NOW)
+        self.assertIs(patch["status"]["ready"], False)
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Ready")["status"], "False")
+
+    def test_keeps_ready(self):
+        self.assertTrue(S.keeps_ready(obj(json.loads(json.dumps(self.READY)))))
+        self.assertFalse(S.keeps_ready(obj(json.loads(json.dumps(self.READY)), generation=2)))
+        self.assertFalse(S.keeps_ready(obj({"ready": True, "observedGeneration": 1})))  # no Ready condition
+        self.assertFalse(S.keeps_ready(obj(json.loads(json.dumps(self.READY)), generation=0)))
+
     def test_partial_leaves_delivery_and_jobs(self):
         patch, _ = S.compute_status_patch(obj({}), {"waitingFor": "gw"}, {"event_id": "e1", "partial": True,
                                                                           "job": {"name": "j"}}, NOW)

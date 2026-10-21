@@ -152,6 +152,26 @@ def synthesize_ready(body, old_conditions):
             "message": str(body.get("message") or "")}
 
 
+def keeps_ready(obj, new_conditions=None):
+    """True when a "reconciling" write must not flip the object out of Ready: it is Ready (Ready condition
+    True) and its spec was handled (status.observedGeneration >= metadata.generation), and the write carries no
+    Ready condition of its own. Controllers mark creates and spec changes not ready before they publish, so
+    this is a re-run (Retry now, a wake, a periodic reconcile).
+    """
+    if find_condition(new_conditions, "Ready") is not None:
+        return False
+    obj = obj or {}
+    status = obj.get("status") or {}
+    if not _cond_true(status.get("conditions") or [], "Ready"):
+        return False
+    try:
+        generation = int((obj.get("metadata") or {}).get("generation") or 0)
+        observed = int(status.get("observedGeneration") or 0)
+    except (TypeError, ValueError):
+        return False
+    return generation > 0 and observed >= generation
+
+
 def apply_delivery(cur_status, body, action, event_id, job, partial, now):
     """Delivery bookkeeping of one job write (status.delivery and status.edaJobs)."""
     cur_delivery = (cur_status or {}).get("delivery") or {}
@@ -338,13 +358,24 @@ def compute_status_patch(obj, body, opts=None, now=None):
 
     old_conds = cur_status.get("conditions") or []
     new_conds = [c for c in (body.pop("conditions", None) or []) if isinstance(c, dict)]
+    running_message = "Applying the change."
+    if action == "reconciling" and keeps_ready(obj, new_conds):
+        # A re-run of a Ready object: the legacy fields keep saying ready as well (status.ready readers such as
+        # parent and dependency checks see no flip). The job's message goes on the Reconciling condition.
+        running_message = str(body.get("message") or "") or running_message
+        if str(body.get("status") or "").lower() == "reconciling":
+            body.pop("status")
+        if body.get("ready") is False:
+            body.pop("ready")
+        body.pop("reason", None)
+        body.pop("message", None)
     synth = synthesize_ready(dict(body, conditions=new_conds), old_conds)
     if synth is not None:
         new_conds.append(synth)
     if not partial:
         if action == "reconciling":
             new_conds.append({"type": "Reconciling", "status": "True", "reason": "JobRunning",
-                              "message": "Applying the change."})
+                              "message": running_message})
         elif find_condition(old_conds, "Reconciling") is not None or action in _JOB_STATUS:
             new_conds.append({"type": "Reconciling", "status": "False", "reason": "AsExpected", "message": ""})
     if not partial and action != "failed" and not (obj.get("metadata") or {}).get("deletionTimestamp"):

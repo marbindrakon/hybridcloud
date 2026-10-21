@@ -11,8 +11,10 @@
 #    true, and no status is written. A tenant cannot make another tenant's namespace terminate, so this
 #    does not reopen the note to forged events for live objects.
 # 2. For an event with an eventId it writes Reconciling=True/JobRunning ("Applying the change.") through
-#    patch_cr_status, which records status.delivery.acknowledgedEventId/jobId/jobStartedAt (an existing
-#    Ready=True stays as it is) - or ends the job, successfully, when a newer request superseded this event.
+#    patch_cr_status, which records status.delivery.acknowledgedEventId/jobId/jobStartedAt - or ends the job,
+#    successfully, when a newer request superseded this event. On a re-run of a Ready object (Ready=True and
+#    observedGeneration >= generation) the status library keeps Ready, status.ready, status.status and the
+#    phase as they are; creates and spec changes (already marked not ready by the controller) show reconciling.
 - name: Read and acknowledge the event's object
   when:
     - event_payload is defined
@@ -129,5 +131,4 @@
         cr_status_body:
           status: reconciling
           ready: false
-          reason: JobRunning
           message: Applying the change.
