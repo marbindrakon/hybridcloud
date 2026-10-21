@@ -155,6 +155,74 @@ class Delivery(unittest.TestCase):
         self.assertEqual(cond["status"], "False")  # a publish in flight
 
 
+class ReadyReRun(unittest.TestCase):
+    """review be-controller-status c2 F1: a re-run keeps a Ready object Ready until its job writes, so the
+    delivery passes must still check its current event (settled = ready and no event outstanding)."""
+
+    @staticmethod
+    def ready_team(delivery):
+        return {"metadata": {"namespace": "entity-a", "name": "t1", "generation": 2,
+                             "creationTimestamp": "2026-10-21T08:00:00Z"},
+                "status": {"ready": True, "status": "ready", "observedGeneration": 2,
+                           "conditions": [{"type": "Ready", "status": "True", "reason": "Ready"},
+                                          {"type": "Reconciling", "status": "True", "reason": "Queued"}],
+                           "delivery": delivery}}
+
+    def kinds(self, obj):
+        return [{"kind": "Team", "plural": "teams", "version": "v1alpha1", "items": [obj]}]
+
+    LOST = {"eventId": "e2", "publishedAt": "2026-10-21T11:00:00Z", "completedEventId": "e1"}
+
+    def test_lost_event_is_redriven(self):
+        api = FakeApi()
+        counts, problems = T.eda_redrive.run_redrive(api, self.kinds(self.ready_team(dict(self.LOST))),
+                                                     {"redriveKinds": ["Team"]}, NOW, False)
+        self.assertEqual((counts["redriven"], counts["readyOutstanding"], counts["notReady"]), (1, 1, 0))
+        self.assertEqual(api.annotations, [{T.RECONCILE_NOW: "true", T.eda_redrive.REDRIVES: "1"}])
+        self.assertEqual(problems, [])
+
+    def test_lost_event_is_reported_when_redrive_is_off(self):
+        api = FakeApi()
+        counts, problems = T.eda_redrive.run_redrive(api, self.kinds(self.ready_team(dict(self.LOST))),
+                                                     {"redriveKinds": []}, NOW, False)
+        self.assertEqual(counts["noAcknowledgement"], 1)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("NoAcknowledgement", problems[0])
+
+    def test_lost_event_raises_delivery_stalled(self):
+        cond, stalled = T.delivery_condition([("Team", self.ready_team(dict(self.LOST)))], TCFG, NOW)
+        self.assertEqual((cond["status"], stalled), ("True", ["Team/t1"]))
+
+    def test_stalled_job_on_ready_object(self):
+        d = {"eventId": "e2", "publishedAt": "2026-10-21T10:00:00Z", "acknowledgedEventId": "e2",
+             "jobId": "7", "jobStartedAt": "2026-10-21T10:01:00Z"}
+        counts, problems = T.eda_redrive.run_redrive(FakeApi(), self.kinds(self.ready_team(d)), {}, NOW, False)
+        self.assertEqual(counts["stalled"], 1)
+        d["state"] = "Stalled"
+        cond, _ = T.delivery_condition([("Team", self.ready_team(d))], TCFG, NOW)
+        self.assertEqual(cond["status"], "True")
+
+    def test_completed_event_stays_quiet(self):
+        d = {"eventId": "e2", "publishedAt": "2026-10-21T10:00:00Z", "acknowledgedEventId": "e2",
+             "completedEventId": "e2", "state": "NoAcknowledgement"}
+        obj = self.ready_team(d)
+        obj["metadata"]["annotations"] = {T.eda_redrive.REDRIVES: "2"}
+        api = FakeApi()
+        counts, problems = T.eda_redrive.run_redrive(api, self.kinds(obj), {"redriveKinds": ["Team"]}, NOW, False)
+        self.assertEqual((counts["redriven"], counts["readyOutstanding"], problems), (0, 0, []))
+        self.assertEqual(api.annotations, [{T.eda_redrive.REDRIVES: None}])  # settled: bookkeeping cleared
+        cond, stalled = T.delivery_condition([("Team", obj)], TCFG, NOW)
+        self.assertEqual((cond["status"], stalled), ("False", []))
+
+    def test_recent_rerun_is_not_yet_a_problem(self):
+        d = {"eventId": "e2", "publishedAt": "2026-10-21T11:58:00Z", "completedEventId": "e1"}
+        counts, problems = T.eda_redrive.run_redrive(FakeApi(), self.kinds(self.ready_team(d)),
+                                                     {"redriveKinds": ["Team"]}, NOW, False)
+        self.assertEqual((counts["redriven"], counts["noAcknowledgement"], problems), (0, 0, []))
+        cond, _ = T.delivery_condition([("Team", self.ready_team(d))], TCFG, NOW)
+        self.assertEqual(cond["status"], "False")
+
+
 class Config(unittest.TestCase):
     def test_flat_config_is_redrive(self):
         import tempfile

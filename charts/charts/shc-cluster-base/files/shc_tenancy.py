@@ -124,8 +124,9 @@ def delivery_condition(crs, tcfg, now):
     Counts only undelivered work: an event published but not picked up by a job (or whose publish keeps
     failing), a redrive verdict (Stalled/NoAcknowledgement) for the current event, or a change with no
     event at all (generation > observedGeneration). Not counted: objects whose current event's job finished
-    (completedEventId == eventId), objects whose job is running, and objects a controller reported as
-    failed, blocked or waiting (phase Failed or Waiting: a refused input, OperatorFailed, a dependency wait).
+    (completedEventId == eventId), objects whose job is running, objects a controller reported as
+    failed, blocked or waiting (phase Failed or Waiting: a refused input, OperatorFailed, a dependency wait),
+    and Ready objects with no event outstanding. A Ready object whose re-run event was never picked up counts.
     """
     limit = tcfg["deliveryStalledMinutes"]
     stalled = []
@@ -134,13 +135,13 @@ def delivery_condition(crs, tcfg, now):
         if meta.get("deletionTimestamp") and status.get("deletionComplete"):
             continue
         phase = shc_status.derive_phase(cr)
-        if phase == "Ready":
-            continue
         delivery = status.get("delivery") or {}
         ref = f"{kind}/{meta['name']}"
         event_id = delivery.get("eventId")
         completed = bool(event_id) and delivery.get("completedEventId") == event_id
         acknowledged = bool(event_id) and delivery.get("acknowledgedEventId") == event_id
+        if phase == "Ready" and (not event_id or completed):
+            continue  # settled; a re-run keeps phase Ready, so a Ready object with a pending event still counts
         if completed:
             continue  # a job finished this event (failed or not): not a delivery problem
         if delivery.get("state") in ("Stalled", "NoAcknowledgement"):

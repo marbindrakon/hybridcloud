@@ -2,7 +2,8 @@
 """Re-drive and stall detection for operator → Kafka → EDA → AAP dispatch.
 
 shc LAB-PLAN §11.1, design/DELIVERY-HARDENING.md §3.4. Runs as a CronJob on the cluster that holds the
-hybridsovereign.redhat CRs. For every CR that is not ready:
+hybridsovereign.redhat CRs. For every CR with outstanding work (not ready, or ready with a current event
+that no job completed yet: a re-run keeps a Ready object Ready until its job writes):
 
 - published (status.delivery.publishedAt) but not acknowledged by an EDA job within ackTimeoutMinutes:
   annotate reconcileNow=true (the legacy request every operator generation acts on), or redeliver=true for a
@@ -89,13 +90,27 @@ def collect(api):
     return out
 
 
+def settled(status):
+    """True when an object needs no delivery checks: ready, and its current event (if any) completed.
+
+    A re-run (Retry now, a machine wake, a period) keeps a Ready object Ready until its job writes, so
+    ready alone does not mean the last event was delivered.
+    """
+    status = status or {}
+    if status.get("ready") is not True:
+        return False
+    delivery = status.get("delivery") or {}
+    event_id = delivery.get("eventId")
+    return not event_id or delivery.get("completedEventId") == event_id
+
+
 def run_redrive(api, kinds, cfg, now, dry_run):
     """Pass over every CR: re-drive unacknowledged events, mark stalled jobs. Returns (counts, problems)."""
     cfg = dict(DEFAULTS, **(cfg or {}))
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     args = argparse.Namespace(dry_run=dry_run)
 
-    counts = {"crs": 0, "notReady": 0, "published": 0, "acknowledged": 0, "redriven": 0,
+    counts = {"crs": 0, "notReady": 0, "readyOutstanding": 0, "published": 0, "acknowledged": 0, "redriven": 0,
               "noAcknowledgement": 0, "stalled": 0, "publishFailed": 0, "legacy": 0}
     problems = []
 
@@ -123,16 +138,19 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                     api.patch_namespaced_custom_object(
                         GROUP, version, ns, plural, name, {"metadata": {"annotations": ann}})
 
-            if status.get("ready") is True:
-                # ready again: clear our bookkeeping
+            event_id = delivery.get("eventId")
+            if settled(status):
+                # ready and nothing outstanding: clear our bookkeeping
                 if REDRIVES in annotations:
                     patch_annotations({REDRIVES: None})
                 if delivery.get("state"):
                     patch_status({"state": None, "stateSince": None})
                 continue
 
-            counts["notReady"] += 1
-            event_id = delivery.get("eventId")
+            if status.get("ready") is True:
+                counts["readyOutstanding"] += 1  # a re-run of a Ready object: its event still has to finish
+            else:
+                counts["notReady"] += 1
             if not event_id:
                 counts["legacy"] += 1
                 continue
