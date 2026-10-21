@@ -215,16 +215,95 @@
           standardFlowEnabled: true
           implicitFlowEnabled: false
           directAccessGrantsEnabled: false
-          redirectUris:
-            - "{{ lookup('env', 'VAULT_SERVICES_URL') | regex_replace('/$', '') ~ '/ui/vault/auth/oidc/oidc/callback' }}"
-            - "http://localhost:8250/oidc/callback"
+          redirectUris: "{{ vault_services_keycloak_redirect_uris }}"
           webOrigins:
             - "+"
+          protocolMappers:
+            - "{{ vault_keycloak_groups_mapper }}"
         status_code: [201]
       register: vault_services_client_create
       when: vault_services_client_check.json | length == 0
       retries: 3
       delay: 5
+
+    - name: Converge the existing vault client (exact callbacks, no password grant, groups claim)
+      when: vault_keycloak_converge | bool and vault_services_client_check.json | length > 0
+      block:
+        - name: Read the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}"
+            method: GET
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+            status_code: [200]
+          register: vault_services_client_full
+          no_log: true
+
+        - name: Work out what changes on the vault client
+          vars:
+            _cur: "{{ vault_services_client_full.json }}"
+          ansible.builtin.set_fact:
+            vault_client_fields: >-
+              {{ (['redirectUris'] if (_cur.redirectUris | default([]) | sort | list) != (vault_services_keycloak_redirect_uris | sort | list) else [])
+                 + (['directAccessGrantsEnabled'] if _cur.directAccessGrantsEnabled | default(false) | bool else []) }}
+            vault_client_mapper: "{{ (_cur.protocolMappers | default([]) | selectattr('name', 'equalto', vault_keycloak_groups_mapper.name) | list + [{}]) | first }}"
+
+        - name: Vault client changes
+          ansible.builtin.debug:
+            msg: >-
+              {{ keycloak_services_realm }}/{{ vault_services_client_id }}:
+              {{ (vault_client_fields + ([] if (vault_client_mapper.config | default({})).get('full.path') == 'true'
+                  and vault_client_mapper.protocolMapper | default('') == vault_keycloak_groups_mapper.protocolMapper else ['mapper groups']))
+                 | join(', ') or 'no change' }}{{ ' (plan only)' if vault_keycloak_plan_only | bool else '' }}
+
+        - name: Update the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}"
+            method: PUT
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: >-
+              {{ vault_services_client_full.json | combine({'redirectUris': vault_services_keycloak_redirect_uris,
+                 'directAccessGrantsEnabled': false}) }}
+            status_code: [204]
+          when: vault_client_fields | length > 0 and not (vault_keycloak_plan_only | bool)
+          no_log: true
+
+        - name: Add the groups mapper to the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}/protocol-mappers/models"
+            method: POST
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: "{{ vault_keycloak_groups_mapper }}"
+            status_code: [201]
+          when: vault_client_mapper | length == 0 and not (vault_keycloak_plan_only | bool)
+
+        - name: Update the groups mapper of the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}/protocol-mappers/models/{{ vault_client_mapper.id }}"
+            method: PUT
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: >-
+              {{ vault_keycloak_groups_mapper | combine({'id': vault_client_mapper.id,
+                 'config': (vault_client_mapper.config | default({})) | combine(vault_keycloak_groups_mapper.config)}) }}
+            status_code: [204]
+          when:
+            - vault_client_mapper | length > 0
+            - (vault_client_mapper.config | default({})).get('full.path') != 'true'
+              or vault_client_mapper.protocolMapper | default('') != vault_keycloak_groups_mapper.protocolMapper
+            - not (vault_keycloak_plan_only | bool)
 
     - name: Get vault client secret from services keycloak
       ansible.builtin.uri:
