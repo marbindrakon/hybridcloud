@@ -25,6 +25,7 @@ import { useTranslation } from '../i18n';
 import { formatRelativeTime } from '../list/listColumns';
 import { deletionBlockers } from '../status/phase';
 import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHiddenPaths';
+import { ToolSignInPanel } from './ToolSignInPanel';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -47,6 +48,11 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
   ],
   // access: shown by the way-in panel (groups that can sign in)
   CloudVirt: ['site', 'namespaces', 'dns', 'storageClass', 'access'],
+  // loginUrl / orgUrl: shown by the sign-in panel
+  AAPOrg: ['loginUrl', 'orgUrl'],
+  QuayOrg: ['loginUrl', 'orgUrl'],
+  VaultKV: ['loginUrl'],
+  Vault: ['loginUrl'],
 };
 
 /** Status keys shown by the common blocks on every kind. */
@@ -845,6 +851,11 @@ export function KindStatusDetails({ kind, item }: KindStatusDetailsProps): React
       return <NetworkPlacementDetails item={item as NetworkPlacement} />;
     case 'CloudVirt':
       return <CloudVirtDetails item={item as CloudVirt} />;
+    case 'AAPOrg':
+    case 'QuayOrg':
+    case 'VaultKV':
+    case 'Vault':
+      return <ToolSignInPanel kind={kind} item={item} />;
     default:
       return null;
   }

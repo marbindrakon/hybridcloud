@@ -421,11 +421,11 @@
       "aapViewer": "Viewers",
       "aapViewerHelp": "View jobs, inventories and templates.",
       "quayAdmin": "Admins",
-      "quayAdminHelp": "Administer the organization.",
+      "quayAdminHelp": "Administer the organization. Each role syncs with the first access group listed; further groups are listed but not synced.",
       "quayCreator": "Creators",
-      "quayCreatorHelp": "Create repositories.",
+      "quayCreatorHelp": "Create repositories. Each role syncs with the first access group listed; further groups are listed but not synced.",
       "quayMember": "Members",
-      "quayMemberHelp": "Pull and push to the organization's repositories."
+      "quayMemberHelp": "Pull and push to the organization's repositories. Each role syncs with the first access group listed; further groups are listed but not synced."
     },
     "vaultHa": "High availability",
     "advanced": "Advanced",
@@ -1151,6 +1151,21 @@
     "youAreNotIn": "You are not in any of these groups; ask your tenant's access administrator.",
     "virtScope": "Sovereign Cloud does not create VMs, volumes or security groups; create them in the site console.",
     "openstackScope": "Sovereign Cloud creates the project; servers, volumes and security groups are made with the OpenStack API or dashboard."
+  },
+  "toolSignIn": {
+    "title": "Sign in",
+    "tool": {
+      "AAPOrg": "AAP",
+      "QuayOrg": "Quay",
+      "VaultKV": "Vault",
+      "Vault": "Vault"
+    },
+    "signIn": "Sign in to {{tool}}",
+    "openIn": "Open in {{tool}}",
+    "verified": "Sign-in verified",
+    "noMembersYet": "No member to verify with yet",
+    "notVerified": "Sign-in not working yet",
+    "checking": "Sign-in not checked yet"
   },
   "review": {
     "title": "Review",

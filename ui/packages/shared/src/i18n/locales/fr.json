@@ -421,11 +421,11 @@
       "aapViewer": "Observateurs",
       "aapViewerHelp": "Voir les tâches, inventaires et modèles.",
       "quayAdmin": "Administrateurs",
-      "quayAdminHelp": "Administrer l'organisation.",
+      "quayAdminHelp": "Administrer l'organisation. Chaque rôle se synchronise avec le premier groupe d'accès listé ; les suivants sont listés mais pas synchronisés.",
       "quayCreator": "Créateurs",
-      "quayCreatorHelp": "Créer des dépôts.",
+      "quayCreatorHelp": "Créer des dépôts. Chaque rôle se synchronise avec le premier groupe d'accès listé ; les suivants sont listés mais pas synchronisés.",
       "quayMember": "Membres",
-      "quayMemberHelp": "Tirer et pousser dans les dépôts de l'organisation."
+      "quayMemberHelp": "Tirer et pousser dans les dépôts de l'organisation. Chaque rôle se synchronise avec le premier groupe d'accès listé ; les suivants sont listés mais pas synchronisés."
     },
     "vaultHa": "Haute disponibilité",
     "advanced": "Avancé",
@@ -1151,6 +1151,21 @@
     "youAreNotIn": "Vous n'êtes dans aucun de ces groupes ; demandez à l'administrateur des accès de votre locataire.",
     "virtScope": "Sovereign Cloud ne crée ni VM, ni volumes, ni groupes de sécurité ; créez-les dans la console du site.",
     "openstackScope": "Sovereign Cloud crée le projet ; serveurs, volumes et groupes de sécurité se créent avec l'API ou le tableau de bord OpenStack."
+  },
+  "toolSignIn": {
+    "title": "Connexion",
+    "tool": {
+      "AAPOrg": "AAP",
+      "QuayOrg": "Quay",
+      "VaultKV": "Vault",
+      "Vault": "Vault"
+    },
+    "signIn": "Se connecter à {{tool}}",
+    "openIn": "Ouvrir dans {{tool}}",
+    "verified": "Connexion vérifiée",
+    "noMembersYet": "Aucun membre pour vérifier la connexion",
+    "notVerified": "La connexion ne fonctionne pas encore",
+    "checking": "Connexion pas encore vérifiée"
   },
   "review": {
     "title": "Vérification",
