@@ -2,18 +2,13 @@ import React from 'react';
 import { Button, PageSection } from '@patternfly/react-core';
 import { SyncIcon } from '@patternfly/react-icons';
 import { useNavigate } from 'react-router-dom';
-import {
-  type HybridSovereignKind,
-  type K8sResource,
-  NetworkOverview,
-  PageHeader,
-  useNetworkOverviewCRs,
-  useTranslation,
-  useTenantScope,
-  useNav,
-  useBreadcrumbs,
-  useDocumentTitle,
-} from '@hybridsovereign/shared';
+import { type HybridSovereignKind, type K8sResource } from '../types';
+import { NetworkOverview } from '../components/NetworkOverview';
+import { PageHeader } from '../components/PageHeader';
+import { useNetworkOverviewCRs } from '../hooks/networkOverviewCrs';
+import { useTranslation } from '../i18n';
+import { useTenantScope } from '../scope/ScopeProvider';
+import { useNav, useBreadcrumbs, useDocumentTitle } from '../nav/useNav';
 
 /**
  * Tenant-scoped network map.
@@ -59,4 +54,3 @@ export function TenantNetworkOverviewPage(): React.ReactElement {
   );
 }
 
-export default TenantNetworkOverviewPage;

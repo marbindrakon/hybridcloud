@@ -18,6 +18,7 @@ export {
   matchLegacy,
   legacyTarget,
   LEGACY_ROUTES,
+  objectPath,
 } from './paths';
 export type { PathParams, LegacyRoute, LegacyMatch, AnyScope } from './paths';
 export {

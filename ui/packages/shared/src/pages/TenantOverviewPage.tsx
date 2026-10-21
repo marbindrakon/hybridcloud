@@ -22,28 +22,21 @@ import {
 } from '@patternfly/react-icons';
 import { Table, Thead, Tr, Th, Tbody, Td } from '@patternfly/react-table';
 import { Link, useNavigate } from 'react-router-dom';
-import {
-  EntityTopology,
-  PageHeader,
-  HealthDonut,
-  InventoryCard,
-  StatusBadge,
-  KindIcon,
-  normalizeHealth,
-  useK8sResourceList,
-  K8sResource,
-  useTranslation,
-  TENANT_OVERVIEW_KINDS,
-  HybridSovereignKind,
-  classifyError,
-  UnavailableState,
-  usePermission,
-  useTenantScope,
-  useNav,
-  useBreadcrumbs,
-  useDocumentTitle,
-  tenantLabel,
-} from '@hybridsovereign/shared';
+import { EntityTopology } from '../components/EntityTopology';
+import { PageHeader } from '../components/PageHeader';
+import { HealthDonut } from '../components/HealthDonut';
+import { InventoryCard } from '../components/InventoryCard';
+import { StatusBadge, normalizeHealth } from '../components/StatusBadge';
+import { KindIcon } from '../icons';
+import { useK8sResourceList } from '../hooks/k8s';
+import { K8sResource, TENANT_OVERVIEW_KINDS, HybridSovereignKind } from '../types';
+import { useTranslation } from '../i18n';
+import { classifyError } from '../hooks/errors';
+import { UnavailableState } from '../access/ForbiddenState';
+import { usePermission } from '../access/PermissionProvider';
+import { useTenantScope } from '../scope/ScopeProvider';
+import { useNav, useBreadcrumbs, useDocumentTitle } from '../nav/useNav';
+import { tenantLabel } from '../scope/resolveIdentity';
 
 /** Kinds of the overview that still have a page (Persona has none). */
 const OVERVIEW_KINDS = TENANT_OVERVIEW_KINDS.filter((k) => k !== 'Persona');

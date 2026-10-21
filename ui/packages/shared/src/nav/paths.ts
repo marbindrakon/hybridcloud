@@ -215,3 +215,18 @@ export function legacyTarget(host: Host, m: LegacyMatch, current: RequestedScope
   if (!scope) return undefined;
   return pathFor(host, m.route.to, scope, { name: m.params.name, formType: m.params.formType });
 }
+
+/**
+ * Detail path of any object from its kind and namespace: platform kinds in
+ * the platform scope, tenant kinds in the tenant that owns the namespace.
+ */
+export function objectPath(host: Host, kind: string, namespace: string | undefined, name: string): string | undefined {
+  const platformEntry = entryForKind(kind, 'platform');
+  if (platformEntry && platformEntry.persona.includes('platform') && !platformEntry.persona.includes('tenant')) {
+    return pathFor(host, platformEntry, { kind: 'global' }, { name });
+  }
+  const tenant = tenantOfNamespace(namespace);
+  const e = entryForKind(kind, 'tenant');
+  if (!e || !tenant) return undefined;
+  return pathFor(host, e, { kind: 'tenant', name: tenant }, { name });
+}

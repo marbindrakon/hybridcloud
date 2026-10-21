@@ -14,7 +14,7 @@ import {
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
-import { MoonIcon, SunIcon, TopologyIcon } from '@patternfly/react-icons';
+import { BarsIcon, MoonIcon, SunIcon, TopologyIcon } from '@patternfly/react-icons';
 import { LanguageToggle, useTranslation } from '../i18n';
 import { useTheme } from '../theme';
 import { TenantScopeSelector } from '../scope/TenantScopeSelector';
@@ -59,7 +59,9 @@ export function SovereignMasthead({ brand, homeHref, includePlatform = false }: 
     <Masthead className="sc-pf-masthead">
       <MastheadMain>
         <MastheadToggle>
-          <PageToggleButton isHamburgerButton aria-label={t('common.globalNav')} />
+          <PageToggleButton variant="plain" aria-label={t('common.globalNav')}>
+            <BarsIcon />
+          </PageToggleButton>
         </MastheadToggle>
         <MastheadBrand>
           <MastheadLogo component={BrandLink} className="sc-masthead-brand">

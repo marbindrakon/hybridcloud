@@ -2758,3 +2758,14 @@ html.pf-v5-theme-dark .sc-console-page,
 .sc-forbidden {
   margin-block: var(--pf-t--global--spacer--lg, 1.5rem);
 }
+/* PF6 masthead controls on the dark bar: toggle, plain menu toggles, scope label */
+.sc-pf-masthead .pf-v6-c-menu-toggle.pf-m-plain,
+.sc-pf-masthead .pf-v6-c-menu-toggle.pf-m-plain-text,
+.sc-pf-masthead .pf-v6-c-masthead__toggle .pf-v6-c-button {
+  color: #fff;
+  --pf-v6-c-menu-toggle--Color: #fff;
+  --pf-v6-c-menu-toggle__toggle-icon--Color: #fff;
+}
+.sc-pf-masthead .sc-scope__label {
+  color: #c7c7c7;
+}

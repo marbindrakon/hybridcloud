@@ -15,10 +15,10 @@ import {
   useRouterScopeAdapter,
   useOptionalScope,
   pathFor,
+  TenantOverviewPage,
+  TenantNetworkOverviewPage,
   type PageMap,
 } from '@hybridsovereign/shared';
-import { TenantOverviewPage } from './pages/TenantOverviewPage';
-import { TenantNetworkOverviewPage } from './pages/TenantNetworkOverviewPage';
 
 const HOST = 'tenant-dashboard' as const;
 

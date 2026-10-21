@@ -37,9 +37,6 @@ admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Thead' canno
 admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot be used as a JSX component.
-admin-dashboard:src/App.tsx: TS2322: Type '{ children: Element; className: string; header: Element; sidebar: Element; isManagedSidebar: true; }' is not assignable to type 'IntrinsicAttributes & IntrinsicClassAttributes<Page> & Pick<Readonly<PageProps>, never> & InexactPartial<...> & InexactPartial<...>'.
-admin-dashboard:src/App.tsx: TS2322: Type '{ children: Element; theme: ThemeMode; isSidebarOpen: boolean; id: string; }' is not assignable to type 'IntrinsicAttributes & PageSidebarProps'.
-admin-dashboard:src/App.tsx: TS2769: No overload matches this call.
 admin-dashboard:src/pages/OverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
 admin-dashboard:src/pages/OverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
 tenant-console-plugin:src/App.tsx: TS2322: Type '"light"' is not assignable to type '"default" | "secondary" | undefined'.

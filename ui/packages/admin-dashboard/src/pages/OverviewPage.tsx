@@ -33,42 +33,15 @@ import {
   K8sResource,
   HybridSovereignKind,
   useTranslation,
+  objectPath,
+  pathFor,
+  useBreadcrumbs,
+  useDocumentTitle,
+  UnavailableState,
 } from '@hybridsovereign/shared';
-import { adminDetailHref } from './ResourceListPage';
-
-const KIND_LIST_PATH: Partial<Record<string, string>> = {
-  Entity: '/entities',
-  Team: '/teams',
-  Project: '/projects',
-  Assignment: '/assignments',
-  PlatformOpenshift: '/platforms',
-  CloudOSO: '/clouds/cloudoso',
-  CloudAWS: '/clouds/cloudaws',
-  CloudGCP: '/clouds/cloudgcp',
-  CloudVirt: '/clouds/cloudvirt',
-  CloudInfrastructure: '/clouds/infrastructure',
-  Persona: '/personas',
-  Rbac: '/operators/rbacs',
-  RbacConfig: '/operators/rbacconfigs',
-  AAPOrg: '/services/aaporgs',
-  AAPConfig: '/services/aapconfigs',
-  QuayOrg: '/services/quayorgs',
-  QuayConfig: '/services/quayconfigs',
-  Vault: '/services/vaults',
-  VaultKV: '/services/vaultkvs',
-  HybridFabric: '/networking/fabrics',
-  CloudGateway: '/networking/gateways',
-  TransportLink: '/networking/transport',
-  HybridNetwork: '/networking/networks',
-  NetworkPlacement: '/networking/placements',
-  UIHealthChecker: '/networking/uihealth',
-};
 
 function overviewItemHref(item: K8sResource): string | null {
-  const kind = (item.kind || '') as HybridSovereignKind;
-  const listPath = KIND_LIST_PATH[kind];
-  if (!listPath) return null;
-  return adminDetailHref(listPath, kind, item);
+  return objectPath('admin-dashboard', item.kind || '', item.metadata.namespace, item.metadata.name) ?? null;
 }
 
 function bucket(items: K8sResource[]) {
@@ -86,7 +59,12 @@ function bucket(items: K8sResource[]) {
 
 export function OverviewPage(): React.ReactElement {
   const { t } = useTranslation();
-  const { items, loading, error, refresh } = useOverviewCRs();
+  const { items, loading, error, refresh, forbiddenKinds } = useOverviewCRs();
+  const crumbs = useBreadcrumbs('platform-overview');
+  useDocumentTitle('platform-overview');
+  const H = 'admin-dashboard' as const;
+  const ALL = { kind: 'all' as const };
+  const GLOBAL = { kind: 'global' as const };
 
   const byKind = useMemo(() => {
     const map = new Map<string, K8sResource[]>();
@@ -113,7 +91,7 @@ export function OverviewPage(): React.ReactElement {
     <>
       <PageHeader
         title={t('pages.overviewTitle')}
-        showLanguageToggle={false}
+        breadcrumbs={crumbs}
         actions={
           <Button variant="secondary" icon={<SyncIcon />} onClick={refresh}>
             {t('common.refresh')}
@@ -121,11 +99,7 @@ export function OverviewPage(): React.ReactElement {
         }
       />
 
-      {error && (
-        <Alert variant="warning" isInline title={t('pages.overviewUnable')} className="sc-mb">
-          {error.message}
-        </Alert>
-      )}
+      {error && <UnavailableState error={error} onRetry={refresh} />}
 
       {loading && items.length === 0 ? (
         <Spinner />
@@ -150,7 +124,8 @@ export function OverviewPage(): React.ReactElement {
                 count={(byKind.get('Entity') ?? []).length}
                 hint={`${bucket(byKind.get('Entity') ?? []).ready} ready`}
                 kind="Entity"
-                href="/entities"
+                href={pathFor(H, 'tenants', GLOBAL)}
+                locked={forbiddenKinds.includes('Entity')}
                 status="success"
               />
               <InventoryCard
@@ -158,14 +133,16 @@ export function OverviewPage(): React.ReactElement {
                 count={(byKind.get('Team') ?? []).length}
                 hint={`${bucket(byKind.get('Team') ?? []).ready} ready`}
                 kind="Team"
-                href="/teams"
+                href={pathFor(H, 'teams', ALL)}
+                locked={forbiddenKinds.includes('Team')}
               />
               <InventoryCard
                 title={t('nav.cloudInfrastructure')}
                 count={(byKind.get('CloudInfrastructure') ?? []).length}
                 hint={`${bucket(byKind.get('CloudInfrastructure') ?? []).ready} ready`}
                 kind="CloudInfrastructure"
-                href="/clouds/infrastructure"
+                href={pathFor(H, 'sites', GLOBAL)}
+                locked={forbiddenKinds.includes('CloudInfrastructure')}
                 status={bucket(byKind.get('CloudInfrastructure') ?? []).failed ? 'danger' : 'default'}
               />
               <InventoryCard
@@ -173,7 +150,8 @@ export function OverviewPage(): React.ReactElement {
                 count={platforms.length}
                 hint={`${bucket(platforms).ready} ready`}
                 kind="PlatformOpenshift"
-                href="/platforms"
+                href={pathFor(H, 'clusters', ALL)}
+                locked={forbiddenKinds.includes('PlatformOpenshift')}
                 status={bucket(platforms).failed ? 'danger' : 'default'}
               />
               <InventoryCard
@@ -181,7 +159,8 @@ export function OverviewPage(): React.ReactElement {
                 count={(byKind.get('Assignment') ?? []).length}
                 hint={`${bucket(byKind.get('Assignment') ?? []).ready} ready`}
                 kind="Assignment"
-                href="/assignments"
+                href={pathFor(H, 'assignments', ALL)}
+                locked={forbiddenKinds.includes('Assignment')}
                 status={bucket(byKind.get('Assignment') ?? []).failed ? 'danger' : 'default'}
               />
             </div>
@@ -253,7 +232,7 @@ export function OverviewPage(): React.ReactElement {
                     </CardTitle>
                   </FlexItem>
                   <FlexItem align={{ default: 'alignEnd' }}>
-                    <Link to="/operators">View all</Link>
+                    <Link to={pathFor(H, 'access-groups', ALL)}>View all</Link>
                   </FlexItem>
                 </Flex>
               </CardHeader>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Button, EmptyState, EmptyStateBody, EmptyStateFooter, EmptyStateActions, Spinner } from '@patternfly/react-core';
 import { LockIcon, UserIcon } from '@patternfly/react-icons';
 import { useTranslation } from '../i18n';
@@ -32,6 +32,11 @@ export function NoAccessState({ requested }: { requested?: string }): React.Reac
   const name = requested ?? (ctx?.scope.kind === 'none' ? ctx.scope.requested : undefined) ?? '';
   const label =
     name === 'all' ? t('scope.allTenants') : name === 'platform' ? t('scope.platform') : name;
+  useEffect(() => {
+    if (!(window as { SERVER_FLAGS?: unknown }).SERVER_FLAGS) {
+      document.title = [t('scope.noAccessTitle', { tenant: label }), t('nav.sovereignCloud')].join(' · ');
+    }
+  }, [t, label]);
   const others = ctx?.tenants ?? [];
   return (
     <EmptyState titleText={t('scope.noAccessTitle', { tenant: label })} headingLevel="h1" icon={iconOf(LockIcon)}>
