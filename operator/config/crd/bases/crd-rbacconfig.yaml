@@ -4,6 +4,7 @@ metadata:
   name: rbacconfigs.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:

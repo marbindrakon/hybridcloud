@@ -9,6 +9,7 @@ metadata:
   name: aapconfigs.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -145,6 +146,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -324,6 +326,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -518,7 +521,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -836,6 +839,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -1012,7 +1016,7 @@ metadata:
   name: cloudgateways.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -1374,6 +1378,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -1545,6 +1550,7 @@ metadata:
   name: cloudinfrastructures.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -1894,6 +1900,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -2140,6 +2147,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -2391,6 +2399,7 @@ metadata:
   name: dnsconfigs.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -2553,6 +2562,7 @@ metadata:
   name: entities.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -2789,7 +2799,7 @@ metadata:
   name: hybridfabrics.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -3081,7 +3091,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "4"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -3347,6 +3357,7 @@ metadata:
   name: iaacs.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -3473,7 +3484,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -3742,7 +3753,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -4000,6 +4011,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -4141,6 +4153,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "2"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -4503,7 +4516,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -4657,7 +4670,7 @@ metadata:
   name: provideredges.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -4876,6 +4889,7 @@ metadata:
   name: quayconfigs.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -5006,6 +5020,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -5182,6 +5197,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "7"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -5328,6 +5344,7 @@ metadata:
   name: rbacconfigs.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -5452,7 +5469,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -5623,7 +5640,7 @@ metadata:
   name: transportlinks.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -5754,7 +5771,7 @@ metadata:
   name: uihealthcheckers.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -5891,6 +5908,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "6"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -6039,6 +6057,7 @@ metadata:
     hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
