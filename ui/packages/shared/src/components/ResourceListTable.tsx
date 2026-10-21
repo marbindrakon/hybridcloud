@@ -18,6 +18,9 @@ import { useTranslation } from '../i18n';
 import type { HybridSovereignKind, K8sResource } from '../types/crds';
 import { KindIcon } from '../icons/kindIcons';
 import { StatusBadge } from './StatusBadge';
+import { ToastHost } from './ToastHost';
+import { phaseOf, summaryOf } from '../status/phase';
+import { useCompletionToasts } from '../status/useCompletionToasts';
 import { HealthStrip } from './StatTile';
 import type { StatVariant } from './StatTile';
 import { HealthDonut } from './HealthDonut';
@@ -189,6 +192,8 @@ export function ResourceListTable({
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const colSpan = columns.length + 1 + (enableDelete ? 1 : 0);
+  // "<name> is ready / failed / deleted" when a row this page watched finishes (Q10, UX-059).
+  useCompletionToasts(error ? null : items, kind);
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
@@ -286,6 +291,7 @@ export function ResourceListTable({
 
   return (
     <>
+      <ToastHost />
       {refreshError && (
         <RefreshFailedAlert error={refreshError} loadedAt={loadedAt} onRetry={onRetry} />
       )}
@@ -389,9 +395,15 @@ export function ResourceListTable({
                         );
                       }
                       if (col.id === 'status') {
+                        const phase = phaseOf(item);
                         return (
                           <Td key={col.id} dataLabel={t(col.labelKey)}>
                             <StatusBadge item={item} />
+                            {phase !== 'Ready' && (
+                              <div className="sc-text-muted sc-status-summary" style={{ fontSize: '0.75rem' }}>
+                                {summaryOf(item)}
+                              </div>
+                            )}
                           </Td>
                         );
                       }
@@ -407,7 +419,8 @@ export function ResourceListTable({
                         <Button
                           variant="plain"
                           icon={<TrashIcon />}
-                          aria-label={`Delete ${item.metadata.name}`}
+                          isDisabled={phaseOf(item) === 'Deleting'}
+                          aria-label={t('list.deleteRow', { name: item.metadata.name })}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
