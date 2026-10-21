@@ -28,6 +28,10 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # the Entity cascade reads the teardown-tier label of the group's CRDs
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list"]
 ---
 # Shared by entity-scoped namespace operators (bound per-entity SA).
 apiVersion: rbac.authorization.k8s.io/v1

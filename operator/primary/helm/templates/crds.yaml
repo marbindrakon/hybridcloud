@@ -130,6 +130,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: aaporgs.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -300,6 +302,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: assignments.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -485,6 +489,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: cloudawss.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -521,6 +527,11 @@ spec:
               type: object
               required: [cloudRef]
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 cloudRef:
                   type: object
                   description: >-
@@ -649,6 +660,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: cloudgcps.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -685,6 +698,11 @@ spec:
               type: object
               required: [cloudRef]
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 cloudRef:
                   type: object
                   description: >-
@@ -808,6 +826,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: cloudosos.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -844,6 +864,11 @@ spec:
                 on the central cluster.
               type: object
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 cloudRef:
                   type: object
                   description: >-
@@ -1389,6 +1414,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: openstackmigrations.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: Replace=true
@@ -1638,6 +1665,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: personas.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -1770,6 +1799,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: platformopenshifts.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "2"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -1802,6 +1833,11 @@ spec:
               description: Desired state for PlatformOpenshift
               type: object
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 type:
                   type: string
                   description: "Platform type: openstack, aws or gcp"
@@ -2118,6 +2154,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: projects.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: Replace=true
@@ -2386,6 +2424,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: quayorgs.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -2553,6 +2593,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: rbacs.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "7"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -2813,6 +2855,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: teams.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: Replace=true
@@ -2977,6 +3021,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: vaults.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "6"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -3119,6 +3165,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: vaultkvs.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -4185,6 +4233,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: hybridnetworks.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "4"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: Replace=true
@@ -4223,6 +4273,11 @@ spec:
             spec:
               type: object
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 description:
                   type: string
                   maxLength: 512
@@ -4439,6 +4494,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: networkplacements.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: Replace=true
@@ -4699,6 +4756,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: cloudvirts.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
@@ -4737,6 +4796,11 @@ spec:
               type: object
               required: [cloudRef]
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 description:
                   type: string
                   maxLength: 512
@@ -5646,6 +5710,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: attachmentcircuits.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: Replace=true

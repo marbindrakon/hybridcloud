@@ -3,6 +3,7 @@ kind: CustomResourceDefinition
 metadata:
   name: quayorgs.hybridsovereign.redhat
   labels:
+    hybridsovereign.redhat/teardown-tier: "5"
     {{- include "plugin-quay.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "1"

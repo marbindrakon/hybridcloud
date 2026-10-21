@@ -30,35 +30,152 @@
     # shc (LAB-PLAN §11.6): tear down the entity's CRs in dependency order first. The namespace operator
     # runs their finalizers, so it and the namespace go only after every tier is gone (upstream removed
     # both at once, stranding CloudOSO/PlatformOpenshift finalizers - the P0 orphans).
+    # Tiers come from the CRDs' teardown-tier label (fallback: entity_teardown_tiers). A namespaced kind of
+    # the group with no tier blocks the cascade (UnknownKind); children with spec.deletionProtection are
+    # not deleted (ProtectedChildren). Waiting for a tier is Deleting, never failed.
+    - name: Mark the tenant namespace as deleting
+      kubernetes.core.k8s:
+        state: patched
+        api_version: v1
+        kind: Namespace
+        name: "entity-{{ ansible_operator_meta.name }}"
+        definition:
+          metadata:
+            labels:
+              hybridsovereign.redhat/deleting: "true"
+      failed_when: false
+
+    - name: Read the teardown tiers from the CRDs
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        label_selectors:
+          - "{{ entity_teardown_tier_label }}"
+      register: _entity_tier_crds
+      failed_when: false
+
+    - name: Compute the tiers
+      ansible.builtin.set_fact:
+        _entity_tiers: >-
+          {%- set by_tier = {} -%}
+          {%- for c in _entity_tier_crds.resources | default([]) if c.spec.group == 'hybridsovereign.redhat' -%}
+            {%- set t = (c.metadata.labels | default({}))[entity_teardown_tier_label] | default('') | string -%}
+            {%- if t is match('^[0-9]+$') -%}
+              {%- set _ = by_tier.update({(t | int): by_tier.get(t | int, []) + [c.spec.names.kind]}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ (by_tier | dictsort | map('last') | list) if by_tier else entity_teardown_tiers }}
+        _entity_skip_kinds: >-
+          {%- set out = [] -%}
+          {%- for c in _entity_tier_crds.resources | default([]) if c.spec.group == 'hybridsovereign.redhat' -%}
+            {%- if ((c.metadata.labels | default({}))[entity_teardown_tier_label] | default('') | string) == 'skip' -%}
+              {%- set _ = out.append(c.spec.names.kind) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Discover the kinds of the API group
+      ansible.builtin.uri:
+        url: "https://{{ lookup('env', 'KUBERNETES_SERVICE_HOST') }}:{{ lookup('env', 'KUBERNETES_SERVICE_PORT') }}/apis/hybridsovereign.redhat/v1alpha1"
+        headers:
+          Authorization: "Bearer {{ lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/token') }}"
+        ca_path: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        return_content: true
+      register: _entity_discovery
+      failed_when: false
+      no_log: true
+
+    - name: Kinds without a tier
+      ansible.builtin.set_fact:
+        _entity_untiered_kinds: >-
+          {%- set known = (_entity_tiers | flatten) + _entity_skip_kinds + entity_teardown_platform_kinds -%}
+          {%- set out = [] -%}
+          {%- for r in (_entity_discovery.json | default({}, true)).resources | default([]) -%}
+            {%- if r.namespaced | default(false) and '/' not in r.name and r.kind not in known and r.kind not in out -%}
+              {%- set _ = out.append(r.kind) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
     - name: List the entity namespace's CRs
       kubernetes.core.k8s_info:
         api_version: hybridsovereign.redhat/v1alpha1
         kind: "{{ item }}"
         namespace: "entity-{{ ansible_operator_meta.name }}"
-      loop: "{{ entity_teardown_tiers | flatten }}"
+      loop: "{{ (_entity_tiers | flatten) + _entity_untiered_kinds }}"
       register: _entity_crs
+      failed_when: false
 
     - name: Find the first tier that still has CRs
       ansible.builtin.set_fact:
         _entity_tier_json: >-
           {%- set by_kind = {} -%}
           {%- for r in _entity_crs.results -%}
-            {%- set _ = by_kind.update({r.item: (r.resources | default([]) | map(attribute='metadata.name') | list)}) -%}
+            {%- set _ = by_kind.update({r.item: (r.resources | default([]))}) -%}
           {%- endfor -%}
+          {%- set unknown = [] -%}
+          {%- for k in _entity_untiered_kinds -%}{%- for o in by_kind.get(k, []) -%}
+            {%- set _ = unknown.append({'kind': k, 'name': o.metadata.name, 'namespace': o.metadata.namespace, 'reason': 'UnknownKind'}) -%}
+          {%- endfor -%}{%- endfor -%}
           {%- set ns = namespace(tier=none) -%}
-          {%- for tier in entity_teardown_tiers -%}
+          {%- for tier in _entity_tiers -%}
             {%- if ns.tier is none -%}
-              {%- set left = [] -%}
-              {%- for k in tier -%}{%- for n in by_kind.get(k, []) -%}{%- set _ = left.append(k ~ '/' ~ n) -%}{%- endfor -%}{%- endfor -%}
-              {%- if left | length > 0 -%}{%- set ns.tier = {'index': loop.index, 'left': left} -%}{%- endif -%}
+              {%- set left = [] -%}{%- set protected = [] -%}
+              {%- for k in tier -%}{%- for o in by_kind.get(k, []) -%}
+                {%- if (o.spec | default({}, true)).deletionProtection | default(false) | bool -%}
+                  {%- set _ = protected.append({'kind': k, 'name': o.metadata.name, 'namespace': o.metadata.namespace, 'reason': 'ProtectedChildren'}) -%}
+                {%- else -%}
+                  {%- set _ = left.append(k ~ '/' ~ o.metadata.name) -%}
+                {%- endif -%}
+              {%- endfor -%}{%- endfor -%}
+              {%- if (left | length > 0) or (protected | length > 0) -%}
+                {%- set ns.tier = {'index': loop.index, 'left': left, 'protected': protected} -%}
+              {%- endif -%}
             {%- endif -%}
           {%- endfor -%}
-          {{ ns.tier | to_json }}
+          {{ {'tier': ns.tier, 'unknown': unknown} | to_json }}
+
+    - name: Set the cascade facts
+      ansible.builtin.set_fact:
+        _entity_cascade: "{{ _entity_tier_json | from_json }}"
+        _entity_phase_since: >-
+          {{ _hybridsovereign_redhat_entity.status.phaseSince | default(entity_delete_transition_time, true)
+             if (_hybridsovereign_redhat_entity.status.phase | default('')) == 'Deleting' else entity_delete_transition_time }}
+
+    - name: Stop at kinds the cascade does not know
+      when: _entity_cascade.unknown | length > 0
+      block:
+        - name: Record the unknown kinds
+          operator_sdk.util.k8s_status:
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: Entity
+            name: "{{ ansible_operator_meta.name }}"
+            namespace: "{{ ansible_operator_meta.namespace }}"
+            status:
+              status: reconciling
+              ready: false
+              phase: Deleting
+              phaseSince: "{{ _entity_phase_since }}"
+              summary: "Deletion waits: an object of an unknown kind is in the tenant. The platform team is looking at it."
+              message: >-
+                Deletion waits: {{ _entity_cascade.unknown | map(attribute='kind') | unique | join(', ') }} has no teardown tier
+                ({{ _entity_cascade.unknown | map(attribute='name') | join(', ') }})
+              deletionBlockedBy: "{{ _entity_cascade.unknown }}"
+              conditions:
+                - type: DeletionBlocked
+                  status: "True"
+                  reason: UnknownKind
+                  message: "{{ _entity_cascade.unknown | map(attribute='kind') | unique | join(', ') }} has no teardown tier"
+                  lastTransitionTime: "{{ entity_delete_transition_time }}"
+
+        - name: Requeue until the unknown objects are gone
+          ansible.builtin.fail:
+            msg: "Entity teardown waits for objects of kinds without a teardown tier"
 
     - name: Tear down the current tier
-      when: (_entity_tier_json | from_json) is not none
+      when: _entity_cascade.tier is not none
       block:
-        - name: Delete the tier's CRs
+        - name: Delete the tier's CRs (not the protected ones)
           kubernetes.core.k8s:
             state: absent
             api_version: hybridsovereign.redhat/v1alpha1
@@ -66,7 +183,7 @@
             name: "{{ item.split('/')[1] }}"
             namespace: "entity-{{ ansible_operator_meta.name }}"
             wait: false
-          loop: "{{ (_entity_tier_json | from_json).left }}"
+          loop: "{{ _entity_cascade.tier.left }}"
 
         - name: Record the teardown progress
           operator_sdk.util.k8s_status:
@@ -77,15 +194,48 @@
             status:
               status: reconciling
               ready: false
+              phase: Deleting
+              phaseSince: "{{ _entity_phase_since }}"
+              summary: >-
+                {{ 'Deletion waits: some objects have deletion protection turned on.'
+                   if (_entity_cascade.tier.left | length == 0) else 'Being deleted.' }}
               message: >-
-                Deleting tier {{ (_entity_tier_json | from_json).index }}/{{ entity_teardown_tiers | length }}:
-                waiting for {{ (_entity_tier_json | from_json).left | join(', ') }}
+                Deleting tier {{ _entity_cascade.tier.index }}/{{ _entity_tiers | length }}:
+                waiting for {{ (_entity_cascade.tier.left + (_entity_cascade.tier.protected | map(attribute='name') | list)) | join(', ') }}
+                {{- (' (deletion protection on ' ~ (_entity_cascade.tier.protected | map(attribute='name') | join(', ')) ~ ')') if _entity_cascade.tier.protected else '' }}
+              deletionBlockedBy: "{{ _entity_cascade.tier.protected }}"
+              conditions:
+                - type: DeletionBlocked
+                  status: "True"
+                  reason: "{{ 'ProtectedChildren' if _entity_cascade.tier.protected else 'WaitingForDependents' }}"
+                  message: >-
+                    {{ ('Deletion protection is on for ' ~ (_entity_cascade.tier.protected | map(attribute='name') | join(', ')))
+                       if _entity_cascade.tier.protected else ('Waiting for ' ~ (_entity_cascade.tier.left | join(', '))) }}
+                  lastTransitionTime: "{{ entity_delete_transition_time }}"
 
         - name: Requeue until the tier is gone
           ansible.builtin.fail:
             msg: >-
-              Entity teardown waits for {{ (_entity_tier_json | from_json).left | join(', ') }}
-              (tier {{ (_entity_tier_json | from_json).index }}/{{ entity_teardown_tiers | length }})
+              Entity teardown waits for {{ (_entity_cascade.tier.left + (_entity_cascade.tier.protected | map(attribute='name') | list)) | join(', ') }}
+              (tier {{ _entity_cascade.tier.index }}/{{ _entity_tiers | length }})
+
+    - name: Record that the cascade is done
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: Entity
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          phase: Deleting
+          phaseSince: "{{ _entity_phase_since }}"
+          summary: Being deleted.
+          deletionBlockedBy: []
+          conditions:
+            - type: DeletionBlocked
+              status: "False"
+              reason: AsExpected
+              message: ""
+              lastTransitionTime: "{{ entity_delete_transition_time }}"
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:
@@ -117,6 +267,8 @@
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('Deletion failed')) }}"
       ignore_errors: true
+      # a cascade that waits for its tiers is Deleting, not failed: the status it set stays
+      when: not (ansible_failed_result.msg | default('') is match('Entity teardown waits for '))
 
     - name: Re-raise to signal finalizer failure
       ansible.builtin.fail:
