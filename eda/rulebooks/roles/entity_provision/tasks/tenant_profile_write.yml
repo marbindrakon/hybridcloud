@@ -1,0 +1,36 @@
+---
+# Create the tenant's TenantProfile "shc" (spec {}) and merge-patch its status with tenant_profile_status
+# (tenant_profile_compute.yml). Keys set to None are sent as JSON null and removed; status.conditions is never sent
+# (the shc-tenancy CronJob writes it).
+# Input: entity_cr_name, entity_namespace, tenant_profile_status, services_api_host/services_bearer_token.
+- name: Create the tenant profile
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    state: present
+    definition:
+      apiVersion: hybridsovereign.redhat/v1alpha1
+      kind: TenantProfile
+      metadata:
+        name: shc
+        namespace: "{{ entity_namespace }}"
+        labels:
+          app.kubernetes.io/managed-by: entity-operator
+          app.kubernetes.io/part-of: hybridsovereign
+          hybridsovereign.redhat/entity: "{{ entity_cr_name }}"
+      spec: {}
+
+- name: Write the tenant profile's status
+  ansible.builtin.uri:
+    url: "{{ services_api_host | trim }}/apis/hybridsovereign.redhat/v1alpha1/namespaces/{{ entity_namespace }}/tenantprofiles/shc/status"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ services_bearer_token | trim }}"
+      Content-Type: application/merge-patch+json
+    body_format: json
+    body:
+      status: "{{ tenant_profile_status }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    status_code: [200]
+  register: _tp_write

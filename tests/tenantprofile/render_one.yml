@@ -1,0 +1,24 @@
+---
+# One Entity of render.yml: read it, run the production compute task (as the Entity job does), keep the result.
+- name: Read Entity {{ render_entity }}
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ services_kubeconfig }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Entity
+    name: "{{ render_entity }}"
+    namespace: "{{ platform_namespace }}"
+  register: _entity
+
+- name: Compute the profile of {{ render_entity }}
+  ansible.builtin.include_role:
+    name: "{{ playbook_dir }}/../../eda/rulebooks/roles/entity_provision"
+    tasks_from: tenant_profile_compute.yml
+  vars:
+    entity_cr_name: "{{ render_entity }}"
+    entity_cr_namespace: "{{ platform_namespace }}"
+    entity_spec: "{{ _entity.resources[0].spec | default({}) }}"
+    entity_generation: "{{ _entity.resources[0].metadata.generation | default(0) }}"
+
+- name: Keep it
+  ansible.builtin.set_fact:
+    rendered_profiles: "{{ rendered_profiles | default({}) | combine({render_entity: tenant_profile_status}) }}"

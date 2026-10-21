@@ -129,6 +129,16 @@
               hybridsovereign.redhat/description: "{{ entity_description }}"
               hybridsovereign.redhat/website-link: "{{ entity_website_link }}"
               hybridsovereign.redhat/console-url: "{{ entity_console_url }}"
+              # the console's project list shows the tenant's name
+              openshift.io/display-name: "{{ entity_spec.displayName | default(entity_cr_name, true) }}"
+              openshift.io/description: "{{ entity_description }}"
+
+    # the tenant's own read-only summary (TenantProfile shc): display name, contacts, the sites it may use
+    - name: Compute the tenant profile
+      ansible.builtin.include_tasks: tenant_profile_compute.yml
+
+    - name: Write the tenant profile
+      ansible.builtin.include_tasks: tenant_profile_write.yml
 
     - name: Generate namespace Roles and RoleBindings for named RBAC roles
       ansible.builtin.include_tasks: namespace_roles.yml

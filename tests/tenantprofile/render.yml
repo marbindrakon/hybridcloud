@@ -1,0 +1,45 @@
+---
+# Read-only dry run of the Entity job's tenant profile (entity_provision/tasks/tenant_profile_compute.yml) against a
+# cluster: prints the TenantProfile status each Entity would get and fails when a profile carries a string that
+# must never reach tenants (URLs, cloud resource ids, long digit runs). Writes nothing.
+#   ansible-playbook -i localhost, -c local tests/tenantprofile/render.yml \
+#     -e services_kubeconfig=<kubeconfig> [-e '{"render_entities": ["acme-corp"]}'] [-e render_out=<file>]
+- name: Tenant profile render (read only)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    platform_namespace: sovereign-cloud
+    render_entities: []
+    forbidden: '(https?://|vpc-|tgw-|subnet-|sg-|vault|[0-9]{9,})'
+  tasks:
+    - name: List the Entities
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ services_kubeconfig }}"
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: Entity
+        namespace: "{{ platform_namespace }}"
+      register: _entities
+
+    - name: Compute each profile
+      ansible.builtin.include_tasks: render_one.yml
+      loop: >-
+        {{ _entities.resources | map(attribute='metadata.name') | list
+           if render_entities | length == 0 else render_entities }}
+      loop_control:
+        loop_var: render_entity
+
+    - name: Show the profiles
+      ansible.builtin.debug:
+        var: rendered_profiles
+
+    - name: Write them
+      ansible.builtin.copy:
+        content: "{{ rendered_profiles | to_nice_yaml(indent=2) }}"
+        dest: "{{ render_out }}"
+        mode: "0644"
+      when: render_out is defined
+
+    - name: No endpoint, id, account or Vault string in any profile
+      ansible.builtin.assert:
+        that: (rendered_profiles | to_json) is not search(forbidden, ignorecase=true)
+        fail_msg: "a tenant profile carries a platform detail: {{ (rendered_profiles | to_json) | regex_findall(forbidden, ignorecase=true) | unique }}"
