@@ -787,7 +787,9 @@
     "noAccessHint": "Votre rôle ne vous permet pas de voir ces objets.",
     "kindsNotVisible_one": "{{count}} type ne vous est pas visible.",
     "kindsNotVisible_other": "{{count}} types ne vous sont pas visibles.",
-    "readOnlyAllTenants": "La vue Tous les locataires est en lecture seule. Ouvrez le locataire pour modifier ses objets."
+    "readOnlyAllTenants": "La vue Tous les locataires est en lecture seule. Ouvrez le locataire pour modifier ses objets.",
+    "sharedWithYou_one": "Vous ne pouvez pas tous les lister ; {{count}} est partagé avec vous.",
+    "sharedWithYou_other": "Vous ne pouvez pas tous les lister ; {{count}} sont partagés avec vous."
   },
   "errors": {
     "sessionEnded": "Votre session a expiré. Reconnectez-vous.",

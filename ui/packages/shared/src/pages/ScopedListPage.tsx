@@ -9,6 +9,8 @@ import { normalizeHealth } from '../components/StatusBadge';
 import { ResourceListTable, filterResourcesByQuery } from '../components/ResourceListTable';
 import { GatedButton } from '../access/GatedButton';
 import { useScopedResourceList } from '../hooks/scopedList';
+import { classifyError } from '../hooks/errors';
+import { useSharedWithYou } from '../access/sharedWithYou';
 import { useBreadcrumbs, useDocumentTitle, useNav } from '../nav/useNav';
 import type { K8sResource } from '../types';
 import { usePageEntry } from './usePageEntry';
@@ -35,6 +37,10 @@ export function ScopedListPage({ entryId, children, hideHeader = false }: Scoped
   const crumbs = useBreadcrumbs(entryId);
   useDocumentTitle(entryId);
   const list = useScopedResourceList<K8sResource>(kind ?? 'Entity', { namespace, enabled: !!kind });
+  // A list the user may not read can still hold objects shared with them by name (NC-13).
+  const forbidden = !!list.error && classifyError(list.error) === 'forbidden';
+  const shared = useSharedWithYou(kind ?? 'Entity', namespace, forbidden && !allTenants && !!kind);
+  const showShared = forbidden && shared.items.length > 0;
 
   const filtered = useMemo(() => {
     if (!kind) return [];
@@ -66,6 +72,9 @@ export function ScopedListPage({ entryId, children, hideHeader = false }: Scoped
         <Alert variant="info" isInline isPlain title={t('access.readOnlyAllTenants')} className="sc-mb" />
       )}
       {children}
+      {showShared && (
+        <Alert variant="info" isInline isPlain title={t('access.sharedWithYou', { count: shared.items.length })} className="sc-mb" />
+      )}
       <FilterToolbar
         search={search}
         onSearchChange={setSearch}
@@ -76,13 +85,13 @@ export function ScopedListPage({ entryId, children, hideHeader = false }: Scoped
       />
       <ResourceListTable
         kind={kind}
-        items={filtered}
-        loading={list.loading}
-        error={list.error}
+        items={showShared ? shared.items : filtered}
+        loading={list.loading || shared.loading}
+        error={showShared ? null : list.error}
         showNamespace={allTenants}
         linkMode="router"
         detailHref={detailHref}
-        enableDelete={!allTenants}
+        enableDelete={!allTenants && !showShared}
         onDeleted={list.refresh}
         onRetry={list.refresh}
       />

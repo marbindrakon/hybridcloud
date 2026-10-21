@@ -16,3 +16,4 @@ export type { UsePermissionResult, PermissionReason } from './PermissionProvider
 export { GatedButton } from './GatedButton';
 export type { GatedButtonProps } from './GatedButton';
 export { ForbiddenState, UnavailableState, UnavailablePage } from './ForbiddenState';
+export { sharedNames, useSharedWithYou } from './sharedWithYou';

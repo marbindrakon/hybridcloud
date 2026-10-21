@@ -413,6 +413,15 @@ export async function createDashboardResource(
   });
 }
 
+/** One object by name (curated route or raw API, as configured); throws K8sApiError. */
+export async function fetchResource<T extends K8sResource>(
+  kind: HybridSovereignKind,
+  name: string,
+  namespace?: string,
+): Promise<T> {
+  return k8sFetchJson<T>(buildResourceUrl(kind, name, namespace), undefined, { kind, verb: 'get', namespace, name });
+}
+
 /** One list request (curated route or raw API, as configured); throws K8sApiError. */
 export async function fetchResourceList<T extends K8sResource>(
   kind: HybridSovereignKind,

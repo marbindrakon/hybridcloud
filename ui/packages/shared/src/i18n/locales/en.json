@@ -787,7 +787,9 @@
     "noAccessHint": "Your role does not let you see these objects.",
     "kindsNotVisible_one": "{{count}} kind is not visible to you.",
     "kindsNotVisible_other": "{{count}} kinds are not visible to you.",
-    "readOnlyAllTenants": "All tenants is a read-only view. Open the tenant to change its objects."
+    "readOnlyAllTenants": "All tenants is a read-only view. Open the tenant to change its objects.",
+    "sharedWithYou_one": "You may not list all of these; {{count}} is shared with you.",
+    "sharedWithYou_other": "You may not list all of these; {{count}} are shared with you."
   },
   "errors": {
     "sessionEnded": "Your session ended. Sign in again.",

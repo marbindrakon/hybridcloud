@@ -7,6 +7,7 @@ export {
   getK8sClientConfig,
   k8sFetchJson,
   fetchResourceList,
+  fetchResource,
   updateDashboardResource,
   useCanI,
   useK8sResource,
