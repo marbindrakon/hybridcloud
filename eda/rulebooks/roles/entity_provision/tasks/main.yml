@@ -72,6 +72,33 @@
       ansible.builtin.set_fact:
         label_billing_id: "{{ entity_billing_id | regex_replace('[^A-Za-z0-9._-]', '-') | truncate(63, true, '') }}"
 
+    # never adopt a namespace that was not created for this Entity (the primary operator refuses it first)
+    - name: Read the entity namespace on services cluster
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Namespace
+        name: "{{ entity_namespace }}"
+      register: entity_namespace_lookup
+
+    - name: Refuse a namespace that was not created for this Entity
+      when:
+        - entity_namespace_lookup.resources | length > 0
+        - ((entity_namespace_lookup.resources[0].metadata.labels | default({}, true))['hybridsovereign.redhat/entity']
+           | default('')) != entity_cr_name
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            entity_failure_reason: NamespaceNotOwned
+
+        - name: Stop before touching the namespace
+          ansible.builtin.fail:
+            msg: >-
+              Namespace {{ entity_namespace }} already exists and was not created for this tenant. The platform
+              team must remove or rename it; then use Retry now.
+
     - name: Create entity namespace with labels
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"
@@ -159,7 +186,7 @@
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ entity_failure_reason | default('EDAFailed') }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
