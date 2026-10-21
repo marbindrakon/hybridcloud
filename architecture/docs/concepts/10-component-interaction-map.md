@@ -69,8 +69,9 @@ flowchart TD
 
 | Location | Components |
 |----------|------------|
-| Services — `sovereign-cloud` | Entity, Persona, Team, Assignment, Project, PlatformOpenshift, CloudOSO, CloudAWS, dashboards |
-| Services — `sovereign-cloud-plugins` | plugin_rbac, plugin_vault, plugin_aap, plugin_quay, plugin_sdx |
+| Services — `sovereign-cloud` | Primary operator, dashboards, console plugins |
+| Services — `entity-<tenant>` | Namespace operator (tenant kinds: Team, Assignment, Project, PlatformOpenshift, environments, networks, ...) |
+| Services — `sovereign-cloud-plugins` | `iaac-git-sync` (Git export); the `*Config` connection CRs |
 | Central — `sovereign-cloud-jobs` | Ansible Jobs, EDA config, AAP controller config |
 | Central — `aap` | AAP Controller, EDA controller |
 
@@ -142,16 +143,16 @@ flowchart TD
 
 ## Diagram 5: Plugin Operator Wiring
 
-Plugin operators reconcile entity-scoped CRs against shared `*Config` CRs in `sovereign-cloud-plugins`. Each plugin integrates with a platform service: Keycloak for RBAC, Vault for secrets, AAP for automation orgs, Quay for registries. Plugin SDX (`plugin_sdx`) is a Go controller that watches all tenancy CRs cluster-wide and syncs stripped YAML to Gitea on central — it does not use the EDA event path.
+The plugin kinds (Rbac, Vault, AAPOrg, QuayOrg) are reconciled through the operators and EDA against the shared `*Config` CRs in `sovereign-cloud-plugins`. Each integrates with a platform service: Keycloak for access groups, Vault for secrets, AAP for automation orgs, Quay for registries. The Git export (`iaac-git-sync`) watches all tenancy CRs and syncs stripped YAML to Gitea on central; it does not use the EDA event path. (The Go Plugin SDX controller it replaced is retired.)
 
 ```mermaid
 flowchart TD
     NS["Entity namespace CRs"]
-    RBAC["plugin_rbac"]
-    VaultP["plugin_vault"]
-    AAP["plugin_aap"]
-    Quay["plugin_quay"]
-    SDX["plugin_sdx"]
+    RBAC["Rbac (EDA rbac roles)"]
+    VaultP["Vault / VaultKV (EDA vault roles)"]
+    AAP["AAPOrg (EDA aaporg roles)"]
+    Quay["QuayOrg (EDA quayorg roles)"]
+    SDX["iaac-git-sync"]
     KC["Keycloak"]
     Vault["Vault"]
     AAPCtrl["AAP Controller"]
@@ -181,5 +182,5 @@ flowchart TD
 | Entity operator | [../technical/17-entity-operator.md](../archive/technical/17-entity-operator.md) |
 | Assignment operator | [../technical/12-assignment-operator.md](../archive/technical/12-assignment-operator.md) |
 | Persona operator | [../technical/45-persona-operator.md](../archive/technical/45-persona-operator.md) |
-| Plugin SDX | [../archive/technical/25-plugin-iaac.md](../archive/technical/25-plugin-iaac.md) |
+| Plugin SDX (retired) | [../archive/technical/25-plugin-iaac.md](../archive/technical/25-plugin-iaac.md) |
 | Leadership deck | [09-leadership-demo-deck.md](../archive/concepts/09-leadership-demo-deck.md) |
