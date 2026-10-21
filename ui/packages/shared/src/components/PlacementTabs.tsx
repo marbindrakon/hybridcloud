@@ -29,20 +29,23 @@ export function placementBlock(p: NetworkPlacement): string {
   return '';
 }
 
-function NameLink({ kind, name }: { kind: string; name: string }): React.ReactElement {
+function NameLink({ kind, name, from }: { kind: string; name: string; from?: string }): React.ReactElement {
   const routeFor = useRouteFor();
   const href = routeFor(kind, name);
-  return href ? <Link to={href}>{name}</Link> : <>{name}</>;
+  // ?from=<Kind>/<name>: the placement page's breadcrumb leads back to the page it was opened from (N5).
+  return href ? <Link to={from ? `${href}?from=${encodeURIComponent(from)}` : href}>{name}</Link> : <>{name}</>;
 }
 
 function PlacementTable({
   rows,
   other,
   otherLabel,
+  from,
 }: {
   rows: NetworkPlacement[];
   other: (p: NetworkPlacement) => { kind: string; name: string; label: string };
   otherLabel: string;
+  from: string;
 }): React.ReactElement {
   const { t } = useTranslation();
   return (
@@ -62,7 +65,7 @@ function PlacementTable({
           return (
             <Tr key={p.metadata.name}>
               <Td dataLabel={t('kindsOne.NetworkPlacement')}>
-                <NameLink kind="NetworkPlacement" name={p.metadata.name} />
+                <NameLink kind="NetworkPlacement" name={p.metadata.name} from={from} />
               </Td>
               <Td dataLabel={otherLabel}>
                 {o.label} <NameLink kind={o.kind} name={o.name} />
@@ -157,6 +160,7 @@ export function EnvironmentNetworksTab({
           rows={rows}
           otherLabel={t('kindsOne.HybridNetwork')}
           other={(p) => ({ kind: 'HybridNetwork', name: p.spec.network, label: '' })}
+          from={`${kind}/${name}`}
         />
       )}
       <AttachNetworkDialog
@@ -207,6 +211,7 @@ export function NetworkEnvironmentsTab({
           rows={rows}
           otherLabel={t('attach.environment')}
           other={(p) => ({ kind: p.spec.backend.kind, name: p.spec.backend.name, label: t(`kindsOne.${p.spec.backend.kind}`) })}
+          from={`HybridNetwork/${network}`}
         />
       )}
       <AttachNetworkDialog
