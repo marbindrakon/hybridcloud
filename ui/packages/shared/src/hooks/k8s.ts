@@ -6,7 +6,7 @@ import {
   K8sResource,
 } from '../types';
 import { usePermissions } from './permissions';
-import { errorFromResponse, K8sApiErrorContext, networkError, parseWarningHeaders } from './errors';
+import { errorFromFetchFailure, errorFromResponse, K8sApiErrorContext, parseWarningHeaders } from './errors';
 import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs } from './fetchState';
 import { isInFlight, phaseOf } from '../status/phase';
 
@@ -318,6 +318,16 @@ export function addForbiddenListener(fn: () => void): () => void {
   };
 }
 
+function notifyForbidden(): void {
+  forbiddenListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      /* listener problems never mask the API answer */
+    }
+  });
+}
+
 /** A successful answer with the Kubernetes `Warning` headers that came with it. */
 export interface K8sAnswer<T> {
   body: T;
@@ -327,7 +337,8 @@ export interface K8sAnswer<T> {
 /**
  * Fetch JSON from the configured API base and keep the answer's `Warning`
  * headers. A failed answer throws `K8sApiError` (status, reason, causes,
- * warnings); a request that never got an answer throws one with status 0.
+ * warnings), also when the configured fetch function throws it (consoleFetch);
+ * a request that never got an answer throws one with status 0.
  */
 export async function k8sFetchWithWarnings<T>(
   url: string,
@@ -346,18 +357,13 @@ export async function k8sFetchWithWarnings<T>(
   try {
     response = await fetchImpl(url, { ...init, headers });
   } catch (err) {
-    throw networkError(err, ctx);
+    // consoleFetch throws its HttpError for every non-2xx answer: keep the status and Status body.
+    const error = errorFromFetchFailure(err, ctx);
+    if (error.status === 403) notifyForbidden();
+    throw error;
   }
   if (!response.ok) {
-    if (response.status === 403) {
-      forbiddenListeners.forEach((fn) => {
-        try {
-          fn();
-        } catch {
-          /* listener problems never mask the API answer */
-        }
-      });
-    }
+    if (response.status === 403) notifyForbidden();
     throw await errorFromResponse(response, ctx);
   }
   const warnings = parseWarningHeaders(response.headers) ?? [];

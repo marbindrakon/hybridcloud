@@ -152,11 +152,56 @@ export async function errorFromResponse(
   return parseStatusBody(response.status, response.statusText, text, ctx, parseWarningHeaders(response.headers));
 }
 
-/** Wrap a transport failure (fetch rejected) so it carries status 0. */
+/** Wrap a transport failure (fetch rejected without an answer) so it carries status 0; see errorFromFetchFailure. */
 export function networkError(err: unknown, ctx: K8sApiErrorContext = {}): K8sApiError {
   if (isK8sApiError(err)) return err;
   const detail = err instanceof Error ? err.message : String(err);
   return new K8sApiError(0, detail, { reason: 'NetworkError', ...ctx });
+}
+
+/**
+ * An HTTP answer that the fetch function threw instead of returning: the
+ * OpenShift console's consoleFetch rejects every non-2xx answer with an
+ * HttpError `{ code, message, json, response }`.
+ */
+interface ThrownHttpAnswer {
+  code: number;
+  message?: string;
+  json?: unknown;
+  response?: { headers?: Headers };
+}
+
+function isThrownHttpAnswer(err: unknown): err is ThrownHttpAnswer {
+  const code = (err as { code?: unknown } | null)?.code;
+  // DOMException codes (AbortError 20, TimeoutError 23) and Node's string codes are transport failures.
+  return typeof code === 'number' && Number.isInteger(code) && code >= 100 && code <= 599;
+}
+
+/**
+ * The error for a rejected fetch. An HTTP answer the fetch function threw
+ * (consoleFetch HttpError) keeps its status and Status body (reason, causes);
+ * only a request that never got an answer (network, abort, timeout) gets status 0.
+ */
+export function errorFromFetchFailure(err: unknown, ctx: K8sApiErrorContext = {}): K8sApiError {
+  if (isK8sApiError(err)) return err;
+  if (isThrownHttpAnswer(err)) {
+    let bodyText = '';
+    if (err.json !== undefined && err.json !== null) {
+      try {
+        bodyText = typeof err.json === 'string' ? err.json : JSON.stringify(err.json);
+      } catch {
+        bodyText = '';
+      }
+    }
+    let warnings: string[] | undefined;
+    try {
+      warnings = parseWarningHeaders(err.response?.headers);
+    } catch {
+      warnings = undefined;
+    }
+    return parseStatusBody(err.code, typeof err.message === 'string' ? err.message : '', bodyText, ctx, warnings);
+  }
+  return networkError(err, ctx);
 }
 
 export type ErrorClass =
