@@ -7,6 +7,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
 import { createRequirePlatform } from "../../shared/server/platformGate.js";
+import { createPermissionsHandler } from "../../shared/server/permissions.js";
 import { userToken } from "../../shared/server/upstream.js";
 import { sendStatus } from "../../shared/server/errors.js";
 
@@ -108,6 +109,8 @@ app.get("/api/user", (req, res) => {
     email: req.user.email,
   });
 });
+
+app.get("/api/permissions", createPermissionsHandler({ apiServer: OCP_API }));
 
 // Transparent K8s API proxy used by PatternFly UI shared hooks (/api/k8s/apis/...)
 app.use("/api/k8s", createApiK8sProxy(OCP_API));

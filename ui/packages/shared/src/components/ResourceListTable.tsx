@@ -30,6 +30,10 @@ import {
   resourceSearchBlob,
 } from '../list/listColumns';
 import { deleteDashboardResource } from '../hooks/k8s';
+import { classifyError } from '../hooks/errors';
+import { ForbiddenState, UnavailableState } from '../access/ForbiddenState';
+import { usePermissionsFor, useScopeGateNamespace } from '../access/PermissionProvider';
+import { errorText } from '../access/errorText';
 
 export interface ResourceListTableProps {
   kind: HybridSovereignKind;
@@ -47,6 +51,8 @@ export interface ResourceListTableProps {
   enableDelete?: boolean;
   /** Called after a successful delete so the parent can refresh */
   onDeleted?: () => void;
+  /** Offered as "Try again" when the list failed for another reason than access. */
+  onRetry?: () => void;
 }
 
 function isMarker(v: unknown): v is CellMarker {
@@ -155,10 +161,16 @@ export function ResourceListTable({
   linkMode = 'router',
   showNamespace = false,
   emptyMessage,
-  enableDelete = false,
+  enableDelete: enableDeleteProp = false,
   onDeleted,
+  onRetry,
 }: ResourceListTableProps): React.ReactElement {
   const { t } = useTranslation();
+  // Row delete only where the permission gate allows it (UX-112); the API stays authoritative.
+  // Without a scope (pages not yet on the scope provider) the rows' namespace is used.
+  const scopeNs = useScopeGateNamespace();
+  const perms = usePermissionsFor(kind, { namespace: scopeNs ? undefined : items[0]?.metadata.namespace });
+  const enableDelete = enableDeleteProp && perms.can('delete');
   const columns = useMemo(() => getListColumns(kind, { showNamespace }), [kind, showNamespace]);
   const [sortId, setSortId] = useState<string>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -182,7 +194,8 @@ export function ResourceListTable({
       setPendingDelete(null);
       onDeleted?.();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Delete failed');
+      const txt = errorText(err, t, { kindLabel: t(`kinds.${kind}`), action: 'action' });
+      setDeleteError([txt.title, txt.body].filter(Boolean).join(' '));
     } finally {
       setDeleting(false);
     }
@@ -248,17 +261,22 @@ export function ResourceListTable({
     [kind, detailHref, showNamespace, t, linkMode],
   );
 
+  // A failed list never shows rows (or an empty table): forbidden says who can
+  // grant access, anything else says what happened (design section 6, UX-057).
+  if (error) {
+    return classifyError(error) === 'forbidden' ? (
+      <ForbiddenState kind={kind} />
+    ) : (
+      <UnavailableState error={error} kind={kind} onRetry={onRetry} />
+    );
+  }
+
   if (loading && items.length === 0) {
     return <Spinner aria-label={t('pages.loadingKind', { kind })} />;
   }
 
   return (
     <>
-      {error && (
-        <Alert variant="warning" title={t('common.k8sUnavailable')} isInline className="sc-mb">
-          {error.message}. {t('common.k8sUnavailableHint')}
-        </Alert>
-      )}
 
       {items.length > 0 && (
         <div className="sc-list-summary">

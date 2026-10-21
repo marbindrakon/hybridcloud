@@ -6,7 +6,7 @@ import '@hybridsovereign/shared/styles/openshift.css';
 import { configureK8sClient, configurePermissionsClient } from '@hybridsovereign/shared';
 import { App } from './App';
 
-// Admin uses raw K8s proxy + /api/overview/crs aggregator
+// Admin uses the raw API proxy (/api/k8s) with the caller's token
 configureK8sClient({ apiStyle: 'raw', baseUrl: '/api/k8s' });
 configurePermissionsClient('/api/k8s', { style: 'can-i' });
 

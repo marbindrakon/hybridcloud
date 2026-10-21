@@ -15,6 +15,9 @@ entries=(
   "hooks/errors.ts:errors"
   "scope/parseGroups.ts:parseGroups"
   "scope/ScopeProvider.tsx:scopeProvider"
+  "access/errorText.ts:errorText"
+  "access/roleHints.ts:roleHints"
+  "access/permissionGate.ts:permissionGate"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

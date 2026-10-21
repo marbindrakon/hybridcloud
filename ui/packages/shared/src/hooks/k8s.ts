@@ -20,6 +20,8 @@ export interface K8sClientConfig {
    * dashboard = curated Express routes (/api/teams?namespace=...) returning item arrays
    */
   apiStyle?: K8sApiStyle;
+  /** Dashboard permission batch endpoint (default /api/permissions); unused by the console (ssar). */
+  permissionsEndpoint?: string;
 }
 
 export interface UseK8sResourceListOptions {
@@ -252,6 +254,13 @@ export async function updateDashboardResource(
   });
 }
 
+let forbiddenListener: (() => void) | null = null;
+
+/** Called on every 403 answer (the permission gate drops its cache then). */
+export function setForbiddenListener(fn: (() => void) | null): void {
+  forbiddenListener = fn;
+}
+
 /**
  * Fetch JSON from the configured API base. A failed answer throws `K8sApiError`
  * (status, reason, causes, warnings); a request that never got an answer throws
@@ -277,6 +286,13 @@ export async function k8sFetchJson<T>(
     throw networkError(err, ctx);
   }
   if (!response.ok) {
+    if (response.status === 403 && forbiddenListener) {
+      try {
+        forbiddenListener();
+      } catch {
+        /* listener problems never mask the API answer */
+      }
+    }
     throw await errorFromResponse(response, ctx);
   }
   // DELETE / some PATCHes return 200 with body, 202 Accepted, or 204 No Content.

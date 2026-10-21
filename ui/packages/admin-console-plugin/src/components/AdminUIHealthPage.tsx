@@ -16,6 +16,7 @@ import {
   PageHeader,
   useK8sResourceList,
   useTranslation,
+  errorText,
 } from '@hybridsovereign/shared';
 import '@hybridsovereign/shared/styles/openshift.css';
 
@@ -157,8 +158,8 @@ const AdminUIHealthPage: React.FC = () => {
         />
 
         {error && (
-          <Alert variant="warning" isInline title={t('common.k8sUnavailable')} className="sc-mb">
-            {error.message}
+          <Alert variant="warning" isInline title={errorText(error, t).title} className="sc-mb">
+            {errorText(error, t).body}
           </Alert>
         )}
 

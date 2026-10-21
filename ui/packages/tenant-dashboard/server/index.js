@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createK8sHandlers } from "./k8s-proxy.js";
 import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
+import { createPermissionsHandler } from "../../shared/server/permissions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -109,7 +110,7 @@ const k8s = createK8sHandlers(OCP_API);
 // Namespaces & configs
 app.get("/api/entities", requireAuth, k8s.listEntities);
 app.get("/api/namespaces", requireAuth, k8s.listNamespaces);
-app.get("/api/permissions", requireAuth, k8s.getPermissions);
+app.get("/api/permissions", requireAuth, createPermissionsHandler({ apiServer: OCP_API }));
 app.get("/api/rbacconfigs", requireAuth, k8s.listRbacConfigs);
 app.get("/api/aapconfigs", requireAuth, k8s.listAAPConfigs);
 app.get("/api/quayconfigs", requireAuth, k8s.listQuayConfigs);
