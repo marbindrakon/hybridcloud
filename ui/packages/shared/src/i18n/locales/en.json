@@ -456,6 +456,25 @@
     "serverRefused": "The platform refused the change",
     "inNamespace": "In {{namespace}}"
   },
+  "entityForm": {
+    "displayNameHelp": "Name people see in consoles and dashboards; it can change later. At most 64 characters.",
+    "billingHelp": "Billing identifier, also set as a label on the tenant namespace; it cannot be changed later.",
+    "contacts": "Contacts",
+    "contactName": "Name",
+    "contactEmail": "E-mail",
+    "contactUrl": "Web page or ticket queue",
+    "addContact": "Add contact",
+    "contactsHelp": "Who this tenant's users contact about access and the tenant; shown to them. At most 10.",
+    "contactsInvalid": "Each contact needs a name; an e-mail address needs an @ and a web page starts with https://.",
+    "allowedSites": "Allowed sites",
+    "allowedSitesPlaceholder": "Every site that allows this tenant",
+    "allowedSitesAll": "Nothing chosen: environments may use every site that allows this tenant ({{count}} now).",
+    "allowedSitesSome": "Environments may use only the {{count}} chosen site(s); an environment on another site is refused.",
+    "sitesNotListing": "Not offered, restricted to other tenants: {{names}}.",
+    "sitesUnavailable": "The site list cannot be read; the stored choice is kept.",
+    "noSites": "No site allows this tenant",
+    "siteNotOffered": "{{name}} (no longer allows this tenant)"
+  },
   "fields": {
     "description": "Description",
     "entity": "Entity (tenant)",

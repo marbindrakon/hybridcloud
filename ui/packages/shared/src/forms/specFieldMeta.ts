@@ -18,6 +18,8 @@ export type SpecFieldWidget =
   | 'rbacRefList'
   /** One access group (Rbac) name in the object's namespace */
   | 'rbacRef'
+  /** Site names (CloudInfrastructure) that allow this tenant; Entity.spec.allowedSites */
+  | 'allowedSites'
   /** The name of an object of refKind in the object's namespace */
   | 'refName';
 
@@ -42,6 +44,11 @@ export interface SpecFieldColumn {
   emptyLabelKey?: string;
   /** Disabled on items that existed before editing (list-map items whose field is fixed) */
   lockedOnExisting?: boolean;
+  /** Flag the cell when the row has other values but this one is empty */
+  required?: boolean;
+  /** Flag a non-empty cell that does not match (regular expression source) */
+  pattern?: string;
+  placeholder?: string;
 }
 
 export interface SpecFieldMeta {
@@ -115,9 +122,24 @@ const VNI = { min: 1, max: 16777215 };
 export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> = {
   Entity: {
     fields: [
+      { path: 'displayName', labelKey: 'fields.displayName', widget: 'text', omitWhenEmpty: true, helpKey: 'entityForm.displayNameHelp' },
       { path: 'description', labelKey: 'fields.description', widget: 'textarea' },
       { path: 'billingID', labelKey: 'fields.billingID', widget: 'text', immutable: true },
       { path: 'websiteLink', labelKey: 'fields.websiteLink', widget: 'text' },
+      {
+        path: 'contacts',
+        labelKey: 'entityForm.contacts',
+        widget: 'objectList',
+        omitWhenEmpty: true,
+        maxItems: 10,
+        helpKey: 'entityForm.contactsHelp',
+        columns: [
+          { key: 'name', labelKey: 'entityForm.contactName', required: true },
+          { key: 'email', labelKey: 'entityForm.contactEmail', pattern: '^[^\\s@]+@[^\\s@]+$' },
+          { key: 'url', labelKey: 'entityForm.contactUrl', pattern: '^https://', placeholder: 'https://' },
+        ],
+      },
+      { path: 'allowedSites', labelKey: 'entityForm.allowedSites', widget: 'allowedSites', omitWhenEmpty: true },
     ],
   },
   Team: {

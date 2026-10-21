@@ -456,6 +456,25 @@
     "serverRefused": "La plateforme a refusé le changement",
     "inNamespace": "Dans {{namespace}}"
   },
+  "entityForm": {
+    "displayNameHelp": "Nom affiché dans les consoles et les tableaux de bord ; il peut changer plus tard. 64 caractères au plus.",
+    "billingHelp": "Identifiant de facturation, aussi posé comme libellé sur l'espace de noms du locataire ; il ne peut plus changer.",
+    "contacts": "Contacts",
+    "contactName": "Nom",
+    "contactEmail": "Courriel",
+    "contactUrl": "Page web ou file de tickets",
+    "addContact": "Ajouter un contact",
+    "contactsHelp": "Qui les utilisateurs de ce locataire contactent pour les accès et le locataire ; affiché pour eux. 10 au plus.",
+    "contactsInvalid": "Chaque contact a besoin d'un nom ; un courriel contient un @ et une page web commence par https://.",
+    "allowedSites": "Sites autorisés",
+    "allowedSitesPlaceholder": "Tous les sites qui autorisent ce locataire",
+    "allowedSitesAll": "Aucun choix : les environnements peuvent utiliser tous les sites qui autorisent ce locataire ({{count}} aujourd'hui).",
+    "allowedSitesSome": "Les environnements ne peuvent utiliser que le ou les {{count}} site(s) choisis ; un environnement sur un autre site est refusé.",
+    "sitesNotListing": "Non proposés, réservés à d'autres locataires : {{names}}.",
+    "sitesUnavailable": "La liste des sites est illisible ; le choix enregistré est conservé.",
+    "noSites": "Aucun site n'autorise ce locataire",
+    "siteNotOffered": "{{name}} (n'autorise plus ce locataire)"
+  },
   "fields": {
     "description": "Description",
     "entity": "Entité (locataire)",

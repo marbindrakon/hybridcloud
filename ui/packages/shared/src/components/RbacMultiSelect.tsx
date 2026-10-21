@@ -26,6 +26,10 @@ export interface RbacMultiSelectProps {
   helperText?: string;
   /** Field error (for example from the API's refusal). */
   error?: string;
+  /** Text of the menu when there is nothing to choose (default: no access groups). */
+  emptyText?: string;
+  /** Read-only: the chips stay, the menu and the chip close buttons go. */
+  isDisabled?: boolean;
 }
 
 /** Multi-select dropdown of Rbac CR names (chip + checkbox PatternFly Select). */
@@ -39,6 +43,8 @@ export function RbacMultiSelect({
   placeholder,
   helperText,
   error,
+  emptyText,
+  isDisabled,
 }: RbacMultiSelectProps): React.ReactElement {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
@@ -50,6 +56,7 @@ export function RbacMultiSelect({
       ref={toggleRef}
       onClick={() => setIsOpen((o) => !o)}
       isExpanded={isOpen}
+      isDisabled={isDisabled}
       style={{ width: '100%' }}
       aria-label={label}
     >
@@ -72,7 +79,7 @@ export function RbacMultiSelect({
       {selected.length > 0 && (
         <LabelGroup numLabels={12} className="pf-v6-u-mb-sm">
           {selected.map((name) => (
-            <Label key={name} color="blue" onClose={() => onChange(selected.filter((s) => s !== name))}>
+            <Label key={name} color="blue" onClose={isDisabled ? undefined : () => onChange(selected.filter((s) => s !== name))}>
               {name}
             </Label>
           ))}
@@ -90,7 +97,7 @@ export function RbacMultiSelect({
         <SelectList>
           {options.length === 0 ? (
             <SelectOption isDisabled value="">
-              {t('form.noAccessGroups')}
+              {emptyText ?? t('form.noAccessGroups')}
             </SelectOption>
           ) : (
             options.map((o) => (

@@ -12,6 +12,7 @@ import {
 } from '@patternfly/react-core';
 import { updateDashboardResource, useK8sResourceList } from '../hooks/k8s';
 import { RbacMultiSelect } from '../components/RbacMultiSelect';
+import { AllowedSitesSelect } from '../components/AllowedSitesSelect';
 import { errorText } from '../access/errorText';
 import { causeLines, fieldErrorsFrom } from './apiErrors';
 import { useServerCheckWith } from './useServerCheck';
@@ -114,12 +115,22 @@ function ObjectListField({
         ],
       };
     }
+    const re = c.pattern ? new RegExp(c.pattern) : null;
+    const filled = (v: unknown) => String(v ?? '').trim() !== '';
     return {
       key: c.key,
       label: t(c.labelKey),
       type: c.type,
       lockedOnExisting: c.lockedOnExisting,
+      placeholder: c.placeholder,
       options: c.options?.map((o) => ({ value: o.value, label: t(o.labelKey) })),
+      validate:
+        c.required || re
+          ? (v: unknown, row: ObjectListRow) => {
+              if (c.required && !filled(v) && Object.keys(row).some((k) => k !== c.key && filled(row[k]))) return false;
+              return !re || !filled(v) || re.test(String(v).trim());
+            }
+          : undefined,
     };
   };
 
@@ -419,6 +430,22 @@ export function GenericSpecEditor({
               options={rbacOptions}
               helperText={help}
               error={fieldErrors.byField[field.path]}
+            />
+          );
+        }
+
+        if (field.widget === 'allowedSites') {
+          const list = Array.isArray(raw) ? raw.map(String) : [];
+          return (
+            <AllowedSitesSelect
+              key={field.path}
+              id={id}
+              tenant={item.metadata.name}
+              label={label}
+              value={list}
+              onChange={(next) => setField(field, next)}
+              error={fieldErrors.byField[field.path]}
+              isDisabled={locked}
             />
           );
         }

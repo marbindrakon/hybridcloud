@@ -31,6 +31,9 @@ import { EntitySelect } from './EntitySelect';
 import { FabricSelect } from './FabricSelect';
 import { CloudGatewaySelect } from './CloudGatewaySelect';
 import { SitePicker } from './SitePicker';
+import { AllowedSitesSelect } from './AllowedSitesSelect';
+import { ObjectListEditor, type ObjectListRow } from './ObjectListEditor';
+import { cleanContacts, contactsValid, entityOptionalSpec, ENTITY_LIMITS } from '../forms/entityFields';
 import { useTranslation } from '../i18n';
 import { DEFAULT_LANDING_ZONE } from '../forms/hybridFabricDefaults';
 import {
@@ -292,6 +295,9 @@ export function CreateResourceForm({
   const [istioEnabled, setIstioEnabled] = useState(false);
   const [haEnabled, setHaEnabled] = useState(true);
   const [displayName, setDisplayName] = useState('');
+  // Entity: who the tenant's users contact, and the sites it may use (empty = every site that allows it).
+  const [contactRows, setContactRows] = useState<ObjectListRow[]>([]);
+  const [allowedSites, setAllowedSites] = useState<string[]>([]);
   const [projectRefs, setProjectRefs] = useState('');
   const [assignAdmin, setAssignAdmin] = useState<string[]>([]);
   const [assignDev, setAssignDev] = useState<string[]>([]);
@@ -550,6 +556,9 @@ export function CreateResourceForm({
   const rolesSpec = (roles: readonly RoleField[]): Record<string, string[]> =>
     Object.fromEntries(roles.map((r) => [r.key, roleList(r.key)]).filter(([, l]) => (l as string[]).length));
 
+  /** Entity contacts as sent (empty rows dropped) and what is wrong with them. */
+  const entityContacts = cleanContacts(type === 'entity' ? contactRows : []);
+
   const buildSpec = (): Record<string, unknown> => {
     if (usesNetworkSection) return networkSpec ?? {};
     switch (type) {
@@ -558,6 +567,7 @@ export function CreateResourceForm({
           description,
           billingID,
           ...(websiteLink ? { websiteLink } : {}),
+          ...entityOptionalSpec({ displayName, contacts: entityContacts.contacts, allowedSites }),
         };
       case 'team':
         return {
@@ -701,6 +711,7 @@ export function CreateResourceForm({
     if (isPlatformForm && audience !== 'admin') return false;
     if (usesNetworkSection) return networkSpec !== null && !!(type === 'hybridfabric' || type === 'cloudinfrastructure' || type === 'cloudgateway' || entityNs);
     if (type === 'entity' && !billingID) return false;
+    if (type === 'entity' && (!contactsValid(entityContacts) || displayName.trim().length > ENTITY_LIMITS.displayNameMax)) return false;
     if (type === 'persona' && !entityNs) return false;
     // Entity-scoped kinds cannot be created without a resolved tenant namespace.
     if (entityScoped && !entityNs) return false;
@@ -720,6 +731,8 @@ export function CreateResourceForm({
   // Client-side checks first (inline), then a server dry run of the exact object (Q8, UX-040).
   const targetNs = isPlatformForm ? PLATFORM_NAMESPACE : entityNs;
   const nameIssue = nameProblem(kind, name);
+  // Tenant names become namespaces: the rule shows as soon as a wrong character is typed.
+  const showNameIssue = !!nameIssue && (nameTouched || type === 'entity');
   const clientValid = canSubmit() && !nameIssue && !!targetNs;
   const specNow = clientValid ? buildSpec() : null;
   const checkBody = useMemo(
@@ -728,7 +741,12 @@ export function CreateResourceForm({
     [clientValid, name, targetNs, JSON.stringify(specNow)],
   );
   const check = useServerCheck(kind, checkBody, clientValid);
-  const checkErrors = fieldErrorsFrom(check.error, { 'metadata.name': 'name' });
+  const checkErrors = fieldErrorsFrom(check.error, {
+    'metadata.name': 'name',
+    ...(type === 'entity'
+      ? { 'spec.displayName': 'displayName', 'spec.billingID': 'billingID', 'spec.contacts': 'contacts', 'spec.allowedSites': 'allowedSites' }
+      : {}),
+  });
   const checkText = check.error ? errorText(check.error, t, { kindLabel: t(`kindsOne.${kind}`, { defaultValue: kind }), action: 'action' }) : null;
   const blockers: string[] = [];
   if (!name) blockers.push(t('form.blockName'));
@@ -818,12 +836,12 @@ export function CreateResourceForm({
                   onChange={(_e, v) => setName(v)}
                   onBlur={() => setNameTouched(true)}
                   isRequired
-                  validated={(nameTouched && nameIssue) || checkErrors.byField.name ? 'error' : 'default'}
+                  validated={showNameIssue || checkErrors.byField.name ? 'error' : 'default'}
                   aria-describedby="name-help"
                 />
                 <FormHelperText>
                   <HelperText id="name-help">
-                    {nameTouched && nameIssue ? (
+                    {showNameIssue && nameIssue ? (
                       <HelperTextItem variant="error">
                         {t(`form.nameRule.${nameIssue.split(':')[0]}`, { max: nameIssue.split(':')[1] })}
                       </HelperTextItem>
@@ -842,15 +860,89 @@ export function CreateResourceForm({
 
               {type === 'entity' && (
                 <>
-                  <FormGroup label="Billing ID" isRequired fieldId="billing">
-                    <TextInput id="billing" value={billingID} onChange={(_e, v) => setBillingID(v)} isRequired />
+                  <FormGroup label={t('fields.displayName')} fieldId="entity-display-name">
+                    <TextInput
+                      id="entity-display-name"
+                      value={displayName}
+                      onChange={(_e, v) => setDisplayName(v)}
+                      validated={displayName.trim().length > ENTITY_LIMITS.displayNameMax || checkErrors.byField.displayName ? 'error' : 'default'}
+                      aria-describedby="entity-display-name-help"
+                    />
+                    <FormHelperText>
+                      <HelperText id="entity-display-name-help">
+                        {displayName.trim().length > ENTITY_LIMITS.displayNameMax ? (
+                          <HelperTextItem variant="error">{t('form.nameRule.max', { max: ENTITY_LIMITS.displayNameMax })}</HelperTextItem>
+                        ) : checkErrors.byField.displayName ? (
+                          <HelperTextItem variant="error">{checkErrors.byField.displayName}</HelperTextItem>
+                        ) : (
+                          <HelperTextItem>{t('entityForm.displayNameHelp')}</HelperTextItem>
+                        )}
+                      </HelperText>
+                    </FormHelperText>
                   </FormGroup>
-                  <FormGroup label="Description" fieldId="description">
+                  <FormGroup label={t('fields.billingID')} isRequired fieldId="billing">
+                    <TextInput
+                      id="billing"
+                      value={billingID}
+                      onChange={(_e, v) => setBillingID(v)}
+                      isRequired
+                      validated={checkErrors.byField.billingID ? 'error' : 'default'}
+                    />
+                    <FormHelperText>
+                      <HelperText>
+                        {checkErrors.byField.billingID ? (
+                          <HelperTextItem variant="error">{checkErrors.byField.billingID}</HelperTextItem>
+                        ) : (
+                          <HelperTextItem>{t('entityForm.billingHelp')}</HelperTextItem>
+                        )}
+                      </HelperText>
+                    </FormHelperText>
+                  </FormGroup>
+                  <FormGroup label={t('fields.description')} fieldId="description">
                     <TextArea id="description" value={description} onChange={(_e, v) => setDescription(v)} />
                   </FormGroup>
-                  <FormGroup label="Website" fieldId="website">
+                  <FormGroup label={t('fields.websiteLink')} fieldId="website">
                     <TextInput id="website" value={websiteLink} onChange={(_e, v) => setWebsiteLink(v)} />
                   </FormGroup>
+                  <ObjectListEditor
+                    id="entity-contacts"
+                    label={t('entityForm.contacts')}
+                    columns={[
+                      {
+                        key: 'name',
+                        label: t('entityForm.contactName'),
+                        validate: (v, row) => !(row.email || row.url) || !!String(v ?? '').trim(),
+                      },
+                      {
+                        key: 'email',
+                        label: t('entityForm.contactEmail'),
+                        validate: (v) => !String(v ?? '').trim() || /^[^\s@]+@[^\s@]+$/.test(String(v).trim()),
+                      },
+                      {
+                        key: 'url',
+                        label: t('entityForm.contactUrl'),
+                        placeholder: 'https://',
+                        validate: (v) => !String(v ?? '').trim() || String(v).trim().startsWith('https://'),
+                      },
+                    ]}
+                    value={contactRows}
+                    onChange={setContactRows}
+                    maxItems={ENTITY_LIMITS.contactsMax}
+                    addLabel={t('entityForm.addContact')}
+                    removeLabel={t('form.removeRow')}
+                    helperText={
+                      contactsValid(entityContacts)
+                        ? checkErrors.byField.contacts || t('entityForm.contactsHelp')
+                        : t('entityForm.contactsInvalid')
+                    }
+                  />
+                  <AllowedSitesSelect
+                    id="entity-allowed-sites"
+                    tenant={name}
+                    value={allowedSites}
+                    onChange={setAllowedSites}
+                    error={checkErrors.byField.allowedSites}
+                  />
                 </>
               )}
 
