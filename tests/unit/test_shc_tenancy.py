@@ -170,5 +170,15 @@ class Config(unittest.TestCase):
         self.assertFalse(cfg["phase"]["write"])
 
 
+
+class StatusKindsTest(unittest.TestCase):
+    def test_skip_tier_kinds_are_left_out(self):
+        kinds = [{"kind": "TenantProfile", "labels": {"hybridsovereign.redhat/teardown-tier": "skip"}, "items": []},
+                 {"kind": "Team", "labels": {"hybridsovereign.redhat/teardown-tier": "5"}, "items": []},
+                 {"kind": "Entity", "labels": {}, "items": []},
+                 {"kind": "CloudInfrastructure", "items": []}]
+        self.assertEqual([k["kind"] for k in T.status_kinds(kinds)], ["Team", "Entity", "CloudInfrastructure"])
+
+
 if __name__ == "__main__":
     unittest.main()

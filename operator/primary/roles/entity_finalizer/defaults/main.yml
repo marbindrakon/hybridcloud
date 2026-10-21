@@ -14,7 +14,8 @@ entity_teardown_tiers:
   - [Team, Project, Persona, AAPOrg, QuayOrg, VaultKV]
   - [Vault]
   - [Rbac]
-# Kinds of the group that are never in a tenant namespace (not listed when looking for unknown kinds).
+# Kinds of the group the cascade never deletes and never reports as unknown: the platform kinds (never in a tenant
+# namespace) and TenantProfile (CRD tier "skip": written by the platform, goes with the namespace).
 entity_teardown_platform_kinds:
   - Entity
   - TenantProfile

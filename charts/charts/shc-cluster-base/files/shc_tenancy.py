@@ -308,6 +308,12 @@ def run_failed_recheck(api, kinds, cfg, now, dry_run):
     return counts, actions
 
 
+def status_kinds(kinds):
+    """The kinds the redrive, phase and re-check passes look at: not those whose CRD carries teardown-tier "skip"
+    (TenantProfile: platform-written, no Ready/phase of its own; it only gets the tenancy conditions)."""
+    return [k for k in kinds if (k.get("labels") or {}).get("hybridsovereign.redhat/teardown-tier") != "skip"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="/etc/shc-tenancy/config.yaml")
@@ -317,11 +323,12 @@ def main():
     api = eda_redrive.connect()
     now = dt.datetime.now(dt.timezone.utc)
     kinds = eda_redrive.collect(api)
+    managed = status_kinds(kinds)
     summary = {"time": stamp(now), "dryRun": args.dry_run}
     problems = []
     if cfg["redrive"].get("enabled", True):
         rcfg = {k: v for k, v in cfg["redrive"].items() if k != "enabled"}
-        counts, probs = eda_redrive.run_redrive(api, kinds, rcfg, now, args.dry_run)
+        counts, probs = eda_redrive.run_redrive(api, managed, rcfg, now, args.dry_run)
         summary["redrive"] = counts
         problems += probs
     if cfg["tenancy"].get("enabled", True):
@@ -331,12 +338,12 @@ def main():
         for w in writes:
             print(("would write " if args.dry_run else "wrote ") + w)
     if cfg["phase"].get("enabled", True):
-        counts, report = run_phase(api, kinds, cfg, now, args.dry_run)
+        counts, report = run_phase(api, managed, cfg, now, args.dry_run)
         summary["phase"] = dict(counts, write=bool(cfg["phase"].get("write")))
         for r in report:
             print("phase", r)
     if cfg["failedRecheck"].get("enabled", True):
-        counts, actions = run_failed_recheck(api, kinds, cfg, now, args.dry_run)
+        counts, actions = run_failed_recheck(api, managed, cfg, now, args.dry_run)
         summary["failedRecheck"] = counts
         for a in actions:
             print(("would " if args.dry_run else "") + a)
