@@ -16,13 +16,15 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 GROUP = "hybridsovereign.redhat"
-FENCE = re.compile(r"^```ya?ml\s*$(.*?)^```\s*$", re.M | re.S)
+# A ```yaml block, also indented inside a list item (the closing fence has the same indent).
+FENCE = re.compile(r"^([ \t]*)```ya?ml[ \t]*$(.*?)^\1```[ \t]*$", re.M | re.S)
 
 
 def tenant_kinds():
@@ -33,7 +35,8 @@ def tenant_kinds():
 def objects(path):
     """(label, object) for every API object of the group in a file."""
     text = path.read_text(encoding="utf-8")
-    chunks = [m.group(1) for m in FENCE.finditer(text)] if path.suffix == ".md" else [text]
+    chunks = [textwrap.dedent(m.group(2)) for m in FENCE.finditer(text)] \
+        if path.suffix == ".md" else [text]
     n = 0
     for chunk in chunks:
         try:

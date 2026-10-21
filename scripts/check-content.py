@@ -45,7 +45,8 @@ UI_FILES = [
     "ui/packages/tenant-console-plugin/console-extensions.json",
 ]
 DOC_GLOBS = ["README.md", "docs/**/*.md", "samples/**/*.md", "samples/**/*.yaml",
-             "architecture/README.md", "architecture/docs/architecture.md"]
+             "architecture/README.md", "architecture/docs/architecture.md",
+             "architecture/docs/tutorial/09-hybrid-networks.md"]
 TENANT_DOCS = ["docs/tenant/**"]
 # Every spec field of every kind must be described (an undescribed field is an error).
 STATE_PREFIX = {"not-implemented": "Not implemented.", "deprecated": "Deprecated.",
