@@ -38,6 +38,8 @@ export function useUiConfig(enabled = true): UiConfig {
 export const HELP_PAGES: { id: string; labelKey: string; path: string; platformOnly?: boolean }[] = [
   { id: 'getting-started', labelKey: 'shell.help.gettingStarted', path: 'tenant/getting-started.md' },
   { id: 'glossary', labelKey: 'shell.help.glossary', path: 'tenant/glossary.md' },
+  { id: 'access', labelKey: 'shell.help.access', path: 'tenant/access-and-delegation.md' },
+  { id: 'status-reasons', labelKey: 'shell.help.statusReasons', path: 'tenant/status-reasons.md' },
   { id: 'onboard-tenant', labelKey: 'shell.help.onboardTenant', path: 'platform/onboard-a-tenant.md', platformOnly: true },
   { id: 'all-docs', labelKey: 'shell.help.allDocs', path: 'README.md' },
 ];

@@ -53,8 +53,15 @@ oc auth can-i create hybridnetworks -n entity-<tenant>
 What you can create depends on the roles your access groups hold (for example network admin,
 VM environment admin, tenant admin). Your tenant admin knows which ones you have.
 
-The sites your tenant may use are listed by the platform team. A tenant profile that lists them
-in the product is not available yet; ask the platform team for the site names.
+Your **tenant profile** (available with this release) lists the sites your tenant may use, with
+where each one is, what it offers and its storage classes, and your tenant's contacts. The site
+pickers of the dashboard's create forms offer those sites; on the command line:
+
+```bash
+oc get tenantprofile shc -n entity-<tenant> -o jsonpath='{range .status.sites[*]}{.name}{"\t"}{.type}{"\t"}{.state}{"\n"}{end}'
+```
+
+The words used on this page are explained in the [glossary](glossary.md).
 
 ## 4. Create a network
 
@@ -121,8 +128,8 @@ spec:
     prefixLength: 24
 ```
 
-An **Attach network** dialog on the environment page is not available yet; create the placement
-on the **Network placements** page (under **Networks**) or with `oc apply`.
+In the dashboard, **Attach network** on the environment page (or on the network page) creates
+this placement for you; on the command line, apply the manifest.
 
 ## 6. Wait until it is ready, then open the site console
 
@@ -130,8 +137,10 @@ on the **Network placements** page (under **Networks**) or with `oc apply`.
 oc get hybridnetworks,cloudvirts,networkplacements -n entity-<tenant>
 ```
 
-Each object shows whether it is ready, and `status.message` says what the platform is doing or
-waiting for. A new environment and its placement are usually ready within a few minutes. The
+Each object shows its state (Waiting, Creating, Updating, Ready, Degraded, Failed or Deleting)
+and a one-line summary of what the platform is doing or waiting for; the **Reason** column says
+why ([status reasons](status-reasons.md)). A new environment and its placement are usually ready
+within a few minutes. The
 placement waits for the environment, and the environment's namespace joins the network once the
 placement is ready.
 
@@ -156,25 +165,35 @@ site supports it. Ask the platform team for the tenant DNS domain.
 People belong to access groups; access groups hold roles. To add a colleague, ask the platform
 team to add them to the right access group (`<tenant>/<access group>` in the sign-in directory).
 Adding people yourself is not available yet. After the change, your colleague signs out and in
-again.
+again. To let a team manage its own app projects without a tenant-wide role, see
+[Access and delegation](access-and-delegation.md).
 
 ## 9. When something does not get ready
 
-Read `status.message` and the conditions (`oc describe` shows both). If the cause is fixed and
-the object still does not move, ask the platform to process it again now (**Retry now**):
+Read the summary, the reason and the conditions (`oc describe` shows them all);
+[Status reasons](status-reasons.md) says who acts on each reason. If the cause is fixed and the
+object still does not move, ask the platform to process it again now: **Retry now** on the
+object's page, or write the current time into the annotation (a new value every time):
 
 ```bash
 oc annotate hybridnetwork example-net -n entity-<tenant> \
-  ansible.sdk.operatorframework.io/reconcileNow="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+  ansible.sdk.operatorframework.io/reconcileNow="$(date -u +%FT%TZ)" --overwrite
 ```
 
 ## 10. Delete, in order
 
 Delete placements first, then the environments and networks. A delete that has to wait says what
-it is waiting for in its status. An object with `spec.deletionProtection: true` is not deleted
-with the tenant; turn protection off first.
+it is waiting for in its status. `spec.deletionProtection: true` on an environment, network or
+OpenShift cluster keeps it when the tenant is deleted (the tenant deletion waits until protection
+is off); it does not stop you from deleting the object itself. Details:
+[Status reasons](status-reasons.md#deleting).
 
 ## Next
+
+- [Glossary](glossary.md): the words, and which project is which.
+- [Access and delegation](access-and-delegation.md): roles, access groups and the access fields of
+  team setups and app projects.
+- [Status reasons](status-reasons.md): states, reasons, Retry now and deletion.
 
 - [Hybrid networks tutorial](../../architecture/docs/tutorial/09-hybrid-networks.md): networks
   across several sites, OpenStack placements, internet egress.

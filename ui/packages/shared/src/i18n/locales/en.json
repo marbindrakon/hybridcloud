@@ -968,6 +968,8 @@
       "menu": "Help",
       "gettingStarted": "Getting started as a tenant",
       "glossary": "Glossary",
+      "access": "Access and delegation",
+      "statusReasons": "Status, Retry now and deletion",
       "onboardTenant": "Onboard a tenant (platform guide)",
       "allDocs": "All documentation",
       "notConfigured": "Documentation is not configured on this installation",
