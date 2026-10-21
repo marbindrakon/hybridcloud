@@ -254,11 +254,14 @@ export async function updateDashboardResource(
   });
 }
 
-let forbiddenListener: (() => void) | null = null;
+const forbiddenListeners = new Set<() => void>();
 
-/** Called on every 403 answer (the permission gate drops its cache then). */
-export function setForbiddenListener(fn: (() => void) | null): void {
-  forbiddenListener = fn;
+/** Called on every 403 answer (the permission gate drops its cache then). Returns the remover. */
+export function addForbiddenListener(fn: () => void): () => void {
+  forbiddenListeners.add(fn);
+  return () => {
+    forbiddenListeners.delete(fn);
+  };
 }
 
 /**
@@ -286,12 +289,14 @@ export async function k8sFetchJson<T>(
     throw networkError(err, ctx);
   }
   if (!response.ok) {
-    if (response.status === 403 && forbiddenListener) {
-      try {
-        forbiddenListener();
-      } catch {
-        /* listener problems never mask the API answer */
-      }
+    if (response.status === 403) {
+      forbiddenListeners.forEach((fn) => {
+        try {
+          fn();
+        } catch {
+          /* listener problems never mask the API answer */
+        }
+      });
     }
     throw await errorFromResponse(response, ctx);
   }

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { setForbiddenListener } from '../hooks/k8s';
+import { addForbiddenListener } from '../hooks/k8s';
 import { useOptionalScope } from '../scope/ScopeProvider';
 import type { HybridSovereignKind } from '../types';
 import { KIND_PLURALS } from '../types';
@@ -35,7 +35,7 @@ export function PermissionProvider({ children }: { children?: React.ReactNode })
       invalidatePermissions();
     };
     window.addEventListener('focus', onFocus);
-    setForbiddenListener(() => {
+    const removeForbidden = addForbiddenListener(() => {
       const now = Date.now();
       if (now - lastForbidden < FORBIDDEN_REFRESH_MIN_MS) return;
       lastForbidden = now;
@@ -44,7 +44,7 @@ export function PermissionProvider({ children }: { children?: React.ReactNode })
     });
     return () => {
       window.removeEventListener('focus', onFocus);
-      setForbiddenListener(null);
+      removeForbidden();
     };
   }, []);
   return <>{children}</>;
