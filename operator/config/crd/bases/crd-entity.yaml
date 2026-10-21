@@ -21,7 +21,12 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            Entity represents a tenant namespace in the Hybrid Sovereign Cloud platform.
+            A tenant: the boundary for isolation, access and billing, comparable to an AWS account
+            under an organizational unit, a Google Cloud project under a folder, an Azure
+            subscription or an OpenStack domain. The platform team creates it in the platform
+            namespace. Creating it creates the tenant namespace entity-<name>, where everything the
+            tenant creates lives, and gives the tenant's access groups the roles listed in
+            spec.namespaceRbac there.
           type: object
           required:
             - spec
@@ -33,181 +38,253 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired state of the Entity
+              description: What the tenant is and which access groups hold which roles.
               type: object
               required:
                 - description
                 - billingID
               properties:
                 description:
-                  description: Multi-line description of the entity
+                  description: >-
+                    Description of the tenant, shown to the platform team and on the tenant
+                    namespace.
                   type: string
                 billingID:
-                  description: Billing identifier (also applied as a namespace label)
+                  description: >-
+                    Billing identifier of the tenant. Also set as a label on the tenant namespace.
                   type: string
                   pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$"
                 websiteLink:
-                  description: URL to the entity's external website
+                  description: Link to the tenant's own website, shown with the tenant.
                   type: string
                 namespaceRbac:
-                  description: Maps each named RBAC role to a list of Rbac CR names
+                  description: >-
+                    The tenant's roles in its namespace. Each key is a role; its value lists the
+                    access groups (names of Rbac objects in the tenant namespace) that hold the
+                    role. A member of access group <name> signs in to the services cluster with the
+                    group <tenant>.<name>. A role with no access group grants nothing.
                   type: object
                   properties:
                     entityAdmin:
-                      description: Full admin over all CRs in the entity namespace
+                      description: >-
+                        Tenant admin: create, change and delete the tenant's OpenStack, VM and AWS
+                        environments, networks, network placements, edge connections, OpenShift
+                        clusters, platform services (Vault, KV secrets engines, AAP and Quay
+                        organizations), team setups, app projects, cluster assignments and access
+                        groups.
                       type: array
                       items:
                         type: string
                     auditor:
-                      description: Read-all access across all CR types
+                      description: >-
+                        Auditor: read everything a tenant admin can change.
                       type: array
                       items:
                         type: string
                     BobsTeam:
-                      description: Read-all access across all CR types (same as auditor)
+                      description: >-
+                        Deprecated: the same as auditor; use auditor.
                       type: array
                       items:
                         type: string
                     cloudOSOAdmin:
-                      description: Create/edit/delete CloudOSO CRs; view Rbac CRs
+                      description: >-
+                        OpenStack environment admin: create, change and delete OpenStack
+                        environments (CloudOSO); read access groups.
                       type: array
                       items:
                         type: string
                     cloudOSOView:
-                      description: View CloudOSO CRs and Rbac CRs
+                      description: >-
+                        OpenStack environment viewer: read OpenStack environments and access groups.
                       type: array
                       items:
                         type: string
                     cloudVirtAdmin:
-                      description: Create/edit/delete CloudVirt CRs; view Rbac CRs
+                      description: >-
+                        OpenShift Virtualization environment admin: create, change and delete VM
+                        environments (CloudVirt); read access groups.
                       type: array
                       items:
                         type: string
                     cloudVirtView:
-                      description: View CloudVirt CRs and Rbac CRs
+                      description: >-
+                        OpenShift Virtualization environment viewer: read VM environments
+                        (CloudVirt) and access groups.
                       type: array
                       items:
                         type: string
                     networkAdmin:
-                      description: Create/edit/delete HybridNetwork and NetworkPlacement CRs; view CloudOSO, CloudVirt and Rbac CRs
+                      description: >-
+                        Network admin: create, change and delete networks, network placements and
+                        edge connections; read OpenStack and VM environments and access groups.
                       type: array
                       items:
                         type: string
                     networkView:
-                      description: View HybridNetwork, NetworkPlacement and Rbac CRs
+                      description: >-
+                        Network viewer: read networks, network placements, edge connections and
+                        access groups.
                       type: array
                       items:
                         type: string
                     cloudAWSAdmin:
-                      description: Create/edit/delete CloudAWS CRs; view Rbac CRs
+                      description: >-
+                        AWS environment admin: create, change and delete AWS environments
+                        (CloudAWS); read access groups.
                       type: array
                       items:
                         type: string
                     cloudAWSView:
-                      description: View CloudAWS CRs and Rbac CRs
+                      description: >-
+                        AWS environment viewer: read AWS environments and access groups.
                       type: array
                       items:
                         type: string
                     platformOpenshiftAdmin:
-                      description: Create/edit/delete PlatformOpenshift CRs; view Rbac CRs
+                      description: >-
+                        OpenShift cluster admin: create, change and delete OpenShift clusters
+                        (PlatformOpenshift); read OpenStack and AWS environments and access groups.
                       type: array
                       items:
                         type: string
                     platformOpenshiftView:
-                      description: View PlatformOpenshift CRs and Rbac CRs
+                      description: >-
+                        OpenShift cluster viewer: read OpenShift clusters and access groups.
                       type: array
                       items:
                         type: string
                     teamAdmin:
-                      description: Create/edit/delete Team CRs; view Assignment and Rbac CRs
+                      description: >-
+                        Team setup admin: create, change and delete team setups (Team); read cluster
+                        assignments and access groups.
                       type: array
                       items:
                         type: string
                     teamView:
-                      description: View Team, Assignment, and Rbac CRs
+                      description: >-
+                        Team setup viewer: read team setups, cluster assignments and access groups.
                       type: array
                       items:
                         type: string
                     projectAdmin:
-                      description: Create/edit/delete Project CRs; view Assignment and Rbac CRs
+                      description: >-
+                        App project admin: create, change and delete app projects (Project); read
+                        cluster assignments and access groups.
                       type: array
                       items:
                         type: string
                     projectView:
-                      description: View Project, Assignment, and Rbac CRs
+                      description: >-
+                        App project viewer: read app projects, cluster assignments and access
+                        groups.
                       type: array
                       items:
                         type: string
                     assignmentAdmin:
-                      description: Create/edit/delete Assignment CRs; view Rbac CRs
+                      description: >-
+                        Cluster assignment admin: create, change and delete cluster assignments
+                        (Assignment); read team setups, app projects and access groups.
                       type: array
                       items:
                         type: string
                     identityAdmin:
-                      description: Create and view Rbac CRs
+                      description: >-
+                        Access group admin: create, change and delete access groups (Rbac).
                       type: array
                       items:
                         type: string
             status:
-              description: Observed state set by the operator after reconciliation
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 entity:
+                  description: Name of the tenant.
                   type: string
                 description:
+                  description: The tenant's description as applied.
                   type: string
                 openshiftConsoleURL:
+                  description: Link to the tenant namespace in the services cluster's web console.
                   type: string
                 billingID:
+                  description: The billing identifier as applied.
                   type: string
                 websiteLink:
+                  description: The website link as applied.
                   type: string
                 status:
+                  description: Short state word written by the platform's automation.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

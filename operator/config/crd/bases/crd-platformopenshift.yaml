@@ -21,7 +21,10 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            PlatformOpenshift observes namespace labels and exposes them via status.
+            An OpenShift cluster the platform installs and manages for the tenant in one of its
+            environments, comparable to Red Hat OpenShift Service on AWS, Google Kubernetes Engine
+            or Azure Red Hat OpenShift. spec.type names the environment type, and the block of the
+            same name says which environment and what size.
           type: object
           required:
             - spec
@@ -33,7 +36,7 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired state for PlatformOpenshift
+              description: The cluster.
               type: object
               properties:
                 deletionProtection:
@@ -43,58 +46,75 @@ spec:
                     waits until protection is turned off.
                 type:
                   type: string
-                  description: "Platform type: openstack, aws or gcp"
+                  description: Environment type the cluster runs in; set the block of the same name.
                   enum: [openstack, aws, gcp]
                 openstack:
                   type: object
-                  description: "OpenStack-specific configuration"
+                  description: Cluster in an OpenStack environment.
                   properties:
                     environment:
                       type: string
-                      description: "CloudOSO CR name providing the OpenStack environment"
+                      description: Name of the OpenStack environment (CloudOSO) in this namespace.
                     controlPlaneCount:
                       type: integer
-                      description: "Control plane node count (default: the installation's platformopenshift_defaults, else 3)"
+                      description: >-
+                        Number of control plane nodes. Default: the installation's default, else 3.
                       minimum: 1
                     workerCount:
                       type: integer
-                      description: "Worker node count; 0 makes a compact cluster (default: platformopenshift_defaults, else 3)"
+                      description: >-
+                        Number of worker nodes; 0 makes a compact cluster. Default: the
+                        installation's default, else 3.
                       minimum: 0
                     controlPlaneFlavor:
                       type: string
-                      description: "OpenStack flavor for control plane (default: platformopenshift_defaults)"
+                      description: >-
+                        OpenStack flavor of the control plane nodes. Default: the installation's
+                        default.
                     workerFlavor:
                       type: string
-                      description: "OpenStack flavor for workers (default: platformopenshift_defaults)"
+                      description: >-
+                        OpenStack flavor of the worker nodes. Default: the installation's default.
                     externalNetwork:
                       type: string
-                      description: "Neutron external network name (default: the CloudOSO's)"
+                      description: >-
+                        External network of the cluster's floating IPs. Default: the environment's.
                     ocpImageSet:
                       type: string
-                      description: "Hive ClusterImageSet name (default: platformopenshift_defaults)"
+                      description: >-
+                        OpenShift release to install (a cluster image set name). Default: the
+                        installation's default.
                     pullSecretVaultPath:
                       type: string
-                      description: "Central Vault path of the pull secret (default: platformopenshift_defaults)"
+                      description: >-
+                        Set by the platform; leave unset. Location of the pull secret in the
+                        platform's secret store. Default: the installation's default.
                     pullSecretVaultProperty:
                       type: string
-                      description: "Property of the pull secret at pullSecretVaultPath (default: platformopenshift_defaults)"
+                      description: >-
+                        Set by the platform; leave unset. Property that holds the pull secret at
+                        that location. Default: the installation's default.
                     sshKeyVaultPath:
                       type: string
-                      description: "Central Vault path with ssh_public_key / ssh_private_key (default: platformopenshift_defaults)"
+                      description: >-
+                        Set by the platform; leave unset. Location of the nodes' SSH key pair in the
+                        platform's secret store. Default: the installation's default.
                     glanceImageOverride:
                       type: string
-                      description: "Existing Glance image for the nodes; empty lets the installer upload the release's RHCOS"
+                      description: >-
+                        Existing image for the nodes. Empty: the installer uploads the release's
+                        image.
                     trustBundle:
                       type: string
-                      description: "Additional trust bundle (PEM) for the install-config"
+                      description: Additional trusted CA certificates (PEM) for the cluster.
                 aws:
                   type: object
-                  description: "AWS-specific configuration"
+                  description: Cluster in an AWS environment.
                   required: [environment]
                   properties:
                     environment:
                       type: string
-                      description: "CloudAWS CR name providing the AWS environment"
+                      description: Name of the AWS environment (CloudAWS) in this namespace.
                     network:
                       type: string
                       description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a network of its own"
@@ -129,12 +149,13 @@ spec:
                       default: m5.large
                 gcp:
                   type: object
-                  description: "Google Cloud-specific configuration"
+                  description: Cluster in a Google Cloud environment.
                   required: [environment]
                   properties:
                     environment:
                       type: string
-                      description: "CloudGCP CR name providing the Google Cloud environment"
+                      description: >-
+                        Name of the Google Cloud environment (CloudGCP) in this namespace.
                     network:
                       type: string
                       description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a VPC of its own"
@@ -163,157 +184,206 @@ spec:
                       description: "Machine type for workers"
                       default: n2-standard-4
                 toolRbac:
-                  description: Controls who gets roles on the provisioned OpenShift cluster (Layer 2 RBAC)
+                  description: >-
+                    Access on the new cluster. Each field lists access groups (Rbac names in this
+                    namespace).
                   type: object
                   properties:
                     clusterAdminRbac:
-                      description: Rbac CR names that get cluster-admin on the target cluster
+                      description: Access groups whose members get cluster-admin on the cluster.
                       type: array
                       items:
                         type: string
                     clusterOperatorRbac:
-                      description: Rbac CR names that can manage workloads and power state (no RBAC changes)
+                      description: >-
+                        Access groups whose members can manage workloads and power state on the
+                        cluster, without changing its access.
                       type: array
                       items:
                         type: string
                     clusterDeveloperRbac:
-                      description: Rbac CR names that can deploy applications in assigned namespaces
+                      description: >-
+                        Access groups whose members can deploy applications in the namespaces
+                        assigned to them.
                       type: array
                       items:
                         type: string
                     clusterViewerRbac:
-                      description: Rbac CR names with read-only cluster access
+                      description: Access groups whose members get read-only access to the cluster.
                       type: array
                       items:
                         type: string
                 clusterViewerRbac:
                   description: >-
-                    Rbac CR names whose Keycloak groups get read-only access to THIS PlatformOpenshift CR
-                    on the services cluster (namespace-scoped Role + RoleBinding).
-                    Distinct from toolRbac.clusterViewerRbac which grants view on the spoke cluster.
+                    Access groups whose members can read this object on the services cluster.
+                    Distinct from toolRbac.clusterViewerRbac, which gives read access on the cluster
+                    itself.
                   type: array
                   items:
                     type: string
             status:
-              description: Observed state
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 name:
+                  description: Name of the cluster object.
                   type: string
                 namespace:
+                  description: Namespace of the cluster object.
                   type: string
                 entity:
+                  description: The tenant this cluster belongs to.
                   type: string
                 billingId:
+                  description: The tenant's billing identifier.
                   type: string
                 description:
+                  description: The tenant's description.
                   type: string
                 platformType:
+                  description: Environment type of the cluster.
                   type: string
                 slug:
+                  description: Short unique name of the cluster, used in its DNS names.
                   type: string
                 domain:
+                  description: Base DNS domain of the cluster.
                   type: string
                 apiURL:
+                  description: URL of the cluster's API.
                   type: string
                 appsURL:
+                  description: Wildcard domain of the cluster's applications.
                   type: string
                 consoleURL:
                   type: string
-                  description: "OpenShift web console URL"
+                  description: URL of the cluster's web console.
                 adminPasswordVaultPath:
                   type: string
-                  description: "Vault path for admin password"
+                  description: >-
+                    Platform detail. Location of the admin password in the platform's secret store.
                 kubeconfigVaultPath:
                   type: string
-                  description: "Vault path for admin kubeconfig"
+                  description: >-
+                    Platform detail. Location of the admin kubeconfig in the platform's secret
+                    store.
                 secretsVaultPath:
                   type: string
-                  description: "Vault path prefix for all cluster secrets"
+                  description: >-
+                    Platform detail. Location of the cluster's secrets in the platform's secret
+                    store.
                 clusterVersion:
                   type: string
-                  description: "OpenShift version"
+                  description: OpenShift version of the cluster.
                 powerState:
                   type: string
-                  description: "Cluster power state (Running, Hibernating, etc.)"
+                  description: Power state of the cluster (Running, Hibernating, ...).
                 clusterHealth:
                   type: string
-                  description: "Overall cluster health"
+                  description: Overall health of the cluster.
                 provisionStatus:
                   type: string
-                  description: "Provision status from ACM/Hive"
+                  description: Installation status.
                 acmAvailable:
                   type: boolean
-                  description: "ACM ManagedCluster availability"
+                  description: True when the platform's cluster management reaches the cluster.
                 acmJoined:
                   type: boolean
-                  description: "ACM ManagedCluster joined status"
+                  description: True when the cluster has joined the platform's cluster management.
                 clusterInstalled:
                   type: boolean
-                  description: "Whether the cluster installation is complete"
+                  description: True when the installation is complete.
                 oidcConfigured:
                   type: boolean
-                  description: "Whether Keycloak OIDC client has been created and ACM policy pushed"
+                  description: >-
+                    True when sign-in with the platform identity is set up on the cluster.
                 oidcClientId:
                   type: string
-                  description: "Keycloak OIDC client ID for this cluster"
+                  description: Client of the cluster in the platform's sign-in directory.
                 awsHelperName:
+                  description: No longer set.
                   type: string
                 awsRegion:
+                  description: AWS region of the cluster.
                   type: string
                 gcpProject:
+                  description: Google Cloud project of the cluster.
                   type: string
                 gcpRegion:
+                  description: Google Cloud region of the cluster.
                   type: string
                 status:
                   type: string
-                  description: Lifecycle status (reconciling, ready, failed)
+                  description: Short state word written by the platform's automation.
                 lastReconciledAt:
                   type: string
                   format: date-time
-                  description: Timestamp of the last reconciliation attempt
+                  description: When the platform last finished processing this object (RFC 3339).
                 message:
                   type: string
-                  description: Human-readable status message (set on failure)
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:

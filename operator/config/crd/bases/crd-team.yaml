@@ -21,7 +21,11 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
-          description: Team defines a team with feature flags within a sovereign cloud entity.
+          description: >-
+            A team setup: the tooling a team gets on a tenant OpenShift cluster (Argo CD, service
+            mesh), comparable to an Argo CD AppProject. It holds no people; access groups do. It
+            takes effect only through a cluster assignment (Assignment); without one it creates
+            nothing on any cluster.
           type: object
           required:
             - spec
@@ -33,19 +37,19 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired state of the Team
+              description: The team's tooling.
               type: object
               properties:
                 features:
-                  description: Feature flags for this team
+                  description: Tooling to install for the team on each cluster it is assigned to.
                   type: object
                   properties:
                     istio:
-                      description: Enable Istio service mesh for this team
+                      description: Install the service mesh for the team.
                       type: boolean
                       default: false
                     argo:
-                      description: Enable Argo Workflows for this team
+                      description: Install Argo CD for the team.
                       type: boolean
                       default: false
                 rbacConfig:
@@ -67,75 +71,106 @@ spec:
                   items:
                     type: string
             status:
-              description: Observed state populated by team-operator reconciliation
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 name:
+                  description: Name of the team setup.
                   type: string
                 namespace:
+                  description: Namespace of the team setup.
                   type: string
                 entity:
+                  description: The tenant this team setup belongs to.
                   type: string
                 billingId:
+                  description: The tenant's billing identifier.
                   type: string
                 description:
+                  description: The tenant's description.
                   type: string
                 features:
+                  description: The tooling as applied.
                   type: object
                   properties:
                     istio:
+                      description: Service mesh requested.
                       type: boolean
                     argo:
+                      description: Argo CD requested.
                       type: boolean
                 status:
                   type: string
-                  description: Lifecycle status (reconciling, ready, failed)
+                  description: Short state word written by the platform's automation.
                 lastReconciledAt:
                   type: string
                   format: date-time
-                  description: Timestamp of the last reconciliation attempt
+                  description: When the platform last finished processing this object (RFC 3339).
                 message:
                   type: string
-                  description: Human-readable status message (set on failure)
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
               x-kubernetes-preserve-unknown-fields: true

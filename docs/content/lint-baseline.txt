@@ -5,39 +5,11 @@ operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapAdminRbac	CR	1
 operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapJobExecutorRbac	AAP job	1
 operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapJobExecutorRbac	CR	1
 operator/config/crd/bases/crd-aaporg.yaml	AAPOrg spec.aapViewerRbac	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.openshift	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.projects	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.team	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.toolRbac	Layer 2	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.toolRbac	spoke	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.toolRbac.assignmentAdmin	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.toolRbac.assignmentDeveloper	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.toolRbac.assignmentOps	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment spec.toolRbac.assignmentViewer	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment status.helperName	AWSHelper	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment status.helperName	CR	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment status.helperName	OSOHelper	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment status.helperName	helper	1
-operator/config/crd/bases/crd-assignment.yaml	Assignment status.openshift	CR	1
 operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS .	backend	1
 operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS status.awsHelperName	AWSHelper	1
 operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS status.awsHelperName	CR	1
 operator/config/crd/bases/crd-cloudaws.yaml	CloudAWS status.slug	AWSHelper	1
 operator/config/crd/bases/crd-cloudgcp.yaml	CloudGCP .	backend	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO .	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO .	Routed53	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO .	helper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO spec	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO spec	helper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.domainId	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.domainName	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.osoHelperCreated	CR	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.osoHelperCreated	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.osoHelperName	CR	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.osoHelperName	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.projectId	OSOHelper	1
-operator/config/crd/bases/crd-cloudoso.yaml	CloudOSO status.projectName	OSOHelper	1
 operator/config/crd/bases/crd-cloudvirt.yaml	CloudVirt spec.toolRbac	CR	1
 operator/config/crd/bases/crd-cloudvirt.yaml	CloudVirt spec.toolRbac.editRbac	CRs	1
 operator/config/crd/bases/crd-cloudvirt.yaml	CloudVirt spec.toolRbac.viewRbac	CRs	1
@@ -49,26 +21,6 @@ operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration spec.cl
 operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration spec.providerNamespace	CR	1
 operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration spec.source	CR	1
 operator/config/crd/bases/crd-openstackmigration.yaml	OpenStackMigration status	EDA	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.aws.environment	CR	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.clusterViewerRbac	CR	2
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.clusterViewerRbac	spoke	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.gcp.environment	CR	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.controlPlaneCount	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.controlPlaneFlavor	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.environment	CR	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.ocpImageSet	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.pullSecretVaultPath	Central Vault	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.pullSecretVaultPath	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.pullSecretVaultProperty	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.sshKeyVaultPath	Central Vault	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.sshKeyVaultPath	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.workerCount	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.openstack.workerFlavor	platformopenshift_defaults	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.toolRbac	Layer 2	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.toolRbac.clusterAdminRbac	CR	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.toolRbac.clusterDeveloperRbac	CR	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.toolRbac.clusterOperatorRbac	CR	1
-operator/config/crd/bases/crd-platformopenshift.yaml	PlatformOpenshift spec.toolRbac.clusterViewerRbac	CR	1
 operator/config/crd/bases/crd-project.yaml	Project spec.projectAdmin	CR	1
 operator/config/crd/bases/crd-project.yaml	Project spec.projectDeveloperRbac	CR	1
 operator/config/crd/bases/crd-project.yaml	Project spec.projectViewerRbac	CR	1
@@ -76,7 +28,6 @@ operator/config/crd/bases/crd-project.yaml	Project spec.rbacConfig	CR	1
 operator/config/crd/bases/crd-quayorg.yaml	QuayOrg spec.quayAdminRbac	CR	1
 operator/config/crd/bases/crd-quayorg.yaml	QuayOrg spec.quayCreatorRbac	CR	1
 operator/config/crd/bases/crd-quayorg.yaml	QuayOrg spec.quayMemberRbac	CR	1
-operator/config/crd/bases/crd-rbac.yaml	Rbac status.creator	CR	1
 operator/config/crd/bases/crd-team.yaml	Team spec.rbacConfig	CR	1
 operator/config/crd/bases/crd-team.yaml	Team spec.teamAdmin	CR	1
 operator/config/crd/bases/crd-team.yaml	Team spec.teamMemberRbac	CR	1
