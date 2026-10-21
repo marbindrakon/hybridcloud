@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         vaultkv_cr_name: "{{ event_payload.regarding.name }}"
         vaultkv_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        vaultkv_spec: "{{ event_payload.note | from_json }}"
+        vaultkv_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"

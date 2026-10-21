@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         cloudoso_cr_name: "{{ event_payload.regarding.name }}"
         cloudoso_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        oso_spec: "{{ event_payload.note | from_json }}"
+        oso_spec: "{{ shc_live_spec }}"
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"

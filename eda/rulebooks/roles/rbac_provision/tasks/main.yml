@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         rbac_cr_name: "{{ event_payload.regarding.name }}"
         rbac_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        rbac_spec: "{{ event_payload.note | from_json }}"
+        rbac_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -53,12 +53,6 @@
           {{
             rbac_cr_lookup.resources[0].metadata.annotations['hybridsovereign.redhat/creator']
             | default(rbac_cr_lookup.resources[0].metadata.managedFields[0].manager | default('unknown'))
-          }}
-        # Prefer event note; fall back to live CR.spec when note is empty/partial
-        rbac_spec: >-
-          {{
-            (rbac_spec if (rbac_spec is mapping and (rbac_spec.config | default('') | length) > 0)
-             else (rbac_cr_lookup.resources[0].spec | default({})))
           }}
 
     - name: Read referenced RbacConfig

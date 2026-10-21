@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         project_cr_name: "{{ event_payload.regarding.name }}"
         project_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        project_spec: "{{ event_payload.note | from_json }}"
+        project_spec: "{{ shc_live_spec }}"
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"

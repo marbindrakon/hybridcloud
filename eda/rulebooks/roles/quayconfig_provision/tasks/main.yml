@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         quayconfig_cr_name: "{{ event_payload.regarding.name }}"
         quayconfig_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        quayconfig_spec: "{{ event_payload.note | from_json }}"
+        quayconfig_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
