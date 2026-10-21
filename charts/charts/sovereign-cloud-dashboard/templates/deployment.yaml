@@ -71,9 +71,15 @@ spec:
             {{- end }}
             {{- with .Values.oauthProxy.openshiftSar }}
             {{- /* Platform administrators only: a session whose user fails this review gets 403 from the
-                 proxy; bearer tokens (the console's plugin proxy) are accepted with the same review. */}}
+                 proxy; bearer tokens (the console's plugin proxy) are accepted with the same review.
+                 --openshift-sar takes the OpenShift SubjectAccessReview keys (resourceAPIGroup,
+                 resourceName); --openshift-delegate-urls takes Kubernetes ResourceAttributes (group, name)
+                 and silently drops unknown keys, so the delegate entry is translated here. */}}
             - --openshift-sar={{ toJson . }}
-            - --openshift-delegate-urls={{ dict "/" . | toJson }}
+            {{- $delegate := dict "resource" .resource "verb" .verb "group" (.resourceAPIGroup | default "") }}
+            {{- with .namespace }}{{ $_ := set $delegate "namespace" . }}{{ end }}
+            {{- with (.resourceName | default .name) }}{{ $_ := set $delegate "name" . }}{{ end }}
+            - --openshift-delegate-urls={{ dict "/" $delegate | toJson }}
             {{- end }}
           volumeMounts:
             - name: proxy-tls
