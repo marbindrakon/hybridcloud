@@ -16,7 +16,9 @@
     "dev:admin": "npm run dev -w @hybridsovereign/admin-dashboard",
     "dev:tenant": "npm run dev -w @hybridsovereign/tenant-dashboard",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck:baseline": "bash scripts/typecheck-baseline.sh --check",
+    "test:shell": "bash scripts/test-shell.sh"
   },
   "engines": {
     "node": ">=18.0.0"

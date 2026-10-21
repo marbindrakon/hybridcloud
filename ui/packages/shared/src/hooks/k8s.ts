@@ -6,6 +6,7 @@ import {
   K8sResource,
 } from '../types';
 import { usePermissions } from './permissions';
+import { errorFromResponse, K8sApiErrorContext, networkError } from './errors';
 
 export type K8sApiStyle = 'raw' | 'dashboard';
 
@@ -251,7 +252,16 @@ export async function updateDashboardResource(
   });
 }
 
-async function k8sFetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+/**
+ * Fetch JSON from the configured API base. A failed answer throws `K8sApiError`
+ * (status, reason, causes, warnings); a request that never got an answer throws
+ * one with status 0.
+ */
+export async function k8sFetchJson<T>(
+  url: string,
+  init?: RequestInit,
+  ctx: K8sApiErrorContext = {},
+): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(init?.headers as Record<string, string> | undefined),
@@ -260,16 +270,14 @@ async function k8sFetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     headers.Authorization = `Bearer ${globalK8sConfig.token}`;
   }
   const fetchImpl = globalK8sConfig.fetchFn ?? fetch;
-  const response = await fetchImpl(url, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { ...init, headers });
+  } catch (err) {
+    throw networkError(err, ctx);
+  }
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = (await response.json()) as { message?: string };
-      if (body?.message) detail = body.message;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(`K8s API error ${response.status}: ${detail}`);
+    throw await errorFromResponse(response, ctx);
   }
   // DELETE / some PATCHes return 200 with body, 202 Accepted, or 204 No Content.
   if (response.status === 204 || response.status === 205) {
@@ -407,6 +415,13 @@ export function useK8sResourceList<T extends K8sResource>(
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
+  // A new URL (other kind, namespace or selector) never shows the previous
+  // list's rows or error while it loads (UX-113).
+  useEffect(() => {
+    setItems([]);
+    setError(null);
+  }, [url]);
+
   useEffect(() => {
     if (!enabled) {
       setLoading(false);
@@ -416,7 +431,7 @@ export function useK8sResourceList<T extends K8sResource>(
     let cancelled = false;
     setLoading(true);
 
-    k8sFetchJson<unknown>(url)
+    k8sFetchJson<unknown>(url, undefined, { kind, verb: 'list', namespace })
       .then((data) => {
         if (!cancelled) {
           setItems(normalizeListPayload<T>(data));
@@ -424,7 +439,11 @@ export function useK8sResourceList<T extends K8sResource>(
         }
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err);
+        if (!cancelled) {
+          // Rows are never rendered under an error.
+          setItems([]);
+          setError(err);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -461,6 +480,11 @@ export function useK8sResource<T extends K8sResource>(
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
+    setResource(null);
+    setError(null);
+  }, [url]);
+
+  useEffect(() => {
     if (!enabled || !name) {
       setLoading(false);
       return;
@@ -469,7 +493,7 @@ export function useK8sResource<T extends K8sResource>(
     let cancelled = false;
     setLoading(true);
 
-    k8sFetchJson<T>(url)
+    k8sFetchJson<T>(url, undefined, { kind, verb: 'get', namespace, name })
       .then((data) => {
         if (!cancelled) {
           setResource(data);
@@ -477,7 +501,10 @@ export function useK8sResource<T extends K8sResource>(
         }
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err);
+        if (!cancelled) {
+          setResource(null);
+          setError(err);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

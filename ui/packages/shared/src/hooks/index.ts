@@ -5,6 +5,7 @@ export {
   deleteDashboardResource,
   forceReconcile,
   getK8sClientConfig,
+  k8sFetchJson,
   updateDashboardResource,
   useCanI,
   useK8sResource,
@@ -18,8 +19,20 @@ export type {
   UseK8sResourceOptions,
   UseK8sResourceResult,
 } from './k8s';
-export { useOverviewCRs, PLATFORM_NS, PLUGINS_NS } from './overviewCrs';
-export type { OverviewCRsResult, UseOverviewCRsOptions } from './overviewCrs';
+export { useOverviewCRs, fetchOverviewCRs, PLATFORM_NS, PLUGINS_NS } from './overviewCrs';
+export type { OverviewCRsResult, OverviewFetchResult, UseOverviewCRsOptions } from './overviewCrs';
+export {
+  K8sApiError,
+  isK8sApiError,
+  statusOf,
+  classifyError,
+  isForbiddenError,
+  parseStatusBody,
+  parseWarningHeaders,
+  errorFromResponse,
+  networkError,
+} from './errors';
+export type { ErrorClass, K8sStatusCause, K8sApiErrorContext } from './errors';
 export { useNetworkOverviewCRs } from './networkOverviewCrs';
 export type { NetworkOverviewCRsResult } from './networkOverviewCrs';
 export {
