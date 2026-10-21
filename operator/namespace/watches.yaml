@@ -3,8 +3,8 @@
   group: hybridsovereign.redhat
   kind: Team
   role: team
-  maxConcurrentReconciles: 20
-  reconcilePeriod: 120s
+  manageStatus: false
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
   finalizer:
     name: hybridsovereign.redhat/team-cleanup
@@ -14,7 +14,8 @@
   group: hybridsovereign.redhat
   kind: Assignment
   role: assignment
-  maxConcurrentReconciles: 10
+  manageStatus: false
+  maxConcurrentReconciles: 1
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
@@ -25,29 +26,30 @@
   group: hybridsovereign.redhat
   kind: Project
   role: project
+  manageStatus: false
   finalizer:
     name: projects.hybridsovereign.redhat/finalizer
     role: project_finalizer
-  maxConcurrentReconciles: 10
-  reconcilePeriod: 300s
+  maxConcurrentReconciles: 2
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: Persona
   role: persona
+  manageStatus: false
   finalizer:
     name: personas.hybridsovereign.redhat/finalizer
     role: persona_finalizer
-  maxConcurrentReconciles: 10
-  reconcilePeriod: 300s
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: PlatformOpenshift
   role: platformopenshift
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 1
   reconcilePeriod: 600s
   watchDependentResources: false
   watchAnnotationsChanges: true
@@ -59,7 +61,8 @@
   group: hybridsovereign.redhat
   kind: CloudOSO
   role: cloudoso
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 2
   reconcilePeriod: 300s
   watchDependentResources: false
   watchAnnotationsChanges: true
@@ -71,7 +74,8 @@
   group: hybridsovereign.redhat
   kind: CloudAWS
   role: cloudaws
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 1
   reconcilePeriod: 300s
   watchDependentResources: false
   watchAnnotationsChanges: true
@@ -83,72 +87,74 @@
   group: hybridsovereign.redhat
   kind: OpenStackMigration
   role: openstackmigration
+  manageStatus: false
   finalizer:
     name: openstackmigrations.hybridsovereign.redhat/finalizer
     role: openstackmigration_delete
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: Rbac
   role: rbac
-  reconcilePeriod: 300s
+  manageStatus: false
   watchAnnotationsChanges: true
   finalizer:
     name: rbacs.hybridsovereign.redhat/finalizer
     role: rbac_finalizer
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 2
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: AAPOrg
   role: aaporg
-  reconcilePeriod: 300s
+  manageStatus: false
   finalizer:
     name: aaporg.hybridsovereign.redhat/finalizer
     role: aaporg_finalizer
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: QuayOrg
   role: quayorg
+  manageStatus: false
   finalizer:
     name: quayorg.hybridsovereign.redhat/finalizer
     role: quayorg_finalizer
-  maxConcurrentReconciles: 10
-  reconcilePeriod: 300s
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: Vault
   role: vault
+  manageStatus: false
   watchAnnotationsChanges: true
   finalizer:
     name: vaults.hybridsovereign.redhat/finalizer
     role: vault_finalizer
-  maxConcurrentReconciles: 20
-  reconcilePeriod: 600s
+  maxConcurrentReconciles: 1
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: VaultKV
   role: vaultkv
+  manageStatus: false
   watchAnnotationsChanges: true
   finalizer:
     name: vaultkvs.hybridsovereign.redhat/finalizer
     role: vaultkv_finalizer
-  maxConcurrentReconciles: 20
-  reconcilePeriod: 600s
+  maxConcurrentReconciles: 2
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: HybridNetwork
   role: hybridnetwork
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 2
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
@@ -159,7 +165,8 @@
   group: hybridsovereign.redhat
   kind: NetworkPlacement
   role: networkplacement
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 3
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
@@ -171,7 +178,8 @@
   group: hybridsovereign.redhat
   kind: AttachmentCircuit
   role: attachmentcircuit
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 1
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
   finalizer:
@@ -183,7 +191,8 @@
   group: hybridsovereign.redhat
   kind: CloudVirt
   role: cloudvirt
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 2
   reconcilePeriod: 300s
   watchDependentResources: false
   watchAnnotationsChanges: true
@@ -195,7 +204,8 @@
   group: hybridsovereign.redhat
   kind: CloudGCP
   role: cloudgcp
-  maxConcurrentReconciles: 20
+  manageStatus: false
+  maxConcurrentReconciles: 1
   reconcilePeriod: 300s
   watchDependentResources: false
   watchAnnotationsChanges: true

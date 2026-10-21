@@ -3,50 +3,55 @@
   group: hybridsovereign.redhat
   kind: Entity
   role: entity
+  manageStatus: false
   finalizer:
     name: entities.hybridsovereign.redhat/finalizer
     role: entity_finalizer
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 3
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: RbacConfig
   role: rbacconfig
+  manageStatus: false
   finalizer:
     name: rbacconfigs.hybridsovereign.redhat/finalizer
     role: rbacconfig_finalizer
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: AAPConfig
   role: aapconfig
+  manageStatus: false
   finalizer:
     name: aapconfig.hybridsovereign.redhat/finalizer
     role: aapconfig_finalizer
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: QuayConfig
   role: quayconfig
+  manageStatus: false
   finalizer:
     name: quayconfig.hybridsovereign.redhat/finalizer
     role: quayconfig_finalizer
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: HybridFabric
   role: hybridfabric
+  manageStatus: false
   finalizer:
     name: hybridfabrics.hybridsovereign.redhat/finalizer
     role: hybridfabric_delete
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
@@ -54,10 +59,11 @@
   group: hybridsovereign.redhat
   kind: CloudGateway
   role: cloudgateway
+  manageStatus: false
   finalizer:
     name: cloudgateways.hybridsovereign.redhat/finalizer
     role: cloudgateway_delete
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 2
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
@@ -66,10 +72,11 @@
   group: hybridsovereign.redhat
   kind: ProviderEdge
   role: provideredge
+  manageStatus: false
   finalizer:
     name: provideredges.hybridsovereign.redhat/finalizer
     role: provideredge_delete
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
@@ -77,10 +84,11 @@
   group: hybridsovereign.redhat
   kind: TransportLink
   role: transportlink
+  manageStatus: false
   finalizer:
     name: transportlinks.hybridsovereign.redhat/finalizer
     role: transportlink_delete
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
@@ -88,10 +96,11 @@
   group: hybridsovereign.redhat
   kind: UIHealthChecker
   role: uihealthchecker
+  manageStatus: false
   finalizer:
     name: uihealthcheckers.hybridsovereign.redhat/finalizer
     role: uihealthchecker_delete
-  maxConcurrentReconciles: 10
+  maxConcurrentReconciles: 1
   watchAnnotationsChanges: true
 
 # shc (design/P7-PLAN.md P7.1): platform-owned cloud sites. The interval lets a Ready site be re-probed
@@ -100,10 +109,11 @@
   group: hybridsovereign.redhat
   kind: CloudInfrastructure
   role: cloudinfrastructure
+  manageStatus: false
   finalizer:
     name: cloudinfrastructures.hybridsovereign.redhat/finalizer
     role: cloudinfrastructure_delete
-  maxConcurrentReconciles: 5
+  maxConcurrentReconciles: 2
   reconcilePeriod: 600s
   watchDependentResources: false
   watchAnnotationsChanges: true
@@ -113,10 +123,11 @@
   group: hybridsovereign.redhat
   kind: DNSConfig
   role: dnsconfig
+  manageStatus: false
   finalizer:
     name: dnsconfigs.hybridsovereign.redhat/finalizer
     role: dnsconfig_delete
-  maxConcurrentReconciles: 2
+  maxConcurrentReconciles: 1
   reconcilePeriod: 600s
   watchDependentResources: false
   watchAnnotationsChanges: true
