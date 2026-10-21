@@ -16,7 +16,7 @@
       vars:
         resolve_config_kind: RbacConfig
         resolve_config_name: "{{ rbac_spec.config | default('') }}"
-        resolve_config_namespace: {{ plugin_rbac_operator_namespace }}
+        resolve_config_namespace: "{{ plugin_rbac_operator_namespace }}"
 
     - name: Use the resolved identity provider connection
       ansible.builtin.set_fact:
