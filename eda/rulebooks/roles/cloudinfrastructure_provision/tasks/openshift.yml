@@ -161,6 +161,28 @@
     - (ci_ocp.storageClass | default('', true)) | length > 0
     - (_ci_sc.resources | default([])) | length == 0
 
+# what a tenant may pick for VM disks (TenantProfile status.sites[].storageClasses); read only
+- name: List the site's storage classes
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+  register: _ci_scs
+  failed_when: false
+
+- name: Keep the storage class names and the default
+  ansible.builtin.set_fact:
+    ci_storage_classes: >-
+      {%- set out = [] -%}
+      {%- for c in _ci_scs.resources | default([]) | sort(attribute='metadata.name') -%}
+        {%- set a = c.metadata.annotations | default({}, true) -%}
+        {%- set _ = out.append({'name': c.metadata.name,
+                                'default': (a['storageclass.kubernetes.io/is-default-class'] | default('') | string | lower) == 'true'}) -%}
+      {%- endfor -%}
+      {{ out }}
+
 - name: Read the cluster network operator config
   kubernetes.core.k8s_info:
     host: "{{ ci_k8s.host | default(omit) }}"
@@ -237,6 +259,7 @@
       routeAdvertisements: "{{ ci_cno_ra }}"
       console: "{{ ci_wayin.console | default('') }}"
       signIn: "{{ {'clientId': ci_wayin.signIn.clientId | default(''), 'idpName': ci_wayin.signIn.idpName | default('') | trim} }}"
+      storageClasses: "{{ ci_storage_classes }}"
       # one expression: nested "{{ x | int }}" values come out as strings
       underlay: "{{ {'sessions': ci_bgp_sessions | int, 'established': ci_bgp_established | int, 'peers': ci_bgp_peers} }}"
     ci_type_message: >-

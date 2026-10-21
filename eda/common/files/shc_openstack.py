@@ -263,6 +263,28 @@ def dns_delete(req):
     return {"deleted": deleted, "missing": missing}
 
 
+def public_volume_types(conn, services, notes):
+    """The public Cinder volume types (what any project of the cloud may use), [{name, default}]; read only.
+    Private types belong to other consumers of a shared cloud and are never listed."""
+    if not ({"volumev3", "block-storage", "volume"} & set(services)):
+        return []
+    try:
+        default = None
+        try:
+            default = conn.block_storage.get("/types/default").json().get("volume_type", {}).get("name")
+        except Exception:  # noqa: BLE001 - the default type is optional information
+            default = None
+        out = []
+        for t in conn.block_storage.types():
+            if getattr(t, "is_public", True) is False:
+                continue
+            out.append({"name": t.name, "default": bool(default) and t.name == default})
+        return sorted(out, key=lambda x: x["name"])
+    except Exception as e:  # noqa: BLE001 - a missing list must not fail the site probe
+        notes.append(f"volume types not listed: {type(e).__name__}")
+        return []
+
+
 def site_probe(req):
     """CloudInfrastructure type openstack. Read-only apart from the tenant domain and the account's
     grants on it (and on the Designate project), which the tenant jobs' domain-scoped calls need."""
@@ -277,6 +299,7 @@ def site_probe(req):
     aliases = sorted(e.alias for e in conn.network.extensions())
     out["evpn_extension"] = "evpn" in aliases
     out["network_extensions"] = [a for a in aliases if a.startswith(("bgp", "evpn"))]
+    out["volume_types"] = public_volume_types(conn, out["services"], out["notes"])
     if req.get("external_network"):
         net = conn.network.find_network(req["external_network"])
         out["external_network"] = {"found": net is not None,

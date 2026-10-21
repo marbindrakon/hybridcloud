@@ -1,0 +1,64 @@
+---
+# Unit test (no cluster) of eda/common/tasks/site_tenant_summary.yml: synthetic sites in, tenant-word entries out.
+#   ansible-playbook -i localhost, -c local tests/tenantprofile/site-summary.yml
+- name: Site summary for tenants
+  hosts: localhost
+  gather_facts: false
+  vars:
+    sites:
+      - metadata: {name: ocp-a, generation: 2}
+        spec: {type: openshift, displayName: OCP A, location: Room 1, openshift: {clusterRef: local}}
+        status:
+          status: ready
+          capabilities: {api: true, virtualization: true, evpn: true, frrK8s: true}
+          site:
+            endpoint: https://api.example.invalid:6443
+            version: "4.22.1"
+            storageClasses: [{name: zfs, default: false}, {name: ceph-rbd, default: true}]
+      - metadata: {name: os-b}
+        spec: {type: openstack, credentialsRef: {vaultPath: secret/x}}
+        status:
+          status: failed
+          capabilities: {api: true, dns: true, evpn: false}
+          site: {endpoint: https://keystone.example.invalid, projectDomainId: abc123, volumeTypes: [{name: standard}]}
+      - metadata: {name: aws-x}
+        spec: {type: aws, location: ignored for regional sites, aws: {region: eu-west-1}}
+        status:
+          capabilities: {api: true, dns: true, evpn: true}
+          site: {account: "123456789012", vpc: vpc-0abc, region: eu-west-1}
+      - metadata: {name: gcp-y, deletionTimestamp: "2026-01-01T00:00:00Z"}
+        spec: {type: gcp, gcp: {}}
+        status:
+          capabilities: {api: true}
+          site: {region: europe-west4}
+      - metadata: {name: ext-z}
+        spec: {type: external}
+        status: {}
+    expected:
+      - name: ocp-a
+        displayName: OCP A
+        type: openshift
+        location: Room 1
+        billable: false
+        state: Available
+        capabilities: [Virtualization, HybridNetworking]
+        storageClasses: [{name: ceph-rbd, default: true}, {name: zfs, default: false}]
+      - {name: os-b, type: openstack, billable: false, state: Unavailable, capabilities: [DNS],
+         storageClasses: [{name: standard, default: false}]}
+      - {name: aws-x, type: aws, region: eu-west-1, billable: true, state: Available, capabilities: [HybridNetworking, DNS]}
+      - {name: gcp-y, type: gcp, region: europe-west4, billable: true, state: Unavailable, capabilities: []}
+      - {name: ext-z, type: external, billable: false, state: Unavailable, capabilities: []}
+  tasks:
+    - name: Summarize
+      ansible.builtin.include_tasks: ../../eda/common/tasks/site_tenant_summary.yml
+      vars:
+        sts_sites: "{{ sites }}"
+
+    - name: Compare
+      ansible.builtin.assert:
+        that: site_tenant_summaries == expected
+        fail_msg: "{{ site_tenant_summaries | to_nice_yaml }}"
+
+    - name: Nothing of the platform's detail leaks
+      ansible.builtin.assert:
+        that: (site_tenant_summaries | to_json) is not search('https://|vpc-|123456789012|abc123|secret/')

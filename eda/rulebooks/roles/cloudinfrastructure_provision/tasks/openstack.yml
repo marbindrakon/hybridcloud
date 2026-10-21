@@ -162,6 +162,7 @@
       region: "{{ ci_probe.region }}"
       services: "{{ ci_probe.services }}"
       networkExtensions: "{{ ci_probe.network_extensions }}"
+      volumeTypes: "{{ ci_probe.volume_types | default([]) }}"
       externalNetworkId: "{{ (ci_probe.external_network | default({})).id | default('') }}"
       projectDomainId: "{{ (ci_probe.project_domain | default({})).id | default('') }}"
       dns: >-
