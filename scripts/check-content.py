@@ -291,6 +291,7 @@ def _prose_lines(text, markdown):
             continue
         prose = "" if fence else re.sub(r"`[^`]*`", "", raw)
         prose = re.sub(r"\]\([^)]*\)", "]", prose)  # link targets are paths
+        prose = re.sub(r"\[[^\]]*\.(md|yaml|yml)\]", "[]", prose)  # so are file-name link texts
         yield n, prose, raw, retired
 
 

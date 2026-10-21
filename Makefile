@@ -50,6 +50,7 @@ check-content:
 	python3 -I scripts/check-content.py --self-test
 	python3 -I scripts/check-content.py
 	python3 -I scripts/crd-descriptions.py lockstep
+	python3 -I scripts/check-doc-links.py
 
 # Strict server-side dry run of samples/ and the YAML in docs/ (nothing is created).
 # Needs KUBECONFIG (services), SAMPLES_NS (an existing tenant namespace) and optionally OC.
