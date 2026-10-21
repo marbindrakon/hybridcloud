@@ -1,0 +1,149 @@
+{{- /*
+Admission policies for the platform objects this chart renders from values (templates/cloud-*.yaml,
+hybrid-fabrics.yaml, provider-edges.yaml, plugin-configs.yaml). Mode per policy in values admission.<policy>.mode
+(Warn: [Warn, Audit] and failurePolicy Ignore; Deny: [Deny, Audit] and failurePolicy Fail). Exempt usernames
+and groups come from the shared helpers in _helpers.tpl.
+*/}}
+{{- $a := .Values.admission }}
+{{- if $a.fabricLedgerGuard.enabled }}
+---
+# shc-fabric-ledger-guard: a HybridFabric that still holds address allocations cannot be deleted (an Argo prune,
+# a kubectl delete). The ledger writer keeps the label hybridsovereign.redhat/allocations at the number of
+# allocations not held by the fabric itself; without the label, any non-zero status.allocated count other than
+# peIndex (the fabric's own root holds one) counts. Break glass: set a non-empty annotation
+# hybridsovereign.redhat/allow-delete-with-allocations on the fabric before deleting it. Nobody is exempt.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-fabric-ledger-guard
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $a.fabricLedgerGuard.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [hybridsovereign.redhat]
+        apiVersions: ["*"]
+        operations: [DELETE]
+        resources: [hybridfabrics]
+  variables:
+    - name: labels
+      expression: >-
+        has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}
+    - name: annotations
+      expression: >-
+        has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}
+    - name: allocated
+      expression: >-
+        has(oldObject.status) && has(oldObject.status.allocated) ? oldObject.status.allocated : {}
+    # -1 = no usable label
+    - name: labelCount
+      expression: >-
+        ('hybridsovereign.redhat/allocations' in variables.labels
+          && variables.labels['hybridsovereign.redhat/allocations'].matches('^[0-9]{1,9}$'))
+        ? int(variables.labels['hybridsovereign.redhat/allocations']) : -1
+    - name: statusKinds
+      expression: >-
+        variables.allocated.filter(k, k != 'peIndex' && string(variables.allocated[k]) != '0')
+    - name: breakGlass
+      expression: >-
+        'hybridsovereign.redhat/allow-delete-with-allocations' in variables.annotations
+        && variables.annotations['hybridsovereign.redhat/allow-delete-with-allocations'] != ''
+  validations:
+    - expression: >-
+        variables.breakGlass
+        || (variables.labelCount >= 0 ? variables.labelCount == 0
+            : (!('hybridsovereign.redhat/allocations' in variables.labels) && size(variables.statusKinds) == 0))
+      messageExpression: >-
+        'The fabric still holds '
+        + (variables.labelCount >= 0 ? string(variables.labelCount) + ' address allocations'
+           : 'address allocations (' + variables.statusKinds.join(', ') + ')')
+        + '. Delete the networks, placements, circuits and gateways that use it first.'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-fabric-ledger-guard
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-fabric-ledger-guard
+  validationActions: {{ include "primary-operator.vapActions" $a.fabricLedgerGuard.mode }}
+{{- end }}
+{{- if $a.gitopsManaged.enabled }}
+---
+# shc-gitops-managed: objects labelled hybridsovereign.redhat/managed-by: gitops are owned by the Git values
+# named in their hybridsovereign.redhat/gitops-source annotation. A spec change (or a change of the managed-by
+# label) by anyone but the platform automation or the GitOps controller is reported (Warn) or refused (Deny);
+# Argo CD would revert it anyway. Status writes (the /status subresource) and other metadata (finalizers,
+# annotations, other labels) are not matched. Break glass: a non-empty annotation
+# hybridsovereign.redhat/gitops-override: "<reason>" on the new object.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-gitops-managed
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $a.gitopsManaged.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [hybridsovereign.redhat]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [cloudinfrastructures, cloudgateways, hybridfabrics, provideredges, dnsconfigs, rbacconfigs, aapconfigs, quayconfigs]
+  matchConditions:
+    - name: gitops-managed
+      expression: >-
+        has(oldObject.metadata.labels)
+        && 'hybridsovereign.redhat/managed-by' in oldObject.metadata.labels
+        && oldObject.metadata.labels['hybridsovereign.redhat/managed-by'] == 'gitops'
+    - name: not-exempt
+      expression: >-
+        !({{ include "primary-operator.isAutomationCEL" . }} || {{ include "primary-operator.isGitopsCEL" . }})
+  variables:
+    - name: newLabels
+      expression: >-
+        has(object.metadata.labels) ? object.metadata.labels : {}
+    - name: newAnnotations
+      expression: >-
+        has(object.metadata.annotations) ? object.metadata.annotations : {}
+    - name: oldAnnotations
+      expression: >-
+        has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}
+    - name: override
+      expression: >-
+        'hybridsovereign.redhat/gitops-override' in variables.newAnnotations
+        && variables.newAnnotations['hybridsovereign.redhat/gitops-override'] != ''
+    - name: source
+      expression: >-
+        'hybridsovereign.redhat/gitops-source' in variables.oldAnnotations
+        ? variables.oldAnnotations['hybridsovereign.redhat/gitops-source'] : 'the platform values'
+  validations:
+    - expression: >-
+        variables.override
+        || ((has(object.spec) == has(oldObject.spec)) && (!has(object.spec) || object.spec == oldObject.spec))
+      messageExpression: >-
+        'This ' + oldObject.kind + ' is managed in Git (' + variables.source + '). Edit Git instead; '
+        + 'a change made here is reverted at the next sync.'
+      reason: Forbidden
+    - expression: >-
+        variables.override
+        || ('hybridsovereign.redhat/managed-by' in variables.newLabels
+            && variables.newLabels['hybridsovereign.redhat/managed-by'] == 'gitops')
+      messageExpression: >-
+        'This ' + oldObject.kind + ' is managed in Git (' + variables.source + '); its '
+        + 'hybridsovereign.redhat/managed-by label cannot be changed here.'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-gitops-managed
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-gitops-managed
+  validationActions: {{ include "primary-operator.vapActions" $a.gitopsManaged.mode }}
+{{- end }}

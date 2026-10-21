@@ -1,4 +1,0 @@
----
-# One status writer: this copy only forwards to eda/common/tasks/patch_cr_status.yml (same inputs).
-- name: "Write the status of {{ cr_plural }}/{{ cr_name }}"
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/../common/tasks/patch_cr_status.yml"

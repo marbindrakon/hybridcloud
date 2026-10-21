@@ -1,4 +1,0 @@
----
-# One acknowledgement task: this copy only forwards to eda/common/tasks/acknowledge_event.yml.
-- name: Acknowledge the event
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/../common/tasks/acknowledge_event.yml"

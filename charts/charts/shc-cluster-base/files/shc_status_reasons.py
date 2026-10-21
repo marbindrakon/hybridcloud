@@ -114,6 +114,8 @@ REASONS = {
     "ClaimMissing": _r("P", FAILED, "Members of the granted access groups cannot sign in yet. The platform team is looking at it."),
     "MapperMissing": _r("P", FAILED, "Sign-in is not set up for this service yet. The platform team is looking at it."),
     "NoDefaultConfig": _r("P", FAILED, "No default connection is configured for this service. Ask the platform team."),
+    # Warning Event on an Entity (never a condition): its operator-version annotation names an image that is not allowed
+    "NamespaceOperatorImageRejected": _r("P", FAILED, "The requested operator version for this tenant is not allowed; the default version is used."),
     # ---- blocked (deletion) ------------------------------------------------------------
     "ProtectedChildren": _r("T", BLOCKED, "Deletion waits: some objects have deletion protection turned on."),
     "UnknownKind": _r("P", BLOCKED, "Deletion waits: an object of an unknown kind is in the tenant. The platform team is looking at it."),

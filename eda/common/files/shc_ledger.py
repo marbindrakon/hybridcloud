@@ -14,7 +14,10 @@ Ledger: ConfigMap fabric-ledger-<fabric> (key ledger.json) in the fabric's names
   ledger-allocate {fabric, kind, owner}   the owner's value (lowest free one the first time)
   ledger-release  {fabric, kind, owner}
   An allocate or release that changes the ledger also writes its counts to the HybridFabric's status.allocated /
-  status.available (best effort), so they follow every change and not only the fabric's own runs.
+  status.available (best effort), so they follow every change and not only the fabric's own runs. Ensure, allocate
+  and release also set the HybridFabric label hybridsovereign.redhat/allocations: "<n>", n = the allocations not
+  held by the fabric itself (best effort); the admission policy shc-fabric-ledger-guard refuses deleting a fabric
+  whose label is not "0".
   ledger-get      {fabric}
 Lease: coordination.k8s.io Lease fabric-config-<fabric>, serializing the jobs that change the border gateway nodes.
   lease-acquire   {fabric, holder, duration (s, default 1800), wait (s, default 1200)}
@@ -60,6 +63,32 @@ def counts(led):
     return out
 
 
+ALLOCATIONS_LABEL = "hybridsovereign.redhat/allocations"
+
+
+def fabric_owner(namespace, fabric):
+    """The owner key the fabric's own reservations use (its border gateway root's peIndex)."""
+    return f"HybridFabric/{namespace}/{fabric}"
+
+
+def tenant_allocations(led, namespace, fabric):
+    """Allocations of every kind not held by the fabric itself."""
+    own = fabric_owner(namespace, fabric)
+    return sum(1 for k in KINDS for o in (led.get("alloc") or {}).get(k, {}) if o != own)
+
+
+def publish_label(api, req, led):
+    """Merge-patch the allocations label on the HybridFabric. False when it could not (best effort)."""
+    try:
+        n = tenant_allocations(led, req["namespace"], req["fabric"])
+        path = f"/apis/hybridsovereign.redhat/v1alpha1/namespaces/{req['namespace']}/hybridfabrics/{req['fabric']}"
+        code, _ = api.call("PATCH", path, {"metadata": {"labels": {ALLOCATIONS_LABEL: str(n)}}},
+                           content_type="application/merge-patch+json")
+        return code == 200
+    except Exception:  # noqa: BLE001 - the next change or fabric run publishes it
+        return False
+
+
 def read(api, req):
     code, cm = api.call("GET", cm_path(req["namespace"], req["fabric"]))
     if code == 404:
@@ -102,7 +131,8 @@ def publish_counts(api, req):
             return False
         path = f"/apis/hybridsovereign.redhat/v1alpha1/namespaces/{req['namespace']}/hybridfabrics/{req['fabric']}/status"
         code, _ = api.call("PATCH", path, {"status": counts(led)}, content_type="application/merge-patch+json")
-        return code == 200
+        labelled = publish_label(api, req, led)
+        return code == 200 and labelled
     except Exception:  # noqa: BLE001 - the allocation stands; the next change or fabric run publishes the counts
         return False
 
@@ -125,7 +155,7 @@ def ledger_ensure(api, req):
             return ledger_ensure(api, req)
         if code not in (200, 201):
             raise RuntimeError(f"creating the ledger: HTTP {code} {out.get('message', '')}")
-        return {"created": True, **counts(led)}
+        return {"created": True, **counts(led), "labelPublished": publish_label(api, req, led)}
 
     def change(led):
         bad = []
@@ -146,7 +176,10 @@ def ledger_ensure(api, req):
                     raise RuntimeError(f"{k} {v} is reserved for {o} but allocated to {holder}")
                 led["alloc"][k][o] = int(v)
         return {"created": False, "unchanged": json.dumps(led, sort_keys=True) == before, **counts(led)}
-    return update(api, req, change)
+    result = update(api, req, change)
+    _, led = read(api, req)
+    result["labelPublished"] = publish_label(api, req, led) if led is not None else False
+    return result
 
 
 def ledger_allocate(api, req):

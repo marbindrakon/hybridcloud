@@ -1,32 +1,138 @@
 ---
-# Load services_api_host + services_bearer_token from Vault (openshift-services-kubeadmin).
+# Sets services_api_host + services_bearer_token for the services cluster (the SHC API) and services_identity
+# (automation | kubeadmin).
+#
+# Default identity: the platform automation account (ACM ManagedServiceAccount shc-automation, token rotated by
+# ACM). Its kubeconfig is in central Vault at shc_services_automation_vault_path (default shc-automation/services,
+# property kubeconfig). The token is checked with a SelfSubjectReview: the username must be
+# shc_services_automation_username, the name the admission policies exempt.
+#
+# Fallback: when that key is missing, the token is refused or the username differs, the job logs in as kubeadmin
+# (Vault openshift-services-kubeadmin, OAuth) and logs "services automation identity unavailable (<reason>); using
+# kubeadmin". The fallback stays while the policies that exempt only the automation account run in Warn mode; it
+# goes before any of them is switched to Deny. shc_services_identity: kubeadmin (job extra var) forces the
+# kubeadmin login (rollback).
 
-- name: Read services cluster kubeadmin credentials from Vault
-  ansible.builtin.include_tasks: vault_kv_read.yml
-  vars:
-    vault_kv_path: openshift-services-kubeadmin
-
-- name: Validate kubeadmin password is plaintext (not bcrypt hash from kube secret)
-  ansible.builtin.assert:
-    that:
-      - not (vault_kv_data.password is search('^\$2[aby]\$'))
-    fail_msg: >-
-      openshift-services-kubeadmin password in Vault looks like a bcrypt hash.
-      Re-seed Vault with the plaintext kubeadmin password (OCP_SERVICES_KUBEADMIN_PASSWORD).
-
-- name: Set services API host from Vault
+- name: Choose the services identity
   ansible.builtin.set_fact:
-    services_api_host: "{{ vault_kv_data.api_host }}"
-  no_log: true
+    _ssc_want: "{{ shc_services_identity | default('automation', true) }}"
+    _ssc_expected_user: >-
+      {{ shc_services_automation_username
+         | default('system:serviceaccount:open-cluster-management-agent-addon:shc-automation', true) }}
+    _ssc_reason: ""
+    _ssc_host: ""
+    _ssc_token: ""
 
-- name: Obtain services cluster API bearer token via kubeadmin OAuth
-  ansible.builtin.include_tasks: obtain_openshift_access_token.yml
-  vars:
-    ocp_api_host: "{{ vault_kv_data.api_host }}"
-    ocp_username: "{{ vault_kv_data.username }}"
-    ocp_password: "{{ vault_kv_data.password }}"
+- name: Use the platform automation account
+  when: _ssc_want != 'kubeadmin'
+  block:
+    - name: Read the services automation kubeconfig from Vault
+      ansible.builtin.include_tasks: vault_kv_read.yml
+      vars:
+        vault_kv_path: "{{ shc_services_automation_vault_path | default('shc-automation/services', true) }}"
+        vault_kv_read_missing_ok: true
 
-- name: Record services bearer token from kubeadmin login
-  ansible.builtin.set_fact:
-    services_bearer_token: "{{ openshift_access_token }}"
-  no_log: true
+    - name: Take the API server and token from the kubeconfig
+      ansible.builtin.set_fact:
+        _ssc_host: >-
+          {{ (((((vault_kv_data.kubeconfig | default('', true) | string | from_yaml) or {}).clusters | default([], true)
+               | first | default({}, true)).cluster | default({}, true)).server | default('', true)) | trim }}
+        _ssc_token: >-
+          {{ (((((vault_kv_data.kubeconfig | default('', true) | string | from_yaml) or {}).users | default([], true)
+               | first | default({}, true)).user | default({}, true)).token | default('', true)) | trim }}
+        vault_kv_data: {}
+      no_log: true
+
+    - name: Note a missing automation kubeconfig
+      ansible.builtin.set_fact:
+        _ssc_reason: >-
+          no kubeconfig with a server and a token in Vault
+          {{ shc_services_automation_vault_path | default('shc-automation/services', true) }}
+      when: _ssc_host == '' or _ssc_token == ''
+
+    - name: Ask the services cluster who the automation token is
+      ansible.builtin.uri:
+        url: "{{ _ssc_host }}/apis/authentication.k8s.io/v1/selfsubjectreviews"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ _ssc_token }}"
+        body_format: json
+        body:
+          apiVersion: authentication.k8s.io/v1
+          kind: SelfSubjectReview
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        status_code: [200, 201]
+        timeout: 30
+      register: _ssc_review
+      failed_when: false
+      no_log: true
+      when: _ssc_reason == ''
+
+    - name: Check the automation token's username
+      ansible.builtin.set_fact:
+        _ssc_reason: >-
+          {{ ('the token was refused or the API was unreachable (HTTP ' ~ (_ssc_review.status | default('?')) ~ ')')
+             if (_ssc_review.status | default(-1)) not in [200, 201]
+             else ('the token belongs to ' ~ (_ssc_review.json.status.userInfo.username | default('?')))
+             if (_ssc_review.json.status.userInfo.username | default('')) != (_ssc_expected_user | trim)
+             else '' }}
+      when: _ssc_reason == ''
+
+    - name: Use the automation account for the services cluster
+      ansible.builtin.set_fact:
+        services_api_host: "{{ _ssc_host }}"
+        services_bearer_token: "{{ _ssc_token }}"
+        services_identity: automation
+      no_log: true
+      when: _ssc_reason == ''
+
+    - name: Drop the automation token copy
+      ansible.builtin.set_fact:
+        _ssc_token: ""
+        _ssc_review: {}
+      no_log: true
+
+- name: Report the kubeadmin fallback
+  ansible.builtin.debug:
+    msg: "services automation identity unavailable ({{ _ssc_reason | trim }}); using kubeadmin"
+  when:
+    - _ssc_want != 'kubeadmin'
+    - _ssc_reason != ''
+
+- name: Use kubeadmin for the services cluster
+  when: _ssc_want == 'kubeadmin' or _ssc_reason != ''
+  block:
+    - name: Read services cluster kubeadmin credentials from Vault
+      ansible.builtin.include_tasks: vault_kv_read.yml
+      vars:
+        vault_kv_path: openshift-services-kubeadmin
+
+    - name: Validate kubeadmin password is plaintext (not bcrypt hash from kube secret)
+      ansible.builtin.assert:
+        that:
+          - not (vault_kv_data.password is search('^\$2[aby]\$'))
+        fail_msg: >-
+          openshift-services-kubeadmin password in Vault looks like a bcrypt hash.
+          Re-seed Vault with the plaintext kubeadmin password (OCP_SERVICES_KUBEADMIN_PASSWORD).
+
+    - name: Set services API host from Vault
+      ansible.builtin.set_fact:
+        services_api_host: "{{ vault_kv_data.api_host }}"
+      no_log: true
+
+    - name: Obtain services cluster API bearer token via kubeadmin OAuth
+      ansible.builtin.include_tasks: obtain_openshift_access_token.yml
+      vars:
+        ocp_api_host: "{{ vault_kv_data.api_host }}"
+        ocp_username: "{{ vault_kv_data.username }}"
+        ocp_password: "{{ vault_kv_data.password }}"
+
+    - name: Record services bearer token from kubeadmin login
+      ansible.builtin.set_fact:
+        services_bearer_token: "{{ openshift_access_token }}"
+        services_identity: kubeadmin
+      no_log: true
+
+- name: Report the services identity
+  ansible.builtin.debug:
+    msg: "services_identity={{ services_identity }}"

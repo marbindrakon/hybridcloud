@@ -167,7 +167,7 @@ print_manual_gates() {
             Follow tests/functional/README.md (TC-F001–F010)
 
   GATE-M03  RBAC matrix
-            Follow tests/rbac-access/README.md (TC-RBAC-001–008)
+            python3 -I tests/rbac-access/sar_matrix.py --entity <tenant>  (tests/rbac-access/README.md)
 
   GATE-M04  Cluster connectivity
             Follow tests/connectivity/README.md (TC-CONN-001–015)
@@ -208,6 +208,34 @@ run_unit_tests() {
   fi
 }
 
+# --- be-foundations ---
+# ─── Phase 6: Repository consistency checks ──────────────────────────────────
+run_repo_checks() {
+  log_info "Repository consistency — EDA includes, generated CRDs"
+  if ! require_cmd python3; then
+    return
+  fi
+  if (cd "${REPO_ROOT}" && python3 -I scripts/check-includes.py) >/tmp/shc-check-includes.log 2>&1; then
+    log_pass "EDA includes resolve ($(tail -1 /tmp/shc-check-includes.log))"
+  else
+    log_fail "EDA includes (scripts/check-includes.py)"
+    grep MISSING /tmp/shc-check-includes.log | head -20 || true
+  fi
+  if (cd "${REPO_ROOT}" && python3 -m unittest discover -s tests/schema-replay -p 'test_*.py') >/tmp/shc-replay-unit.log 2>&1; then
+    log_pass "schema-replay unit tests ($(grep -Eo 'Ran [0-9]+ tests' /tmp/shc-replay-unit.log))"
+  else
+    log_fail "schema-replay unit tests"
+    tail -20 /tmp/shc-replay-unit.log || true
+  fi
+  if (cd "${REPO_ROOT}" && python3 -I scripts/gen-crds.py --check) >/tmp/shc-gen-crds.log 2>&1; then
+    log_pass "crds.yaml generated from operator/config/crd/bases"
+  else
+    log_fail "crds.yaml drift (run python3 -I scripts/gen-crds.py)"
+    cat /tmp/shc-gen-crds.log
+  fi
+}
+# --- end be-foundations ---
+
 main() {
   echo "Hybrid Sovereign Test Runner"
   echo "Repository: ${REPO_ROOT}"
@@ -223,6 +251,8 @@ main() {
   run_script_permissions
   echo ""
   run_unit_tests
+  echo ""
+  run_repo_checks
   echo ""
   print_manual_gates
   echo ""

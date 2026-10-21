@@ -18,7 +18,8 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-content check-manifests
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-content check-manifests \
+        check-includes crds crds-check replay sar-matrix
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -56,3 +57,25 @@ check-content:
 # Needs KUBECONFIG (services), SAMPLES_NS (an existing tenant namespace) and optionally OC.
 check-manifests:
 	OC=$${OC:-oc} python3 -I scripts/check-manifests.py samples docs
+
+# --- be-foundations ---
+check-includes:
+	python3 -I scripts/check-includes.py
+
+crds:
+	python3 -I scripts/gen-crds.py
+
+crds-check:
+	python3 -I scripts/gen-crds.py --check
+
+# Schema replay (tests/schema-replay/README.md): OBJECTS = an export.sh objects dir; BASELINE_CRDS optional
+REPLAY_BACKEND ?= envtest
+replay:
+	@test -n "$(OBJECTS)" || { echo "usage: make replay OBJECTS=<dir> [BASELINE_CRDS=<dir>] [REPLAY_BACKEND=envtest|kind]"; exit 2; }
+	python3 -I tests/schema-replay/replay.py --objects $(OBJECTS) --crds operator/primary/helm/templates/crds.yaml \
+	  --backend $(REPLAY_BACKEND) $(if $(BASELINE_CRDS),--baseline-crds $(BASELINE_CRDS))
+# SAR matrix (tests/rbac-access/README.md) against the current KUBECONFIG: ENTITY = a tenant, PROFILE optional
+sar-matrix:
+	@test -n "$(ENTITY)" || { echo "usage: make sar-matrix ENTITY=<tenant> [PROFILE=generated|negative|automation]"; exit 2; }
+	python3 -I tests/rbac-access/sar_matrix.py --entity $(ENTITY) $(if $(PROFILE),--profile $(PROFILE))
+# --- end be-foundations ---
