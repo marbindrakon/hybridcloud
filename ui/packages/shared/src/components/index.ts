@@ -24,7 +24,7 @@ export { ResourceDetail } from './ResourceDetail';
 export type { ResourceDetailProps } from './ResourceDetail';
 export { CreateResourceForm } from './CreateResourceForm';
 export type { CreateResourceFormProps, SelfServiceFormType } from './CreateResourceForm';
-export { ResourceListTable, filterResourcesByQuery } from './ResourceListTable';
+export { ResourceListTable, filterResourcesByQuery, RefreshFailedAlert } from './ResourceListTable';
 export type { ResourceListTableProps } from './ResourceListTable';
 export { EntitySelect } from './EntitySelect';
 export type { EntitySelectProps } from './EntitySelect';

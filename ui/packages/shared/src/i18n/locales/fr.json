@@ -52,7 +52,9 @@
     "disabled": "Désactivé",
     "selectEntity": "Sélectionnez une entité",
     "yes": "Oui",
-    "no": "Non"
+    "no": "Non",
+    "refreshFailed": "L'actualisation a échoué ; nouvelle tentative.",
+    "refreshFailedShowing": "Affichage des données chargées à {{time}}."
   },
   "status": {
     "all": "tous",

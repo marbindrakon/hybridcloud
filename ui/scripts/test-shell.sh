@@ -21,6 +21,7 @@ entries=(
   "nav/registry.ts:registry"
   "nav/paths.ts:paths"
   "status/phase.ts:phase"
+  "hooks/fetchState.ts:fetchState"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

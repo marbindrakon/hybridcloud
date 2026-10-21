@@ -11,20 +11,26 @@ import { useCallback, useEffect, useState } from 'react';
 import type { HybridSovereignKind, K8sResource } from '../types';
 import { fetchResourceList, getK8sClientConfig, useK8sResourceList } from './k8s';
 import { classifyError } from './errors';
+import { applyFetchOutcome, initialFetchState, pollDelayMs, type FetchState } from './fetchState';
+import { isInFlight, phaseOf } from '../status/phase';
 import { useOptionalScope } from '../scope/ScopeProvider';
 
 export interface ScopedListResult<T extends K8sResource> {
   items: T[];
   loading: boolean;
   error: Error | null;
+  /** A refresh failed; `items` are from the last good answer. */
+  refreshError: Error | null;
   /** Tenant namespaces that answered 403 in All tenants scope. */
   skipped: string[];
   refresh: () => void;
 }
 
+const EMPTY: never[] = [];
+
 export function useScopedResourceList<T extends K8sResource>(
   kind: HybridSovereignKind,
-  options: { namespace?: string; pollIntervalMs?: number; enabled?: boolean } = {},
+  options: { namespace?: string; pollIntervalMs?: number; pollWhileInFlight?: boolean; enabled?: boolean } = {},
 ): ScopedListResult<T> {
   const ctx = useOptionalScope();
   const scope = ctx?.scope;
@@ -35,23 +41,21 @@ export function useScopedResourceList<T extends K8sResource>(
   const single = useK8sResourceList<T>(kind, {
     namespace,
     pollIntervalMs: options.pollIntervalMs,
+    pollWhileInFlight: options.pollWhileInFlight,
     enabled: enabled && !all && (!!namespace || !scope || scope.kind === 'global'),
   });
 
-  const [state, setState] = useState<{ items: T[]; loading: boolean; error: Error | null; skipped: string[] }>({
-    items: [],
-    loading: all,
-    error: null,
-    skipped: [],
-  });
-  const [tick, setTick] = useState(0);
   const tenants = ctx?.tenants ?? [];
   const tenantKey = tenants.map((t) => t.namespace).join(',');
+  const key = `all:${kind}:${tenantKey}`;
+  const [state, setState] = useState<FetchState<{ items: T[]; skipped: string[] }>>(() => initialFetchState(key));
+  const [loading, setLoading] = useState(all);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!all || !enabled) return;
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true }));
+    setLoading(true);
     const run = async () => {
       if (getK8sClientConfig().apiStyle !== 'dashboard') {
         try {
@@ -79,24 +83,39 @@ export function useScopedResourceList<T extends K8sResource>(
     };
     run()
       .then((r) => {
-        if (!cancelled) setState({ items: r.items, loading: false, error: null, skipped: r.skipped });
+        if (!cancelled) setState((prev) => applyFetchOutcome(prev, key, { ok: true, data: r }));
       })
       .catch((err: Error) => {
-        if (!cancelled) setState({ items: [], loading: false, error: err, skipped: [] });
+        if (!cancelled) setState((prev) => applyFetchOutcome<{ items: T[]; skipped: string[] }>(prev, key, { ok: false, error: err }));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [all, enabled, kind, tenantKey, tick]);
+  }, [all, enabled, kind, tenantKey, key, tick]);
+
+  const current = state.key === key ? state : initialFetchState<{ items: T[]; skipped: string[] }>(key);
+  const allItems = current.data?.items ?? (EMPTY as T[]);
+  const inFlight = !!options.pollWhileInFlight && allItems.some((i) => isInFlight(phaseOf(i)));
+  const delay = pollDelayMs({ pollIntervalMs: options.pollIntervalMs, pollWhileInFlight: options.pollWhileInFlight, inFlight });
 
   useEffect(() => {
-    if (!all || !enabled || !options.pollIntervalMs) return;
-    const id = setInterval(() => setTick((t) => t + 1), options.pollIntervalMs);
-    return () => clearInterval(id);
-  }, [all, enabled, options.pollIntervalMs]);
+    if (!all || !enabled || loading || !delay) return;
+    const id = setTimeout(() => setTick((t) => t + 1), delay);
+    return () => clearTimeout(id);
+  }, [all, enabled, loading, delay]);
 
   const refreshAll = useCallback(() => setTick((t) => t + 1), []);
 
   if (!all) return { ...single, skipped: [] };
-  return { ...state, refresh: refreshAll };
+  return {
+    items: allItems,
+    loading,
+    error: current.error,
+    refreshError: current.refreshError,
+    skipped: current.data?.skipped ?? [],
+    refresh: refreshAll,
+  };
 }

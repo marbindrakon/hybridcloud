@@ -7,6 +7,8 @@ import {
 } from '../types';
 import { usePermissions } from './permissions';
 import { errorFromResponse, K8sApiErrorContext, networkError } from './errors';
+import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs } from './fetchState';
+import { isInFlight, phaseOf } from '../status/phase';
 
 export type K8sApiStyle = 'raw' | 'dashboard';
 
@@ -28,27 +30,43 @@ export interface UseK8sResourceListOptions {
   namespace?: string;
   labelSelector?: string;
   fieldSelector?: string;
+  /** Fixed refresh interval; wins over pollWhileInFlight. */
   pollIntervalMs?: number;
+  /** Refresh every 5 s while an item is in flight (Waiting, Creating, Updating, Deleting), else every 30 s. */
+  pollWhileInFlight?: boolean;
   enabled?: boolean;
 }
 
 export interface UseK8sResourceListResult<T extends K8sResource> {
+  /** The last good list for the current URL (kept when a refresh fails for a transient reason). */
   items: T[];
   loading: boolean;
+  /** The list could not be loaded and there is nothing to show (full-page state). */
   error: Error | null;
+  /** A refresh failed; `items` are from the last good answer (inline "retrying" state). */
+  refreshError: Error | null;
+  /** Epoch ms of the last good answer. */
+  loadedAt?: number;
   refresh: () => void;
 }
 
 export interface UseK8sResourceOptions {
   namespace?: string;
+  /** Fixed refresh interval; wins over pollWhileInFlight. */
   pollIntervalMs?: number;
+  /** Refresh every 5 s while the object is in flight, else every 30 s. */
+  pollWhileInFlight?: boolean;
   enabled?: boolean;
 }
 
 export interface UseK8sResourceResult<T extends K8sResource> {
+  /** The last good object for the current URL (kept when a refresh fails for a transient reason). */
   resource: T | null;
   loading: boolean;
   error: Error | null;
+  /** A refresh failed; `resource` is from the last good answer. */
+  refreshError: Error | null;
+  loadedAt?: number;
   refresh: () => void;
 }
 
@@ -437,30 +455,48 @@ export async function fetchResourceList<T extends K8sResource>(
   return normalizeListPayload<T>(data);
 }
 
+const NO_ITEMS: never[] = [];
+
+/** True while the browser tab is hidden (polling pauses then). */
+function useDocumentHidden(): boolean {
+  const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden === true);
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onChange = () => setHidden(document.hidden === true);
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+  return hidden;
+}
+
+/**
+ * Schedules the next refresh once the current request has finished, so
+ * requests never overlap; a changed delay or a manual refresh reschedules.
+ */
+function useNextRefresh(delayMs: number, active: boolean, refresh: () => void): void {
+  useEffect(() => {
+    if (!active || !delayMs) return;
+    const id = setTimeout(refresh, delayMs);
+    return () => clearTimeout(id);
+  }, [delayMs, active, refresh]);
+}
+
 /** List Hybrid Sovereign CRs of a given kind */
 export function useK8sResourceList<T extends K8sResource>(
   kind: HybridSovereignKind,
   options: UseK8sResourceListOptions = {},
 ): UseK8sResourceListResult<T> {
-  const { namespace, pollIntervalMs, enabled = true, labelSelector, fieldSelector } = options;
-  const [items, setItems] = useState<T[]>([]);
+  const { namespace, pollIntervalMs, pollWhileInFlight, enabled = true, labelSelector, fieldSelector } = options;
   const [loading, setLoading] = useState(enabled);
-  const [error, setError] = useState<Error | null>(null);
   const [tick, setTick] = useState(0);
 
   const url = useMemo(
     () => buildListUrl(kind, { namespace, labelSelector, fieldSelector }),
     [kind, namespace, labelSelector, fieldSelector],
   );
+  const [state, setState] = useState<FetchState<T[]>>(() => initialFetchState<T[]>(url));
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
-
-  // A new URL (other kind, namespace or selector) never shows the previous
-  // list's rows or error while it loads (UX-113).
-  useEffect(() => {
-    setItems([]);
-    setError(null);
-  }, [url]);
 
   useEffect(() => {
     if (!enabled) {
@@ -473,17 +509,10 @@ export function useK8sResourceList<T extends K8sResource>(
 
     k8sFetchJson<unknown>(url, undefined, { kind, verb: 'list', namespace })
       .then((data) => {
-        if (!cancelled) {
-          setItems(normalizeListPayload<T>(data));
-          setError(null);
-        }
+        if (!cancelled) setState((prev) => applyFetchOutcome(prev, url, { ok: true, data: normalizeListPayload<T>(data) }));
       })
       .catch((err: Error) => {
-        if (!cancelled) {
-          // Rows are never rendered under an error.
-          setItems([]);
-          setError(err);
-        }
+        if (!cancelled) setState((prev) => applyFetchOutcome<T[]>(prev, url, { ok: false, error: err }));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -494,13 +523,23 @@ export function useK8sResourceList<T extends K8sResource>(
     };
   }, [url, enabled, tick]);
 
-  useEffect(() => {
-    if (!pollIntervalMs || !enabled) return;
-    const id = setInterval(refresh, pollIntervalMs);
-    return () => clearInterval(id);
-  }, [pollIntervalMs, enabled, refresh]);
+  // A new URL (other kind, namespace or selector) never shows the previous
+  // list's rows or error while it loads (UX-113).
+  const current = state.key === url ? state : initialFetchState<T[]>(url);
+  const items = (current.data ?? NO_ITEMS) as T[];
+  const hidden = useDocumentHidden();
+  const inFlight = !!pollWhileInFlight && items.some((i) => isInFlight(phaseOf(i)));
+  const delay = pollDelayMs({ pollIntervalMs, pollWhileInFlight, inFlight, hidden });
+  useNextRefresh(delay, enabled && !loading, refresh);
 
-  return { items, loading, error, refresh };
+  return {
+    items,
+    loading,
+    error: current.error,
+    refreshError: current.refreshError,
+    loadedAt: current.loadedAt,
+    refresh,
+  };
 }
 
 /** Fetch a single Hybrid Sovereign CR by name */
@@ -509,20 +548,14 @@ export function useK8sResource<T extends K8sResource>(
   name: string,
   options: UseK8sResourceOptions = {},
 ): UseK8sResourceResult<T> {
-  const { namespace, pollIntervalMs, enabled = true } = options;
-  const [resource, setResource] = useState<T | null>(null);
+  const { namespace, pollIntervalMs, pollWhileInFlight, enabled = true } = options;
   const [loading, setLoading] = useState(enabled);
-  const [error, setError] = useState<Error | null>(null);
   const [tick, setTick] = useState(0);
 
   const url = useMemo(() => buildResourceUrl(kind, name, namespace), [kind, name, namespace]);
+  const [state, setState] = useState<FetchState<T>>(() => initialFetchState<T>(url));
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
-
-  useEffect(() => {
-    setResource(null);
-    setError(null);
-  }, [url]);
 
   useEffect(() => {
     if (!enabled || !name) {
@@ -535,16 +568,10 @@ export function useK8sResource<T extends K8sResource>(
 
     k8sFetchJson<T>(url, undefined, { kind, verb: 'get', namespace, name })
       .then((data) => {
-        if (!cancelled) {
-          setResource(data);
-          setError(null);
-        }
+        if (!cancelled) setState((prev) => applyFetchOutcome(prev, url, { ok: true, data }));
       })
       .catch((err: Error) => {
-        if (!cancelled) {
-          setResource(null);
-          setError(err);
-        }
+        if (!cancelled) setState((prev) => applyFetchOutcome<T>(prev, url, { ok: false, error: err }));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -555,13 +582,21 @@ export function useK8sResource<T extends K8sResource>(
     };
   }, [url, enabled, name, tick]);
 
-  useEffect(() => {
-    if (!pollIntervalMs || !enabled) return;
-    const id = setInterval(refresh, pollIntervalMs);
-    return () => clearInterval(id);
-  }, [pollIntervalMs, enabled, refresh]);
+  const current = state.key === url ? state : initialFetchState<T>(url);
+  const resource = current.data ?? null;
+  const hidden = useDocumentHidden();
+  const inFlight = !!pollWhileInFlight && !!resource && isInFlight(phaseOf(resource));
+  const delay = pollDelayMs({ pollIntervalMs, pollWhileInFlight, inFlight, hidden });
+  useNextRefresh(delay, enabled && !!name && !loading, refresh);
 
-  return { resource, loading, error, refresh };
+  return {
+    resource,
+    loading,
+    error: current.error,
+    refreshError: current.refreshError,
+    loadedAt: current.loadedAt,
+    refresh,
+  };
 }
 
 /** Check if the current user can perform a verb on a resource */

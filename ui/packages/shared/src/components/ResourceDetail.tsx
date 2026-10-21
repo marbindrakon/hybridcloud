@@ -23,6 +23,7 @@ import { HybridSovereignKind, K8sResource } from '../types';
 import { GenericSpecEditor } from '../forms/GenericSpecEditor';
 import { PageHeader } from './PageHeader';
 import { StatusBadge } from './StatusBadge';
+import { RefreshFailedAlert } from './ResourceListTable';
 import {
   COMMON_STATUS_KEYS,
   KIND_STATUS_KEYS,
@@ -157,8 +158,9 @@ export function ResourceDetail({
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const { resource, loading, error, refresh } = useK8sResource<K8sResource>(kind, name, {
+  const { resource, loading, error, refreshError, loadedAt, refresh } = useK8sResource<K8sResource>(kind, name, {
     namespace,
+    pollWhileInFlight: true,
   });
 
   const readyStatus =
@@ -292,6 +294,8 @@ export function ResourceDetail({
           Sync: {readyStatus}
         </span>
       </div>
+
+      {refreshError && <RefreshFailedAlert error={refreshError} loadedAt={loadedAt} onRetry={refresh} />}
 
       {actionError && (
         <Alert

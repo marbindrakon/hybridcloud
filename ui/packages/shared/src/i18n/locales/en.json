@@ -52,7 +52,9 @@
     "disabled": "Disabled",
     "selectEntity": "Select an entity",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "refreshFailed": "Refresh failed; retrying.",
+    "refreshFailedShowing": "Showing what was loaded at {{time}}."
   },
   "status": {
     "all": "all",

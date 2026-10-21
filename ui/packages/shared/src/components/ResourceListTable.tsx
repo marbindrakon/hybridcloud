@@ -53,6 +53,13 @@ export interface ResourceListTableProps {
   onDeleted?: () => void;
   /** Offered as "Try again" when the list failed for another reason than access. */
   onRetry?: () => void;
+  /**
+   * A refresh failed while rows were already loaded: the rows stay (last good
+   * answer) and an inline "retrying" alert says so instead of a full-page state.
+   */
+  refreshError?: Error | null;
+  /** Epoch ms of the rows shown (for the retrying alert). */
+  loadedAt?: number;
 }
 
 function isMarker(v: unknown): v is CellMarker {
@@ -164,6 +171,8 @@ export function ResourceListTable({
   enableDelete: enableDeleteProp = false,
   onDeleted,
   onRetry,
+  refreshError,
+  loadedAt,
 }: ResourceListTableProps): React.ReactElement {
   const { t } = useTranslation();
   // Row delete only where the permission gate allows it (UX-112); the API stays authoritative.
@@ -277,6 +286,9 @@ export function ResourceListTable({
 
   return (
     <>
+      {refreshError && (
+        <RefreshFailedAlert error={refreshError} loadedAt={loadedAt} onRetry={onRetry} />
+      )}
 
       {items.length > 0 && (
         <div className="sc-list-summary">
@@ -501,6 +513,44 @@ export function ResourceListTable({
         </ModalFooter>
       </Modal>
     </>
+  );
+}
+
+/** Inline state for a failed refresh of data already on screen (the data stays). */
+export function RefreshFailedAlert({
+  error,
+  loadedAt,
+  onRetry,
+}: {
+  error: Error;
+  loadedAt?: number;
+  onRetry?: () => void;
+}): React.ReactElement {
+  const { t } = useTranslation();
+  const at = loadedAt ? new Date(loadedAt) : undefined;
+  return (
+    <Alert
+      variant="warning"
+      isInline
+      isPlain
+      className="sc-mb"
+      title={t('common.refreshFailed', { defaultValue: 'Refresh failed; retrying.' })}
+      actionLinks={
+        onRetry ? (
+          <Button variant="link" isInline onClick={onRetry}>
+            {t('errors.retry')}
+          </Button>
+        ) : undefined
+      }
+    >
+      {at
+        ? t('common.refreshFailedShowing', {
+            time: at.toLocaleTimeString(),
+            defaultValue: `Showing what was loaded at ${at.toLocaleTimeString()}.`,
+          })
+        : null}{' '}
+      <span className="sc-text-muted">{error.message}</span>
+    </Alert>
   );
 }
 
