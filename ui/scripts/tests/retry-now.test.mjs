@@ -68,3 +68,60 @@ test('only the reconcileNow annotation is accepted', async () => {
     { kind: 'CloudVirt', name: 'vm', namespace: 'entity-uxr-corp', annotation: 'other/annotation', value: 'x' });
   assert.equal(out.code, 400);
 });
+
+test('the Retry now answer is tenant-safe for CloudOSO and PlatformOpenshift', async () => {
+  const answers = {
+    cloudosos: {
+      kind: 'CloudOSO',
+      metadata: { name: 'test-project', namespace: 'entity-uxr-corp' },
+      spec: { vaultPath: 'kv/hidden', route53VaultPath: 'kv/hidden-r53', region: 'r1' },
+      status: {
+        phase: 'Ready',
+        projectId: 'p1',
+        accountVaultPath: 'kv/account',
+        dns: { mode: 'shared', zone: 'z', credentialsVaultPath: 'kv/dns' },
+        internalDetail: 'not on the allow-list',
+      },
+    },
+    platformopenshifts: {
+      kind: 'PlatformOpenshift',
+      metadata: { name: 'ocp', namespace: 'entity-uxr-corp' },
+      spec: { openstack: { pullSecretVaultPath: 'kv/pull', sshKeyVaultPath: 'kv/ssh', flavor: 'f' } },
+      status: { phase: 'Ready', apiURL: 'https://api', kubeconfigVaultPath: 'kv/kubeconfig' },
+    },
+  };
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      const plural = req.url.split('?')[0].split('/')[6];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(answers[plural]));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const { createK8sHandlers } = await import(
+      pathToFileURL(path.join(UI, 'packages/tenant-dashboard/server/k8s-proxy.js')).href);
+    const k8s = createK8sHandlers(`http://127.0.0.1:${server.address().port}`);
+    const oso = await call(k8s.patchAnnotation,
+      { kind: 'CloudOSO', name: 'test-project', namespace: 'entity-uxr-corp', annotation: ANNOTATION });
+    assert.equal(oso.code, 200);
+    const osoText = JSON.stringify(oso.body);
+    assert.ok(!/VaultPath/i.test(osoText), `VaultPath leaked: ${osoText}`);
+    assert.equal(oso.body.resource.status.phase, 'Ready');
+    assert.equal(oso.body.resource.status.projectId, 'p1');
+    assert.equal(oso.body.resource.status.dns.zone, 'z');
+    assert.equal(oso.body.resource.status.internalDetail, undefined);
+    assert.equal(oso.body.resource.spec.region, 'r1');
+
+    const ocp = await call(k8s.patchAnnotation,
+      { kind: 'PlatformOpenshift', name: 'ocp', namespace: 'entity-uxr-corp', annotation: ANNOTATION });
+    assert.equal(ocp.code, 200);
+    const ocpText = JSON.stringify(ocp.body);
+    assert.ok(!/VaultPath/i.test(ocpText), `VaultPath leaked: ${ocpText}`);
+    assert.equal(ocp.body.resource.status.apiURL, 'https://api');
+    assert.equal(ocp.body.resource.spec.openstack.flavor, 'f');
+  } finally {
+    server.close();
+  }
+});
