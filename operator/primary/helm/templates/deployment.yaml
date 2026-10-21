@@ -34,6 +34,7 @@ spec:
             - --leader-elect
             - --leader-election-id=hybridsovereign-primary-operator
             - --health-probe-bind-address=:6789
+            - --max-concurrent-reconciles=1
           env:
             - name: WATCH_NAMESPACE
               value: "{{ .Values.namespace }},{{ .Values.pluginsNamespace }}"

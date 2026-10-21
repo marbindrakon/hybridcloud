@@ -157,6 +157,21 @@
                   - --leader-elect
                   - --leader-election-id=hybridsovereign-namespace-operator-{{ ansible_operator_meta.name }}
                   - --health-probe-bind-address=:6789
+                  - --max-concurrent-reconciles=1
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 6789
+                  initialDelaySeconds: 30
+                  periodSeconds: 20
+                  timeoutSeconds: 5
+                  failureThreshold: 6
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 6789
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
                 env:
                   - name: WATCH_NAMESPACE
                     value: "{{ entity_tenant_namespace }}"

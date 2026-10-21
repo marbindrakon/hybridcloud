@@ -33,6 +33,7 @@ spec:
             - --leader-elect
             - --leader-election-id=hybridsovereign-namespace-operator-{{ .Values.entityName }}
             - --health-probe-bind-address=:6789
+            - --max-concurrent-reconciles=1
           env:
             - name: WATCH_NAMESPACE
               value: {{ .Values.namespace | quote }}
@@ -79,5 +80,19 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 6789
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 6789
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
