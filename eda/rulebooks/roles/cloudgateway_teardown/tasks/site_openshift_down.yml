@@ -1,5 +1,6 @@
 ---
 # shc (design/P7-PLAN.md P7.3.5): remove the VTEP this gateway created on the OpenShift site (labelled with it).
+# Uses the site's fabric credential (the platform automation account shc-automation).
 - name: Read the site's fabric credential
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
   vars:
