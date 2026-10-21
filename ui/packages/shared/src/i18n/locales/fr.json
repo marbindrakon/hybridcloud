@@ -1020,7 +1020,9 @@
   "sites": {
     "billable": "Facturable : à la charge de ce locataire",
     "unavailable": "indisponible pour le moment",
-    "typeName": "Saisissez le nom du site donné par l'équipe plateforme.",
+    "profileNotReady": "La liste des sites de ce locataire n'est pas encore prête. Elle apparaît quand la plateforme a fini de préparer le locataire ; réessayez dans quelques minutes.",
+    "profileDenied": "Vos accès ne comprennent pas la liste des sites de ce locataire. Demandez à un administrateur du locataire ou à l'équipe plateforme.",
+    "profileError": "La liste des sites n'a pas pu être lue. Réessayez dans un instant.",
     "platformDefault": "Le site par défaut de la plateforme",
     "choose": "Choisir un site",
     "noneOfType": "Aucun site de ce type n'est disponible pour ce locataire. Contactez l'équipe plateforme.",

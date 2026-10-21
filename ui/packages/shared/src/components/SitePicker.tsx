@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { FormGroup, FormHelperText, FormSelect, FormSelectOption, HelperText, HelperTextItem, Label, TextInput } from '@patternfly/react-core';
+import { FormGroup, FormHelperText, FormSelect, FormSelectOption, HelperText, HelperTextItem, Label } from '@patternfly/react-core';
 import { useTranslation } from '../i18n';
 import { useTenantProfile } from '../hooks/tenantProfile';
 import type { CloudInfrastructure, TenantProfileSite, TenantSiteType } from '../types';
@@ -50,8 +50,9 @@ export function siteOptionLabel(site: TenantProfileSite, t: (k: string, o?: Reco
 /**
  * The site of an environment. Tenant pages offer the sites of the tenant's
  * profile (display name, location, Billable), preselected when there is only
- * one; without a profile they accept a typed site name. Platform pages pick
- * from the platform's sites.
+ * one. Until the profile exists (the tenant is still being set up) or when it
+ * cannot be read, the picker says why and offers nothing: a typed site name
+ * would only be refused later. Platform pages pick from the platform's sites.
  */
 export function SitePicker({
   id = 'site',
@@ -107,13 +108,16 @@ export function SitePicker({
   }
 
   if (!tenantProfile.available && !tenantProfile.loading) {
-    // No profile to read: today's behaviour, a typed site name.
+    // No profile to read: say why; an existing value stays visible.
+    const why = tenantProfile.notReady ? 'sites.profileNotReady' : tenantProfile.denied ? 'sites.profileDenied' : 'sites.profileError';
     return (
       <FormGroup label={fieldLabel} isRequired={isRequired} fieldId={id}>
-        <TextInput id={id} value={value} onChange={(_e, v) => onChange(v.trim())} isRequired={isRequired} isDisabled={isDisabled} />
+        <FormSelect id={id} value={value} onChange={() => undefined} isDisabled aria-describedby={`${id}-help`}>
+          <FormSelectOption value={value} label={value || t('sites.choose')} />
+        </FormSelect>
         <FormHelperText>
-          <HelperText>
-            <HelperTextItem>{helperText ?? t('sites.typeName')}</HelperTextItem>
+          <HelperText id={`${id}-help`}>
+            <HelperTextItem variant="warning">{t(why)}</HelperTextItem>
           </HelperText>
         </FormHelperText>
       </FormGroup>

@@ -1020,7 +1020,9 @@
   "sites": {
     "billable": "Billable: charges to this tenant",
     "unavailable": "not available now",
-    "typeName": "Type the site name your platform team gave you.",
+    "profileNotReady": "This tenant's site list is not ready yet. It appears when the platform has finished setting up the tenant; try again in a few minutes.",
+    "profileDenied": "Your access does not include this tenant's site list. Ask a tenant admin or the platform team.",
+    "profileError": "The site list could not be read just now. Try again in a moment.",
     "platformDefault": "The platform's default site",
     "choose": "Choose a site",
     "noneOfType": "No site of this type is available to this tenant. Ask the platform team.",
