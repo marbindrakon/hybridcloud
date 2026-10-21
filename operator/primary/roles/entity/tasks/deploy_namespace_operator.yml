@@ -144,6 +144,41 @@
       type: Opaque
       data: "{{ lookup('kubernetes.core.k8s', kind='Secret', namespace='sovereign-cloud', resource_name='amq-producer-credentials').data }}"
 
+# Namespace operator image of this tenant (canary). The Entity annotation
+# hybridsovereign.redhat/namespace-operator-image selects it: a bare tag (img-0.1.22) or a full
+# reference in the same repository as the default image (<repo>:<tag> or <repo>@sha256:<digest>).
+# Anything else is refused with a Warning Event NamespaceOperatorImageRejected and the default
+# (NAMESPACE_OPERATOR_IMAGE) is used. The pod template records which one runs.
+- name: Select the namespace operator image
+  ansible.builtin.include_tasks: namespace_operator_image.yml
+
+- name: Report a refused namespace operator image request
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: events.k8s.io/v1
+      kind: Event
+      metadata:
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        generateName: "entity-{{ ansible_operator_meta.name }}-image-"
+      regarding:
+        apiVersion: "{{ _hybridsovereign_redhat_entity.apiVersion | default('hybridsovereign.redhat/v1alpha1') }}"
+        kind: Entity
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        uid: "{{ _hybridsovereign_redhat_entity.metadata.uid }}"
+      reason: NamespaceOperatorImageRejected
+      note: >-
+        {{ ('The annotation hybridsovereign.redhat/namespace-operator-image names an image outside '
+            ~ entity_ns_operator_image_repository ~ '; it must be a tag or a reference in that repository. '
+            ~ 'The default image is used.') | truncate(1024, True, '…') }}
+      type: Warning
+      action: SelectImage
+      reportingController: hybridsovereign-primary-operator
+      reportingInstance: hybridsovereign-primary-operator
+      eventTime: "{{ now(utc=true).isoformat() }}Z"
+  when: entity_ns_operator_image_rejected | bool
+
 - name: Deploy namespace operator Deployment
   kubernetes.core.k8s:
     state: present
@@ -165,6 +200,8 @@
           metadata:
             labels:
               app.kubernetes.io/name: hybridsovereign-namespace-operator
+            annotations:
+              hybridsovereign.redhat/namespace-operator-image-source: "{{ entity_ns_operator_image_source }}"
           spec:
             serviceAccountName: hybridsovereign-namespace-operator
             imagePullSecrets:
@@ -175,7 +212,7 @@
                 type: RuntimeDefault
             containers:
               - name: manager
-                image: "{{ lookup('env', 'NAMESPACE_OPERATOR_IMAGE') }}"
+                image: "{{ entity_ns_operator_image }}"
                 imagePullPolicy: Always
                 args:
                   - --leader-elect

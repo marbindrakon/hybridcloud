@@ -1,43 +1,54 @@
-Role Name
-=========
+# entity (primary operator role)
 
-A brief description of the role goes here.
+Reconciles an Entity on the services cluster: creates the tenant namespace `entity-<name>`,
+deploys the tenant's namespace operator into it (`tasks/deploy_namespace_operator.yml`, on every
+reconcile, before the "already processed" skip) and publishes the Entity event for the EDA jobs.
 
-Requirements
-------------
+## Namespace operator image and the canary annotation
 
-Any pre-requisites that may not be covered by Ansible itself or the role should be mentioned here. For instance,
-if the role uses the EC2 module, it may be a good idea to mention in this section that the boto package is required.
+Every tenant runs the default namespace operator image, `NAMESPACE_OPERATOR_IMAGE` of the primary
+operator (chart values `namespaceOperator.image.repository` / `namespaceOperator.image.tag`).
 
-Role Variables
---------------
+One tenant can run another image of the **same repository** first:
 
-A description of the settable variables for this role should go here, including any variables that are in 
-defaults/main.yml, vars/main.yml, and any variables that can/should be set via parameters to the role. Any variables 
-that are read from other roles and/or the global scope (ie. hostvars, group vars, etc.) should be mentioned here as well
+```
+oc -n sovereign-cloud annotate entity <name> hybridsovereign.redhat/namespace-operator-image=<tag>
+#   <tag>                     e.g. img-0.1.22           -> <default repository>:<tag>
+#   <repository>:<tag>        same repository only
+#   <repository>@sha256:<64 hex>
+```
 
-Dependencies
-------------
+The annotation is watched, so setting or removing it re-runs the Entity and rolls only that
+tenant's Deployment. The pod template carries
+`hybridsovereign.redhat/namespace-operator-image-source: canary|default`. A value outside the
+default repository, or a malformed one, is ignored: the default image is used and a Warning Event
+`NamespaceOperatorImageRejected` is written on the Entity.
 
-A list of other roles hosted on Galaxy should go here, plus any details in regards to parameters that may need to be set
-for other roles, or variables that are used from other roles.
+Check which image a tenant runs:
 
-Example Playbook
-----------------
+```
+oc -n entity-<name> get deploy hybridsovereign-namespace-operator \
+  -o jsonpath='{.spec.template.spec.containers[0].image}{" "}{.spec.template.metadata.annotations.hybridsovereign\.redhat/namespace-operator-image-source}{"\n"}'
+```
 
-Including an example of how to use your role (for instance, with variables passed in as parameters) is always nice for
-users too:
+Promotion procedure:
 
-    - hosts: servers
-      roles:
-         - { role: username.rolename, x: 42 }
+1. Push the new namespace operator image (new tag; never reuse a pushed tag).
+2. Annotate one low-stakes tenant with the tag; watch its operator (pod Ready, its objects keep
+   reconciling, no restarts). Then a second tenant.
+3. Set the tag as the default (`namespaceOperator.image.tag` in the platform values) and sync the
+   primary operator. Its startup resync redeploys every tenant's operator with the new default.
+4. Remove the annotation from the canary tenants (they now run the default anyway).
 
-License
--------
+Rollback of a canary: remove the annotation. Rollback of a promotion: restore the previous tag.
 
-BSD
+The selection logic is in `tasks/namespace_operator_image.yml`; its cases run without a cluster:
 
-Author Information
-------------------
+```
+NAMESPACE_OPERATOR_IMAGE=quay.example/shc/hybridsovereign-namespace-operator:img-0.1.21 \
+  ansible-playbook -i localhost, -c local operator/primary/roles/entity/tests/test_namespace_operator_image.yml
+```
 
-An optional section for the role authors to include contact information, or a website (HTML is not allowed).
+Note: any change to the Deployment template in this role (arguments, probes, annotations) also
+redeploys every tenant's operator when the new primary operator starts, with the image each tenant
+already runs.

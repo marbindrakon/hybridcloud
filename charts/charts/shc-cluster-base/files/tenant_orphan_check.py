@@ -11,7 +11,13 @@ Checks:
   1. projects in the domain without a CloudOSO (config ignoreProjects excepted);
   2. CloudOSOs whose recorded project no longer exists;
   3. unattached floating IPs in a CloudOSO's project other than its recorded API/ingress pair;
-  4. records in the tenant zone that no PlatformOpenshift recorded (zone apex SOA/NS excepted).
+  4. records in the tenant zone that no PlatformOpenshift recorded and that are not the NS delegation
+     a CloudOSO recorded (status.dns.zone/nameservers) (zone apex SOA/NS excepted).
+
+Checks 1-3 look at one cloud: the account's. With config cloudInfrastructure set, only CloudOSOs on
+that CloudInfrastructure (status.cloudInfrastructure, else spec.cloudRef.name) are compared with its
+projects; CloudOSOs on other clouds are counted as "elsewhere" and not reported. The tenant DNS zone
+is shared by every cloud, so check 4 uses the CloudOSOs of all clouds.
 """
 import argparse
 import sys
@@ -49,8 +55,15 @@ def main():
     except config.ConfigException:  # outside a pod (manual run): KUBECONFIG
         config.load_kube_config()
     api = client.CustomObjectsApi()
-    osos = crs(api, "cloudosos")
+    all_osos = crs(api, "cloudosos")
     pos = crs(api, "platformopenshifts")
+    cloud_name = cfg.get("cloudInfrastructure") or ""
+
+    def oso_cloud(o):
+        st = o.get("status") or {}
+        return st.get("cloudInfrastructure") or ((o.get("spec") or {}).get("cloudRef") or {}).get("name") or ""
+
+    osos = [o for o in all_osos if not cloud_name or oso_cloud(o) == cloud_name]
 
     conn_d = connect(domain_name=cfg["domain"])
     domain_id = conn_d.session.auth.get_access(conn_d.session).domain_id
@@ -90,15 +103,23 @@ def main():
         for p in pos:
             for r in ((p.get("status") or {}).get("dns") or {}).get("records") or []:
                 recorded_names.add((r.get("name", "").rstrip(".") + ".", r.get("type", "A")))
+        # NS delegations of CloudOSO sub-zones (any cloud) into the tenant zone
+        for o in all_osos:
+            dns = (o.get("status") or {}).get("dns") or {}
+            if dns.get("zone") and dns.get("delegated") and dns.get("globalZoneId", cfg["dnsZoneId"]) == cfg["dnsZoneId"]:
+                recorded_names.add((dns["zone"].rstrip(".") + ".", "NS"))
         conn_z = connect(project_id=cfg["dnsProjectId"])
         zone = conn_z.dns.get_zone(cfg["dnsZoneId"])
         for rs in conn_z.dns.recordsets(zone):
             if rs.name == zone.name and rs.type in ("SOA", "NS"):
                 continue
             if (rs.name, rs.type) not in recorded_names:
-                findings.append(f"DNS {rs.name} {rs.type} {','.join(rs.records or [])}: no PlatformOpenshift recorded it")
+                findings.append(f"DNS {rs.name} {rs.type} {','.join(rs.records or [])}: no PlatformOpenshift or CloudOSO recorded it")
 
-    print(f"tenant-orphan-check: domain {cfg['domain']}: {len(projects)} projects, {len(osos)} CloudOSO, "
+    elsewhere = len(all_osos) - len(osos)
+    print(f"tenant-orphan-check: domain {cfg['domain']}"
+          f"{(' on ' + cloud_name) if cloud_name else ''}: {len(projects)} projects, {len(osos)} CloudOSO"
+          f"{f' ({elsewhere} on other clouds)' if elsewhere else ''}, "
           f"{len(pos)} PlatformOpenshift; {len(findings)} finding(s)")
     for line in findings:
         print("  " + line)

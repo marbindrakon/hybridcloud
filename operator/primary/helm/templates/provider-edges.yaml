@@ -1,6 +1,7 @@
 {{- /*
 shc (P9): the platform's ProviderEdges in the platform namespace, keyed by name, each {spec: <ProviderEdge spec>}
-(enabled: false skips one). Removing one deletes it; its finalizer waits until no AttachmentCircuit uses it.
+(enabled: false skips one). Removing one from values does not delete it (Prune=false): delete it by hand; its
+finalizer waits until no AttachmentCircuit uses it.
 */}}
 {{- range $name, $e := .Values.providerEdges }}
 {{- if ne (toString $e.enabled) "false" }}
@@ -10,9 +11,14 @@ kind: ProviderEdge
 metadata:
   name: {{ $name }}
   namespace: {{ $.Values.namespace }}
+  labels:
+    hybridsovereign.redhat/managed-by: gitops
   annotations:
     argocd.argoproj.io/sync-wave: "4"
-    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # Never pruned or deleted by Argo CD: removing it from values leaves it in the cluster (shown as
+    # requiring pruning); delete it by hand once nothing uses it.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Prune=false,Delete=false
+    hybridsovereign.redhat/gitops-source: {{ printf "%s/providerEdges/%s" (include "primary-operator.gitopsApp" $) $name | quote }}
 spec:
   {{- toYaml $e.spec | nindent 2 }}
 {{- end }}

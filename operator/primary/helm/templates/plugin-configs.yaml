@@ -2,7 +2,8 @@
 shc: the services-side plugin configuration the AAPOrg/QuayOrg flows need (RbacConfig, AAPConfig,
 QuayConfig in the plugins namespace). Upstream only created them from the legacy per-plugin charts
 (pluginRbac/pluginAap/pluginQuay default*Config), which ADR-002 retired in favour of this operator.
-spec.secret names the central Vault key the EDA roles read.
+spec.secret names the central Vault key the EDA roles read. Removing one from values does not delete it
+(Prune=false): delete it by hand.
 */}}
 {{- range $kind, $c := .Values.pluginConfigs }}
 {{- if $c.enabled }}
@@ -12,9 +13,14 @@ kind: {{ $kind }}
 metadata:
   name: {{ $c.name }}
   namespace: {{ $.Values.pluginsNamespace }}
+  labels:
+    hybridsovereign.redhat/managed-by: gitops
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # Never pruned or deleted by Argo CD: removing it from values leaves it in the cluster (shown as
+    # requiring pruning); delete it by hand once nothing uses it.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Prune=false,Delete=false
+    hybridsovereign.redhat/gitops-source: {{ printf "%s/pluginConfigs.%s/%s" (include "primary-operator.gitopsApp" $) $kind $c.name | quote }}
 spec:
   {{- toYaml $c.spec | nindent 2 }}
 {{- end }}

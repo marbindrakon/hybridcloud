@@ -2,6 +2,11 @@
 hybridsovereign-primary-operator
 {{- end }}
 
+{{- /* Argo CD application named in the gitops-source annotation (values gitopsSource.app, else the release). */}}
+{{- define "primary-operator.gitopsApp" -}}
+{{- .Values.gitopsSource.app | default .Release.Name -}}
+{{- end }}
+
 {{- define "primary-operator.labels" -}}
 app.kubernetes.io/name: {{ include "primary-operator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
