@@ -6,7 +6,28 @@
     fail_msg: "CloudOSO slug must be exactly 5 characters. Got: '{{ cb_slug }}'"
   when: not (use_designate_dns | default(false) | bool)
 
+# The pull secret and SSH key are read with the platform's Vault token and end up in a cluster the tenant
+# administers: a spec value is honoured only when the platform lists it (role defaults), else the default applies.
+- name: Note the Vault fields of the spec the platform does not honour
+  vars:
+    _os: "{{ platform_spec.openstack | default({}, true) }}"
+  ansible.builtin.set_fact:
+    cb_ignored_spec_fields: >-
+      {{ ([] if (_os.pullSecretVaultPath | default('', true)) in ([''] + platformopenshift_allowed_vault_paths)
+          else ['spec.openstack.pullSecretVaultPath'])
+         + ([] if (_os.pullSecretVaultProperty | default('', true)) in ([''] + platformopenshift_allowed_pull_secret_properties)
+            else ['spec.openstack.pullSecretVaultProperty'])
+         + ([] if (_os.sshKeyVaultPath | default('', true)) in ([''] + platformopenshift_allowed_vault_paths)
+            else ['spec.openstack.sshKeyVaultPath']) }}
+
+- name: Say which spec fields were ignored
+  ansible.builtin.debug:
+    msg: "Ignored (chosen by the platform): {{ cb_ignored_spec_fields | join(', ') }}"
+  when: cb_ignored_spec_fields | length > 0
+
 - name: Derive cluster identifiers
+  vars:
+    _os: "{{ platform_spec.openstack | default({}, true) }}"
   ansible.builtin.set_fact:
     cb_app_name: "{{ ansible_operator_meta.name }}"
     cb_cluster_name: "{{ ansible_operator_meta.name }}"
@@ -15,9 +36,15 @@
     cb_worker_flavor: "{{ oso_worker_flavor }}"
     cb_control_plane_count: "{{ oso_control_plane_count }}"
     cb_worker_count: "{{ oso_worker_count }}"
-    cb_pull_secret_vault: "{{ platform_spec.openstack.pullSecretVaultPath | default(default_pull_secret_vault_path, true) }}"
-    cb_pull_secret_vault_property: "{{ platform_spec.openstack.pullSecretVaultProperty | default(default_pull_secret_vault_property, true) }}"
-    cb_ssh_key_vault: "{{ platform_spec.openstack.sshKeyVaultPath | default(default_ssh_key_vault_path, true) }}"
+    cb_pull_secret_vault: >-
+      {{ _os.pullSecretVaultPath if 'spec.openstack.pullSecretVaultPath' not in cb_ignored_spec_fields
+         and (_os.pullSecretVaultPath | default('', true)) | length > 0 else default_pull_secret_vault_path }}
+    cb_pull_secret_vault_property: >-
+      {{ _os.pullSecretVaultProperty if 'spec.openstack.pullSecretVaultProperty' not in cb_ignored_spec_fields
+         and (_os.pullSecretVaultProperty | default('', true)) | length > 0 else default_pull_secret_vault_property }}
+    cb_ssh_key_vault: >-
+      {{ _os.sshKeyVaultPath if 'spec.openstack.sshKeyVaultPath' not in cb_ignored_spec_fields
+         and (_os.sshKeyVaultPath | default('', true)) | length > 0 else default_ssh_key_vault_path }}
     cb_provider_creds_vault: "oso/projects/{{ oso_env_name }}/clouds-config"
     # shc (§11.6 phase C): per cluster (two clusters on one CloudOSO overwrote each other)
     cb_install_config_vault: "oso/projects/{{ oso_env_name }}/clusters/{{ ansible_operator_meta.name }}/install-config"

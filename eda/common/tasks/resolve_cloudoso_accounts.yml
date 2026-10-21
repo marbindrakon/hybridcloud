@@ -8,7 +8,9 @@
 #   rca_ignore_status_keys   true: never read the legacy status keys (accountVaultPath, route53VaultPath,
 #                            vaultPaths, dns.dnsConfigSecret); default false: an object written before they were
 #                            dropped is read from them until its status is migrated
-# Uses services_api_host / services_bearer_token and cloudoso_defaults (legacy objects without a site).
+# Uses services_api_host / services_bearer_token, cloudoso_defaults (legacy objects without a site) and
+# cloudoso_allowed_vault_paths (role defaults: a legacy spec.vaultPath / spec.route53VaultPath counts only when it
+# is listed there).
 # Sets:
 #   rca_site                 the CloudInfrastructure in effect ('' = legacy account)
 #   rca_account_vault_path   the OpenStack account the project was created with ('' = cannot be told)
@@ -49,8 +51,14 @@
 - name: Derive the account and the Route53 account
   vars:
     _spec: "{{ (rca_cr | default({})).spec | default({}, true) }}"
-    _legacy_account: "{{ _spec.vaultPath | default((cloudoso_defaults | default({}, true)).vaultPath | default(''), true) }}"
-    _legacy_route53: "{{ _spec.route53VaultPath | default((cloudoso_defaults | default({}, true)).route53VaultPath | default(''), true) }}"
+    _allowed: "{{ cloudoso_allowed_vault_paths | default((cloudoso_defaults | default({}, true)).allowedVaultPaths | default([], true), true) }}"
+    # a legacy spec value counts only when the platform lists it (as in cloudoso_provision cloudref.yml)
+    _legacy_account: >-
+      {{ _spec.vaultPath if (_spec.vaultPath | default('', true) | length > 0 and _spec.vaultPath in _allowed)
+         else ((cloudoso_defaults | default({}, true)).vaultPath | default('')) }}
+    _legacy_route53: >-
+      {{ _spec.route53VaultPath if (_spec.route53VaultPath | default('', true) | length > 0 and _spec.route53VaultPath in _allowed)
+         else ((cloudoso_defaults | default({}, true)).route53VaultPath | default('')) }}
     _site_account: >-
       {{ ((ci_spec | default({})).credentialsRef | default({}, true)).vaultPath | default('')
          if (rca_site | length > 0 and (ci_found | default(false) | bool)) else '' }}
