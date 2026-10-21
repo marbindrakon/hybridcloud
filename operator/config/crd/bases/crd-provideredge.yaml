@@ -76,6 +76,8 @@ spec:
                     required: [name, ceKinds]
                     properties:
                       name:
+                        description: >-
+                          Bearer name, unique on this edge. Circuits name it in spec.edgeRef.bearer.
                         type: string
                         minLength: 1
                         maxLength: 63
@@ -89,6 +91,8 @@ spec:
                           type: string
                           enum: [customer]
                       description:
+                        description: >-
+                          What the bearer is, in a few words, for the people ordering circuits.
                         type: string
                         maxLength: 256
                 entityRefs:

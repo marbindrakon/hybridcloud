@@ -72,6 +72,9 @@ spec:
                       minLength: 1
                       maxLength: 253
                     bearer:
+                      description: >-
+                        Name of the bearer on that ProviderEdge (one of its spec.bearers) the
+                        circuit is ordered on.
                       type: string
                       minLength: 1
                       maxLength: 63
@@ -84,6 +87,7 @@ spec:
                     - rule: self == oldSelf
                       message: spec.ceKind is immutable
                 routing:
+                  description: How the network and the CE exchange routes.
                   type: object
                   required: [protocol]
                   x-kubernetes-validations:
@@ -95,6 +99,7 @@ spec:
                       description: How routes are exchanged with the CE.
                       enum: [bgp]
                     bgp:
+                      description: The BGP session with the CE. Required when protocol is bgp.
                       type: object
                       required: [peerAsn]
                       properties:
@@ -112,10 +117,15 @@ spec:
                             it to a Secret named in status.ceConfig.
                           properties:
                             type:
+                              description: >-
+                                md5: TCP MD5 password on the session (default). none: no password.
                               type: string
                               enum: [md5, none]
                               default: md5
                             secretRef:
+                              description: >-
+                                A Secret in this namespace whose key "password" holds the session
+                                password. Omit it to have the platform generate one.
                               type: object
                               required: [name]
                               properties:
@@ -129,11 +139,15 @@ spec:
                           description: How many routes the CE may send. teardown closes the session above the limit.
                           properties:
                             limit:
+                              description: Most routes the CE may send (1 to 100000, default 100).
                               type: integer
                               minimum: 1
                               maximum: 100000
                               default: 100
                             action:
+                              description: >-
+                                What happens above the limit. teardown (default): the session is
+                                closed. warning: the session stays up and the excess is only logged.
                               type: string
                               enum: [teardown, warning]
                               default: teardown

@@ -74,4 +74,4 @@ flowchart TB
 - [Plugin Vault](./21-plugin-vault.md)
 - [Plugin AAP](./22-plugin-aap.md)
 - [Plugin Quay](./23-plugin-quay.md)
-- [Tenancy operators](./24-tenancy-operators.md)
+- [Tenancy operators](../archive/technical/24-tenancy-operators.md)

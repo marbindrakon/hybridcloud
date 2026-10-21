@@ -16,6 +16,8 @@ product:
 #   dense     shorter term for dense tables, when one exists
 #   audience  tenant: tenants create or read it; platform: the platform team manages it
 #   state     current | experimental | deprecated | not-implemented
+#   planned   true while the kind's CRD is not in this tree yet (the entry is written ahead of it);
+#             remove it once the CRD lands
 #   analogy   the one closest equivalent per cloud (aws, gcp, azure, openstack; openshift for
 #             app-platform kinds); omitted when none fits
 kinds:
@@ -30,6 +32,15 @@ kinds:
       gcp: a Google Cloud project under a folder
       azure: an Azure subscription
       openstack: an OpenStack domain
+  TenantProfile:
+    term: tenant profile
+    plural: tenant profiles
+    audience: tenant
+    state: current
+    planned: true
+    note: >-
+      Read-only. One object named shc in each tenant namespace, written by the platform: the
+      tenant's display name, contacts and the sites it may use.
   CloudInfrastructure:
     term: site
     plural: sites
@@ -264,6 +275,8 @@ roles:
   networkView: {name: Network viewer}
   cloudAWSAdmin: {name: AWS environment admin}
   cloudAWSView: {name: AWS environment viewer}
+  cloudGCPAdmin: {name: Google Cloud environment admin}
+  cloudGCPView: {name: Google Cloud environment viewer}
   platformOpenshiftAdmin: {name: OpenShift cluster admin}
   platformOpenshiftView: {name: OpenShift cluster viewer}
   teamAdmin: {name: Team setup admin}

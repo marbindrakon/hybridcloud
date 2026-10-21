@@ -220,7 +220,7 @@ oc get externalsecret -n sovereign-cloud -l app=tenancy-dashboard
 ## Related Documentation
 
 - [20-tenancy-dashboard.md](../technical/20-tenancy-dashboard.md) — Architecture reference
-- [24-tenancy-operators.md](../technical/24-tenancy-operators.md) — Tenancy operators (Team, Assignment, Project, etc.)
+- [24-tenancy-operators.md](../archive/technical/24-tenancy-operators.md) — Tenancy operators (Team, Assignment, Project, etc.)
 - [05-day2-plugins.md](05-day2-plugins.md) — Plugin operator operations
 - [06-user-dashboard.md](06-user-dashboard.md) — Sovereign Cloud Dashboard (Entity management)
 - [03-day2-operators.md](03-day2-operators.md) — General operator operations

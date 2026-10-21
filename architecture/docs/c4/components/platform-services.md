@@ -74,4 +74,4 @@ Config-as-code Job targets the **central** gateway for EDA + controller template
 
 ## Related specs
 
-`016`, `022`–`032`, `034` — see [../../../specs/README.md](../../../specs/README.md).
+`016`, `022`–`032`, `034` — see [../../../specs/README.md](../../../../specs/README.md).

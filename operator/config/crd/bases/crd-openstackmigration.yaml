@@ -124,8 +124,10 @@ spec:
                           - targetNetwork
                         properties:
                           sourceNetwork:
+                            description: Network name on the source side.
                             type: string
                           targetNetwork:
+                            description: Network name in the target OpenStack project.
                             type: string
                     flavorStrategy:
                       type: string
@@ -137,45 +139,58 @@ spec:
               type: object
               properties:
                 name:
+                  description: Name of the migration.
                   type: string
                 namespace:
+                  description: Namespace of the migration.
                   type: string
                 entity:
+                  description: Tenant the migration belongs to.
                   type: string
                 source:
+                  description: Migration provider the run used.
                   type: string
                 vmName:
+                  description: Virtual machine being migrated.
                   type: string
                 cloudoso:
+                  description: Target OpenStack environment.
                   type: string
                 targetProject:
+                  description: Target OpenStack project.
                   type: string
                 migrationMethod:
+                  description: Data transfer method the run used.
                   type: string
                 phase:
                   type: string
                   description: >-
-                    Current migration phase (validating, deployingConversionHost,
-                    exportingMetadata, convertingMetadata, importingWorkloads,
-                    cutover, ready, failed)
+                    Lifecycle phase, written by the platform: Waiting, Creating, Updating, Ready,
+                    Degraded, Failed or Deleting. The steps of the migration are in status.phases.
                 phases:
                   type: array
-                  description: Phase history with timestamps
+                  description: Steps of the migration, with timestamps.
                   items:
+                    description: One step.
                     type: object
                     properties:
                       name:
+                        description: Name of the step.
                         type: string
                       status:
+                        description: Result of the step.
                         type: string
                         enum: [pending, running, succeeded, failed]
                       startedAt:
+                        description: When the step started.
                         type: string
                         format: date-time
                       completedAt:
+                        description: When the step finished.
                         type: string
                         format: date-time
                       message:
+                        description: What happened in the step, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
                 status:

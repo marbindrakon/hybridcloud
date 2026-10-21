@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Check the relative links (and their #anchors) of the documentation front door.
+"""Check the relative links (and their #anchors) of the documentation.
 
-Scope: the README, docs/, samples/README.md and the architecture entry pages; more files can be
-given as arguments. Links inside fenced code are ignored; http(s) and mailto links are not
+Scope: the README, bootstrap/README.md, docs/, samples/README.md, specs/README.md and every page
+under architecture/ except the archive/ folders and the mocks; files given as arguments replace
+the scope. Links inside fenced code are ignored; http(s) and mailto links are not
 fetched.
 
 usage: check-doc-links.py [FILE ...]     exit 1 when a link points nowhere
@@ -13,8 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCOPE = ["README.md", "bootstrap/README.md", "docs/**/*.md", "samples/README.md",
-         "architecture/README.md",
-         "architecture/docs/architecture.md"]
+         "specs/README.md", "architecture/**/*.md"]
+# Historical pages keep their links as written.
+EXCLUDE = ("/archive/", "architecture/mocks/")
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
@@ -41,6 +43,9 @@ def files(args):
     seen = []
     for g in SCOPE:
         for p in sorted(ROOT.glob(g)):
+            rel = "/" + str(p.relative_to(ROOT))
+            if any(x in rel for x in EXCLUDE):
+                continue
             if p.is_file() and p not in seen:
                 seen.append(p)
     return seen

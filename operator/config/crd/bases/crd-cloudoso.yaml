@@ -69,8 +69,9 @@ spec:
                 vaultPath:
                   type: string
                   description: >-
-                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Location
-                    of the platform's OpenStack account credential in the platform's secret store.
+                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Requests
+                    from tenant users that set or change it are refused, or accepted with a warning,
+                    depending on the platform's admission settings.
                 baseDomain:
                   type: string
                   description: >-
@@ -95,9 +96,9 @@ spec:
                 route53VaultPath:
                   type: string
                   description: >-
-                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Location
-                    of the Route 53 credential in the platform's secret store, used when dnsProvider
-                    is route53.
+                    Legacy, ignored when cloudRef is set. Set by the platform; leave unset. Requests
+                    from tenant users that set or change it are refused, or accepted with a warning,
+                    depending on the platform's admission settings.
                 landingzone:
                   type: string
                   description: No effect.

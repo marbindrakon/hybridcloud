@@ -103,10 +103,16 @@ spec:
                       message: spec.ipv4.prefix must be as long as spec.ipv4.prefixLength
                   properties:
                     prefixLength:
+                      description: >-
+                        Size of the subnet the platform allocates, 16 to 29 (for example 24 for a
+                        /24).
                       type: integer
                       minimum: 16
                       maximum: 29
                     prefix:
+                      description: >-
+                        A pinned IPv4 subnet in canonical form (host bits zero, for example
+                        10.20.30.0/24), inside one of the network's IPv4 prefixes.
                       type: string
                       maxLength: 18
                       x-kubernetes-validations:
@@ -127,10 +133,14 @@ spec:
                       message: spec.ipv6 needs prefixLength or prefix
                   properties:
                     prefixLength:
+                      description: Size of the subnet the platform allocates. Only 64 is accepted.
                       type: integer
                       minimum: 64
                       maximum: 64
                     prefix:
+                      description: >-
+                        A pinned IPv6 /64 in canonical form, inside one of the network's IPv6
+                        prefixes.
                       type: string
                       maxLength: 43
                       x-kubernetes-validations:

@@ -86,7 +86,7 @@ The Persona operator decouples RBAC role assignment from the Entity operator. Pr
 | `spec.type` | One of 14 role types (e.g., `entityAdmin`, `teamAdmin`, `assignmentAdmin`) |
 | `spec.rbac` | Reference to an `Rbac` CR in the same entity namespace |
 
-Reconciliation follows the EDA event pattern: the operator emits `PersonaCreateRequested`, EDA/AAP configures Keycloak groups and Kubernetes RoleBindings, then patches `status.ready`. See [Persona overview](008-persona-overview.md) and [Persona operator](../technical/45-persona-operator.md).
+Reconciliation follows the EDA event pattern: the operator emits `PersonaCreateRequested`, EDA/AAP configures Keycloak groups and Kubernetes RoleBindings, then patches `status.ready`. See [Persona overview](008-persona-overview.md) and [Persona operator](../archive/technical/45-persona-operator.md).
 
 ## Plugin SDX (`plugin_sdx`)
 
@@ -154,7 +154,7 @@ Shared patterns: Material UI, force-reconcile annotation, EDA job link chips, en
 5. **External OCI / Quay** stores Helm charts and images consumed by ArgoCD and cluster pulls.
 6. **ODF/Noobaa** backs object storage for **Quay**; **Crunchy Postgres** supports data services (Keycloak, AAP, Quay, and others).
 7. **Sovereign Jobs** (central) post-configures Keycloak, Vault, and Gitea after GitOps rollout.
-8. **Entity Operator** provisions entity namespaces from `Entity` CRs; tenancy operators enrich **Team**, **Project**, **Assignment**, and **PlatformOpenshift** status from namespace labels and cross-CR references (**Assignment**). **CloudOSO** additionally mirrors **project** and **domain** identifiers from **OSOHelper** on the central cluster ([Tenancy operators](../technical/24-tenancy-operators.md)).
+8. **Entity Operator** provisions entity namespaces from `Entity` CRs; tenancy operators enrich **Team**, **Project**, **Assignment**, and **PlatformOpenshift** status from namespace labels and cross-CR references (**Assignment**). **CloudOSO** additionally mirrors **project** and **domain** identifiers from **OSOHelper** on the central cluster ([Tenancy operators](../archive/technical/24-tenancy-operators.md)).
 9. **Sovereign Dashboard** focuses on entity workflows and adds **Overview** (cluster-wide CR health) and **Services** (Routes + health checks); **Tenancy Dashboard** covers tenancy CRs and Vault/AAP/Quay plugin resources with the user’s OAuth token.
 10. **Persona operator** manages `Persona` CRs independently of Entity — each binds a role type to an `Rbac` CR; EDA provisions Keycloak groups and RoleBindings.
 11. **Plugin operators** (RBAC, Vault, AAP, Quay, SDX) are cluster-scoped controllers in **sovereign-cloud-plugins** that reconcile entity-scoped CRs and shared `*Config` CRs in the plugins namespace. SDX (Go) watches all tenancy CRs cluster-wide and exports stripped YAML to Gitea — it does not use the EDA event path.

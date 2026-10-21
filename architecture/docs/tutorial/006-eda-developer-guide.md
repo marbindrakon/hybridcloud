@@ -11,7 +11,7 @@
 - Familiarity with Ansible Operator SDK and `hybridsovereign.redhat` CRDs
 - Access to build and push images to the private OCI registry
 - Local or CI environment with `ansible-builder` and `podman`
-- Understanding of the [status handshake protocol](../../../specs/006-platform-eda-rebuild/contracts/operator-eda-handshake.md)
+- Understanding of the status handshake protocol (not published in this repository)
 
 ---
 
@@ -79,7 +79,7 @@ On delete:
 
 ## Step 2 — Define Event Reasons
 
-Follow the naming convention from [event-contract.md](../../../specs/006-platform-eda-rebuild/contracts/event-contract.md):
+Follow the naming convention from event-contract.md (not published in this repository):
 
 | Action | Reason Pattern | Entity Example |
 |--------|----------------|----------------|
@@ -391,5 +391,5 @@ The `check_eda_events` role performs end-to-end validation with cleanup.
 - [006 EDA Architecture](../technical/006-eda-architecture.md)
 - [006 EDA Overview](../concepts/006-eda-overview.md)
 - [006 Hardening Check](../../hardeningcheck/006-platform-eda-rebuild.md)
-- [Entity Operator](../technical/17-entity-operator.md)
-- Event contract: [event-contract.md](../../../specs/006-platform-eda-rebuild/contracts/event-contract.md)
+- [Entity Operator](../archive/technical/17-entity-operator.md)
+- Event contract: event-contract.md (not published in this repository)

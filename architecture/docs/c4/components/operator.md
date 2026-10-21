@@ -150,5 +150,5 @@ ArgoCD Application: `hybridsovereignPrimaryOperator` (sync-wave 38, services clu
 
 - [code/entity-lifecycle.md](../code/entity-lifecycle.md) — Entity state machine
 - [event-system.md](event-system.md) — event pipeline to EDA
-- [../decisions/ADR-002-multi-tier-operator.md](../decisions/ADR-002-multi-tier-operator.md)
-- [../technical/17-entity-operator.md](../technical/17-entity-operator.md)
+- [../decisions/ADR-002-multi-tier-operator.md](../../decisions/ADR-002-multi-tier-operator.md)
+- [../technical/17-entity-operator.md](../../archive/technical/17-entity-operator.md)

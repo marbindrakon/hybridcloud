@@ -13,8 +13,11 @@ A site (`CloudInfrastructure` in `sovereign-cloud`) lists the tenants that may u
 `spec.entityRefs`; an empty list means every tenant. Sites are managed in Git with the platform's
 GitOps values, so add the tenant there and let Argo CD sync it.
 
-A per-tenant allow-list on the tenant itself, and a tenant profile that shows tenants their
-sites, are not available yet. Tell the tenant which site names to use.
+Available with this release: narrow the list per tenant with `spec.allowedSites` on the tenant
+(step 2). The tenant may then use only the sites named there, out of the sites that already allow
+it; without the field it may use all of those. Environments on a site outside the list are
+refused with the reason `SiteNotAllowed`. A site's optional `spec.location` (for example a city
+or a data-centre name) is shown to tenants next to its name.
 
 ## 2. Create the tenant
 
@@ -28,8 +31,15 @@ metadata:
   name: example-corp
   namespace: sovereign-cloud
 spec:
+  displayName: Example Corp
   description: Example Corp, a tenant for the samples.
   billingID: example-corp-0001
+  contacts:
+    - name: Example Corp platform desk
+      email: platform@example.com
+  allowedSites:
+    - site-vm
+    - site-osp
   namespaceRbac:
     entityAdmin:
       - example-admins
@@ -38,8 +48,12 @@ spec:
 ```
 
 - **Name**: lowercase letters, digits and `-`, no dots (the sign-in groups use the first dot to
-  separate tenant and group) and short enough for `entity-<name>` to be a valid namespace name.
+  separate tenant and group), no `--`, at most 56 characters (so that `entity-<name>` is a valid
+  namespace name). The name cannot change later; `displayName` can.
 - `billingID` is required and becomes a label on the tenant namespace.
+- `displayName`, `contacts` (up to 10, each a name with an optional email or https URL) and
+  `allowedSites` are available with this release. The tenant's users see them in their tenant
+  profile.
 - `namespaceRbac` gives roles to access groups (step 4). You can list access groups before they
   exist; a role whose access groups do not exist yet grants nothing.
 
@@ -48,7 +62,12 @@ Wait until the tenant is ready and its namespace exists:
 ```bash
 oc get entity example-corp -n sovereign-cloud
 oc get namespace entity-example-corp
+oc get tenantprofile shc -n entity-example-corp      # available with this release
 ```
+
+The tenant profile `shc` is written by the platform from the tenant and the sites (display name,
+contacts, the allowed sites with their location, capabilities and storage classes). Tenants read
+it; nobody edits it.
 
 ## 3. Create the access groups
 
@@ -109,8 +128,16 @@ Access to the objects a tenant creates is given on those objects, not here: who 
 VM environment's site console (`CloudVirt` `spec.toolRbac`), who gets which role on an OpenShift
 cluster (`PlatformOpenshift` `spec.toolRbac`) and in the namespaces a cluster assignment creates
 (`Assignment` `spec.toolRbac`), and the access lists of Vault, KV secrets engine, AAP and Quay
-organizations. Resource-scoped access through the access fields of team setups and app projects
-is not available yet.
+organizations.
+
+Available with this release: the access fields of team setups (`teamAdmin`, `teamMemberRbac`,
+`teamViewerRbac`) and app projects (`projectAdmin`, `projectDeveloperRbac`, `projectViewerRbac`)
+grant access groups rights on those objects only, on the services cluster. They are the interim
+form of a resource-scoped role assignment. A team setup's `teamAdmin` groups may change the team
+setup and its app projects and view its cluster assignments, but not change the team setup's
+access lists (only people allowed to delete an object can change its lists). Nothing in these
+fields grants access on clusters. The tenant-facing summary is
+[Access and delegation](../tenant/access-and-delegation.md).
 
 ## 5. Add people to the access groups
 

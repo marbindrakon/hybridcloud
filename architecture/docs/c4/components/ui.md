@@ -100,7 +100,7 @@ UIHealthChecker
 - Entity onboarding (create `Entity` CR in `sovereign-cloud`)
 - Plugin config management (`RbacConfig`, `AAPConfig`, `QuayConfig`)
 - Platform-wide status and health views
-- **UI Health** (`/networking/uihealth`): `UIHealthChecker` URL registry; Refresh / Run checks probe from the dashboard pod (no CR reconcile). See [57-hybridvpc-uihealth.md](../technical/57-hybridvpc-uihealth.md).
+- **UI Health** (`/networking/uihealth`): `UIHealthChecker` URL registry; Refresh / Run checks probe from the dashboard pod (no CR reconcile). See [57-hybridvpc-uihealth.md](../../technical/57-hybridvpc-uihealth.md).
 - Hybrid VPC admin pages (fabrics, gateways, transport links)
 - Create + update forms for admin and shared tenancy kinds via `@hybridsovereign/shared`
 
@@ -184,6 +184,6 @@ sequenceDiagram
 ## Related Documents
 
 - [context.md](../context.md) — external actors
-- [../technical/15-sovereign-dashboard.md](../technical/15-sovereign-dashboard.md)
-- [../technical/20-tenancy-dashboard.md](../technical/20-tenancy-dashboard.md)
-- [../12-console-plugins.md](../12-console-plugins.md)
+- [../technical/15-sovereign-dashboard.md](../../technical/15-sovereign-dashboard.md)
+- [../technical/20-tenancy-dashboard.md](../../technical/20-tenancy-dashboard.md)
+- [../12-console-plugins.md](../../archive/technical/12-console-plugins.md)

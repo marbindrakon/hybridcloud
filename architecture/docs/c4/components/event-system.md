@@ -183,5 +183,5 @@ Images are pushed to Quay and referenced in `hybridcloud/aap-config/eda/decision
 ## Related Documents
 
 - [operator.md](operator.md) — event-emitting operators
-- [../decisions/ADR-003-kafka-events.md](../decisions/ADR-003-kafka-events.md)
-- [../technical/006-eda-architecture.md](../technical/006-eda-architecture.md)
+- [../decisions/ADR-003-kafka-events.md](../../decisions/ADR-003-kafka-events.md)
+- [../technical/006-eda-architecture.md](../../technical/006-eda-architecture.md)

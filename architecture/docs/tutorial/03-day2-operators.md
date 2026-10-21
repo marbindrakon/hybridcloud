@@ -247,7 +247,7 @@ oc annotate team platform-team -n entity-acme-corp \
 
 ## Related Documentation
 
-- [17-entity-operator.md](../technical/17-entity-operator.md) — Entity operator reference
-- [24-tenancy-operators.md](../technical/24-tenancy-operators.md) — Tenancy operators reference
+- [17-entity-operator.md](../archive/technical/17-entity-operator.md) — Entity operator reference
+- [24-tenancy-operators.md](../archive/technical/24-tenancy-operators.md) — Tenancy operators reference
 - [26-observability.md](../technical/26-observability.md) — Metrics and alerts
 - [27-operator-performance.md](../technical/27-operator-performance.md) — Reconcile tuning
