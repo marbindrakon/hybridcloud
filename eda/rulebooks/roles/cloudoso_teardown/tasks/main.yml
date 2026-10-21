@@ -192,10 +192,49 @@
       ansible.builtin.set_fact:
         teardown_step: vault
 
+    # The clouds-config path is name-only: keep it while another tenant's same-named environment uses it
+    # (realized: it has a project and was not refused for its name, and is not being deleted).
+    - name: List the environments with this name
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudOSO
+        field_selectors:
+          - "metadata.name={{ cloudoso_cr_name }}"
+      register: cloudoso_same_name
+
+    - name: Find the other tenants' environments with this name
+      vars:
+        _others: "{{ cloudoso_same_name.resources | default([]) | rejectattr('metadata.namespace', 'equalto', cloudoso_cr_namespace) | list }}"
+      ansible.builtin.set_fact:
+        cloudoso_name_in_use: >-
+          {%- set ns = namespace(used=false) -%}
+          {%- for o in _others if o.metadata.deletionTimestamp is not defined -%}
+            {%- set st = o.status | default({}, true) -%}
+            {%- set ready = (st.conditions | default([], true)) | selectattr('type', 'equalto', 'Ready') | list -%}
+            {%- if (st.projectId | default('', true)) | length > 0 and not (ready and ((ready | first).reason | default('')) == 'NameInUse') -%}
+              {%- set ns.used = true -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.used }}
+        # the oldest one refused for this name gets its turn once this one is gone
+        cloudoso_name_waiting: >-
+          {%- set out = [] -%}
+          {%- for o in _others | sort(attribute='metadata.creationTimestamp') if o.metadata.deletionTimestamp is not defined -%}
+            {%- set ready = ((o.status | default({}, true)).conditions | default([], true)) | selectattr('type', 'equalto', 'Ready') | list -%}
+            {%- if ready and ((ready | first).reason | default('')) == 'NameInUse' -%}
+              {%- set _ = out.append({'kind': 'CloudOSO', 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out[:1] }}
+
     - name: Delete the project's Vault paths
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
       vars:
         vault_kv_delete_paths: "{{ oso_vault_paths }}"
+      when: not (cloudoso_name_in_use | bool)
 
     - name: Get deletion reconcile timestamp
       ansible.builtin.set_fact:
@@ -223,6 +262,13 @@
             CloudOSO {{ cloudoso_cr_name }} teardown complete.
             {{ ('Default security group ' ~ (cloudoso_leftover_sgs | join(', ')) ~
                 ' is left for a cloud admin (Neutron reserves that delete).') if cloudoso_leftover_sgs else '' }}
+
+    # after deletionComplete, so the waiting environment no longer counts this one as the name's holder
+    - name: Give the name to the environment that waits for it
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: "{{ cloudoso_name_waiting }}"
+      when: cloudoso_name_waiting | length > 0
 
   rescue:
     - name: Mark CloudOSO delete as failed on services cluster

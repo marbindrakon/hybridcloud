@@ -70,6 +70,9 @@
           Namespace {{ cloudoso_cr_namespace }} is missing label
           hybridsovereign.redhat/entity. Cannot provision CloudOSO.
 
+    - name: Refuse a name another tenant already uses
+      ansible.builtin.include_tasks: name_unique.yml
+
     # shc (P7.1): the site (CloudInfrastructure) and its account and settings
     - name: Resolve the CloudOSO's site
       ansible.builtin.include_tasks: cloudref.yml
@@ -158,7 +161,7 @@
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ cloudoso_failure_reason | default('EDAFailed') }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
