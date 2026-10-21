@@ -28,6 +28,17 @@
     validate_certs: false
     status_code: [200]
   register: cloudgcp_raw
+  # The request carries the services API token in a header, which the uri module does not mask: keep the whole
+  # result out of the job output and report only the HTTP status and the API's message below.
+  no_log: true
+  failed_when: false
+
+- name: Fail when the CloudGCP could not be read
+  ansible.builtin.fail:
+    msg: >-
+      Reading CloudGCP '{{ gcp_env_name }}' failed (HTTP {{ cloudgcp_raw.status | default('?') }}):
+      {{ (cloudgcp_raw.json | default({}, true)).message | default(cloudgcp_raw.msg | default(''), true) }}
+  when: (cloudgcp_raw.status | default(-1)) != 200
 
 - name: Fail if CloudGCP not ready
   ansible.builtin.assert:

@@ -72,8 +72,9 @@ it; nobody edits it.
 ## 3. Create the access groups
 
 An access group (`Rbac`) is a named group of people in the tenant. Create it in the tenant
-namespace; `spec.config` names the identity provider connection (`oc get rbacconfigs -n
-sovereign-cloud-plugins`):
+namespace. Leave `spec.config` empty: the platform uses its default identity provider
+connection (set it only when the installation has more than one; the connection used is
+reported in `status.config`):
 
 ```yaml
 apiVersion: hybridsovereign.redhat/v1alpha1
@@ -82,7 +83,6 @@ metadata:
   name: example-admins
   namespace: entity-example-corp
 spec:
-  config: example-identity
   description: Tenant admins of Example Corp.
 ```
 
