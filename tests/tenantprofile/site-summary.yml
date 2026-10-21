@@ -92,3 +92,26 @@
       loop_control:
         loop_var: ready_site
         label: "{{ ready_site.metadata.name }}"
+
+# The rescue path of the role must use the failure capabilities for both the status write and the tenants' view
+# (the plays above run the task files; this reads main.yml as data, so a rescue that falls back to a fixed
+# capability pair, which leaves probe-specific keys true in the stored map, is caught).
+- name: The failure body and the tenant view of the rescue path use the failure capabilities
+  hosts: localhost
+  gather_facts: false
+  vars:
+    main_yml: "{{ playbook_dir }}/../../eda/rulebooks/roles/cloudinfrastructure_provision/tasks/main.yml"
+    _rescue: >-
+      {{ (lookup('file', main_yml) | from_yaml | selectattr('rescue', 'defined') | first).rescue }}
+    _first: "{{ _rescue | first }}"
+    _status_write: "{{ _rescue | selectattr('vars.cr_status_body', 'defined') | first }}"
+    _view: "{{ _rescue | selectattr('vars.civ_after_status', 'defined') | first }}"
+  tasks:
+    - name: The failure capabilities run first, and both writers take their result
+      ansible.builtin.assert:
+        that:
+          - _first['ansible.builtin.include_tasks'] == 'failed_capabilities.yml'
+          - _status_write.vars.cr_status_body.capabilities is search('_ci_failed_caps')
+          - _view.vars.civ_after_status.capabilities is search('_ci_failed_caps')
+          - _view['ansible.builtin.include_tasks'] == 'tenant_view.yml'
+        fail_msg: "rescue tasks: {{ _rescue | map(attribute='name') | list }}"
