@@ -2673,6 +2673,8 @@ iaasClusterDefaults:
       - {apiGroups: [operator.openshift.io], resources: [networks], verbs: [get, list]}
       - {apiGroups: [frrk8s.metallb.io], resources: [bgpsessionstates], verbs: [get, list]}
       - {apiGroups: [storage.k8s.io], resources: [storageclasses], verbs: [get, list]}
+      # the way in for tenants: console URL and the sign-in button name (openshift_wayin.yml); read only
+      - {apiGroups: [config.openshift.io], resources: [consoles, oauths], verbs: [get]}
   # P7.3 (design/P7-PLAN.md §12.4 d, owner-approved RBAC 2026-10-13): the fabric jobs' write credential,
   # central Vault cloudinfra/<cluster>-fabric. Tenant VM namespaces get RoleBindings to `edit` only (bind is
   # limited to it); NADs/UDNs in those namespaces are denied by an admission policy on the cluster.
