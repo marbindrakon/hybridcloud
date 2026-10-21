@@ -102,6 +102,9 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
         - name: Last Sync
           type: string
           jsonPath: .status.lastSyncTime
@@ -111,6 +114,10 @@ spec:
         - name: Errors
           type: integer
           jsonPath: .status.syncErrors
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

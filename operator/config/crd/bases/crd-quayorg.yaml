@@ -34,11 +34,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

@@ -335,11 +335,14 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: string
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
         - name: Health
           type: string
           jsonPath: .status.clusterHealth
@@ -349,6 +352,10 @@ spec:
         - name: Version
           type: string
           jsonPath: .status.clusterVersion
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

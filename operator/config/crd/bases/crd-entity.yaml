@@ -213,7 +213,7 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Namespace
+        - name: Tenant namespace
           type: string
           jsonPath: .status.entity
         - name: BillingID
@@ -223,6 +223,13 @@ spec:
           type: string
           jsonPath: .status.openshiftConsoleURL
           priority: 1
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

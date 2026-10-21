@@ -31,6 +31,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -161,11 +168,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -481,6 +495,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -647,11 +668,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -813,11 +841,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -1036,9 +1071,6 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Name
-          type: string
-          jsonPath: .metadata.name
         - name: Entity
           type: string
           jsonPath: .status.entity
@@ -1055,11 +1087,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -1279,7 +1318,7 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Namespace
+        - name: Tenant namespace
           type: string
           jsonPath: .status.entity
         - name: BillingID
@@ -1289,6 +1328,13 @@ spec:
           type: string
           jsonPath: .status.openshiftConsoleURL
           priority: 1
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -1397,6 +1443,9 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
         - name: Last Sync
           type: string
           jsonPath: .status.lastSyncTime
@@ -1406,6 +1455,10 @@ spec:
         - name: Errors
           type: integer
           jsonPath: .status.syncErrors
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -1657,6 +1710,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -1791,6 +1851,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -2132,11 +2199,14 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: string
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
         - name: Health
           type: string
           jsonPath: .status.clusterHealth
@@ -2146,6 +2216,10 @@ spec:
         - name: Version
           type: string
           jsonPath: .status.clusterVersion
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -2290,11 +2364,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -2331,6 +2412,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -2455,11 +2543,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -2714,9 +2809,6 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Name
-          type: string
-          jsonPath: .metadata.name
         - name: Config
           type: string
           jsonPath: .spec.config
@@ -2729,6 +2821,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -2838,15 +2937,19 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Name
-          type: string
-          jsonPath: .metadata.name
         - name: Type
           type: string
           jsonPath: .spec.type
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -3008,11 +3111,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -3139,9 +3249,6 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Name
-          type: string
-          jsonPath: .metadata.name
         - name: URL
           type: string
           jsonPath: .status.vaultUrl
@@ -3152,11 +3259,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -3317,9 +3431,6 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - name: Name
-          type: string
-          jsonPath: .metadata.name
         - name: Vault
           type: string
           jsonPath: .spec.vault
@@ -3330,11 +3441,18 @@ spec:
           type: string
           jsonPath: .status.status
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -3618,6 +3736,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -3971,6 +4096,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -4095,6 +4227,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -4224,6 +4363,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -4486,6 +4632,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -4733,7 +4886,7 @@ spec:
         - name: Backend
           type: string
           jsonPath: .spec.backend.kind
-        - name: Name
+        - name: Environment
           type: string
           jsonPath: .spec.backend.name
         - name: Site
@@ -4748,6 +4901,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -4994,6 +5154,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -5334,6 +5501,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -5489,6 +5663,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -5702,6 +5883,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -6013,6 +6201,13 @@ spec:
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
