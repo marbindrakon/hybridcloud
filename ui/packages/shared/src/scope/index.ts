@@ -1,6 +1,6 @@
 export * from './types';
 export * from './parseGroups';
-export { resolveIdentity, tenantLabel, PLATFORM_NAMESPACE, SCOPE_CONFIRM_FALLBACK } from './resolveIdentity';
+export { resolveIdentity, tenantLabel, PLATFORM_NAMESPACE } from './resolveIdentity';
 export {
   ScopeProvider,
   useIdentity,

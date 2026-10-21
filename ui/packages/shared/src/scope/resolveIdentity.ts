@@ -22,14 +22,6 @@ import type { Identity, TenantRef } from './types';
 
 export const PLATFORM_NAMESPACE = 'sovereign-cloud';
 
-/**
- * Transitional rule: until every tenant role grants `get tenantprofiles`, a
- * candidate tenant is also confirmed when the user may list any of these
- * tenant kinds in its namespace. Remove once the roles carry the grant.
- */
-export const SCOPE_CONFIRM_FALLBACK = true;
-const FALLBACK_KINDS = ['cloudvirts', 'hybridnetworks', 'cloudosos', 'teams', 'rbacs', 'vaults'];
-
 /** Upper bound of tenant candidates checked per sign-in (each costs one review). */
 const MAX_CANDIDATES = 50;
 
@@ -96,12 +88,7 @@ async function confirmTenant(namespace: string): Promise<{ confirmed: boolean; p
     name: TENANT_PROFILE_NAME,
     verb: 'get',
   });
-  if (profileReadable) return { confirmed: true, profileReadable };
-  if (!SCOPE_CONFIRM_FALLBACK) return { confirmed: false, profileReadable };
-  const any = await Promise.all(
-    FALLBACK_KINDS.map((resource) => selfSubjectAccessReview({ namespace, resource, verb: 'list' })),
-  );
-  return { confirmed: any.some(Boolean), profileReadable };
+  return { confirmed: profileReadable, profileReadable };
 }
 
 function entityNamespace(e: Entity): string {
