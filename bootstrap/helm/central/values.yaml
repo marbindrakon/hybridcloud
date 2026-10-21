@@ -3614,9 +3614,24 @@ vaultSecretStore:
 # Uses kubernetes-services auth mount on central vault (k8s auth, no root token)
 vaultSecretStoreServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.3.3-shc.2"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
+  chartVersion: "0.3.3-shc.3"  # shc: 0.3.3 rebuilt with the public 0.3.0 templates; .3 adds spec.conditions
   syncWave: "0"  # shc: ESO + store before every ExternalSecret on services
   values:
+    # Only the platform namespaces on services may use the store (tenants create projects there; an
+    # ExternalSecret in a tenant project must not read central Vault). Add a namespace here when a platform
+    # chart starts using vault-backend in it.
+    conditions:
+      - namespaces:
+          - cert-manager
+          - openshift-storage
+          - services-quay
+          - services-rhbk
+          - services-vault
+          - shc-ops
+          - sovereign-cloud
+          - sovereign-cloud-helpers
+          - sovereign-cloud-jobs
+          - sovereign-cloud-plugins
     vault:
       server: "https://vault-central.apps.central.shc.signal9.gg"
       path: "central"
