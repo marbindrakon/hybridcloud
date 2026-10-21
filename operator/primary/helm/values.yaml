@@ -91,6 +91,7 @@ admission:
   platformOnlyFields: {enabled: true, mode: Warn}        # shc-platform-only-fields
   gitopsManaged: {enabled: true, mode: Warn}             # shc-gitops-managed
   fabricLedgerGuard: {enabled: true, mode: Deny}         # shc-fabric-ledger-guard
+  accessFieldLadder: {enabled: true, mode: Deny}         # shc-access-field-ladder (Team/Project access lists)
 # Argo CD application name written into the gitops-source annotation of GitOps-owned objects.
 gitopsSource:
   app: ""
