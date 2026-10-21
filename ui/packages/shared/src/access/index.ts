@@ -10,6 +10,7 @@ export {
   usePermission,
   usePermissionsFor,
   useScopeGateNamespace,
+  useGateMatrix,
 } from './PermissionProvider';
 export type { UsePermissionResult, PermissionReason } from './PermissionProvider';
 export { GatedButton } from './GatedButton';

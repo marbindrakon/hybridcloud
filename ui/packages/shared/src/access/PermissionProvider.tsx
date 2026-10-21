@@ -74,7 +74,8 @@ export interface UsePermissionResult {
   reason?: PermissionReason;
 }
 
-function useMatrix(namespace: string | undefined): { matrix?: PermissionMatrix; loading: boolean } {
+/** The gate matrix of one namespace ("-" = cluster scope). */
+export function useGateMatrix(namespace: string | undefined): { matrix?: PermissionMatrix; loading: boolean } {
   const [v, setV] = useState(permissionsVersion());
   const [state, setState] = useState<{ ns?: string; matrix?: PermissionMatrix; loading: boolean }>({ loading: !!namespace });
   useEffect(() => subscribePermissions(() => setV(permissionsVersion())), []);
@@ -112,7 +113,7 @@ export function usePermission(
   const scopeNs = useScopeGateNamespace();
   const base = options.namespace ?? scopeNs;
   const ns = base ? gateNamespaceFor(kind, base) : undefined;
-  const { matrix, loading } = useMatrix(ns);
+  const { matrix, loading } = useGateMatrix(ns);
   const allowed = matrixAllows(matrix, kind, verb) ?? false;
   const reason = useMemo<PermissionReason | undefined>(() => {
     if (allowed || loading) return undefined;
@@ -134,7 +135,7 @@ export function usePermissionsFor(
   const scopeNs = useScopeGateNamespace();
   const base = options.namespace ?? scopeNs;
   const ns = base ? gateNamespaceFor(kind, base) : undefined;
-  const { matrix, loading } = useMatrix(ns);
+  const { matrix, loading } = useGateMatrix(ns);
   return {
     can: (verb: GateVerb) => matrixAllows(matrix, kind, verb) ?? false,
     loading,

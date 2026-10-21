@@ -2,6 +2,7 @@ export * from './types';
 export * from './hooks';
 export * from './scope';
 export * from './access';
+export * from './nav';
 export * from './theme';
 export * from './components';
 export * from './icons';

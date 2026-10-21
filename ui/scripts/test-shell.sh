@@ -18,6 +18,8 @@ entries=(
   "access/errorText.ts:errorText"
   "access/roleHints.ts:roleHints"
   "access/permissionGate.ts:permissionGate"
+  "nav/registry.ts:registry"
+  "nav/paths.ts:paths"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"
