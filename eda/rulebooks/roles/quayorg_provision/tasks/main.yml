@@ -236,60 +236,56 @@
         status_code: [200, 201, 400]
       ignore_errors: true
 
-    - name: Sync admin team with OIDC group
+    - name: Converge the OIDC team sync of each team
+      ansible.builtin.include_tasks: team_sync.yml
+      loop:
+        - {team: admins, groups: "{{ admin_groups }}"}
+        - {team: creators, groups: "{{ creator_groups }}"}
+        - {team: members, groups: "{{ member_groups }}"}
+      loop_control:
+        loop_var: qts
+        label: "{{ qts.team }}"
+
+    # the sign-in client the registry uses: its public configuration names it per external login service
+    - name: Read the registry's sign-in services
       ansible.builtin.uri:
-        url: "{{ quay_url }}/api/v1/organization/{{ org_name }}/team/admins/syncing"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ quay_api_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          # OIDC team sync: the group as the sign-in claim carries it (full path /<entity>/<access group>)
-          group_name: "{{ '/' ~ (item | regex_replace('^/+', '')) }}"
+        url: "{{ quay_url }}/config"
         validate_certs: false
-        status_code: [200, 201, 400]
-      loop: "{{ admin_groups }}"
-      when: admin_groups | length > 0
+        status_code: [200]
+      register: _quay_public_config
       ignore_errors: true
 
-    - name: Sync creator team with OIDC group
-      ansible.builtin.uri:
-        url: "{{ quay_url }}/api/v1/organization/{{ org_name }}/team/creators/syncing"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ quay_api_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          # OIDC team sync: the group as the sign-in claim carries it (full path /<entity>/<access group>)
-          group_name: "{{ '/' ~ (item | regex_replace('^/+', '')) }}"
-        validate_certs: false
-        status_code: [200, 201, 400]
-      loop: "{{ creator_groups }}"
-      when: creator_groups | length > 0
-      ignore_errors: true
+    - name: Name the registry's sign-in client
+      vars:
+        _logins: "{{ ((_quay_public_config.json | default({}, true)).external_login | default([], true)) | selectattr('config', 'defined') | list }}"
+        _by_id: "{{ _logins | selectattr('id', 'equalto', quay_login_service_id) | list }}"
+        _oidc: "{{ _logins | selectattr('config.OIDC', 'defined') | selectattr('config.OIDC') | list }}"
+      ansible.builtin.set_fact:
+        quayorg_signin_client: >-
+          {{ (_by_id[0].config.CLIENT_ID | default('')) if _by_id | length > 0
+             else ((_oidc[0].config.CLIENT_ID | default('')) if _oidc | length == 1
+                   else (_quay_config.resources[0].status.keycloakClientId | default(''))) }}
 
-    - name: Sync member team with OIDC group
-      ansible.builtin.uri:
-        url: "{{ quay_url }}/api/v1/organization/{{ org_name }}/team/members/syncing"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ quay_api_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          # OIDC team sync: the group as the sign-in claim carries it (full path /<entity>/<access group>)
-          group_name: "{{ '/' ~ (item | regex_replace('^/+', '')) }}"
-        validate_certs: false
-        status_code: [200, 201, 400]
-      loop: "{{ member_groups }}"
-      when: member_groups | length > 0
-      ignore_errors: true
+    - name: Granted access groups that exist
+      ansible.builtin.set_fact:
+        quayorg_granted_rbacs: >-
+          {{ (_admin_rbac_crs.results + _creator_rbac_crs.results + _member_rbac_crs.results)
+             | selectattr('resources', 'defined') | map(attribute='resources') | flatten
+             | selectattr('status.group', 'defined') | unique(attribute='metadata.name') | list }}
+
+    # Ready only with a mapped access group and the groups claim verified for a member (or no member yet)
+    - name: Check sign-in for the granted access groups
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/tool_org_signin_status.yml"
+      vars:
+        tos_kind: QuayOrg
+        tos_fields: [spec.quayAdminRbac, spec.quayCreatorRbac, spec.quayMemberRbac]
+        tos_rbacs: "{{ quayorg_granted_rbacs }}"
+        tos_mapping_failed: "{{ quayorg_mapping_failed | default(false) | bool }}"
+        tos_client: "{{ quayorg_signin_client }}"
 
     - name: Build team summary as JSON string
       ansible.builtin.set_fact:
-        team_summary: "{{ {'admins': admin_groups, 'creators': creator_groups, 'members': member_groups} | to_json }}"
+        team_summary: "{{ quayorg_team_sync | default({}) | to_json }}"
 
     - name: Get current timestamp for status
       ansible.builtin.set_fact:
@@ -311,19 +307,17 @@
           orgName: "{{ org_name }}"
           quayUrl: "{{ quay_url }}"
           orgUrl: "{{ quay_url }}/organization/{{ org_name }}"
-          loginUrl: "{{ quay_url }}/oauth/login?provider=oidc"
+          loginUrl: "{{ quay_url | regex_replace('/$', '') }}/signin/"
           adminGroups: "{{ admin_groups }}"
           creatorGroups: "{{ creator_groups }}"
           memberGroups: "{{ member_groups }}"
           teams: "{{ team_summary | string }}"
           entity: "{{ entity_name }}"
           message: "Quay org {{ org_name }} created with team-to-group mappings"
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ quayorg_status_transition_time }}"
-              reason: EDASucceeded
-              message: QuayOrg {{ quayorg_cr_name }} provisioned by EDA
+          conditions: >-
+            {{ [{'type': 'Ready', 'status': 'True', 'lastTransitionTime': quayorg_status_transition_time,
+                 'reason': tool_org_ready_reason, 'message': 'QuayOrg ' ~ quayorg_cr_name ~ ' provisioned by EDA'}]
+               + ([tool_org_signin_condition] if tool_org_signin_condition | default({}) | length > 0 else []) }}
 
   rescue:
     - name: Mark QuayOrg as failed on services cluster
@@ -335,15 +329,15 @@
         cr_namespace: "{{ quayorg_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: "{{ tool_org_failure_reason | default('EDAFailed') }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
-          conditions:
-            - type: Ready
-              status: "False"
-              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
-              message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          conditions: >-
+            {{ [{'type': 'Ready', 'status': 'False', 'lastTransitionTime': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z'),
+                 'reason': tool_org_failure_reason | default('EDAFailed'),
+                 'message': ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed'))}]
+               + ([tool_org_signin_condition] if tool_org_signin_condition | default({}) | length > 0 else []) }}
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 
