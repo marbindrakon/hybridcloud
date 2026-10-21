@@ -221,6 +221,12 @@ run_repo_checks() {
     log_fail "EDA includes (scripts/check-includes.py)"
     grep MISSING /tmp/shc-check-includes.log | head -20 || true
   fi
+  if (cd "${REPO_ROOT}" && python3 -m unittest discover -s tests/schema-replay -p 'test_*.py') >/tmp/shc-replay-unit.log 2>&1; then
+    log_pass "schema-replay unit tests ($(grep -Eo 'Ran [0-9]+ tests' /tmp/shc-replay-unit.log))"
+  else
+    log_fail "schema-replay unit tests"
+    tail -20 /tmp/shc-replay-unit.log || true
+  fi
   if (cd "${REPO_ROOT}" && python3 -I scripts/gen-crds.py --check) >/tmp/shc-gen-crds.log 2>&1; then
     log_pass "crds.yaml generated from operator/config/crd/bases"
   else
