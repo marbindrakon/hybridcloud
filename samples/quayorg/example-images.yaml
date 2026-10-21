@@ -1,5 +1,4 @@
-# A Quay organization (QuayOrg). spec.quayConfig names the platform's registry connection: ask the
-# platform team for its name.
+# A Quay organization (QuayOrg), created through the platform's registry connection.
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: QuayOrg
@@ -7,7 +6,6 @@ metadata:
   name: example-images
   namespace: entity-example-corp
 spec:
-  quayConfig: example-registry-connection
   quayAdminRbac:
     - example-admins
   quayMemberRbac:
