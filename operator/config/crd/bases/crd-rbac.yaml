@@ -37,11 +37,12 @@ spec:
             spec:
               description: Desired Keycloak RBAC group linkage
               type: object
-              required:
-                - config
               properties:
                 config:
-                  description: Name of an RbacConfig resource in the sovereign-cloud-plugins namespace
+                  description: >-
+                    Optional. The identity provider connection (an RbacConfig in the platform's
+                    integration namespace) this access group uses. When omitted the platform uses
+                    its default connection; the one used is reported in status.config.
                   type: string
                 description:
                   description: Human-readable purpose of this RBAC group
