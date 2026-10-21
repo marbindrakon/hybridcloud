@@ -2680,6 +2680,9 @@ iaasClusterDefaults:
     enabled: false
     serviceAccount: shc-fabric
     tokenValidity: 168h
+    # BF-09 step 1: the PushSecret no longer deletes the Vault key when it goes, so renaming the account (step 2)
+    # cannot remove cloudinfra/<site>-fabric between the old PushSecret's prune and the new one's push
+    pushDeletionPolicy: None
     apiServer: ""
     rules:
       - {apiGroups: [k8s.ovn.org], resources: [clusteruserdefinednetworks, routeadvertisements, vteps], verbs: [get, list, watch, create, update, patch, delete]}
