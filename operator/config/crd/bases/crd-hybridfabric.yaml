@@ -81,10 +81,12 @@ spec:
                       message: start must not exceed end
                   properties:
                     start:
+                      description: First VNI of the pool (1 to 16777215).
                       type: integer
                       minimum: 1
                       maximum: 16777215
                     end:
+                      description: Last VNI of the pool, not lower than start.
                       type: integer
                       minimum: 1
                       maximum: 16777215
@@ -99,10 +101,12 @@ spec:
                       message: start must not exceed end
                   properties:
                     start:
+                      description: First VNI of the pool (1 to 16777215).
                       type: integer
                       minimum: 1
                       maximum: 16777215
                     end:
+                      description: Last VNI of the pool, not lower than start.
                       type: integer
                       minimum: 1
                       maximum: 16777215
@@ -115,6 +119,7 @@ spec:
                   required: [nodes, credentialsRef]
                   properties:
                     nodes:
+                      description: The border gateway nodes, 1 to 8, by unique name.
                       type: array
                       minItems: 1
                       maxItems: 8
@@ -141,6 +146,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -156,6 +162,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512

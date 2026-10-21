@@ -1,0 +1,172 @@
+---
+# Sign-in mapping of this secrets engine in the tenant's Vault:
+#   - per granted access group <entity>/<access group>: one external group of that name whose alias on the OIDC
+#     mount is the sign-in claim value /<entity>/<access group> (shared by every secrets engine of this Vault);
+#   - per role (admin, reader, ops, developer): one internal group <kv_path>-<role> with the role's policy and the
+#     granted external groups as member groups.
+# An alias left on another group (earlier releases created aliases without their group) is moved to its group.
+# Sets: vaultkv_mapping_failed, vaultkv_group_ids (path -> external group id).
+- name: Access groups per role
+  ansible.builtin.set_fact:
+    vaultkv_role_groups:
+      admin: "{{ admin_group_paths }}"
+      reader: "{{ reader_group_paths }}"
+      ops: "{{ ops_group_paths }}"
+      developer: "{{ developer_group_paths }}"
+    vaultkv_all_group_paths: "{{ (admin_group_paths + reader_group_paths + ops_group_paths + developer_group_paths) | unique | list }}"
+    vaultkv_mapping_failed: "{{ oidc_accessor is not defined }}"
+    vaultkv_group_ids: {}
+
+- name: Ensure the external group of each access group
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/group/name/{{ item }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    body_format: json
+    body:
+      type: external
+      metadata:
+        accessGroup: "{{ item }}"
+    validate_certs: false
+    status_code: [200, 204]
+  loop: "{{ vaultkv_all_group_paths }}"
+  when: oidc_accessor is defined
+
+- name: Read the external groups
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/group/name/{{ item }}"
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    validate_certs: false
+    status_code: [200]
+  loop: "{{ vaultkv_all_group_paths }}"
+  register: _vkv_ext
+  when: oidc_accessor is defined
+
+- name: Keep the external group ids
+  ansible.builtin.set_fact:
+    vaultkv_group_ids: "{{ vaultkv_group_ids | combine({item.item: item.json.data.id}) }}"
+  loop: "{{ _vkv_ext.results | default([]) | selectattr('json', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Find who holds each sign-in alias
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/lookup/group"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    body_format: json
+    body:
+      alias_name: "/{{ item }}"
+      alias_mount_accessor: "{{ oidc_accessor }}"
+    validate_certs: false
+    status_code: [200, 204]
+  loop: "{{ vaultkv_all_group_paths }}"
+  register: _vkv_alias_owner
+  when: oidc_accessor is defined
+
+- name: Create the sign-in alias of each external group
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/group-alias"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    body_format: json
+    body:
+      name: "/{{ item.item }}"
+      mount_accessor: "{{ oidc_accessor }}"
+      canonical_id: "{{ vaultkv_group_ids[item.item] }}"
+    validate_certs: false
+    status_code: [200, 204]
+  loop: "{{ _vkv_alias_owner.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.status == 204 and item.item in vaultkv_group_ids
+  register: _vkv_alias_created
+  ignore_errors: true
+
+- name: Move a sign-in alias held by another group to its external group
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/group-alias/id/{{ item.json.data.alias.id }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    body_format: json
+    body:
+      name: "/{{ item.item }}"
+      mount_accessor: "{{ oidc_accessor }}"
+      canonical_id: "{{ vaultkv_group_ids[item.item] }}"
+    validate_certs: false
+    status_code: [200, 204]
+  loop: "{{ _vkv_alias_owner.results | default([]) | rejectattr('skipped', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: >-
+    item.status == 200 and item.item in vaultkv_group_ids
+    and item.json.data.id != vaultkv_group_ids[item.item]
+  register: _vkv_alias_moved
+  ignore_errors: true
+
+- name: Ensure the role groups of this secrets engine
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/group/name/{{ kv_path }}-{{ item.key }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    body_format: json
+    body:
+      type: internal
+      policies: ["{{ kv_path }}-{{ item.key }}"]
+      member_group_ids: "{{ item.value | map('extract', vaultkv_group_ids) | list }}"
+    validate_certs: false
+    status_code: [200, 204]
+  loop: "{{ vaultkv_role_groups | dict2items }}"
+  loop_control:
+    label: "{{ kv_path }}-{{ item.key }}"
+  when: oidc_accessor is defined
+
+- name: Read the external groups back
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/group/name/{{ item }}"
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    validate_certs: false
+    status_code: [200, 404]
+  loop: "{{ vaultkv_all_group_paths }}"
+  register: _vkv_ext_after
+  when: oidc_accessor is defined
+
+- name: Read the role groups back
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/identity/group/name/{{ kv_path }}-{{ item.key }}"
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    validate_certs: false
+    status_code: [200, 404]
+  loop: "{{ vaultkv_role_groups | dict2items }}"
+  loop_control:
+    label: "{{ kv_path }}-{{ item.key }}"
+  register: _vkv_role_after
+  when: oidc_accessor is defined
+
+- name: Record whether the sign-in mapping is in place
+  ansible.builtin.set_fact:
+    vaultkv_mapping_failed: >-
+      {%- set ns = namespace(bad=(oidc_accessor is not defined)) -%}
+      {%- for r in _vkv_ext_after.results | default([]) if r.skipped is not defined -%}
+        {%- set a = (((r.json | default({}, true)).data | default({}, true)).alias | default({}, true)) -%}
+        {%- if r.status != 200 or a.name | default('') != '/' ~ r.item or a.mount_accessor | default('') != oidc_accessor -%}
+          {%- set ns.bad = true -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- for r in _vkv_role_after.results | default([]) if r.skipped is not defined -%}
+        {%- set d = ((r.json | default({}, true)).data | default({}, true)) -%}
+        {%- set want = r.item.value | map('extract', vaultkv_group_ids) | list -%}
+        {%- if r.status != 200 or (kv_path ~ '-' ~ r.item.key) not in (d.policies | default([], true))
+              or (want | reject('in', d.member_group_ids | default([], true)) | list | length > 0) -%}
+          {%- set ns.bad = true -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.bad }}

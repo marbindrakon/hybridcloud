@@ -19,6 +19,9 @@ status. Argo CD on the central cluster deploys the whole platform from this repo
   and a VM environment, attach them, reach your VM.
 - [Hybrid networks tutorial](architecture/docs/tutorial/09-hybrid-networks.md): networks across
   sites, placements, internet egress.
+- [Glossary](docs/tenant/glossary.md), [Access and delegation](docs/tenant/access-and-delegation.md)
+  and [Status reasons](docs/tenant/status-reasons.md): the words, who may do what, and what a state
+  or reason means.
 - [Samples](samples/README.md): one example per kind of object.
 - `oc explain <kind>` describes every object and field, for example `oc explain cloudvirt.spec`.
 

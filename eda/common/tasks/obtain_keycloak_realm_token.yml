@@ -11,7 +11,8 @@
 #                    requests to, the token's issuer must match it
 #   krt_token_fact   optional: also set the token under this fact name
 #   krt_headers      optional extra HTTP headers
-# Sets: keycloak_realm_token, keycloak_realm_name (and krt_token_fact when given).
+# Sets: keycloak_realm_token, keycloak_realm_name, keycloak_realm_url (the URL the token was asked at; send the admin
+# requests there) and krt_token_fact when given.
 - name: Require a known purpose
   ansible.builtin.assert:
     that: krt_purpose | default('') in ['membership', 'clients']
@@ -66,6 +67,7 @@
 - name: Expose the realm token
   ansible.builtin.set_fact:
     keycloak_realm_token: "{{ _krt_resp.json.access_token }}"
+    keycloak_realm_url: "{{ _krt_url }}"
     _krt_client_secret: ""
     _krt_resp: {}
   no_log: true

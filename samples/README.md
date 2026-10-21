@@ -30,8 +30,8 @@ groups need the matching role (see [Onboard a tenant](../docs/platform/onboard-a
 | [networkplacement/example-net-vms.yaml](networkplacement/example-net-vms.yaml) | NetworkPlacement | The network attached to the VM environment, with a /24. |
 | [attachmentcircuit/example-edge.yaml](attachmentcircuit/example-edge.yaml) | AttachmentCircuit | An edge connection to the tenant's own router. |
 | [platformopenshift/example-cluster.yaml](platformopenshift/example-cluster.yaml) | PlatformOpenshift | An OpenShift cluster in the OpenStack environment. |
-| [team/example-team.yaml](team/example-team.yaml) | Team | A team setup (tooling only). |
-| [project/example-app.yaml](project/example-app.yaml) | Project | An app project. |
+| [team/example-team.yaml](team/example-team.yaml) | Team | A team setup, with access groups that may manage it (access fields: available with this release). |
+| [project/example-app.yaml](project/example-app.yaml) | Project | An app project, with its access fields (available with this release). |
 | [assignment/example-team-on-cluster.yaml](assignment/example-team-on-cluster.yaml) | Assignment | The team setup and app project on the cluster, with access. |
 | [vault/example-vault.yaml](vault/example-vault.yaml) | Vault | A Vault of the tenant's own. |
 | [vaultkv/example-kv.yaml](vaultkv/example-kv.yaml) | VaultKV | A KV secrets engine in that Vault. |

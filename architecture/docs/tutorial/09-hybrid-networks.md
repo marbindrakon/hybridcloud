@@ -1,13 +1,19 @@
 # Hybrid networks: one private network across cloud sites
 
-A **HybridNetwork** is a tenant's routed private network that spans cloud sites, with its own address space.
-Each **NetworkPlacement** puts the network on one cloud environment: a VM environment (**CloudVirt**) on an
-OpenShift Virtualization site, an OpenStack project (**CloudOSO**) or an AWS account (**CloudAWS**). The platform
+**Before you start:** sign in and find your tenant as [Getting started](../../../docs/tenant/getting-started.md)
+describes; the words are explained in the [glossary](../../../docs/tenant/glossary.md). The examples use the
+tenant `example-corp` (namespace `entity-example-corp`) and the sites `site-vm` (OpenShift Virtualization) and
+`site-osp` (OpenStack); use your own tenant and the sites in your tenant profile.
+
+A **network** (`HybridNetwork`) is a tenant's routed private network that spans cloud sites, with its own address
+space. Each **network placement** (`NetworkPlacement`) puts the network on one cloud environment: a VM environment
+(`CloudVirt`) on an OpenShift Virtualization site, an OpenStack environment (`CloudOSO`) or an AWS environment
+(`CloudAWS`). The platform
 gives each placement a subnet from the network's address space, of the size the tenant asks for (or a pinned
 prefix). Every placement's subnets reach every other placement's subnets of the same network, and nothing else.
 Two tenants can use the same prefixes, even the same addresses, without seeing each other.
 
-The platform team runs the fabric underneath (**HybridFabric**, one **CloudGateway** per site). Tenants never
+The platform team runs the fabric underneath (`HybridFabric`, one `CloudGateway` per site). Tenants never
 touch it.
 
 ## Who does what
@@ -16,9 +22,9 @@ touch it.
 |---|---|---|---|
 | `HybridFabric` | platform (`sovereign-cloud`) | platform | ASN, overlay MTU, VNI pools, border gateway nodes and credentials |
 | `CloudGateway` | platform | platform | attaches one site (a `CloudInfrastructure` with `evpn: true`) to the fabric |
-| `CloudVirt` | entity | tenant | VM environment on an OpenShift site; its namespaces |
-| `HybridNetwork` | entity | tenant | the network: address space, MTU (default and maximum: the fabric's `overlayMtu`) |
-| `NetworkPlacement` | entity | tenant | network × environment × subnet size (or pinned prefix) |
+| `CloudVirt`, `CloudOSO` | tenant (`entity-<tenant>`) | tenant | VM environment on an OpenShift Virtualization site (its namespaces); OpenStack environment |
+| `HybridNetwork` | tenant | tenant | the network: address space, MTU (default and maximum: the fabric's `overlayMtu`) |
+| `NetworkPlacement` | tenant | tenant | network × environment × subnet size (or pinned prefix) |
 
 ## Tenant walk-through
 
@@ -26,7 +32,7 @@ touch it.
    ```yaml
    apiVersion: hybridsovereign.redhat/v1alpha1
    kind: HybridNetwork
-   metadata: {name: core, namespace: entity-acme-corp}
+   metadata: {name: core, namespace: entity-example-corp}
    spec:
      description: shared services network
      prefixes: [10.110.0.0/16, "fd12:3456:789a::/48"]
@@ -38,31 +44,41 @@ touch it.
    - Prefixes can be added at any time. A change that would leave a placement's subnet outside the space is refused
      and names the placements (`PrefixInUse`; the space stays as it was). Removing an unused prefix, or growing one
      in place (a /16 replaced by the /15 that holds it), works.
-   - It becomes `ready` once the fabric is ready (`status.fabric`, `status.mtu`). `status.addressSpace` shows each
+   - It becomes Ready once the fabric is ready (`status.fabric`, `status.mtu`). `status.addressSpace` shows each
      prefix with its placement subnets (`allocations`) and the largest free block (`largestFree`, a prefix
      length).
 
-2. **A VM environment** whose namespace `vms` uses the network:
+2. **A VM environment** whose namespace `vms` uses the network, and an **OpenStack environment**:
    ```yaml
    apiVersion: hybridsovereign.redhat/v1alpha1
    kind: CloudVirt
-   metadata: {name: virt1, namespace: entity-acme-corp}
+   metadata: {name: virt1, namespace: entity-example-corp}
    spec:
-     cloudRef: {name: iaas1}
+     cloudRef: {name: site-vm}
      namespaces: [{name: vms, network: core}]
      quota: {cpu: 16, memory: 64Gi, virtualMachines: 8}
+   ---
+   apiVersion: hybridsovereign.redhat/v1alpha1
+   kind: CloudOSO
+   metadata: {name: osp1, namespace: entity-example-corp}
+   spec:
+     cloudRef: {name: site-osp}
    ```
-   - On the site the namespace is `<entity>-<cloudvirt>-<name>`, here `acme-corp-virt1-vms`.
+   - On the site the namespace is `<tenant>-<cloudvirt>-<name>`, here `example-corp-virt1-vms`.
    - A namespace's network is fixed when it is created. To move VMs, add a namespace and remove the old one.
    - VMs in a namespace with a network start only once a placement puts that network on the environment
      (`status.namespaces[].ready`).
-   - The environment gets a DNS zone `<cloudvirt>.<entity>.<tenant domain>` (`status.dns`), deleted with it.
+   - Each environment gets a DNS zone `<environment>.<tenant>.<tenant DNS domain>` (`status.dns`), deleted with
+     it.
+   - The OpenStack environment is a project on the site; the site supplies every setting, so `cloudRef` is all it
+     needs.
 
-3. **Place the network** on the environment, and on an OpenStack project:
+3. **Place the network** on both environments (in the dashboard: **Attach network** on the environment or network
+   page):
    ```yaml
    apiVersion: hybridsovereign.redhat/v1alpha1
    kind: NetworkPlacement
-   metadata: {name: core-virt1, namespace: entity-acme-corp}
+   metadata: {name: core-virt1, namespace: entity-example-corp}
    spec:
      network: core
      backend: {kind: CloudVirt, name: virt1}
@@ -70,10 +86,10 @@ touch it.
    ---
    apiVersion: hybridsovereign.redhat/v1alpha1
    kind: NetworkPlacement
-   metadata: {name: core-oso1, namespace: entity-acme-corp}
+   metadata: {name: core-osp1, namespace: entity-example-corp}
    spec:
      network: core
-     backend: {kind: CloudOSO, name: oso1}
+     backend: {kind: CloudOSO, name: osp1}
      ipv4: {prefix: 10.110.200.0/24}
    ```
    - `ipv4` is a size (`prefixLength`, /16–/29; on a CloudAWS /16–/24), or a pinned `prefix` inside the
@@ -85,10 +101,10 @@ touch it.
      until a prefix is added or a placement goes away.
    - A pinned prefix is never replaced: outside the space, or on one of the platform's or the site's ranges, it is
      refused (`PrefixInvalid`); held by another placement, the placement waits until it is free.
-   - `ipv6` (optional, /64) is accepted, but where the platform doesn't offer IPv6 for the backend the placement
+   - `ipv6` (optional, /64) is accepted, but where the platform doesn't offer IPv6 for the environment type the placement
      fails with `FamilyUnavailable`, before anything is allocated.
-   - `network`, `backend`, `ipv4` and `ipv6` are immutable. To resize, create a new placement.
-   - On OpenStack the placement's network appears in the tenant's project as a **shared network**. Attach VMs to
+   - `network`, `backend` (the environment), `ipv4` and `ipv6` are immutable. To resize, create a new placement.
+   - On OpenStack the placement's network appears in the environment's project as a **shared network**. Attach VMs to
      it; its router and subnets belong to the platform.
 
 4. **Use it.**
@@ -112,7 +128,7 @@ A network has no route to the internet unless it asks for one. Two ways:
   - Connections can only be opened from inside the network. The platform's private address ranges are not
     reachable this way.
   - `status.egress.internet`:
-    - `pending` while the platform adds it, `ready` once it is in place;
+    - `pending` (a value of this field) while the platform adds it, `ready` once it is in place;
     - `removing` after you turn it off;
     - `unavailable` if the platform offers no internet egress.
   - It can be turned on and off at any time. A connection in progress may break when the platform moves it to
@@ -122,17 +138,17 @@ A network has no route to the internet unless it asks for one. Two ways:
 
 ## DNS names in the environment zone
 
-A CloudVirt environment's zone `<cloudvirt>.<entity>.<tenant domain>` (`status.dns.zone`) is held by the platform.
+A VM environment's zone `<cloudvirt>.<tenant>.<tenant DNS domain>` (`status.dns.zone`) is held by the platform.
 Tenants publish names in it from their VM namespaces, without a second identity:
 
 - a **`DNSEndpoint`** (`externaldns.k8s.io/v1alpha1`, the external-dns schema):
   ```yaml
   apiVersion: externaldns.k8s.io/v1alpha1
   kind: DNSEndpoint
-  metadata: {name: web, namespace: acme-corp-virt1-vms}
+  metadata: {name: web, namespace: example-corp-virt1-vms}
   spec:
     endpoints:
-      - {dnsName: www.virt1.acme-corp.tenants.shc.signal9.gg, recordType: A, targets: [10.110.1.10], recordTTL: 300}
+      - {dnsName: "www.virt1.example-corp.<tenant DNS domain>", recordType: A, targets: [10.110.1.10], recordTTL: 300}
   ```
 - or the annotation `external-dns.alpha.kubernetes.io/hostname` (comma-separated names) on a **Service** or a
   **Route**. The targets come from `external-dns.alpha.kubernetes.io/target`, else the Service's load balancer
@@ -150,39 +166,41 @@ Rules:
 
 ## In the console and the dashboards
 
-The OpenShift console's **Sovereign Cloud** perspective and the standalone dashboards (tenant and admin) show the
-same pages. Members of an entity sign in with the tenant identity provider; the Entity's `namespaceRbac` maps its Rbac
-groups to what they may do in the entity namespace.
+The OpenShift console's **Sovereign Cloud** pages and the standalone dashboards (tenant and admin) show the same
+pages. People sign in as [Getting started](../../../docs/tenant/getting-started.md) describes; the roles their access
+groups hold on the tenant decide what they may do in the tenant namespace.
 
 Tenants:
-- **IaaS Networking → Network Overview:** the entity's networks against its environments. A cell is one
-  NetworkPlacement (state and prefixes); each network shows its MTU and internet egress (state and source addresses).
-- **Hybrid Networks:** create and edit (address space, description, MTU, internet egress, viewer RBAC); the detail
-  page shows the address space in use, the effective MTU, placements ready, egress and the informational
-  realization.
-- **Network Placements:** create (network, environment, subnet size or pinned prefix); read-only afterwards, since
-  those fields are immutable.
-- **IaaS Platform → OpenShift Virt:** environments with their site, VM namespaces (network, ready), quota, DNS zone and
-  API endpoint. Where the site list isn't readable, type the site's name as given by the platform team.
-- Platform objects aren't shown to tenants; the console hides the admin sections.
+- **Networks → Network map:** the tenant's networks against its environments. A cell is one network placement
+  (state and prefixes); each network shows its MTU and internet egress (state and source addresses).
+- **Networks → Networks:** create and edit (address space, description, MTU, internet egress, viewers); the detail
+  page shows the address space in use, the effective MTU, placements ready, egress and, collapsed, the realization
+  (platform detail).
+- **Networks → Network placements**, or **Attach network** on an environment or network page: create (network,
+  environment, subnet size or pinned prefix); read-only afterwards, since those fields are immutable.
+- **Environments → OpenShift Virtualization:** environments with their site, VM namespaces (network, ready), quota,
+  DNS zone and API endpoint. The site picker offers the sites of the tenant profile.
+- Platform objects aren't shown to tenants.
 
-Platform team (Admin Networks):
-- **Network Overview:** each fabric (ASN, overlay MTU, border gateway nodes ready, pool use), a map of the sites
-  attached through Cloud Gateways (site type, transport, BGP sessions per node, tunnel state for remote sites), and every
-  entity's networks.
-- **Hybrid Fabrics, Cloud Infrastructure, Cloud Gateways:** list, detail, create and edit. Forms show only the section
-  for the chosen site type or transport. A gateway's detail page lists each node's sessions and, for WireGuard, each
-  node's public key and each peer's endpoint and last handshake.
-- **Hybrid Networks / Network Placements (all entities):** read-only.
+Platform team (**Fabric and sites**):
+- **Fabric map:** each fabric (ASN, overlay MTU, border gateway nodes ready, pool use), a map of the sites attached
+  through site gateways (site type, transport, BGP sessions per node, tunnel state for remote sites), and every
+  tenant's networks.
+- **Sites, Fabric, Site gateways:** list, detail, create and edit. Forms show only the section for the chosen site
+  type or transport. A gateway's detail page lists each node's sessions and, for WireGuard, each node's public key and
+  each peer's endpoint and last handshake.
 
 ## Status
 
-| `status.status` | Meaning |
+Each object shows a state (Waiting, Creating, Updating, Ready, Degraded, Failed, Deleting), a one-line summary and
+the reason of its `Ready` condition; [Status reasons](../../../docs/tenant/status-reasons.md) lists every reason and
+who acts on it. The reasons you meet most with networks:
+
+| State | Common reasons |
 |---|---|
-| `reconciling` | a job is running |
-| `pending` | waiting for something; `status.waitingFor` says what, and the job is retried on the CR's period. Common reasons: `WaitingForDependencies` (network, backend or gateway not usable yet), `WaitingForAddressSpace` (no room in the network's space, or a pinned prefix held by another placement), `WaitingForGateway` (the site's gateway is adding the network), `RoutesMissing` (the site hasn't advertised the placement's prefixes yet), `SiteNotEvpnCapable` |
-| `ready` | realized; `status.realization` shows how (informational) |
-| `failed` | the spec can't be realized as written; the condition's reason says why (`PrefixReserved`, `PrefixInUse`, `PrefixInvalid`, `FamilyUnavailable`, `FabricMismatch`, `EntityNotAllowed`, `NamespaceTaken`, `EnvironmentNameTaken`, …) |
+| Waiting | `WaitingForDependencies` (network, environment or site connection not usable yet), `WaitingForAddressSpace` (no room in the network's space, or a pinned prefix held by another placement), `WaitingForGateway` (the site is adding the network) |
+| Ready | realized; `status.realization` shows how (platform detail) |
+| Failed | the spec can't be realized as written: `PrefixReserved`, `PrefixInUse`, `PrefixInvalid`, `FamilyUnavailable`, `FabricMismatch`, `EntityNotAllowed`, `SiteNotEvpnCapable` (the site cannot join networks), `NamespaceTaken`, `EnvironmentNameTaken`, ...; or the platform team has to act: `RoutesMissing` (the site hasn't advertised the placement's prefixes) |
 
 A dependency counts as usable when it is ready, or realized before (`status.realized`) and not failed. A
 network or gateway that is re-running doesn't stop its placements.
@@ -191,16 +209,18 @@ network or gateway that is re-running doesn't stop its placements.
 
 Deletes wait for what depends on the object (`status.deletionBlockedBy`):
 
-- a **CloudVirt** waits for the **VirtualMachines** in its namespaces (delete them first);
-- a **NetworkPlacement** on a CloudVirt waits while the environment still has a namespace naming its network;
-  on a CloudOSO it waits for the tenant's **ports** on the network (delete those VMs first);
-- a **HybridNetwork** waits for its placements and for CloudVirt namespaces naming it; its address space goes with
-  it;
-- **CloudGateway** and **HybridFabric** (platform) wait for the placements and networks that use them.
+- a VM environment waits for the **VirtualMachines** in its namespaces (delete them first);
+- a network placement on a VM environment waits while the environment still has a namespace naming its network;
+  on an OpenStack environment it waits for the tenant's **ports** on the network (delete those VMs first);
+- a network waits for its placements and for VM environment namespaces naming it; its address space goes with it;
+- site gateways and fabrics (platform) wait for the placements and networks that use them.
 
 Deleting everything at once works: the guards order it.
 
 ## Platform operations
+
+For the platform team; tenants can skip the rest of this page. Onboarding a tenant (sites, roles, access groups) is in
+[Onboard a tenant](../../../docs/platform/onboard-a-tenant.md).
 
 - **Realization parameters** (how this platform builds the fabric) live in the EDA vars
   `common/vars/fabric_realization.yml` and the installation's `FABRIC_REALIZATION`, not in the CRs. Among them:
@@ -215,8 +235,9 @@ Deleting everything at once works: the guards order it.
   - gateway namespaces and VRFs on the border gateway nodes.
 
   The job fails when something has no owner.
-- **Re-running** any fabric CR (`ansible.sdk.operatorframework.io/reconcileNow: "true"`) is safe: an unchanged
-  gateway reports "no change" and nothing flaps.
+- **Re-running** any fabric object (Retry now: write a new timestamp into
+  `ansible.sdk.operatorframework.io/reconcileNow`) is safe: an unchanged gateway reports "no change" and nothing
+  flaps.
 
 ## This platform's realization (informational)
 

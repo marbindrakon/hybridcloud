@@ -102,7 +102,7 @@ Key vault paths under `central/data/`:
 | `keycloak-clients` | OAuth client secrets (vault, gitea, quay-central, openshift-central) |
 | `oci-credentials` | OCI registry robot credentials |
 | `gitea-admin` | Gitea admin user/password/token |
-| `osohelper-creator-sa` | OSOHelper cross-cluster SA token |
+| `osohelper-creator-sa` | Cross-cluster SA token for the central cluster (the name dates from the retired OSOHelper) |
 | `dashboard-oauth` | Sovereign Dashboard OAuth cookie + client secrets |
 | `tenancy-dashboard-oauth` | Tenancy Dashboard OAuth cookie + client secrets |
 | `vault-services-client` | Vault OIDC client for services keycloak |

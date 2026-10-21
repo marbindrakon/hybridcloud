@@ -160,6 +160,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512

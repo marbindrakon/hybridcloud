@@ -1,0 +1,93 @@
+---
+# Ready rules of a tool organization (AAPOrg, QuayOrg, VaultKV) after the tool side is configured:
+#   no granted access group exists            -> Ready=False AccessNotMapped (the job fails)
+#   the tool-side mapping is not in place     -> Ready=False MappingFailed
+#   the sign-in client lacks the groups claim -> Ready=False MappingFailed, SignInVerified=False ClaimMissing
+#   a member's example token lacks the group  -> Ready=False ClaimMissing,  SignInVerified=False ClaimMissing
+#   no granted group has a member yet         -> Ready=True,                SignInVerified=False NoMembersYet
+#   a member's example token has the group    -> Ready=True GroupClaimVerified, SignInVerified=True GroupClaimVerified
+#
+# Inputs:
+#   tos_kind            the kind (for messages)
+#   tos_fields          the spec fields that name access groups (for messages)
+#   tos_rbacs           the granted Rbac objects that exist (status.group set)
+#   tos_mapping_failed  true when the tool-side mapping could not be set up
+#   tos_client          clientId of the tool's sign-in client ('' when unknown)
+# Sets: tool_org_ready_reason, tool_org_signin_condition (a condition to add to the status), and
+#   tool_org_failure_reason before failing (the role's rescue writes it as the Ready reason).
+- name: Start from no sign-in condition
+  ansible.builtin.set_fact:
+    tool_org_signin_condition: {}
+    tool_org_ready_reason: EDASucceeded
+
+- name: Refuse an organization nobody can sign in to
+  when: tos_rbacs | default([]) | length == 0
+  block:
+    - name: Record that no access group is mapped
+      ansible.builtin.set_fact:
+        tool_org_failure_reason: AccessNotMapped
+        tool_org_signin_condition:
+          type: SignInVerified
+          status: "False"
+          reason: AccessNotMapped
+          message: No access group named here exists in this tenant.
+
+    - name: Stop with the tenant's next step
+      ansible.builtin.fail:
+        msg: >-
+          No access group named in {{ tos_fields | join(', ') }} exists in this tenant, so nobody can sign in to this
+          {{ tos_kind }} yet. Name an existing access group, or create the access group, then reconcile.
+
+- name: Refuse when the tool-side mapping is missing
+  when: tos_mapping_failed | default(false) | bool
+  block:
+    - name: Record the mapping failure
+      ansible.builtin.set_fact:
+        tool_org_failure_reason: MappingFailed
+
+    - name: Stop
+      ansible.builtin.fail:
+        msg: The sign-in mapping of this {{ tos_kind }} could not be set up in the tool.
+
+- name: Refuse when the sign-in client is unknown
+  when: tos_client | default('', true) | length == 0
+  block:
+    - name: Record the missing client
+      ansible.builtin.set_fact:
+        tool_org_failure_reason: MappingFailed
+
+    - name: Stop
+      ansible.builtin.fail:
+        msg: The sign-in client of this {{ tos_kind }} is not known; reconcile its connection first.
+
+- name: Verify the groups claim of a granted member
+  ansible.builtin.include_tasks: keycloak_verify_group_claim.yml
+  vars:
+    kvg_client: "{{ tos_client }}"
+    kvg_rbacs: "{{ tos_rbacs }}"
+
+- name: Sign-in condition from the check
+  ansible.builtin.set_fact:
+    tool_org_signin_condition:
+      type: SignInVerified
+      status: "{{ 'True' if kvg_verified | bool else 'False' }}"
+      reason: "{{ 'ClaimMissing' if kvg_reason == 'MapperMissing' else kvg_reason }}"
+      message: >-
+        {{ {'GroupClaimVerified': 'A member of ' ~ kvg_group ~ ' receives the group in the sign-in token.',
+            'NoMembersYet': 'No granted access group has a member yet.',
+            'ClaimMissing': 'A member of ' ~ kvg_group ~ ' does not receive the group in the sign-in token.',
+            'MapperMissing': 'The sign-in client does not send the groups claim.'}[kvg_reason] | default(kvg_reason) }}
+    tool_org_ready_reason: "{{ 'GroupClaimVerified' if kvg_verified | bool else 'EDASucceeded' }}"
+
+- name: Refuse when members would not receive their group
+  when: kvg_reason in ['ClaimMissing', 'MapperMissing']
+  block:
+    - name: Record the claim failure
+      ansible.builtin.set_fact:
+        tool_org_failure_reason: "{{ 'MappingFailed' if kvg_reason == 'MapperMissing' else 'ClaimMissing' }}"
+
+    - name: Stop
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'The sign-in client ' ~ tos_client ~ ' does not send the groups claim.' if kvg_reason == 'MapperMissing'
+             else 'Members of ' ~ kvg_group ~ ' do not receive the group in the sign-in token of ' ~ tos_client ~ '.' }}

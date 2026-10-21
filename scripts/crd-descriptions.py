@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """Read, edit and verify the description text of the hybridsovereign.redhat CRDs.
 
-The CRDs exist twice: the per-kind sources operator/config/crd/bases/crd-<kind>.yaml and the
-copy the primary chart installs, operator/primary/helm/templates/crds.yaml. Until crds.yaml is
-generated from the per-kind sources, every description edit goes to both copies at once; this
-tool does that with line-level edits, so the rest of each file (layout, comments, Helm lines)
-stays byte-identical.
+The per-kind sources operator/config/crd/bases/crd-<kind>.yaml are the only place CRD text is
+edited. operator/primary/helm/templates/crds.yaml is generated from them by scripts/gen-crds.py;
+`set` and `fill` regenerate it after editing. Edits are line-level, so the rest of each source
+(layout, comments) stays byte-identical.
 
 Paths name schema nodes below openAPIV3Schema: "." is the kind itself, "spec.cloudRef.name" a
 field, "status.edaJobs[]" the items of an array, "status.edaJobs[].name" a field of those items.
 
 usage:
   crd-descriptions.py dump KIND [--missing]       list path -> description (per-kind source)
-  crd-descriptions.py set PATCH.yaml              apply {Kind: {path: text}} to both copies
+  crd-descriptions.py set PATCH.yaml              apply {Kind: {path: text}}, regenerate crds.yaml
   crd-descriptions.py fill [--kinds K,K]          add the common descriptions that are missing
-  crd-descriptions.py lockstep                    per-kind sources and crds.yaml must agree
+  crd-descriptions.py lockstep                    crds.yaml is the generated form of the sources
   crd-descriptions.py diff BASE_REF               nothing but descriptions changed since BASE_REF
 
 Exit status 1 when a check fails or an edit cannot be verified.
@@ -98,9 +97,24 @@ def _rt_yaml():
 
 
 def _helm_masked(text):
-    """Replace Helm control lines with comments so the file parses, keeping line numbers."""
+    """Replace Helm control lines (and multi-line Helm comments) with YAML comments so the file
+    parses, keeping line numbers."""
     lines = text.split("\n")
-    return "\n".join("#" if ln.lstrip().startswith("{{") else ln for ln in lines), lines
+    out = []
+    in_tpl = False
+    for ln in lines:
+        if in_tpl:
+            out.append("#")
+            if "}}" in ln:
+                in_tpl = False
+            continue
+        if ln.lstrip().startswith("{{"):
+            out.append("#")
+            if "}}" not in ln:
+                in_tpl = True
+            continue
+        out.append(ln)
+    return "\n".join(out), lines
 
 
 def kind_files():
@@ -276,8 +290,11 @@ def edit_file(path, kind, changes, only_missing=False):
     return len(edits)
 
 
-def both_copies(kind):
-    return [source_for(kind), CHART_CRDS]
+def regenerate():
+    """Regenerate crds.yaml from the sources with the BE-FOUNDATIONS generator."""
+    r = subprocess.run([sys.executable, "-I", str(ROOT / "scripts/gen-crds.py")])
+    if r.returncode:
+        raise SystemExit("gen-crds.py failed; crds.yaml not regenerated")
 
 
 # ---------------------------------------------------------------- commands
@@ -302,11 +319,13 @@ def cmd_set(args):
     patch = yaml.safe_load(Path(args.patch).read_text(encoding="utf-8"))
     total = 0
     for kind, changes in patch.items():
-        for path in both_copies(kind):
-            n = edit_file(path, kind, changes)
-            total += n
-            print(f"{path.relative_to(ROOT)}: {kind}: {n} description(s) set")
+        path = source_for(kind)
+        n = edit_file(path, kind, changes)
+        total += n
+        print(f"{path.relative_to(ROOT)}: {kind}: {n} description(s) set")
     print(f"{total} edit(s)")
+    if total:
+        regenerate()
 
 
 def cmd_fill(args):
@@ -326,11 +345,12 @@ def cmd_fill(args):
                         todo[p] = text
             if not todo:
                 continue
-            for path in (src, CHART_CRDS):
-                n = edit_file(path, kind, todo, only_missing=True)
-                total += n
-                print(f"{path.relative_to(ROOT)}: {kind}: {n} filled")
+            n = edit_file(src, kind, todo, only_missing=True)
+            total += n
+            print(f"{src.relative_to(ROOT)}: {kind}: {n} filled")
     print(f"{total} description(s) filled")
+    if total:
+        regenerate()
 
 
 def _strip(obj):
@@ -358,8 +378,9 @@ def _git_show(ref, rel):
 
 
 def cmd_lockstep(args):
+    r = subprocess.run([sys.executable, "-I", str(ROOT / "scripts/gen-crds.py"), "--check"])
     chart = load_plain(CHART_CRDS.read_text(encoding="utf-8"))
-    bad = 0
+    bad = 1 if r.returncode else 0
     for src in kind_files():
         if src.name == "crd.yaml":
             continue
@@ -383,7 +404,8 @@ def cmd_lockstep(args):
 def cmd_diff(args):
     bad = 0
     changed = 0
-    files = [p for p in kind_files() if p.name != "crd.yaml"] + [CHART_CRDS]
+    # crds.yaml is generated from the sources (lockstep checks that), so the sources suffice.
+    files = [p for p in kind_files() if p.name != "crd.yaml"]
     for path in files:
         rel = str(path.relative_to(ROOT))
         old_text = _git_show(args.base, rel)

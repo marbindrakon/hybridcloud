@@ -1,6 +1,11 @@
 # Developer Tutorial — Entity RBAC Configuration
 
-**Goal:** Get a working Entity with all 14 RBAC roles configured in ≤ 30 minutes.
+> **Superseded.** This page describes an earlier access model and earlier components. Use
+> [Onboard a tenant](../../../docs/platform/onboard-a-tenant.md) and
+> [Getting started](../../../docs/tenant/getting-started.md); the CRDs and `oc explain` are
+> authoritative.
+
+**Goal:** Get a working Entity with its RBAC roles configured in ≤ 30 minutes.
 
 **Prerequisites:**
 - `oc` access to the services cluster

@@ -32,7 +32,7 @@ The operator watches for that completion signal. Once EDA marks a resource as re
 
 Operators and EDA run on different OpenShift clusters. Kubernetes Events are cluster-local — they do not automatically cross cluster boundaries.
 
-A dedicated event forwarder component runs on the services cluster alongside the operators. It watches for operator events, packages them into a standard format, and securely posts them to the central cluster's Event Stream. The forwarder includes retry logic and deduplication so temporary network issues do not cause duplicate automation runs.
+The operators publish their events themselves to the Kafka event bus (AMQ Streams) on the central cluster, over an outbound TLS connection; the EDA activations consume them there. (An earlier design used a separate event forwarder posting to an EDA Event Stream; it is retired, see [retired components](../architecture.md#retired-components).)
 
 This push-based design follows the same connectivity pattern already used by Red Hat Advanced Cluster Management: outbound connections from the managed cluster to the hub, avoiding firewall changes.
 
@@ -66,7 +66,7 @@ Operators no longer hold credentials for Keycloak, Vault, or cloud APIs. Their R
 
 ### Retry and Resilience
 
-The event forwarder retries failed deliveries with exponential backoff. If an event is still not delivered before it expires (~1 hour), the operator automatically re-emits on its next reconcile cycle. No single network blip can permanently lose a provisioning request.
+Kafka keeps events durably until the activations have consumed them. If the operator cannot publish, it publishes again on its next reconcile cycle. No single network blip can permanently lose a provisioning request.
 
 ### Idempotency
 
@@ -78,7 +78,7 @@ The forwarder exposes health endpoints for Kubernetes probes. EDA activations re
 
 ### Forced Reconciliation
 
-Platform operators can trigger a fresh automation run from the tenancy dashboard refresh button. This patches a reconcile annotation on the custom resource; the operator detects it and emits a reconcile event. EDA re-runs provisioning without manual cluster access.
+Anyone allowed to change an object can trigger a fresh automation run with **Retry now** on its page. This writes a new timestamp into the `reconcileNow` annotation; the operator detects the new value and emits a reconcile event. EDA re-runs provisioning without manual cluster access.
 
 ---
 
@@ -102,7 +102,7 @@ The following operators were refactored to the event-driven model:
 | Platform | PlatformOpenshift, CloudOSO |
 | Plugins | RBAC, Vault, AAP, Quay |
 
-SDX (`plugin-sdx`) handles CR-to-Gitea sync separately as a Go controller and is not part of the EDA migration.
+The Git export (`iaac-git-sync`, which replaced the retired Go Plugin SDX) handles CR-to-Gitea sync separately and is not part of the EDA path.
 
 Each EDA-covered operator has a matching Decision Environment, create/delete rulebooks, and provision/teardown Ansible roles under `eda/<operator>/`.
 
@@ -112,5 +112,5 @@ Each EDA-covered operator has a matching Decision Environment, create/delete rul
 
 - Technical details: [006 EDA Architecture](../technical/006-eda-architecture.md)
 - Developer guide: [006 EDA Developer Guide](../tutorial/006-eda-developer-guide.md)
-- Business presentation: [006 EDA Slides](006-eda-slides.md)
+- Business presentation: [006 EDA Slides](../archive/concepts/006-eda-slides.md)
 - Security validation: [006 Hardening Check](../../hardeningcheck/006-platform-eda-rebuild.md)

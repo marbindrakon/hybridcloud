@@ -65,6 +65,24 @@
           ignore_errors: true
           no_log: true
 
+        # the role groups of this engine; the external groups of the access groups stay (other engines share them)
+        - name: Delete the role groups
+          loop:
+            - "{{ vaultkv_cr_name }}-admin"
+            - "{{ vaultkv_cr_name }}-reader"
+            - "{{ vaultkv_cr_name }}-ops"
+            - "{{ vaultkv_cr_name }}-developer"
+          when: vault_init_final.resources | length > 0
+          ansible.builtin.uri:
+            url: "{{ parent_vault_final.resources[0].status.vaultUrl }}/v1/identity/group/name/{{ item }}"
+            method: DELETE
+            headers:
+              X-Vault-Token: "{{ vault_init_final.resources[0].data.root_token | b64decode }}"
+            validate_certs: false
+            status_code: [200, 204, 404]
+          ignore_errors: true
+          no_log: true
+
     - name: Get current timestamp
       ansible.builtin.set_fact:
         vaultkv_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"

@@ -1,5 +1,10 @@
 # Day-2 Operations: Plugin Operators
 
+> **Superseded.** This page describes an earlier access model and earlier components. Use
+> [Onboard a tenant](../../../docs/platform/onboard-a-tenant.md) and
+> [Getting started](../../../docs/tenant/getting-started.md); the CRDs and `oc explain` are
+> authoritative.
+
 ## Overview
 
 Plugin operators run in `sovereign-cloud-plugins` on the services cluster. They manage per-entity resources (Keycloak groups, Vault instances, AAP orgs, Quay orgs) tied to entity namespaces.

@@ -1,6 +1,6 @@
 # C4 Level 3 — Event System
 
-**Scope**: AMQ Streams, Event Forwarder, AAP EDA  
+**Scope**: AMQ Streams, AAP EDA  
 **API group**: `hybridsovereign.redhat/v1alpha1` (event `regarding.kind`)  
 **Last updated**: 2026-08-25
 
@@ -13,9 +13,8 @@ Operators on the services cluster publish normalized event JSON directly to AMQ 
 1. **Operators** publish to Kafka topic `hybridsovereign-events` (SASL_SSL via external bootstrap Route).
 2. **AMQ Streams** (Kafka) provides the durable event bus (12 partitions on `hybridsovereign-events`, 6 on audit).
 3. **AAP EDA** matches events via `ansible.eda.kafka` rulebook activations with tuned consumer settings (`KAFKA_MAX_POLL_RECORDS=500`, `KAFKA_FETCH_MAX_WAIT_MS=500`).
-4. **Event Forwarder** (optional, `eventForwarder.enabled: true`) bridges Kubernetes Events to the EDA Event Stream for audit visibility.
-
-Primary path remains **operator → Kafka → EDA**. Event Forwarder supplements K8s-native events.
+The path is **operator → Kafka → EDA**. The Event Forwarder that used to relay Kubernetes Events to an EDA
+Event Stream is retired ([retired components](../../architecture.md#retired-components)).
 
 ---
 
@@ -123,7 +122,7 @@ action:
 | `<Kind>DeleteRequested` | `EntityDeleteRequested` | `deletionTimestamp` set |
 | `<Kind>ReconcileRequested` | `EntityReconcileRequested` | `reconcileNow` annotation |
 
-### Normalized Forwarder Payload
+### Operator Event Payload
 
 | Field | Purpose |
 |-------|---------|
@@ -142,21 +141,15 @@ sequenceDiagram
     participant U as User
     participant CR as Entity CR
     participant PO as Primary Operator
-    participant EV as K8s Event
-    participant EF as Event Forwarder
     participant KF as Kafka
-    participant ES as EDA Event Stream
     participant EDA as EDA Activation
     participant AAP as AAP Controller
 
     U->>CR: Create Entity
     CR->>PO: Reconcile
     PO->>CR: status=reconciling
-    PO->>EV: EntityCreateRequested
-    EV->>EF: Watch delivers event
-    EF->>KF: Produce to hybridsovereign-events
-    EF->>ES: POST normalized payload
-    ES->>EDA: Match rule
+    PO->>KF: Produce EntityCreateRequested to hybridsovereign-events
+    KF->>EDA: Consume and match rule
     EDA->>AAP: run_playbook entity-provision
     AAP->>CR: Patch status=ready
 ```
@@ -183,5 +176,5 @@ Images are pushed to Quay and referenced in `hybridcloud/aap-config/eda/decision
 ## Related Documents
 
 - [operator.md](operator.md) — event-emitting operators
-- [../decisions/ADR-003-kafka-events.md](../decisions/ADR-003-kafka-events.md)
-- [../technical/006-eda-architecture.md](../technical/006-eda-architecture.md)
+- [../decisions/ADR-003-kafka-events.md](../../decisions/ADR-003-kafka-events.md)
+- [../technical/006-eda-architecture.md](../../technical/006-eda-architecture.md)

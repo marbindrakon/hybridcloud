@@ -56,7 +56,7 @@ check-content:
 # Strict server-side dry run of samples/ and the YAML in docs/ (nothing is created).
 # Needs KUBECONFIG (services), SAMPLES_NS (an existing tenant namespace) and optionally OC.
 check-manifests:
-	OC=$${OC:-oc} python3 -I scripts/check-manifests.py samples docs
+	OC=$${OC:-oc} python3 -I scripts/check-manifests.py samples docs architecture/docs/tutorial/09-hybrid-networks.md
 
 # --- be-foundations ---
 check-includes:

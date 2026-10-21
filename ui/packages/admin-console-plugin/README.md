@@ -5,7 +5,7 @@ OpenShift 4.x dynamic console plugin for platform operator views.
 ## Extensions
 
 - Navigation section: **Hybrid Sovereign**
-- Routes: Overview, Entities (scaffold pages)
+- Routes: the platform pages of the shared navigation registry (`shared/src/nav/registry.ts`), rendered by the shared page library
 
 ## Build
 

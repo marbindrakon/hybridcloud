@@ -6,7 +6,7 @@ Shared library for Hybrid Sovereign Cloud UI packages.
 
 - **CRD types** — TypeScript interfaces for `hybridsovereign.redhat/v1alpha1` custom resources
 - **K8s hooks** — React hooks for listing and fetching CRs via the dashboard K8s proxy
-- **Theme** — PatternFly 5 `SovereignThemeProvider` with dark/light mode toggle
+- **Theme** — PatternFly 6 `SovereignThemeProvider` with dark/light mode toggle
 
 ## Usage
 

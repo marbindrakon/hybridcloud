@@ -1,5 +1,7 @@
 # An app project (Project): application namespaces for the team on its cluster. Not an OpenStack
-# project and not a Google Cloud project.
+# project and not a Google Cloud project. The access fields (available with this release) give
+# access groups rights on this app project on the services cluster: projectAdmin may change and
+# delete it, projectDeveloperRbac may change it, projectViewerRbac may view it.
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: Project
@@ -9,3 +11,9 @@ metadata:
 spec:
   displayName: Example application
   description: Namespaces of the example application.
+  projectAdmin:
+    - example-admins
+  projectDeveloperRbac:
+    - example-developers
+  projectViewerRbac:
+    - example-auditors

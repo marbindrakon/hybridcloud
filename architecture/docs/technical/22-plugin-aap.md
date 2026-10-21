@@ -72,6 +72,6 @@ graph TD
 ## Related docs
 
 - [AAP workload](./10-aap.md)
-- [Secrets flow](./18-secrets-flow.md)
+- [Vault and secret delivery](./09-vault.md)
 - [Plugin RBAC](./19-plugin-rbac.md)
 - [Tenancy Dashboard](./20-tenancy-dashboard.md)

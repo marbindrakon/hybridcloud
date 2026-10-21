@@ -35,7 +35,7 @@ Platform and component repositories enforce the same posture:
 |---------|-------------|
 | **AGENTS.md** | Every repo ships **`AGENTS.md`** documenting **Secret Management**: never commit credentials; use Vault and operators |
 | **`.gitignore`** | Common secret filenames and env dumps are blocked by **shared `.gitignore` patterns** |
-| **Runtime delivery** | All cluster secrets flow through **Vault** plus **ExternalSecret** / **PushSecret** — see [Platform secrets flow](../technical/18-secrets-flow.md) |
+| **Runtime delivery** | All cluster secrets flow through **Vault** plus **ExternalSecret** / **PushSecret** — see [Vault and secret delivery](../technical/09-vault.md) |
 
 **No secrets are ever stored in Git.**
 

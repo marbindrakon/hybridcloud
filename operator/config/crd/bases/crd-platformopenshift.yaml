@@ -94,18 +94,24 @@ spec:
                     pullSecretVaultPath:
                       type: string
                       description: >-
-                        Set by the platform; leave unset. Location of the pull secret in the
-                        platform's secret store. Default: the installation's default.
+                        Set by the platform; leave unset. Requests from tenant users that set or
+                        change it are refused, or accepted with a warning, depending on the
+                        platform's admission settings. Location of the pull secret in the platform's
+                        secret store.
                     pullSecretVaultProperty:
                       type: string
                       description: >-
-                        Set by the platform; leave unset. Property that holds the pull secret at
-                        that location. Default: the installation's default.
+                        Set by the platform; leave unset. Requests from tenant users that set or
+                        change it are refused, or accepted with a warning, depending on the
+                        platform's admission settings. Property that holds the pull secret at that
+                        location.
                     sshKeyVaultPath:
                       type: string
                       description: >-
-                        Set by the platform; leave unset. Location of the nodes' SSH key pair in the
-                        platform's secret store. Default: the installation's default.
+                        Set by the platform; leave unset. Requests from tenant users that set or
+                        change it are refused, or accepted with a warning, depending on the
+                        platform's admission settings. Location of the nodes' SSH key pair in the
+                        platform's secret store.
                     glanceImageOverride:
                       type: string
                       description: >-
@@ -267,18 +273,13 @@ spec:
                   description: URL of the cluster's web console.
                 adminPasswordVaultPath:
                   type: string
-                  description: >-
-                    Platform detail. Location of the admin password in the platform's secret store.
+                  description: Not written any more; removed from older objects.
                 kubeconfigVaultPath:
                   type: string
-                  description: >-
-                    Platform detail. Location of the admin kubeconfig in the platform's secret
-                    store.
+                  description: Not written any more; removed from older objects.
                 secretsVaultPath:
                   type: string
-                  description: >-
-                    Platform detail. Location of the cluster's secrets in the platform's secret
-                    store.
+                  description: Not written any more; removed from older objects.
                 clusterVersion:
                   type: string
                   description: OpenShift version of the cluster.

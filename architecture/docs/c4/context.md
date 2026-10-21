@@ -52,7 +52,7 @@ C4Context
 | Actor | Interaction | Auth |
 |-------|-------------|------|
 | Platform Administrator | Entity onboarding, `RbacConfig` / `AAPConfig` / `QuayConfig`, bootstrap | Keycloak via Admin Dashboard or OCP console plugin |
-| Tenant Administrator | Team, Project, Assignment, Persona, cloud CRs in `entity-<name>` | Keycloak; 14 named RBAC roles |
+| Tenant Administrator | Team, Project, Assignment, network and cloud environment CRs in `entity-<name>` | Keycloak; the roles of the tenant's access groups ([role table](../../../docs/platform/onboard-a-tenant.md#4-give-the-access-groups-roles)) |
 | Tenant Developer | Scoped CRUD / read per RoleBinding | Keycloak |
 
 ---

@@ -158,6 +158,6 @@ The `Iaac` CR (`hybridsovereign.redhat/v1alpha1`) serves as the configuration an
 
 ## Related Documents
 
-- [../decisions/ADR-001-monorepo.md](../decisions/ADR-001-monorepo.md) — replaces Go plugin_sdx
-- [../archive/technical/25-plugin-iaac.md](../archive/technical/25-plugin-iaac.md) — legacy SDX reference
-- [../technical/14-gitea.md](../technical/14-gitea.md) — Gitea deployment
+- [../decisions/ADR-001-monorepo.md](../../decisions/ADR-001-monorepo.md) — replaces Go plugin_sdx
+- [../archive/technical/25-plugin-iaac.md](../../archive/technical/25-plugin-iaac.md) — legacy SDX reference
+- [../technical/14-gitea.md](../../technical/14-gitea.md) — Gitea deployment

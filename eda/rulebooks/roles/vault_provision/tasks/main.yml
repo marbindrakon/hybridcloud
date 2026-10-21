@@ -76,6 +76,7 @@
           ready: true
           observedGeneration: "{{ vault_generation }}"
           vaultUrl: "{{ vault_external_url }}"
+          loginUrl: "{{ vault_external_url | regex_replace('/$', '') }}/ui/vault/auth?with=oidc"
           vaultInternalUrl: "{{ vault_internal_url }}"
           adminSecretName: "{{ vault_instance_name }}-init"
           adminSecretNamespace: "{{ vault_cr_namespace }}"

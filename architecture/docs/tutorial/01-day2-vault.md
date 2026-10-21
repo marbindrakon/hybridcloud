@@ -225,5 +225,5 @@ ESO will automatically refresh the Kubernetes Secret within the configured `refr
 ## Related Documentation
 
 - [09-vault.md](../technical/09-vault.md) — Architecture reference
-- [18-secrets-flow.md](../technical/18-secrets-flow.md) — Secrets flow overview
+- [09-vault.md](../technical/09-vault.md) — Secrets flow overview
 - [31-keycloak-vault-integration.md](../technical/31-keycloak-vault-integration.md) — Keycloak OIDC auth details

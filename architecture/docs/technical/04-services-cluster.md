@@ -11,10 +11,10 @@ graph TD
     subgraph Services["Services Cluster"]
         KC["Keycloak"]
         AAP["AAP"]
-        Entity["Entity Operator"]
-        TenOps["Tenancy operators<br/>Team / Assignment / Project /<br/>PlatformOpenshift / CloudOSO"]
-        Dash["Sovereign + Tenancy<br/>Dashboards"]
-        Plugins["Plugin ops:<br/>RBAC, Vault, AAP, Quay, SDX"]
+        Entity["Primary operator<br/>(platform kinds)"]
+        TenOps["Namespace operators<br/>one per tenant namespace"]
+        Dash["Sovereign + Tenancy<br/>Dashboards, console plugins"]
+        Plugins["iaac-git-sync<br/>(Git export)"]
         ODF["ODF / Noobaa"]
         Quay["Quay Registry"]
         CPG["Crunchy Postgres"]
@@ -25,8 +25,9 @@ graph TD
 
 | Namespace | Purpose |
 |---|---|
-| `sovereign-cloud` | Entity Operator, Sovereign Dashboard, Tenancy Dashboard, tenancy operators |
-| `sovereign-cloud-plugins` | Plugin operators (`plugin_rbac`, `plugin_vault`, `plugin_aap`, `plugin_quay`, `plugin_sdx`) |
+| `sovereign-cloud` | Primary operator, Sovereign Dashboard, Tenancy Dashboard, console plugins |
+| `sovereign-cloud-plugins` | `iaac-git-sync` (Git export); the `*Config` connection CRs |
+| `entity-<tenant>` | The tenant's namespace operator and objects |
 
 These namespaces are **not** deployed on the central cluster anymore. They were removed there so they exist only on the services cluster.
 
@@ -43,19 +44,11 @@ These namespaces are **not** deployed on the central cluster anymore. They were 
 |-----------|-----------|---------|
 | Keycloak (RHBK) | `rhbk` | Tenant identity and access management |
 | AAP | `aap` | Ansible Automation Platform |
-| Entity Operator | `sovereign-cloud` | Tenant namespace provisioning from Entity CRs |
-| Team Operator | `sovereign-cloud` | Team CR management |
-| Assignment Operator | `sovereign-cloud` | Assignment CR management (links Teams, Projects, Platforms) |
-| Project Operator | `sovereign-cloud` | Project CR management |
-| PlatformOpenshift Operator | `sovereign-cloud` | PlatformOpenshift CR management |
-| CloudOSO Operator | `sovereign-cloud` | CloudOSO CR management |
+| Primary operator | `sovereign-cloud` | Platform kinds (Entity, sites, fabric, connections); deploys the namespace operators |
+| Namespace operator | `entity-<tenant>` | Tenant kinds (Team, Assignment, Project, PlatformOpenshift, environments, networks, plugin kinds) |
 | Sovereign Dashboard | `sovereign-cloud` | Entity management UI with OpenShift OAuth |
 | Tenancy Dashboard | `sovereign-cloud` | Tenancy + plugin CR UI; user OAuth token to Kubernetes API |
-| Plugin RBAC | `sovereign-cloud-plugins` | Keycloak OIDC clients and groups from `RbacConfig` / `Rbac` |
-| Plugin Vault | `sovereign-cloud-plugins` | Vault instance provisioning per entity |
-| Plugin AAP | `sovereign-cloud-plugins` | AAP organization management per entity |
-| Plugin Quay | `sovereign-cloud-plugins` | Quay organization management per entity |
-| Plugin SDX | `sovereign-cloud-plugins` | CR-to-Gitea sync for all `hybridsovereign.redhat` CRs |
+| IAAC git-sync | `sovereign-cloud-plugins` | CR-to-Gitea export of the `hybridsovereign.redhat` CRs (replaces the retired Plugin SDX) |
 | ODF / Noobaa | `openshift-storage` | Object storage for Quay |
 | Quay | `quay-enterprise` | Container image registry |
 | Crunchy Postgres | `openshift-operators` | PostgreSQL operator |
@@ -64,7 +57,7 @@ These namespaces are **not** deployed on the central cluster anymore. They were 
 
 | API Group | Must Deploy Here | Examples |
 |---|---|---|
-| `hybridsovereign.redhat` | **Yes** | Entity Operator; Team, Assignment, Project, PlatformOpenshift, CloudOSO; `plugin_rbac`, `plugin_vault`, `plugin_aap`, `plugin_quay`, `plugin_sdx` |
+| `hybridsovereign.redhat` | **Yes** | Primary operator; namespace operators |
 | `helper.hybridsovereign.redhat` | **No** (central only) | *(future)* |
 
 ## Connection to Central

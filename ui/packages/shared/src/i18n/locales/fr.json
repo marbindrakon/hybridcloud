@@ -968,6 +968,8 @@
       "menu": "Aide",
       "gettingStarted": "Premiers pas en tant que locataire",
       "glossary": "Glossaire",
+      "access": "Accès et délégation",
+      "statusReasons": "États, Réessayer maintenant et suppression",
       "onboardTenant": "Intégrer un locataire (guide plateforme)",
       "allDocs": "Toute la documentation",
       "notConfigured": "La documentation n'est pas configurée sur cette installation",

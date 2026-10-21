@@ -36,7 +36,7 @@ C4Component
         Component(teamRole, "team role", "Ansible", "Team CR reconcile + events")
         Component(assignRole, "assignment role", "Ansible", "Assignment CR reconcile + events")
         Component(projectRole, "project role", "Ansible", "Project CR reconcile + events")
-        Component(personaRole, "persona role", "Ansible", "Persona CR reconcile + events")
+        Component(personaRole, "persona role (deprecated)", "Ansible", "Persona CR reconcile + events")
         Component(platRole, "platformopenshift role", "Ansible", "OCP cluster CR reconcile + events")
         Component(cloudosoRole, "cloudoso role", "Ansible", "OpenStack env CR reconcile + events")
         Component(cloudawsRole, "cloudaws role", "Ansible", "AWS env CR reconcile + events")
@@ -129,7 +129,7 @@ The Deployment runs with `--watched-namespaces=entity-<name>` and a per-entity l
 | Primary | `ClusterRole` | Must create namespaces and deploy namespace operators |
 | Namespace | `Role` (namespace-scoped) | Least privilege within `entity-<name>` |
 
-Entity namespace RBAC (14 named roles for tenant users) is provisioned by EDA `entity_provision` role, not by the operator directly.
+Entity namespace RBAC (one Role per role in `spec.namespaceRbac`, see the [role table](../../../../docs/platform/onboard-a-tenant.md#4-give-the-access-groups-roles)) is provisioned by EDA `entity_provision` role, not by the operator directly.
 
 ---
 
@@ -150,5 +150,5 @@ ArgoCD Application: `hybridsovereignPrimaryOperator` (sync-wave 38, services clu
 
 - [code/entity-lifecycle.md](../code/entity-lifecycle.md) — Entity state machine
 - [event-system.md](event-system.md) — event pipeline to EDA
-- [../decisions/ADR-002-multi-tier-operator.md](../decisions/ADR-002-multi-tier-operator.md)
-- [../technical/17-entity-operator.md](../technical/17-entity-operator.md)
+- [../decisions/ADR-002-multi-tier-operator.md](../../decisions/ADR-002-multi-tier-operator.md)
+- [../technical/17-entity-operator.md](../../archive/technical/17-entity-operator.md)

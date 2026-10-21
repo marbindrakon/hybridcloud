@@ -1,5 +1,10 @@
 # 41 — Two-Layer RBAC Design
 
+> **Superseded.** This page describes an earlier access model and earlier components. Use
+> [Onboard a tenant](../../../docs/platform/onboard-a-tenant.md) and
+> [Getting started](../../../docs/tenant/getting-started.md); the CRDs and `oc explain` are
+> authoritative.
+
 ## Overview
 
 Sovereign Cloud enforces two distinct RBAC layers for every tenant:
@@ -53,8 +58,9 @@ Each entry is an Rbac CR name. The operator looks up the Rbac CR and reads `stat
 ```
 Role: cloudosos-creator  → verbs: [get, list, watch, create, update, patch, delete]
 Role: cloudosos-viewer   → verbs: [get, list, watch]
-RoleBinding: cloudosos-creator → subjects: [Group: /acme-corp/platform-admins, Group: /acme-corp/infra-team]
-RoleBinding: cloudosos-viewer  → subjects: [Group: /acme-corp/devs]
+RoleBinding: cloudosos-creator → subjects: [Group: acme-corp.platform-admins, Group: acme-corp.infra-team]
+RoleBinding: cloudosos-viewer  → subjects: [Group: acme-corp.devs]
+# OpenShift group names are <tenant>.<access group>; <tenant>/<access group> is the sign-in directory path.
 ```
 
 ---

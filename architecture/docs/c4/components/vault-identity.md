@@ -76,7 +76,7 @@ Group `sovereign-admin` maps to elevated OpenShift and Vault policies.
 
 ## Related
 
-- [../../technical/18-secrets-flow.md](../../technical/18-secrets-flow.md)
+- [../../technical/09-vault.md](../../technical/09-vault.md)
 - [../../technical/09-vault.md](../../technical/09-vault.md)
 - [../../technical/06-keycloak.md](../../technical/06-keycloak.md)
 - Specs `022`, `023`
