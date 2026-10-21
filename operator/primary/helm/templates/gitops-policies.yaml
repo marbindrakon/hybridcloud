@@ -71,3 +71,79 @@ spec:
   policyName: shc-fabric-ledger-guard
   validationActions: {{ include "primary-operator.vapActions" $a.fabricLedgerGuard.mode }}
 {{- end }}
+{{- if $a.gitopsManaged.enabled }}
+---
+# shc-gitops-managed: objects labelled hybridsovereign.redhat/managed-by: gitops are owned by the Git values
+# named in their hybridsovereign.redhat/gitops-source annotation. A spec change (or a change of the managed-by
+# label) by anyone but the platform automation or the GitOps controller is reported (Warn) or refused (Deny);
+# Argo CD would revert it anyway. Status writes (the /status subresource) and other metadata (finalizers,
+# annotations, other labels) are not matched. Break glass: a non-empty annotation
+# hybridsovereign.redhat/gitops-override: "<reason>" on the new object.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-gitops-managed
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $a.gitopsManaged.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [hybridsovereign.redhat]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [cloudinfrastructures, cloudgateways, hybridfabrics, provideredges, dnsconfigs, rbacconfigs, aapconfigs, quayconfigs]
+  matchConditions:
+    - name: gitops-managed
+      expression: >-
+        has(oldObject.metadata.labels)
+        && 'hybridsovereign.redhat/managed-by' in oldObject.metadata.labels
+        && oldObject.metadata.labels['hybridsovereign.redhat/managed-by'] == 'gitops'
+    - name: not-exempt
+      expression: >-
+        !({{ include "primary-operator.isAutomationCEL" . }} || {{ include "primary-operator.isGitopsCEL" . }})
+  variables:
+    - name: newLabels
+      expression: >-
+        has(object.metadata.labels) ? object.metadata.labels : {}
+    - name: newAnnotations
+      expression: >-
+        has(object.metadata.annotations) ? object.metadata.annotations : {}
+    - name: oldAnnotations
+      expression: >-
+        has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}
+    - name: override
+      expression: >-
+        'hybridsovereign.redhat/gitops-override' in variables.newAnnotations
+        && variables.newAnnotations['hybridsovereign.redhat/gitops-override'] != ''
+    - name: source
+      expression: >-
+        'hybridsovereign.redhat/gitops-source' in variables.oldAnnotations
+        ? variables.oldAnnotations['hybridsovereign.redhat/gitops-source'] : 'the platform values'
+  validations:
+    - expression: >-
+        variables.override
+        || ((has(object.spec) == has(oldObject.spec)) && (!has(object.spec) || object.spec == oldObject.spec))
+      messageExpression: >-
+        'This ' + oldObject.kind + ' is managed in Git (' + variables.source + '). Edit Git instead; '
+        + 'a change made here is reverted at the next sync.'
+      reason: Forbidden
+    - expression: >-
+        variables.override
+        || ('hybridsovereign.redhat/managed-by' in variables.newLabels
+            && variables.newLabels['hybridsovereign.redhat/managed-by'] == 'gitops')
+      messageExpression: >-
+        'This ' + oldObject.kind + ' is managed in Git (' + variables.source + '); its '
+        + 'hybridsovereign.redhat/managed-by label cannot be changed here.'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-gitops-managed
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-gitops-managed
+  validationActions: {{ include "primary-operator.vapActions" $a.gitopsManaged.mode }}
+{{- end }}
