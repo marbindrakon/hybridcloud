@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { FormGroup, FormHelperText, FormSelect, FormSelectOption, HelperText, HelperTextItem, Label, TextInput } from '@patternfly/react-core';
 import { useTranslation } from '../i18n';
 import { useTenantProfile } from '../hooks/tenantProfile';
-import type { TenantProfileSite, TenantSiteType } from '../types';
+import type { CloudInfrastructure, TenantProfileSite, TenantSiteType } from '../types';
 import { CloudInfrastructureSelect } from './CloudInfrastructureSelect';
 
 export interface SitePickerProps {
@@ -24,6 +24,10 @@ export interface SitePickerProps {
   helperText?: string;
   /** Called with the profile entry of the chosen site (tenant pages), e.g. for storage classes. */
   onSite?: (site: TenantProfileSite | undefined) => void;
+  /** Platform pages: called with the chosen CloudInfrastructure (e.g. its default storage class). */
+  onInfrastructure?: (item: CloudInfrastructure | undefined) => void;
+  /** Platform pages: flag sites that report this capability as false. */
+  capability?: string;
   isDisabled?: boolean;
 }
 
@@ -62,6 +66,8 @@ export function SitePicker({
   emptyLabel,
   helperText,
   onSite,
+  onInfrastructure,
+  capability,
   isDisabled,
 }: SitePickerProps): React.ReactElement {
   const { t } = useTranslation();
@@ -94,6 +100,8 @@ export function SitePicker({
         isRequired={isRequired}
         allowEmpty={allowEmpty}
         placeholder={allowEmpty ? emptyLabel : undefined}
+        onSelectInfrastructure={onInfrastructure}
+        capability={capability}
       />
     );
   }

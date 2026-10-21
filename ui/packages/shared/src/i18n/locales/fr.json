@@ -428,7 +428,8 @@
     "entityNameHelp": "Devient le namespace du locataire {{namespace}} ; 56 caractères au plus, sans point ni \"--\".",
     "created": "{{kind}} {{name}} créé",
     "submitted": "Créé",
-    "submitFailed": "Non créé"
+    "submitFailed": "Non créé",
+    "storageClassDefault": "{{name}} (par défaut du site)"
   },
   "fields": {
     "description": "Description",
@@ -670,7 +671,9 @@
     "cloudGcpSiteHelp": "Le site Google Cloud (CloudInfrastructure de type gcp) de cet environnement ; la plateforme attribue le projet.",
     "publish": "Publication",
     "publishExternal": "Externe (exposé sur Internet)",
-    "publishInternal": "Interne (réseau seulement)"
+    "publishInternal": "Interne (réseau seulement)",
+    "signInGroups": "Groupes autorisés à se connecter à cet environnement",
+    "signInGroupsHelp": "Les membres peuvent se connecter à la console du site et travailler dans les namespaces de VM. Prérempli avec vos groupes d'accès dans ce locataire."
   },
   "detail": {
     "allocated": "Alloués",

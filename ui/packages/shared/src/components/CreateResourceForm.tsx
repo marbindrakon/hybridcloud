@@ -1123,6 +1123,7 @@ export function CreateResourceForm({
                   namespace={entityNs}
                   entityName={currentEntityName}
                   onChange={setNetworkSpec}
+                  audience={audience}
                 />
               )}
 

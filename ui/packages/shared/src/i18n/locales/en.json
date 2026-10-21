@@ -428,7 +428,8 @@
     "entityNameHelp": "Becomes the tenant namespace {{namespace}}; at most 56 characters, no dots, no \"--\".",
     "created": "{{kind}} {{name}} created",
     "submitted": "Created",
-    "submitFailed": "Not created"
+    "submitFailed": "Not created",
+    "storageClassDefault": "{{name}} (site default)"
   },
   "fields": {
     "description": "Description",
@@ -670,7 +671,9 @@
     "cloudGcpSiteHelp": "The Google Cloud site (CloudInfrastructure of type gcp) this environment lives in; the platform assigns the project.",
     "publish": "Publish",
     "publishExternal": "External (internet-facing)",
-    "publishInternal": "Internal (network only)"
+    "publishInternal": "Internal (network only)",
+    "signInGroups": "Groups that can sign in to this environment",
+    "signInGroupsHelp": "Members can sign in to the site console and work in the VM namespaces. Pre-filled with your access groups in this tenant."
   },
   "detail": {
     "allocated": "Allocated",

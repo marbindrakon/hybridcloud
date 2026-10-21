@@ -23,11 +23,14 @@ import type {
   HybridNetwork,
   K8sResource,
   NetworkPlacementBackendKind,
+  TenantProfileSite,
 } from '../types';
 import { EntityMultiSelect } from '../components/EntityMultiSelect';
 import { FabricSelect } from '../components/FabricSelect';
 import { CloudInfrastructureSelect } from '../components/CloudInfrastructureSelect';
 import { RbacMultiSelect } from '../components/RbacMultiSelect';
+import { SitePicker } from '../components/SitePicker';
+import { useOptionalScope } from '../scope/ScopeProvider';
 import { BackendSelect, buildBackendOptions } from '../components/BackendSelect';
 import { ObjectListEditor, type ObjectListRow } from '../components/ObjectListEditor';
 import { ListTextArea } from '../components/ListTextArea';
@@ -833,12 +836,10 @@ export function HybridNetworkCreateFields({
 }): React.ReactElement {
   const { t } = useTranslation();
   const fabrics = useK8sResourceList<HybridFabric>('HybridFabric', { namespace: PLATFORM_NAMESPACE });
-  const rbacs = useK8sResourceList<K8sResource>('Rbac', { namespace, enabled: !!namespace });
   const [description, setDescription] = useState('');
   const [fabricRef, setFabricRef] = useState('');
   const [mtu, setMtu] = useState('');
   const [egress, setEgress] = useState(false);
-  const [viewers, setViewers] = useState<string[]>([]);
   const [prefixes, setPrefixes] = useState<string[]>([]);
 
   const fabricsReadable = !fabrics.error;
@@ -872,7 +873,6 @@ export function HybridNetworkCreateFields({
         ...(fabricRef.trim() ? { fabricRef: { name: fabricRef.trim() } } : {}),
         ...(mtu.trim() ? { mtu: Number(mtu) } : {}),
         egress: { internet: egress },
-        ...(viewers.length ? { networkViewerRbac: viewers } : {}),
       }
     : null;
   useReportSpec(spec, onChange);
@@ -935,14 +935,7 @@ export function HybridNetworkCreateFields({
         />
         <Help>{t('fields.egressInternetHelp')}</Help>
       </FormGroup>
-      <RbacMultiSelect
-        id="hn-viewers"
-        label={t('fields.networkViewerRbac')}
-        value={viewers}
-        onChange={setViewers}
-        options={names(rbacs.items)}
-        placeholder={t('form.selectRbac')}
-      />
+      {/* networkViewerRbac is not offered: no job reads it, so it would grant nothing (UX-015, UX-088). */}
     </>
   );
 }
@@ -1083,13 +1076,19 @@ export function CloudVirtCreateFields({
   namespace,
   entityName,
   onChange,
+  audience = 'tenant',
 }: {
   namespace: string;
   entityName: string;
   onChange: SpecChange;
+  /** Tenant pages pick sites and storage classes from the tenant profile (OD9). */
+  audience?: 'admin' | 'tenant';
 }): React.ReactElement {
   const { t } = useTranslation();
   const enabled = !!namespace;
+  const identity = useOptionalScope()?.identity;
+  const [profileSite, setProfileSite] = useState<TenantProfileSite | undefined>();
+  const [editTouched, setEditTouched] = useState(false);
   const networks = useK8sResourceList<K8sResource>('HybridNetwork', { namespace, enabled });
   const rbacs = useK8sResourceList<K8sResource>('Rbac', { namespace, enabled });
   const [description, setDescription] = useState('');
@@ -1142,15 +1141,28 @@ export function CloudVirtCreateFields({
     : null;
   useReportSpec(spec, onChange);
 
-  const siteStorageClass = siteObj?.spec?.openshift?.storageClass;
+  const profileClasses = profileSite?.storageClasses ?? [];
+  const siteStorageClass = siteObj?.spec?.openshift?.storageClass ?? profileClasses.find((c) => c.default)?.name;
   const rbacOptions = names(rbacs.items);
+
+  // Groups that can sign in: pre-filled with the creator's access groups in this tenant (W5, NC-06),
+  // <tenant>.<access group> groups of the signed-in user mapped to access groups that exist here.
+  useEffect(() => {
+    if (editTouched || editRbac.length || !identity || !entityName || !rbacs.items.length) return;
+    const prefix = `${entityName}.`;
+    const mine = identity.groups
+      .filter((g) => g.startsWith(prefix))
+      .map((g) => g.slice(prefix.length))
+      .filter((r) => rbacs.items.some((i) => i.metadata.name === r));
+    if (mine.length) setEditRbac(Array.from(new Set(mine)));
+  }, [identity, entityName, rbacs.items, editTouched]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
       <FormGroup label={t('fields.description')} fieldId="cv-desc">
         <TextArea id="cv-desc" value={description} onChange={(_e, v) => setDescription(v)} rows={2} />
       </FormGroup>
-      <CloudInfrastructureSelect
+      <SitePicker
         id="cv-site"
         label={t('fields.site')}
         value={site}
@@ -1158,9 +1170,11 @@ export function CloudVirtCreateFields({
           setSite(v);
           if (!v) setSiteObj(undefined);
         }}
-        onSelectInfrastructure={setSiteObj}
+        onInfrastructure={setSiteObj}
+        onSite={setProfileSite}
         types={['openshift']}
-        entityName={entityName}
+        namespace={namespace}
+        audience={audience}
         capability="virtualization"
         isRequired
       />
@@ -1232,32 +1246,46 @@ export function CloudVirtCreateFields({
         <Help>{t('fields.quotaHelp')}</Help>
       </FormGroup>
       <FormGroup label={t('fields.storageClass')} fieldId="cv-sc">
-        <TextInput
-          id="cv-sc"
-          value={storageClass}
-          onChange={(_e, v) => setStorageClass(v)}
-          placeholder={siteStorageClass ? t('form.siteDefaultValue', { value: siteStorageClass }) : t('form.siteDefault')}
-        />
+        {profileClasses.length ? (
+          // The site's storage classes from the tenant profile, the default marked (NC-52).
+          <FormSelect id="cv-sc" value={storageClass} onChange={(_e, v) => setStorageClass(v)} aria-label={t('fields.storageClass')}>
+            <FormSelectOption
+              value=""
+              label={siteStorageClass ? t('form.siteDefaultValue', { value: siteStorageClass }) : t('form.siteDefault')}
+            />
+            {profileClasses.map((c) => (
+              <FormSelectOption key={c.name} value={c.name} label={c.default ? t('form.storageClassDefault', { name: c.name }) : c.name} />
+            ))}
+          </FormSelect>
+        ) : (
+          <TextInput
+            id="cv-sc"
+            value={storageClass}
+            onChange={(_e, v) => setStorageClass(v)}
+            placeholder={siteStorageClass ? t('form.siteDefaultValue', { value: siteStorageClass }) : t('form.siteDefault')}
+          />
+        )}
         <Help>{t('fields.cloudVirtStorageClassHelp')}</Help>
       </FormGroup>
       <RbacMultiSelect
         id="cv-edit-rbac"
-        label={t('fields.editRbac')}
+        label={t('fields.signInGroups')}
         value={editRbac}
-        onChange={setEditRbac}
+        onChange={(v) => {
+          setEditTouched(true);
+          setEditRbac(v);
+        }}
         options={rbacOptions}
-        placeholder={t('form.selectRbac')}
+        helperText={t('fields.signInGroupsHelp')}
       />
-      <Help>{t('fields.editRbacHelp')}</Help>
       <RbacMultiSelect
         id="cv-view-rbac"
         label={t('fields.viewRbac')}
         value={viewRbac}
         onChange={setViewRbac}
         options={rbacOptions}
-        placeholder={t('form.selectRbac')}
+        helperText={t('fields.viewRbacHelp')}
       />
-      <Help>{t('fields.viewRbacHelp')}</Help>
     </>
   );
 }
