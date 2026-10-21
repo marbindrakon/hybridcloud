@@ -112,5 +112,5 @@ Each EDA-covered operator has a matching Decision Environment, create/delete rul
 
 - Technical details: [006 EDA Architecture](../technical/006-eda-architecture.md)
 - Developer guide: [006 EDA Developer Guide](../tutorial/006-eda-developer-guide.md)
-- Business presentation: [006 EDA Slides](006-eda-slides.md)
+- Business presentation: [006 EDA Slides](../archive/concepts/006-eda-slides.md)
 - Security validation: [006 Hardening Check](../../hardeningcheck/006-platform-eda-rebuild.md)

@@ -228,5 +228,5 @@ sequenceDiagram
 
 - [components/operator.md](../components/operator.md) — operator tiers
 - [components/event-system.md](../components/event-system.md) — event routing
-- [../decisions/ADR-002-multi-tier-operator.md](../decisions/ADR-002-multi-tier-operator.md)
-- [../technical/17-entity-operator.md](../technical/17-entity-operator.md)
+- [../decisions/ADR-002-multi-tier-operator.md](../../decisions/ADR-002-multi-tier-operator.md)
+- [../technical/17-entity-operator.md](../../archive/technical/17-entity-operator.md)

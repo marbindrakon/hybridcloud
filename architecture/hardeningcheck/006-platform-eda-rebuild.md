@@ -86,5 +86,5 @@
 - [006 EDA Architecture](../docs/technical/006-eda-architecture.md)
 - [006 EDA Overview](../docs/concepts/006-eda-overview.md)
 - [006 EDA Developer Guide](../docs/tutorial/006-eda-developer-guide.md)
-- Event contract: [event-contract.md](../../specs/006-platform-eda-rebuild/contracts/event-contract.md)
-- Status handshake: [operator-eda-handshake.md](../../specs/006-platform-eda-rebuild/contracts/operator-eda-handshake.md)
+- Event contract: event-contract.md (not published in this repository)
+- Status handshake: operator-eda-handshake.md (not published in this repository)

@@ -62,7 +62,7 @@ flowchart LR
 
 ## Event Contract
 
-All operators emit `events.k8s.io/v1` Events following a shared contract. See [event-contract.md](../../../specs/006-platform-eda-rebuild/contracts/event-contract.md) for the full schema.
+All operators emit `events.k8s.io/v1` Events following a shared contract. See event-contract.md (not published in this repository) for the full schema.
 
 **Reason convention**:
 
@@ -179,7 +179,7 @@ Sync wave 33 in `bootstrap/helm/central/values.yaml` (`sovereignJobs.jobs.aapCon
 
 ## Status Handshake Protocol
 
-Operators and EDA share CR status fields per [operator-eda-handshake.md](../../../specs/006-platform-eda-rebuild/contracts/operator-eda-handshake.md).
+Operators and EDA share CR status fields per operator-eda-handshake.md (not published in this repository).
 
 ### Create / Update
 
@@ -337,7 +337,7 @@ AWSHelper and OSOHelper operators have been merged into EDA roles. No more helpe
 
 **GitHub**: `git@github.com:hybrid-sovereign-cloud/eda.git` (migrated from Gitea)
 
-Each CR type has its own directory with separate create/delete rulebook activations. See [EDA GitHub Migration](46-eda-github-migration.md) for details.
+Each CR type has its own directory with separate create/delete rulebook activations. See [EDA GitHub Migration](../archive/technical/46-eda-github-migration.md) for details.
 
 ---
 
@@ -346,8 +346,8 @@ Each CR type has its own directory with separate create/delete rulebook activati
 - [006 EDA Overview](../concepts/006-eda-overview.md) — non-technical summary
 - [006 EDA Developer Guide](../tutorial/006-eda-developer-guide.md) — extending EDA for new operators
 - [006 Hardening Check](../../hardeningcheck/006-platform-eda-rebuild.md) — CIS/NIST validation
-- [Entity Operator](17-entity-operator.md) — Entity CR reference
-- [Persona Operator](45-persona-operator.md) — Persona CR reference
-- [EDA GitHub Migration](46-eda-github-migration.md) — EDA repo migration and helper merge
-- [Secrets Flow](18-secrets-flow.md) — Vault and ExternalSecret patterns
+- [Entity Operator](../archive/technical/17-entity-operator.md) — Entity CR reference
+- [Persona Operator](../archive/technical/45-persona-operator.md) — Persona CR reference
+- [EDA GitHub Migration](../archive/technical/46-eda-github-migration.md) — EDA repo migration and helper merge
+- [Vault and secret delivery](09-vault.md) — Vault and ExternalSecret patterns
 - [AAP Job Templates](48-aap-job-templates.md) — Job template catalog and lifecycle
