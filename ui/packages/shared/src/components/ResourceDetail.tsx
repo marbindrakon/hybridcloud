@@ -24,6 +24,8 @@ import { GenericSpecEditor } from '../forms/GenericSpecEditor';
 import { PageHeader } from './PageHeader';
 import { StatusBadge } from './StatusBadge';
 import { RefreshFailedAlert } from './ResourceListTable';
+import { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind } from './PlacementTabs';
+import { useTranslation } from '../i18n';
 import {
   COMMON_STATUS_KEYS,
   KIND_STATUS_KEYS,
@@ -151,6 +153,7 @@ export function ResourceDetail({
   readOnly = false,
   audience = 'tenant',
 }: ResourceDetailProps): React.ReactElement {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<string | number>(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState(false);
@@ -317,6 +320,16 @@ export function ResourceDetail({
             <FieldGrid data={overviewFields} />
           </div>
         </Tab>
+        {isEnvironmentKind(kind) && (
+          <Tab eventKey="networks" title={<TabTitleText>{t('attach.networksTab')}</TabTitleText>}>
+            <EnvironmentNetworksTab kind={kind} name={name} namespace={namespace} item={resource} readOnly={readOnly} />
+          </Tab>
+        )}
+        {kind === 'HybridNetwork' && (
+          <Tab eventKey="environments" title={<TabTitleText>{t('attach.environmentsTab')}</TabTitleText>}>
+            <NetworkEnvironmentsTab network={name} namespace={namespace} readOnly={readOnly} />
+          </Tab>
+        )}
         <Tab eventKey={1} title={<TabTitleText>Configuration</TabTitleText>}>
           <div style={{ paddingTop: '1rem' }}>
             <SpecEditor

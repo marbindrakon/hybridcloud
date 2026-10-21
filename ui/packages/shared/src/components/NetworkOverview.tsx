@@ -47,6 +47,12 @@ export interface NetworkOverviewProps {
   resourcesError?: Error | null;
   /** Called when a gateway, network or placement is activated, for drill-down navigation. */
   onSelect?: (kind: HybridSovereignKind, item: K8sResource) => void;
+  /**
+   * Offer "Attach" on the empty cells of the network map (network not on that
+   * environment yet): called with the network, the environment and the tenant
+   * namespace. The page opens the one Attach dialog (OD25).
+   */
+  onAttach?: (network: string, environment: { kind: string; name: string }, namespace: string) => void;
 }
 
 interface Backend {
@@ -101,6 +107,7 @@ export function NetworkOverview({
   resourcesLoading,
   resourcesError,
   onSelect,
+  onAttach,
 }: NetworkOverviewProps): React.ReactElement {
   const { t } = useTranslation();
   const [asTable, setAsTable] = useState(false);
@@ -261,7 +268,7 @@ export function NetworkOverview({
                     {t('networkOverview.entity')} <code>{g.entity}</code>
                   </h4>
                 )}
-                <PlacementMatrix group={g} cellFor={cellFor} onSelect={onSelect} />
+                <PlacementMatrix group={g} cellFor={cellFor} onSelect={onSelect} onAttach={onAttach} />
               </div>
             ))}
             <Legend />
@@ -351,10 +358,12 @@ function PlacementMatrix({
   group,
   cellFor,
   onSelect,
+  onAttach,
 }: {
   group: EntityGroup;
   cellFor: (n: HybridNetwork, id: string) => Cell;
   onSelect?: NetworkOverviewProps['onSelect'];
+  onAttach?: NetworkOverviewProps['onAttach'];
 }): React.ReactElement {
   const { t } = useTranslation();
   if (group.networks.length === 0) {
@@ -409,6 +418,23 @@ function PlacementMatrix({
                   const prefixes = c.prefixes.join(', ');
                   const select =
                     onSelect && c.placement ? () => onSelect('NetworkPlacement', c.placement as K8sResource) : undefined;
+                  if (!c.placement && c.state === 'absent' && onAttach) {
+                    const attachLabel = t('attach.attachCell', { network: n.metadata.name, environment: b.name });
+                    return (
+                      <td key={b.id} className={`sc-netov__cell sc-netov__cell--${meta.cls}`}>
+                        <Button
+                          variant="link"
+                          isInline
+                          size="sm"
+                          aria-label={attachLabel}
+                          title={attachLabel}
+                          onClick={() => onAttach(n.metadata.name, { kind: b.kind, name: b.name }, group.namespace)}
+                        >
+                          {t('attach.attach')}
+                        </Button>
+                      </td>
+                    );
+                  }
                   return (
                     <td key={b.id} className={`sc-netov__cell sc-netov__cell--${meta.cls}`}>
                       <span

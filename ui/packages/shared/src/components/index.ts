@@ -63,3 +63,6 @@ export {
 export type { KindStatusDetailsProps } from './KindStatusDetails';
 export { SitePicker, siteOptionLabel } from './SitePicker';
 export type { SitePickerProps } from './SitePicker';
+export { AttachNetworkDialog, defaultPlacementName } from './AttachNetworkDialog';
+export type { AttachNetworkDialogProps, AttachEnvironmentRef } from './AttachNetworkDialog';
+export { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind, placementBlock, ENVIRONMENT_KINDS } from './PlacementTabs';
