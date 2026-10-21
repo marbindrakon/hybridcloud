@@ -1120,7 +1120,9 @@
     "waitsFor": "La suppression attend :",
     "changeNotApplied": "Changement non appliqué : {{reason}}",
     "platformActs": "L'équipe plateforme s'en occupe.",
-    "youAct": "Vous pouvez corriger : modifiez l'objet ou ce qu'il référence."
+    "youAct": "Vous pouvez corriger : modifiez l'objet ou ce qu'il référence.",
+    "tenantDelayedTitle": "Les modifications de ce locataire sont retardées",
+    "tenantDelayed": "Les modifications de ce locataire sont retardées. L'équipe plateforme est prévenue ; rien de ce que vous avez créé n'est perdu."
   },
   "toasts": {
     "ready": "{{kind}} {{name}} est prêt",

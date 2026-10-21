@@ -28,6 +28,7 @@ import { HealthDonut } from '../components/HealthDonut';
 import { InventoryCard } from '../components/InventoryCard';
 import { StatusBadge, normalizeHealth } from '../components/StatusBadge';
 import { GettingStartedCard } from '../components/GettingStartedCard';
+import { TenantHealthBanner } from '../components/TenantHealthBanner';
 import { KindIcon } from '../icons';
 import { useK8sResourceList } from '../hooks/k8s';
 import { K8sResource, TENANT_OVERVIEW_KINDS, HybridSovereignKind } from '../types';
@@ -169,6 +170,7 @@ export function TenantOverviewPage(): React.ReactElement {
         }
       />
 
+      {scope.kind === 'tenant' && <TenantHealthBanner namespace={namespace} />}
       {scope.kind === 'tenant' && <GettingStartedCard />}
 
       {firstError && <UnavailableState error={firstError} onRetry={refreshAll} />}

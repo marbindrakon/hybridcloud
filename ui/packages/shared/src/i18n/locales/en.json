@@ -1120,7 +1120,9 @@
     "waitsFor": "The delete waits for:",
     "changeNotApplied": "Change not applied: {{reason}}",
     "platformActs": "The platform team acts on this.",
-    "youAct": "You can fix this: change the object or what it refers to."
+    "youAct": "You can fix this: change the object or what it refers to.",
+    "tenantDelayedTitle": "Changes in this tenant are delayed",
+    "tenantDelayed": "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."
   },
   "toasts": {
     "ready": "{{kind}} {{name}} is ready",
