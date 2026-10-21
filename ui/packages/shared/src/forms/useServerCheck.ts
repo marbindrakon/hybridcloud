@@ -6,7 +6,7 @@
  * paths.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { createDashboardResource } from '../hooks/k8s';
+import { createDashboardResource, type WriteOptions } from '../hooks/k8s';
 import type { HybridSovereignKind } from '../types';
 
 export const SERVER_CHECK_DELAY_MS = 600;
@@ -22,12 +22,14 @@ export interface ServerCheckState {
   warnings: string[];
 }
 
-export function useServerCheck(
-  kind: HybridSovereignKind,
-  body: { name: string; namespace: string; spec: unknown } | null,
-  enabled = true,
+/**
+ * The general form: `run` sends the object with the given write options; the
+ * check re-runs whenever `key` changes (null = nothing to check).
+ */
+export function useServerCheckWith(
+  key: string | null,
+  run: (opts: WriteOptions) => Promise<unknown>,
 ): ServerCheckState {
-  const key = useMemo(() => (body && enabled ? JSON.stringify(body) : null), [body, enabled]);
   const [state, setState] = useState<{ key: string | null; passed: boolean; error: unknown; warnings: string[] }>({
     key: null,
     passed: false,
@@ -37,7 +39,7 @@ export function useServerCheck(
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    if (!key || !body) {
+    if (!key) {
       setPending(false);
       return;
     }
@@ -45,7 +47,7 @@ export function useServerCheck(
     setPending(true);
     const id = setTimeout(() => {
       let warnings: string[] = [];
-      createDashboardResource(kind, body, body.namespace, { dryRun: true, onWarnings: (w) => (warnings = w) })
+      run({ dryRun: true, onWarnings: (w) => (warnings = w) })
         .then(() => {
           if (!cancelled) setState({ key, passed: true, error: null, warnings });
         })
@@ -60,7 +62,7 @@ export function useServerCheck(
       cancelled = true;
       clearTimeout(id);
     };
-  }, [key, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const current = state.key === key;
   return {
@@ -69,4 +71,16 @@ export function useServerCheck(
     error: current ? state.error : null,
     warnings: current ? state.warnings : [],
   };
+}
+
+/** Dry run of a create. */
+export function useServerCheck(
+  kind: HybridSovereignKind,
+  body: { name: string; namespace: string; spec: unknown } | null,
+  enabled = true,
+): ServerCheckState {
+  const key = useMemo(() => (body && enabled ? `${kind}:${JSON.stringify(body)}` : null), [kind, body, enabled]);
+  return useServerCheckWith(key, (opts) =>
+    body ? createDashboardResource(kind, body, body.namespace, opts) : Promise.resolve(undefined),
+  );
 }

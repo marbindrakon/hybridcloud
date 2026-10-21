@@ -429,7 +429,10 @@
     "created": "{{kind}} {{name}} created",
     "submitted": "Created",
     "submitFailed": "Not created",
-    "storageClassDefault": "{{name}} (site default)"
+    "storageClassDefault": "{{name}} (site default)",
+    "saved": "Saved. The platform applies the change; the status shows when it is done.",
+    "reset": "Reset",
+    "serverRefused": "The platform refused the change"
   },
   "fields": {
     "description": "Description",
