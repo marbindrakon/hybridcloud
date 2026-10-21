@@ -855,5 +855,17 @@
       "showAllGroups": "Show all {{count}} groups",
       "signOut": "Sign out"
     }
+  },
+  "durations": {
+    "entity": "Usually 3–5 minutes.",
+    "network": "Usually under a minute.",
+    "placement": "Usually 5–35 minutes; longer for a site's first network.",
+    "environment": "Usually 2–10 minutes.",
+    "publicCloud": "Usually 4–10 minutes the first time.",
+    "cluster": "Usually about an hour.",
+    "queueCycle": "Usually within one queue cycle (a minute or two).",
+    "networkDelete": "Usually 15–35 minutes after its network placements are gone.",
+    "placementDelete": "Usually 5–20 minutes.",
+    "entityDelete": "Takes as long as deleting everything the tenant holds."
   }
 }

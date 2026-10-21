@@ -855,5 +855,17 @@
       "showAllGroups": "Afficher les {{count}} groupes",
       "signOut": "Se déconnecter"
     }
+  },
+  "durations": {
+    "entity": "Habituellement 3 à 5 minutes.",
+    "network": "Habituellement moins d'une minute.",
+    "placement": "Habituellement 5 à 35 minutes ; plus longtemps pour le premier réseau d'un site.",
+    "environment": "Habituellement 2 à 10 minutes.",
+    "publicCloud": "Habituellement 4 à 10 minutes la première fois.",
+    "cluster": "Habituellement environ une heure.",
+    "queueCycle": "Habituellement en un cycle de file d'attente (une ou deux minutes).",
+    "networkDelete": "Habituellement 15 à 35 minutes après la suppression de ses placements réseau.",
+    "placementDelete": "Habituellement 5 à 20 minutes.",
+    "entityDelete": "Dure le temps de supprimer tout ce que le locataire détient."
   }
 }

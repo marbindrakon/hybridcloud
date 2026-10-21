@@ -8,6 +8,7 @@ export * from './pages';
 export * from './theme';
 export * from './components';
 export * from './icons';
+export * from './status';
 export * from './forms/specFieldMeta';
 export { GenericSpecEditor } from './forms/GenericSpecEditor';
 export {

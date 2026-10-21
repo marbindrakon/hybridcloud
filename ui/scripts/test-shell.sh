@@ -20,6 +20,7 @@ entries=(
   "access/permissionGate.ts:permissionGate"
   "nav/registry.ts:registry"
   "nav/paths.ts:paths"
+  "status/phase.ts:phase"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"
@@ -36,4 +37,5 @@ node --test "$here"/tests/*.test.mjs || rc=1
 # Generated files must match their sources.
 node "$here/gen-console-extensions.mjs" --check || rc=1
 python3 -I "$here/gen-role-hints.py" --check || rc=1
+python3 -I "$here/gen-status-reasons.py" --check || rc=1
 exit $rc
