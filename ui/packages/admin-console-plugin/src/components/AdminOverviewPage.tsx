@@ -34,7 +34,7 @@ import {
   K8sResource,
   useTranslation,
 } from '@hybridsovereign/shared';
-import { overviewItemHref } from '../adminPaths';
+import { overviewItemHref, ADMIN_LINKS } from '../adminPaths';
 import '@hybridsovereign/shared/styles/openshift.css';
 
 /** Keep Overview usable if topology/subtree throws (React #306 / undefined element). */
@@ -141,7 +141,7 @@ const AdminOverviewPage: React.FC = () => {
                   count={(byKind.get('Entity') ?? []).length}
                   hint={`${bucket(byKind.get('Entity') ?? []).ready} ready`}
                   kind="Entity"
-                  href="/hybridsovereign/entities"
+                  href={ADMIN_LINKS.tenants}
                   status="success"
                 />
                 <InventoryCard
@@ -149,14 +149,14 @@ const AdminOverviewPage: React.FC = () => {
                   count={(byKind.get('Team') ?? []).length}
                   hint={`${bucket(byKind.get('Team') ?? []).ready} ready`}
                   kind="Team"
-                  href="/hybridsovereign/teams"
+                  href={ADMIN_LINKS.teams}
                 />
                 <InventoryCard
                   title="Platforms"
                   count={platforms.length}
                   hint={`${bucket(platforms).ready} ready`}
                   kind="PlatformOpenshift"
-                  href="/hybridsovereign/platforms"
+                  href={ADMIN_LINKS.clusters}
                   status={bucket(platforms).failed ? 'danger' : 'default'}
                 />
                 <InventoryCard
@@ -164,7 +164,7 @@ const AdminOverviewPage: React.FC = () => {
                   count={(byKind.get('Assignment') ?? []).length}
                   hint={`${bucket(byKind.get('Assignment') ?? []).ready} ready`}
                   kind="Assignment"
-                  href="/hybridsovereign/assignments"
+                  href={ADMIN_LINKS.assignments}
                   status={bucket(byKind.get('Assignment') ?? []).failed ? 'danger' : 'default'}
                 />
               </div>
@@ -179,8 +179,7 @@ const AdminOverviewPage: React.FC = () => {
                   {platforms.slice(0, 6).map((p) => {
                     const healthy = normalizeHealth(p.status?.ready, p.status?.status) === 'ready';
                     const href =
-                      overviewItemHref(p) ??
-                      `/hybridsovereign/platforms/${encodeURIComponent(p.metadata.namespace ?? 'default')}/${encodeURIComponent(p.metadata.name)}`;
+                      overviewItemHref({ ...p, kind: 'PlatformOpenshift' }) ?? ADMIN_LINKS.clusters;
                     return (
                       <Card key={p.metadata.name} className="sc-cluster-card" isCompact>
                         <CardHeader>
@@ -232,7 +231,7 @@ const AdminOverviewPage: React.FC = () => {
                       </CardTitle>
                     </FlexItem>
                     <FlexItem align={{ default: 'alignEnd' }}>
-                      <a href="/hybridsovereign/operators">View all</a>
+                      <a href={ADMIN_LINKS.accessGroups}>View all</a>
                     </FlexItem>
                   </Flex>
                 </CardHeader>
@@ -306,7 +305,7 @@ const AdminOverviewPage: React.FC = () => {
                 count={(byKind.get('CloudInfrastructure') ?? []).length}
                 hint={`${bucket(byKind.get('CloudInfrastructure') ?? []).ready} ready`}
                 kind="CloudInfrastructure"
-                href="/hybridsovereign/clouds/infrastructure"
+                href={ADMIN_LINKS.sites}
                 status={bucket(byKind.get('CloudInfrastructure') ?? []).failed ? 'danger' : 'default'}
               />
             </div>

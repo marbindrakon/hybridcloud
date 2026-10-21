@@ -51,7 +51,5 @@ export {
   ENTITY_NS,
 } from './entityOptions';
 export type { EntityOption, UseEntityOptionsOptions, UseEntityOptionsResult } from './entityOptions';
-export { useEntityNamespace } from './entityNamespace';
-export type { UseEntityNamespaceOptions, UseEntityNamespaceResult } from './entityNamespace';
 export { useScopedResourceList } from './scopedList';
 export type { ScopedListResult } from './scopedList';

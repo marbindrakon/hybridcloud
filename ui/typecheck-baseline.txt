@@ -1,9 +1,3 @@
-admin-console-plugin:src/App.tsx: TS2322: Type '"light"' is not assignable to type '"default" | "secondary" | undefined'.
-admin-console-plugin:src/App.tsx: TS2786: 'Button' cannot be used as a JSX component.
-admin-console-plugin:src/App.tsx: TS2786: 'NavItem' cannot be used as a JSX component.
-admin-console-plugin:src/App.tsx: TS2786: 'NavItem' cannot be used as a JSX component.
-admin-console-plugin:src/components/AdminEntitiesPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
-admin-console-plugin:src/components/AdminEntitiesPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminNetworkOverviewPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminNetworkOverviewPage.tsx: TS2786: 'SectionErrorBoundary' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
@@ -14,11 +8,6 @@ admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Card' cannot
 admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'SectionErrorBoundary' cannot be used as a JSX component.
-admin-console-plugin:src/components/AdminResourceListPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
-admin-console-plugin:src/components/AdminServicesPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
-admin-console-plugin:src/components/AdminServicesPage.tsx: TS2786: 'Tab' cannot be used as a JSX component.
-admin-console-plugin:src/components/AdminServicesPage.tsx: TS2786: 'Tab' cannot be used as a JSX component.
-admin-console-plugin:src/components/AdminServicesPage.tsx: TS2786: 'Tab' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
 admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
@@ -39,7 +28,3 @@ admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot b
 admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot be used as a JSX component.
 admin-dashboard:src/pages/OverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
 admin-dashboard:src/pages/OverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
-tenant-console-plugin:src/App.tsx: TS2322: Type '"light"' is not assignable to type '"default" | "secondary" | undefined'.
-tenant-console-plugin:src/App.tsx: TS2786: 'Button' cannot be used as a JSX component.
-tenant-console-plugin:src/components/TenantOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
-tenant-console-plugin:src/components/TenantTeamsPage.tsx: TS2786: 'Button' cannot be used as a JSX component.

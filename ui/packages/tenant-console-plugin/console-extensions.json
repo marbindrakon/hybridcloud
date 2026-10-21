@@ -1,491 +1,936 @@
 [
   {
-    "type": "console.navigation/href",
+    "type": "console.navigation/section",
     "properties": {
-      "id": "hybridsovereign-tenant-cloudoso",
-      "section": "hybridsovereign-iaas-platform-section",
+      "id": "hybridsovereign-section-environments",
       "perspective": "hybridsovereign",
-      "name": "Openstack",
-      "href": "/hybridsovereign/tenant/cloudoso"
+      "name": "Environments"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-section-networks",
+      "perspective": "hybridsovereign",
+      "name": "Networks"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-section-clusters",
+      "perspective": "hybridsovereign",
+      "name": "Clusters"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-section-platform-services",
+      "perspective": "hybridsovereign",
+      "name": "Platform services"
+    }
+  },
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "hybridsovereign-section-access",
+      "perspective": "hybridsovereign",
+      "name": "Access"
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-cloudaws",
-      "section": "hybridsovereign-iaas-platform-section",
+      "id": "hybridsovereign-nav-home",
+      "perspective": "hybridsovereign",
+      "name": "Home",
+      "href": "/hybridsovereign/home",
+      "namespaced": true
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-nav-env-vm",
+      "perspective": "hybridsovereign",
+      "name": "OpenShift Virtualization",
+      "href": "/hybridsovereign/environments/vm",
+      "section": "hybridsovereign-section-environments",
+      "namespaced": true
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-nav-env-openstack",
+      "perspective": "hybridsovereign",
+      "name": "OpenStack",
+      "href": "/hybridsovereign/environments/openstack",
+      "section": "hybridsovereign-section-environments",
+      "namespaced": true
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-nav-env-aws",
       "perspective": "hybridsovereign",
       "name": "AWS",
-      "href": "/hybridsovereign/tenant/cloudaws"
+      "href": "/hybridsovereign/environments/aws",
+      "section": "hybridsovereign-section-environments",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-cloudgcp",
-      "section": "hybridsovereign-iaas-platform-section",
+      "id": "hybridsovereign-nav-env-gcp",
       "perspective": "hybridsovereign",
       "name": "Google Cloud",
-      "href": "/hybridsovereign/tenant/cloudgcp"
+      "href": "/hybridsovereign/environments/gcp",
+      "section": "hybridsovereign-section-environments",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-cloudvirt",
-      "section": "hybridsovereign-iaas-platform-section",
+      "id": "hybridsovereign-nav-networks",
       "perspective": "hybridsovereign",
-      "name": "Openshift Virt",
-      "href": "/hybridsovereign/tenant/cloudvirt"
+      "name": "Networks",
+      "href": "/hybridsovereign/networks",
+      "section": "hybridsovereign-section-networks",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-network-overview",
-      "section": "hybridsovereign-iaas-networking-section",
+      "id": "hybridsovereign-nav-network-map",
       "perspective": "hybridsovereign",
-      "name": "Network Overview",
-      "href": "/hybridsovereign/tenant/network-overview"
+      "name": "Network map",
+      "href": "/hybridsovereign/networks/map",
+      "section": "hybridsovereign-section-networks",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-networks",
-      "section": "hybridsovereign-iaas-networking-section",
+      "id": "hybridsovereign-nav-clusters",
       "perspective": "hybridsovereign",
-      "name": "Hybrid Networks",
-      "href": "/hybridsovereign/tenant/networks"
+      "name": "OpenShift clusters",
+      "href": "/hybridsovereign/clusters",
+      "section": "hybridsovereign-section-clusters",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-placements",
-      "section": "hybridsovereign-iaas-networking-section",
+      "id": "hybridsovereign-nav-teams",
       "perspective": "hybridsovereign",
-      "name": "Network Placements",
-      "href": "/hybridsovereign/tenant/placements"
+      "name": "Team setups",
+      "href": "/hybridsovereign/clusters/teams",
+      "section": "hybridsovereign-section-clusters",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-rbac",
-      "section": "hybridsovereign-access-section",
+      "id": "hybridsovereign-nav-projects",
       "perspective": "hybridsovereign",
-      "name": "RBAC",
-      "href": "/hybridsovereign/tenant/rbac"
+      "name": "App projects",
+      "href": "/hybridsovereign/clusters/projects",
+      "section": "hybridsovereign-section-clusters",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-vaults",
-      "section": "hybridsovereign-services-section",
+      "id": "hybridsovereign-nav-assignments",
       "perspective": "hybridsovereign",
-      "name": "Vault",
-      "href": "/hybridsovereign/tenant/vaults"
+      "name": "Cluster assignments",
+      "href": "/hybridsovereign/clusters/assignments",
+      "section": "hybridsovereign-section-clusters",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-vaultkvs",
-      "section": "hybridsovereign-services-section",
+      "id": "hybridsovereign-nav-svc-vaults",
       "perspective": "hybridsovereign",
-      "name": "Vault KVs",
-      "href": "/hybridsovereign/tenant/vaultkvs"
+      "name": "Vaults",
+      "href": "/hybridsovereign/services/vaults",
+      "section": "hybridsovereign-section-platform-services",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-aaporgs",
-      "section": "hybridsovereign-services-section",
+      "id": "hybridsovereign-nav-svc-vault-kvs",
       "perspective": "hybridsovereign",
-      "name": "AAP Orgs",
-      "href": "/hybridsovereign/tenant/aaporgs"
+      "name": "KV secrets engines",
+      "href": "/hybridsovereign/services/kv",
+      "section": "hybridsovereign-section-platform-services",
+      "namespaced": true
     }
   },
   {
     "type": "console.navigation/href",
     "properties": {
-      "id": "hybridsovereign-tenant-quayorgs",
-      "section": "hybridsovereign-services-section",
+      "id": "hybridsovereign-nav-svc-aap-orgs",
       "perspective": "hybridsovereign",
-      "name": "Quay Orgs",
-      "href": "/hybridsovereign/tenant/quayorgs"
+      "name": "AAP organizations",
+      "href": "/hybridsovereign/services/aap",
+      "section": "hybridsovereign-section-platform-services",
+      "namespaced": true
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-nav-svc-quay-orgs",
+      "perspective": "hybridsovereign",
+      "name": "Quay organizations",
+      "href": "/hybridsovereign/services/quay",
+      "section": "hybridsovereign-section-platform-services",
+      "namespaced": true
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "hybridsovereign-nav-access-groups",
+      "perspective": "hybridsovereign",
+      "name": "Access groups",
+      "href": "/hybridsovereign/access/groups",
+      "section": "hybridsovereign-section-access",
+      "namespaced": true
     }
   },
   {
     "type": "console.page/route",
     "properties": {
-      "path": "/hybridsovereign/tenant/network-overview",
-      "component": {
-        "$codeRef": "TenantNetworkOverviewPage"
-      },
-      "perspective": "hybridsovereign"
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "path": "/hybridsovereign/tenant/networks",
-      "component": {
-        "$codeRef": "TenantHybridNetworksPage"
-      },
-      "perspective": "hybridsovereign"
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/networks/:name",
-      "component": {
-        "$codeRef": "TenantHybridNetworkDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "path": "/hybridsovereign/tenant/placements",
-      "component": {
-        "$codeRef": "TenantNetworkPlacementsPage"
-      },
-      "perspective": "hybridsovereign"
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/placements/:name",
-      "component": {
-        "$codeRef": "TenantNetworkPlacementDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
+      "path": "/hybridsovereign/home/ns/:ns",
       "exact": true,
-      "path": "/hybridsovereign/tenant/overview",
       "component": {
-        "$codeRef": "TenantOverviewPage"
+        "$codeRef": "ShcConsolePage"
       }
     }
   },
   {
     "type": "console.page/route",
     "properties": {
+      "path": "/hybridsovereign/home/all-namespaces",
       "exact": true,
-      "path": "/hybridsovereign/tenant/create/:formType",
       "component": {
-        "$codeRef": "TenantCreatePage"
+        "$codeRef": "ShcConsolePage"
       }
     }
   },
   {
     "type": "console.page/route",
     "properties": {
+      "path": "/hybridsovereign/environments/vm/ns/:ns",
       "exact": true,
-      "path": "/hybridsovereign/tenant/teams",
       "component": {
-        "$codeRef": "TenantTeamsPage"
+        "$codeRef": "ShcConsolePage"
       }
     }
   },
   {
     "type": "console.page/route",
     "properties": {
+      "path": "/hybridsovereign/environments/vm/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/vm/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/vm/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/openstack/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/openstack/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/openstack/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/openstack/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/aws/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/aws/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/aws/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/aws/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/gcp/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/gcp/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/gcp/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/gcp/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/migrations/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/migrations/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/migrations/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/environments/migrations/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/map/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/map/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/placements/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/placements/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/placements/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/networks/placements/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/teams/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/teams/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/teams/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/teams/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/projects/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/projects/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/projects/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/projects/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/assignments/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/assignments/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/assignments/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/clusters/assignments/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/vaults/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/vaults/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/vaults/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/vaults/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/kv/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/kv/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/kv/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/kv/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/aap/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/aap/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/aap/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/aap/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/quay/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/quay/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/quay/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/services/quay/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/access/groups/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/access/groups/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/access/groups/ns/:ns/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/access/groups/all-namespaces/:name",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/create/:formType/ns/:ns",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/create/:formType/all-namespaces",
+      "exact": true,
+      "component": {
+        "$codeRef": "ShcConsolePage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/hybridsovereign/tenant",
       "exact": false,
-      "path": "/hybridsovereign/tenant/teams/:name",
       "component": {
-        "$codeRef": "TenantTeamDetailPage"
+        "$codeRef": "ShcConsolePage"
       }
     }
   },
   {
     "type": "console.page/route",
     "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/projects",
-      "component": {
-        "$codeRef": "TenantProjectsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
+      "path": "/hybridsovereign/home",
       "exact": false,
-      "path": "/hybridsovereign/tenant/projects/:name",
       "component": {
-        "$codeRef": "TenantProjectDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/platforms",
-      "component": {
-        "$codeRef": "TenantPlatformsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/platforms/:name",
-      "component": {
-        "$codeRef": "TenantPlatformDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/assignments",
-      "component": {
-        "$codeRef": "TenantAssignmentsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/assignments/:name",
-      "component": {
-        "$codeRef": "TenantAssignmentDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/cloudoso",
-      "component": {
-        "$codeRef": "TenantCloudOSOPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/cloudoso/:name",
-      "component": {
-        "$codeRef": "TenantCloudOSODetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/cloudaws",
-      "component": {
-        "$codeRef": "TenantCloudAWSPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/cloudgcp",
-      "component": {
-        "$codeRef": "TenantCloudGCPPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/cloudaws/:name",
-      "component": {
-        "$codeRef": "TenantCloudAWSDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/cloudgcp/:name",
-      "component": {
-        "$codeRef": "TenantCloudGCPDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/cloudvirt",
-      "component": {
-        "$codeRef": "TenantCloudVirtPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/cloudvirt/:name",
-      "component": {
-        "$codeRef": "TenantCloudVirtDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/migrations",
-      "component": {
-        "$codeRef": "TenantMigrationsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/migrations/:name",
-      "component": {
-        "$codeRef": "TenantMigrationDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/personas",
-      "component": {
-        "$codeRef": "TenantPersonasPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/personas/:name",
-      "component": {
-        "$codeRef": "TenantPersonaDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/rbac",
-      "component": {
-        "$codeRef": "TenantRbacPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/rbac/:name",
-      "component": {
-        "$codeRef": "TenantRbacDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/vaults",
-      "component": {
-        "$codeRef": "TenantVaultsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/vaults/:name",
-      "component": {
-        "$codeRef": "TenantVaultDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/vaultkvs",
-      "component": {
-        "$codeRef": "TenantVaultKVsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/vaultkvs/:name",
-      "component": {
-        "$codeRef": "TenantVaultKVDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/aaporgs",
-      "component": {
-        "$codeRef": "TenantAAPOrgsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/aaporgs/:name",
-      "component": {
-        "$codeRef": "TenantAAPOrgDetailPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": true,
-      "path": "/hybridsovereign/tenant/quayorgs",
-      "component": {
-        "$codeRef": "TenantQuayOrgsPage"
-      }
-    }
-  },
-  {
-    "type": "console.page/route",
-    "properties": {
-      "exact": false,
-      "path": "/hybridsovereign/tenant/quayorgs/:name",
-      "component": {
-        "$codeRef": "TenantQuayOrgDetailPage"
+        "$codeRef": "ShcConsolePage"
       }
     }
   }

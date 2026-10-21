@@ -20,8 +20,6 @@ export { StatTile, HealthStrip } from './StatTile';
 export type { StatTileProps, HealthStripProps, HealthStripTile, StatVariant } from './StatTile';
 export { FilterToolbar } from './FilterToolbar';
 export type { FilterToolbarProps, StatusFilter } from './FilterToolbar';
-export { NamespaceContextBar } from './NamespaceContextBar';
-export type { NamespaceContextBarProps } from './NamespaceContextBar';
 export { ResourceDetail } from './ResourceDetail';
 export type { ResourceDetailProps } from './ResourceDetail';
 export { CreateResourceForm } from './CreateResourceForm';

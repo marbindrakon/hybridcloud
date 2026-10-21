@@ -75,6 +75,10 @@ test('paths per host and scope', () => {
   assert.equal(paths.pathFor('tenant-console', 'env-vm', t), '/hybridsovereign/environments/vm/ns/entity-acme-corp');
   assert.equal(paths.pathFor('tenant-console', 'env-vm', { kind: 'all' }), '/hybridsovereign/environments/vm/all-namespaces');
   assert.equal(paths.pathFor('tenant-console', 'home', t), '/hybridsovereign/home/ns/entity-acme-corp');
+  assert.equal(paths.pathFor('tenant-console', 'networks', t, { name: 'core' }), '/hybridsovereign/networks/ns/entity-acme-corp/core');
+  assert.equal(paths.pathFor('tenant-console', 'networks', { kind: 'all' }, { name: 'core' }), '/hybridsovereign/networks/all-namespaces/core');
+  assert.equal(paths.pathFor('tenant-console', 'create', t, { formType: 'cloudvirt' }), '/hybridsovereign/create/cloudvirt/ns/entity-acme-corp');
+  assert.equal(paths.pathFor('admin-console', 'sites', { kind: 'global' }, { name: 'iaas1' }), '/hybridsovereign/platform/sites/iaas1');
   assert.equal(paths.pathFor('admin-console', 'tenants', { kind: 'global' }), '/hybridsovereign/platform/tenants');
   assert.equal(paths.routeFor('tenant-dashboard', 'CloudVirt', t, 'p1'), '/t/acme-corp/environments/vm/p1');
   assert.equal(paths.createPathFor('tenant-dashboard', 'cloudvirt', t), '/t/acme-corp/create/cloudvirt');
@@ -105,4 +109,51 @@ test('legacy paths are unique, map to existing entries, and resolve', () => {
   assert.equal(go('admin-dashboard', 'networking/transport'), undefined);
   assert.equal(go('admin-dashboard', 'create/hybridfabric'), '/platform/create/hybridfabric');
   assert.equal(paths.matchLegacy('admin-dashboard', 'no/such/path'), undefined);
+});
+
+test('console paths parse back to their entry and scope', () => {
+  const t = { kind: 'tenant', name: 'acme-corp' };
+  const cases = [
+    ['tenant-console', 'env-vm', t, {}],
+    ['tenant-console', 'networks', t, { name: 'core' }],
+    ['tenant-console', 'networks', { kind: 'all' }, {}],
+    ['tenant-console', 'network-map', t, {}],
+    ['tenant-console', 'home', t, {}],
+    ['tenant-console', 'access-groups', t, { name: 'viewers' }],
+    ['tenant-console', 'create', t, { formType: 'team' }],
+    ['admin-console', 'sites', { kind: 'global' }, { name: 'iaas1' }],
+    ['admin-console', 'platform-overview', { kind: 'global' }, {}],
+    ['admin-console', 'fabric-map', { kind: 'global' }, {}],
+    ['admin-console', 'fabric', { kind: 'global' }, { name: 'lab' }],
+    ['admin-console', 'ui-health', { kind: 'global' }, { name: 'x' }],
+    ['admin-console', 'platform-create', { kind: 'global' }, { formType: 'entity' }],
+  ];
+  for (const [host, id, scope, params] of cases) {
+    const p = paths.pathFor(host, id, scope, params);
+    const m = paths.parseConsolePath(host, p);
+    assert.ok(m, `${host} ${p}`);
+    assert.equal(m.entry.id, id, p);
+    assert.equal(m.name, params.name, p);
+    assert.equal(m.formType, params.formType, p);
+    assert.equal(m.requested.kind, scope.kind, p);
+  }
+  assert.equal(paths.parseConsolePath('tenant-console', '/hybridsovereign/tenant/cloudvirt'), undefined);
+  assert.equal(paths.parseConsolePath('tenant-console', '/hybridsovereign/home/ns/default').requested.kind, 'unset');
+});
+
+test('console legacy paths', () => {
+  const cur = { kind: 'tenant', name: 'acme-corp' };
+  const go = (host, p) => {
+    const m = paths.matchLegacy(host, p);
+    return m && paths.legacyTarget(host, m, cur);
+  };
+  assert.equal(go('tenant-console', 'tenant/cloudvirt'), '/hybridsovereign/environments/vm/ns/entity-acme-corp');
+  assert.equal(go('tenant-console', 'tenant/networks/core'), '/hybridsovereign/networks/ns/entity-acme-corp/core');
+  assert.equal(go('tenant-console', 'tenant/overview'), '/hybridsovereign/home/ns/entity-acme-corp');
+  assert.equal(go('tenant-console', 'home'), '/hybridsovereign/home/ns/entity-acme-corp');
+  assert.equal(go('admin-console', ''), '/hybridsovereign/platform');
+  assert.equal(go('admin-console', 'overview'), '/hybridsovereign/platform');
+  assert.equal(go('admin-console', 'entities/acme-corp'), '/hybridsovereign/platform/tenants/acme-corp');
+  assert.equal(go('admin-console', 'networking/networks'), '/hybridsovereign/networks/all-namespaces');
+  assert.equal(go('admin-console', 'clouds/cloudvirt/entity-waynetech/v1'), '/hybridsovereign/environments/vm/ns/entity-waynetech/v1');
 });

@@ -1,12 +1,9 @@
 import React from 'react';
 import { Tab, Tabs, TabTitleText } from '@patternfly/react-core';
-import {
-  PageHeader,
-  ScopedListPage,
-  useBreadcrumbs,
-  useDocumentTitle,
-  useTranslation,
-} from '@hybridsovereign/shared';
+import { PageHeader } from '../components/PageHeader';
+import { useTranslation } from '../i18n';
+import { useBreadcrumbs, useDocumentTitle } from '../nav/useNav';
+import { ScopedListPage } from './ScopedListPage';
 
 /**
  * Platform integrations: identity provider connections (RbacConfig),

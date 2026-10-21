@@ -1,0 +1,26 @@
+[
+  {
+    "type": "console.flag/hookProvider",
+    "properties": {
+      "handler": {
+        "$codeRef": "platformAdminFlag.usePlatformAdminFlag"
+      }
+    }
+  },
+  {
+    "type": "console.perspective",
+    "properties": {
+      "id": "hybridsovereign",
+      "name": "Sovereign Cloud",
+      "icon": {
+        "$codeRef": "perspective.icon"
+      },
+      "landingPageURL": {
+        "$codeRef": "perspective.getLandingPageURL"
+      },
+      "importRedirectURL": {
+        "$codeRef": "perspective.getImportRedirectURL"
+      }
+    }
+  }
+]

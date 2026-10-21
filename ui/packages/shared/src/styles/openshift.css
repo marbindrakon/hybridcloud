@@ -2769,3 +2769,8 @@ html.pf-v5-theme-dark .sc-console-page,
 .sc-pf-masthead .sc-scope__label {
   color: #c7c7c7;
 }
+.sc-console-scope {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--pf-t--global--spacer--sm, 0.5rem);
+}

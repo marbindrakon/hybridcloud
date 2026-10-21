@@ -1,61 +1,27 @@
-import { HybridSovereignKind, K8sResource } from '@hybridsovereign/shared';
+import { HybridSovereignKind, K8sResource, objectPath, pathFor } from '@hybridsovereign/shared';
 
-const PREFIX = '/hybridsovereign';
+const HOST = 'admin-console' as const;
 
-/** Console paths aligned with standalone admin dashboard routes. */
-export const ADMIN_LIST_PATH: Partial<Record<HybridSovereignKind, string>> = {
-  Entity: `${PREFIX}/entities`,
-  Team: `${PREFIX}/teams`,
-  Project: `${PREFIX}/projects`,
-  Assignment: `${PREFIX}/assignments`,
-  PlatformOpenshift: `${PREFIX}/platforms`,
-  CloudOSO: `${PREFIX}/clouds/cloudoso`,
-  CloudAWS: `${PREFIX}/clouds/cloudaws`,
-  CloudGCP: `${PREFIX}/clouds/cloudgcp`,
-  CloudVirt: `${PREFIX}/clouds/cloudvirt`,
-  CloudInfrastructure: `${PREFIX}/clouds/infrastructure`,
-  Persona: `${PREFIX}/personas`,
-  Rbac: `${PREFIX}/operators/rbacs`,
-  RbacConfig: `${PREFIX}/operators/rbacconfigs`,
-  AAPOrg: `${PREFIX}/services/aaporgs`,
-  AAPConfig: `${PREFIX}/services/aapconfigs`,
-  QuayOrg: `${PREFIX}/services/quayorgs`,
-  QuayConfig: `${PREFIX}/services/quayconfigs`,
-  Vault: `${PREFIX}/services/vaults`,
-  VaultKV: `${PREFIX}/services/vaultkvs`,
-  HybridFabric: `${PREFIX}/networking/fabrics`,
-  CloudGateway: `${PREFIX}/networking/gateways`,
-  TransportLink: `${PREFIX}/networking/transport`,
-  HybridNetwork: `${PREFIX}/networking/networks`,
-  NetworkPlacement: `${PREFIX}/networking/placements`,
-  UIHealthChecker: `${PREFIX}/networking/uihealth`,
-};
-
-const CLUSTER_SCOPED: HybridSovereignKind[] = [
-  'Entity',
-  'CloudInfrastructure',
-  'HybridFabric',
-  'CloudGateway',
-  'TransportLink',
-  'UIHealthChecker',
-];
-
-export function consoleAdminDetailHref(
-  listPath: string,
-  kind: HybridSovereignKind,
-  item: K8sResource,
-): string {
-  const name = encodeURIComponent(item.metadata.name);
-  if (CLUSTER_SCOPED.includes(kind)) {
-    return `${listPath}/${name}`;
-  }
-  const ns = encodeURIComponent(item.metadata.namespace ?? 'default');
-  return `${listPath}/${ns}/${name}`;
-}
-
+/** Detail path of any object in the console (platform kinds under /platform, tenant kinds in their tenant). */
 export function overviewItemHref(item: K8sResource): string | null {
-  const kind = (item.kind || '') as HybridSovereignKind;
-  const listPath = ADMIN_LIST_PATH[kind];
-  if (!listPath) return null;
-  return consoleAdminDetailHref(listPath, kind, item);
+  return objectPath(HOST, (item.kind || '') as HybridSovereignKind, item.metadata.namespace, item.metadata.name) ?? null;
 }
+
+export function objectHref(kind: HybridSovereignKind, item: K8sResource): string | null {
+  return objectPath(HOST, kind, item.metadata.namespace, item.metadata.name) ?? null;
+}
+
+const ALL = { kind: 'all' as const };
+const GLOBAL = { kind: 'global' as const };
+
+/** List pages linked from the platform overview. */
+export const ADMIN_LINKS = {
+  tenants: pathFor(HOST, 'tenants', GLOBAL),
+  sites: pathFor(HOST, 'sites', GLOBAL),
+  teams: pathFor(HOST, 'teams', ALL),
+  clusters: pathFor(HOST, 'clusters', ALL),
+  assignments: pathFor(HOST, 'assignments', ALL),
+  accessGroups: pathFor(HOST, 'access-groups', ALL),
+  createHealthCheck: pathFor(HOST, 'platform-create', GLOBAL, { formType: 'uihealthchecker' }),
+  healthCheck: (name: string) => pathFor(HOST, 'ui-health', GLOBAL, { name }),
+};

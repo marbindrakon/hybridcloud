@@ -7,7 +7,7 @@
  */
 import type { RequestedScope, Scope } from '../scope/types';
 import { namespaceOfTenant, tenantOfNamespace } from '../scope/parseGroups';
-import { entryById, entryForKind, entryForCreateForm } from './registry';
+import { entriesForHost as entriesForHostLocal, entryById, entryForKind, entryForCreateForm } from './registry';
 import type { Host, NavEntry } from './types';
 
 export type AnyScope = RequestedScope | Scope;
@@ -42,16 +42,19 @@ export function isConsoleHost(host: Host): boolean {
 export function pathFor(host: Host, entry: NavEntry | string, scope: AnyScope, params: PathParams = {}): string {
   const e = typeof entry === 'string' ? entryById(entry) : entry;
   if (!e) return isConsoleHost(host) ? '/hybridsovereign' : '/';
-  const route = fill(e.route, params);
   const platform = e.persona.includes('platform') && !e.persona.includes('tenant');
   if (isConsoleHost(host)) {
+    const route = fill(e.route, params);
     if (platform) return `/hybridsovereign/platform${route ? `/${route}` : ''}`;
-    const base = `/hybridsovereign/${route || 'home'}`;
+    // Tenant pages: /hybridsovereign/<route>/ns/<namespace>[/<name>] (the console's namespaced href form).
+    const base = `/hybridsovereign/${fill(e.route, { formType: params.formType }) || 'home'}`;
+    const name = params.name ? `/${encodeURIComponent(params.name)}` : '';
     const k = scopeKind(scope);
-    if (k === 'all') return `${base}/all-namespaces`;
+    if (k === 'all') return `${base}/all-namespaces${name}`;
     const t = tenantName(scope);
-    return t ? `${base}/ns/${namespaceOfTenant(t)}` : base;
+    return t ? `${base}/ns/${namespaceOfTenant(t)}${name}` : base;
   }
+  const route = fill(e.route, params);
   if (platform) return `/platform${route ? `/${route}` : ''}`;
   const k = scopeKind(scope);
   if (k === 'all') return `/all${route ? `/${route}` : ''}`;
@@ -163,6 +166,25 @@ export const LEGACY_ROUTES: LegacyRoute[] = [
   { host: 'admin-dashboard', from: 'create/:formType', to: 'platform-create', scope: 'global' },
 ];
 
+// Console hosts: the old /hybridsovereign/tenant/* pages of the tenant plugin and the old
+// /hybridsovereign/* pages of the admin plugin (same relative paths as the admin dashboard).
+for (const [from, to] of TENANT_LEGACY) {
+  LEGACY_ROUTES.push({ host: 'tenant-console', from: `tenant/${from}`, to, scope: 'current' });
+  if (to !== 'network-map') LEGACY_ROUTES.push({ host: 'tenant-console', from: `tenant/${from}/:name`, to, scope: 'current' });
+}
+LEGACY_ROUTES.push(
+  { host: 'tenant-console', from: 'tenant/overview', to: 'home', scope: 'current' },
+  { host: 'tenant-console', from: 'tenant/create/:formType', to: 'create', scope: 'current' },
+  { host: 'tenant-console', from: 'tenant/personas', to: null, scope: 'current' },
+  { host: 'tenant-console', from: 'tenant/personas/:name', to: null, scope: 'current' },
+  { host: 'tenant-console', from: 'home', to: 'home', scope: 'current' },
+  { host: 'admin-console', from: '', to: 'platform-overview', scope: 'global' },
+  { host: 'admin-console', from: 'overview', to: 'platform-overview', scope: 'global' },
+);
+for (const l of LEGACY_ROUTES.filter((x) => x.host === 'admin-dashboard')) {
+  LEGACY_ROUTES.push({ ...l, host: 'admin-console' });
+}
+
 export interface LegacyMatch {
   route: LegacyRoute;
   params: { namespace?: string; name?: string; formType?: string };
@@ -173,7 +195,7 @@ export function matchLegacy(host: Host, rest: string): LegacyMatch | undefined {
   const parts = rest.split('/').filter(Boolean);
   for (const route of LEGACY_ROUTES) {
     if (route.host !== host) continue;
-    const pat = route.from.split('/');
+    const pat = route.from.split('/').filter(Boolean);
     if (pat.length !== parts.length) continue;
     const params: LegacyMatch['params'] = {};
     let ok = true;
@@ -229,4 +251,70 @@ export function objectPath(host: Host, kind: string, namespace: string | undefin
   const e = entryForKind(kind, 'tenant');
   if (!e || !tenant) return undefined;
   return pathFor(host, e, { kind: 'tenant', name: tenant }, { name });
+}
+
+/** What a console URL under /hybridsovereign asks for. */
+export interface ConsoleMatch {
+  entry: NavEntry;
+  requested: RequestedScope;
+  name?: string;
+  formType?: string;
+}
+
+/**
+ * Parse /hybridsovereign/<route>/ns/<namespace>[/<name>], /hybridsovereign/<route>/all-namespaces[/<name>]
+ * and /hybridsovereign/platform/<route>[/<name>] against the registry.
+ */
+export function parseConsolePath(host: Host, pathname: string): ConsoleMatch | undefined {
+  const rest = pathname.replace(/^\/hybridsovereign\/?/, '').replace(/\/+$/, '');
+  const parts = rest.split('/').filter(Boolean).map((p) => decodeURIComponent(p));
+  const entries = entriesForHostLocal(host);
+  if (parts[0] === 'platform') {
+    const routeParts = parts.slice(1);
+    const platformEntries = entries.filter((e) => e.persona.includes('platform') && !e.persona.includes('tenant'));
+    if (routeParts[0] === 'create' && routeParts[1] && routeParts.length === 2) {
+      const e = platformEntries.find((x) => x.page === 'create');
+      return e ? { entry: e, requested: { kind: 'global' }, formType: routeParts[1] } : undefined;
+    }
+    for (const cut of [routeParts.length, routeParts.length - 1]) {
+      if (cut < 0) continue;
+      const route = routeParts.slice(0, cut).join('/');
+      const e = platformEntries.find((x) => x.route === route && !x.route.includes(':'));
+      if (!e) continue;
+      const name = cut < routeParts.length ? routeParts[cut] : undefined;
+      if (name && !e.kinds?.length) continue;
+      if (routeParts.length - cut > 1) continue;
+      return { entry: e, requested: { kind: 'global' }, name };
+    }
+    return undefined;
+  }
+  const nsAt = parts.indexOf('ns');
+  const allAt = parts.indexOf('all-namespaces');
+  let routeParts: string[];
+  let requested: RequestedScope;
+  let tail: string[];
+  if (nsAt >= 0 && parts[nsAt + 1]) {
+    routeParts = parts.slice(0, nsAt);
+    const tenant = tenantOfNamespace(parts[nsAt + 1]);
+    // The console writes its "all projects" value as #ALL_NS# in some versions.
+    requested = tenant ? { kind: 'tenant', name: tenant } : parts[nsAt + 1] === '#ALL_NS#' ? { kind: 'all' } : { kind: 'unset' };
+    tail = parts.slice(nsAt + 2);
+  } else if (allAt >= 0) {
+    routeParts = parts.slice(0, allAt);
+    requested = { kind: 'all' };
+    tail = parts.slice(allAt + 1);
+  } else {
+    return undefined;
+  }
+  if (tail.length > 1) return undefined;
+  const tenantEntries = entries.filter((e) => e.persona.includes('tenant'));
+  if (routeParts[0] === 'create' && routeParts.length === 2) {
+    const e = tenantEntries.find((x) => x.page === 'create');
+    return e && !tail.length ? { entry: e, requested, formType: routeParts[1] } : undefined;
+  }
+  const route = routeParts.join('/') === 'home' ? '' : routeParts.join('/');
+  const e = tenantEntries.find((x) => x.route === route && !x.route.includes(':'));
+  if (!e) return undefined;
+  if (tail.length && !e.kinds?.length) return undefined;
+  return { entry: e, requested, name: tail[0] };
 }

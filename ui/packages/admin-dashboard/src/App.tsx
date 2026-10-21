@@ -14,13 +14,13 @@ import {
   AllTenantsHome,
   TenantOverviewPage,
   TenantNetworkOverviewPage,
+  IntegrationsPage,
   useRouterScopeAdapter,
   useOptionalScope,
   type PageMap,
 } from '@hybridsovereign/shared';
 import { OverviewPage } from './pages/OverviewPage';
 import { UIHealthPage } from './pages/UIHealthPage';
-import { IntegrationsPage } from './pages/IntegrationsPage';
 import NetworkOverviewPage from './pages/NetworkOverviewPage';
 
 const HOST = 'admin-dashboard' as const;

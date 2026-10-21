@@ -31,4 +31,9 @@ done
 
 export SHELL_BUNDLE_DIR="$out"
 export UI_ROOT="$ui"
-node --test "$here"/tests/*.test.mjs
+rc=0
+node --test "$here"/tests/*.test.mjs || rc=1
+# Generated files must match their sources.
+node "$here/gen-console-extensions.mjs" --check || rc=1
+python3 -I "$here/gen-role-hints.py" --check || rc=1
+exit $rc

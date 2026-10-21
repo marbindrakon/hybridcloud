@@ -19,8 +19,9 @@ export {
   legacyTarget,
   LEGACY_ROUTES,
   objectPath,
+  parseConsolePath,
 } from './paths';
-export type { PathParams, LegacyRoute, LegacyMatch, AnyScope } from './paths';
+export type { PathParams, LegacyRoute, LegacyMatch, AnyScope, ConsoleMatch } from './paths';
 export {
   NavHostProvider,
   useNavHost,
