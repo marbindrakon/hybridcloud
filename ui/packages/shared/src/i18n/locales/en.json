@@ -290,7 +290,10 @@
     "egressRequested": "requested",
     "namespacesReady": "{{ready}}/{{total}} ready",
     "project": "Project",
-    "domain": "Domain"
+    "domain": "Domain",
+    "reason": "Reason",
+    "age": "Age",
+    "deleteRow": "Delete {{name}}"
   },
   "form": {
     "required": "Required",
@@ -700,7 +703,7 @@
     "pool": "Pool",
     "poolUse": "Pool use",
     "ready": "Ready",
-    "realization": "Realization (informational)",
+    "realization": "Realization (platform detail)",
     "realizationHelp": "How the platform realized this object. Informational; it depends on the platform and may change.",
     "addressSpace": "Address space",
     "addressSpacePending": "Not in use yet (being added, or refused): {{prefixes}}",
@@ -735,7 +738,26 @@
     "waitingFor": "Waiting for",
     "wireguard": "WireGuard tunnel",
     "wireguardNodes": "WireGuard keys per node",
-    "wireguardPeers": "WireGuard peers per node"
+    "wireguardPeers": "WireGuard peers per node",
+    "name": "Name",
+    "namespace": "Namespace",
+    "labels": "Labels",
+    "noData": "No more details.",
+    "noConditions": "No conditions reported.",
+    "subtitle": "{{kind}} in {{namespace}}",
+    "backTo": "Back to {{parent}}",
+    "retryNow": "Retry now",
+    "retryQueued": "Retry queued",
+    "apiKind": "API kind: {{kind}}",
+    "actionFailed": "The action did not go through",
+    "overviewTab": "Overview",
+    "configurationTab": "Configuration",
+    "conditionsTab": "Conditions",
+    "jsonTab": "JSON",
+    "diagnostics": "Diagnostics (platform administrators)",
+    "deleteTitle": "Delete {{kind}} {{name}}?",
+    "deleteBody": "This deletes {{name}} from {{namespace}}. The page shows the progress until it is gone.",
+    "deleting": "Deleting…"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1020,5 +1042,48 @@
     "notAttached": "Not attached anywhere",
     "notAttachedBody": "Attach this network to an environment to use it there.",
     "waitingForNetwork": "A namespace of this environment names network {{network}}, which is not attached yet."
+  },
+  "callout": {
+    "since": "since {{time}}",
+    "waiting": "Waiting",
+    "creating": "Being created",
+    "updating": "Applying a change",
+    "failed": "Could not be completed",
+    "degraded": "Working with reduced health",
+    "deleting": "Being deleted",
+    "waitsFor": "The delete waits for:",
+    "changeNotApplied": "Change not applied: {{reason}}",
+    "platformActs": "The platform team acts on this.",
+    "youAct": "You can fix this: change the object or what it refers to."
+  },
+  "toasts": {
+    "ready": "{{kind}} {{name}} is ready",
+    "failed": "{{kind}} {{name}} failed",
+    "deleted": "{{kind}} {{name}} deleted"
+  },
+  "wayin": {
+    "title": "How to use it",
+    "open": {
+      "CloudVirt": "Open OpenShift Virtualization console",
+      "CloudOSO": "Open OpenStack dashboard",
+      "CloudAWS": "Open AWS console",
+      "CloudGCP": "Open Google Cloud console"
+    },
+    "notPublished": "The site console is not published for this environment yet.",
+    "noConsoleSignIn": "Console sign-in is not offered for this environment yet.",
+    "signInWith": "Sign in",
+    "signInButton": "with the button {{name}}",
+    "signInNotOffered": "Human sign-in is not offered; use the API with an application credential.",
+    "api": "API endpoint",
+    "namespaces": "Your VMs live in",
+    "project": "Project",
+    "domain": "Domain",
+    "location": "Location",
+    "signInGroups": "Groups that can sign in",
+    "you": "You",
+    "youAreIn": "You are in {{groups}}.",
+    "youAreNotIn": "You are not in any of these groups; ask your tenant's access administrator.",
+    "virtScope": "Sovereign Cloud does not create VMs, volumes or security groups; create them in the site console.",
+    "openstackScope": "Sovereign Cloud creates the project; servers, volumes and security groups are made with the OpenStack API or dashboard."
   }
 }

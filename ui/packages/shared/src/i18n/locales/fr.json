@@ -290,7 +290,10 @@
     "egressRequested": "demandée",
     "namespacesReady": "{{ready}}/{{total}} prêts",
     "project": "Projet",
-    "domain": "Domaine"
+    "domain": "Domaine",
+    "reason": "Raison",
+    "age": "Âge",
+    "deleteRow": "Supprimer {{name}}"
   },
   "form": {
     "entityListRestricted": "Seule l'entité à laquelle vous avez accès est affichée — la liste complète nécessite un accès plateforme.",
@@ -700,7 +703,7 @@
     "pool": "Pool",
     "poolUse": "Utilisation des pools",
     "ready": "Prêt",
-    "realization": "Réalisation (informatif)",
+    "realization": "Réalisation (détail plateforme)",
     "realizationHelp": "Comment la plateforme a réalisé cet objet. Informatif ; dépend de la plateforme et peut changer.",
     "addressSpace": "Espace d'adressage",
     "addressSpacePending": "Pas encore en service (en cours d'ajout, ou refusé) : {{prefixes}}",
@@ -735,7 +738,26 @@
     "waitingFor": "En attente de",
     "wireguard": "Tunnel WireGuard",
     "wireguardNodes": "Clés WireGuard par nœud",
-    "wireguardPeers": "Pairs WireGuard par nœud"
+    "wireguardPeers": "Pairs WireGuard par nœud",
+    "name": "Nom",
+    "namespace": "Namespace",
+    "labels": "Labels",
+    "noData": "Pas d'autres détails.",
+    "noConditions": "Aucune condition signalée.",
+    "subtitle": "{{kind}} dans {{namespace}}",
+    "backTo": "Retour à {{parent}}",
+    "retryNow": "Réessayer maintenant",
+    "retryQueued": "Nouvel essai en file",
+    "apiKind": "Type d'API : {{kind}}",
+    "actionFailed": "L'action n'a pas abouti",
+    "overviewTab": "Vue d'ensemble",
+    "configurationTab": "Configuration",
+    "conditionsTab": "Conditions",
+    "jsonTab": "JSON",
+    "diagnostics": "Diagnostic (administrateurs de la plateforme)",
+    "deleteTitle": "Supprimer {{kind}} {{name}} ?",
+    "deleteBody": "Supprime {{name}} de {{namespace}}. La page affiche la progression jusqu'à sa disparition.",
+    "deleting": "Suppression…"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1020,5 +1042,48 @@
     "notAttached": "Attaché nulle part",
     "notAttachedBody": "Attachez ce réseau à un environnement pour l'y utiliser.",
     "waitingForNetwork": "Un namespace de cet environnement nomme le réseau {{network}}, qui n'est pas encore attaché."
+  },
+  "callout": {
+    "since": "depuis {{time}}",
+    "waiting": "En attente",
+    "creating": "Création en cours",
+    "updating": "Application d'un changement",
+    "failed": "N'a pas pu aboutir",
+    "degraded": "Fonctionne en mode dégradé",
+    "deleting": "Suppression en cours",
+    "waitsFor": "La suppression attend :",
+    "changeNotApplied": "Changement non appliqué : {{reason}}",
+    "platformActs": "L'équipe plateforme s'en occupe.",
+    "youAct": "Vous pouvez corriger : modifiez l'objet ou ce qu'il référence."
+  },
+  "toasts": {
+    "ready": "{{kind}} {{name}} est prêt",
+    "failed": "{{kind}} {{name}} a échoué",
+    "deleted": "{{kind}} {{name}} supprimé"
+  },
+  "wayin": {
+    "title": "Comment l'utiliser",
+    "open": {
+      "CloudVirt": "Ouvrir la console OpenShift Virtualization",
+      "CloudOSO": "Ouvrir le tableau de bord OpenStack",
+      "CloudAWS": "Ouvrir la console AWS",
+      "CloudGCP": "Ouvrir la console Google Cloud"
+    },
+    "notPublished": "La console du site n'est pas encore publiée pour cet environnement.",
+    "noConsoleSignIn": "La connexion à la console n'est pas encore proposée pour cet environnement.",
+    "signInWith": "Connexion",
+    "signInButton": "avec le bouton {{name}}",
+    "signInNotOffered": "La connexion humaine n'est pas proposée ; utilisez l'API avec un identifiant d'application.",
+    "api": "Point d'accès API",
+    "namespaces": "Vos VM sont dans",
+    "project": "Projet",
+    "domain": "Domaine",
+    "location": "Emplacement",
+    "signInGroups": "Groupes autorisés à se connecter",
+    "you": "Vous",
+    "youAreIn": "Vous êtes dans {{groups}}.",
+    "youAreNotIn": "Vous n'êtes dans aucun de ces groupes ; demandez à l'administrateur des accès de votre locataire.",
+    "virtScope": "Sovereign Cloud ne crée ni VM, ni volumes, ni groupes de sécurité ; créez-les dans la console du site.",
+    "openstackScope": "Sovereign Cloud crée le projet ; serveurs, volumes et groupes de sécurité se créent avec l'API ou le tableau de bord OpenStack."
   }
 }

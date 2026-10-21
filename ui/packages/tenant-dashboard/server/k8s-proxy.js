@@ -25,6 +25,7 @@ import {
   sanitizeVaultSpec,
 } from "./sanitizers.js";
 import { recordUpstreamWarnings, upstreamWriteQuery } from "./writeOptions.js";
+import { tenantSafe } from "../../shared/server/tenantSafe.js";
 
 function userAccessToken(req) {
   return userToken(req);
@@ -442,7 +443,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const resp = await k8sRequest(apiServer, platformopenshiftsCollectionPath(namespace), "GET", token);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.json(resp.body?.items || []);
+        res.json((resp.body?.items || []).map((i) => tenantSafe("PlatformOpenshift", i)));
       } catch (err) {
         console.error("PlatformOpenshift list error:", err.message);
         sendUpstreamError(res, err);
@@ -459,7 +460,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const resp = await k8sRequest(apiServer, cloudososCollectionPath(namespace), "GET", token);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.json(resp.body?.items || []);
+        res.json((resp.body?.items || []).map((i) => tenantSafe("CloudOSO", i)));
       } catch (err) {
         console.error("CloudOSO list error:", err.message);
         sendUpstreamError(res, err);
@@ -696,7 +697,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const resp = await k8sRequest(apiServer, platformopenshiftsCollectionPath(namespace), "POST", token, obj);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.status(201).json(resp.body);
+        res.status(201).json(tenantSafe("PlatformOpenshift", resp.body));
       } catch (err) {
         console.error("PlatformOpenshift create error:", err.message);
         sendUpstreamError(res, err);
@@ -732,7 +733,7 @@ export function createK8sHandlers(apiServer) {
         const urlPath = `${platformopenshiftsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.json(resp.body);
+        res.json(tenantSafe("PlatformOpenshift", resp.body));
       } catch (err) {
         console.error("PlatformOpenshift get error:", err.message);
         sendUpstreamError(res, err);
@@ -763,7 +764,7 @@ export function createK8sHandlers(apiServer) {
         ];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.json(resp.body);
+        res.json(tenantSafe("PlatformOpenshift", resp.body));
       } catch (err) {
         console.error("PlatformOpenshift patch error:", err.message);
         sendUpstreamError(res, err);
@@ -788,7 +789,7 @@ export function createK8sHandlers(apiServer) {
       try {
         const resp = await k8sRequest(apiServer, cloudososCollectionPath(namespace), "POST", token, obj);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.status(201).json(resp.body);
+        res.status(201).json(tenantSafe("CloudOSO", resp.body));
       } catch (err) {
         console.error("CloudOSO create error:", err.message);
         sendUpstreamError(res, err);
@@ -824,7 +825,7 @@ export function createK8sHandlers(apiServer) {
         const urlPath = `${cloudososCollectionPath(namespace)}/${encodeURIComponent(name)}`;
         const resp = await k8sRequest(apiServer, urlPath, "GET", token);
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.json(resp.body);
+        res.json(tenantSafe("CloudOSO", resp.body));
       } catch (err) {
         console.error("CloudOSO get error:", err.message);
         sendUpstreamError(res, err);
@@ -855,7 +856,7 @@ export function createK8sHandlers(apiServer) {
         ];
         const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
         if (resp.status >= 400) return sendUpstreamError(res, resp);
-        res.json(resp.body);
+        res.json(tenantSafe("CloudOSO", resp.body));
       } catch (err) {
         console.error("CloudOSO patch error:", err.message);
         sendUpstreamError(res, err);
