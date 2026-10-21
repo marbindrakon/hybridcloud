@@ -98,6 +98,62 @@ class Delivery(unittest.TestCase):
         cond, _ = T.delivery_condition([cr("a", ready=False, delivery={"state": "Stalled"})], TCFG, NOW)
         self.assertEqual(cond["status"], "True")
 
+    # review be-controller-status r2 F2: tenant input errors and finished jobs are not delivery problems
+    @staticmethod
+    def raw(kind, status, generation=1):
+        return (kind, {"metadata": {"name": "x", "generation": generation, "creationTimestamp": "2026-10-21T10:00:00Z"},
+                       "status": status})
+
+    def test_refused_at_validation_without_observed_generation(self):
+        st = {"status": "failed", "ready": False,
+              "conditions": [{"type": "Ready", "status": "False", "reason": "ProvisionFailed"}],
+              "delivery": {"eventId": "e", "publishedAt": "2026-10-21T10:00:00Z", "acknowledgedEventId": "e",
+                           "completedEventId": "e", "completedAt": "2026-10-21T10:02:00Z"}}
+        cond, stalled = T.delivery_condition([self.raw("PlatformOpenshift", st)], TCFG, NOW)
+        self.assertEqual((cond["status"], stalled), ("False", []))
+
+    def test_completed_event_with_failed_validation_reason(self):
+        st = {"conditions": [{"type": "Ready", "status": "False", "reason": "SiteNotAllowed"}],
+              "delivery": {"eventId": "e", "publishedAt": "2026-10-21T10:00:00Z", "completedEventId": "e"}}
+        cond, _ = T.delivery_condition([self.raw("CloudVirt", st, generation=3)], TCFG, NOW)
+        self.assertEqual(cond["status"], "False")
+
+    def test_refused_by_the_operator_never_published(self):
+        st = {"status": "failed", "conditions": [{"type": "Ready", "status": "False", "reason": "OperatorFailed"}]}
+        cond, _ = T.delivery_condition([self.raw("VaultKV", st)], TCFG, NOW)
+        self.assertEqual(cond["status"], "False")
+
+    def test_operator_dependency_wait(self):
+        st = {"conditions": [{"type": "Ready", "status": "False", "reason": "WaitingForDependencies"}]}
+        cond, _ = T.delivery_condition([self.raw("AAPOrg", st)], TCFG, NOW)
+        self.assertEqual(cond["status"], "False")
+
+    def test_finished_job_with_leftover_redrive_state(self):
+        st = {"status": "failed", "delivery": {"eventId": "e", "publishedAt": "2026-10-21T10:00:00Z",
+                                               "completedEventId": "e", "state": "Stalled"}}
+        cond, _ = T.delivery_condition([self.raw("CloudVirt", st)], TCFG, NOW)
+        self.assertEqual(cond["status"], "False")
+
+    def test_running_job_is_not_undelivered(self):
+        st = {"status": "reconciling", "delivery": {"eventId": "e", "publishedAt": "2026-10-21T10:00:00Z",
+                                                    "acknowledgedEventId": "e"}}
+        cond, _ = T.delivery_condition([self.raw("CloudVirt", st, generation=2)], TCFG, NOW)
+        self.assertEqual(cond["status"], "False")
+
+    def test_new_event_after_a_failed_one_still_counts(self):
+        st = {"status": "failed", "conditions": [{"type": "Ready", "status": "False", "reason": "ProvisionFailed"}],
+              "delivery": {"eventId": "e2", "publishedAt": "2026-10-21T11:00:00Z", "completedEventId": "e1"}}
+        cond, _ = T.delivery_condition([self.raw("PlatformOpenshift", st, generation=2)], TCFG, NOW)
+        self.assertEqual(cond["status"], "True")
+
+    def test_publish_failing(self):
+        st = {"delivery": {"eventId": "e", "publishedAt": None, "publishFailingSince": "2026-10-21T11:00:00Z"}}
+        cond, _ = T.delivery_condition([self.raw("CloudVirt", st)], TCFG, NOW)
+        self.assertEqual(cond["status"], "True")
+        st = {"delivery": {"eventId": "e", "publishedAt": None}}
+        cond, _ = T.delivery_condition([self.raw("CloudVirt", st)], TCFG, NOW)
+        self.assertEqual(cond["status"], "False")  # a publish in flight
+
 
 class Config(unittest.TestCase):
     def test_flat_config_is_redrive(self):
