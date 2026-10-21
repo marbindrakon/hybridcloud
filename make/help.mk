@@ -8,5 +8,6 @@ help:
 	@echo "  make build-iaac         Build and push iaac-git-sync image"
 	@echo "  make upload-hybrid-charts Upload AMQ/operator/IAAC charts to OCI"
 	@echo "  make test               Run automated test suite"
+	@echo "  make check-content      Content lint: words, CRD descriptions, lab names (docs/content)"
 	@echo ""
 	@echo "Bootstrap targets: see bootstrap/Makefile"

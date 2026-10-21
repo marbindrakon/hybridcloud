@@ -18,7 +18,7 @@ include make/help.mk
 include make/check-env.mk
 include bootstrap/make/*.mk
 
-.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts
+.PHONY: help check-env lint-all build-operators build-iaac upload-hybrid-charts check-content
 help:
 	@$(MAKE) -f make/help.mk help
 
@@ -43,3 +43,10 @@ lint-all:
 	@helm lint operator/primary/helm
 	@helm lint operator/namespace/helm
 	@helm lint iaac/helm
+
+# Content lint: banned words, CRD description rules, lab knowledge, generated blocks
+# (docs/content/style.md). Repo-only; reads no cluster and no Secret.
+check-content:
+	python3 -I scripts/check-content.py --self-test
+	python3 -I scripts/check-content.py
+	python3 -I scripts/crd-descriptions.py lockstep
