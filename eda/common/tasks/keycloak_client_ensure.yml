@@ -1,0 +1,127 @@
+---
+# Create or converge one confidential sign-in client of a tool (Vault, AAP, Quay) in a tenant realm: exact redirect
+# URIs (no '*', '.../*' or relative URI), web origins, root URL, browser sign-in only (no password grant), and the
+# groups claim with full paths (eda/common/vars/keycloak_group_mapper.yml). Fields not named here are kept.
+#
+# Inputs: kce_url (Keycloak base URL), kce_realm, kce_token (a clients-purpose realm token), kce_client (clientId),
+#   kce_name, kce_redirect_uris (list), kce_web_origins (default ['+']), kce_root_url (optional),
+#   kce_attributes (optional dict, create only)
+# Sets: kce_client_uuid, kce_changed (list of field names converged)
+- name: Load the groups mapper definition
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/keycloak_group_mapper.yml"
+
+- name: Refuse inexact redirect URIs for {{ kce_client }}
+  ansible.builtin.assert:
+    that: >-
+      kce_redirect_uris | length > 0
+      and (kce_redirect_uris | select('match', '^(\\*|/.*|.*/\\*|(?!https?://).*)$') | list | length == 0)
+    fail_msg: "{{ kce_client }}: redirect URIs must be exact absolute callbacks (got {{ kce_redirect_uris | join(', ') }})"
+    quiet: true
+
+- name: Look up {{ kce_client }}
+  ansible.builtin.uri:
+    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients?clientId={{ kce_client | urlencode }}"
+    headers: {Authorization: "Bearer {{ kce_token }}"}
+    validate_certs: false
+    status_code: [200]
+  register: _kce_lookup
+
+- name: Create {{ kce_client }}
+  ansible.builtin.uri:
+    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients"
+    method: POST
+    headers: {Authorization: "Bearer {{ kce_token }}", Content-Type: application/json}
+    body_format: json
+    body: >-
+      {{ {'clientId': kce_client, 'name': kce_name | default(kce_client), 'enabled': true, 'protocol': 'openid-connect',
+          'publicClient': false, 'clientAuthenticatorType': 'client-secret', 'standardFlowEnabled': true,
+          'implicitFlowEnabled': false, 'directAccessGrantsEnabled': false, 'serviceAccountsEnabled': false,
+          'redirectUris': kce_redirect_uris, 'webOrigins': kce_web_origins | default(['+']),
+          'attributes': kce_attributes | default({}), 'protocolMappers': [keycloak_group_mapper]}
+         | combine({'rootUrl': kce_root_url} if (kce_root_url | default('')) | length > 0 else {}) }}
+    validate_certs: false
+    status_code: [201, 409]
+  when: _kce_lookup.json | length == 0
+
+- name: Read {{ kce_client }}
+  ansible.builtin.uri:
+    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients?clientId={{ kce_client | urlencode }}"
+    headers: {Authorization: "Bearer {{ kce_token }}"}
+    validate_certs: false
+    status_code: [200]
+  register: _kce_client
+  retries: 10
+  delay: 3
+  until: _kce_client.json | length > 0
+
+- name: Work out what changes on {{ kce_client }}
+  vars:
+    _cur: "{{ _kce_client.json[0] }}"
+    _want: >-
+      {{ {'redirectUris': kce_redirect_uris, 'webOrigins': kce_web_origins | default(['+']),
+          'directAccessGrantsEnabled': false, 'standardFlowEnabled': true, 'implicitFlowEnabled': false}
+         | combine({'rootUrl': kce_root_url} if (kce_root_url | default('')) | length > 0 else {}) }}
+  ansible.builtin.set_fact:
+    kce_client_uuid: "{{ _cur.id }}"
+    kce_desired: "{{ _want }}"
+    kce_changed: >-
+      {%- set out = [] -%}
+      {%- for k, v in _want.items() -%}
+        {%- if v is sequence and v is not string -%}
+          {%- if (_cur[k] | default([], true) | sort | list) != (v | sort | list) -%}{%- set _ = out.append(k) -%}{%- endif -%}
+        {%- elif _cur[k] | default(none) != v -%}{%- set _ = out.append(k) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    kce_mapper: "{{ (_cur.protocolMappers | default([]) | selectattr('name', 'equalto', keycloak_group_mapper.name) | list + [{}]) | first }}"
+
+- name: Converge {{ kce_client }}
+  ansible.builtin.uri:
+    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients/{{ kce_client_uuid }}"
+    method: PUT
+    headers: {Authorization: "Bearer {{ kce_token }}", Content-Type: application/json}
+    body_format: json
+    body: "{{ _kce_client.json[0] | combine(kce_desired) }}"
+    validate_certs: false
+    status_code: [204]
+  when: kce_changed | length > 0
+  no_log: true
+
+- name: Add the groups mapper to {{ kce_client }}
+  ansible.builtin.uri:
+    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients/{{ kce_client_uuid }}/protocol-mappers/models"
+    method: POST
+    headers: {Authorization: "Bearer {{ kce_token }}", Content-Type: application/json}
+    body_format: json
+    body: "{{ keycloak_group_mapper }}"
+    validate_certs: false
+    status_code: [201, 409]
+  when: kce_mapper | length == 0
+
+- name: Does the groups mapper of {{ kce_client }} differ
+  vars:
+    _cfg: "{{ kce_mapper.config | default({}, true) }}"
+  ansible.builtin.set_fact:
+    _kce_mapper_differs: >-
+      {%- set ns = namespace(d=((kce_mapper.protocolMapper | default('')) != keycloak_group_mapper.protocolMapper)) -%}
+      {%- for k, v in keycloak_group_mapper.config.items() if (_cfg[k] | default(none)) != v -%}{%- set ns.d = true -%}{%- endfor -%}
+      {{ ns.d }}
+  when: kce_mapper | length > 0
+
+- name: Update the groups mapper of {{ kce_client }}
+  ansible.builtin.uri:
+    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients/{{ kce_client_uuid }}/protocol-mappers/models/{{ kce_mapper.id }}"
+    method: PUT
+    headers: {Authorization: "Bearer {{ kce_token }}", Content-Type: application/json}
+    body_format: json
+    body: >-
+      {{ keycloak_group_mapper | combine({'id': kce_mapper.id,
+         'config': (kce_mapper.config | default({}, true)) | combine(keycloak_group_mapper.config)}) }}
+    validate_certs: false
+    status_code: [204]
+  when: kce_mapper | length > 0 and (_kce_mapper_differs | bool)
+
+- name: Note what changed on {{ kce_client }}
+  ansible.builtin.set_fact:
+    kce_changed: >-
+      {{ kce_changed + (['groups mapper'] if (kce_mapper | length == 0) or (_kce_mapper_differs | default(false) | bool) else []) }}

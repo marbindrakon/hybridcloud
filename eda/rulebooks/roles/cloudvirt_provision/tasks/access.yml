@@ -52,20 +52,27 @@
       ansible.builtin.set_fact:
         cv_kc: "https://{{ _cv_kc_route.resources[0].spec.host }}"
 
-    - name: Keycloak admin credentials
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+    # the tenant realm's own automation clients: clients (the site sign-in client's roles), membership (group mappings)
+    - name: Realm token for the sign-in client's roles
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
       vars:
-        keycloak_vault_path: rhbk-services-admin
+        krt_purpose: clients
+        krt_rbac_config: "{{ cv_signin.rbacConfig | default('keycloak-sovereign-tenants-services', true) }}"
+        krt_url: "{{ cv_kc }}"
+        krt_token_fact: cv_clients_token
 
-    - name: Keycloak admin token
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+    - name: Realm token for the group mappings
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
       vars:
-        keycloak_url: "{{ cv_kc }}"
+        krt_purpose: membership
+        krt_rbac_config: "{{ cv_signin.rbacConfig | default('keycloak-sovereign-tenants-services', true) }}"
+        krt_url: "{{ cv_kc }}"
+        krt_token_fact: cv_members_token
 
     - name: Find the sign-in client
       ansible.builtin.uri:
         url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/clients?clientId={{ cv_client_id }}"
-        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        headers: {Authorization: "Bearer {{ cv_clients_token }}"}
         validate_certs: false
       register: _cv_client
 
@@ -78,7 +85,7 @@
       ansible.builtin.uri:
         url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/clients/{{ _cv_client.json[0].id }}/roles"
         method: POST
-        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        headers: {Authorization: "Bearer {{ cv_clients_token }}"}
         body_format: json
         body: {name: "{{ item }}", description: "Group {{ item }} on {{ cv_cluster }} (CloudVirt environments of {{ fab_entity }})"}
         validate_certs: false
@@ -90,7 +97,7 @@
     - name: Read the client roles
       ansible.builtin.uri:
         url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/clients/{{ _cv_client.json[0].id }}/roles/{{ item | urlencode }}"
-        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        headers: {Authorization: "Bearer {{ cv_clients_token }}"}
         validate_certs: false
       loop: "{{ cv_grants | selectattr('path') | map(attribute='group') | unique | list }}"
       register: _cv_roles
@@ -98,7 +105,7 @@
     - name: Find the Rbac groups
       ansible.builtin.uri:
         url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/group-by-path/{{ item.path | urlencode }}"
-        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        headers: {Authorization: "Bearer {{ cv_members_token }}"}
         validate_certs: false
       loop: "{{ cv_grants | selectattr('path') | list }}"
       loop_control:
@@ -109,7 +116,7 @@
       ansible.builtin.uri:
         url: "{{ cv_kc }}/admin/realms/{{ cv_signin.realm }}/groups/{{ item.json.id }}/role-mappings/clients/{{ _cv_client.json[0].id }}"
         method: POST
-        headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+        headers: {Authorization: "Bearer {{ cv_members_token }}"}
         body_format: json
         body: "{{ [(_cv_roles.results | selectattr('item', 'equalto', item.item.group) | first).json] }}"
         validate_certs: false

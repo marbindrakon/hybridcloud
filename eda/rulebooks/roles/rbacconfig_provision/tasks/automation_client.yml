@@ -1,0 +1,158 @@
+---
+# One realm automation client (loop var rac: {purpose, suffix, roles}): a confidential client with a service account
+# only (no browser or password sign-in) whose service account holds exactly rac.roles of realm-management; any other
+# realm-management role mapping is removed. Sets rbac_automation[rac.purpose] = {clientId, id, secret}.
+- name: Name the {{ rac.purpose }} client
+  ansible.builtin.set_fact:
+    _rac_client_id: "{{ rbac_config_cr_name }}{{ rac.suffix }}"
+    _rac_headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
+    _rac_base: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}"
+  no_log: true
+
+- name: Look up the {{ rac.purpose }} client
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients?clientId={{ _rac_client_id | urlencode }}"
+    headers: "{{ _rac_headers }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rac_lookup
+  retries: 5
+  delay: 5
+
+- name: Create the {{ rac.purpose }} client
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients"
+    method: POST
+    headers: "{{ _rac_headers | combine({'Content-Type': 'application/json'}) }}"
+    body_format: json
+    body:
+      clientId: "{{ _rac_client_id }}"
+      name: "{{ _rac_client_id }}"
+      description: "Realm automation ({{ rac.purpose }}) for RbacConfig {{ rbac_config_cr_name }}"
+      enabled: true
+      clientAuthenticatorType: client-secret
+      publicClient: false
+      serviceAccountsEnabled: true
+      standardFlowEnabled: false
+      implicitFlowEnabled: false
+      directAccessGrantsEnabled: false
+    validate_certs: false
+    status_code: [201, 409]
+  when: _rac_lookup.json | length == 0
+
+- name: Read the {{ rac.purpose }} client
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients?clientId={{ _rac_client_id | urlencode }}"
+    headers: "{{ _rac_headers }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rac_client
+  retries: 10
+  delay: 3
+  until: _rac_client.json | length > 0
+
+- name: Keep the {{ rac.purpose }} client to a service account
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients/{{ _rac_client.json[0].id }}"
+    method: PUT
+    headers: "{{ _rac_headers | combine({'Content-Type': 'application/json'}) }}"
+    body_format: json
+    body: >-
+      {{ _rac_client.json[0] | combine({'serviceAccountsEnabled': true, 'standardFlowEnabled': false,
+         'implicitFlowEnabled': false, 'directAccessGrantsEnabled': false, 'publicClient': false}) }}
+    validate_certs: false
+    status_code: [204]
+  when: >-
+    not (_rac_client.json[0].serviceAccountsEnabled | default(false) | bool)
+    or (_rac_client.json[0].standardFlowEnabled | default(false) | bool)
+    or (_rac_client.json[0].implicitFlowEnabled | default(false) | bool)
+    or (_rac_client.json[0].directAccessGrantsEnabled | default(false) | bool)
+    or (_rac_client.json[0].publicClient | default(false) | bool)
+  no_log: true
+
+- name: Get the {{ rac.purpose }} service account user
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients/{{ _rac_client.json[0].id }}/service-account-user"
+    headers: "{{ _rac_headers }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rac_sa
+  retries: 5
+  delay: 5
+
+- name: Read the realm-management client and its roles
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients?clientId=realm-management"
+    headers: "{{ _rac_headers }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rac_rm
+
+- name: Read the realm-management roles
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients/{{ _rac_rm.json[0].id }}/roles"
+    headers: "{{ _rac_headers }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rac_rm_roles
+
+- name: Read the service account's realm-management roles
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/users/{{ _rac_sa.json.id }}/role-mappings/clients/{{ _rac_rm.json[0].id }}"
+    headers: "{{ _rac_headers }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rac_mapped
+
+- name: Work out the role changes
+  ansible.builtin.set_fact:
+    _rac_add: "{{ _rac_rm_roles.json | selectattr('name', 'in', rac.roles) | rejectattr('name', 'in', _rac_mapped.json | map(attribute='name') | list) | list }}"
+    _rac_remove: "{{ _rac_mapped.json | rejectattr('name', 'in', rac.roles) | list }}"
+    _rac_missing: "{{ rac.roles | reject('in', _rac_rm_roles.json | map(attribute='name') | list) | list }}"
+
+- name: Require the realm-management roles
+  ansible.builtin.assert:
+    that: _rac_missing | length == 0
+    fail_msg: "Realm {{ plugin_rbac_keycloak_realm }} has no realm-management role {{ _rac_missing | join(', ') }}"
+    quiet: true
+
+- name: Grant the {{ rac.purpose }} roles
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/users/{{ _rac_sa.json.id }}/role-mappings/clients/{{ _rac_rm.json[0].id }}"
+    method: POST
+    headers: "{{ _rac_headers | combine({'Content-Type': 'application/json'}) }}"
+    body_format: json
+    body: "{{ _rac_add }}"
+    validate_certs: false
+    status_code: [204]
+  when: _rac_add | length > 0
+
+- name: Remove every other realm-management role
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/users/{{ _rac_sa.json.id }}/role-mappings/clients/{{ _rac_rm.json[0].id }}"
+    method: DELETE
+    headers: "{{ _rac_headers | combine({'Content-Type': 'application/json'}) }}"
+    body_format: json
+    body: "{{ _rac_remove }}"
+    validate_certs: false
+    status_code: [204]
+  when: _rac_remove | length > 0
+
+- name: Read the {{ rac.purpose }} client secret
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients/{{ _rac_client.json[0].id }}/client-secret"
+    headers: "{{ _rac_headers }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rac_secret
+  retries: 5
+  delay: 5
+  no_log: true
+
+- name: Record the {{ rac.purpose }} client
+  ansible.builtin.set_fact:
+    rbac_automation: >-
+      {{ rbac_automation | default({}) | combine({rac.purpose: {'clientId': _rac_client_id, 'id': _rac_client.json[0].id,
+         'secret': _rac_secret.json.value}}) }}
+    _rac_secret: {}
+  no_log: true

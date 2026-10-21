@@ -37,20 +37,27 @@
   ansible.builtin.set_fact:
     ssg_kc: "https://{{ _ssg_kc_route.resources[0].spec.host }}"
 
-- name: Keycloak admin credentials
-  ansible.builtin.include_tasks: obtain_keycloak_admin_credentials.yml
+# the tenant realm's own automation clients: clients (the sign-in client's roles) and membership (group mappings)
+- name: Realm token for the sign-in client's roles
+  ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
   vars:
-    keycloak_vault_path: rhbk-services-admin
+    krt_purpose: clients
+    krt_rbac_config: "{{ entity_signin_rbac_config | default('keycloak-sovereign-tenants-services') }}"
+    krt_url: "{{ ssg_kc }}"
+    krt_token_fact: ssg_clients_token
 
-- name: Keycloak admin token
-  ansible.builtin.include_tasks: obtain_keycloak_admin_token.yml
+- name: Realm token for the group mappings
+  ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
   vars:
-    keycloak_url: "{{ ssg_kc }}"
+    krt_purpose: membership
+    krt_rbac_config: "{{ entity_signin_rbac_config | default('keycloak-sovereign-tenants-services') }}"
+    krt_url: "{{ ssg_kc }}"
+    krt_token_fact: ssg_members_token
 
 - name: Find the sign-in client
   ansible.builtin.uri:
     url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/clients?clientId={{ ssg_client_id }}"
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_clients_token }}"}
     validate_certs: false
   register: _ssg_client
 
@@ -62,7 +69,7 @@
 - name: Read the client roles
   ansible.builtin.uri:
     url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/clients/{{ _ssg_client.json[0].id }}/roles?briefRepresentation=false"
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_clients_token }}"}
     validate_certs: false
   register: _ssg_roles_now
 
@@ -86,7 +93,7 @@
   ansible.builtin.uri:
     url: "{{ ssg_base }}"
     method: POST
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_clients_token }}"}
     body_format: json
     body:
       name: "{{ item }}"
@@ -100,7 +107,7 @@
   ansible.builtin.uri:
     url: "{{ ssg_base }}/{{ item | urlencode }}"
     method: PUT
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_clients_token }}"}
     body_format: json
     body:
       name: "{{ item }}"
@@ -125,7 +132,7 @@
 - name: Read the wanted client roles
   ansible.builtin.uri:
     url: "{{ ssg_base }}/{{ item | urlencode }}"
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_clients_token }}"}
     validate_certs: false
   loop: "{{ ssg_wanted_groups }}"
   register: _ssg_roles
@@ -133,7 +140,7 @@
 - name: Find the Rbac groups
   ansible.builtin.uri:
     url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/group-by-path/{{ item.path | regex_replace('^/+', '') | urlencode }}"
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_members_token }}"}
     validate_certs: false
   loop: "{{ ssg_wanted }}"
   loop_control:
@@ -144,7 +151,7 @@
   ansible.builtin.uri:
     url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/groups/{{ item.json.id }}/role-mappings/clients/{{ _ssg_client.json[0].id }}"
     method: POST
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_members_token }}"}
     body_format: json
     body: "{{ [(_ssg_roles.results | selectattr('item', 'equalto', item.item.group) | first).json] }}"
     validate_certs: false
@@ -171,7 +178,7 @@
   ansible.builtin.uri:
     url: "{{ ssg_base }}/{{ item.key | urlencode }}"
     method: PUT
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_clients_token }}"}
     body_format: json
     body:
       name: "{{ item.key }}"
@@ -187,7 +194,7 @@
   ansible.builtin.uri:
     url: "{{ ssg_base }}/{{ item.key | urlencode }}"
     method: DELETE
-    headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+    headers: {Authorization: "Bearer {{ ssg_clients_token }}"}
     validate_certs: false
     status_code: [204, 404]
   loop: "{{ ssg_released | rejectattr('value.owners') | list }}"

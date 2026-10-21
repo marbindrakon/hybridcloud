@@ -3,3 +3,13 @@ plugin_rbac_operator_namespace: sovereign-cloud-plugins
 plugin_rbac_keycloak_realm: sovereign-tenants
 plugin_rbac_keycloak_url_default: "https://rhbk-services.apps.services.shc.signal9.gg"
 eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
+# Realm automation clients of an RbacConfig (tasks/automation_client.yml): purpose, client id suffix and the exact
+# realm-management roles of its service account. Credentials in central Vault <keycloak_automation_vault_prefix>/<name>.
+plugin_rbac_automation_clients:
+  - purpose: membership
+    suffix: ""
+    roles: [manage-users, view-users, query-users, query-groups, query-clients]
+  - purpose: clients
+    suffix: "-clients"
+    roles: [manage-clients, view-clients, query-clients]
+keycloak_automation_vault_prefix: keycloak-automation

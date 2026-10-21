@@ -115,24 +115,15 @@
       ansible.builtin.set_fact:
         svc_keycloak_url_http_headers: {}
 
-    - name: Load Keycloak admin credentials
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+    # the tenant realm's membership automation client (groups), published by the RbacConfig job
+    - name: Obtain the realm token for the access groups
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
       vars:
-        keycloak_vault_path: "{{ rbac_cfg_spec.secret | default('rhbk-services-admin') }}"
-
-    - name: Obtain Keycloak admin access token
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
-      vars:
-        keycloak_url: "{{ svc_keycloak_url }}"
-        keycloak_url_http_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
-        keycloak_token_output_fact: svc_access_token
-
-    - name: Refresh Keycloak admin token before group lookups
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
-      vars:
-        keycloak_url: "{{ svc_keycloak_url }}"
-        keycloak_url_http_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
-        keycloak_token_output_fact: svc_access_token
+        krt_purpose: membership
+        krt_rbac_config: "{{ rbac_cfg_lookup.resources[0].metadata.name | default(rbac_spec.config | default('keycloak-sovereign-tenants-services', true), true) }}"
+        krt_url: "{{ svc_keycloak_url }}"
+        krt_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
+        krt_token_fact: svc_access_token
 
     - name: Build Keycloak group path segments
       ansible.builtin.set_fact:
@@ -183,12 +174,14 @@
             else parent_group_refetch.json.id
           }}
 
-    - name: Refresh Keycloak admin token before RBAC subgroup lookup
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
+    - name: Refresh the realm token before the access group lookup
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
       vars:
-        keycloak_url: "{{ svc_keycloak_url }}"
-        keycloak_url_http_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
-        keycloak_token_output_fact: svc_access_token
+        krt_purpose: membership
+        krt_rbac_config: "{{ rbac_cfg_lookup.resources[0].metadata.name | default(rbac_spec.config | default('keycloak-sovereign-tenants-services', true), true) }}"
+        krt_url: "{{ svc_keycloak_url }}"
+        krt_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
+        krt_token_fact: svc_access_token
 
     - name: Look up fully-qualified RBAC subgroup
       ansible.builtin.uri:

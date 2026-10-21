@@ -144,22 +144,20 @@
                 label_selectors: ["app=keycloak"]
               register: _cvd_kc_route
 
-            - name: Keycloak admin credentials
-              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+            - name: Realm token for the sign-in client's roles
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
               vars:
-                keycloak_vault_path: rhbk-services-admin
-
-            - name: Keycloak admin token
-              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
-              vars:
-                keycloak_url: "https://{{ _cvd_kc_route.resources[0].spec.host }}"
+                krt_purpose: clients
+                krt_rbac_config: "{{ fab_real.openshift.tenantSignIn.rbacConfig | default('keycloak-sovereign-tenants-services', true) }}"
+                krt_url: "https://{{ _cvd_kc_route.resources[0].spec.host }}"
+                krt_token_fact: cvd_clients_token
 
             - name: Find the sign-in client
               ansible.builtin.uri:
                 url: >-
                   https://{{ _cvd_kc_route.resources[0].spec.host }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
                   }}/clients?clientId={{ fab_st.access.signInClient }}
-                headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+                headers: {Authorization: "Bearer {{ cvd_clients_token }}"}
                 validate_certs: false
               register: _cvd_client
 
@@ -169,7 +167,7 @@
                   https://{{ _cvd_kc_route.resources[0].spec.host }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
                   }}/clients/{{ _cvd_client.json[0].id }}/roles/{{ item | urlencode }}
                 method: DELETE
-                headers: {Authorization: "Bearer {{ keycloak_admin_token }}"}
+                headers: {Authorization: "Bearer {{ cvd_clients_token }}"}
                 validate_certs: false
                 status_code: [204, 404]
               loop: "{{ cvd_drop }}"

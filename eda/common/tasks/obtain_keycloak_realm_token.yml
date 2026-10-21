@@ -1,0 +1,77 @@
+---
+# Access token of a tenant realm's own automation client (client-credentials grant), for the jobs that manage a
+# tenant realm. The master realm admin stays with the bootstrap Keycloak jobs and the RbacConfig jobs that publish
+# these clients (rbacconfig_provision: central Vault keycloak-automation/<rbacconfig>, keys membershipClientId,
+# membershipClientSecret, clientsClientId, clientsClientSecret, realm, url).
+#
+# Inputs:
+#   krt_purpose      membership (users, groups, group role mappings) | clients (clients, client roles, mappers)
+#   krt_rbac_config  the RbacConfig whose realm is managed (default keycloak-sovereign-tenants-services)
+#   krt_url          Keycloak base URL to ask (default the published url); use the URL the caller sends its admin
+#                    requests to, the token's issuer must match it
+#   krt_token_fact   optional: also set the token under this fact name
+#   krt_headers      optional extra HTTP headers
+# Sets: keycloak_realm_token, keycloak_realm_name (and krt_token_fact when given).
+- name: Require a known purpose
+  ansible.builtin.assert:
+    that: krt_purpose | default('') in ['membership', 'clients']
+    fail_msg: "obtain_keycloak_realm_token.yml: krt_purpose must be membership or clients"
+    quiet: true
+
+- name: Read the realm automation credentials
+  ansible.builtin.include_tasks: vault_kv_read.yml
+  vars:
+    vault_kv_path: "{{ keycloak_automation_vault_prefix | default('keycloak-automation') }}/{{ krt_rbac_config | default('keycloak-sovereign-tenants-services', true) }}"
+    vault_kv_read_missing_ok: true
+
+- name: Keep the credentials of this purpose
+  ansible.builtin.set_fact:
+    _krt_client_id: "{{ vault_kv_data[krt_purpose ~ 'ClientId'] | default('') }}"
+    _krt_client_secret: "{{ vault_kv_data[krt_purpose ~ 'ClientSecret'] | default('') }}"
+    keycloak_realm_name: "{{ vault_kv_data.realm | default('') }}"
+    _krt_url: "{{ krt_url | default(vault_kv_data.url | default(''), true) | regex_replace('/$', '') }}"
+    vault_kv_data: {}
+  no_log: true
+
+- name: Require published automation clients
+  ansible.builtin.assert:
+    that:
+      - _krt_client_id | length > 0
+      - _krt_client_secret | length > 0
+      - keycloak_realm_name | length > 0
+      - _krt_url | length > 0
+    fail_msg: >-
+      RbacConfig {{ krt_rbac_config | default('keycloak-sovereign-tenants-services', true) }} has not published its
+      automation clients yet; reconcile it first.
+    quiet: true
+
+- name: Request the realm token
+  ansible.builtin.uri:
+    url: "{{ _krt_url }}/realms/{{ keycloak_realm_name }}/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: client_credentials
+      client_id: "{{ _krt_client_id }}"
+      client_secret: "{{ _krt_client_secret }}"
+    headers: "{{ krt_headers | default({}) }}"
+    validate_certs: false
+    status_code: [200]
+  register: _krt_resp
+  retries: 5
+  delay: 5
+  until: _krt_resp is succeeded
+  no_log: true
+
+- name: Expose the realm token
+  ansible.builtin.set_fact:
+    keycloak_realm_token: "{{ _krt_resp.json.access_token }}"
+    _krt_client_secret: ""
+    _krt_resp: {}
+  no_log: true
+
+- name: Expose the realm token under the caller's fact name
+  ansible.builtin.set_fact:
+    "{{ krt_token_fact }}": "{{ keycloak_realm_token }}"
+  when: krt_token_fact | default('') | length > 0
+  no_log: true

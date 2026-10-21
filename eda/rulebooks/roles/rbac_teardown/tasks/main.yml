@@ -103,17 +103,14 @@
                  | default(plugin_rbac_keycloak_url_default, true) }}
           when: kc_route_final.resources | length == 0
 
-        - name: Load Keycloak admin credentials
-          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
+        - name: Obtain the realm token for the access group removal
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
           vars:
-            keycloak_vault_path: "{{ rbac_cfg_final.resources[0].spec.secret | default('rhbk-services-admin') }}"
-
-        - name: Obtain Keycloak admin access token
-          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_token.yml"
-          vars:
-            keycloak_url: "{{ svc_keycloak_url }}"
-            keycloak_url_http_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
-            keycloak_token_output_fact: svc_access_token_final
+            krt_purpose: membership
+            krt_rbac_config: "{{ rbac_cfg_final.resources[0].metadata.name | default(rbac_spec.config | default('keycloak-sovereign-tenants-services', true), true) }}"
+            krt_url: "{{ svc_keycloak_url }}"
+            krt_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
+            krt_token_fact: svc_access_token_final
 
         - name: Build Keycloak path queries for subgroup removal
           ansible.builtin.set_fact:
