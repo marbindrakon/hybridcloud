@@ -2,8 +2,8 @@ apiVersion: v2
 name: tenancy-dashboard
 description: Sovereign Cloud Tenancy Dashboard - per-entity RBAC management UI for OpenShift
 type: application
-version: 1.1.13-shc.2
-appVersion: "4.1.5"
+version: 1.1.13-shc.3
+appVersion: "5.2.0"
 keywords:
   - openshift
   - dashboard
