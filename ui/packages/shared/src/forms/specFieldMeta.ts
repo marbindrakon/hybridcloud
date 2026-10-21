@@ -69,6 +69,13 @@ export interface SpecFieldMeta {
   clearWhenHidden?: boolean | string;
   /** Platform-only field (e.g. a Vault path): not shown on tenant pages */
   adminOnly?: boolean;
+  /**
+   * Access list of the object itself (Team/Project): only users allowed to delete the object may change it
+   * (admission rule); for others the field is read-only.
+   */
+  accessList?: boolean;
+  /** Changing it needs namespace-wide update on the kind (not a grant on this one object). */
+  namespaceEditOnly?: boolean;
   /** namedRef: the key inside the reference object (default name) */
   refKey?: string;
   /** number bounds */
@@ -147,18 +154,18 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'features.istio', labelKey: 'fields.istio', widget: 'boolean' },
       { path: 'features.argo', labelKey: 'fields.argo', widget: 'boolean' },
       // the interim form of a role assignment on the team setup (OD15)
-      { path: 'teamAdmin', labelKey: 'form.roles.teamAdmins', widget: 'rbacRefList', helpKey: 'form.roles.teamAdminsHelp' },
-      { path: 'teamMemberRbac', labelKey: 'form.roles.teamMembers', widget: 'rbacRefList', helpKey: 'form.roles.teamMembersHelp' },
-      { path: 'teamViewerRbac', labelKey: 'form.roles.teamViewers', widget: 'rbacRefList', helpKey: 'form.roles.teamViewersHelp' },
+      { path: 'teamAdmin', accessList: true, labelKey: 'form.roles.teamAdmins', widget: 'rbacRefList', helpKey: 'form.roles.teamAdminsHelp' },
+      { path: 'teamMemberRbac', accessList: true, labelKey: 'form.roles.teamMembers', widget: 'rbacRefList', helpKey: 'form.roles.teamMembersHelp' },
+      { path: 'teamViewerRbac', accessList: true, labelKey: 'form.roles.teamViewers', widget: 'rbacRefList', helpKey: 'form.roles.teamViewersHelp' },
     ],
   },
   Project: {
     fields: [
       { path: 'displayName', labelKey: 'fields.displayName', widget: 'text' },
       { path: 'description', labelKey: 'fields.description', widget: 'textarea' },
-      { path: 'projectAdmin', labelKey: 'form.roles.projectAdmins', widget: 'rbacRefList', helpKey: 'form.roles.projectAdminsHelp' },
-      { path: 'projectDeveloperRbac', labelKey: 'form.roles.projectDevelopers', widget: 'rbacRefList', helpKey: 'form.roles.projectDevelopersHelp' },
-      { path: 'projectViewerRbac', labelKey: 'form.roles.projectViewers', widget: 'rbacRefList', helpKey: 'form.roles.projectViewersHelp' },
+      { path: 'projectAdmin', accessList: true, labelKey: 'form.roles.projectAdmins', widget: 'rbacRefList', helpKey: 'form.roles.projectAdminsHelp' },
+      { path: 'projectDeveloperRbac', accessList: true, labelKey: 'form.roles.projectDevelopers', widget: 'rbacRefList', helpKey: 'form.roles.projectDevelopersHelp' },
+      { path: 'projectViewerRbac', accessList: true, labelKey: 'form.roles.projectViewers', widget: 'rbacRefList', helpKey: 'form.roles.projectViewersHelp' },
     ],
   },
   Assignment: {
@@ -166,10 +173,10 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'team', labelKey: 'kindsOne.Team', widget: 'refName', refKind: 'Team', immutable: true },
       { path: 'projects', labelKey: 'fields.projects', widget: 'stringList' },
       { path: 'openshift', labelKey: 'kindsOne.PlatformOpenshift', widget: 'refName', refKind: 'PlatformOpenshift', omitWhenEmpty: true },
-      { path: 'toolRbac.assignmentAdmin', labelKey: 'form.roles.assignmentAdmin', widget: 'rbacRef', omitWhenEmpty: true },
-      { path: 'toolRbac.assignmentDeveloper', labelKey: 'form.roles.assignmentDeveloper', widget: 'rbacRef', omitWhenEmpty: true },
-      { path: 'toolRbac.assignmentViewer', labelKey: 'form.roles.assignmentViewer', widget: 'rbacRef', omitWhenEmpty: true },
-      { path: 'toolRbac.assignmentOps', labelKey: 'form.roles.assignmentOps', widget: 'rbacRef', omitWhenEmpty: true },
+      { path: 'toolRbac.assignmentAdmin', labelKey: 'form.roles.assignmentAdmin', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
+      { path: 'toolRbac.assignmentDeveloper', labelKey: 'form.roles.assignmentDeveloper', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
+      { path: 'toolRbac.assignmentViewer', labelKey: 'form.roles.assignmentViewer', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
+      { path: 'toolRbac.assignmentOps', labelKey: 'form.roles.assignmentOps', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
     ],
   },
   PlatformOpenshift: {

@@ -384,7 +384,7 @@
     "accessInterimNote": "These fields are the interim form of a role assignment on this object; they will appear as role assignments when access management arrives.",
     "roles": {
       "teamAdmins": "Team admins",
-      "teamAdminsHelp": "Edit this team setup and its app projects and cluster assignments.",
+      "teamAdminsHelp": "Edit this team setup and its app projects; view its cluster assignments.",
       "teamMembers": "Team members",
       "teamMembersHelp": "View this team setup; edit its app projects.",
       "teamViewers": "Team viewers",
@@ -395,6 +395,9 @@
       "projectDevelopersHelp": "Deploy and change workloads in this app project.",
       "projectViewers": "Project viewers",
       "projectViewersHelp": "View this app project.",
+      "accessListRule": "Only people allowed to delete this object can change this list.",
+      "accessListLocked": "You can view this list; only people allowed to delete this object can change it.",
+      "assignmentAccessLocked": "You can view these access groups; changing them needs edit rights on all cluster assignments of this tenant.",
       "assignmentAdmin": "Assignment admins",
       "assignmentDeveloper": "Assignment developers",
       "assignmentViewer": "Assignment viewers",

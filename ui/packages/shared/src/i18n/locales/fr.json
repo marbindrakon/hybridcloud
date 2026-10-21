@@ -384,7 +384,7 @@
     "accessInterimNote": "Ces champs sont la forme provisoire d'une attribution de rôle sur cet objet ; ils apparaîtront comme attributions de rôle quand la gestion des accès arrivera.",
     "roles": {
       "teamAdmins": "Administrateurs de l'équipe",
-      "teamAdminsHelp": "Modifier cette équipe, ses projets applicatifs et ses affectations de cluster.",
+      "teamAdminsHelp": "Modifier cette équipe et ses projets applicatifs ; voir ses affectations de cluster.",
       "teamMembers": "Membres de l'équipe",
       "teamMembersHelp": "Voir cette équipe ; modifier ses projets applicatifs.",
       "teamViewers": "Observateurs de l'équipe",
@@ -395,6 +395,9 @@
       "projectDevelopersHelp": "Déployer et modifier les charges de travail de ce projet applicatif.",
       "projectViewers": "Observateurs du projet",
       "projectViewersHelp": "Voir ce projet applicatif.",
+      "accessListRule": "Seules les personnes autorisées à supprimer cet objet peuvent modifier cette liste.",
+      "accessListLocked": "Vous pouvez voir cette liste ; seules les personnes autorisées à supprimer cet objet peuvent la modifier.",
+      "assignmentAccessLocked": "Vous pouvez voir ces groupes d'accès ; les modifier demande le droit de modifier toutes les affectations de cluster de ce locataire.",
       "assignmentAdmin": "Administrateurs de l'affectation",
       "assignmentDeveloper": "Développeurs de l'affectation",
       "assignmentViewer": "Observateurs de l'affectation",

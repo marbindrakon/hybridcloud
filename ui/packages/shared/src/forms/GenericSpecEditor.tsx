@@ -13,10 +13,11 @@ import {
 import { updateDashboardResource, useK8sResourceList } from '../hooks/k8s';
 import { RbacMultiSelect } from '../components/RbacMultiSelect';
 import { AllowedSitesSelect } from '../components/AllowedSitesSelect';
+import { selfSubjectAccessReview } from '../access/ssar';
 import { errorText } from '../access/errorText';
 import { causeLines, fieldErrorsFrom } from './apiErrors';
 import { useServerCheckWith } from './useServerCheck';
-import { HybridSovereignKind, K8sResource } from '../types';
+import { HybridSovereignKind, K8sResource, KIND_PLURALS } from '../types';
 import { useTranslation } from '../i18n';
 import { ListTextArea } from '../components/ListTextArea';
 import { ObjectListEditor, type ObjectListColumn, type ObjectListRow } from '../components/ObjectListEditor';
@@ -240,6 +241,33 @@ export function GenericSpecEditor({
     () => (meta?.fields ?? []).filter((f) => audience === 'admin' || !f.adminOnly),
     [meta, audience],
   );
+
+  // Access lists: only users allowed to delete this object may change them (admission rule); the Assignment's
+  // access groups need namespace-wide edit (a team admin views them). Unknown counts as not allowed.
+  const objectName = item.metadata.name;
+  const wantsDeleteCheck = !readOnly && allFields.some((f) => f.accessList);
+  const wantsNsEditCheck = !readOnly && allFields.some((f) => f.namespaceEditOnly);
+  const [mayDelete, setMayDelete] = useState<boolean | undefined>(undefined);
+  const [mayEditAll, setMayEditAll] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    let off = false;
+    const resource = KIND_PLURALS[kind];
+    if (wantsDeleteCheck) {
+      void selfSubjectAccessReview({ namespace, resource, name: objectName, verb: 'delete' }).then((ok) => {
+        if (!off) setMayDelete(ok);
+      });
+    }
+    if (wantsNsEditCheck) {
+      void selfSubjectAccessReview({ namespace, resource, verb: 'update' }).then((ok) => {
+        if (!off) setMayEditAll(ok);
+      });
+    }
+    return () => {
+      off = true;
+    };
+  }, [kind, namespace, objectName, wantsDeleteCheck, wantsNsEditCheck]);
+  const accessLocked = (field: SpecFieldMeta): boolean =>
+    (!!field.accessList && mayDelete !== true) || (!!field.namespaceEditOnly && mayEditAll !== true);
   const fields = useMemo(
     () => allFields.filter((f) => isSpecFieldVisible(f, draft)),
     [allFields, draft],
@@ -251,6 +279,7 @@ export function GenericSpecEditor({
 
   const isLocked = (field: SpecFieldMeta): boolean => {
     if (readOnly || field.immutable) return true;
+    if (accessLocked(field)) return true;
     if (field.immutableWhenSet) {
       const before = getAtPath(original, field.path);
       return before != null && before !== '';
@@ -340,14 +369,19 @@ export function GenericSpecEditor({
         const label = t(field.labelKey);
         const raw = getAtPath(draft, field.path);
         const locked = isLocked(field);
+        const base = field.helpKey ? t(field.helpKey) : undefined;
         const help =
           field.immutable && !readOnly
             ? t('form.immutableHint')
             : field.immutableWhenSet && locked && !readOnly
               ? t('form.immutableOnceSetHint')
-              : field.helpKey
-                ? t(field.helpKey)
-                : undefined;
+              : field.accessList
+                ? [base, !readOnly && accessLocked(field) ? t('form.roles.accessListLocked') : t('form.roles.accessListRule')]
+                    .filter(Boolean)
+                    .join(' ')
+                : field.namespaceEditOnly && !readOnly && accessLocked(field)
+                  ? [base, t('form.roles.assignmentAccessLocked')].filter(Boolean).join(' ')
+                  : base;
 
         const hint = help ? <p className="sc-text-muted" style={{ marginTop: '0.25rem' }}>{help}</p> : null;
 
@@ -430,6 +464,7 @@ export function GenericSpecEditor({
               options={rbacOptions}
               helperText={help}
               error={fieldErrors.byField[field.path]}
+              isDisabled={locked}
             />
           );
         }

@@ -972,7 +972,7 @@ export function CreateResourceForm({
                   <RbacMultiSelect
                     id="team-rbac-admin"
                     label={t('form.roles.teamAdmins')}
-                    helperText={t('form.roles.teamAdminsHelp')}
+                    helperText={`${t('form.roles.teamAdminsHelp')} ${t('form.roles.accessListRule')}`}
                     value={teamAdminRbac}
                     onChange={setTeamAdminRbac}
                     options={names(rbacs.items)}
@@ -980,7 +980,7 @@ export function CreateResourceForm({
                   <RbacMultiSelect
                     id="team-rbac-member"
                     label={t('form.roles.teamMembers')}
-                    helperText={t('form.roles.teamMembersHelp')}
+                    helperText={`${t('form.roles.teamMembersHelp')} ${t('form.roles.accessListRule')}`}
                     value={teamMemberRbac}
                     onChange={setTeamMemberRbac}
                     options={names(rbacs.items)}
@@ -988,7 +988,7 @@ export function CreateResourceForm({
                   <RbacMultiSelect
                     id="team-rbac-viewer"
                     label={t('form.roles.teamViewers')}
-                    helperText={t('form.roles.teamViewersHelp')}
+                    helperText={`${t('form.roles.teamViewersHelp')} ${t('form.roles.accessListRule')}`}
                     value={teamViewerRbac}
                     onChange={setTeamViewerRbac}
                     options={names(rbacs.items)}
@@ -1005,7 +1005,7 @@ export function CreateResourceForm({
                   <RbacMultiSelect
                     id="project-rbac-admin"
                     label={t('form.roles.projectAdmins')}
-                    helperText={t('form.roles.projectAdminsHelp')}
+                    helperText={`${t('form.roles.projectAdminsHelp')} ${t('form.roles.accessListRule')}`}
                     value={projectAdminRbac}
                     onChange={setProjectAdminRbac}
                     options={names(rbacs.items)}
@@ -1013,7 +1013,7 @@ export function CreateResourceForm({
                   <RbacMultiSelect
                     id="project-rbac-developer"
                     label={t('form.roles.projectDevelopers')}
-                    helperText={t('form.roles.projectDevelopersHelp')}
+                    helperText={`${t('form.roles.projectDevelopersHelp')} ${t('form.roles.accessListRule')}`}
                     value={projectDeveloperRbac}
                     onChange={setProjectDeveloperRbac}
                     options={names(rbacs.items)}
@@ -1021,7 +1021,7 @@ export function CreateResourceForm({
                   <RbacMultiSelect
                     id="project-rbac-viewer"
                     label={t('form.roles.projectViewers')}
-                    helperText={t('form.roles.projectViewersHelp')}
+                    helperText={`${t('form.roles.projectViewersHelp')} ${t('form.roles.accessListRule')}`}
                     value={projectViewerRbac}
                     onChange={setProjectViewerRbac}
                     options={names(rbacs.items)}
