@@ -176,7 +176,11 @@ const UPDATE_METHOD: Partial<Record<HybridSovereignKind, 'PUT' | 'PATCH'>> = {
 
 const RECONCILE_ANNOTATION = 'ansible.sdk.operatorframework.io/reconcileNow';
 
-/** Force reconcile by setting the operator reconcileNow annotation */
+/**
+ * Retry now: write a new value to the operator's reconcileNow annotation. The operator handles each
+ * distinct value once (status.lastHandledReconcileRequest) and keeps the annotation, so every request
+ * writes a fresh timestamp (the dashboard server substitutes its own).
+ */
 export async function forceReconcile(
   kind: HybridSovereignKind,
   name: string,
@@ -193,7 +197,7 @@ export async function forceReconcile(
         name,
         namespace,
         annotation: RECONCILE_ANNOTATION,
-        value: 'true',
+        value: new Date().toISOString(),
       }),
     });
   }
