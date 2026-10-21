@@ -4,3 +4,5 @@ keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants
 aap_controller_url: "{{ lookup('env', 'AAP_CONTROLLER_URL') }}"
 aap_gateway_internal_url: "{{ lookup('env', 'AAP_GATEWAY_INTERNAL_URL') | default('http://sovereign-aap.aap.svc:80', true) }}"
 keycloak_external_url: "{{ lookup('env', 'KEYCLOAK_EXTERNAL_URL') }}"
+# the sign-in claim that carries the user's groups: the claim name of the shared Keycloak groups mapper
+aap_oidc_groups_claim: "{{ (lookup('file', role_path ~ '/../../../common/vars/keycloak_group_mapper.yml') | from_yaml).keycloak_group_mapper.config['claim.name'] }}"

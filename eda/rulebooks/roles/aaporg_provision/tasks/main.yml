@@ -271,6 +271,29 @@
       ansible.builtin.set_fact:
         aap_auth_id: "{{ _aap_config.resources[0].status.authMethodId | default('') }}"
 
+    # the team maps match on the authenticator's groups claim; any other claim name grants nobody anything
+    - name: Read the sign-in authenticator
+      ansible.builtin.uri:
+        url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticators/{{ aap_auth_id }}/"
+        method: GET
+        user: "{{ aap_username }}"
+        password: "{{ aap_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 404]
+      register: _aaporg_authenticator
+      when: aap_auth_id | length > 0
+
+    - name: Load the groups claim the sign-in clients send
+      ansible.builtin.include_vars:
+        file: "{{ role_path }}/../../../common/vars/keycloak_group_mapper.yml"
+
+    - name: Check the authenticator's groups claim
+      ansible.builtin.set_fact:
+        aaporg_groups_claim: >-
+          {{ ((_aaporg_authenticator.json | default({}, true)).configuration | default({}, true)).GROUPS_CLAIM | default('', true) }}
+        aaporg_groups_claim_wanted: "{{ keycloak_group_mapper.config['claim.name'] }}"
+
     - name: Configure teams, OIDC mappings, and role grants
       ansible.builtin.include_tasks: teams_and_roles.yml
 
@@ -289,7 +312,13 @@
         tos_fields: [spec.aapAdminRbac, spec.aapJobExecutorRbac, spec.aapViewerRbac]
         tos_rbacs: "{{ aaporg_granted_rbacs }}"
         tos_mapping_failed: >-
-          {{ (aaporg_mapping_failed | default(false) | bool) or aap_auth_id | length == 0 or gw_org_id | int == 0 }}
+          {{ (aaporg_mapping_failed | default(false) | bool) or aap_auth_id | length == 0 or gw_org_id | int == 0
+             or aaporg_groups_claim != aaporg_groups_claim_wanted }}
+        tos_mapping_message: >-
+          {{ ('The automation platform reads groups from the sign-in claim "' ~ aaporg_groups_claim ~ '", but the sign-in client sends "'
+              ~ aaporg_groups_claim_wanted ~ '", so no member joins a team. A platform administrator reconciles the AAPConfig '
+              ~ aaporg_spec.aapConfig ~ '; then reconcile this AAPOrg.')
+             if (aap_auth_id | length > 0 and aaporg_groups_claim != aaporg_groups_claim_wanted) else '' }}
         tos_client: "{{ _aap_config.resources[0].status.keycloakClientId | default('') }}"
 
     - name: Build team mapping summary string
