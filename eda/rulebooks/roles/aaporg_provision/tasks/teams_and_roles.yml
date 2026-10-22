@@ -120,6 +120,8 @@
           has_or: ["{{ item.group }}"]
       organization: "{{ org_name }}"
       team: "{{ item.team }}"
+      # the gateway requires the team role a map grants (400 "You must specify a role with the selected map type")
+      role: "{{ aaporg_team_map_role | default('Team Member') }}"
       order: "{{ item.order }}"
       revoke: true
     validate_certs: false
