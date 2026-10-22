@@ -273,6 +273,10 @@
                       secretKeyRef:
                         name: amq-producer-credentials
                         key: sasl_mechanism
+                  # Kafka protocol version of the event producer, the same as the primary operator's
+                  # (empty: the image default; "auto": probe the brokers).
+                  - name: KAFKA_API_VERSION
+                    value: "{{ lookup('env', 'KAFKA_API_VERSION') | default('', true) }}"
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:

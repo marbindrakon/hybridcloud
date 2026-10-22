@@ -78,6 +78,10 @@ spec:
                 secretKeyRef:
                   name: amq-producer-credentials
                   key: sasl_mechanism
+            {{- with .Values.amqKafka.apiVersion }}
+            - name: KAFKA_API_VERSION
+              value: {{ . | toString | quote }}
+            {{- end }}
             {{- end }}
           securityContext:
             allowPrivilegeEscalation: false

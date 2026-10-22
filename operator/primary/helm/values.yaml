@@ -31,6 +31,10 @@ replicas: 2
 
 amqKafka:
   enabled: true
+  # Kafka protocol version the operators' event producer speaks, for the primary operator and every tenant
+  # namespace operator. Empty: the version built into the operator image. "auto": probe the brokers first.
+  # Otherwise a dotted version such as "2.6.0".
+  apiVersion: ""
   vaultPath: amq-producer
   secretStoreName: vault-backend
   secretStoreKind: ClusterSecretStore

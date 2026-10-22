@@ -81,5 +81,26 @@ class ImagePinTest(unittest.TestCase):
             self.assertFalse(re.search(r"kafka-python(\s|$)", text), path + " installs kafka-python unpinned")
 
 
+class ApiVersionPassThroughTest(unittest.TestCase):
+    """The protocol version is a chart value: the primary Deployment sets it, the tenant Deployment copies it."""
+
+    def read(self, *parts):
+        with open(os.path.join(ROOT, *parts)) as f:
+            return f.read()
+
+    def test_primary_deployment_sets_it_from_values(self):
+        text = self.read("operator", "primary", "helm", "templates", "deployment.yaml")
+        self.assertRegex(text, r"with \.Values\.amqKafka\.apiVersion\b[\s\S]*?name: KAFKA_API_VERSION")
+        self.assertRegex(self.read("operator", "primary", "helm", "values.yaml"), r"(?m)^  apiVersion: \"\"$")
+
+    def test_namespace_operator_deployment_copies_it(self):
+        text = self.read("operator", "primary", "roles", "entity", "tasks", "deploy_namespace_operator.yml")
+        self.assertRegex(text, r"name: KAFKA_API_VERSION\s+value: \"\{\{ lookup\('env', 'KAFKA_API_VERSION'\)")
+
+    def test_publish_task_reads_it(self):
+        text = self.read("operator", "roles", "_common", "tasks", "amq_publish.yml")
+        self.assertIn("KAFKA_API_VERSION: \"{{ lookup('env', 'KAFKA_API_VERSION')", text)
+
+
 if __name__ == "__main__":
     unittest.main()
