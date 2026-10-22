@@ -4177,6 +4177,10 @@ sovereignJobs:
           value: "vault-init-secrets"
         - name: VAULT_SERVICES_ADDR
           value: "https://vault-services.apps.services.shc.signal9.gg"
+        # the central Vault UI's external URL: its OIDC callback is added to the sovereign-admin role's allowed
+        # redirect URIs (without it no OIDC sign-in to central Vault is possible)
+        - name: VAULT_CENTRAL_URL
+          value: "https://vault-central.apps.central.shc.signal9.gg"
         # External HTTPS URL — Vault needs this to match the issuer in OIDC discovery doc.
         # central_ingress_ca_pem is fetched in pre_tasks and passed to the Vault OIDC config.
         - name: KEYCLOAK_CENTRAL_URL
@@ -5447,6 +5451,7 @@ hybridsovereignPrimaryOperator:
         spec:
           type: openstack
           displayName: Atuin
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/atuin}
           openstack:
             region: ATUIN
@@ -5460,6 +5465,7 @@ hybridsovereignPrimaryOperator:
         spec:
           type: openstack
           displayName: RHOSO bare metal (FR6, EVPN)
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/rhoso-bm}
           openstack:
             region: regionOne
@@ -5473,6 +5479,7 @@ hybridsovereignPrimaryOperator:
         spec:
           type: openshift
           displayName: iaas1 (OpenShift Virtualization)
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/iaas1}
           openshift:
             clusterRef: iaas1
@@ -5483,6 +5490,7 @@ hybridsovereignPrimaryOperator:
         spec:
           type: openshift
           displayName: edge1 (OpenShift Virtualization, compact)
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/edge1}
           openshift:
             clusterRef: edge1
@@ -5495,6 +5503,7 @@ hybridsovereignPrimaryOperator:
         spec:
           type: aws
           displayName: AWS us-east-2
+          location: US East (Ohio)
           aws: {region: us-east-2}
     # P7.3 (P7-PLAN §12.3, H2 = gateway as PE): the fabric and a gateway per EVPN site on the BGW blades bgw-1/2
     # (blades 5/8). The fabric is realized from P7.3.4 (ledger + root instance on both blades), the gateways from
