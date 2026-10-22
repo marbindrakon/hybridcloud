@@ -189,8 +189,19 @@ test('a tenant lists its objects tier by tier, then its namespace; protected obj
   assert.deepEqual(p.sections[0].entries.map((e) => `${e.detail}:${e.kind}/${e.name}`), ['1:NetworkPlacement/n1-vm', '5:QuayOrg/registry', '7:Rbac/admins']);
   assert.ok(p.sections[0].entries.every((e) => e.noLink));
   assert.deepEqual(p.sections[1].entries, [{ name: 'entity-x' }]);
-  assert.deepEqual(p.sections[3].entries.map((e) => `${e.detail}:${e.kind}/${e.name}`), ['3:CloudVirt/vm']);
+  assert.deepEqual(p.sections[3].entries.map((e) => `${e.detail}:${e.kind}/${e.name}`), ['1:CloudVirt/vm']);
   assert.equal(p.realized, true);
+});
+
+test('a VM environment goes in the same tier as its placements, before the clusters and the other environments', () => {
+  // a placement on a VM environment waits until the environment's namespaces are gone; the environment's own
+  // delete has no guard, so it must not wait for a later tier
+  const tierOf = (k) => m.TENANT_TEARDOWN_TIERS.findIndex((t) => t.includes(k));
+  assert.equal(tierOf('CloudVirt'), tierOf('NetworkPlacement'));
+  assert.ok(tierOf('CloudVirt') < tierOf('PlatformOpenshift'));
+  for (const k of ['CloudOSO', 'CloudAWS', 'CloudGCP']) assert.ok(tierOf(k) > tierOf('NetworkPlacement') && tierOf(k) > tierOf('PlatformOpenshift'));
+  assert.ok(tierOf('HybridNetwork') > Math.max(tierOf('CloudVirt'), tierOf('CloudOSO')));
+  assert.equal(new Set(m.TENANT_TEARDOWN_TIERS.flat()).size, m.TENANT_TEARDOWN_TIERS.flat().length);
 });
 
 test('every kind with a teardown says what goes with it', () => {

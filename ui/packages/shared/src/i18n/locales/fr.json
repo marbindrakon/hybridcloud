@@ -1235,7 +1235,7 @@
       "waitSiteNamespace": "Les espaces de noms de son environnement qui utilisent le réseau",
       "keptPlacements": "Placements réseau sur cet environnement",
       "external": "Supprimé là où il a été mis en place",
-      "tenantObjects": "Chaque objet du locataire, dans cet ordre (chaque étape se termine avant que la suivante commence)",
+      "tenantObjects": "Chaque objet du locataire, dans cet ordre (chaque étape se termine avant que la suivante commence ; un environnement de VM se termine quand ses espaces de noms ne contiennent plus de VM)",
       "tenantNamespace": "L'espace de noms du locataire",
       "waitAssignments": "Affectations de cluster sur ce cluster",
       "waitProtected": "Objets protégés contre la suppression (la suppression du locataire s'y arrête jusqu'à ce que la protection soit retirée)",

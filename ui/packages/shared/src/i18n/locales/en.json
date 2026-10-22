@@ -1235,7 +1235,7 @@
       "waitSiteNamespace": "The namespaces of its environment that use the network",
       "keptPlacements": "Network placements on it",
       "external": "Removed where it was set up",
-      "tenantObjects": "Every object of the tenant, in this order (each step finishes before the next starts)",
+      "tenantObjects": "Every object of the tenant, in this order (each step finishes before the next starts; a VM environment finishes once its namespaces hold no VMs)",
       "tenantNamespace": "The tenant namespace",
       "waitAssignments": "Cluster assignments on it",
       "waitProtected": "Objects with delete protection on (the tenant's delete stops there until it is turned off)",
