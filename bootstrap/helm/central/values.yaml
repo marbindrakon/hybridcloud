@@ -3519,8 +3519,8 @@ shcClusterBaseServices:
         enabled: true
         issuers: [central, spire, services, iaas1, edge1]
       # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md), now the shc-tenancy CronJob: redrive, the Entity
-      # conditions ControllerAvailable / DeliveryStalled and the stored status.phase (phase.write false = report only
-      # until the legacy conditions are stripped); the CRs live on services
+      # conditions ControllerAvailable / DeliveryStalled and the stored status.phase (phase.write true since the
+      # legacy Running/Successful/Failure conditions were stripped); the CRs live on services
       shcTenancy:
         enabled: true
         config:
@@ -3530,7 +3530,7 @@ shcClusterBaseServices:
                            CloudInfrastructure, DNSConfig, HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt,
                            ProviderEdge, AttachmentCircuit]
           phase:
-            write: false
+            write: true
       # §11.6 phase D (design/TENANT-TEARDOWN.md §3.5): report-only orphan check of the tenant
       # Keystone domain and DNS zone against the CloudOSO/PlatformOpenshift CRs (owner: domain only)
       tenantOrphanCheck:
