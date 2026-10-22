@@ -71,5 +71,7 @@ rendered:
   - {text: "No HybridNetwork resources match the current filters", hits: [HybridNetwork]}
   - {text: "Network in entity-uxr-corp", hits: []}
   - {text: "oc get rbacs uxr-admins", hits: []}
+  - {text: "=== TAB (default) | /t/acme-corp/create/cloudvirt", hits: []}
+  - {text: "Open https://console.example.com/k8s/cloudvirts", hits: []}
   - {text: "Environment VM environment g-vmenv-1", hits: []}
   - {text: "Waiting for the platform; was Pending", hits: [Pending]}

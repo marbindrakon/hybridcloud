@@ -92,8 +92,9 @@ CLOUDS = [("aws", "AWS"), ("gcp", "Google Cloud"), ("azure", "Azure"), ("opensta
 GLOSSARY_PLATFORM_KINDS = ("Entity", "CloudInfrastructure")
 EN_CATALOGUE = ROOT / "ui/packages/shared/src/i18n/locales/en.json"
 RUNTIME_STRINGS = ROOT / "ui/scripts/runtime-strings.mjs"
-# Text on a rendered page that is not prose: namespace names and `oc get` command lines.
-RENDERED_NOT_TEXT = [re.compile(r"\bentity-[a-z0-9-]+"), re.compile(r"\boc get \S+( \S+)?")]
+# Text on a rendered page that is not prose: URLs and paths, namespace names, `oc get` command lines.
+RENDERED_NOT_TEXT = [re.compile(r"https?://\S+|(?<![\w/])/[\w/?=&%.-]+"), re.compile(r"\bentity-[a-z0-9-]+"),
+                     re.compile(r"\boc get \S+( \S+)?")]
 # A raw kind in a display string: t('x', { kind }) / t('x', { kind: item.kind }), and JSX
 # text {item.kind}. kindTerm() / kindTermInText() / objectLabel() of i18n/vocabulary give the term.
 T_CALL = re.compile(r"\bt\(\s*['\"`][^'\"`]+['\"`]\s*,\s*\{([^{}]*)\}")
