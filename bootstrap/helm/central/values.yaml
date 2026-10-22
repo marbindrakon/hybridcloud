@@ -3444,7 +3444,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.15"  # 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
+  chartVersion: "0.3.16"  # 0.3.16: shc-tenancy CronJob (redrive + ControllerAvailable/DeliveryStalled + stored phase; former eda-redrive), tenant-orphan-check in sync wave 10 and scoped to the account's cloud, restricted self-provisioning; 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
   # BF-15: on services the ACM observability addon (endpoint-monitoring-operator) owns
   # openshift-monitoring/cluster-monitoring-config data and rewrites it in its own normalized form, so Argo's copy
   # never stays applied (permanent OutOfSync). Ignored, and with RespectIgnoreDifferences not re-applied, while the
@@ -3458,6 +3458,10 @@ shcClusterBaseServices:
     base: "0"
     certs: "2"
   values:
+    # only the platform group may create projects on services (tenants get their namespaces from the platform)
+    selfProvisioning:
+      restricted: true
+      groups: [sovereign-admin]
     cluster:
       name: services
       baseDomain: shc.signal9.gg
@@ -3508,14 +3512,19 @@ shcClusterBaseServices:
       issuerProbe:
         enabled: true
         issuers: [central, spire, services, iaas1, edge1]
-      # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md); the CRs live on services
-      edaRedrive:
+      # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md), now the shc-tenancy CronJob: redrive, the Entity
+      # conditions ControllerAvailable / DeliveryStalled and the stored status.phase (phase.write false = report only
+      # until the legacy conditions are stripped); the CRs live on services
+      shcTenancy:
         enabled: true
         config:
-          # P7.3.2: + CloudInfrastructure/DNSConfig probes and the fabric kinds (their jobs are idempotent by design)
-          redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment,
-                         CloudInfrastructure, DNSConfig, HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt,
-                         ProviderEdge, AttachmentCircuit]
+          redrive:
+            # P7.3.2: + CloudInfrastructure/DNSConfig probes and the fabric kinds (their jobs are idempotent by design)
+            redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment,
+                           CloudInfrastructure, DNSConfig, HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt,
+                           ProviderEdge, AttachmentCircuit]
+          phase:
+            write: false
       # §11.6 phase D (design/TENANT-TEARDOWN.md §3.5): report-only orphan check of the tenant
       # Keystone domain and DNS zone against the CloudOSO/PlatformOpenshift CRs (owner: domain only)
       tenantOrphanCheck:
