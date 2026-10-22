@@ -42,7 +42,7 @@
            | combine(fab_status | default({})) }}
 
 # a network or environment that is ready wakes the placements waiting for it (GA2-F4)
-- name: "Wake the placements waiting for {{ fab_kind }} {{ fab_name }}"
+- name: "Wake the placements waiting for {{ fab_kind ~ ' ' ~ fab_name }}"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_waiting_placements.yml"
   vars:
     wp_kind: "{{ fab_kind }}"

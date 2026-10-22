@@ -2,7 +2,7 @@
 # A network or an environment that became ready wakes the NetworkPlacements waiting for it (their Ready reason
 # WaitingForDependencies, or status.waitingFor naming it), so they do not wait for their reconcilePeriod.
 # inputs: wp_kind (HybridNetwork | CloudOSO | CloudVirt | CloudAWS | CloudGCP), wp_name, wp_namespace
-- name: "List the placements that may wait for {{ wp_kind }} {{ wp_name }}"
+- name: "List the placements that may wait for {{ wp_kind ~ ' ' ~ wp_name }}"
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
     api_key: "{{ services_bearer_token }}"
@@ -13,7 +13,7 @@
   register: _wp_placements
   failed_when: false
 
-- name: "Wake the placements waiting for {{ wp_kind }} {{ wp_name }}"
+- name: "Wake the placements waiting for {{ wp_kind ~ ' ' ~ wp_name }}"
   ansible.builtin.include_tasks: nudge_cr.yml
   vars:
     nudge_crs: >-

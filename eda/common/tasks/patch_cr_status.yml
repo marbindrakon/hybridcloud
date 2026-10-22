@@ -52,7 +52,7 @@
 # A teardown that finished (deletionComplete) on an object that is being deleted: wake its controller now, so it
 # releases the finalizer at once and not at its next requeue (which backs off after failed attempts, e.g. after
 # Stalled=TeardownFailed and a successful retry).
-- name: "Release the finalizer of {{ cr_plural }}/{{ cr_name }} now"
+- name: "Release the finalizer now: {{ cr_plural ~ '/' ~ cr_name }}"
   ansible.builtin.include_tasks: nudge_cr.yml
   vars:
     nudge_crs: [{kind: "{{ cr_plural }}", namespace: "{{ cr_namespace }}", name: "{{ cr_name }}"}]
