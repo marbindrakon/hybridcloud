@@ -273,6 +273,51 @@ class MachineWakeTest(unittest.TestCase):
         self.assertEqual(api.annotations[0][T.RECONCILE_NOW], "true")
 
 
+class NoCompletionTest(unittest.TestCase):
+    """GF2-F2: a job that acknowledged its event and never wrote its final status is reported, not left Creating."""
+
+    def cr(self, started_min, running=True, completed=False):
+        at = (NOW - dt.timedelta(minutes=started_min)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        delivery = {"eventId": "e1", "publishedAt": at, "acknowledgedEventId": "e1", "jobId": "7454", "jobStartedAt": at}
+        if completed:
+            delivery["completedEventId"] = "e1"
+        return {"metadata": {"namespace": "entity-a", "name": "d1", "generation": 1,
+                             "creationTimestamp": "2026-10-21T10:00:00Z"},
+                "status": {"ready": False, "phase": "Creating", "delivery": delivery,
+                           "conditions": [{"type": "Reconciling", "status": "True" if running else "False",
+                                           "reason": "JobRunning" if running else "AsExpected"}]}}
+
+    def redrive(self, cr, kind="Rbac", cfg=None):
+        api = FakeApi()
+        kinds = [{"kind": kind, "plural": kind.lower() + "s", "version": "v1alpha1", "items": [cr]}]
+        return T.eda_redrive.run_redrive(api, kinds, cfg or {}, NOW, False)
+
+    def test_overdue_job_is_reported(self):
+        counts, problems = self.redrive(self.cr(12))
+        self.assertEqual(counts["noCompletion"], 1)
+        self.assertIn("NoCompletion", problems[0])
+
+    def test_recent_or_finished_job_is_quiet(self):
+        for cr in (self.cr(5), self.cr(12, completed=True), self.cr(12, running=False)):
+            counts, problems = self.redrive(cr)
+            self.assertEqual((counts["noCompletion"], problems), (0, []))
+
+    def test_long_job_kinds_use_their_window(self):
+        cfg = {"kinds": {"CloudOSO": {"jobTimeoutMinutes": 150}, "CloudAWS": {"jobFinishedMinutes": 20}}}
+        self.assertEqual(self.redrive(self.cr(40), "CloudOSO", cfg)[0]["noCompletion"], 0)
+        self.assertEqual(self.redrive(self.cr(15), "CloudAWS", cfg)[0]["noCompletion"], 0)
+        self.assertEqual(self.redrive(self.cr(22), "CloudAWS", cfg)[0]["noCompletion"], 1)
+        # past the job timeout the Stalled verdict decides
+        counts, _ = self.redrive(self.cr(31), "CloudAWS", cfg)
+        self.assertEqual((counts["noCompletion"], counts["stalled"]), (0, 1))
+
+    def test_delivery_stalled_counts_it(self):
+        cond, stalled = T.delivery_condition([("Rbac", self.cr(12))], TCFG, NOW, {})
+        self.assertEqual((cond["status"], stalled), ("True", ["Rbac/d1"]))
+        cond, _ = T.delivery_condition([("Rbac", self.cr(5))], TCFG, NOW, {})
+        self.assertEqual(cond["status"], "False")
+
+
 class FinalizerReleaseTest(unittest.TestCase):
     """GA2-F12: a finished teardown whose finalizer is still set gets a machine wake; a long one is reported."""
 

@@ -11,6 +11,23 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 from kafka import KafkaProducer
 
 
+# Kafka protocol version the producer speaks. Pinned so the producer does not probe the broker version first: the
+# probe has a short timeout (2 s by default) and one slow DNS resolver made every publish fail although the next
+# resolver answered. KAFKA_API_VERSION overrides it ("auto" probes, with API_VERSION_PROBE_MS).
+DEFAULT_API_VERSION = "2.6.0"
+API_VERSION_PROBE_MS = 10000
+
+
+def api_version(value):
+    value = (value or "").strip()
+    if value.lower() == "auto":
+        return None
+    try:
+        return tuple(int(p) for p in (value or DEFAULT_API_VERSION).split("."))
+    except ValueError:
+        return tuple(int(p) for p in DEFAULT_API_VERSION.split("."))
+
+
 def main() -> int:
     payload = json.loads(os.environ["AMQ_EVENT_PAYLOAD"])
     bootstrap = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
@@ -25,6 +42,8 @@ def main() -> int:
         "acks": "all",
         "retries": 5,
         "request_timeout_ms": 15000,
+        "api_version": api_version(os.environ.get("KAFKA_API_VERSION", "")),
+        "api_version_auto_timeout_ms": API_VERSION_PROBE_MS,
     }
 
     if username and password:

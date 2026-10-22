@@ -11,10 +11,14 @@ that no job completed yet: a re-run keeps a Ready object Ready until its job wri
   times, and only for kinds in redriveKinds; otherwise status.delivery.state=NoAcknowledgement
 - acknowledged but not completed within the kind's jobTimeoutMinutes: status.delivery.state=Stalled
   (never re-driven: the job may still be changing things)
+- acknowledged, still Reconciling=True/JobRunning, and no completing status write within the kind's
+  jobFinishedMinutes (default ackTimeoutMinutes; a kind with its own jobTimeoutMinutes uses that): the job most
+  likely ended without its final write (it died before it, e.g. a failed name lookup). Reported as
+  status.delivery.state=NoCompletion, never re-driven (Retry now after a look at the job)
 - not published and status.delivery.publishFailingSince older than publishFailedMinutes: reported
   (the operator is already retrying)
 
-Exits 1 while any CR is NoAcknowledgement, Stalled or PublishFailed, so the platform's job alert
+Exits 1 while any CR is NoAcknowledgement, Stalled, NoCompletion or PublishFailed, so the platform's job alert
 fires. Events from operators without eventId support carry no status.delivery and are skipped.
 
 usage: eda_redrive.py [--config FILE] [--dry-run]
@@ -90,6 +94,39 @@ def collect(api):
     return out
 
 
+def job_finished_minutes(kind, cfg):
+    """Minutes after the job's start by which its completing status write is expected (see the module docstring)."""
+    cfg = dict(DEFAULTS, **(cfg or {}))
+    kcfg = cfg["kinds"].get(kind, {}) or {}
+    if "jobFinishedMinutes" in kcfg:
+        return kcfg["jobFinishedMinutes"]
+    if "jobTimeoutMinutes" in kcfg:
+        return kcfg["jobTimeoutMinutes"]
+    return cfg.get("jobFinishedMinutes", cfg["ackTimeoutMinutes"])
+
+
+def job_running(status):
+    """True when the object's status still says a job runs (Reconciling=True/JobRunning)."""
+    for c in (status or {}).get("conditions") or []:
+        if isinstance(c, dict) and c.get("type") == "Reconciling":
+            return str(c.get("status")) == "True" and c.get("reason") == "JobRunning"
+    return False
+
+
+def no_completion(kind, status, cfg, now):
+    """Minutes since the job started when its completing write is overdue (job_finished_minutes), else None."""
+    delivery = (status or {}).get("delivery") or {}
+    event_id = delivery.get("eventId")
+    if not event_id or delivery.get("acknowledgedEventId") != event_id or delivery.get("completedEventId") == event_id:
+        return None
+    if not job_running(status):
+        return None
+    age = minutes_since(delivery.get("jobStartedAt"), now)
+    if age is None or age <= job_finished_minutes(kind, cfg):
+        return None
+    return age
+
+
 def settled(status):
     """True when an object needs no delivery checks: ready, and its current event (if any) completed.
 
@@ -111,7 +148,7 @@ def run_redrive(api, kinds, cfg, now, dry_run):
     args = argparse.Namespace(dry_run=dry_run)
 
     counts = {"crs": 0, "notReady": 0, "readyOutstanding": 0, "published": 0, "acknowledged": 0, "redriven": 0,
-              "noAcknowledgement": 0, "stalled": 0, "publishFailed": 0, "legacy": 0}
+              "noAcknowledgement": 0, "stalled": 0, "noCompletion": 0, "publishFailed": 0, "legacy": 0}
     problems = []
 
     for k in kinds:
@@ -179,6 +216,15 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                                     f"(timeout {job_timeout} min)")
                     if delivery.get("state") != "Stalled":
                         patch_status({"state": "Stalled", "stateSince": stamp})
+                    continue
+                overdue = no_completion(kind, status, cfg, now)
+                if overdue is not None:
+                    counts["noCompletion"] += 1
+                    problems.append(f"{ref}: NoCompletion, job {delivery.get('jobId', '?')} started {overdue:.0f} min ago "
+                                    f"and has not written its final status (expected within "
+                                    f"{job_finished_minutes(kind, cfg)} min); it most likely ended early")
+                    if delivery.get("state") != "NoCompletion":
+                        patch_status({"state": "NoCompletion", "stateSince": stamp})
                 continue
 
             age = minutes_since(delivery.get("publishedAt"), now)

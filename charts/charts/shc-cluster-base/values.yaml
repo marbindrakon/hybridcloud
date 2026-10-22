@@ -146,9 +146,17 @@ ops:
         maxRedrives: 3
         # kinds whose jobs are idempotent (create-if-absent); others are only reported
         redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment]
+        # a job still JobRunning this long after its start without its final status write is reported
+        # (NoCompletion, DeliveryStalled); per kind jobFinishedMinutes, else the kind's jobTimeoutMinutes
+        jobFinishedMinutes: 10
         kinds:
           PlatformOpenshift: {jobTimeoutMinutes: 150}
           CloudOSO: {jobTimeoutMinutes: 150}
+          # jobs that wait on cloud or fabric work for minutes
+          CloudAWS: {jobFinishedMinutes: 30}
+          CloudGCP: {jobFinishedMinutes: 30}
+          CloudGateway: {jobFinishedMinutes: 30}
+          HybridFabric: {jobFinishedMinutes: 30}
       tenancy:
         unavailableMinutes: 2
         restartWindowMinutes: 15

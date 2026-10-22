@@ -124,7 +124,7 @@ def controller_condition(deploy, pods, tcfg, now):
 DELIVERY_REASONS = ("NoJobStarted", "ControllerUnavailable", "ControllerRestarting", "ControllerOutOfMemory")
 
 
-def delivery_condition(crs, tcfg, now):
+def delivery_condition(crs, tcfg, now, rcfg=None):
     """DeliveryStalled condition of one tenant from its CRs.
 
     Counts only undelivered work: an event published but not picked up by a job (or whose publish keeps
@@ -150,11 +150,15 @@ def delivery_condition(crs, tcfg, now):
             continue  # settled; a re-run keeps phase Ready, so a Ready object with a pending event still counts
         if completed:
             continue  # a job finished this event (failed or not): not a delivery problem
-        if delivery.get("state") in ("Stalled", "NoAcknowledgement"):
+        if delivery.get("state") in ("Stalled", "NoAcknowledgement", "NoCompletion"):
             stalled.append(ref)
             continue
         if acknowledged:
-            continue  # a job is running; a job past its timeout is the redrive's Stalled verdict above
+            # a job is running; a job past its timeout is the redrive's Stalled verdict above. A job that still
+            # says JobRunning past the kind's expected finish most likely ended without its final write.
+            if eda_redrive.no_completion(kind, status, rcfg, now) is not None:
+                stalled.append(ref)
+            continue
         if event_id:
             # published and not picked up, or the publish keeps failing (no publishedAt, publishFailingSince
             # set); an id with neither is a publish in flight
@@ -232,7 +236,7 @@ def run_tenancy(api, kinds, cfg, now, dry_run):
         ctrl = controller_condition(deploy, pods, tcfg, now)
         crs = [(k["kind"], cr) for k in kinds if k["kind"] not in ("Entity", "TenantProfile")
                for cr in k["items"] if cr["metadata"].get("namespace") == ns]
-        deliv, stalled = delivery_condition(crs, tcfg, now)
+        deliv, stalled = delivery_condition(crs, tcfg, now, cfg.get("redrive"))
         if ctrl["status"] == "False":
             counts["controllerUnavailable"] += 1
             problems.append(f"Entity {name}: ControllerAvailable=False/{ctrl['reason']}: {ctrl['message']}")

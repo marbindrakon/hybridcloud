@@ -20,6 +20,8 @@
     KAFKA_CA_CERT: "{{ lookup('env', 'KAFKA_CA_CERT') | default('', true) }}"
     KAFKA_SECURITY_PROTOCOL: "{{ lookup('env', 'KAFKA_SECURITY_PROTOCOL') | default('SASL_SSL', true) }}"
     KAFKA_SASL_MECHANISM: "{{ lookup('env', 'KAFKA_SASL_MECHANISM') | default('SCRAM-SHA-512', true) }}"
+    # pinned protocol version (amq_publish.py DEFAULT_API_VERSION when unset; "auto" probes the broker)
+    KAFKA_API_VERSION: "{{ lookup('env', 'KAFKA_API_VERSION') | default('', true) }}"
   register: amq_publish_result
   changed_when: true
   # shc (LAB-PLAN §11.1): a failed publish fails the reconcile (publish_operator_event records
