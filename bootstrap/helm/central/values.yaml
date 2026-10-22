@@ -3844,6 +3844,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "26"
       env:
+        - name: KEYCLOAK_HARDEN
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "true"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v7"
         - name: KEYCLOAK_URL
           value: "http://rhbk-central-service.central-rhbk.svc:8080"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -3891,6 +3898,13 @@ sovereignJobs:
               remoteKey: keycloak-clients
               property: acs
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "true"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v7"
         - name: KEYCLOAK_URL
           value: "http://rhbk-central-service.central-rhbk.svc:8080"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -3902,7 +3916,7 @@ sovereignJobs:
         - name: VAULT_NAMESPACE
           value: "central-vault"
         - name: KEYCLOAK_CLIENTS
-          value: '[{"realm":"sovereign-central","client_id":"quay-central","name":"Quay Central","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"vault","name":"Vault","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"gitea","name":"Gitea","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"openshift-central","name":"OpenShift Central","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"]}]'
+          value: '[{"realm":"sovereign-central","client_id":"quay-central","name":"Quay Central","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-central","client_id":"vault","name":"Vault","redirect_uris":["https://vault-central.apps.central.shc.signal9.gg/ui/vault/auth/oidc/oidc/callback","http://localhost:8250/oidc/callback"],"direct_access_grants":false,"protocol_mappers":[{"name":"groups","protocol":"openid-connect","protocolMapper":"oidc-group-membership-mapper","config":{"claim.name":"groups","full.path":"true","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-central","client_id":"gitea","name":"Gitea","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-central","client_id":"openshift-central","name":"OpenShift Central","redirect_uris":["https://oauth-openshift.apps.central.shc.signal9.gg/oauth2callback/sovereign-central"],"direct_access_grants":false},{"realm":"sovereign-central","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-central","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     keycloakRbac:
@@ -3919,6 +3933,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "27"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "true"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v7"
         - name: RUN_ID
           value: "2026-06-24-fix-oauth"
         - name: KEYCLOAK_CENTRAL_URL
@@ -4022,6 +4043,13 @@ sovereignJobs:
               remoteKey: rhbk-services-admin
               property: password
       env:
+        - name: KEYCLOAK_HARDEN
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "true"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v7"
         - name: KEYCLOAK_URL
           value: "https://rhbk-services.apps.services.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -4059,6 +4087,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "30"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "true"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v7"
         # shc: own Vault entry; central's job owns "keycloak-clients"
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-services"
@@ -4071,7 +4106,7 @@ sovereignJobs:
         - name: REALM_NAME
           value: "sovereign-tenants"
         - name: KEYCLOAK_CLIENTS
-          value: '[{"realm":"sovereign-tenants","client_id":"openshift-services","name":"OpenShift Services","redirect_uris":["*"],"protocol_mappers":[{"name":"entity-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-services","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"quay-services","name":"Quay Services","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"]}]'
+          value: '[{"realm":"sovereign-tenants","client_id":"openshift-services","name":"OpenShift Services","redirect_uris":["https://oauth-openshift.apps.services.shc.signal9.gg/oauth2callback/sovereign-services"],"protocol_mappers":[{"name":"entity-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-services","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}],"direct_access_grants":false},{"realm":"sovereign-tenants","client_id":"quay-services","name":"Quay Services","redirect_uris":["https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg/oauth2/rhbk/callback","https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg/oauth2/rhbk/callback/attach","https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg/oauth2/rhbk/callback/cli"],"direct_access_grants":false,"root_url":"https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg","protocol_mappers":[{"name":"groups","protocol":"openid-connect","protocolMapper":"oidc-group-membership-mapper","config":{"claim.name":"groups","full.path":"true","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-tenants","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     # shc (P7.3.7, design/P7-PLAN.md §12.4 e / §12.15; owner 10-14: IdP changes allowed): tenant sign-in on the IaaS
@@ -4085,6 +4120,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "30"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "true"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v7"
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-iaas"
         - name: KEYCLOAK_URL
@@ -4096,7 +4138,7 @@ sovereignJobs:
         - name: REALM_NAME
           value: "sovereign-tenants"
         - name: KEYCLOAK_CLIENTS
-          value: '[{"realm":"sovereign-tenants","client_id":"openshift-iaas1","name":"OpenShift iaas1","redirect_uris":["https://oauth-openshift.apps.iaas1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/iaas1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-iaas1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"openshift-edge1","name":"OpenShift edge1","redirect_uris":["https://oauth-openshift.apps.edge1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/edge1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-edge1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]}]'
+          value: '[{"realm":"sovereign-tenants","client_id":"openshift-iaas1","name":"OpenShift iaas1","redirect_uris":["https://oauth-openshift.apps.iaas1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/iaas1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-iaas1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}],"direct_access_grants":false},{"realm":"sovereign-tenants","client_id":"openshift-edge1","name":"OpenShift edge1","redirect_uris":["https://oauth-openshift.apps.edge1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/edge1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-edge1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}],"direct_access_grants":false}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     vaultServicesInit:
@@ -4119,6 +4161,13 @@ sovereignJobs:
       activeDeadlineSeconds: 1800
       syncWave: "29"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "true"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v7"
         - name: VAULT_ADDR
           value: "http://vault-active.central-vault.svc:8200"
         - name: VAULT_SECRET_NAMESPACE
