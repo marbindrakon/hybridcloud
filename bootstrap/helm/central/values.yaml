@@ -5246,7 +5246,7 @@ sovereignDashboard:
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "1.1.13-shc.2"  # shc: vendored into charts/charts, ESO v1
+  chartVersion: "1.1.13-shc.3"  # shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
   syncWave: "41"
   destinationNamespace: sovereign-cloud
   values:
@@ -5254,7 +5254,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.1.10"
+      tag: "img-5.2.0"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5268,11 +5268,15 @@ tenancyDashboard:
         secretStoreKind: ClusterSecretStore
         vaultPath: "tenancy-dashboard-oauth"
         refreshInterval: "1h"
+      # "Sign out" ends the Keycloak session too (realm sovereign-tenants, the sovereign-services IdP of this cluster)
+      logoutUrl: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
     route:
       enabled: true
     env:
       NODE_ENV: production
       OAUTH_SYNC_VERSION: "2"
+      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/ux-h1/docs
+      SHC_CONSOLE_URL: https://console-openshift-console.apps.services.shc.signal9.gg
 
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
 sovereignAdminPlugin:
