@@ -5371,7 +5371,7 @@ hybridsovereignPrimaryOperator:
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.21"  # img-0.1.21: CloudGCP watch + roles (P11.4); img-0.1.20: AttachmentCircuit watch, HybridNetwork delete waits for circuits (P9.1); img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
+        tag: "img-0.1.22"  # img-0.1.22: shc_status library (stored phase, no Ready flip), per-kind reconcile caps, probes, reconcileNow with any value, optional connection references, tenantprofiles grant (canary-tested on globex-industries and acme-corp); img-0.1.21: CloudGCP watch + roles (P11.4); img-0.1.20: AttachmentCircuit watch, HybridNetwork delete waits for circuits (P9.1); img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
     amqKafka:
       enabled: true
       vaultPath: amq-producer
