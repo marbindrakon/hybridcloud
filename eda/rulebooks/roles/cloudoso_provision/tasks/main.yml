@@ -146,6 +146,14 @@
                 OpenStack project {{ oso_project_name }} ({{ oso_project_id }})
                 provisioned by EDA in Keystone domain {{ oso_domain_name }}.
 
+    # a ready environment wakes the placements waiting for it (GA2-F4)
+    - name: Wake the placements waiting for this environment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_waiting_placements.yml"
+      vars:
+        wp_kind: CloudOSO
+        wp_name: "{{ cloudoso_cr_name }}"
+        wp_namespace: "{{ cloudoso_cr_namespace }}"
+
   rescue:
     - name: Mark CloudOSO as failed on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

@@ -1,0 +1,36 @@
+---
+# A network or an environment that became ready wakes the NetworkPlacements waiting for it (their Ready reason
+# WaitingForDependencies, or status.waitingFor naming it), so they do not wait for their reconcilePeriod.
+# inputs: wp_kind (HybridNetwork | CloudOSO | CloudVirt | CloudAWS | CloudGCP), wp_name, wp_namespace
+- name: "List the placements that may wait for {{ wp_kind }} {{ wp_name }}"
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: NetworkPlacement
+    namespace: "{{ wp_namespace }}"
+  register: _wp_placements
+  failed_when: false
+
+- name: "Wake the placements waiting for {{ wp_kind }} {{ wp_name }}"
+  ansible.builtin.include_tasks: nudge_cr.yml
+  vars:
+    nudge_crs: >-
+      {%- set out = [] -%}
+      {%- for p in _wp_placements.resources | default([]) -%}
+        {%- set st = p.status | default({}, true) -%}
+        {%- set spec = p.spec | default({}, true) -%}
+        {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
+        {%- set names_it = (wp_kind == 'HybridNetwork' and spec.network | default('') == wp_name)
+              or ((spec.backend | default({}, true)).kind | default('') == wp_kind
+                  and (spec.backend | default({}, true)).name | default('') == wp_name) -%}
+        {%- set waits = (ready.reason | default('') == 'WaitingForDependencies')
+              or (st.waitingFor | default([], true) | select('match', (wp_kind ~ ' ' ~ wp_name ~ ' ') | regex_escape) | list | length > 0) -%}
+        {%- if names_it and waits and p.metadata.deletionTimestamp is not defined
+              and (st.status | default('') == 'pending' or st.phase | default('') == 'Waiting') -%}
+          {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': wp_namespace, 'name': p.metadata.name}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  when: _wp_placements.resources | default([]) | length > 0
