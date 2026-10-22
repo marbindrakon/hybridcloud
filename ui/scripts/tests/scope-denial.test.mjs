@@ -1,5 +1,5 @@
 // Scope-level denials (PGT-F1): a tenant link for a non-member and a platform page for a tenant
-// name who grants access and whom to ask, like the forbidden pages inside a tenant.
+// name who grants access, who adds members and whom to ask, like the forbidden pages inside a tenant.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -12,12 +12,20 @@ const t = (key, opts = {}) => {
   return String(typeof s === 'string' ? s : key).replace(/\{\{\s*(\w+)\s*\}\}/g, (_x, k) => String(opts[k] ?? ''));
 };
 
-test('a non-member on a tenant link is told which role adds people and whom to ask', () => {
+test('a non-member on a tenant link is told who adds members and whom to ask', () => {
   const out = m.scopeDenialText(t, { requested: 'tenant', ownTenants: [] });
   assert.deepEqual(out, [
-    "Membership in one of the tenant's access groups grants it; the Tenant administrator role adds people to them.",
-    "Ask the tenant's administrators or the platform team to add you to one.",
+    "Membership in one of the tenant's access groups grants it. The platform team adds members in the sign-in directory.",
+    "Ask them, or the tenant's administrators, to add you to one.",
   ]);
+  // no tenant role adds members (the access groups' membership is in the sign-in directory)
+  assert.doesNotMatch(out.join(' '), /role adds|access administrator/);
+});
+
+test('a user with no role is pointed at the platform team, not a tenant role', () => {
+  const body = t('scope.noRoleBody');
+  assert.match(body, /platform team adds members to access groups in the sign-in directory/);
+  assert.doesNotMatch(body, /access administrator/);
 });
 
 test('a tenant user on a platform page gets the platform roles and the contacts of their own tenant', () => {

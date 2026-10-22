@@ -32,9 +32,9 @@ export function contactsText(contacts: ErrorTextContext['contacts']): string {
 /**
  * A scope-level denial (PGT-F1): a tenant link the user is no member of, or a platform page
  * opened as a tenant. Same shape as the forbidden pages inside a tenant: who grants it, then
- * whom to ask. A non-member cannot read the tenant's contacts, so that case names the role and
- * asks the tenant's administrators or the platform team; on a platform page the contacts of the
- * user's own tenants are given.
+ * whom to ask. A non-member cannot read the tenant's contacts, so that case says the platform
+ * team adds members in the sign-in directory and asks them or the tenant's administrators; on a
+ * platform page the contacts of the user's own tenants are given.
  */
 export function scopeDenialText(
   t: T,
@@ -45,10 +45,8 @@ export function scopeDenialText(
   },
 ): string[] {
   if (ctx.requested === 'tenant') {
-    return [
-      t('scope.denyTenantGrant', { role: t('roles.entityAdmin') }),
-      t('scope.denyTenantAsk'),
-    ];
+    // Membership is kept in the sign-in directory by the platform team; no tenant role adds members.
+    return [t('scope.denyTenantGrant'), t('scope.denyTenantAsk')];
   }
   const out = [t('access.grantedBy', { roles: [t('scope.platformAdminRole'), t('scope.platformViewRole')].join(t('access.or')) })];
   const withContacts = (ctx.ownTenants ?? []).filter((o) => contactsText(o.contacts)).slice(0, 3);
