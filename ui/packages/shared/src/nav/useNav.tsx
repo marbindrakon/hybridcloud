@@ -7,6 +7,7 @@ import { tenantLabel } from '../scope/resolveIdentity';
 import type { Scope } from '../scope/types';
 import { gateNamespaceFor, matrixAllows } from '../access/permissionGate';
 import { useGateMatrix, useScopeGateNamespace } from '../access/PermissionProvider';
+import { useSharedKinds } from '../access/sharedWithYou';
 import { entriesForHost, entryById, NAV_SECTIONS } from './registry';
 import { createPathFor, pathFor, routeFor as routeForPath, type PathParams } from './paths';
 import type { Host, NavEntry, ScopeMode, SectionId } from './types';
@@ -74,6 +75,22 @@ export function useNav(hostArg?: Host): {
   }, [scope, identity]);
   const tenantMode: ScopeMode | null =
     mode === 'tenant' || mode === 'all' ? mode : mode === 'global' && identity?.platform.reader ? 'all' : null;
+  // A user who may not list a kind can still hold objects of it by name (team setup and app
+  // project grants): their entries stay in the navigation (GT-F4). One rules review, only when
+  // the matrix denies a read the navigation asks for.
+  const readDenied = useMemo(
+    () =>
+      !!matrix &&
+      !!gateNs &&
+      tenantMode === 'tenant' &&
+      entriesForHost(host).some((e) =>
+        (e.requiredVerbs ?? []).some(
+          (rv) => (rv.verb === 'list' || rv.verb === 'get') && gateNamespaceFor(rv.kind, gateNs) === gateNs && matrixAllows(matrix, rv.kind, rv.verb) === false,
+        ),
+      ),
+    [matrix, gateNs, tenantMode, host],
+  );
+  const sharedKinds = useSharedKinds(gateNs, readDenied);
 
   const groups = useMemo<NavGroupView[]>(() => {
     const entries = entriesForHost(host).filter((e) => e.nav !== false);
@@ -93,7 +110,8 @@ export function useNav(hostArg?: Host): {
           if (!gateNs) return false;
           const ns = gateNamespaceFor(rv.kind, gateNs);
           if (ns !== gateNs) return true;
-          return matrixAllows(matrix, rv.kind, rv.verb) !== false;
+          if (matrixAllows(matrix, rv.kind, rv.verb) !== false) return true;
+          return (rv.verb === 'list' || rv.verb === 'get') && !!sharedKinds?.has(rv.kind);
         });
       }
       return true;
@@ -119,7 +137,7 @@ export function useNav(hostArg?: Host): {
       if (items.length) out.push({ section: section.id, labelKey: section.labelKey, items });
     }
     return out;
-  }, [host, identity, mode, tenantMode, matrix, gateNs, location.pathname, tenantScopeForPaths]);
+  }, [host, identity, mode, tenantMode, matrix, gateNs, sharedKinds, location.pathname, tenantScopeForPaths]);
 
   return {
     host,

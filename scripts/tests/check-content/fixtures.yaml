@@ -41,3 +41,19 @@ cases:
   - {surface: crd, text: "See design/P10-PLAN.md.", hits: [design/]}
   - {surface: crd, text: "The owner decided this.", hits: [owner decided]}
   - {surface: crd, text: "Allocated from the pool (RFC 4271).", hits: []}
+# Display strings the UI source scanner extracts from .ts/.tsx (JSX text, display props, display keys).
+sources:
+  - source: '<li><span className="sc-dot" /> Pending <strong>{n}</strong></li>'
+    strings: [Pending]
+  - source: '<Alert title="Unable to load topology" variant="warning" isInline>'
+    strings: [Unable to load topology]
+  - source: "const layers = [{ title: 'Entity', nodes }, { title: t('kinds.Team'), nodes }];"
+    strings: [Entity]
+  - source: "t('detail.apiKind', { kind, defaultValue: `API kind: ${kind}` })"
+    strings: ['API kind:']
+  - source: "if (a > b) { return x < y; } // Pending comment\nconst f = (p: Promise<void>) => p;"
+    strings: []
+  - source: "<Button aria-label={'Zoom in'} status=\"pending\" className=\"sc-dot--pending\">{t('x.y')}</Button>"
+    strings: [Zoom in]
+  - source: "/* label: 'Platform Openshift' */ const v = { label: 'common.name' };"
+    strings: []

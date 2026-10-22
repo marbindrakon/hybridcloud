@@ -201,7 +201,7 @@ spec:
           jsonPath: .status.entity
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt

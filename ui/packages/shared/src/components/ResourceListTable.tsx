@@ -4,11 +4,6 @@ import {
   Alert,
   Button,
   Label,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  ModalVariant,
   Spinner,
   Tooltip,
 } from '@patternfly/react-core';
@@ -19,6 +14,7 @@ import type { HybridSovereignKind, K8sResource } from '../types/crds';
 import { KindIcon } from '../icons/kindIcons';
 import { StatusBadge } from './StatusBadge';
 import { ToastHost } from './ToastHost';
+import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { phaseOf, summaryOf } from '../status/phase';
 import { useCompletionToasts } from '../status/useCompletionToasts';
 import { HealthStrip } from './StatTile';
@@ -488,33 +484,18 @@ export function ResourceListTable({
         </Table>
       </div>
 
-      <Modal
-        variant={ModalVariant.small}
+      <DeleteConfirmModal
         isOpen={!!pendingDelete}
-        onClose={() => (!deleting ? setPendingDelete(null) : undefined)}
-      >
-        <ModalHeader title={`Delete ${kind}?`} />
-        <ModalBody>
-          {deleteError && (
-            <Alert variant="danger" title="Delete failed" isInline className="sc-mb">
-              {deleteError}
-            </Alert>
-          )}
-          This will permanently delete <strong>{pendingDelete?.metadata.name}</strong>
-          {pendingDelete?.metadata.namespace
-            ? <> from namespace <strong>{pendingDelete.metadata.namespace}</strong></>
-            : null}
-          .
-        </ModalBody>
-        <ModalFooter>
-          <Button key="confirm" variant="danger" isDisabled={deleting} onClick={() => void confirmDelete()}>
-            {deleting ? 'Deleting…' : 'Delete'}
-          </Button>
-          <Button key="cancel" variant="link" isDisabled={deleting} onClick={() => setPendingDelete(null)}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
+        kind={kind}
+        item={pendingDelete}
+        deleting={deleting}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          setPendingDelete(null);
+          setDeleteError(null);
+        }}
+      />
     </>
   );
 }

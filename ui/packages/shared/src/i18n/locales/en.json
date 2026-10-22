@@ -67,7 +67,8 @@
     "reason": "Reason",
     "since": "Since",
     "title": "Status: {{phase}}",
-    "badgeAria": "Status: {{phase}}. Show details"
+    "badgeAria": "Status: {{phase}}. Show details",
+    "notReadyYet": "Waiting or in progress"
   },
   "nav": {
     "overview": "Overview",
@@ -225,7 +226,12 @@
     "cloudProjectsSection": "Cloud projects (tenant)",
     "cloudProjectsSectionSubtitle": "CloudOSO, CloudAWS and CloudVirt projects in entity namespaces, each on a Cloud Infrastructure",
     "networkOverviewDesc": "The hybrid fabric end to end: each fabric and its border gateway nodes, the sites attached through Cloud Gateways, and every tenant network across the environments it is placed on.",
-    "allEntitiesReadOnly": "Tenant objects of every entity, read-only. Tenants manage them from their own pages."
+    "allEntitiesReadOnly": "Tenant objects of every entity, read-only. Tenants manage them from their own pages.",
+    "sharedWithYouTitle": "Shared with you",
+    "sharedWithYouBody": "You can open these by name: they were shared with one of your access groups, although your role does not list everything of their kind.",
+    "sharedWithYouLabel": "Shared with you",
+    "overviewConsoleSubtitle": "Platform health and the objects of every tenant",
+    "fabricMapFailed": "The fabric map could not be drawn"
   },
   "list": {
     "showing": "{{count}} resources",
@@ -371,12 +377,12 @@
     "siteDefaultNetwork": "Site default network",
     "siteDefaultValue": "Site default: {{value}}",
     "siteDnsSection": "Environment DNS",
-    "entityListRestricted": "Showing only the Entity you have access to — the full tenant list needs platform access.",
-    "entityListUnavailable": "The Entity list could not be read; type the Entity name given by the platform team.",
-    "entityNamePlaceholder": "Entity name, e.g. acme-corp",
-    "entityNone": "No Entities are visible with your access — create an Entity first",
+    "entityListRestricted": "Showing only the tenant you have access to; the full tenant list needs platform access.",
+    "entityListUnavailable": "The tenant list could not be read; type the tenant name given by the platform team.",
+    "entityNamePlaceholder": "Tenant name",
+    "entityNone": "No tenant is visible with your access; create a tenant first",
     "entityScopeHelp": "Created in namespace {{namespace}}.",
-    "entitySelectPlaceholder": "Select Entity…",
+    "entitySelectPlaceholder": "Select a tenant…",
     "accessGroupsPlaceholder": "Choose access groups (optional)",
     "nSelected": "{{count}} selected",
     "noAccessGroups": "No access groups in this tenant yet",
@@ -480,7 +486,7 @@
   },
   "fields": {
     "description": "Description",
-    "entity": "Entity (tenant)",
+    "entity": "Tenant",
     "istio": "Istio",
     "argo": "Argo CD",
     "team": "Team",
@@ -810,7 +816,6 @@
     "backTo": "Back to {{parent}}",
     "retryNow": "Retry now",
     "retryQueued": "Retry queued",
-    "apiKind": "API kind: {{kind}}",
     "actionFailed": "The action did not go through",
     "overviewTab": "Overview",
     "configurationTab": "Configuration",
@@ -819,7 +824,9 @@
     "diagnostics": "Diagnostics (platform administrators)",
     "deleteTitle": "Delete {{kind}} {{name}}?",
     "deleteBody": "This deletes {{name}} from {{namespace}}. The page shows the progress until it is gone.",
-    "deleting": "Deleting…"
+    "deleting": "Deleting…",
+    "cliGet": "oc get {{resource}} {{name}}",
+    "cliGetTitle": "Read this object from the command line"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -956,7 +963,10 @@
     "server": "Not your fault.",
     "serverBody": "Try again; if it persists, contact the platform team.",
     "serverBodyRef": "Try again; if it persists, contact the platform team with reference {{ref}}.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "forbiddenObject": "You don't have access to {{kind}} {{name}} in {{tenant}}.",
+    "forbiddenObjectNoTenant": "You don't have access to {{kind}} {{name}}.",
+    "notFoundObject": "{{kind}} {{name}} was deleted or never existed in this tenant."
   },
   "roles": {
     "entityAdmin": "Tenant administrator",
@@ -1107,7 +1117,14 @@
     "noNetworksBody": "Attach a network to give this environment a subnet that reaches your other environments.",
     "notAttached": "Not attached anywhere",
     "notAttachedBody": "Attach this network to an environment to use it there.",
-    "waitingForNetwork": "A namespace of this environment names network {{network}}, which is not attached yet."
+    "waitingForNetwork": "A namespace of this environment names network {{network}}, which is not attached yet.",
+    "noNamespaceShort": "no namespace of this environment uses this network",
+    "greyedNetworks": "Greyed networks cannot be attached: no namespace of this environment uses them. Add a namespace that names the network to the environment first.",
+    "greyedEnvironments": "Greyed environments cannot take this network: no namespace of the environment uses it. Add a namespace that names the network first:",
+    "openEnvironmentNetworks": "Networks of {{environment}}",
+    "notAttachable": "{{network}} cannot be attached to {{environment}}: no namespace of this environment uses this network.",
+    "cannotAttach": "Not attachable",
+    "addNamespaceHint": "A network can be attached here only when a namespace of this environment names it. Add or change the namespaces on the Configuration tab."
   },
   "callout": {
     "since": "since {{time}}",
@@ -1184,5 +1201,80 @@
     "step3": "Attach the network to the environment (the environment's Networks tab)",
     "step4": "Open the site console from the environment page and sign in",
     "dismiss": "Hide getting started"
+  },
+  "deletePreview": {
+    "failed": "The delete did not go through",
+    "checking": "Checking what the delete takes with it",
+    "nothingElse": "Nothing else is deleted with it.",
+    "partial": "Some objects that may name it could not be read with your role; they are not listed.",
+    "typeName": "Type {{name}} to confirm",
+    "typeNameHelp": "It owns resources on a site or in a cloud; they are removed with it.",
+    "awsResources": "The environment's AWS resources",
+    "awsResourcesIn": "The environment's AWS resources in {{region}}",
+    "openstackProject": "OpenStack project",
+    "gcpProject": "Google Cloud project",
+    "onSite": "on site {{site}}",
+    "section": {
+      "placements": "Network placements deleted with it:",
+      "namespaces": "Site namespaces deleted with it, with every VM in them:",
+      "cloudProject": "Deleted in the cloud:",
+      "dnsZone": "DNS zone deleted with it:",
+      "subnet": "Subnet released:",
+      "tenantRoles": "Tenant roles that name it (its members lose them):",
+      "toolRoles": "Tool roles that name it (its members lose them):",
+      "accessLists": "Access lists that name it (its members lose that access):",
+      "scopeGrants": "Access that ends with it:"
+    },
+    "fields": {
+      "aapAdminRbac": "AAP admins",
+      "aapJobExecutorRbac": "Job template runners",
+      "aapViewerRbac": "AAP viewers",
+      "quayAdminRbac": "Quay admins",
+      "quayCreatorRbac": "Quay creators",
+      "quayMemberRbac": "Quay members",
+      "vaultAdminRbac": "Vault admins",
+      "vaultOpsRbac": "Vault operators",
+      "vaultDeveloperRbac": "Vault developers",
+      "vaultReaderRbac": "Vault readers",
+      "editRbac": "VM editors",
+      "viewRbac": "VM viewers",
+      "clusterAdminRbac": "Cluster admins",
+      "clusterOperatorRbac": "Cluster operators",
+      "clusterDeveloperRbac": "Cluster developers",
+      "clusterViewerRbac": "Cluster viewers",
+      "assignmentAdmin": "Cluster assignment admins",
+      "assignmentDeveloper": "Cluster assignment developers",
+      "assignmentViewer": "Cluster assignment viewers",
+      "assignmentOps": "Cluster assignment operators",
+      "teamAdmin": "team setup administrators",
+      "teamMemberRbac": "team setup members",
+      "teamViewerRbac": "team setup viewers",
+      "projectAdmin": "app project administrators",
+      "projectDeveloperRbac": "app project developers",
+      "projectViewerRbac": "app project viewers",
+      "networkViewerRbac": "network viewers"
+    },
+    "tenantRolesHidden": "The tenant roles given to it are kept by the platform team and are not listed here; its members lose them too."
+  },
+  "donut": {
+    "total": "Total",
+    "pctReady": "{{pct}}% ready",
+    "aria": "{{title}}: {{pct}}% ready"
+  },
+  "topology": {
+    "vmEnvironment": "VM environment",
+    "environments": "Environments",
+    "loading": "Loading the topology",
+    "loadFailed": "The topology could not be loaded",
+    "loadFailedBody": "Your objects could not be listed. Try again in a moment.",
+    "empty": "Nothing to draw yet",
+    "emptyIn": "No objects in {{namespace}} yet.",
+    "emptyVisibleIn": "No object in {{namespace}} that your role can read.",
+    "emptyPlatform": "No objects on the platform yet.",
+    "emptyVisiblePlatform": "No object on the platform that your role can read.",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to view",
+    "fullscreen": "Full screen"
   }
 }

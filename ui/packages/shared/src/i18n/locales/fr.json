@@ -67,7 +67,8 @@
     "reason": "Raison",
     "since": "Depuis",
     "title": "État : {{phase}}",
-    "badgeAria": "État : {{phase}}. Afficher les détails"
+    "badgeAria": "État : {{phase}}. Afficher les détails",
+    "notReadyYet": "En attente ou en cours"
   },
   "nav": {
     "overview": "Vue d'ensemble",
@@ -225,7 +226,12 @@
     "cloudProjectsSection": "Projets cloud (locataire)",
     "cloudProjectsSectionSubtitle": "Projets CloudOSO, CloudAWS et CloudVirt dans les espaces de noms des entités, chacun sur une infrastructure cloud",
     "networkOverviewDesc": "Le fabric hybride de bout en bout : chaque fabric et ses nœuds de bordure, les sites rattachés par des Cloud Gateways, et chaque réseau locataire sur les environnements où il est placé.",
-    "allEntitiesReadOnly": "Objets locataires de toutes les entités, en lecture seule. Les locataires les gèrent depuis leurs propres pages."
+    "allEntitiesReadOnly": "Objets locataires de toutes les entités, en lecture seule. Les locataires les gèrent depuis leurs propres pages.",
+    "sharedWithYouTitle": "Partagés avec vous",
+    "sharedWithYouBody": "Vous pouvez les ouvrir par leur nom : ils ont été partagés avec l'un de vos groupes d'accès, même si votre rôle ne liste pas tous les objets de ce type.",
+    "sharedWithYouLabel": "Partagé avec vous",
+    "overviewConsoleSubtitle": "Santé de la plateforme et objets de tous les locataires",
+    "fabricMapFailed": "La carte de la fabric n'a pas pu être dessinée"
   },
   "list": {
     "showing": "{{count}} ressources",
@@ -297,12 +303,12 @@
     "deleteRow": "Supprimer {{name}}"
   },
   "form": {
-    "entityListRestricted": "Seule l'entité à laquelle vous avez accès est affichée — la liste complète nécessite un accès plateforme.",
-    "entityListUnavailable": "La liste des entités n'a pas pu être lue ; saisissez le nom de l'entité fourni par l'équipe plateforme.",
-    "entityNamePlaceholder": "Nom de l'entité, p. ex. acme-corp",
-    "entityNone": "Aucune entité visible avec vos droits — créez d'abord une entité",
+    "entityListRestricted": "Seul le locataire auquel vous avez accès est affiché ; la liste complète nécessite un accès plateforme.",
+    "entityListUnavailable": "La liste des locataires n'a pas pu être lue ; saisissez le nom du locataire fourni par l'équipe plateforme.",
+    "entityNamePlaceholder": "Nom du locataire",
+    "entityNone": "Aucun locataire visible avec vos droits ; créez d'abord un locataire",
     "entityScopeHelp": "Créé dans l'espace de noms {{namespace}}.",
-    "entitySelectPlaceholder": "Sélectionner une entité…",
+    "entitySelectPlaceholder": "Sélectionner un locataire…",
     "required": "Obligatoire",
     "optional": "Facultatif",
     "createTitle": "Créer {{kind}}",
@@ -480,7 +486,7 @@
   },
   "fields": {
     "description": "Description",
-    "entity": "Entité (locataire)",
+    "entity": "Locataire",
     "istio": "Istio",
     "argo": "Argo CD",
     "team": "Équipe",
@@ -810,7 +816,6 @@
     "backTo": "Retour à {{parent}}",
     "retryNow": "Réessayer maintenant",
     "retryQueued": "Nouvel essai en file",
-    "apiKind": "Type d'API : {{kind}}",
     "actionFailed": "L'action n'a pas abouti",
     "overviewTab": "Vue d'ensemble",
     "configurationTab": "Configuration",
@@ -819,7 +824,9 @@
     "diagnostics": "Diagnostic (administrateurs de la plateforme)",
     "deleteTitle": "Supprimer {{kind}} {{name}} ?",
     "deleteBody": "Supprime {{name}} de {{namespace}}. La page affiche la progression jusqu'à sa disparition.",
-    "deleting": "Suppression…"
+    "deleting": "Suppression…",
+    "cliGet": "oc get {{resource}} {{name}}",
+    "cliGetTitle": "Lire cet objet en ligne de commande"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -956,7 +963,10 @@
     "server": "Ce n'est pas de votre fait.",
     "serverBody": "Réessayez ; si le problème persiste, contactez l'équipe plateforme.",
     "serverBodyRef": "Réessayez ; si le problème persiste, contactez l'équipe plateforme avec la référence {{ref}}.",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "forbiddenObject": "Vous n'avez pas accès à {{kind}} {{name}} dans {{tenant}}.",
+    "forbiddenObjectNoTenant": "Vous n'avez pas accès à {{kind}} {{name}}.",
+    "notFoundObject": "{{kind}} {{name}} a été supprimé ou n'a jamais existé dans ce locataire."
   },
   "roles": {
     "entityAdmin": "Administrateur du locataire",
@@ -1107,7 +1117,14 @@
     "noNetworksBody": "Attachez un réseau pour donner à cet environnement un sous-réseau qui joint vos autres environnements.",
     "notAttached": "Attaché nulle part",
     "notAttachedBody": "Attachez ce réseau à un environnement pour l'y utiliser.",
-    "waitingForNetwork": "Un namespace de cet environnement nomme le réseau {{network}}, qui n'est pas encore attaché."
+    "waitingForNetwork": "Un namespace de cet environnement nomme le réseau {{network}}, qui n'est pas encore attaché.",
+    "noNamespaceShort": "aucun espace de noms de cet environnement n'utilise ce réseau",
+    "greyedNetworks": "Les réseaux grisés ne peuvent pas être rattachés : aucun espace de noms de cet environnement ne les utilise. Ajoutez d'abord à l'environnement un espace de noms qui nomme le réseau.",
+    "greyedEnvironments": "Les environnements grisés ne peuvent pas recevoir ce réseau : aucun de leurs espaces de noms ne l'utilise. Ajoutez d'abord un espace de noms qui nomme le réseau :",
+    "openEnvironmentNetworks": "Réseaux de {{environment}}",
+    "notAttachable": "{{network}} ne peut pas être rattaché à {{environment}} : aucun espace de noms de cet environnement n'utilise ce réseau.",
+    "cannotAttach": "Non rattachable",
+    "addNamespaceHint": "Un réseau ne peut être rattaché ici que si un espace de noms de cet environnement le nomme. Ajoutez ou modifiez les espaces de noms dans l'onglet Configuration."
   },
   "callout": {
     "since": "depuis {{time}}",
@@ -1184,5 +1201,80 @@
     "step3": "Attacher le réseau à l'environnement (onglet Réseaux de l'environnement)",
     "step4": "Ouvrir la console du site depuis la page de l'environnement et se connecter",
     "dismiss": "Masquer Pour commencer"
+  },
+  "deletePreview": {
+    "failed": "La suppression n'a pas abouti",
+    "checking": "Vérification de ce que la suppression emporte",
+    "nothingElse": "Rien d'autre n'est supprimé avec lui.",
+    "partial": "Certains objets qui pourraient le nommer ne sont pas lisibles avec votre rôle ; ils ne sont pas listés.",
+    "typeName": "Saisissez {{name}} pour confirmer",
+    "typeNameHelp": "Il possède des ressources sur un site ou dans un cloud ; elles sont supprimées avec lui.",
+    "awsResources": "Les ressources AWS de l'environnement",
+    "awsResourcesIn": "Les ressources AWS de l'environnement dans {{region}}",
+    "openstackProject": "Projet OpenStack",
+    "gcpProject": "Projet Google Cloud",
+    "onSite": "sur le site {{site}}",
+    "section": {
+      "placements": "Placements réseau supprimés avec lui :",
+      "namespaces": "Espaces de noms du site supprimés avec lui, avec toutes leurs VM :",
+      "cloudProject": "Supprimé dans le cloud :",
+      "dnsZone": "Zone DNS supprimée avec lui :",
+      "subnet": "Sous-réseau libéré :",
+      "tenantRoles": "Rôles du locataire qui le nomment (ses membres les perdent) :",
+      "toolRoles": "Rôles d'outils qui le nomment (ses membres les perdent) :",
+      "accessLists": "Listes d'accès qui le nomment (ses membres perdent cet accès) :",
+      "scopeGrants": "Accès qui prennent fin avec lui :"
+    },
+    "fields": {
+      "aapAdminRbac": "Administrateurs AAP",
+      "aapJobExecutorRbac": "Exécutants de modèles de tâches",
+      "aapViewerRbac": "Lecteurs AAP",
+      "quayAdminRbac": "Administrateurs Quay",
+      "quayCreatorRbac": "Créateurs Quay",
+      "quayMemberRbac": "Membres Quay",
+      "vaultAdminRbac": "Administrateurs Vault",
+      "vaultOpsRbac": "Opérateurs Vault",
+      "vaultDeveloperRbac": "Développeurs Vault",
+      "vaultReaderRbac": "Lecteurs Vault",
+      "editRbac": "Éditeurs de VM",
+      "viewRbac": "Lecteurs de VM",
+      "clusterAdminRbac": "Administrateurs du cluster",
+      "clusterOperatorRbac": "Opérateurs du cluster",
+      "clusterDeveloperRbac": "Développeurs du cluster",
+      "clusterViewerRbac": "Lecteurs du cluster",
+      "assignmentAdmin": "Administrateurs de l'affectation",
+      "assignmentDeveloper": "Développeurs de l'affectation",
+      "assignmentViewer": "Lecteurs de l'affectation",
+      "assignmentOps": "Opérateurs de l'affectation",
+      "teamAdmin": "administrateurs de l'équipe",
+      "teamMemberRbac": "membres de l'équipe",
+      "teamViewerRbac": "lecteurs de l'équipe",
+      "projectAdmin": "administrateurs du projet applicatif",
+      "projectDeveloperRbac": "développeurs du projet applicatif",
+      "projectViewerRbac": "lecteurs du projet applicatif",
+      "networkViewerRbac": "lecteurs du réseau"
+    },
+    "tenantRolesHidden": "Les rôles du locataire qui lui sont attribués sont gérés par l'équipe plateforme et ne sont pas listés ici ; ses membres les perdent aussi."
+  },
+  "donut": {
+    "total": "Total",
+    "pctReady": "{{pct}} % prêts",
+    "aria": "{{title}} : {{pct}} % prêts"
+  },
+  "topology": {
+    "vmEnvironment": "Environnement de VM",
+    "environments": "Environnements",
+    "loading": "Chargement de la topologie",
+    "loadFailed": "La topologie n'a pas pu être chargée",
+    "loadFailedBody": "Vos objets n'ont pas pu être listés. Réessayez dans un instant.",
+    "empty": "Rien à dessiner pour l'instant",
+    "emptyIn": "Aucun objet dans {{namespace}} pour l'instant.",
+    "emptyVisibleIn": "Aucun objet de {{namespace}} lisible avec votre rôle.",
+    "emptyPlatform": "Aucun objet sur la plateforme pour l'instant.",
+    "emptyVisiblePlatform": "Aucun objet de la plateforme lisible avec votre rôle.",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "fit": "Ajuster à la vue",
+    "fullscreen": "Plein écran"
   }
 }

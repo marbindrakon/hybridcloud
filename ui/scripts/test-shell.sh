@@ -27,6 +27,9 @@ entries=(
   "forms/entityFields.ts:entityFields"
   "hooks/k8s.ts:k8s"
   "hooks/overviewCrs.ts:overviewCrs"
+  "forms/attachable.ts:attachable"
+  "access/sharedWithYou.ts:sharedWithYou"
+  "status/deletePreview.ts:deletePreview"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

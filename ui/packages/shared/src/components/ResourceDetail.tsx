@@ -4,24 +4,20 @@ import {
   Button,
   ExpandableSection,
   Label,
-  Modal,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  ModalVariant,
   Spinner,
   Tab,
   Tabs,
   TabTitleText,
 } from '@patternfly/react-core';
 import { ArrowLeftIcon, RedoIcon, SyncAltIcon, TrashIcon } from '@patternfly/react-icons';
+import { useLocation } from 'react-router-dom';
 import {
   deleteDashboardResource,
   forceReconcile,
   useK8sResource,
 } from '../hooks/k8s';
 import { classifyError } from '../hooks/errors';
-import { HybridSovereignKind, K8sResource } from '../types';
+import { HybridSovereignKind, K8sResource, KIND_PLURALS } from '../types';
 import { GenericSpecEditor } from '../forms/GenericSpecEditor';
 import { PageHeader } from './PageHeader';
 import { StatusBadge } from './StatusBadge';
@@ -30,7 +26,9 @@ import { ToastHost, pushToast } from './ToastHost';
 import { RefreshFailedAlert } from './ResourceListTable';
 import { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind } from './PlacementTabs';
 import { WayInPanel } from './WayInPanel';
+import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { GatedButton } from '../access/GatedButton';
+import { ForbiddenState } from '../access/ForbiddenState';
 import { errorText } from '../access/errorText';
 import { useTranslation } from '../i18n';
 import { condStatus, phaseOf, retryQueued } from '../status/phase';
@@ -226,7 +224,14 @@ export function ResourceDetail({
   audience = 'tenant',
 }: ResourceDetailProps): React.ReactElement {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<string | number>(0);
+  // ?tab=networks / ?tab=environments opens that tab (links from the Attach dialog, GT-F3).
+  const { search } = useLocation();
+  const tabParam = new URLSearchParams(search).get('tab');
+  const linkedTab = tabParam === 'networks' || tabParam === 'environments' ? tabParam : null;
+  const [activeTab, setActiveTab] = useState<string | number>(linkedTab ?? 0);
+  useEffect(() => {
+    if (linkedTab) setActiveTab(linkedTab);
+  }, [linkedTab, kind, name]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [retrySent, setRetrySent] = useState(false);
@@ -317,10 +322,14 @@ export function ResourceDetail({
     if (deleteRequested && classifyError(error) === 'notFound') {
       return <Alert variant="info" isInline title={t('toasts.deleted', { kind: kindLabel, name })} />;
     }
+    const cls = classifyError(error);
+    // A forbidden page says who grants access, like a forbidden list (GT-F5).
+    if (cls === 'forbidden') return <ForbiddenState kind={kind} name={name} />;
     const txt = errorText(error, t, { kindLabel, action: 'get' });
+    // A gone object says so in words, without the raw API text (GT-F9).
     return (
-      <Alert variant={classifyError(error) === 'notFound' ? 'warning' : 'danger'} title={txt.title} isInline>
-        {txt.body || error.message}
+      <Alert variant={cls === 'notFound' ? 'warning' : 'danger'} title={txt.title} isInline>
+        {cls === 'notFound' ? t('errors.notFoundObject', { kind: kindLabel, name }) : txt.body || error.message}
       </Alert>
     );
   }
@@ -396,8 +405,9 @@ export function ResourceDetail({
             {t('callout.since', { time: sinceRel.label })}
           </span>
         )}
-        <Label color="grey" isCompact>
-          {t('detail.apiKind', { kind })}
+        {/* The command that reads this object (the API word, never a raw kind in the page text). */}
+        <Label color="grey" isCompact title={t('detail.cliGetTitle')}>
+          <code>{t('detail.cliGet', { resource: KIND_PLURALS[kind] ?? kind.toLowerCase(), name })}</code>
         </Label>
       </div>
 
@@ -462,18 +472,15 @@ export function ResourceDetail({
         </Tab>
       </Tabs>
 
-      <Modal variant={ModalVariant.small} isOpen={confirmDelete} onClose={() => setConfirmDelete(false)}>
-        <ModalHeader title={t('detail.deleteTitle', { kind: kindLabel, name })} />
-        <ModalBody>{t('detail.deleteBody', { name, namespace })}</ModalBody>
-        <ModalFooter>
-          <Button key="confirm" variant="danger" isDisabled={deleting} onClick={() => void handleDelete()}>
-            {deleting ? t('detail.deleting') : t('common.delete')}
-          </Button>
-          <Button key="cancel" variant="link" onClick={() => setConfirmDelete(false)}>
-            {t('common.cancel')}
-          </Button>
-        </ModalFooter>
-      </Modal>
+      <DeleteConfirmModal
+        isOpen={confirmDelete}
+        kind={kind}
+        item={resource}
+        deleting={deleting}
+        error={confirmDelete ? actionError : null}
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

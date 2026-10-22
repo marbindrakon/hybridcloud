@@ -128,6 +128,7 @@ export function EnvironmentNetworksTab({
           <GatedButton kind="NetworkPlacement" verb="create" namespace={namespace} variant="primary" icon={<LinkIcon />} onClick={() => setAttach({})}>
             {t('attach.attachNetwork')}
           </GatedButton>
+          {kind === 'CloudVirt' && <p className="sc-text-muted" style={{ marginTop: '0.5rem' }}>{t('attach.addNamespaceHint')}</p>}
         </div>
       )}
       {wanted.map((n) => (

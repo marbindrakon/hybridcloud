@@ -49,7 +49,7 @@ export default function AdminNetworkOverviewPage(): React.ReactElement {
   return (
     <>
       <PageHeader
-        title={t('nav.networkOverview')}
+        title={t('nav.fabricMap')}
         subtitle={t('pages.networkOverviewDesc')}
         actions={
           <Button variant="secondary" icon={<SyncIcon />} onClick={refresh} isDisabled={loading}>
@@ -58,7 +58,7 @@ export default function AdminNetworkOverviewPage(): React.ReactElement {
         }
       />
       <PageSection>
-        <SectionErrorBoundary title="Network overview failed to render">
+        <SectionErrorBoundary title={t('pages.fabricMapFailed')}>
           <NetworkOverview
             resources={items}
             resourcesLoading={loading}

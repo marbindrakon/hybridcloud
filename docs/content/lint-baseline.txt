@@ -8,19 +8,12 @@ ui/packages/shared/src/i18n/locales/en.json	common.entity	Entity	1
 ui/packages/shared/src/i18n/locales/en.json	common.entityNamespace	Entity	1
 ui/packages/shared/src/i18n/locales/en.json	detail.l2Vni	Layer 2	1
 ui/packages/shared/src/i18n/locales/en.json	fields.cloudInfraEntityRefsHelp	Entities	1
-ui/packages/shared/src/i18n/locales/en.json	fields.entity	Entity	1
 ui/packages/shared/src/i18n/locales/en.json	fields.entityRefs	Entities	1
 ui/packages/shared/src/i18n/locales/en.json	fields.fabricEntityRefsHelp	Entities	1
 ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPool	Layer 2	1
 ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPoolEnd	Layer 2	1
 ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPoolStart	Layer 2	1
 ui/packages/shared/src/i18n/locales/en.json	fields.personaType	Persona	1
-ui/packages/shared/src/i18n/locales/en.json	form.entityListRestricted	Entity	1
-ui/packages/shared/src/i18n/locales/en.json	form.entityListUnavailable	Entity	2
-ui/packages/shared/src/i18n/locales/en.json	form.entityNamePlaceholder	Entity	1
-ui/packages/shared/src/i18n/locales/en.json	form.entityNone	Entities	1
-ui/packages/shared/src/i18n/locales/en.json	form.entityNone	Entity	1
-ui/packages/shared/src/i18n/locales/en.json	form.entitySelectPlaceholder	Entity	1
 ui/packages/shared/src/i18n/locales/en.json	hybridTopology.entityGroup	Entity	1
 ui/packages/shared/src/i18n/locales/en.json	hybridTopology.networkTableCaption	backend	1
 ui/packages/shared/src/i18n/locales/en.json	kinds.Persona	Personas	1

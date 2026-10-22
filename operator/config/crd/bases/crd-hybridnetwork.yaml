@@ -289,7 +289,7 @@ spec:
           jsonPath: .status.placementCount
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready

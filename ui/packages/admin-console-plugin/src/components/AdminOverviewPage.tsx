@@ -33,6 +33,7 @@ import {
   useOverviewCRs,
   K8sResource,
   useTranslation,
+  phaseOf,
 } from '@hybridsovereign/shared';
 import { overviewItemHref, ADMIN_LINKS } from '../adminPaths';
 import '@hybridsovereign/shared/styles/openshift.css';
@@ -103,7 +104,7 @@ const AdminOverviewPage: React.FC = () => {
       <div className="sc-page">
         <PageHeader
           title={t('pages.overviewTitle')}
-          subtitle="Platform health and CR topology — OpenShift Console native"
+          subtitle={t('pages.overviewConsoleSubtitle')}
           breadcrumbs={[{ label: t('nav.sovereignCloud') }, { label: t('pages.overviewTitle') }]}
           actions={
             <Button variant="secondary" icon={<SyncIcon />} onClick={refresh}>
@@ -124,45 +125,45 @@ const AdminOverviewPage: React.FC = () => {
           <>
             <div className="sc-overview-top">
               <Card className="sc-panel">
-                <CardTitle>Platform health</CardTitle>
+                <CardTitle>{t('pages.platformHealth')}</CardTitle>
                 <CardBody>
                   <HealthDonut
                     ready={overall.ready}
                     failed={overall.failed}
                     pending={overall.pending}
-                    title="Platform"
+                    title={t('scope.platform')}
                   />
                 </CardBody>
               </Card>
 
               <div className="sc-inventory-grid">
                 <InventoryCard
-                  title={t('nav.entities')}
+                  title={t('kinds.Entity')}
                   count={(byKind.get('Entity') ?? []).length}
-                  hint={`${bucket(byKind.get('Entity') ?? []).ready} ready`}
+                  hint={`${bucket(byKind.get('Entity') ?? []).ready} ${t('status.ready')}`}
                   kind="Entity"
                   href={ADMIN_LINKS.tenants}
                   status="success"
                 />
                 <InventoryCard
-                  title={t('nav.teams')}
+                  title={t('kinds.Team')}
                   count={(byKind.get('Team') ?? []).length}
-                  hint={`${bucket(byKind.get('Team') ?? []).ready} ready`}
+                  hint={`${bucket(byKind.get('Team') ?? []).ready} ${t('status.ready')}`}
                   kind="Team"
                   href={ADMIN_LINKS.teams}
                 />
                 <InventoryCard
-                  title="Platforms"
+                  title={t('kinds.PlatformOpenshift')}
                   count={platforms.length}
-                  hint={`${bucket(platforms).ready} ready`}
+                  hint={`${bucket(platforms).ready} ${t('status.ready')}`}
                   kind="PlatformOpenshift"
                   href={ADMIN_LINKS.clusters}
                   status={bucket(platforms).failed ? 'danger' : 'default'}
                 />
                 <InventoryCard
-                  title={t('nav.assignments')}
+                  title={t('kinds.Assignment')}
                   count={(byKind.get('Assignment') ?? []).length}
-                  hint={`${bucket(byKind.get('Assignment') ?? []).ready} ready`}
+                  hint={`${bucket(byKind.get('Assignment') ?? []).ready} ${t('status.ready')}`}
                   kind="Assignment"
                   href={ADMIN_LINKS.assignments}
                   status={bucket(byKind.get('Assignment') ?? []).failed ? 'danger' : 'default'}
@@ -173,7 +174,7 @@ const AdminOverviewPage: React.FC = () => {
             {platforms.length > 0 && (
               <>
                 <Title headingLevel="h2" size="lg" className="sc-section-title">
-                  OpenShift clusters
+                  {t('kinds.PlatformOpenshift')}
                 </Title>
                 <div className="sc-cluster-grid sc-mb">
                   {platforms.slice(0, 6).map((p) => {
@@ -194,7 +195,7 @@ const AdminOverviewPage: React.FC = () => {
                             </FlexItem>
                             <FlexItem align={{ default: 'alignEnd' }}>
                               <Label color={healthy ? 'green' : 'red'} icon={healthy ? <CheckCircleIcon /> : undefined}>
-                                {healthy ? 'Healthy' : 'Degraded'}
+                                {healthy ? t('phase.Ready') : t(`phase.${phaseOf(p)}`)}
                               </Label>
                             </FlexItem>
                           </Flex>
@@ -202,12 +203,12 @@ const AdminOverviewPage: React.FC = () => {
                         <CardBody>
                           <dl className="sc-meta-list">
                             <div>
-                              <dt>Namespace</dt>
+                              <dt>{t('common.namespace')}</dt>
                               <dd>{p.metadata.namespace ?? '—'}</dd>
                             </div>
                             <div>
-                              <dt>Status</dt>
-                              <dd>{p.status?.status ?? (healthy ? 'ready' : 'unknown')}</dd>
+                              <dt>{t('common.status')}</dt>
+                              <dd>{t(`phase.${phaseOf(p)}`)}</dd>
                             </div>
                           </dl>
                         </CardBody>
@@ -227,23 +228,23 @@ const AdminOverviewPage: React.FC = () => {
                     </FlexItem>
                     <FlexItem>
                       <CardTitle component="span">
-                        Failed custom resources <Label color="orange">{overall.failed}</Label>
+                        {t('pages.failedResources')} <Label color="orange">{overall.failed}</Label>
                       </CardTitle>
                     </FlexItem>
                     <FlexItem align={{ default: 'alignEnd' }}>
-                      <a href={ADMIN_LINKS.accessGroups}>View all</a>
+                      <a href={ADMIN_LINKS.accessGroups}>{t('common.view')}</a>
                     </FlexItem>
                   </Flex>
                 </CardHeader>
                 <CardBody>
                   <div className="sc-table-wrap">
-                    <table className="pf-v5-c-table pf-m-compact" role="grid" aria-label="Failed resources">
+                    <table className="pf-v5-c-table pf-m-compact" role="grid" aria-label={t('pages.failedResources')}>
                       <thead>
                         <tr>
-                          <th>Kind</th>
-                          <th>Name</th>
-                          <th>Namespace</th>
-                          <th>Message</th>
+                          <th>{t('common.resources')}</th>
+                          <th>{t('common.name')}</th>
+                          <th>{t('common.namespace')}</th>
+                          <th>{t('common.status')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -251,7 +252,7 @@ const AdminOverviewPage: React.FC = () => {
                           const href = overviewItemHref(item);
                           return (
                             <tr key={`${item.kind}/${item.metadata.namespace}/${item.metadata.name}`}>
-                              <td data-label="Kind">{item.kind}</td>
+                              <td data-label={t('common.resources')}>{t(`kindsOne.${item.kind}`, { defaultValue: item.kind })}</td>
                               <td data-label={t('common.name')}>
                                 {href ? (
                                   <a className="sc-resource-link" href={href}>
@@ -263,7 +264,7 @@ const AdminOverviewPage: React.FC = () => {
                                 )}
                               </td>
                               <td data-label={t('common.namespace')}>{item.metadata.namespace ?? '—'}</td>
-                              <td data-label="Message">
+                              <td data-label={t('common.status')}>
                                 <StatusBadge item={item} />
                               </td>
                             </tr>
@@ -279,13 +280,13 @@ const AdminOverviewPage: React.FC = () => {
             <Flex alignItems={{ default: 'alignItemsCenter' }} className="sc-section-title">
               <FlexItem>
                 <Title headingLevel="h2" size="lg">
-                  <TopologyIcon className="sc-inline-icon" /> Live topology
+                  <TopologyIcon className="sc-inline-icon" /> {t('common.topology')}
                 </Title>
               </FlexItem>
             </Flex>
             <Card className="sc-panel">
               <CardBody>
-                <SectionErrorBoundary title="Live topology unavailable">
+                <SectionErrorBoundary title={t('topology.loadFailed')}>
                   <EntityTopology
                     resources={items}
                     resourcesLoading={loading}
@@ -299,7 +300,7 @@ const AdminOverviewPage: React.FC = () => {
               <InventoryCard
                 title={t('nav.cloudInfrastructure')}
                 count={(byKind.get('CloudInfrastructure') ?? []).length}
-                hint={`${bucket(byKind.get('CloudInfrastructure') ?? []).ready} ready`}
+                hint={`${bucket(byKind.get('CloudInfrastructure') ?? []).ready} ${t('status.ready')}`}
                 kind="CloudInfrastructure"
                 href={ADMIN_LINKS.sites}
                 status={bucket(byKind.get('CloudInfrastructure') ?? []).failed ? 'danger' : 'default'}

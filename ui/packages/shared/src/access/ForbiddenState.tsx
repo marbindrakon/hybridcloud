@@ -22,15 +22,33 @@ function useScopeLabels(): { tenantLabel?: string; contacts?: { name?: string; e
 
 /**
  * "You don't have access to VM environments in Acme Corporation. ... grants it.
- * Contacts: ..." - a forbidden list is never shown as an empty one.
+ * Contacts: ..." - a forbidden list is never shown as an empty one. With
+ * `name`, the same state for one object's page (GT-F5): the roles that grant
+ * reading that kind and the tenant's contacts.
  */
-export function ForbiddenState({ kind, compact = false }: { kind: HybridSovereignKind; compact?: boolean }): React.ReactElement {
+export function ForbiddenState({
+  kind,
+  name,
+  compact = false,
+}: {
+  kind: HybridSovereignKind;
+  /** The object a detail page could not read */
+  name?: string;
+  compact?: boolean;
+}): React.ReactElement {
   const { t } = useTranslation();
   const { tenantLabel, contacts } = useScopeLabels();
   const kindLabel = t(`kinds.${kind}`);
-  const title = tenantLabel ? t('errors.forbiddenList', { kind: kindLabel, tenant: tenantLabel }) : t('errors.forbiddenKind', { kind: kindLabel });
+  const oneLabel = t(`kindsOne.${kind}`, { defaultValue: kind });
+  const title = name
+    ? tenantLabel
+      ? t('errors.forbiddenObject', { kind: oneLabel, name, tenant: tenantLabel })
+      : t('errors.forbiddenObjectNoTenant', { kind: oneLabel, name })
+    : tenantLabel
+      ? t('errors.forbiddenList', { kind: kindLabel, tenant: tenantLabel })
+      : t('errors.forbiddenKind', { kind: kindLabel });
   const hint = roleHintText(t, {
-    roleNames: hintRoles(KIND_PLURALS[kind], 'list').map((r) => t(`roles.${r}`)),
+    roleNames: hintRoles(KIND_PLURALS[kind], name ? 'get' : 'list').map((r) => t(`roles.${r}`)),
     contacts,
   });
   if (compact) {

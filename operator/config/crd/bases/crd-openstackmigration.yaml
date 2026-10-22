@@ -286,9 +286,6 @@ spec:
         - name: Phase
           type: string
           jsonPath: .status.phase
-        - name: Status
-          type: string
-          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready
