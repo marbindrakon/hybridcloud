@@ -3848,9 +3848,9 @@ sovereignJobs:
           value: "true"
         # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
         - name: KEYCLOAK_PLAN_ONLY
-          value: "true"
+          value: "false"
         - name: SHC_SECURITY_RUN_ID
-          value: "ux-h1-v7"
+          value: "ux-h1-v8"
         - name: KEYCLOAK_URL
           value: "http://rhbk-central-service.central-rhbk.svc:8080"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -3902,9 +3902,9 @@ sovereignJobs:
           value: "true"
         # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
         - name: KEYCLOAK_PLAN_ONLY
-          value: "true"
+          value: "false"
         - name: SHC_SECURITY_RUN_ID
-          value: "ux-h1-v7"
+          value: "ux-h1-v8"
         - name: KEYCLOAK_URL
           value: "http://rhbk-central-service.central-rhbk.svc:8080"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -3937,9 +3937,9 @@ sovereignJobs:
           value: "true"
         # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
         - name: KEYCLOAK_PLAN_ONLY
-          value: "true"
+          value: "false"
         - name: SHC_SECURITY_RUN_ID
-          value: "ux-h1-v7"
+          value: "ux-h1-v8"
         - name: RUN_ID
           value: "2026-06-24-fix-oauth"
         - name: KEYCLOAK_CENTRAL_URL
@@ -4047,9 +4047,9 @@ sovereignJobs:
           value: "true"
         # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
         - name: KEYCLOAK_PLAN_ONLY
-          value: "true"
+          value: "false"
         - name: SHC_SECURITY_RUN_ID
-          value: "ux-h1-v7"
+          value: "ux-h1-v8"
         - name: KEYCLOAK_URL
           value: "https://rhbk-services.apps.services.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -4091,9 +4091,9 @@ sovereignJobs:
           value: "true"
         # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
         - name: KEYCLOAK_PLAN_ONLY
-          value: "true"
+          value: "false"
         - name: SHC_SECURITY_RUN_ID
-          value: "ux-h1-v7"
+          value: "ux-h1-v8"
         # shc: own Vault entry; central's job owns "keycloak-clients"
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-services"
@@ -4124,9 +4124,9 @@ sovereignJobs:
           value: "true"
         # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
         - name: KEYCLOAK_PLAN_ONLY
-          value: "true"
+          value: "false"
         - name: SHC_SECURITY_RUN_ID
-          value: "ux-h1-v7"
+          value: "ux-h1-v8"
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-iaas"
         - name: KEYCLOAK_URL
@@ -4165,9 +4165,9 @@ sovereignJobs:
           value: "true"
         # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
         - name: KEYCLOAK_PLAN_ONLY
-          value: "true"
+          value: "false"
         - name: SHC_SECURITY_RUN_ID
-          value: "ux-h1-v7"
+          value: "ux-h1-v8"
         - name: VAULT_ADDR
           value: "http://vault-active.central-vault.svc:8200"
         - name: VAULT_SECRET_NAMESPACE
