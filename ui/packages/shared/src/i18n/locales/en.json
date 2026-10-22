@@ -1214,16 +1214,26 @@
     "openstackProject": "OpenStack project",
     "gcpProject": "Google Cloud project",
     "onSite": "on site {{site}}",
+    "group": {
+      "deleted": "Deleted with it:",
+      "waits": "The delete waits until these are gone (it shows Deleting until then):",
+      "kept": "Not deleted with it (delete them separately):"
+    },
     "section": {
-      "placements": "Network placements deleted with it:",
-      "namespaces": "Site namespaces deleted with it, with every VM in them:",
-      "cloudProject": "Deleted in the cloud:",
-      "dnsZone": "DNS zone deleted with it:",
-      "subnet": "Subnet released:",
+      "namespaces": "Site namespaces, removed once they hold no VMs (the delete waits while any VM remains)",
+      "cloudProject": "In the cloud",
+      "dnsZone": "DNS zone",
+      "subnet": "Subnet released",
       "tenantRoles": "Tenant roles that name it (its members lose them):",
       "toolRoles": "Tool roles that name it (its members lose them):",
       "accessLists": "Access lists that name it (its members lose that access):",
-      "scopeGrants": "Access that ends with it:"
+      "scopeGrants": "Access that ends with it:",
+      "waitPlacements": "Network placements",
+      "waitVmEnvironments": "OpenShift Virtualization environments whose namespaces use it",
+      "waitCircuits": "Edge connections",
+      "waitClusters": "OpenShift clusters on it",
+      "waitSiteNamespace": "The namespaces of its environment that use the network",
+      "keptPlacements": "Network placements on it"
     },
     "fields": {
       "aapAdminRbac": "AAP admins",
@@ -1254,7 +1264,8 @@
       "projectViewerRbac": "app project viewers",
       "networkViewerRbac": "network viewers"
     },
-    "tenantRolesHidden": "The tenant roles given to it are kept by the platform team and are not listed here; its members lose them too."
+    "tenantRolesHidden": "The tenant roles given to it are kept by the platform team and are not listed here; its members lose them too.",
+    "usingNamespaces": "namespaces {{names}}"
   },
   "donut": {
     "total": "Total",

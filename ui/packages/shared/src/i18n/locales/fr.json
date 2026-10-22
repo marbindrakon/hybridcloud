@@ -1214,16 +1214,26 @@
     "openstackProject": "Projet OpenStack",
     "gcpProject": "Projet Google Cloud",
     "onSite": "sur le site {{site}}",
+    "group": {
+      "deleted": "Supprimé avec lui :",
+      "waits": "La suppression attend que ceux-ci aient disparu (il reste en suppression jusque-là) :",
+      "kept": "Non supprimés avec lui (à supprimer séparément) :"
+    },
     "section": {
-      "placements": "Placements réseau supprimés avec lui :",
-      "namespaces": "Espaces de noms du site supprimés avec lui, avec toutes leurs VM :",
-      "cloudProject": "Supprimé dans le cloud :",
-      "dnsZone": "Zone DNS supprimée avec lui :",
-      "subnet": "Sous-réseau libéré :",
+      "namespaces": "Espaces de noms du site, supprimés une fois vides de VM (la suppression attend tant qu'une VM reste)",
+      "cloudProject": "Dans le cloud",
+      "dnsZone": "Zone DNS",
+      "subnet": "Sous-réseau libéré",
       "tenantRoles": "Rôles du locataire qui le nomment (ses membres les perdent) :",
       "toolRoles": "Rôles d'outils qui le nomment (ses membres les perdent) :",
       "accessLists": "Listes d'accès qui le nomment (ses membres perdent cet accès) :",
-      "scopeGrants": "Accès qui prennent fin avec lui :"
+      "scopeGrants": "Accès qui prennent fin avec lui :",
+      "waitPlacements": "Placements réseau",
+      "waitVmEnvironments": "Environnements OpenShift Virtualization dont des espaces de noms l'utilisent",
+      "waitCircuits": "Connexions de bordure",
+      "waitClusters": "Clusters OpenShift sur cet environnement",
+      "waitSiteNamespace": "Les espaces de noms de son environnement qui utilisent le réseau",
+      "keptPlacements": "Placements réseau sur cet environnement"
     },
     "fields": {
       "aapAdminRbac": "Administrateurs AAP",
@@ -1254,7 +1264,8 @@
       "projectViewerRbac": "lecteurs du projet applicatif",
       "networkViewerRbac": "lecteurs du réseau"
     },
-    "tenantRolesHidden": "Les rôles du locataire qui lui sont attribués sont gérés par l'équipe plateforme et ne sont pas listés ici ; ses membres les perdent aussi."
+    "tenantRolesHidden": "Les rôles du locataire qui lui sont attribués sont gérés par l'équipe plateforme et ne sont pas listés ici ; ses membres les perdent aussi.",
+    "usingNamespaces": "espaces de noms {{names}}"
   },
   "donut": {
     "total": "Total",

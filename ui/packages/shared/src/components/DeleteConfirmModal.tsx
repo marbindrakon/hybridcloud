@@ -20,9 +20,9 @@ import { tenantOfNamespace } from '../scope/parseGroups';
 import { useOptionalScope } from '../scope/ScopeProvider';
 import type { HybridSovereignKind, K8sResource } from '../types';
 import {
-  ACCESS_GROUP_KINDS,
-  ENVIRONMENT_KINDS,
+  PREVIEW_GROUPS,
   deletePreview,
+  previewReads,
   type PreviewContext,
   type PreviewEntry,
   type PreviewSection,
@@ -44,40 +44,29 @@ function usePreviewContext(kind: string, item: K8sResource | null, isOpen: boole
   const namespace = item?.metadata.namespace ?? '';
   const name = item?.metadata.name ?? '';
   useEffect(() => {
-    if (!isOpen || !item || !namespace) {
-      setState({ ctx: {}, loading: false, partial: false });
-      return;
-    }
-    const needsPlacements = kind === 'HybridNetwork' || ENVIRONMENT_KINDS.includes(kind);
-    const needsRelated = kind === 'Rbac';
-    if (!needsPlacements && !needsRelated) {
+    const reads = isOpen && item ? previewReads(kind, item) : [];
+    const tenant = tenantOfNamespace(namespace);
+    // Only platform readers may read the tenant object (its role bindings); tenants are told so instead.
+    const readEntity = kind === 'Rbac' && !!tenant && readTenant;
+    if (!reads.length && !readEntity) {
       setState({ ctx: {}, loading: false, partial: false });
       return;
     }
     let cancelled = false;
     setState({ ctx: {}, loading: true, partial: false });
-    const tenant = tenantOfNamespace(namespace);
-    const jobs: Promise<unknown>[] = [];
-    const placementsJob = needsPlacements ? fetchResourceList<K8sResource>('NetworkPlacement', { namespace }) : Promise.resolve([]);
-    jobs.push(placementsJob);
-    const relatedJobs = needsRelated
-      ? ACCESS_GROUP_KINDS.map((k) =>
-          fetchResourceList<K8sResource>(k as HybridSovereignKind, { namespace }).then((items) => items.map((i) => ({ ...i, kind: i.kind || k }))),
-        )
-      : [];
-    jobs.push(...relatedJobs);
-    // Only platform readers may read the tenant object (its role bindings); tenants are told so instead.
-    const tenantJob =
-      needsRelated && tenant && readTenant ? fetchResource<K8sResource>('Entity', tenant, TENANT_OBJECTS_NAMESPACE) : Promise.resolve(null);
-    jobs.push(tenantJob);
-    Promise.allSettled(jobs).then((results) => {
+    const listJobs = reads.map((r) => fetchResourceList<K8sResource>(r.kind as HybridSovereignKind, { namespace: r.namespace }));
+    const tenantJob = readEntity ? fetchResource<K8sResource>('Entity', tenant!, TENANT_OBJECTS_NAMESPACE) : Promise.resolve(null);
+    Promise.allSettled([...listJobs, tenantJob]).then((results) => {
       if (cancelled) return;
-      const value = <T,>(r: PromiseSettledResult<unknown>, fallback: T): T => (r.status === 'fulfilled' ? (r.value as T) : fallback);
-      const placements = value<K8sResource[]>(results[0], []);
-      const related = results.slice(1, 1 + relatedJobs.length).flatMap((r) => value<K8sResource[]>(r, []));
-      const tenantObj = value<K8sResource | null>(results[results.length - 1], null);
+      const objects: Record<string, K8sResource[]> = {};
+      reads.forEach((r, i) => {
+        const res = results[i];
+        if (res.status === 'fulfilled') objects[r.kind] = [...(objects[r.kind] ?? []), ...(res.value as K8sResource[])];
+      });
+      const last = results[results.length - 1];
+      const tenantObj = last.status === 'fulfilled' ? (last.value as K8sResource | null) : null;
       setState({
-        ctx: { placements, related, tenant: tenantObj },
+        ctx: { objects, tenant: tenantObj },
         loading: false,
         partial: results.some((r) => r.status === 'rejected'),
       });
@@ -97,12 +86,30 @@ function EntryText({ section, entry }: { section: PreviewSection; entry: Preview
   const nameNode = href ? <Link to={href}>{entry.name}</Link> : <strong>{entry.name}</strong>;
   const fieldLabel = (key: string) => t(`deletePreview.fields.${key}`, { defaultValue: key });
   switch (section.key) {
-    case 'placements':
+    case 'waitVmEnvironments':
+    case 'waitSiteNamespace':
       return (
         <>
           {label}
           {nameNode}
-          {entry.detail ? <span className="sc-text-muted"> ({entry.detail})</span> : null}
+          {entry.detail ? <span className="sc-text-muted"> ({t('deletePreview.usingNamespaces', { names: entry.detail })})</span> : null}
+        </>
+      );
+    case 'waitPlacements':
+    case 'keptPlacements':
+    case 'waitCircuits':
+    case 'waitClusters':
+      return (
+        <>
+          {label}
+          {nameNode}
+          {entry.detail ? (
+            <span className="sc-text-muted">
+              {' '}
+              ({entry.detailKind ? `${t(`kindsOne.${entry.detailKind}`, { defaultValue: entry.detailKind })} ` : ''}
+              {entry.detail})
+            </span>
+          ) : null}
         </>
       );
     case 'cloudProject':
@@ -190,18 +197,31 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
           <Spinner size="md" aria-label={t('deletePreview.checking')} />
         ) : (
           <>
-            {preview.sections.map((s) => (
-              <div key={s.key} className="sc-mb">
-                <strong>{t(`deletePreview.section.${s.key}`)}</strong>
-                <ul className="sc-delete-preview__list">
-                  {s.entries.map((e, i) => (
-                    <li key={`${e.kind ?? ''}/${e.name}/${e.detail ?? ''}/${i}`}>
-                      <EntryText section={s} entry={e} />
-                    </li>
+            {PREVIEW_GROUPS.map((g) => {
+              const sections = preview.sections.filter((s) => s.group === g);
+              if (!sections.length) return null;
+              return (
+                <div key={g} className="sc-mb">
+                  {g !== 'access' && <strong>{t(`deletePreview.group.${g}`)}</strong>}
+                  {sections.map((s) => (
+                    <div key={s.key} className={g === 'access' ? 'sc-mb' : undefined}>
+                      {g === 'access' ? (
+                        <strong>{t(`deletePreview.section.${s.key}`)}</strong>
+                      ) : (
+                        <div className="sc-text-muted">{t(`deletePreview.section.${s.key}`)}</div>
+                      )}
+                      <ul className="sc-delete-preview__list">
+                        {s.entries.map((e, i) => (
+                          <li key={`${e.kind ?? ''}/${e.name}/${e.detail ?? ''}/${i}`}>
+                            <EntryText section={s} entry={e} />
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ))}
-                </ul>
-              </div>
-            ))}
+                </div>
+              );
+            })}
             {preview.sections.length === 0 && <p className="sc-text-muted sc-mb">{t('deletePreview.nothingElse')}</p>}
             {kind === 'Rbac' && !platformReader && <p className="sc-text-muted sc-mb">{t('deletePreview.tenantRolesHidden')}</p>}
             {partial && <p className="sc-text-muted sc-mb">{t('deletePreview.partial')}</p>}
