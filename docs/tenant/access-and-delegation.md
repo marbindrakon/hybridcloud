@@ -70,6 +70,9 @@ oc auth can-i create hybridnetworks -n entity-<tenant>       # a tenant role
 oc auth can-i update teams/<name> -n entity-<tenant>         # an access field of a team setup
 ```
 
+To list everything your role reads without `Forbidden` lines, use the command for your role in
+[listing your objects](glossary.md#listing-your-objects).
+
 ## Group spelling
 
 One access group, three spellings:
