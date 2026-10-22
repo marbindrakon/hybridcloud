@@ -31,9 +31,22 @@
       retries: 5
       delay: 5
 
+    # Several clusters are registered with Argo CD (services and the sites); pick the services one by its API
+    # server, then by the conventional name. "first" picked whichever sorted first (edge1) and its token got 401.
+    - name: Pick the services cluster's ArgoCD secret
+      ansible.builtin.set_fact:
+        services_cluster_secrets: "{{ (argo_cluster_secrets.resources | selectattr('data.server', 'defined') | selectattr('data.server', 'equalto', ocp_services_server | b64encode) | list) or (argo_cluster_secrets.resources | selectattr('metadata.name', 'equalto', 'argocd-cluster-services') | list) }}"
+      when: argo_cluster_secrets.resources | length > 0
+
     - name: Parse services cluster credentials
       ansible.builtin.set_fact:
-        services_cluster_config: "{{ (argo_cluster_secrets.resources | first).data.config | b64decode | from_json }}"
+        services_cluster_config: "{{ (services_cluster_secrets | first).data.config | b64decode | from_json }}"
+      when: (services_cluster_secrets | default([])) | length > 0
+
+    - name: The services cluster must have an ArgoCD cluster secret
+      ansible.builtin.assert:
+        that: (services_cluster_secrets | default([])) | length > 0
+        fail_msg: "no ArgoCD cluster secret in openshift-gitops has server {{ ocp_services_server }} or the name argocd-cluster-services"
       when: argo_cluster_secrets.resources | length > 0
 
     - name: Login to services cluster to obtain bearer token
