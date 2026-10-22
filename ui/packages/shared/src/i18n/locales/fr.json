@@ -67,7 +67,8 @@
     "reason": "Raison",
     "since": "Depuis",
     "title": "État : {{phase}}",
-    "badgeAria": "État : {{phase}}. Afficher les détails"
+    "badgeAria": "État : {{phase}}. Afficher les détails",
+    "notReadyYet": "En attente ou en cours"
   },
   "nav": {
     "overview": "Vue d'ensemble",
@@ -228,7 +229,9 @@
     "allEntitiesReadOnly": "Objets locataires de toutes les entités, en lecture seule. Les locataires les gèrent depuis leurs propres pages.",
     "sharedWithYouTitle": "Partagés avec vous",
     "sharedWithYouBody": "Vous pouvez les ouvrir par leur nom : ils ont été partagés avec l'un de vos groupes d'accès, même si votre rôle ne liste pas tous les objets de ce type.",
-    "sharedWithYouLabel": "Partagé avec vous"
+    "sharedWithYouLabel": "Partagé avec vous",
+    "overviewConsoleSubtitle": "Santé de la plateforme et objets de tous les locataires",
+    "fabricMapFailed": "La carte de la fabric n'a pas pu être dessinée"
   },
   "list": {
     "showing": "{{count}} ressources",
@@ -300,12 +303,12 @@
     "deleteRow": "Supprimer {{name}}"
   },
   "form": {
-    "entityListRestricted": "Seule l'entité à laquelle vous avez accès est affichée — la liste complète nécessite un accès plateforme.",
-    "entityListUnavailable": "La liste des entités n'a pas pu être lue ; saisissez le nom de l'entité fourni par l'équipe plateforme.",
-    "entityNamePlaceholder": "Nom de l'entité, p. ex. acme-corp",
-    "entityNone": "Aucune entité visible avec vos droits — créez d'abord une entité",
+    "entityListRestricted": "Seul le locataire auquel vous avez accès est affiché ; la liste complète nécessite un accès plateforme.",
+    "entityListUnavailable": "La liste des locataires n'a pas pu être lue ; saisissez le nom du locataire fourni par l'équipe plateforme.",
+    "entityNamePlaceholder": "Nom du locataire",
+    "entityNone": "Aucun locataire visible avec vos droits ; créez d'abord un locataire",
     "entityScopeHelp": "Créé dans l'espace de noms {{namespace}}.",
-    "entitySelectPlaceholder": "Sélectionner une entité…",
+    "entitySelectPlaceholder": "Sélectionner un locataire…",
     "required": "Obligatoire",
     "optional": "Facultatif",
     "createTitle": "Créer {{kind}}",
@@ -483,7 +486,7 @@
   },
   "fields": {
     "description": "Description",
-    "entity": "Entité (locataire)",
+    "entity": "Locataire",
     "istio": "Istio",
     "argo": "Argo CD",
     "team": "Équipe",
@@ -813,7 +816,6 @@
     "backTo": "Retour à {{parent}}",
     "retryNow": "Réessayer maintenant",
     "retryQueued": "Nouvel essai en file",
-    "apiKind": "Type d'API : {{kind}}",
     "actionFailed": "L'action n'a pas abouti",
     "overviewTab": "Vue d'ensemble",
     "configurationTab": "Configuration",
@@ -822,7 +824,9 @@
     "diagnostics": "Diagnostic (administrateurs de la plateforme)",
     "deleteTitle": "Supprimer {{kind}} {{name}} ?",
     "deleteBody": "Supprime {{name}} de {{namespace}}. La page affiche la progression jusqu'à sa disparition.",
-    "deleting": "Suppression…"
+    "deleting": "Suppression…",
+    "cliGet": "oc get {{resource}} {{name}}",
+    "cliGetTitle": "Lire cet objet en ligne de commande"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1250,5 +1254,26 @@
       "projectViewerRbac": "lecteurs du projet applicatif",
       "networkViewerRbac": "lecteurs du réseau"
     }
+  },
+  "donut": {
+    "total": "Total",
+    "pctReady": "{{pct}} % prêts",
+    "aria": "{{title}} : {{pct}} % prêts"
+  },
+  "topology": {
+    "vmEnvironment": "Environnement de VM",
+    "environments": "Environnements",
+    "loading": "Chargement de la topologie",
+    "loadFailed": "La topologie n'a pas pu être chargée",
+    "loadFailedBody": "Vos objets n'ont pas pu être listés. Réessayez dans un instant.",
+    "empty": "Rien à dessiner pour l'instant",
+    "emptyIn": "Aucun objet dans {{namespace}} pour l'instant.",
+    "emptyVisibleIn": "Aucun objet de {{namespace}} lisible avec votre rôle.",
+    "emptyPlatform": "Aucun objet sur la plateforme pour l'instant.",
+    "emptyVisiblePlatform": "Aucun objet de la plateforme lisible avec votre rôle.",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "fit": "Ajuster à la vue",
+    "fullscreen": "Plein écran"
   }
 }

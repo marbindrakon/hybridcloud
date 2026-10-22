@@ -25,42 +25,43 @@ import {
   InfrastructureIcon,
 } from '@patternfly/react-icons';
 import { HybridSovereignKind } from '../types';
+import { useTranslation } from '../i18n';
 
 export interface KindVisual {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
 }
 
-/** Distinctive icon per CR kind — no accent backgrounds; color is inherited. */
+/** Distinctive icon per kind, no accent backgrounds; color is inherited. Labels are the display terms (fallback when no translation). */
 export const KIND_VISUALS: Record<string, KindVisual> = {
   Overview: { icon: TachometerAltIcon, label: 'Overview' },
-  Entity: { icon: BuildingIcon, label: 'Entity' },
-  Team: { icon: UsersIcon, label: 'Team' },
-  Project: { icon: FolderOpenIcon, label: 'Project' },
-  PlatformOpenshift: { icon: ClusterIcon, label: 'Platform Openshift' },
-  CloudOSO: { icon: LayerGroupIcon, label: 'Cloud OSO' },
-  CloudAWS: { icon: AwsIcon, label: 'Cloud AWS' },
-  CloudGCP: { icon: GoogleIcon, label: 'Cloud GCP' },
-  CloudVirt: { icon: ServerIcon, label: 'Cloud Virt' },
+  Entity: { icon: BuildingIcon, label: 'Tenant' },
+  Team: { icon: UsersIcon, label: 'Team setup' },
+  Project: { icon: FolderOpenIcon, label: 'App project' },
+  PlatformOpenshift: { icon: ClusterIcon, label: 'OpenShift cluster' },
+  CloudOSO: { icon: LayerGroupIcon, label: 'OpenStack environment' },
+  CloudAWS: { icon: AwsIcon, label: 'AWS environment' },
+  CloudGCP: { icon: GoogleIcon, label: 'Google Cloud environment' },
+  CloudVirt: { icon: ServerIcon, label: 'OpenShift Virtualization environment' },
   Cloud: { icon: CloudIcon, label: 'Cloud' },
-  Assignment: { icon: ProjectDiagramIcon, label: 'Assignment' },
-  Persona: { icon: UserEditIcon, label: 'Persona' },
-  Rbac: { icon: LockIcon, label: 'RBAC' },
+  Assignment: { icon: ProjectDiagramIcon, label: 'Cluster assignment' },
+  Persona: { icon: UserEditIcon, label: 'Identity role (deprecated)' },
+  Rbac: { icon: LockIcon, label: 'Access group' },
   Vault: { icon: SecurityIcon, label: 'Vault' },
-  VaultKV: { icon: KeyIcon, label: 'Vault KV' },
-  AAPOrg: { icon: ProcessAutomationIcon, label: 'AAP Org' },
-  QuayOrg: { icon: BundleIcon, label: 'Quay Org' },
-  OpenStackMigration: { icon: MigrationIcon, label: 'Migration' },
-  AAPConfig: { icon: GlobeIcon, label: 'Service URL' },
-  RbacConfig: { icon: CogIcon, label: 'Operator' },
-  QuayConfig: { icon: CatalogIcon, label: 'Quay Config' },
-  CloudInfrastructure: { icon: InfrastructureIcon, label: 'Cloud Infrastructure' },
-  HybridFabric: { icon: TopologyIcon, label: 'Hybrid Fabric' },
+  VaultKV: { icon: KeyIcon, label: 'KV secrets engine' },
+  AAPOrg: { icon: ProcessAutomationIcon, label: 'AAP organization' },
+  QuayOrg: { icon: BundleIcon, label: 'Quay organization' },
+  OpenStackMigration: { icon: MigrationIcon, label: 'VM migration to OpenStack' },
+  AAPConfig: { icon: GlobeIcon, label: 'Automation connection' },
+  RbacConfig: { icon: CogIcon, label: 'Identity provider connection' },
+  QuayConfig: { icon: CatalogIcon, label: 'Registry connection' },
+  CloudInfrastructure: { icon: InfrastructureIcon, label: 'Site' },
+  HybridFabric: { icon: TopologyIcon, label: 'Fabric' },
   CloudGateway: { icon: GlobeIcon, label: 'Cloud Gateway' },
-  TransportLink: { icon: ProjectDiagramIcon, label: 'Transport Link' },
-  HybridNetwork: { icon: TopologyIcon, label: 'Hybrid Network' },
-  NetworkPlacement: { icon: LayerGroupIcon, label: 'Network Placement' },
-  UIHealthChecker: { icon: TachometerAltIcon, label: 'UI Health' },
+  TransportLink: { icon: ProjectDiagramIcon, label: 'Transport link' },
+  HybridNetwork: { icon: TopologyIcon, label: 'Network' },
+  NetworkPlacement: { icon: LayerGroupIcon, label: 'Network placement' },
+  UIHealthChecker: { icon: TachometerAltIcon, label: 'Endpoint health check' },
   Server: { icon: ServerIcon, label: 'Server' },
 };
 
@@ -84,12 +85,14 @@ export function KindIcon({
   className = '',
   title,
 }: KindIconProps): React.ReactElement {
+  const { t } = useTranslation();
   const visual = getKindVisual(kind);
+  const label = t(`kindsOne.${kind}`, { defaultValue: visual.label });
   const Icon = visual.icon;
   const classes = ['sc-kind-icon', `sc-kind-icon--${size}`, className].filter(Boolean).join(' ');
 
   return (
-    <span className={classes} title={title ?? visual.label} aria-hidden={!title}>
+    <span className={classes} title={title ?? label} aria-hidden={!title}>
       <Icon />
     </span>
   );

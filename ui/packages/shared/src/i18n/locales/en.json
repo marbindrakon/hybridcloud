@@ -67,7 +67,8 @@
     "reason": "Reason",
     "since": "Since",
     "title": "Status: {{phase}}",
-    "badgeAria": "Status: {{phase}}. Show details"
+    "badgeAria": "Status: {{phase}}. Show details",
+    "notReadyYet": "Waiting or in progress"
   },
   "nav": {
     "overview": "Overview",
@@ -228,7 +229,9 @@
     "allEntitiesReadOnly": "Tenant objects of every entity, read-only. Tenants manage them from their own pages.",
     "sharedWithYouTitle": "Shared with you",
     "sharedWithYouBody": "You can open these by name: they were shared with one of your access groups, although your role does not list everything of their kind.",
-    "sharedWithYouLabel": "Shared with you"
+    "sharedWithYouLabel": "Shared with you",
+    "overviewConsoleSubtitle": "Platform health and the objects of every tenant",
+    "fabricMapFailed": "The fabric map could not be drawn"
   },
   "list": {
     "showing": "{{count}} resources",
@@ -374,12 +377,12 @@
     "siteDefaultNetwork": "Site default network",
     "siteDefaultValue": "Site default: {{value}}",
     "siteDnsSection": "Environment DNS",
-    "entityListRestricted": "Showing only the Entity you have access to — the full tenant list needs platform access.",
-    "entityListUnavailable": "The Entity list could not be read; type the Entity name given by the platform team.",
-    "entityNamePlaceholder": "Entity name, e.g. acme-corp",
-    "entityNone": "No Entities are visible with your access — create an Entity first",
+    "entityListRestricted": "Showing only the tenant you have access to; the full tenant list needs platform access.",
+    "entityListUnavailable": "The tenant list could not be read; type the tenant name given by the platform team.",
+    "entityNamePlaceholder": "Tenant name",
+    "entityNone": "No tenant is visible with your access; create a tenant first",
     "entityScopeHelp": "Created in namespace {{namespace}}.",
-    "entitySelectPlaceholder": "Select Entity…",
+    "entitySelectPlaceholder": "Select a tenant…",
     "accessGroupsPlaceholder": "Choose access groups (optional)",
     "nSelected": "{{count}} selected",
     "noAccessGroups": "No access groups in this tenant yet",
@@ -483,7 +486,7 @@
   },
   "fields": {
     "description": "Description",
-    "entity": "Entity (tenant)",
+    "entity": "Tenant",
     "istio": "Istio",
     "argo": "Argo CD",
     "team": "Team",
@@ -813,7 +816,6 @@
     "backTo": "Back to {{parent}}",
     "retryNow": "Retry now",
     "retryQueued": "Retry queued",
-    "apiKind": "API kind: {{kind}}",
     "actionFailed": "The action did not go through",
     "overviewTab": "Overview",
     "configurationTab": "Configuration",
@@ -822,7 +824,9 @@
     "diagnostics": "Diagnostics (platform administrators)",
     "deleteTitle": "Delete {{kind}} {{name}}?",
     "deleteBody": "This deletes {{name}} from {{namespace}}. The page shows the progress until it is gone.",
-    "deleting": "Deleting…"
+    "deleting": "Deleting…",
+    "cliGet": "oc get {{resource}} {{name}}",
+    "cliGetTitle": "Read this object from the command line"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1250,5 +1254,26 @@
       "projectViewerRbac": "app project viewers",
       "networkViewerRbac": "network viewers"
     }
+  },
+  "donut": {
+    "total": "Total",
+    "pctReady": "{{pct}}% ready",
+    "aria": "{{title}}: {{pct}}% ready"
+  },
+  "topology": {
+    "vmEnvironment": "VM environment",
+    "environments": "Environments",
+    "loading": "Loading the topology",
+    "loadFailed": "The topology could not be loaded",
+    "loadFailedBody": "Your objects could not be listed. Try again in a moment.",
+    "empty": "Nothing to draw yet",
+    "emptyIn": "No objects in {{namespace}} yet.",
+    "emptyVisibleIn": "No object in {{namespace}} that your role can read.",
+    "emptyPlatform": "No objects on the platform yet.",
+    "emptyVisiblePlatform": "No object on the platform that your role can read.",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to view",
+    "fullscreen": "Full screen"
   }
 }

@@ -17,7 +17,7 @@ import {
   useK8sResource,
 } from '../hooks/k8s';
 import { classifyError } from '../hooks/errors';
-import { HybridSovereignKind, K8sResource } from '../types';
+import { HybridSovereignKind, K8sResource, KIND_PLURALS } from '../types';
 import { GenericSpecEditor } from '../forms/GenericSpecEditor';
 import { PageHeader } from './PageHeader';
 import { StatusBadge } from './StatusBadge';
@@ -405,8 +405,9 @@ export function ResourceDetail({
             {t('callout.since', { time: sinceRel.label })}
           </span>
         )}
-        <Label color="grey" isCompact>
-          {t('detail.apiKind', { kind })}
+        {/* The command that reads this object (the API word, never a raw kind in the page text). */}
+        <Label color="grey" isCompact title={t('detail.cliGetTitle')}>
+          <code>{t('detail.cliGet', { resource: KIND_PLURALS[kind] ?? kind.toLowerCase(), name })}</code>
         </Label>
       </div>
 

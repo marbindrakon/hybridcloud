@@ -68,7 +68,7 @@ export function EntitySelect({
     enabled,
     fallbackNamespace,
   });
-  const fieldLabel = label ?? t('fields.entity', { defaultValue: 'Entity' });
+  const fieldLabel = label ?? t('fields.entity', { defaultValue: 'Tenant' });
   const selected = options.find((o) => o.name === value);
 
   // Preselect whatever the host app already scoped us to, so switching apps

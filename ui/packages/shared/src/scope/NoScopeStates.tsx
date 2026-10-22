@@ -14,6 +14,12 @@ const iconOf = (c: unknown): any => c;
 export function NoRoleState(): React.ReactElement {
   const { t } = useTranslation();
   const ctx = useOptionalScope();
+  // The page title says the same as the page (GT-F6), not the static index.html title.
+  useEffect(() => {
+    if (!(window as { SERVER_FLAGS?: unknown }).SERVER_FLAGS) {
+      document.title = [t('scope.noRoleTitle'), t('nav.sovereignCloud')].join(' · ');
+    }
+  }, [t]);
   return (
     <EmptyState titleText={t('scope.noRoleTitle')} headingLevel="h1" icon={iconOf(UserIcon)}>
       <EmptyStateBody>

@@ -9,6 +9,7 @@ import {
   LabelGroup,
 } from '@patternfly/react-core';
 import type { MenuToggleElement } from '@patternfly/react-core';
+import { useTranslation } from '../i18n';
 
 export interface EntityMultiSelectOption {
   value: string;
@@ -33,13 +34,14 @@ export interface EntityMultiSelectProps {
  */
 export function EntityMultiSelect({
   id = 'entity-multiselect',
-  label = 'Entities that may use this fabric',
+  label = 'Tenants that may use this fabric',
   value,
   onChange,
   options,
   isRequired,
-  placeholder = 'Select entities…',
+  placeholder = 'Select tenants…',
 }: EntityMultiSelectProps): React.ReactElement {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const selected = value ?? [];
 
@@ -88,7 +90,7 @@ export function EntityMultiSelect({
         <SelectList>
           {options.length === 0 ? (
             <SelectOption isDisabled value="">
-              No Ready Entities — create an Entity first
+              {t('form.entityNone')}
             </SelectOption>
           ) : (
             options.map((o) => (

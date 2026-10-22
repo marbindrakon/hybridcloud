@@ -118,22 +118,22 @@ const TRANSPORT_LINK_TUNNELS = ['wireguard', 'ipsec', 'macsec', 'none'];
 const OSO_DNS_PROVIDERS = ['designate', 'route53', 'none'];
 
 const FORM_TITLES: Record<SelfServiceFormType, string> = {
-  team: 'Create Team',
-  project: 'Create Project',
-  assignment: 'Create Assignment',
-  cloudoso: 'Request CloudOSO Environment',
-  cloudaws: 'Request Cloud AWS Account',
-  cloudgcp: 'Request Cloud GCP Environment',
-  cloudvirt: 'Request Cloud Virt Environment',
-  platformopenshift: 'Create Platform Openshift',
+  team: 'Create team setup',
+  project: 'Create app project',
+  assignment: 'Create cluster assignment',
+  cloudoso: 'Request an OpenStack environment',
+  cloudaws: 'Request an AWS environment',
+  cloudgcp: 'Request a Google Cloud environment',
+  cloudvirt: 'Request an OpenShift Virtualization environment',
+  platformopenshift: 'Create OpenShift cluster',
   migration: 'Migrate to OpenStack',
   persona: 'Create Persona',
-  rbac: 'Create RBAC',
+  rbac: 'Create access group',
   vault: 'Create Vault',
   vaultkv: 'Create Vault KV',
   aaporg: 'Create AAP Org',
   quayorg: 'Create Quay Org',
-  entity: 'Create Entity',
+  entity: 'Create tenant',
   hybridnetwork: 'Create Hybrid Network',
   networkplacement: 'Create Network Placement',
   hybridfabric: 'Create Hybrid Fabric',
@@ -1046,7 +1046,7 @@ export function CreateResourceForm({
                   </FormGroup>
                   <RefSelect
                     id="platform"
-                    label="Platform Openshift"
+                    label={t('kindsOne.PlatformOpenshift')}
                     value={platformRef}
                     onChange={setPlatformRef}
                     options={names(platforms.items)}
@@ -1310,7 +1310,7 @@ export function CreateResourceForm({
                   {!namespace && (
                     <RefSelect
                       id="entity"
-                      label="Entity"
+                      label={t('kindsOne.Entity')}
                       value={entityName}
                       onChange={(v) => {
                         setEntityName(v);
@@ -1323,7 +1323,7 @@ export function CreateResourceForm({
                   )}
                   <RbacMultiSelect
                     id="rbac"
-                    label="RBAC"
+                    label={t('kindsOne.Rbac')}
                     value={personaRbacs}
                     onChange={(next) => {
                       setPersonaRbacs(next);

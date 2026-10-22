@@ -5,7 +5,9 @@ Reads docs/content/terms.yaml (the content contract) and checks
   a) the CRD descriptions in operator/config/crd/bases (banned words, structural rules, the
      kind-description convention, undocumented spec fields),
   b) the UI string catalogues (en.json, fr.json values; console-extensions.json names, labels and
-     descriptions), ratcheted by docs/content/lint-baseline.txt,
+     descriptions) and the display strings hard-coded in ui/packages/*/src/**/*.ts(x) (JSX text,
+     display props such as title= / label= / aria-label=, display keys of object literals such
+     as title: / label: / defaultValue:), ratcheted by docs/content/lint-baseline.txt,
   c) the README, docs/ and samples/ (banned words outside code; tenant words in docs/tenant/),
   d) lab knowledge in CRDs, samples, README and docs/ (the patterns of
      scripts/check-lab-literals.py plus the gitignored scripts/scrub-patterns.txt when present),
@@ -44,6 +46,25 @@ UI_FILES = [
     "ui/packages/admin-console-plugin/console-extensions.json",
     "ui/packages/tenant-console-plugin/console-extensions.json",
 ]
+# Hard-coded display strings in the UI sources (b); tests and declarations are not shown to users.
+UI_SRC_GLOBS = ["ui/packages/*/src/**/*.tsx", "ui/packages/*/src/**/*.ts"]
+UI_SRC_SKIP = ["*.test.ts", "*.test.tsx", "*.d.ts", "*/node_modules/*", "*/dist/*"]
+DISPLAY_PROPS = ("title|label|aria-label|placeholder|description|subtitle|titleText|toggleText|alt|"
+                 "helperText|emptyMessage|screenReaderText|tooltip|caption|heading|hint|summary|"
+                 "labelOn|labelOff|noResultsText|textLabel")
+DISPLAY_KEYS = ("title|label|description|subtitle|caption|heading|placeholder|hint|message|summary|"
+                "tooltip|defaultValue|helpText|emptyMessage|text")
+# JSX text between tags: no code punctuation, at least one letter, not part of "=>" / "->".
+JSX_TEXT = re.compile(r"(?<![=\-])>([^<>{}`;=&|?]*[A-Za-z][^<>{}`;=&|?]*)(?=<|\{)")
+# title="..." / title={'...'} / title={`...`}
+JSX_PROP = re.compile(r"(?<![\w-])(?:" + DISPLAY_PROPS + r")=(?:\"([^\"\n]*)\"|\{\s*'([^'\n]*)'\s*\}|"
+                      r"\{\s*\"([^\"\n]*)\"\s*\}|\{\s*`([^`]*)`\s*\})")
+# { title: '...' } / defaultValue: `...`
+OBJ_KEY = re.compile(r"(?<![\w.])(?:" + DISPLAY_KEYS + r")\s*:\s*(?:'([^'\n]*)'|\"([^\"\n]*)\"|`([^`]*)`)")
+# Interpolations and the translation-key look of a literal are not words.
+TEMPLATE_EXPR = re.compile(r"\$\{[^}]*\}")
+I18N_KEY = re.compile(r"^[a-zA-Z][\w-]*(\.[\w-]+)+$")
+
 DOC_GLOBS = ["README.md", "docs/**/*.md", "samples/**/*.md", "samples/**/*.yaml",
              "architecture/README.md", "architecture/docs/architecture.md",
              "architecture/docs/tutorial/09-hybrid-networks.md"]
@@ -224,6 +245,82 @@ def _ui_strings(rel):
             elif isinstance(o, str):
                 yield path, o
         yield from walk(data, "")
+
+
+def _strip_comments(text):
+    """The source without // and /* */ comments; strings and template literals are kept."""
+    out, i, n = [], 0, len(text)
+    quote = None
+    while i < n:
+        c = text[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"`":
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            seg = text[i:n if j < 0 else j + 2]
+            out.append("\n" * seg.count("\n"))  # keep line numbers
+            i = n if j < 0 else j + 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def ui_source_strings(text):
+    """(line, display string) of a .ts/.tsx source: JSX text, display props, display keys."""
+    src = _strip_comments(text)
+    found = []
+    for rx in (JSX_TEXT, JSX_PROP, OBJ_KEY):
+        for m in rx.finditer(src):
+            val = next((g for g in m.groups() if g is not None), "")
+            val = " ".join(TEMPLATE_EXPR.sub(" ", val).split())
+            if not val or not re.search(r"[A-Za-z]", val) or I18N_KEY.match(val):
+                continue
+            if rx is JSX_TEXT and val.count("(") != val.count(")"):
+                continue  # code between two comparisons, not text
+            found.append((src.count("\n", 0, m.start()) + 1, val))
+    return sorted(found)
+
+
+def _ui_source_files():
+    seen = set()
+    for g in UI_SRC_GLOBS:
+        for p in sorted(ROOT.glob(g)):
+            rel = str(p.relative_to(ROOT))
+            if p in seen or not p.is_file() or any(fnmatch.fnmatch(rel, x) for x in UI_SRC_SKIP):
+                continue
+            seen.add(p)
+            yield p, rel
+
+
+def check_ui_sources(rep, rules):
+    """Banned words in the display strings of the UI sources; a hit's key is its text, not its
+    line, so moving code does not churn the baseline."""
+    for path, rel in _ui_source_files():
+        for _line, value in ui_source_strings(path.read_text(encoding="utf-8")):
+            for r in rules:
+                if r.applies("ui", True, rel):
+                    for m in r.rx.finditer(value):
+                        hit = f"{rel}\t{_excerpt(value, 60)}\t{m.group(0)}"
+                        rep.ui_hits[hit] += 1
+                        rep.use[hit] = r.use
 
 
 def check_ui(rep, rules):
@@ -413,7 +510,14 @@ def self_test(rules, crd_rules):
             failed += 1
             print(f"FAIL {surface}{' tenant' if tenant else ''}: {case['text']!r}: "
                   f"hits {hits}, expected {want}")
-    print(f"self-test: {len(fx['cases']) - failed}/{len(fx['cases'])} cases pass")
+    total = len(fx["cases"])
+    for case in fx.get("sources", []):
+        total += 1
+        got = [v for _, v in ui_source_strings(case["source"])]
+        if got != case["strings"]:
+            failed += 1
+            print(f"FAIL source {case['source']!r}: strings {got}, expected {case['strings']}")
+    print(f"self-test: {total - failed}/{total} cases pass")
     return 1 if failed else 0
 
 
@@ -437,6 +541,7 @@ def main():
     rep = Report()
     labs = lab_patterns()
     check_ui(rep, rules)
+    check_ui_sources(rep, rules)
     check_crds(rep, terms, rules, crd_rules, labs)
     if args.write_baseline:
         write_baseline(rep)
