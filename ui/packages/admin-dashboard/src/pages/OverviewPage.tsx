@@ -38,6 +38,7 @@ import {
   useBreadcrumbs,
   useDocumentTitle,
   UnavailableState,
+  phaseOf,
 } from '@hybridsovereign/shared';
 
 function overviewItemHref(item: K8sResource): string | null {
@@ -194,7 +195,7 @@ export function OverviewPage(): React.ReactElement {
                           </FlexItem>
                           <FlexItem align={{ default: 'alignEnd' }}>
                             <Label color={healthy ? 'green' : 'red'} icon={healthy ? <CheckCircleIcon /> : undefined}>
-                              {healthy ? 'Healthy' : 'Degraded'}
+                              {t(`phase.${phaseOf(p)}`)}
                             </Label>
                           </FlexItem>
                         </Flex>
@@ -202,12 +203,12 @@ export function OverviewPage(): React.ReactElement {
                       <CardBody>
                         <dl className="sc-meta-list">
                           <div>
-                            <dt>Namespace</dt>
+                            <dt>{t('common.namespace')}</dt>
                             <dd>{p.metadata.namespace ?? '—'}</dd>
                           </div>
                           <div>
-                            <dt>Status</dt>
-                            <dd>{p.status?.status ?? (healthy ? 'ready' : 'unknown')}</dd>
+                            <dt>{t('common.status')}</dt>
+                            <dd>{t(`phase.${phaseOf(p)}`)}</dd>
                           </div>
                         </dl>
                       </CardBody>

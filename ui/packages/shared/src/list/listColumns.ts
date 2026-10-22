@@ -138,7 +138,7 @@ export function resourceSearchBlob(item: K8sResource, columns: ListColumnDef[]):
   const parts = [
     item.metadata.name,
     item.metadata.namespace ?? '',
-    item.status?.status ?? '',
+    phaseOf(item),
     item.status?.message ?? '',
     JSON.stringify(item.spec ?? {}),
   ];

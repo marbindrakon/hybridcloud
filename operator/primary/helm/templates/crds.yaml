@@ -204,7 +204,7 @@ spec:
           jsonPath: .status.orgId
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -983,7 +983,7 @@ spec:
           jsonPath: .status.vlan
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -1190,7 +1190,7 @@ spec:
           jsonPath: .status.domain
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -1589,7 +1589,7 @@ spec:
           jsonPath: .spec.siteUnderlay.vlan
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -1791,7 +1791,7 @@ spec:
           jsonPath: .status.domain
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -2183,7 +2183,7 @@ spec:
           jsonPath: .status.capabilities.evpn
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -2474,7 +2474,7 @@ spec:
           jsonPath: .status.projectName
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -2772,7 +2772,7 @@ spec:
           jsonPath: .spec.cloudRef.name
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -3665,7 +3665,7 @@ spec:
           jsonPath: .spec.overlayMtu
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -3971,7 +3971,7 @@ spec:
           jsonPath: .status.placementCount
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -4439,7 +4439,7 @@ spec:
           jsonPath: .status.prefixes[0]
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -4742,9 +4742,6 @@ spec:
         - name: Phase
           type: string
           jsonPath: .status.phase
-        - name: Status
-          type: string
-          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -4914,7 +4911,7 @@ spec:
           jsonPath: .spec.rbac
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -5342,7 +5339,7 @@ spec:
           jsonPath: .status.domain
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -5572,7 +5569,7 @@ spec:
           jsonPath: .status.entity
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -5830,7 +5827,7 @@ spec:
           jsonPath: .spec.platform
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -6040,7 +6037,7 @@ spec:
           jsonPath: .status.orgName
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -6782,7 +6779,7 @@ spec:
           jsonPath: .status.features.argo
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -7522,7 +7519,7 @@ spec:
           jsonPath: .status.entity
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt
@@ -7737,7 +7734,7 @@ spec:
           jsonPath: .status.kvPath
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
           type: date
           jsonPath: .status.lastReconciledAt

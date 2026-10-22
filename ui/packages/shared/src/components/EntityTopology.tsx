@@ -86,8 +86,9 @@ const PAD_X = 20;
 const PAD_Y = 16;
 const LAYER_LABEL_H = 16;
 
-function statusFromReady(ready?: boolean, status?: string): TopologyNode['status'] {
-  return normalizeHealth(ready, status);
+/** The node state from the object's phase (stored status.phase, else derived from the Ready condition), Q10. */
+function statusOfItem(item: K8sResource): TopologyNode['status'] {
+  return normalizeHealth(item);
 }
 
 function statusColor(status: TopologyNode['status']): string {
@@ -287,7 +288,7 @@ export function EntityTopology({
       label: item.metadata.name,
       kind,
       namespace: item.metadata.namespace,
-      status: statusFromReady(item.status?.ready, item.status?.status),
+      status: statusOfItem(item),
     });
 
     type AssignSpec = {
@@ -395,7 +396,7 @@ export function EntityTopology({
         const ans = a.metadata.namespace;
         const spec = (a.spec || {}) as AssignSpec;
         const self = resolve('Assignment', ans, a.metadata.name);
-        const failed = statusFromReady(a.status?.ready, a.status?.status) === 'failed';
+        const failed = statusOfItem(a) === 'failed';
         if (spec.team) link(resolve('Team', ans, spec.team), self, failed);
         for (const pName of spec.projects ?? []) link(resolve('Project', ans, pName), self, failed);
         if (spec.openshift) link(resolve('PlatformOpenshift', ans, spec.openshift), self, failed);
@@ -413,7 +414,7 @@ export function EntityTopology({
       link(
         resolve('HybridFabric', gns, fabricName),
         resolve('CloudInfrastructure', gns, infraName),
-        statusFromReady(g.status?.ready, g.status?.status) === 'failed',
+        statusOfItem(g) === 'failed',
       );
     }
 
@@ -424,7 +425,7 @@ export function EntityTopology({
       link(
         resolve('CloudInfrastructure', item.metadata.namespace, infraName),
         nodeKey(kind, item.metadata.namespace, item.metadata.name),
-        statusFromReady(item.status?.ready, item.status?.status) === 'failed',
+        statusOfItem(item) === 'failed',
       );
     }
 
@@ -441,7 +442,7 @@ export function EntityTopology({
         const self = nodeKey('PlatformOpenshift', pns, p.metadata.name);
         if (!cloud) continue;
         platformHasCloudParent.add(self);
-        link(cloud, self, statusFromReady(p.status?.ready, p.status?.status) === 'failed');
+        link(cloud, self, statusOfItem(p) === 'failed');
       }
     }
 
@@ -466,7 +467,7 @@ export function EntityTopology({
       link(
         e.id,
         nodeKey(kind, item.metadata.namespace, item.metadata.name),
-        statusFromReady(item.status?.ready, item.status?.status) === 'failed',
+        statusOfItem(item) === 'failed',
       );
     }
 
@@ -484,7 +485,7 @@ export function EntityTopology({
         const self = nodeKey('PlatformOpenshift', p.metadata.namespace, p.metadata.name);
         if (platformHasCloudParent.has(self)) continue;
         const e = ownerNode(p);
-        link(e?.id, self, statusFromReady(p.status?.ready, p.status?.status) === 'failed');
+        link(e?.id, self, statusOfItem(p) === 'failed');
       }
     }
 
@@ -495,7 +496,7 @@ export function EntityTopology({
         const self = nodeKey('Assignment', a.metadata.namespace, a.metadata.name);
         if (claimed.has(self)) continue;
         const e = ownerNode(a);
-        link(e?.id, self, statusFromReady(a.status?.ready, a.status?.status) === 'failed');
+        link(e?.id, self, statusOfItem(a) === 'failed');
       }
     }
 
