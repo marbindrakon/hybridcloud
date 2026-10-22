@@ -30,6 +30,7 @@ entries=(
   "forms/attachable.ts:attachable"
   "access/sharedWithYou.ts:sharedWithYou"
   "status/deletePreview.ts:deletePreview"
+  "i18n/vocabulary.ts:vocabulary"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"
@@ -42,6 +43,9 @@ done
 # Spec schemas of the platform CRDs (sanitizer drift test).
 python3 -I "$here/crd-spec-schemas.py" > "$out/crd-specs.json" || exit 1
 export CRD_SPECS_JSON="$out/crd-specs.json"
+# The content contract (vocabulary test).
+python3 -I "$here/terms-json.py" > "$out/terms.json" || exit 1
+export TERMS_JSON="$out/terms.json"
 export SHELL_BUNDLE_DIR="$out"
 export UI_ROOT="$ui"
 rc=0

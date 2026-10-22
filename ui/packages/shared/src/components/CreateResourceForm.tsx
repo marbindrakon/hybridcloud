@@ -45,6 +45,7 @@ import {
   NetworkPlacementCreateFields,
   PLATFORM_NAMESPACE,
 } from '../forms/NetworkCreateFields';
+import { kindTerm } from '../i18n/vocabulary';
 
 export type SelfServiceFormType =
   | 'team'
@@ -747,7 +748,7 @@ export function CreateResourceForm({
       ? { 'spec.displayName': 'displayName', 'spec.billingID': 'billingID', 'spec.contacts': 'contacts', 'spec.allowedSites': 'allowedSites' }
       : {}),
   });
-  const checkText = check.error ? errorText(check.error, t, { kindLabel: t(`kindsOne.${kind}`, { defaultValue: kind }), action: 'action' }) : null;
+  const checkText = check.error ? errorText(check.error, t, { kindLabel: kindTerm(t, kind), action: 'action' }) : null;
   const blockers: string[] = [];
   if (!name) blockers.push(t('form.blockName'));
   else if (nameIssue) blockers.push(t(`form.nameRule.${nameIssue.split(':')[0]}`, { max: nameIssue.split(':')[1] }));
@@ -765,13 +766,13 @@ export function CreateResourceForm({
       const usual = usualCreateDuration(kind);
       pushToast({
         variant: 'success',
-        title: t('form.created', { kind: t(`kindsOne.${kind}`, { defaultValue: kind }), name }),
+        title: t('form.created', { kind: kindTerm(t, kind), name }),
         body: usual ? t(usual.key, { defaultValue: usual.defaultValue }) : undefined,
       });
       // Stay with the new object: its page shows the progress (UX-090).
       onSuccess(detailPathFor?.(name) ?? listPath);
     } catch (err) {
-      const txt = errorText(err, t, { kindLabel: t(`kindsOne.${kind}`, { defaultValue: kind }), action: 'action' });
+      const txt = errorText(err, t, { kindLabel: kindTerm(t, kind), action: 'action' });
       const fe = fieldErrorsFrom(err, { 'metadata.name': 'name' });
       setResult({
         ok: false,
@@ -797,7 +798,7 @@ export function CreateResourceForm({
         subtitle={t('form.inNamespace', { namespace: (isPlatformForm ? PLATFORM_NAMESPACE : entityNs) || '—' })}
         breadcrumbs={[
           { label: t('nav.sovereignCloud') },
-          { label: t(`kinds.${kind}`, { defaultValue: kind }), to: listPath },
+          { label: kindTerm(t, kind, 'many'), to: listPath },
           { label: t('common.create') },
         ]}
       />

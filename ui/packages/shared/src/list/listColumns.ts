@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { HybridSovereignKind, K8sResource } from '../types/crds';
 import { PHASE_SORT_ORDER, phaseOf, phaseSinceOf, reasonOf, summaryOf } from '../status/phase';
+import { kindTerm } from '../i18n/vocabulary';
 
 export type ListLinkMode = 'router' | 'anchor';
 
@@ -887,11 +888,11 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         const b = (specOf(i).backend ?? {}) as Record<string, unknown>;
         return `${asString(b.kind)} ${asString(b.name)}`;
       },
-      render: (i) => {
+      render: (i, ctx) => {
         const b = (specOf(i).backend ?? {}) as Record<string, unknown>;
         if (!b.kind) return '—';
         return chips([
-          { label: asString(b.kind), color: 'blue' },
+          { label: kindTerm(ctx.t, asString(b.kind), 'dense'), color: 'blue' },
           { label: asString(b.name), color: 'grey' },
         ]);
       },

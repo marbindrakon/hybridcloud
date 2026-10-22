@@ -397,6 +397,21 @@ banned:
     where: [ui, docs]
     audience: tenant
 
+# Words a rendered tenant page must not show, matched without regard to case (a page can show a
+# label in capitals). They are checked on the labels the UI builds at runtime (kind terms, object
+# references, field labels, the catalogue templates that take a kind; check-content.py runs
+# ui/scripts/runtime-strings.mjs) and on saved page texts (check-content.py --rendered). Namespace
+# names (entity-<name>) and `oc get` command lines are not text. Every API kind name with more
+# than one word in it (CloudVirt, HybridNetwork, ...) is checked as well.
+rendered:
+  - '\bPending\b'
+  - '\bEntit(y|ies)\b'
+  - '\bRbacs?\b'
+  - '\bPersonas?\b'
+  - 'Platform Openshift'
+  - 'API kind'
+  - '\bOSO\b'
+
 # Structural rules for CRD descriptions: they describe the API, never a plan, a date or a person.
 crd_rules:
   - match: '\bP\d+(\.\d+)+[a-z]?\b|\bOD\d+[a-z]?\b|\bUX-\d+\b|\bNC-\d+\b|§'

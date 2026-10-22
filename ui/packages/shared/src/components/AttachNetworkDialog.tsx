@@ -35,6 +35,7 @@ import {
   PLACEMENT_IPV4_MIN,
 } from '../forms/hybridFabricDefaults';
 import type { HybridNetwork, K8sResource, NetworkPlacement, NetworkPlacementBackendKind } from '../types';
+import { kindTerm } from '../i18n/vocabulary';
 
 export interface AttachEnvironmentRef {
   kind: NetworkPlacementBackendKind;
@@ -151,7 +152,7 @@ export function AttachNetworkDialog({
         kind,
         name: i.metadata.name,
         item: i,
-        label: `${t(`kindsOne.${kind}`)} ${i.metadata.name}`,
+        label: `${kindTerm(t, kind)} ${i.metadata.name}`,
       }));
     if (fixedEnv) return [];
     return [
@@ -165,7 +166,7 @@ export function AttachNetworkDialog({
   // The chosen environment's object (CloudVirt only: its namespaces decide which networks it takes).
   const envObj = env?.kind === 'CloudVirt' ? cloudvirts.items.find((i) => i.metadata.name === env.name) : undefined;
   const envUnknown = env?.kind === 'CloudVirt' && !envObj && cloudvirts.loading;
-  const envLabel = env ? `${t(`kindsOne.${env.kind}`)} ${env.name}` : '';
+  const envLabel = env ? `${kindTerm(t, env.kind)} ${env.name}` : '';
   const networksHref = (ref: AttachEnvironmentRef): string | undefined => {
     const href = routeFor(ref.kind, ref.name);
     return href ? `${href}?tab=networks` : undefined;
@@ -316,7 +317,7 @@ export function AttachNetworkDialog({
 
           <FormGroup label={t('attach.environment')} fieldId="attach-env" isRequired>
             {fixedEnv ? (
-              <TextInput id="attach-env" value={`${t(`kindsOne.${fixedEnv.kind}`)} ${fixedEnv.name}`} readOnlyVariant="default" />
+              <TextInput id="attach-env" value={`${kindTerm(t, fixedEnv.kind)} ${fixedEnv.name}`} readOnlyVariant="default" />
             ) : (
               <FormSelect id="attach-env" value={envKey(env)} onChange={(_e, v) => setEnv(parseEnvKey(v))} isRequired>
                 <FormSelectOption value="" label={t('attach.chooseEnvironment')} isDisabled />

@@ -12,6 +12,7 @@ import { useOverviewCRs } from '../hooks/overviewCrs';
 import { useCanListKind } from '../hooks/permissions';
 import { normalizeHealth } from './StatusBadge';
 import { useTranslation } from '../i18n';
+import { kindTerm } from '../i18n/vocabulary';
 
 export interface TopologyNode {
   id: string;
@@ -192,7 +193,7 @@ const STATUS_KEY: Record<TopologyNode['status'], string> = {
 
 /** Node caption: the display kind, the short form where the full one does not fit. */
 function kindCaption(kind: string, t: (k: string, o?: Record<string, unknown>) => string): string {
-  const full = kind === 'CloudVirt' ? t('topology.vmEnvironment') : t(`kindsOne.${kind}`, { defaultValue: kind });
+  const full = kindTerm(t, kind, 'dense');
   return full.length > 24 ? `${full.slice(0, 23)}…` : full;
 }
 
@@ -749,7 +750,7 @@ export function EntityTopology({
           })}
           {graph.nodes.map((n) => (
             <g key={n.id} transform={`translate(${n.x}, ${n.y})`} className={`sc-topology-node sc-topology-node--${n.status}`}>
-              <title>{`${t(`kindsOne.${n.kind}`, { defaultValue: n.kind })} ${n.label}${n.namespace ? ` (${n.namespace})` : ''} — ${t(STATUS_KEY[n.status])}`}</title>
+              <title>{`${kindTerm(t, n.kind)} ${n.label}${n.namespace ? ` (${n.namespace})` : ''} — ${t(STATUS_KEY[n.status])}`}</title>
               <rect width={NODE_W} height={NODE_H} rx={3} ry={3} />
               <StatusGlyph status={n.status} x={14} y={NODE_H / 2} />
               <text x={26} y={19} className="sc-topology-node__kind">

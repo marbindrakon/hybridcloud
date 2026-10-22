@@ -6,6 +6,7 @@ import { KIND_PLURALS, type HybridSovereignKind } from '../types';
 import { useOptionalScope } from '../scope/ScopeProvider';
 import { errorText, roleHintText } from './errorText';
 import { hintRoles } from './roleHints';
+import { kindTerm } from '../i18n/vocabulary';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const iconOf = (c: unknown): any => c;
@@ -38,8 +39,8 @@ export function ForbiddenState({
 }): React.ReactElement {
   const { t } = useTranslation();
   const { tenantLabel, contacts } = useScopeLabels();
-  const kindLabel = t(`kinds.${kind}`);
-  const oneLabel = t(`kindsOne.${kind}`, { defaultValue: kind });
+  const kindLabel = kindTerm(t, kind, 'many');
+  const oneLabel = kindTerm(t, kind);
   const title = name
     ? tenantLabel
       ? t('errors.forbiddenObject', { kind: oneLabel, name, tenant: tenantLabel })
@@ -81,7 +82,7 @@ export function UnavailableState({
   const { t } = useTranslation();
   const { tenantLabel, contacts } = useScopeLabels();
   const txt = errorText(error, t, {
-    kindLabel: kind ? t(`kinds.${kind}`) : undefined,
+    kindLabel: kind ? kindTerm(t, kind, 'many') : undefined,
     tenantLabel,
     contacts,
     action: 'list',

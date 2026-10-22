@@ -33,6 +33,19 @@ export {
 } from './i18n';
 export type { AppLocale, SovereignI18nProviderProps, LanguageToggleProps } from './i18n';
 export {
+  API_KINDS,
+  isApiKind,
+  kindTerm,
+  kindTermInText,
+  inText,
+  parseObjectRef,
+  objectLabel,
+  displayText,
+  fieldLabel,
+  tenantCaption,
+} from './i18n/vocabulary';
+export type { VocabT, KindForm, ObjectRef } from './i18n/vocabulary';
+export {
   createAccessFlagHook,
   type AccessCheck,
   type SetFeatureFlag,

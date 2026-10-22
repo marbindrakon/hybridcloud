@@ -3,6 +3,7 @@ import { FormGroup, Select, SelectList, SelectOption, MenuToggle } from '@patter
 import type { MenuToggleElement } from '@patternfly/react-core';
 import type { K8sResource } from '../types';
 import { useTranslation } from '../i18n';
+import { kindTerm } from '../i18n/vocabulary';
 
 /** NetworkPlacement backends (spec.backend.kind). */
 export type BackendKind = 'CloudOSO' | 'CloudVirt' | 'CloudAWS' | 'CloudGCP';
@@ -97,7 +98,7 @@ export function BackendSelect({
       style={{ width: '100%' }}
       aria-label={label}
     >
-      {selectedOption ? `${t(`kindsOne.${selectedOption.kind}`, { defaultValue: selectedOption.kind })} · ${selectedOption.label}` : placeholder}
+      {selectedOption ? `${kindTerm(t, selectedOption.kind)} · ${selectedOption.label}` : placeholder}
     </MenuToggle>
   );
 
@@ -133,7 +134,7 @@ export function BackendSelect({
                 isDisabled={!!o.disabledReason}
                 description={o.disabledReason ?? (o.ready === false ? t('form.notReady') : undefined)}
               >
-                {t(`kindsOne.${o.kind}`, { defaultValue: o.kind })} · {o.label}
+                {kindTerm(t, o.kind)} · {o.label}
               </SelectOption>
             ))
           )}

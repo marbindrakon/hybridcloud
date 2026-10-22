@@ -13,6 +13,7 @@ import {
 } from '../status/phase';
 import { usualDuration } from '../status/durations';
 import { formatRelativeTime } from '../list/listColumns';
+import { displayText, objectLabel } from '../i18n/vocabulary';
 
 /**
  * One callout under the page title that says what is going on (Q10, UX-053,
@@ -47,7 +48,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
     return (
       <Alert variant="custom" isInline className="sc-mb sc-status-callout" title={t('callout.deleting')}>
         <p>
-          {summary} {sinceText}
+          {displayText(t, summary)} {sinceText}
         </p>
         {blockers.length > 0 && (
           <>
@@ -55,7 +56,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
             <ul>
               {blockers.map((b, i) => (
                 <li key={`${b.kind}-${b.name}-${i}`}>
-                  {[b.kind ? t(`kindsOne.${b.kind}`, { defaultValue: b.kind }) : '', b.name].filter(Boolean).join(' ')}
+                  {objectLabel(t, { kind: b.kind, name: b.name ?? '', namespace: b.namespace }, { dense: true })}
                   {b.reason ? <span className="sc-text-muted"> ({b.reason})</span> : null}
                 </li>
               ))}
@@ -76,7 +77,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
         title={phase === 'Failed' ? t('callout.failed') : t('callout.degraded')}
       >
         <p>
-          {summary} {sinceText}
+          {displayText(t, summary)} {sinceText}
         </p>
         {reason && (
           <p className="sc-text-muted">
@@ -98,7 +99,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
       title={t(`callout.${phase.toLowerCase()}`, { defaultValue: phase })}
     >
       <p>
-        {summary} {sinceText}
+        {displayText(t, summary)} {sinceText}
       </p>
       {usual && <p className="sc-text-muted">{t(usual.key, { defaultValue: usual.defaultValue })}</p>}
       {phase === 'Waiting' && actorText && <p className="sc-text-muted">{actorText}</p>}

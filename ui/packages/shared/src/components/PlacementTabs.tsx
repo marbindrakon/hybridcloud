@@ -11,6 +11,7 @@ import { summaryOf, phaseOf } from '../status/phase';
 import type { K8sResource, NetworkPlacement, NetworkPlacementBackendKind } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { AttachNetworkDialog, type AttachEnvironmentRef } from './AttachNetworkDialog';
+import { kindTerm } from '../i18n/vocabulary';
 
 /** Kinds a network can be attached to (environment pages show the Networks tab). */
 export const ENVIRONMENT_KINDS: NetworkPlacementBackendKind[] = ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'];
@@ -211,7 +212,7 @@ export function NetworkEnvironmentsTab({
         <PlacementTable
           rows={rows}
           otherLabel={t('attach.environment')}
-          other={(p) => ({ kind: p.spec.backend.kind, name: p.spec.backend.name, label: t(`kindsOne.${p.spec.backend.kind}`) })}
+          other={(p) => ({ kind: p.spec.backend.kind, name: p.spec.backend.name, label: kindTerm(t, p.spec.backend.kind) })}
           from={`HybridNetwork/${network}`}
         />
       )}

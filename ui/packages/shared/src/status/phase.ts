@@ -12,6 +12,7 @@
  * Pure module: type-only imports, so it can be bundled for node tests.
  */
 import { DELETE_REQUESTED_SUFFIX, PHASE_SUMMARIES, REASONS, type ReasonClass, type ReasonEntry } from './reasons.generated';
+import { parseObjectRef } from '../i18n/vocabulary';
 
 export const PHASES = ['Waiting', 'Creating', 'Updating', 'Ready', 'Degraded', 'Failed', 'Deleting'] as const;
 export type Phase = (typeof PHASES)[number];
@@ -230,7 +231,12 @@ export function deletionBlockers(item: PhaseSubject | null | undefined): Deletio
   if (!Array.isArray(raw)) return [];
   return raw
     .map((b): DeletionBlocker | null => {
-      if (typeof b === 'string') return b.trim() ? { name: b.trim() } : null;
+      if (typeof b === 'string') {
+        // "Kind/name" (the API's short form) is split so pages show the display term, not the kind.
+        const ref = parseObjectRef(b);
+        if (ref) return { kind: ref.kind, name: ref.name, namespace: ref.namespace };
+        return b.trim() ? { name: b.trim() } : null;
+      }
       if (b && typeof b === 'object') {
         const o = b as Record<string, unknown>;
         return {

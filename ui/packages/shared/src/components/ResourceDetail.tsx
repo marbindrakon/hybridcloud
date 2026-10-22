@@ -31,6 +31,7 @@ import { GatedButton } from '../access/GatedButton';
 import { ForbiddenState } from '../access/ForbiddenState';
 import { errorText } from '../access/errorText';
 import { useTranslation } from '../i18n';
+import { displayText, fieldLabel, inText, kindTerm } from '../i18n/vocabulary';
 import { condStatus, phaseOf, retryQueued } from '../status/phase';
 import { formatRelativeTime } from '../list/listColumns';
 import {
@@ -64,6 +65,12 @@ export interface ResourceDetailProps {
  */
 const CONTRACT_KEYS = ['phase', 'phaseSince', 'summary', 'endpoints', 'config', 'lastHandledReconcileRequest', 'retry'];
 const DIAGNOSTIC_KEYS = ['delivery', 'edaJobs', 'observedGeneration', 'lastReconciledAt', 'status', 'ready', 'message', 'realized'];
+/**
+ * Status keys of helper objects that no longer exist (the API says "No longer set"); old
+ * objects may still carry them. scripts/check-content.py leaves the same keys out of its
+ * runtime label check (any status key with "helper" in its name).
+ */
+export const LEGACY_STATUS_KEYS = ['osoHelperName', 'osoHelperCreated', 'awsHelperName', 'awsHelperCreated', 'helperName', 'helperProvider'];
 
 function formatValue(val: unknown): React.ReactNode {
   if (val === null || val === undefined || val === '') {
@@ -105,7 +112,7 @@ function FieldGrid({ data }: { data: Record<string, unknown> }): React.ReactElem
     <div className="sc-fields">
       {pairs.map(([label, val]) => (
         <div key={label} className="sc-fields__row">
-          <div className="sc-fields__label">{label}</div>
+          <div className="sc-fields__label">{fieldLabel(t, label)}</div>
           <div className="sc-fields__value">{formatValue(val)}</div>
         </div>
       ))}
@@ -139,7 +146,7 @@ function ConditionsTab({ item }: { item: K8sResource }): React.ReactElement {
             </Label>
             <div>
               <div className="sc-condition__type">{value}</div>
-              {c.message && <div className="sc-condition__message">{c.message}</div>}
+              {c.message && <div className="sc-condition__message">{displayText(t, c.message)}</div>}
               {c.reason && (
                 <div className="sc-condition__message">
                   {t('status.reason')}: <code>{c.reason}</code>
@@ -239,7 +246,7 @@ export function ResourceDetail({
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** A delete was requested here: keep polling until the object is gone (UX-061). */
   const [deleteRequested, setDeleteRequested] = useState(false);
-  const kindLabel = t(`kindsOne.${kind}`, { defaultValue: kind });
+  const kindLabel = kindTerm(t, kind);
 
   const { resource, loading, error, refreshError, loadedAt, refresh } = useK8sResource<K8sResource>(kind, name, {
     namespace,
@@ -268,7 +275,7 @@ export function ResourceDetail({
   const overviewFields = useMemo(() => {
     if (!resource || !shown) return {};
     const statusRaw = { ...(shown.status ?? {}) } as Record<string, unknown>;
-    for (const key of [...COMMON_STATUS_KEYS, ...(KIND_STATUS_KEYS[kind] ?? []), ...CONTRACT_KEYS, ...DIAGNOSTIC_KEYS]) {
+    for (const key of [...COMMON_STATUS_KEYS, ...(KIND_STATUS_KEYS[kind] ?? []), ...CONTRACT_KEYS, ...DIAGNOSTIC_KEYS, ...LEGACY_STATUS_KEYS]) {
       delete statusRaw[key];
     }
     return {
@@ -315,7 +322,7 @@ export function ResourceDetail({
   };
 
   if (loading && !resource) {
-    return <Spinner aria-label={t('pages.loadingKind', { kind: kindLabel })} />;
+    return <Spinner aria-label={t('pages.loadingKind', { kind: inText(kindLabel) })} />;
   }
 
   if (error && !resource) {

@@ -57,3 +57,19 @@ sources:
     strings: [Zoom in]
   - source: "/* label: 'Platform Openshift' */ const v = { label: 'common.name' };"
     strings: []
+# Raw kinds in display strings of the UI sources (g): `raw` is how many the check reports.
+raw_kinds:
+  - {source: "t('pages.noMatch', { kind })", raw: 1}
+  - {source: "t('form.created', { kind: item.kind, name })", raw: 1}
+  - {source: "t('pages.noMatch', { kind: kindTermInText(t, kind, 'many') })", raw: 0}
+  - {source: "<Td>{item.kind}</Td>", raw: 1}
+  - {source: "<KindIcon kind={item.kind} /> key={`${b.kind}/${b.name}`}", raw: 0}
+# Saved page text (check-content --rendered): `hits` are the rendered words reported for `text`.
+rendered:
+  - {text: "ENTITY · UXR-CORP", hits: [ENTITY]}
+  - {text: "Environment CloudVirt / g-vmenv-1", hits: [CloudVirt]}
+  - {text: "No HybridNetwork resources match the current filters", hits: [HybridNetwork]}
+  - {text: "Network in entity-uxr-corp", hits: []}
+  - {text: "oc get rbacs uxr-admins", hits: []}
+  - {text: "Environment VM environment g-vmenv-1", hits: []}
+  - {text: "Waiting for the platform; was Pending", hits: [Pending]}

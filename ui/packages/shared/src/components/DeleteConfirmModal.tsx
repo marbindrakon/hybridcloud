@@ -27,6 +27,7 @@ import {
   type PreviewEntry,
   type PreviewSection,
 } from '../status/deletePreview';
+import { kindTerm } from '../i18n/vocabulary';
 
 /** Namespace of the tenant objects (Entity) on the services cluster. */
 const TENANT_OBJECTS_NAMESPACE = 'sovereign-cloud';
@@ -82,7 +83,7 @@ function EntryText({ section, entry }: { section: PreviewSection; entry: Preview
   const { t } = useTranslation();
   const routeFor = useRouteFor();
   const href = entry.kind && !entry.noLink ? routeFor(entry.kind, entry.name) : undefined;
-  const label = entry.kind ? `${t(`kindsOne.${entry.kind}`, { defaultValue: entry.kind })} ` : '';
+  const label = entry.kind ? `${kindTerm(t, entry.kind)} ` : '';
   const nameNode = href ? <Link to={href}>{entry.name}</Link> : <strong>{entry.name}</strong>;
   const fieldLabel = (key: string) => t(`deletePreview.fields.${key}`, { defaultValue: key });
   switch (section.key) {
@@ -106,7 +107,7 @@ function EntryText({ section, entry }: { section: PreviewSection; entry: Preview
           {entry.detail ? (
             <span className="sc-text-muted">
               {' '}
-              ({entry.detailKind ? `${t(`kindsOne.${entry.detailKind}`, { defaultValue: entry.detailKind })} ` : ''}
+              ({entry.detailKind ? `${kindTerm(t, entry.detailKind)} ` : ''}
               {entry.detail})
             </span>
           ) : null}
@@ -199,7 +200,7 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
   if (!isOpen || !item) return null;
   const name = item.metadata.name;
   const namespace = item.metadata.namespace ?? '';
-  const kindLabel = t(`kindsOne.${kind}`, { defaultValue: kind });
+  const kindLabel = kindTerm(t, kind);
   const mustType = preview.realized;
   const confirmOk = !mustType || typed.trim() === name;
   const canDelete = confirmOk && !deleting && !loading;

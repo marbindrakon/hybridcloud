@@ -22,6 +22,7 @@ import type {
   NetworkPlacement,
 } from '../types';
 import { useTranslation } from '../i18n';
+import { displayText, objectLabel } from '../i18n/vocabulary';
 import { formatRelativeTime } from '../list/listColumns';
 import { deletionBlockers } from '../status/phase';
 import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHiddenPaths';
@@ -202,7 +203,7 @@ export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactEl
   const { t } = useTranslation();
   const waiting = Array.isArray(item.status?.waitingFor) ? item.status?.waitingFor ?? [] : [];
   const blocked = deletionBlockers(item).map((b) =>
-    [b.kind, b.namespace && b.name ? `${b.namespace}/${b.name}` : b.name].filter(Boolean).join(' '),
+    objectLabel(t, { kind: b.kind, name: b.name ?? '', namespace: b.namespace }, { dense: true }),
   );
   if (!waiting.length && !blocked.length) return null;
   return (
@@ -211,7 +212,7 @@ export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactEl
         <Alert variant="info" isInline isPlain title={t('detail.waitingFor')}>
           <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
             {waiting.map((w) => (
-              <li key={w}>{w}</li>
+              <li key={w}>{objectLabel(t, String(w), { dense: true })}</li>
             ))}
           </ul>
         </Alert>
@@ -308,7 +309,7 @@ function HybridFabricDetails({ item }: { item: HybridFabric }): React.ReactEleme
                   <Td dataLabel={t('detail.lastApplied')}>
                     <RelativeTime iso={s?.lastAppliedAt} />
                   </Td>
-                  <Td dataLabel={t('common.message')}>{s?.message || <Dash />}</Td>
+                  <Td dataLabel={t('common.message')}>{s?.message ? displayText(t, s.message) : <Dash />}</Td>
                 </Tr>
               );
             })}
@@ -468,7 +469,7 @@ function CloudGatewayDetails({ item }: { item: CloudGateway }): React.ReactEleme
                       <UpDownLabel up={n.tunnel} />
                     </Td>
                   )}
-                  <Td dataLabel={t('common.message')}>{n.message || <Dash />}</Td>
+                  <Td dataLabel={t('common.message')}>{n.message ? displayText(t, n.message) : <Dash />}</Td>
                 </Tr>
               ))}
             </Tbody>
@@ -724,7 +725,7 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
     <Facts>
       <Fact label={t('fields.network')}>{spec.network}</Fact>
       <Fact label={t('fields.backendName')}>
-        {spec.backend ? `${spec.backend.kind} / ${spec.backend.name}` : undefined}
+        {spec.backend ? objectLabel(t, { kind: spec.backend.kind, name: spec.backend.name }, { dense: true }) : undefined}
       </Fact>
       <Fact label={t('detail.placementRequest')}>{placementRequestText(spec, t)}</Fact>
       <Fact label={t('detail.allocatedPrefixes')}>
@@ -820,7 +821,7 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
                   <Td dataLabel={t('detail.ready')}>
                     <ReadyLabel ready={s?.ready} />
                   </Td>
-                  <Td dataLabel={t('common.message')}>{s?.message || <Dash />}</Td>
+                  <Td dataLabel={t('common.message')}>{s?.message ? displayText(t, s.message) : <Dash />}</Td>
                 </Tr>
               );
             })}

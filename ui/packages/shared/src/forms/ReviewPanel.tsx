@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, CardBody, CardTitle, Label } from '@patternfly/react-core';
 import { useTranslation } from '../i18n';
 import { usualCreateDuration } from '../status/durations';
+import { kindTerm } from '../i18n/vocabulary';
 
 /** What a create will do, in one short paragraph (Q8, UX-090, UX-045). */
 export function reviewLines(
@@ -12,7 +13,7 @@ export function reviewLines(
   t: (k: string, o?: Record<string, unknown>) => string,
 ): string[] {
   const lines: string[] = [];
-  const kindLabel = t(`kindsOne.${kind}`, { defaultValue: kind });
+  const kindLabel = kindTerm(t, kind);
   const site = ((spec?.cloudRef ?? {}) as { name?: string }).name;
   lines.push(
     site
@@ -35,7 +36,7 @@ export function reviewLines(
       lines.push(
         t('review.attaches', {
           network: String(spec.network),
-          environment: `${t(`kindsOne.${backend.kind}`, { defaultValue: backend.kind ?? '' })} ${backend.name}`,
+          environment: `${kindTerm(t, backend.kind)} ${backend.name}`,
         }),
       );
     }

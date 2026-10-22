@@ -52,5 +52,20 @@ networks. Sample objects are named `example-*`, so they cannot collide with real
 
 1. Add the kind under `kinds:` in `terms.yaml` (term, plural, audience, state, analogy).
 2. Write its CRD description to the rules above.
-3. Run `make check-content`. It fails while a kind in the CRDs has no entry in `terms.yaml`, or
-   the other way round.
+3. Add its display names to the UI catalogues (`kindsOne`, `kinds`, and `kindsDense` when it has
+   a dense term, in `ui/packages/shared/src/i18n/locales/en.json` and `fr.json`).
+4. Run `make check-content`. It fails while a kind in the CRDs has no entry in `terms.yaml`, or
+   the other way round, and while the English catalogue terms of a kind a tenant meets differ
+   from `terms.yaml`.
+
+## Labels built at runtime
+
+Pages name kinds, object references and field keys through the vocabulary module
+(`ui/packages/shared/src/i18n/vocabulary.ts`): `kindTerm` and `kindTermInText` for a kind,
+`objectLabel` for a reference such as `CloudVirt/web` ("VM environment web"), `displayText` for
+text from the API, and `fieldLabel` for a field key (`attributes.entity` reads "Attributes ·
+Tenant"). `make check-content` fails on a raw kind passed into a display string, and on a banned
+or `rendered` word (terms.yaml) in the labels the module builds for every kind a tenant meets and
+every status field of those kinds (it needs `npm ci` in `ui/`; without it that part is skipped
+with a warning). To check a crawl of rendered tenant pages, save each page's text and run
+`python3 -I scripts/check-content.py --rendered <dir>`.

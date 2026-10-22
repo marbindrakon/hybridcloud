@@ -5,6 +5,7 @@ import { useTranslation } from '../i18n';
 import { ResourceDetail } from '../components/ResourceDetail';
 import { useDocumentTitle, useNav } from '../nav/useNav';
 import { usePageEntry, useObjectName } from './usePageEntry';
+import { kindTerm } from '../i18n/vocabulary';
 
 /** The detail page of an object of a registry entry, in the current tenant (or the platform). */
 export function ScopedDetailPage({ entryId }: { entryId: string }): React.ReactElement {
@@ -22,7 +23,7 @@ export function ScopedDetailPage({ entryId }: { entryId: string }): React.ReactE
     const [fromKind, fromName] = (from ?? '').split('/');
     const fromHref = fromKind && fromName ? nav.routeFor(fromKind, fromName) : undefined;
     return fromHref
-      ? { title: `${t(`kindsOne.${fromKind}`, { defaultValue: fromKind })} ${fromName}`, path: fromHref }
+      ? { title: `${kindTerm(t, fromKind)} ${fromName}`, path: fromHref }
       : { title: t(entry.labelKey), path: listHref };
   })();
   return (

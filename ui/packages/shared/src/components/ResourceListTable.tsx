@@ -33,6 +33,7 @@ import { classifyError } from '../hooks/errors';
 import { ForbiddenState, UnavailableState } from '../access/ForbiddenState';
 import { usePermissionsFor, useScopeGateNamespace } from '../access/PermissionProvider';
 import { errorText } from '../access/errorText';
+import { displayText, kindTerm, kindTermInText } from '../i18n/vocabulary';
 
 export interface ResourceListTableProps {
   kind: HybridSovereignKind;
@@ -204,7 +205,7 @@ export function ResourceListTable({
       setPendingDelete(null);
       onDeleted?.();
     } catch (err) {
-      const txt = errorText(err, t, { kindLabel: t(`kinds.${kind}`), action: 'action' });
+      const txt = errorText(err, t, { kindLabel: kindTerm(t, kind, 'many'), action: 'action' });
       setDeleteError([txt.title, txt.body].filter(Boolean).join(' '));
     } finally {
       setDeleting(false);
@@ -282,7 +283,7 @@ export function ResourceListTable({
   }
 
   if (loading && items.length === 0) {
-    return <Spinner aria-label={t('pages.loadingKind', { kind })} />;
+    return <Spinner aria-label={t('pages.loadingKind', { kind: kindTermInText(t, kind, 'many') })} />;
   }
 
   return (
@@ -314,7 +315,7 @@ export function ResourceListTable({
       )}
 
       <div className="sc-table-wrap">
-        <Table aria-label={`${kind} table`} variant="compact" className="sc-resource-list">
+        <Table aria-label={kindTerm(t, kind, 'many')} variant="compact" className="sc-resource-list">
           <Thead>
             <Tr>
               <Th screenReaderText={t('common.details')} />
@@ -349,7 +350,7 @@ export function ResourceListTable({
             <Tbody>
               <Tr>
                 <Td colSpan={colSpan}>
-                  {emptyMessage ?? t('pages.noMatch', { kind })}
+                  {emptyMessage ?? t('pages.noMatch', { kind: kindTermInText(t, kind, 'many') })}
                 </Td>
               </Tr>
             </Tbody>
@@ -397,7 +398,7 @@ export function ResourceListTable({
                             <StatusBadge item={item} />
                             {phase !== 'Ready' && (
                               <div className="sc-text-muted sc-status-summary" style={{ fontSize: '0.75rem' }}>
-                                {summaryOf(item)}
+                                {displayText(t, summaryOf(item))}
                               </div>
                             )}
                           </Td>
@@ -443,7 +444,7 @@ export function ResourceListTable({
                                 {expandRows.map((r) => (
                                   <div key={r.label} className="sc-list-expand__card">
                                     <div className="sc-list-expand__card-label">{r.label}</div>
-                                    <div className="sc-list-expand__card-value">{r.value}</div>
+                                    <div className="sc-list-expand__card-value">{displayText(t, r.value)}</div>
                                   </div>
                                 ))}
                               </div>

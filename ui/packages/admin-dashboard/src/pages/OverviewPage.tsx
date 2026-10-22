@@ -33,6 +33,7 @@ import {
   K8sResource,
   HybridSovereignKind,
   useTranslation,
+  kindTerm,
   objectPath,
   pathFor,
   useBreadcrumbs,
@@ -253,7 +254,7 @@ export function OverviewPage(): React.ReactElement {
                         const href = overviewItemHref(item);
                         return (
                           <Tr key={`${item.kind}/${item.metadata.namespace}/${item.metadata.name}`}>
-                            <Td dataLabel="Kind">{item.kind}</Td>
+                            <Td dataLabel={t('common.resources')}>{kindTerm(t, item.kind)}</Td>
                             <Td dataLabel={t('common.name')}>
                               {href ? (
                                 <Link className="sc-resource-link" to={href}>

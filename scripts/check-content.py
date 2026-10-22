@@ -13,7 +13,13 @@ Reads docs/content/terms.yaml (the content contract) and checks
      scripts/check-lab-literals.py plus the gitignored scripts/scrub-patterns.txt when present),
   e) one terms.yaml entry per CRD kind and the other way round,
   f) generated blocks are current (the role table of docs/platform/onboard-a-tenant.md, the
-     terms table of docs/tenant/glossary.md, the reasons table of docs/tenant/status-reasons.md).
+     terms table of docs/tenant/glossary.md, the reasons table of docs/tenant/status-reasons.md),
+  g) runtime labels: the catalogue kind terms (kinds, kindsOne, kindsDense in en.json) match
+     terms.yaml for every kind a tenant meets; the UI sources pass no raw kind into a display
+     string; and the labels the vocabulary module builds at runtime (ui/scripts/runtime-strings.mjs:
+     kind terms, object references, field labels of every CRD field, the templates that take a
+     kind) show no banned or `rendered` word. Needs node and ui/node_modules (npm ci in ui/);
+     without them this part is skipped with a warning.
 
 Output: `file:line: rule: excerpt`. Exit 1 on any error. The lint reads no Secret.
 
@@ -22,14 +28,18 @@ usage:
   check-content.py --self-test     check the rules against scripts/tests/check-content/
   check-content.py --write-baseline  record today's UI hits as accepted (the baseline only shrinks)
   check-content.py --write-glossary  rewrite the generated terms table of docs/tenant/glossary.md
+  check-content.py --rendered PATH...  check saved page texts (a GUI crawl of tenant pages, .txt
+                                   files or directories of them) for the `rendered` words
 """
 import argparse
 import ast
 import fnmatch
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -80,6 +90,15 @@ CLOUDS = [("aws", "AWS"), ("gcp", "Google Cloud"), ("azure", "Azure"), ("opensta
           ("openshift", "OpenShift")]
 # Platform kinds a tenant meets (the rest of the platform kinds are not in the tenant glossary).
 GLOSSARY_PLATFORM_KINDS = ("Entity", "CloudInfrastructure")
+EN_CATALOGUE = ROOT / "ui/packages/shared/src/i18n/locales/en.json"
+RUNTIME_STRINGS = ROOT / "ui/scripts/runtime-strings.mjs"
+# Text on a rendered page that is not prose: namespace names and `oc get` command lines.
+RENDERED_NOT_TEXT = [re.compile(r"\bentity-[a-z0-9-]+"), re.compile(r"\boc get \S+( \S+)?")]
+# A raw kind in a display string: t('x', { kind }) / t('x', { kind: item.kind }), and JSX
+# text {item.kind}. kindTerm() / kindTermInText() / objectLabel() of i18n/vocabulary give the term.
+T_CALL = re.compile(r"\bt\(\s*['\"`][^'\"`]+['\"`]\s*,\s*\{([^{}]*)\}")
+RAW_KIND_OPT = re.compile(r"(?:^|[,{\s])kind\s*(?:,|$)|\bkind\s*:\s*(?:[\w?]+\.)*kind\s*(?:,|$)")
+RAW_KIND_JSX = re.compile(r"(?<![=\w$])\{\s*[\w?]+(?:\.[\w?]+)*\.kind\s*\}")
 
 
 class Rule:
@@ -133,6 +152,7 @@ class Report:
         self.warnings = []
         self.ui_hits = Counter()  # ratcheted hits: UI strings and CRD text other streams own
         self.use = {}
+        self.runtime_checked = False
 
     def error(self, where, rule, text):
         self.errors.append(f"{where}: {rule}: {_excerpt(text)}")
@@ -493,6 +513,159 @@ def check_generated(rep):
                       (r.stdout + r.stderr).strip() or "run it without --check")
 
 
+# ------------------------------------------------------------------ g) runtime labels
+
+
+def tenant_kinds(terms):
+    """The kinds a tenant meets: tenant audience, plus the platform kinds of the tenant glossary."""
+    return {k for k, e in terms["kinds"].items()
+            if e.get("audience") == "tenant" or k in GLOSSARY_PLATFORM_KINDS}
+
+
+def _sentence(term):
+    return term[:1].upper() + term[1:]
+
+
+def check_vocabulary(rep, terms):
+    """kinds / kindsOne / kindsDense of the English catalogue follow terms.yaml."""
+    if not EN_CATALOGUE.exists():
+        return
+    en = json.loads(EN_CATALOGUE.read_text(encoding="utf-8"))
+    rel = EN_CATALOGUE.relative_to(ROOT)
+    for kind in sorted(tenant_kinds(terms)):
+        e = terms["kinds"][kind]
+        if e.get("state") == "not-implemented":
+            continue
+        for sec, want in (("kindsOne", e["term"]), ("kinds", e["plural"])):
+            got = (en.get(sec) or {}).get(kind)
+            if got != _sentence(want):
+                rep.error(f"{rel} {sec}.{kind}", "vocabulary",
+                          f"is {got!r}, terms.yaml says {_sentence(want)!r}")
+        dense = (en.get("kindsDense") or {}).get(kind)
+        if e.get("dense") and dense != _sentence(e["dense"]):
+            rep.error(f"{rel} kindsDense.{kind}", "vocabulary",
+                      f"is {dense!r}, terms.yaml says {_sentence(e['dense'])!r}")
+        if dense and not e.get("dense"):
+            rep.error(f"{rel} kindsDense.{kind}", "vocabulary", "terms.yaml has no dense term")
+
+
+def raw_kinds(text):
+    """(offset, rule, code) of each raw kind in a display string of a UI source."""
+    src = _strip_comments(text)
+    out = []
+    for m in T_CALL.finditer(src):
+        opts = m.group(1)
+        while True:  # arguments of nested calls are not options: kindTerm(t, kind)
+            flat = re.sub(r"\([^()]*\)", "()", opts)
+            if flat == opts:
+                break
+            opts = flat
+        if RAW_KIND_OPT.search(opts):
+            out.append((m.start(), "raw kind in a display string",
+                        f"{m.group(0)} (use kindTerm / kindTermInText of i18n/vocabulary)"))
+    for m in RAW_KIND_JSX.finditer(src):
+        out.append((m.start(), "raw kind in page text",
+                    f"{m.group(0)} (use kindTerm / objectLabel of i18n/vocabulary)"))
+    return src, out
+
+
+def _raw_kind_count(text):
+    return len(raw_kinds(text)[1])
+
+
+def check_raw_kinds(rep):
+    """No raw kind in display strings of the UI sources (the vocabulary module names kinds)."""
+    for path, rel in _ui_source_files():
+        if rel.endswith("i18n/vocabulary.ts"):
+            continue
+        src, hits = raw_kinds(path.read_text(encoding="utf-8"))
+        for off, rule, code in hits:
+            rep.error(f"{rel}:{src.count(chr(10), 0, off) + 1}", rule, code)
+
+
+def rendered_rules(terms):
+    pats = list(terms.get("rendered") or [])
+    pats += [rf"\b{k}s?\b" for k in sorted(terms["kinds"]) if re.match(r"^[A-Z][a-z]+[A-Z]", k)]
+    return [re.compile(p, re.I) for p in pats]
+
+
+def rendered_hits(text, rendered):
+    """(rendered pattern, matched text) on one line of page text."""
+    for rx in RENDERED_NOT_TEXT:
+        text = rx.sub(" ", text)
+    for rx in rendered:
+        m = rx.search(text)
+        if m:
+            yield rx.pattern, m.group(0)
+
+
+def _crd_field_paths(kinds):
+    """Every status field path of the given kinds, as the detail pages list them (spec fields are
+    labelled from the catalogue). Fields described as "No longer set." and the helper keys are
+    left out; the pages do not show them (ResourceDetail LEGACY_STATUS_KEYS)."""
+    out = set()
+    for _, doc in _crd_docs():
+        if doc["spec"]["names"]["kind"] not in kinds:
+            continue
+        for v in doc["spec"]["versions"]:
+            schema = (v.get("schema") or {}).get("openAPIV3Schema") or {}
+            node = (schema.get("properties") or {}).get("status")
+            if isinstance(node, dict):
+                for p, child in _walk(node):
+                    legacy = str(child.get("description", "")).startswith("No longer set") or \
+                        "helper" in p.lower()  # ResourceDetail LEGACY_STATUS_KEYS
+                    if p != "." and not legacy:
+                        out.add(p.replace("[]", ""))
+    return sorted(x for x in out if x)
+
+
+def check_runtime(rep, rules, terms, tmpdir):
+    """The labels the vocabulary module builds at runtime, for every kind a tenant meets."""
+    node = shutil.which("node")
+    if not node or not (ROOT / "ui/node_modules/esbuild").exists() or not RUNTIME_STRINGS.exists():
+        rep.warn(RUNTIME_STRINGS.relative_to(ROOT), "runtime check skipped",
+                 "needs node and ui/node_modules (npm ci in ui/)")
+        return
+    kinds = tenant_kinds(terms)
+    paths_file = Path(tmpdir) / "paths.json"
+    paths_file.write_text(json.dumps({"fieldPaths": _crd_field_paths(kinds)}), encoding="utf-8")
+    r = subprocess.run([node, str(RUNTIME_STRINGS), str(paths_file)], capture_output=True, text=True)
+    if r.returncode:
+        rep.error(RUNTIME_STRINGS.relative_to(ROOT), "runtime check failed", r.stderr.strip()[-300:])
+        return
+    rendered = rendered_rules(terms)
+    rel = RUNTIME_STRINGS.relative_to(ROOT)
+    for e in json.loads(r.stdout):
+        if e.get("kind") and e["kind"] not in kinds:
+            continue  # a label of a platform kind: admin pages only
+        text = e["text"]
+        for rx, word in rendered_hits(text, rendered):
+            rep.error(f"{rel} {e['source']}", f"runtime label shows '{word}'", text)
+        for rl in rules:
+            if rl.applies("ui", True, str(rel)):
+                m = rl.rx.search(text)
+                if m:
+                    rep.error(f"{rel} {e['source']}", f"banned '{m.group(0)}' (use: {rl.use})", text)
+    rep.runtime_checked = True
+
+
+def check_rendered(terms, targets):
+    """Saved page texts (a crawl of tenant pages) checked for the rendered words; exit code."""
+    rendered = rendered_rules(terms)
+    files = []
+    for t in targets:
+        p = Path(t)
+        files += sorted(p.rglob("*.txt")) if p.is_dir() else [p]
+    hits = 0
+    for f in files:
+        for n, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            for _pat, word in rendered_hits(line, rendered):
+                hits += 1
+                print(f"{f}:{n}: rendered '{word}': {_excerpt(line)}")
+    print(f"check-content --rendered: {len(files)} file(s), {hits} hit(s)")
+    return 1 if hits else 0
+
+
 # ------------------------------------------------------------------ self-test
 
 
@@ -517,6 +690,19 @@ def self_test(rules, crd_rules):
         if got != case["strings"]:
             failed += 1
             print(f"FAIL source {case['source']!r}: strings {got}, expected {case['strings']}")
+    for case in fx.get("raw_kinds", []):
+        total += 1
+        got = _raw_kind_count(case["source"])
+        if got != case["raw"]:
+            failed += 1
+            print(f"FAIL raw kind {case['source']!r}: {got}, expected {case['raw']}")
+    rendered = rendered_rules(yaml.safe_load(TERMS.read_text(encoding="utf-8")))
+    for case in fx.get("rendered", []):
+        total += 1
+        got = sorted({w for _, w in rendered_hits(case["text"], rendered)})
+        if got != sorted(case["hits"]):
+            failed += 1
+            print(f"FAIL rendered {case['text']!r}: {got}, expected {case['hits']}")
     print(f"self-test: {total - failed}/{total} cases pass")
     return 1 if failed else 0
 
@@ -527,8 +713,12 @@ def main():
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--write-glossary", action="store_true")
     ap.add_argument("--warnings", action="store_true", help="print warnings, not only a count")
+    ap.add_argument("--rendered", nargs="+", metavar="PATH",
+                    help="check saved page texts for the rendered words (and nothing else)")
     args = ap.parse_args()
     terms, rules, crd_rules = load_terms()
+    if args.rendered:
+        sys.exit(check_rendered(terms, args.rendered))
     if args.self_test:
         sys.exit(self_test(rules, crd_rules))
     if args.write_glossary:
@@ -550,6 +740,10 @@ def main():
     check_docs(rep, rules, labs)
     check_generated(rep)
     check_glossary(rep, terms)
+    check_vocabulary(rep, terms)
+    check_raw_kinds(rep)
+    with tempfile.TemporaryDirectory() as tmp:
+        check_runtime(rep, rules, terms, tmp)
     for e in rep.errors:
         print(e)
     if args.warnings:
@@ -559,7 +753,8 @@ def main():
         " (scripts/scrub-patterns.txt absent: generic lab patterns only)"
     print(f"check-content: {len(rep.errors)} error(s), {len(rep.warnings)} warning(s), "
           f"{sum(rep.ui_hits.values())} banned-word hit(s) in UI strings and CRD text checked "
-          f"against the baseline{lab_note}")
+          f"against the baseline{lab_note}"
+          f"{'; runtime labels checked' if rep.runtime_checked else '; runtime labels NOT checked'}")
     sys.exit(1 if rep.errors else 0)
 
 

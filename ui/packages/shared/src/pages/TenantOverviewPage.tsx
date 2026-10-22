@@ -40,6 +40,7 @@ import { useSharedObjects } from '../access/sharedWithYou';
 import { useTenantScope } from '../scope/ScopeProvider';
 import { useNav, useBreadcrumbs, useDocumentTitle } from '../nav/useNav';
 import { tenantLabel } from '../scope/resolveIdentity';
+import { kindTerm } from '../i18n/vocabulary';
 
 /** Kinds of the overview that still have a page (Persona has none). */
 const OVERVIEW_KINDS = TENANT_OVERVIEW_KINDS.filter((k) => k !== 'Persona');
@@ -169,7 +170,7 @@ export function TenantOverviewPage(): React.ReactElement {
 
   const kindRows = OVERVIEW_KINDS.map((kind) => ({
     kind,
-    label: t(`kinds.${kind}`),
+    label: kindTerm(t, kind, 'many'),
     path: kindPath(kind),
   }));
 
@@ -212,7 +213,7 @@ export function TenantOverviewPage(): React.ReactElement {
                 (kind) => (
                   <InventoryCard
                     key={kind}
-                    title={t(`kinds.${kind}`)}
+                    title={kindTerm(t, kind, 'many')}
                     count={lists[kind]?.length ?? 0}
                     hint={`${bucket(lists[kind] ?? []).ready} ${t('status.ready')}`}
                     kind={kind}
@@ -266,7 +267,7 @@ export function TenantOverviewPage(): React.ReactElement {
                     <Tbody>
                       {failedItems.map((item) => (
                         <Tr key={`${item.kind}/${item.metadata.name}`}>
-                          <Td>{t(`kindsOne.${item.kind}`, { defaultValue: item.kind })}</Td>
+                          <Td>{kindTerm(t, item.kind)}</Td>
                           <Td>
                             <ObjectLink kind={item.kind} name={item.metadata.name} />
                           </Td>
@@ -302,7 +303,7 @@ export function TenantOverviewPage(): React.ReactElement {
                           <Td>
                             <span className="sc-kind-cell">
                               <KindIcon kind={item.kind} size="sm" />
-                              {t(`kindsOne.${item.kind}`, { defaultValue: item.kind })}
+                              {kindTerm(t, item.kind)}
                             </span>
                           </Td>
                           <Td>

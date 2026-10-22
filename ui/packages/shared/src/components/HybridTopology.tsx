@@ -12,6 +12,7 @@ import type {
   VniPool,
 } from '../types';
 import { useTranslation } from '../i18n';
+import { displayText, kindTerm, objectLabel } from '../i18n/vocabulary';
 import { normalizeHealth } from './StatusBadge';
 import { egressText, placementVnis } from './KindStatusDetails';
 
@@ -901,7 +902,7 @@ export function HybridTopology({
                               `CloudGateway ${g.gw.name} — ${stateLabel(t, g.gw.state)}`,
                               `${t('fields.transport')}: ${transportLabel(t, g.gw)}`,
                               ...lines,
-                              g.gw.state !== 'ready' ? g.gw.message : '',
+                              g.gw.state !== 'ready' ? displayText(t, g.gw.message) : '',
                             ]
                               .filter(Boolean)
                               .join('\n')}
@@ -1058,13 +1059,13 @@ function NetworkColumn({
       >
         <title>
           {[
-            `HybridNetwork ${net.namespace}/${net.name} — ${state}`,
+            `${kindTerm(t, 'HybridNetwork')} ${net.namespace}/${net.name} — ${state}`,
             `${t('hybridTopology.routeTarget')}: ${net.routeTarget || t('hybridTopology.noRouteTarget')}`,
             net.mtu !== undefined ? t('networkOverview.mtuValue', { mtu: net.mtu }) : '',
             egressText(net.cr, t),
             `${t('detail.placements')}: ${placementsReady}`,
             net.description,
-            net.state !== 'ready' ? net.message : '',
+            net.state !== 'ready' ? displayText(t, net.message) : '',
           ]
             .filter(Boolean)
             .join('\n')}
@@ -1109,15 +1110,15 @@ function NetworkColumn({
           >
             <title>
               {[
-                `NetworkPlacement ${p.name} — ${pState}`,
-                `${t('fields.backendName')}: ${p.backendKind}/${p.backendName}`,
+                `${kindTerm(t, 'NetworkPlacement')} ${p.name} — ${pState}`,
+                `${t('fields.backendName')}: ${objectLabel(t, { kind: p.backendKind, name: p.backendName })}`,
                 `${t('hybridTopology.site')}: ${p.siteName || t('hybridTopology.unresolved')}`,
                 p.cloudGateway ? `${t('detail.cloudGateway')}: ${p.cloudGateway}` : '',
                 `${t('fields.prefixes')}: ${p.prefixes.join(', ') || '—'}`,
                 p.l3Vni !== undefined ? `${t('detail.l3Vni')}: ${p.l3Vni}` : '',
                 p.l2Vni !== undefined ? `${t('detail.l2Vni')}: ${p.l2Vni}` : '',
                 p.namespaces.length ? `${t('detail.siteNamespaces')}: ${p.namespaces.join(', ')}` : '',
-                p.state !== 'ready' ? p.message : '',
+                p.state !== 'ready' ? displayText(t, p.message) : '',
               ]
                 .filter(Boolean)
                 .join('\n')}
@@ -1127,7 +1128,7 @@ function NetworkColumn({
               {t('hybridTopology.placementKind')}
             </text>
             <text x={10} y={30} className="sc-hstopo__chip-name">
-              {trunc(`${p.backendKind}/${p.backendName}`, 28)}
+              {trunc(objectLabel(t, { kind: p.backendKind, name: p.backendName }, { dense: true }), 28)}
             </text>
             <text x={10} y={43} className="sc-hstopo__chip-prefix">
               {trunc(p.prefixes.join(', ') || t('hybridTopology.noPrefixes'), 30)}
@@ -1322,7 +1323,7 @@ function TopologyTable({ model, showEntity }: { model: TopologyModel; showEntity
           ...base,
           key: p.key,
           placement: p.name,
-          backend: `${p.backendKind}/${p.backendName}`,
+          backend: objectLabel(t, { kind: p.backendKind, name: p.backendName }, { dense: true }),
           site: p.siteName || t('hybridTopology.unresolved'),
           prefixes: p.prefixes.join(', ') || '—',
           l3: p.l3Vni !== undefined ? String(p.l3Vni) : '—',

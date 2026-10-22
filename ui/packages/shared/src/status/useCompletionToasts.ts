@@ -8,6 +8,7 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from '../i18n';
 import { pushToast } from '../components/ToastHost';
 import { completionEvents, type Seen, type Watched } from './completion';
+import { kindTerm } from '../i18n/vocabulary';
 
 export { completionEvents };
 
@@ -28,7 +29,7 @@ export function useCompletionToasts(
     }
     const { events, next } = completionEvents(seen.current, items, kind);
     seen.current = next;
-    const label = t(`kindsOne.${kind}`, { defaultValue: kind });
+    const label = kindTerm(t, kind);
     for (const e of events) {
       if (e.type === 'ready') pushToast({ variant: 'success', title: t('toasts.ready', { kind: label, name: e.name }) });
       else if (e.type === 'failed') pushToast({ variant: 'danger', title: t('toasts.failed', { kind: label, name: e.name }), body: e.summary });

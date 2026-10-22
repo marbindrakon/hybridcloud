@@ -37,6 +37,7 @@ import {
 } from '@hybridsovereign/shared';
 import { overviewItemHref, ADMIN_LINKS } from '../adminPaths';
 import '@hybridsovereign/shared/styles/openshift.css';
+import { kindTerm } from '@hybridsovereign/shared';
 
 /** Keep Overview usable if topology/subtree throws (React #306 / undefined element). */
 class SectionErrorBoundary extends Component<
@@ -252,7 +253,7 @@ const AdminOverviewPage: React.FC = () => {
                           const href = overviewItemHref(item);
                           return (
                             <tr key={`${item.kind}/${item.metadata.namespace}/${item.metadata.name}`}>
-                              <td data-label={t('common.resources')}>{t(`kindsOne.${item.kind}`, { defaultValue: item.kind })}</td>
+                              <td data-label={t('common.resources')}>{kindTerm(t, item.kind)}</td>
                               <td data-label={t('common.name')}>
                                 {href ? (
                                   <a className="sc-resource-link" href={href}>

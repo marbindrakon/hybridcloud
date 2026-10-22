@@ -68,6 +68,7 @@ import {
   PLACEMENT_IPV4_MAX_AWS,
   PLACEMENT_IPV4_MIN,
 } from './hybridFabricDefaults';
+import { kindTerm } from '../i18n/vocabulary';
 
 export const PLATFORM_NAMESPACE = 'sovereign-cloud';
 
@@ -1024,7 +1025,7 @@ export function NetworkPlacementCreateFields({
           aria-label={t('fields.backendKind')}
         >
           {PLACEMENT_BACKEND_KINDS.map((k) => (
-            <FormSelectOption key={k} value={k} label={t(`kinds.${k}`, { defaultValue: k })} />
+            <FormSelectOption key={k} value={k} label={kindTerm(t, k, 'many')} />
           ))}
         </FormSelect>
       </FormGroup>
@@ -1039,7 +1040,7 @@ export function NetworkPlacementCreateFields({
       />
       <Help>
         {pairBlock
-          ? t('attach.notAttachable', { network, environment: `${t(`kindsOne.${backendKind}`)} ${backendName}` })
+          ? t('attach.notAttachable', { network, environment: `${kindTerm(t, backendKind)} ${backendName}` })
           : t('fields.placementBackendHelp')}
       </Help>
       <FormGroup label={t('fields.placementIpv4Size')} fieldId="np-ipv4-length" isRequired>

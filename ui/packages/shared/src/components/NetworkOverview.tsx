@@ -21,6 +21,7 @@ import { useTranslation } from '../i18n';
 import { HybridTopology, describeGateway, stateOf, type NetState } from './HybridTopology';
 import { PoolBar, egressText } from './KindStatusDetails';
 import { attachBlock } from '../forms/attachable';
+import { kindTerm, objectLabel } from '../i18n/vocabulary';
 
 /**
  * Network Overview — the hybrid fabric as one picture.
@@ -384,7 +385,7 @@ function PlacementMatrix({
             </th>
             {group.backends.map((b) => (
               <th key={b.id} scope="col" className="sc-netov__colhead">
-                <span className="sc-netov__colhead-kind">{t(`kindsOne.${b.kind}`, { defaultValue: b.kind })}</span>
+                <span className="sc-netov__colhead-kind">{kindTerm(t, b.kind)}</span>
                 <span className="sc-netov__colhead-name" title={b.name}>
                   {b.name}
                 </span>
@@ -451,7 +452,7 @@ function PlacementMatrix({
                     <td key={b.id} className={`sc-netov__cell sc-netov__cell--${meta.cls}`}>
                       <span
                         className="sc-netov__cell-inner"
-                        title={`${n.metadata.name} → ${b.kind} ${b.name}: ${label}${prefixes ? `\n${prefixes}` : ''}`}
+                        title={`${n.metadata.name} → ${objectLabel(t, { kind: b.kind, name: b.name }, { dense: true })}: ${label}${prefixes ? `\n${prefixes}` : ''}`}
                         role={select ? 'button' : undefined}
                         tabIndex={select ? 0 : undefined}
                         onClick={select}
@@ -510,7 +511,7 @@ function PlacementTable({
           entity: g.entity,
           net: n.metadata.name,
           egress: egressText(n, t),
-          backend: `${b.kind}/${b.name}`,
+          backend: objectLabel(t, { kind: b.kind, name: b.name }, { dense: true }),
           placement: c.placement?.metadata.name ?? '—',
           prefixes: c.prefixes.join(', ') || '—',
           state: c.state,
