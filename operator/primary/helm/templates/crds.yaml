@@ -2497,7 +2497,7 @@ kind: CustomResourceDefinition
 metadata:
   name: cloudvirts.hybridsovereign.redhat
   labels:
-    hybridsovereign.redhat/teardown-tier: "3"
+    hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/sync-options: Prune=false,Delete=false

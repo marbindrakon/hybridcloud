@@ -5,11 +5,14 @@
 # The tiers come from the CRD label below ("1".."7"; "skip" = goes with the namespace). This static list
 # is the fallback when no CRD carries the label: placements and attachments, clusters, environments,
 # networks (after the environments that name them), access-dependent objects, Vault, access last.
+# CloudVirt goes with the placements: a placement on a VM environment waits until no namespace of that
+# environment names its network (networkplacement_delete), and CloudVirt's own delete has no guard, so a
+# later tier would never start. The other environments wait for their placements and clusters (tier 3).
 entity_teardown_tier_label: hybridsovereign.redhat/teardown-tier
 entity_teardown_tiers:
-  - [Assignment, AttachmentCircuit, NetworkPlacement, OpenStackMigration]
+  - [Assignment, AttachmentCircuit, NetworkPlacement, OpenStackMigration, CloudVirt]
   - [PlatformOpenshift]
-  - [CloudVirt, CloudOSO, CloudAWS, CloudGCP]
+  - [CloudOSO, CloudAWS, CloudGCP]
   - [HybridNetwork]
   - [Team, Project, Persona, AAPOrg, QuayOrg, VaultKV]
   - [Vault]

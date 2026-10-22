@@ -144,12 +144,14 @@ export const ACCESS_GROUP_KINDS = Object.keys(ACCESS_GROUP_FIELDS);
 
 /**
  * The order a tenant's delete removes its objects in (the tenant cascade's
- * tiers); each tier is gone before the next starts, then the tenant namespace.
+ * tiers, the CRDs' teardown-tier label); each tier is gone before the next
+ * starts, then the tenant namespace. VM environments go with the placements:
+ * a placement on one waits until the environment's namespaces are gone.
  */
 export const TENANT_TEARDOWN_TIERS: string[][] = [
-  ['Assignment', 'AttachmentCircuit', 'NetworkPlacement', 'OpenStackMigration'],
+  ['Assignment', 'AttachmentCircuit', 'NetworkPlacement', 'OpenStackMigration', 'CloudVirt'],
   ['PlatformOpenshift'],
-  ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'],
+  ['CloudOSO', 'CloudAWS', 'CloudGCP'],
   ['HybridNetwork'],
   ['Team', 'Project', 'Persona', 'AAPOrg', 'QuayOrg', 'VaultKV'],
   ['Vault'],
