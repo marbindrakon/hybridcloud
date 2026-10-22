@@ -5214,7 +5214,7 @@ cloudAWSOperator:
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.9.18-shc.2"  # shc: vendored into charts/charts, ESO v1
+  chartVersion: "0.9.18-shc.3"  # shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
   syncWave: "40"
   destinationNamespace: sovereign-cloud
   values:
@@ -5222,7 +5222,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.1.9"
+      tag: "img-2.2.0"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5236,12 +5236,17 @@ sovereignDashboard:
         secretStoreKind: ClusterSecretStore
         vaultPath: "dashboard-oauth"
         refreshInterval: "1h"
+      # "Sign out" ends the Keycloak session too (realm sovereign-tenants, the sovereign-services IdP of this cluster)
+      logoutUrl: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
+      # openshiftSar: chart default (list hybridfabrics in sovereign-cloud = a platform role)
     route:
       enabled: true
     env:
       ENTITY_NAMESPACE: sovereign-cloud
       NODE_ENV: production
       OAUTH_SYNC_VERSION: "2"
+      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/ux-h1/docs
+      SHC_CONSOLE_URL: https://console-openshift-console.apps.services.shc.signal9.gg
 
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
