@@ -1107,7 +1107,14 @@
     "noNetworksBody": "Attach a network to give this environment a subnet that reaches your other environments.",
     "notAttached": "Not attached anywhere",
     "notAttachedBody": "Attach this network to an environment to use it there.",
-    "waitingForNetwork": "A namespace of this environment names network {{network}}, which is not attached yet."
+    "waitingForNetwork": "A namespace of this environment names network {{network}}, which is not attached yet.",
+    "noNamespaceShort": "no namespace of this environment uses this network",
+    "greyedNetworks": "Greyed networks cannot be attached: no namespace of this environment uses them. Add a namespace that names the network to the environment first.",
+    "greyedEnvironments": "Greyed environments cannot take this network: no namespace of the environment uses it. Add a namespace that names the network first:",
+    "openEnvironmentNetworks": "Networks of {{environment}}",
+    "notAttachable": "{{network}} cannot be attached to {{environment}}: no namespace of this environment uses this network.",
+    "cannotAttach": "Not attachable",
+    "addNamespaceHint": "A network can be attached here only when a namespace of this environment names it. Add or change the namespaces on the Configuration tab."
   },
   "callout": {
     "since": "since {{time}}",

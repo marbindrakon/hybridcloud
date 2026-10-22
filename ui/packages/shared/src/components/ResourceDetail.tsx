@@ -15,6 +15,7 @@ import {
   TabTitleText,
 } from '@patternfly/react-core';
 import { ArrowLeftIcon, RedoIcon, SyncAltIcon, TrashIcon } from '@patternfly/react-icons';
+import { useLocation } from 'react-router-dom';
 import {
   deleteDashboardResource,
   forceReconcile,
@@ -226,7 +227,14 @@ export function ResourceDetail({
   audience = 'tenant',
 }: ResourceDetailProps): React.ReactElement {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<string | number>(0);
+  // ?tab=networks / ?tab=environments opens that tab (links from the Attach dialog, GT-F3).
+  const { search } = useLocation();
+  const tabParam = new URLSearchParams(search).get('tab');
+  const linkedTab = tabParam === 'networks' || tabParam === 'environments' ? tabParam : null;
+  const [activeTab, setActiveTab] = useState<string | number>(linkedTab ?? 0);
+  useEffect(() => {
+    if (linkedTab) setActiveTab(linkedTab);
+  }, [linkedTab, kind, name]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [retrySent, setRetrySent] = useState(false);

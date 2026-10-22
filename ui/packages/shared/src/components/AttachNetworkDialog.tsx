@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -22,6 +23,8 @@ import { createDashboardResource, useK8sResourceList } from '../hooks/k8s';
 import { errorText } from '../access/errorText';
 import { GatedButton } from '../access/GatedButton';
 import { fieldErrorsFrom, causeLines } from '../forms/apiErrors';
+import { attachBlock } from '../forms/attachable';
+import { useRouteFor } from '../nav/useNav';
 import {
   isPinnedIpv4Prefix,
   prefixWithin,
@@ -84,6 +87,11 @@ function parseEnvKey(v: string): AttachEnvironmentRef | undefined {
  * the environment type (the API's limits); a pinned prefix is used exactly or
  * waits while another placement holds it. A server dry run checks the exact
  * object before Create is offered.
+ *
+ * Only attachable pairs are offered (GT-F3): an OpenShift Virtualization
+ * environment takes a network only when one of its namespaces names it; the
+ * other networks (or environments) are shown greyed with the reason and a link
+ * to the environment's Networks tab.
  */
 export function AttachNetworkDialog({
   isOpen,
@@ -94,11 +102,16 @@ export function AttachNetworkDialog({
   onAttached,
 }: AttachNetworkDialogProps): React.ReactElement | null {
   const { t } = useTranslation();
+  const routeFor = useRouteFor();
   const enabled = isOpen && !!namespace;
   const networks = useK8sResourceList<HybridNetwork>('HybridNetwork', { namespace, enabled: enabled && !fixedNetwork });
   const fixedNetworkObj = useK8sResourceList<HybridNetwork>('HybridNetwork', { namespace, enabled: enabled && !!fixedNetwork });
   const placements = useK8sResourceList<NetworkPlacement>('NetworkPlacement', { namespace, enabled });
-  const cloudvirts = useK8sResourceList<K8sResource>('CloudVirt', { namespace, enabled: enabled && !fixedEnv });
+  // CloudVirts are read also for a fixed environment: their namespaces say which networks they take.
+  const cloudvirts = useK8sResourceList<K8sResource>('CloudVirt', {
+    namespace,
+    enabled: enabled && (!fixedEnv || fixedEnv.kind === 'CloudVirt'),
+  });
   const cloudosos = useK8sResourceList<K8sResource>('CloudOSO', { namespace, enabled: enabled && !fixedEnv });
   const cloudawss = useK8sResourceList<K8sResource>('CloudAWS', { namespace, enabled: enabled && !fixedEnv });
   const cloudgcps = useK8sResourceList<K8sResource>('CloudGCP', { namespace, enabled: enabled && !fixedEnv });
@@ -133,14 +146,38 @@ export function AttachNetworkDialog({
 
   const envOptions = useMemo(() => {
     const of = (kind: NetworkPlacementBackendKind, items: K8sResource[]) =>
-      items.map((i) => ({ value: envKey({ kind, name: i.metadata.name }), label: `${t(`kindsOne.${kind}`)} ${i.metadata.name}` }));
+      items.map((i) => ({
+        value: envKey({ kind, name: i.metadata.name }),
+        kind,
+        name: i.metadata.name,
+        item: i,
+        label: `${t(`kindsOne.${kind}`)} ${i.metadata.name}`,
+      }));
+    if (fixedEnv) return [];
     return [
       ...of('CloudVirt', cloudvirts.items),
       ...of('CloudOSO', cloudosos.items),
       ...of('CloudAWS', cloudawss.items),
       ...of('CloudGCP', cloudgcps.items),
     ];
-  }, [cloudvirts.items, cloudosos.items, cloudawss.items, cloudgcps.items, t]);
+  }, [fixedEnv, cloudvirts.items, cloudosos.items, cloudawss.items, cloudgcps.items, t]);
+
+  // The chosen environment's object (CloudVirt only: its namespaces decide which networks it takes).
+  const envObj = env?.kind === 'CloudVirt' ? cloudvirts.items.find((i) => i.metadata.name === env.name) : undefined;
+  const envUnknown = env?.kind === 'CloudVirt' && !envObj && cloudvirts.loading;
+  const envLabel = env ? `${t(`kindsOne.${env.kind}`)} ${env.name}` : '';
+  const networksHref = (ref: AttachEnvironmentRef): string | undefined => {
+    const href = routeFor(ref.kind, ref.name);
+    return href ? `${href}?tab=networks` : undefined;
+  };
+  const networkChoices = (fixedNetwork ? [] : networks.items).map((n) => ({
+    name: n.metadata.name,
+    block: env ? attachBlock(env.kind, envObj, n.metadata.name) : null,
+  }));
+  const greyedNetworks = networkChoices.filter((n) => n.block);
+  const envChoices = envOptions.map((o) => ({ ...o, block: networkName ? attachBlock(o.kind, o.item, networkName) : null }));
+  const greyedEnvs = envChoices.filter((o) => o.block);
+  const pairBlock = env && networkName ? attachBlock(env.kind, envObj, networkName) : null;
 
   const chosenNetwork = (fixedNetwork ? fixedNetworkObj.items : networks.items).find((n) => n.metadata.name === networkName);
   const space = (chosenNetwork?.status?.addressSpace ?? []).filter((a) => a.family === 4);
@@ -163,11 +200,13 @@ export function AttachNetworkDialog({
   if (!networkName) blockers.push(t('attach.chooseNetwork'));
   if (!env) blockers.push(t('attach.chooseEnvironment'));
   if (existing) blockers.push(t('attach.alreadyAttached', { name: existing.metadata.name }));
+  if (pairBlock) blockers.push(t('attach.notAttachable', { network: networkName, environment: envLabel }));
+  if (envUnknown) blockers.push(t('form.checking'));
   if (!pinnedOk) blockers.push(t('attach.pinnedInvalid', { max: maxLength }));
   if (networkName && env && !nameOk) blockers.push(t('attach.nameInvalid'));
 
   const body = useMemo(() => {
-    if (!networkName || !env || !nameOk || !pinnedOk || existing) return null;
+    if (!networkName || !env || !nameOk || !pinnedOk || existing || pairBlock || envUnknown) return null;
     return {
       name: effectiveName,
       namespace,
@@ -177,7 +216,7 @@ export function AttachNetworkDialog({
         ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) },
       },
     };
-  }, [networkName, env, nameOk, pinnedOk, existing, effectiveName, namespace, pinnedText, prefixLength]);
+  }, [networkName, env, nameOk, pinnedOk, existing, pairBlock, envUnknown, effectiveName, namespace, pinnedText, prefixLength]);
   const bodyKey = body ? JSON.stringify(body) : null;
 
   // Server dry run of the exact object (debounced); Create is offered only after it passed.
@@ -245,15 +284,31 @@ export function AttachNetworkDialog({
             ) : (
               <FormSelect id="attach-network" value={networkName} onChange={(_e, v) => setNetworkName(v)} isRequired>
                 <FormSelectOption value="" label={networks.loading ? t('common.loading') : t('attach.chooseNetwork')} isDisabled />
-                {networks.items.map((n) => (
-                  <FormSelectOption key={n.metadata.name} value={n.metadata.name} label={n.metadata.name} />
+                {networkChoices.map((n) => (
+                  <FormSelectOption
+                    key={n.name}
+                    value={n.name}
+                    label={n.block ? `${n.name} (${t('attach.noNamespaceShort')})` : n.name}
+                    isDisabled={!!n.block}
+                  />
                 ))}
               </FormSelect>
             )}
-            {fieldErrors.byField.network && (
+            {(fieldErrors.byField.network || (env && greyedNetworks.length > 0) || (fixedNetwork && pairBlock)) && (
               <FormHelperText>
                 <HelperText>
-                  <HelperTextItem variant="error">{fieldErrors.byField.network}</HelperTextItem>
+                  {fieldErrors.byField.network ? (
+                    <HelperTextItem variant="error">{fieldErrors.byField.network}</HelperTextItem>
+                  ) : env && (greyedNetworks.length > 0 || pairBlock) ? (
+                    <HelperTextItem variant="warning">
+                      {fixedNetwork ? t('attach.notAttachable', { network: networkName, environment: envLabel }) : t('attach.greyedNetworks')}{' '}
+                      {networksHref(env) && (
+                        <Link to={networksHref(env) as string} onClick={onClose}>
+                          {t('attach.openEnvironmentNetworks', { environment: env.name })}
+                        </Link>
+                      )}
+                    </HelperTextItem>
+                  ) : null}
                 </HelperText>
               </FormHelperText>
             )}
@@ -265,8 +320,13 @@ export function AttachNetworkDialog({
             ) : (
               <FormSelect id="attach-env" value={envKey(env)} onChange={(_e, v) => setEnv(parseEnvKey(v))} isRequired>
                 <FormSelectOption value="" label={t('attach.chooseEnvironment')} isDisabled />
-                {envOptions.map((o) => (
-                  <FormSelectOption key={o.value} value={o.value} label={o.label} />
+                {envChoices.map((o) => (
+                  <FormSelectOption
+                    key={o.value}
+                    value={o.value}
+                    label={o.block ? `${o.label} (${t('attach.noNamespaceShort')})` : o.label}
+                    isDisabled={!!o.block}
+                  />
                 ))}
               </FormSelect>
             )}
@@ -277,6 +337,26 @@ export function AttachNetworkDialog({
                 ) : env ? (
                   <HelperTextItem>{t(ENV_WHAT[env.kind])}</HelperTextItem>
                 ) : null}
+                {!fixedEnv && greyedEnvs.length > 0 && (
+                  <HelperTextItem variant="warning">
+                    {t('attach.greyedEnvironments')}{' '}
+                    {greyedEnvs.map((o, i) => {
+                      const href = networksHref({ kind: o.kind, name: o.name });
+                      return (
+                        <React.Fragment key={o.value}>
+                          {i > 0 ? ', ' : ''}
+                          {href ? (
+                            <Link to={href} onClick={onClose}>
+                              {t('attach.openEnvironmentNetworks', { environment: o.name })}
+                            </Link>
+                          ) : (
+                            o.name
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </HelperTextItem>
+                )}
               </HelperText>
             </FormHelperText>
           </FormGroup>

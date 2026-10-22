@@ -12,6 +12,8 @@ export interface BackendSelectOption {
   name: string;
   label: string;
   ready?: boolean;
+  /** Shown greyed with this reason (the pair cannot be attached). */
+  disabledReason?: string;
 }
 
 export interface BackendSelectValue {
@@ -95,7 +97,7 @@ export function BackendSelect({
       style={{ width: '100%' }}
       aria-label={label}
     >
-      {selectedOption ? `${selectedOption.kind} · ${selectedOption.label}` : placeholder}
+      {selectedOption ? `${t(`kindsOne.${selectedOption.kind}`, { defaultValue: selectedOption.kind })} · ${selectedOption.label}` : placeholder}
     </MenuToggle>
   );
 
@@ -128,9 +130,10 @@ export function BackendSelect({
                 key={encode(o)}
                 value={encode(o)}
                 isSelected={encode(o) === selectedValue}
-                description={o.ready === false ? t('form.notReady') : undefined}
+                isDisabled={!!o.disabledReason}
+                description={o.disabledReason ?? (o.ready === false ? t('form.notReady') : undefined)}
               >
-                {o.kind} · {o.label}
+                {t(`kindsOne.${o.kind}`, { defaultValue: o.kind })} · {o.label}
               </SelectOption>
             ))
           )}

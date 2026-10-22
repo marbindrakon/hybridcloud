@@ -20,6 +20,7 @@ import { useOverviewCRs } from '../hooks/overviewCrs';
 import { useTranslation } from '../i18n';
 import { HybridTopology, describeGateway, stateOf, type NetState } from './HybridTopology';
 import { PoolBar, egressText } from './KindStatusDetails';
+import { attachBlock } from '../forms/attachable';
 
 /**
  * Network Overview — the hybrid fabric as one picture.
@@ -383,7 +384,7 @@ function PlacementMatrix({
             </th>
             {group.backends.map((b) => (
               <th key={b.id} scope="col" className="sc-netov__colhead">
-                <span className="sc-netov__colhead-kind">{b.kind}</span>
+                <span className="sc-netov__colhead-kind">{t(`kindsOne.${b.kind}`, { defaultValue: b.kind })}</span>
                 <span className="sc-netov__colhead-name" title={b.name}>
                   {b.name}
                 </span>
@@ -418,6 +419,17 @@ function PlacementMatrix({
                   const prefixes = c.prefixes.join(', ');
                   const select =
                     onSelect && c.placement ? () => onSelect('NetworkPlacement', c.placement as K8sResource) : undefined;
+                  if (!c.placement && c.state === 'absent' && onAttach && attachBlock(b.kind, b.item, n.metadata.name)) {
+                    // GT-F3: an environment none of whose namespaces names the network cannot take it.
+                    const why = t('attach.notAttachable', { network: n.metadata.name, environment: b.name });
+                    return (
+                      <td key={b.id} className={`sc-netov__cell sc-netov__cell--${meta.cls}`}>
+                        <span className="sc-netov__cell-inner sc-text-muted" title={why} aria-label={why}>
+                          {t('attach.cannotAttach')}
+                        </span>
+                      </td>
+                    );
+                  }
                   if (!c.placement && c.state === 'absent' && onAttach) {
                     const attachLabel = t('attach.attachCell', { network: n.metadata.name, environment: b.name });
                     return (

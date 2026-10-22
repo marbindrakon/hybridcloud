@@ -32,6 +32,7 @@ import { RbacMultiSelect } from '../components/RbacMultiSelect';
 import { SitePicker } from '../components/SitePicker';
 import { useOptionalScope } from '../scope/ScopeProvider';
 import { BackendSelect, buildBackendOptions } from '../components/BackendSelect';
+import { attachBlock } from './attachable';
 import { ObjectListEditor, type ObjectListRow } from '../components/ObjectListEditor';
 import { ListTextArea } from '../components/ListTextArea';
 import {
@@ -964,13 +965,21 @@ export function NetworkPlacementCreateFields({
   const [prefixLength, setPrefixLength] = useState(String(PLACEMENT_IPV4_DEFAULT));
   const [pinned, setPinned] = useState('');
 
+  // GT-F3: an environment none of whose namespaces names the chosen network is offered greyed.
+  const envItem = (kind: string, name: string) =>
+    kind === 'CloudVirt' ? cloudvirts.items.find((i) => i.metadata.name === name) : undefined;
   const backendOptions = useMemo(
     () =>
-      buildBackendOptions({ cloudosos: cloudosos.items, cloudvirts: cloudvirts.items, cloudawss: cloudawss.items, cloudgcps: cloudgcps.items }).filter(
-        (o) => o.kind === backendKind,
-      ),
-    [cloudosos.items, cloudvirts.items, cloudawss.items, cloudgcps.items, backendKind],
+      buildBackendOptions({ cloudosos: cloudosos.items, cloudvirts: cloudvirts.items, cloudawss: cloudawss.items, cloudgcps: cloudgcps.items })
+        .filter((o) => o.kind === backendKind)
+        .map((o) =>
+          network && attachBlock(o.kind, envItem(o.kind, o.name), network)
+            ? { ...o, disabledReason: t('attach.noNamespaceShort') }
+            : o,
+        ),
+    [cloudosos.items, cloudvirts.items, cloudawss.items, cloudgcps.items, backendKind, network, t],
   );
+  const pairBlock = network && backendName ? attachBlock(backendKind, envItem(backendKind, backendName), network) : null;
 
   // the chosen network's IPv4 space (as the platform holds it, else as asked for) for the size hint and the pinned check
   const chosen = networks.items.find((n) => n.metadata.name === network);
@@ -983,7 +992,7 @@ export function NetworkPlacementCreateFields({
   const pinnedText = pinned.trim();
   const pinnedOk =
     !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
-  const valid = !!network && !!backendName && pinnedOk;
+  const valid = !!network && !!backendName && pinnedOk && !pairBlock;
   const spec = valid
     ? {
         network,
@@ -1028,7 +1037,11 @@ export function NetworkPlacementCreateFields({
         placeholder={t('form.selectPlaceholder')}
         isRequired
       />
-      <Help>{t('fields.placementBackendHelp')}</Help>
+      <Help>
+        {pairBlock
+          ? t('attach.notAttachable', { network, environment: `${t(`kindsOne.${backendKind}`)} ${backendName}` })
+          : t('fields.placementBackendHelp')}
+      </Help>
       <FormGroup label={t('fields.placementIpv4Size')} fieldId="np-ipv4-length" isRequired>
         <FormSelect
           id="np-ipv4-length"

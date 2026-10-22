@@ -1107,7 +1107,14 @@
     "noNetworksBody": "Attachez un réseau pour donner à cet environnement un sous-réseau qui joint vos autres environnements.",
     "notAttached": "Attaché nulle part",
     "notAttachedBody": "Attachez ce réseau à un environnement pour l'y utiliser.",
-    "waitingForNetwork": "Un namespace de cet environnement nomme le réseau {{network}}, qui n'est pas encore attaché."
+    "waitingForNetwork": "Un namespace de cet environnement nomme le réseau {{network}}, qui n'est pas encore attaché.",
+    "noNamespaceShort": "aucun espace de noms de cet environnement n'utilise ce réseau",
+    "greyedNetworks": "Les réseaux grisés ne peuvent pas être rattachés : aucun espace de noms de cet environnement ne les utilise. Ajoutez d'abord à l'environnement un espace de noms qui nomme le réseau.",
+    "greyedEnvironments": "Les environnements grisés ne peuvent pas recevoir ce réseau : aucun de leurs espaces de noms ne l'utilise. Ajoutez d'abord un espace de noms qui nomme le réseau :",
+    "openEnvironmentNetworks": "Réseaux de {{environment}}",
+    "notAttachable": "{{network}} ne peut pas être rattaché à {{environment}} : aucun espace de noms de cet environnement n'utilise ce réseau.",
+    "cannotAttach": "Non rattachable",
+    "addNamespaceHint": "Un réseau ne peut être rattaché ici que si un espace de noms de cet environnement le nomme. Ajoutez ou modifiez les espaces de noms dans l'onglet Configuration."
   },
   "callout": {
     "since": "depuis {{time}}",
