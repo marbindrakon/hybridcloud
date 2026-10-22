@@ -1208,7 +1208,7 @@
     "nothingElse": "Nothing else is deleted with it.",
     "partial": "Some objects that may name it could not be read with your role; they are not listed.",
     "typeName": "Type {{name}} to confirm",
-    "typeNameHelp": "It owns resources on a site or in a cloud; they are removed with it.",
+    "typeNameHelp": "It owns resources on a site, in a cloud or in a tool; they are removed with it.",
     "awsResources": "The environment's AWS resources",
     "awsResourcesIn": "The environment's AWS resources in {{region}}",
     "openstackProject": "OpenStack project",
@@ -1233,7 +1233,13 @@
       "waitCircuits": "Edge connections",
       "waitClusters": "OpenShift clusters on it",
       "waitSiteNamespace": "The namespaces of its environment that use the network",
-      "keptPlacements": "Network placements on it"
+      "keptPlacements": "Network placements on it",
+      "external": "Removed where it was set up",
+      "tenantObjects": "Every object of the tenant, in this order (each step finishes before the next starts)",
+      "tenantNamespace": "The tenant namespace",
+      "waitAssignments": "Cluster assignments on it",
+      "waitProtected": "Objects with delete protection on (the tenant's delete stops there until it is turned off)",
+      "keptSecretEngines": "KV secrets engines on it (their secrets go with the Vault)"
     },
     "fields": {
       "aapAdminRbac": "AAP admins",
@@ -1265,7 +1271,29 @@
       "networkViewerRbac": "network viewers"
     },
     "tenantRolesHidden": "The tenant roles given to it are kept by the platform team and are not listed here; its members lose them too.",
-    "usingNamespaces": "namespaces {{names}}"
+    "usingNamespaces": "namespaces {{names}}",
+    "step": "Step {{n}}:",
+    "namespaceLast": "Then namespace {{name}}, with everything else in it",
+    "external": {
+      "accessGroup": "Access group {{name}} in the identity provider: its members lose every access it gives",
+      "quayOrg": "Quay organization {{name}} and every repository in it",
+      "aapOrg": "AAP organization {{name}}, with its teams and sign-in mappings",
+      "kvEngine": "KV secrets engine {{name}} in Vault {{vault}} and every secret in it, with its policies and role groups",
+      "vault": "Vault {{name}}: its server and its unseal keys, so every secret stored in it is lost, and its sign-in client",
+      "cluster": "OpenShift cluster {{name}}: it is deprovisioned with everything that runs on it, with its DNS names, stored credentials and sign-in client",
+      "assignment": "What it put on cluster {{cluster}}: the app projects {{name}} and the access its groups have there",
+      "assignmentAccess": "What it put on cluster {{cluster}}: the access its groups have there",
+      "tenantSignIn": "The tenant's sign-in roles",
+      "networkFabric": "The network on the fabric and its address space, where they were set up",
+      "placementSite": "Its subnet and routing on its site, where they were set up",
+      "circuit": "The edge connection on the fabric, with its VLAN and link subnet, where they were set up",
+      "environmentResources": "What the environment created on its site or in its cloud",
+      "signInGroups": "Its sign-in groups and the roles it gave in its scope",
+      "signInClient": "Its sign-in client in the identity provider",
+      "gateway": "The gateway on its site, with its edge and tunnel endpoint",
+      "fabric": "The fabric's routing on its border gateways",
+      "site": "The site's link to the platform (the delete waits while any object uses the site)"
+    }
   },
   "donut": {
     "total": "Total",

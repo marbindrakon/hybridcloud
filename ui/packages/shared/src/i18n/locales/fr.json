@@ -1208,7 +1208,7 @@
     "nothingElse": "Rien d'autre n'est supprimé avec lui.",
     "partial": "Certains objets qui pourraient le nommer ne sont pas lisibles avec votre rôle ; ils ne sont pas listés.",
     "typeName": "Saisissez {{name}} pour confirmer",
-    "typeNameHelp": "Il possède des ressources sur un site ou dans un cloud ; elles sont supprimées avec lui.",
+    "typeNameHelp": "Il possède des ressources sur un site, dans un cloud ou dans un outil ; elles sont supprimées avec lui.",
     "awsResources": "Les ressources AWS de l'environnement",
     "awsResourcesIn": "Les ressources AWS de l'environnement dans {{region}}",
     "openstackProject": "Projet OpenStack",
@@ -1233,7 +1233,13 @@
       "waitCircuits": "Connexions de bordure",
       "waitClusters": "Clusters OpenShift sur cet environnement",
       "waitSiteNamespace": "Les espaces de noms de son environnement qui utilisent le réseau",
-      "keptPlacements": "Placements réseau sur cet environnement"
+      "keptPlacements": "Placements réseau sur cet environnement",
+      "external": "Supprimé là où il a été mis en place",
+      "tenantObjects": "Chaque objet du locataire, dans cet ordre (chaque étape se termine avant que la suivante commence)",
+      "tenantNamespace": "L'espace de noms du locataire",
+      "waitAssignments": "Affectations de cluster sur ce cluster",
+      "waitProtected": "Objets protégés contre la suppression (la suppression du locataire s'y arrête jusqu'à ce que la protection soit retirée)",
+      "keptSecretEngines": "Moteurs de secrets KV sur ce Vault (leurs secrets disparaissent avec le Vault)"
     },
     "fields": {
       "aapAdminRbac": "Administrateurs AAP",
@@ -1265,7 +1271,29 @@
       "networkViewerRbac": "lecteurs du réseau"
     },
     "tenantRolesHidden": "Les rôles du locataire qui lui sont attribués sont gérés par l'équipe plateforme et ne sont pas listés ici ; ses membres les perdent aussi.",
-    "usingNamespaces": "espaces de noms {{names}}"
+    "usingNamespaces": "espaces de noms {{names}}",
+    "step": "Étape {{n}} :",
+    "namespaceLast": "Puis l'espace de noms {{name}}, avec tout ce qu'il contient encore",
+    "external": {
+      "accessGroup": "Groupe d'accès {{name}} dans le fournisseur d'identité : ses membres perdent tous les accès qu'il donne",
+      "quayOrg": "Organisation Quay {{name}} et tous ses dépôts",
+      "aapOrg": "Organisation AAP {{name}}, avec ses équipes et ses correspondances de connexion",
+      "kvEngine": "Moteur de secrets KV {{name}} dans le Vault {{vault}} et tous ses secrets, avec ses stratégies et ses groupes de rôles",
+      "vault": "Vault {{name}} : son serveur et ses clés de descellement, donc tous les secrets qu'il stocke sont perdus, et son client de connexion",
+      "cluster": "Cluster OpenShift {{name}} : il est déprovisionné avec tout ce qui y tourne, avec ses noms DNS, ses identifiants stockés et son client de connexion",
+      "assignment": "Ce qu'elle a mis sur le cluster {{cluster}} : les projets applicatifs {{name}} et les accès de ses groupes",
+      "assignmentAccess": "Ce qu'elle a mis sur le cluster {{cluster}} : les accès de ses groupes",
+      "tenantSignIn": "Les rôles de connexion du locataire",
+      "networkFabric": "Le réseau sur la fabric et son espace d'adressage, là où ils ont été mis en place",
+      "placementSite": "Son sous-réseau et son routage sur son site, là où ils ont été mis en place",
+      "circuit": "La connexion de bordure sur la fabric, avec son VLAN et son sous-réseau de lien, là où ils ont été mis en place",
+      "environmentResources": "Ce que l'environnement a créé sur son site ou dans son cloud",
+      "signInGroups": "Ses groupes de connexion et les rôles donnés dans son périmètre",
+      "signInClient": "Son client de connexion dans le fournisseur d'identité",
+      "gateway": "La passerelle sur son site, avec sa bordure et son point de terminaison de tunnel",
+      "fabric": "Le routage de la fabric sur ses passerelles de bordure",
+      "site": "Le lien du site avec la plateforme (la suppression attend tant qu'un objet utilise le site)"
+    }
   },
   "donut": {
     "total": "Total",

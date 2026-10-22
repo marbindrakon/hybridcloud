@@ -81,7 +81,7 @@ function usePreviewContext(kind: string, item: K8sResource | null, isOpen: boole
 function EntryText({ section, entry }: { section: PreviewSection; entry: PreviewEntry }): React.ReactElement {
   const { t } = useTranslation();
   const routeFor = useRouteFor();
-  const href = entry.kind ? routeFor(entry.kind, entry.name) : undefined;
+  const href = entry.kind && !entry.noLink ? routeFor(entry.kind, entry.name) : undefined;
   const label = entry.kind ? `${t(`kindsOne.${entry.kind}`, { defaultValue: entry.kind })} ` : '';
   const nameNode = href ? <Link to={href}>{entry.name}</Link> : <strong>{entry.name}</strong>;
   const fieldLabel = (key: string) => t(`deletePreview.fields.${key}`, { defaultValue: key });
@@ -125,6 +125,27 @@ function EntryText({ section, entry }: { section: PreviewSection; entry: Preview
         <>
           <code>{entry.name}</code>
           {entry.detail ? ` ${t('deletePreview.onSite', { site: entry.detail })}` : ''}
+        </>
+      );
+    case 'external':
+      return <>{t(`deletePreview.external.${entry.detail}`, { name: entry.name, ...(entry.args ?? {}) })}</>;
+    case 'tenantObjects':
+    case 'waitProtected':
+      return (
+        <>
+          <span className="sc-text-muted">{t('deletePreview.step', { n: entry.detail })} </span>
+          {label}
+          {nameNode}
+        </>
+      );
+    case 'tenantNamespace':
+      return <>{t('deletePreview.namespaceLast', { name: entry.name })}</>;
+    case 'waitAssignments':
+    case 'keptSecretEngines':
+      return (
+        <>
+          {label}
+          {nameNode}
         </>
       );
     case 'tenantRoles':

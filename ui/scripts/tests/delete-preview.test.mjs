@@ -10,7 +10,7 @@ const placements = [np('n1-vm', 'n1', 'CloudVirt', 'vm'), np('n1-os', 'n1', 'Clo
 const vmEnv = obj('CloudVirt', 'vm', { namespaces: [{ name: 'web', network: 'n1' }, { name: 'db', network: 'n2' }] });
 const keys = (p) => p.sections.map((s) => [s.group, s.key]);
 
-test('a network waits for its placements, the VM environments naming it and its edge connections; nothing is deleted with it', () => {
+test('a network waits for its placements, the VM environments naming it and its edge connections; only its fabric side goes with it', () => {
   const objects = {
     NetworkPlacement: placements,
     CloudVirt: [vmEnv],
@@ -18,17 +18,22 @@ test('a network waits for its placements, the VM environments naming it and its 
   };
   const p = m.deletePreview('HybridNetwork', obj('HybridNetwork', 'n1'), { objects });
   assert.deepEqual(keys(p), [
+    ['deleted', 'external'],
     ['waits', 'waitPlacements'],
     ['waits', 'waitVmEnvironments'],
     ['waits', 'waitCircuits'],
   ]);
-  assert.deepEqual(p.sections[0].entries, [
+  assert.deepEqual(p.sections[0].entries, [{ name: '', detail: 'networkFabric' }]);
+  assert.deepEqual(p.sections[1].entries, [
     { kind: 'NetworkPlacement', name: 'n1-vm', detail: 'vm', detailKind: 'CloudVirt' },
     { kind: 'NetworkPlacement', name: 'n1-os', detail: 'os', detailKind: 'CloudOSO' },
   ]);
-  assert.deepEqual(p.sections[1].entries, [{ kind: 'CloudVirt', name: 'vm', detail: 'web' }]);
-  assert.deepEqual(p.sections[2].entries.map((e) => e.name), ['c1']);
-  assert.ok(!p.sections.some((s) => s.group === 'deleted'), 'placements are blockers, not deleted with the network');
+  assert.deepEqual(p.sections[2].entries, [{ kind: 'CloudVirt', name: 'vm', detail: 'web' }]);
+  assert.deepEqual(p.sections[3].entries.map((e) => e.name), ['c1']);
+  assert.ok(
+    !p.sections.some((s) => s.group === 'deleted' && s.entries.some((e) => e.kind)),
+    'placements, environments and circuits are blockers, not deleted with the network',
+  );
   // blockers alone do not ask for typing; a realized network does
   assert.equal(p.realized, false);
   assert.equal(m.deletePreview('HybridNetwork', obj('HybridNetwork', 'n1', {}, { realization: { l3vni: 5 } }), { objects }).realized, true);
@@ -67,7 +72,10 @@ test('an OpenStack environment deletes its project and waits for its placements 
   assert.deepEqual(os.sections[2].entries.map((e) => e.name), ['c1']);
   assert.equal(os.realized, true);
   const aws = m.deletePreview('CloudAWS', obj('CloudAWS', 'a'), { objects: { PlatformOpenshift: [obj('PlatformOpenshift', 'c3', { aws: { environment: 'a' } })] } });
-  assert.deepEqual(keys(aws), [['waits', 'waitClusters']]);
+  assert.deepEqual(keys(aws), [
+    ['deleted', 'external'],
+    ['waits', 'waitClusters'],
+  ]);
   assert.equal(aws.realized, false);
 });
 
@@ -108,4 +116,95 @@ test('a team setup lists the access its lists grant', () => {
   const grants = p.sections.find((s) => s.key === 'scopeGrants');
   assert.deepEqual(grants.entries.map((e) => `${e.name}:${e.detail}`), ['admins:teamAdmin', 'devs:teamMemberRbac']);
   assert.equal(p.realized, false);
+});
+
+// F2: kinds whose teardown removes state outside the API say what goes, and ask for the name.
+const ext = (p) => p.sections.filter((s) => s.key === 'external').flatMap((s) => s.entries.map((e) => [e.detail, e.name, e.args ?? {}]));
+
+test('tool objects name what their teardown removes and ask for the name, realized or not', () => {
+  const quay = m.deletePreview('QuayOrg', obj('QuayOrg', 'registry'));
+  assert.deepEqual(ext(quay), [['quayOrg', 'x-registry', {}]]);
+  assert.equal(quay.realized, true);
+  assert.deepEqual(ext(m.deletePreview('QuayOrg', obj('QuayOrg', 'registry', {}, { orgName: 'org-1' }))), [['quayOrg', 'org-1', {}]]);
+  const aap = m.deletePreview('AAPOrg', obj('AAPOrg', 'automation'));
+  assert.deepEqual(ext(aap), [['aapOrg', 'x-automation', {}]]);
+  assert.equal(aap.realized, true);
+  const kv = m.deletePreview('VaultKV', obj('VaultKV', 'apps', { vault: 'v1' }, { kvPath: 'apps' }));
+  assert.deepEqual(ext(kv), [['kvEngine', 'apps', { vault: 'v1' }]]);
+  assert.equal(kv.realized, true);
+  const vault = m.deletePreview('Vault', obj('Vault', 'v1'), { objects: { VaultKV: [obj('VaultKV', 'apps', { vault: 'v1' }), obj('VaultKV', 'other', { vault: 'v2' })] } });
+  assert.deepEqual(keys(vault), [
+    ['deleted', 'external'],
+    ['kept', 'keptSecretEngines'],
+  ]);
+  assert.deepEqual(vault.sections[1].entries.map((e) => e.name), ['apps']);
+  assert.equal(vault.realized, true);
+  const asg = m.deletePreview('Assignment', obj('Assignment', 'a1', { openshift: 'c1', projects: ['web', 'api'] }));
+  assert.deepEqual(ext(asg), [['assignment', 'web, api', { cluster: 'c1' }]]);
+  assert.equal(asg.realized, true);
+});
+
+test('a cluster is deprovisioned and its delete waits for its assignments and placements', () => {
+  const objects = {
+    Assignment: [obj('Assignment', 'a1', { openshift: 'c1' }), obj('Assignment', 'a2', { openshift: 'c2' })],
+    NetworkPlacement: [np('core-c1', 'core', 'PlatformOpenshift', 'c1'), ...placements],
+  };
+  const p = m.deletePreview('PlatformOpenshift', obj('PlatformOpenshift', 'c1'), { objects });
+  assert.deepEqual(keys(p), [
+    ['deleted', 'external'],
+    ['waits', 'waitAssignments'],
+    ['waits', 'waitPlacements'],
+  ]);
+  assert.deepEqual(ext(p), [['cluster', 'c1', {}]]);
+  assert.deepEqual(p.sections[1].entries.map((e) => e.name), ['a1']);
+  assert.deepEqual(p.sections[2].entries.map((e) => e.name), ['core-c1']);
+  assert.equal(p.realized, true);
+  assert.deepEqual(m.previewReads('PlatformOpenshift', obj('PlatformOpenshift', 'c1')).map((r) => r.kind), ['Assignment', 'NetworkPlacement']);
+});
+
+test('an access group goes from the identity provider: the name must be typed and it never reads as nothing else', () => {
+  const p = m.deletePreview('Rbac', obj('Rbac', 'admins', {}, { group: 'x-admins' }));
+  assert.deepEqual(ext(p), [['accessGroup', 'x-admins', {}]]);
+  assert.equal(p.realized, true);
+});
+
+test('a tenant lists its objects tier by tier, then its namespace; protected objects stop it', () => {
+  const tenant = { kind: 'Entity', metadata: { name: 'x', namespace: 'sovereign-cloud' }, spec: {}, status: {} };
+  const reads = m.previewReads('Entity', tenant);
+  assert.ok(reads.every((r) => r.namespace === 'entity-x'));
+  assert.deepEqual(reads.map((r) => r.kind), m.TENANT_TEARDOWN_TIERS.flat());
+  const objects = {
+    Rbac: [obj('Rbac', 'admins')],
+    NetworkPlacement: [np('n1-vm', 'n1', 'CloudVirt', 'vm')],
+    CloudVirt: [obj('CloudVirt', 'vm', { deletionProtection: true })],
+    QuayOrg: [obj('QuayOrg', 'registry')],
+  };
+  const p = m.deletePreview('Entity', tenant, { objects });
+  assert.deepEqual(keys(p), [
+    ['deleted', 'tenantObjects'],
+    ['deleted', 'tenantNamespace'],
+    ['deleted', 'external'],
+    ['waits', 'waitProtected'],
+  ]);
+  assert.deepEqual(p.sections[0].entries.map((e) => `${e.detail}:${e.kind}/${e.name}`), ['1:NetworkPlacement/n1-vm', '5:QuayOrg/registry', '7:Rbac/admins']);
+  assert.ok(p.sections[0].entries.every((e) => e.noLink));
+  assert.deepEqual(p.sections[1].entries, [{ name: 'entity-x' }]);
+  assert.deepEqual(p.sections[3].entries.map((e) => `${e.detail}:${e.kind}/${e.name}`), ['3:CloudVirt/vm']);
+  assert.equal(p.realized, true);
+});
+
+test('every kind with a teardown says what goes with it', () => {
+  const kinds = ['HybridNetwork', 'NetworkPlacement', 'AttachmentCircuit', 'CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP', 'Team', 'Project',
+    'QuayOrg', 'AAPOrg', 'VaultKV', 'Vault', 'PlatformOpenshift', 'Assignment', 'Rbac', 'Entity',
+    'AAPConfig', 'QuayConfig', 'RbacConfig', 'CloudGateway', 'HybridFabric', 'CloudInfrastructure'];
+  for (const k of kinds) {
+    const p = m.deletePreview(k, obj(k, 'o'));
+    assert.ok(p.sections.some((s) => s.group === 'deleted'), `${k} has a deleted section`);
+  }
+  // a plain object without a teardown keeps the one-click confirm
+  const persona = m.deletePreview('Persona', obj('Persona', 'p'));
+  assert.deepEqual(persona.sections, []);
+  assert.equal(persona.realized, false);
+  // team setups keep the one-click confirm (their access is listed)
+  assert.equal(m.deletePreview('Team', obj('Team', 't')).realized, false);
 });

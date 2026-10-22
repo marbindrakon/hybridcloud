@@ -15,11 +15,17 @@
  *                   its DNS zone is deleted; its placements are kept
  *   placement    -> the subnet it holds on its site; on a VM environment it
  *                   waits until no namespace of that environment uses the network
- *   access group -> the tenant roles, tool roles and access lists naming it
- *   team setup / app project -> the access its access lists grant
+ *   access group -> its group in the identity provider; the tenant roles, tool
+ *                   roles and access lists naming it
+ *   team setup / app project -> its sign-in groups; the access its lists grant
+ *   tool objects -> what the teardown removes in the tool: the Quay or AAP
+ *                   organization, the KV engine and its secrets, the Vault
+ *                   instance, the cluster, what an assignment put on a cluster
+ *   tenant       -> every object of the tenant, tier by tier, then its namespace
  *
- * An object that owns realized resources asks for its name to be typed; plain
- * objects keep the one-click confirm.
+ * An object that owns realized resources (any kind whose teardown removes
+ * state outside the API) asks for its name to be typed; plain objects keep the
+ * one-click confirm. A kind with a teardown always says what goes with it.
  */
 import type { K8sResource } from '../types';
 
@@ -31,14 +37,20 @@ export type PreviewSectionKey =
   | 'cloudProject'
   | 'dnsZone'
   | 'subnet'
+  | 'external'
+  | 'tenantObjects'
+  | 'tenantNamespace'
   // the delete waits until these are gone
   | 'waitPlacements'
   | 'waitVmEnvironments'
   | 'waitCircuits'
   | 'waitClusters'
   | 'waitSiteNamespace'
+  | 'waitAssignments'
+  | 'waitProtected'
   // not deleted with it
   | 'keptPlacements'
+  | 'keptSecretEngines'
   // access that ends
   | 'tenantRoles'
   | 'toolRoles'
@@ -50,12 +62,18 @@ export const SECTION_GROUP: Record<PreviewSectionKey, PreviewGroup> = {
   cloudProject: 'deleted',
   dnsZone: 'deleted',
   subnet: 'deleted',
+  external: 'deleted',
+  tenantObjects: 'deleted',
+  tenantNamespace: 'deleted',
   waitPlacements: 'waits',
   waitVmEnvironments: 'waits',
   waitCircuits: 'waits',
   waitClusters: 'waits',
   waitSiteNamespace: 'waits',
+  waitAssignments: 'waits',
+  waitProtected: 'waits',
   keptPlacements: 'kept',
+  keptSecretEngines: 'kept',
   tenantRoles: 'access',
   toolRoles: 'access',
   accessLists: 'access',
@@ -73,6 +91,10 @@ export interface PreviewEntry {
   detail?: string;
   /** The kind of the object `detail` names (shown in words) */
   detailKind?: string;
+  /** Values the entry's sentence is filled with (external entries) */
+  args?: Record<string, string>;
+  /** The object is in another namespace than the deleted one: shown without a link */
+  noLink?: boolean;
 }
 
 export interface PreviewSection {
@@ -120,6 +142,60 @@ export const ACCESS_GROUP_FIELDS: Record<string, { path: string; section: 'toolR
 /** Kinds the preview of an access group reads. */
 export const ACCESS_GROUP_KINDS = Object.keys(ACCESS_GROUP_FIELDS);
 
+/**
+ * The order a tenant's delete removes its objects in (the tenant cascade's
+ * tiers); each tier is gone before the next starts, then the tenant namespace.
+ */
+export const TENANT_TEARDOWN_TIERS: string[][] = [
+  ['Assignment', 'AttachmentCircuit', 'NetworkPlacement', 'OpenStackMigration'],
+  ['PlatformOpenshift'],
+  ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'],
+  ['HybridNetwork'],
+  ['Team', 'Project', 'Persona', 'AAPOrg', 'QuayOrg', 'VaultKV'],
+  ['Vault'],
+  ['Rbac'],
+];
+
+/**
+ * Kinds whose teardown removes state outside the API by definition (the
+ * external object is the realization): their delete asks for the name.
+ */
+export const REALIZED_KINDS = new Set([
+  'QuayOrg',
+  'VaultKV',
+  'AAPOrg',
+  'Vault',
+  'PlatformOpenshift',
+  'Assignment',
+  'Entity',
+  'Rbac',
+  'AAPConfig',
+  'QuayConfig',
+  'RbacConfig',
+  'CloudGateway',
+  'HybridFabric',
+  'CloudInfrastructure',
+]);
+
+/** What the teardown of a kind removes, when nothing more precise is known (deletePreview.external.<key>). */
+const EXTERNAL_FALLBACK: Record<string, string> = {
+  HybridNetwork: 'networkFabric',
+  NetworkPlacement: 'placementSite',
+  AttachmentCircuit: 'circuit',
+  CloudVirt: 'environmentResources',
+  CloudOSO: 'environmentResources',
+  CloudAWS: 'environmentResources',
+  CloudGCP: 'environmentResources',
+  Team: 'signInGroups',
+  Project: 'signInGroups',
+  AAPConfig: 'signInClient',
+  QuayConfig: 'signInClient',
+  RbacConfig: 'signInClient',
+  CloudGateway: 'gateway',
+  HybridFabric: 'fabric',
+  CloudInfrastructure: 'site',
+};
+
 /** One list read the preview of `kind` needs: a kind in a namespace. */
 export interface PreviewRead {
   kind: string;
@@ -136,6 +212,10 @@ export function previewReads(kind: string, item: K8sResource): PreviewRead[] {
   else if (ENVIRONMENT_KINDS.includes(kind)) kinds = ['NetworkPlacement', 'PlatformOpenshift'];
   else if (kind === 'NetworkPlacement') kinds = backendOf(item).kind === 'CloudVirt' ? ['CloudVirt'] : [];
   else if (kind === 'Rbac') kinds = ACCESS_GROUP_KINDS;
+  else if (kind === 'PlatformOpenshift') kinds = ['Assignment', 'NetworkPlacement'];
+  else if (kind === 'Vault') kinds = ['VaultKV'];
+  // a tenant's objects live in its own namespace
+  else if (kind === 'Entity') return TENANT_TEARDOWN_TIERS.flat().map((k) => ({ kind: k, namespace: `entity-${item.metadata.name}` }));
   return kinds.map((k) => ({ kind: k, namespace }));
 }
 
@@ -178,7 +258,26 @@ function vmNamespacesUsing(env: K8sResource, network: string): string[] {
     .filter(Boolean);
 }
 
+function tenantPrefixed(item: K8sResource, status: Record<string, unknown>): string {
+  const ns = item.metadata.namespace ?? '';
+  const tenant = ns.startsWith('entity-') ? ns.slice('entity-'.length) : '';
+  return (status.orgName as string | undefined) || (tenant ? `${tenant}-${item.metadata.name}` : item.metadata.name);
+}
+
+function external(key: string, name = '', args?: Record<string, string>): PreviewSection[] {
+  return section('external', [{ name, detail: key, ...(args ? { args } : {}) }]);
+}
+
+/** What the delete of `item` removes, waits for and keeps. */
 export function deletePreview(kind: string, item: K8sResource, ctx: PreviewContext = {}): DeletePreview {
+  const p = kindPreview(kind, item, ctx);
+  const fallback = EXTERNAL_FALLBACK[kind];
+  // A kind with a teardown never reads as "nothing else is deleted".
+  const sections = fallback && !p.sections.some((s) => s.group === 'deleted') ? [...external(fallback), ...p.sections] : p.sections;
+  return { sections, realized: p.realized || REALIZED_KINDS.has(kind) };
+}
+
+function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): DeletePreview {
   const name = item.metadata.name;
   const spec = (item.spec ?? {}) as Record<string, unknown>;
   const status = (item.status ?? {}) as Record<string, unknown>;
@@ -283,8 +382,13 @@ export function deletePreview(kind: string, item: K8sResource, ctx: PreviewConte
       }
     }
     return {
-      sections: [...section('tenantRoles', tenantRows), ...section('toolRoles', tool), ...section('accessLists', lists)],
-      realized: hasRealization,
+      sections: [
+        ...external('accessGroup', (status.group as string | undefined) || name),
+        ...section('tenantRoles', tenantRows),
+        ...section('toolRoles', tool),
+        ...section('accessLists', lists),
+      ],
+      realized: true,
     };
   }
 
@@ -295,6 +399,66 @@ export function deletePreview(kind: string, item: K8sResource, ctx: PreviewConte
     }
     return { sections: section('scopeGrants', rows), realized: hasRealization };
   }
+
+  if (kind === 'QuayOrg') return { sections: external('quayOrg', tenantPrefixed(item, status)), realized: true };
+  if (kind === 'AAPOrg') return { sections: external('aapOrg', tenantPrefixed(item, status)), realized: true };
+  if (kind === 'VaultKV') {
+    return {
+      sections: external('kvEngine', (status.kvPath as string | undefined) || name, { vault: (spec.vault as string | undefined) ?? '' }),
+      realized: true,
+    };
+  }
+  if (kind === 'Vault') {
+    const engines = list('VaultKV')
+      .filter((kv) => (kv.spec as { vault?: string } | undefined)?.vault === name)
+      .map((kv) => ({ kind: 'VaultKV', name: kv.metadata.name }));
+    return { sections: [...external('vault', name), ...section('keptSecretEngines', engines)], realized: true };
+  }
+  if (kind === 'PlatformOpenshift') {
+    // The cluster's delete waits for its assignments and the placements on it.
+    const assignments = list('Assignment')
+      .filter((a) => (a.spec as { openshift?: string } | undefined)?.openshift === name)
+      .map((a) => ({ kind: 'Assignment', name: a.metadata.name }));
+    const placements = list('NetworkPlacement')
+      .filter((pl) => {
+        const b = backendOf(pl);
+        return b.kind === 'PlatformOpenshift' && b.name === name;
+      })
+      .map((pl) => ({ kind: 'NetworkPlacement', name: pl.metadata.name, detail: networkOf(pl), detailKind: 'HybridNetwork' }));
+    return {
+      sections: [...external('cluster', name), ...section('waitAssignments', assignments), ...section('waitPlacements', placements)],
+      realized: true,
+    };
+  }
+  if (kind === 'Assignment') {
+    const cluster = (status.clusterName as string | undefined) || ((spec.openshift as string | undefined) ?? '');
+    const projects = names(spec.projects).join(', ');
+    return { sections: external(projects ? 'assignment' : 'assignmentAccess', projects, { cluster }), realized: true };
+  }
+  if (kind === 'Entity') {
+    // The tenant's delete removes its objects tier by tier (protected ones stop it), then its namespace.
+    const objectsRows: PreviewEntry[] = [];
+    const protectedRows: PreviewEntry[] = [];
+    TENANT_TEARDOWN_TIERS.forEach((tier, i) => {
+      for (const k of tier) {
+        for (const o of list(k)) {
+          const row = { kind: k, name: o.metadata.name, detail: String(i + 1), noLink: true };
+          ((o.spec as { deletionProtection?: boolean } | undefined)?.deletionProtection ? protectedRows : objectsRows).push(row);
+        }
+      }
+    });
+    return {
+      sections: [
+        ...section('tenantObjects', objectsRows),
+        ...section('tenantNamespace', [{ name: `entity-${name}` }]),
+        ...external('tenantSignIn'),
+        ...section('waitProtected', protectedRows),
+      ],
+      realized: true,
+    };
+  }
+
+  if (kind === 'AttachmentCircuit') return { sections: [], realized: hasRealization || !!status.realized || status.vlan !== undefined };
 
   return { sections: [], realized: hasRealization };
 }
