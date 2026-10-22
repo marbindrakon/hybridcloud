@@ -35,6 +35,49 @@ answer the questions people ask most.
 `oc get` takes the plural or a short name: `oc get hybridnetworks -n entity-<tenant>`. The
 comparisons are the closest equivalent, not an exact match.
 
+## Listing your objects
+
+A category lists several kinds at once: `oc get shc-tenant -n entity-<tenant>` lists every
+tenant object. For each kind in a category that your role may not list, `oc` prints a
+`Forbidden` line instead, so a role that reads only some kinds uses a narrower category or names
+the kinds. The categories, and the command for each role:
+
+<!-- list-commands:begin -->
+| Category | Kinds |
+|---|---|
+| `shc-tenant` | AAP organizations (`AAPOrg`), cluster assignments (`Assignment`), edge connections (`AttachmentCircuit`), AWS environments (`CloudAWS`), Google Cloud environments (`CloudGCP`), OpenStack environments (`CloudOSO`), OpenShift Virtualization environments (`CloudVirt`), networks (`HybridNetwork`), network placements (`NetworkPlacement`), VM migrations to OpenStack (`OpenStackMigration`), OpenShift clusters (`PlatformOpenshift`), app projects (`Project`), Quay organizations (`QuayOrg`), access groups (`Rbac`), team setups (`Team`), tenant profiles (`TenantProfile`), Vaults (`Vault`), KV secrets engines (`VaultKV`) |
+| `shc-network` | edge connections (`AttachmentCircuit`), networks (`HybridNetwork`), network placements (`NetworkPlacement`) |
+| `shc-environment` | AWS environments (`CloudAWS`), Google Cloud environments (`CloudGCP`), OpenStack environments (`CloudOSO`), OpenShift Virtualization environments (`CloudVirt`) |
+| `shc-appplatform` | cluster assignments (`Assignment`), OpenShift clusters (`PlatformOpenshift`), app projects (`Project`), team setups (`Team`) |
+| `shc-services` | AAP organizations (`AAPOrg`), Quay organizations (`QuayOrg`), Vaults (`Vault`), KV secrets engines (`VaultKV`) |
+| `shc-access` | access groups (`Rbac`) |
+
+| Role | Lists what the role reads |
+|---|---|
+| Tenant admin | `oc get shc-tenant -n entity-<tenant>` |
+| Auditor | `oc get shc-tenant -n entity-<tenant>` |
+| OpenStack environment admin | `oc get shc-access,cloudosos -n entity-<tenant>` |
+| OpenStack environment viewer | `oc get shc-access,cloudosos -n entity-<tenant>` |
+| VM environment admin | `oc get shc-access,cloudvirts -n entity-<tenant>` |
+| VM environment viewer | `oc get shc-access,cloudvirts -n entity-<tenant>` |
+| Network admin | `oc get shc-network,shc-environment,shc-access -n entity-<tenant>` |
+| Network viewer | `oc get shc-network,shc-access -n entity-<tenant>` |
+| AWS environment admin | `oc get shc-access,cloudawss -n entity-<tenant>` |
+| AWS environment viewer | `oc get shc-access,cloudawss -n entity-<tenant>` |
+| OpenShift cluster admin | `oc get shc-access,platformopenshifts,cloudosos,cloudawss,cloudgcps -n entity-<tenant>` |
+| OpenShift cluster viewer | `oc get shc-access,platformopenshifts -n entity-<tenant>` |
+| Team setup admin | `oc get shc-access,teams,assignments -n entity-<tenant>` |
+| Team setup viewer | `oc get shc-access,teams,assignments -n entity-<tenant>` |
+| App project admin | `oc get shc-access,projects.hybridsovereign.redhat,assignments -n entity-<tenant>` |
+| App project viewer | `oc get shc-access,projects.hybridsovereign.redhat,assignments -n entity-<tenant>` |
+| Cluster assignment admin | `oc get shc-access,assignments,projects.hybridsovereign.redhat,teams -n entity-<tenant>` |
+| Access group admin | `oc get shc-access -n entity-<tenant>` |
+<!-- list-commands:end -->
+
+Every role also reads the tenant profile (`oc get tenantprofile shc -n entity-<tenant>`).
+Objects shared with you through an access field (team setups, app projects) are not in a list;
+get them by name ([access and delegation](access-and-delegation.md)).
+
 ## Tenant
 
 Your organisation's space in the platform. It is **not** a Microsoft Entra ID tenant: all tenants

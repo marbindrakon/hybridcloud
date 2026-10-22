@@ -1,7 +1,7 @@
 FROM quay.io/operator-framework/ansible-operator:v1.42.2
 
 USER root
-RUN pip3 install --no-cache-dir kafka-python
+RUN pip3 install --no-cache-dir kafka-python==3.0.11
 USER 1001
 
 COPY primary/requirements.yml ${HOME}/requirements.yml

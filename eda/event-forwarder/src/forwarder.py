@@ -70,15 +70,18 @@ def get_kafka_producer():
     try:
         from kafka import KafkaProducer  # type: ignore
 
-        _kafka_producer = KafkaProducer(
-            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            key_serializer=lambda k: k.encode("utf-8") if k else None,
-            acks="all",
-            retries=3,
-            api_version=kafka_api_version(os.environ.get("KAFKA_API_VERSION", "")),
-            api_version_auto_timeout_ms=API_VERSION_PROBE_MS,
-        )
+        kwargs = {
+            "bootstrap_servers": KAFKA_BOOTSTRAP_SERVERS.split(","),
+            "value_serializer": lambda v: json.dumps(v).encode("utf-8"),
+            "key_serializer": lambda k: k.encode("utf-8") if k else None,
+            "acks": "all",
+            "retries": 3,
+            "api_version": kafka_api_version(os.environ.get("KAFKA_API_VERSION", "")),
+        }
+        # kafka-python 3.x rejects unknown configs and has no probe timeout option.
+        if kwargs["api_version"] is None and "api_version_auto_timeout_ms" in KafkaProducer.DEFAULT_CONFIG:
+            kwargs["api_version_auto_timeout_ms"] = API_VERSION_PROBE_MS
+        _kafka_producer = KafkaProducer(**kwargs)
         logger.info("Kafka producer connected to %s topic=%s", KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC)
         return _kafka_producer
     except Exception as exc:

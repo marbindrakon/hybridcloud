@@ -99,7 +99,8 @@ admission:
     - system:serviceaccount:kube-system:generic-garbage-collector
   accessFieldLadder: {enabled: true, mode: Deny}         # shc-access-field-ladder (Team/Project access lists)
   # shc-tenant-namespace-delete-guard: a tenant namespace is deleted through its Entity (DELETE refused unless the
-  # namespace carries hybridsovereign.redhat/entity-deleting=<its entity>, written by the Entity's deletion).
+  # namespace carries hybridsovereign.redhat/entity-deleting=<its entity>, written by the Entity's deletion once
+  # the tenant objects are gone).
   # exemptPlatformGroups: false keeps platform administrators on the product path too.
   tenantNamespaceDeleteGuard: {enabled: true, mode: Deny, exemptPlatformGroups: false}
 # Argo CD application name written into the gitops-source annotation of GitOps-owned objects.

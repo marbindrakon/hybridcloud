@@ -59,9 +59,6 @@
           metadata:
             labels:
               hybridsovereign.redhat/deleting: "true"
-            # the tenant namespace delete guard admits the namespace's deletion only with this annotation
-            annotations:
-              hybridsovereign.redhat/entity-deleting: "{{ ansible_operator_meta.name }}"
       failed_when: false
       when: entity_ns_owned | bool
 
@@ -257,6 +254,23 @@
               reason: AsExpected
               message: ""
               lastTransitionTime: "{{ entity_delete_transition_time }}"
+
+    # The tenant namespace delete guard admits the namespace's deletion only with this annotation. It is written
+    # only now that every tier is gone: written earlier, a direct namespace delete during the cascade (which can
+    # wait indefinitely on protected or unknown children) would remove the namespace operator with the objects and
+    # skip their teardown and their deletion protection.
+    - name: Mark the tenant namespace as deletable through its Entity
+      kubernetes.core.k8s:
+        state: patched
+        api_version: v1
+        kind: Namespace
+        name: "entity-{{ ansible_operator_meta.name }}"
+        definition:
+          metadata:
+            annotations:
+              hybridsovereign.redhat/entity-deleting: "{{ ansible_operator_meta.name }}"
+      failed_when: false
+      when: entity_ns_owned | bool
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:
