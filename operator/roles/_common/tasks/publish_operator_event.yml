@@ -28,6 +28,18 @@
     - operator_event_reason is search('DeleteRequested$')
     - _publish_cr.resources | default([]) | length > 0
 
+# phase Creating on the first write of a new object, Deleting at the delete request (not when its job writes)
+- name: Record the phase of a new or deleting object
+  ansible.builtin.include_tasks: mark_phase.yml
+  vars:
+    mark_phase_regarding: "{{ operator_event_regarding }}"
+    mark_phase_deleting: "{{ operator_event_reason is search('DeleteRequested$') }}"
+    mark_phase_cr: >-
+      {{ (_publish_cr.resources | default([]) | first | default({}, true))
+         if (operator_event_reason is search('DeleteRequested$'))
+         else lookup('ansible.builtin.vars', '_hybridsovereign_redhat_' ~ (operator_event_regarding.kind | lower), default={}) }}
+  when: amq_kafka_enabled | default(true) | bool
+
 - name: Decide whether to publish
   ansible.builtin.set_fact:
     _publish_redeliver: >-
