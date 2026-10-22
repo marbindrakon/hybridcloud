@@ -572,7 +572,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -2144,7 +2144,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -2429,7 +2429,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -2930,7 +2930,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -3300,7 +3300,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -4701,7 +4701,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -5297,7 +5297,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -5535,7 +5535,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -6739,7 +6739,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -7144,7 +7144,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
@@ -7317,7 +7317,7 @@ spec:
                       status:
                         description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
