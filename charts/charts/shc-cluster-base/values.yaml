@@ -157,6 +157,12 @@ ops:
           CloudGCP: {jobFinishedMinutes: 30}
           CloudGateway: {jobFinishedMinutes: 30}
           HybridFabric: {jobFinishedMinutes: 30}
+          HybridNetwork: {jobFinishedMinutes: 30}
+          NetworkPlacement: {jobFinishedMinutes: 30}
+          CloudVirt: {jobFinishedMinutes: 30}
+          AttachmentCircuit: {jobFinishedMinutes: 30}
+          ProviderEdge: {jobFinishedMinutes: 30}
+          TransportLink: {jobFinishedMinutes: 30}
       tenancy:
         unavailableMinutes: 2
         restartWindowMinutes: 15

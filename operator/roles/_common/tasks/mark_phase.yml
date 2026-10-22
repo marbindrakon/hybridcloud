@@ -5,12 +5,13 @@
 # Later phases come from the jobs' status writes (status library). One write per transition: nothing is written
 # when the stored phase is already right (decision Keep).
 # Inputs: mark_phase_regarding {apiVersion, kind, name, namespace}; mark_phase_cr (the object as read, or {});
-# mark_phase_deleting (bool); mark_phase_summary (optional, the summary to write).
+# mark_phase_deleting (bool); mark_phase_summary (optional, the summary to write); mark_phase_recorded (optional,
+# the phase the caller already wrote in this run, when mark_phase_cr was read before that write).
 - name: Decide the phase to record
   ansible.builtin.set_fact:
     _mark_phase_value: >-
       {%- set st = (mark_phase_cr | default({}, true)).status | default({}, true) -%}
-      {%- set cur = st.phase | default('', true) -%}
+      {%- set cur = (mark_phase_recorded | default('', true)) or (st.phase | default('', true)) -%}
       {%- if mark_phase_deleting | default(false) | bool -%}
         {{ 'Deleting' if cur != 'Deleting' else 'Keep' }}
       {%- elif cur == '' and (st.observedGeneration | default(0, true) | int) == 0

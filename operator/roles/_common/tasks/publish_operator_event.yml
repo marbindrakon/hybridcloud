@@ -34,6 +34,7 @@
   vars:
     mark_phase_regarding: "{{ operator_event_regarding }}"
     mark_phase_deleting: "{{ operator_event_reason is search('DeleteRequested$') }}"
+    mark_phase_recorded: "{{ operator_event_phase_recorded | default('', true) }}"
     mark_phase_cr: >-
       {{ (_publish_cr.resources | default([]) | first | default({}, true))
          if (operator_event_reason is search('DeleteRequested$'))

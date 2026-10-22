@@ -36,6 +36,33 @@
             and (entity_status == 'ready')
             and (entity_ready | bool)
           }}
+        # a new Entity (no phase, never handled, not ready): the rule of _common/tasks/mark_phase.yml
+        entity_is_new: >-
+          {%- set st = _hybridsovereign_redhat_entity.status | default({}, true) -%}
+          {{ (st.phase | default('', true)) == '' and (st.observedGeneration | default(0, true) | int) == 0
+             and not (st.ready | default(false, true) | bool) and not (st.realized | default(false, true) | bool) }}
+
+    # The first status write of a new Entity says Creating, before the namespace operator deployment below (it
+    # takes a while), as the tenant kinds do from their first write on. Edits and re-runs keep the stored phase.
+    - name: Record phase Creating on a new Entity
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: Entity
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          status: reconciling
+          ready: false
+          phase: Creating
+          phaseSince: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          summary: Being created.
+          conditions:
+            - type: Ready
+              status: "False"
+              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+              reason: AwaitingEDA
+              message: Awaiting EDA to complete provisioning
+      when: entity_is_new | bool
 
     # shc (LAB-PLAN §11.6): deploy (idempotently) on every reconcile, before the "already processed"
     # skip. Upstream deployed it after publishing; a reconcile interrupted in between (operator
@@ -116,6 +143,8 @@
         operator_event_reason: "{{ entity_event_reason }}"
         operator_event_action: "{{ entity_event_action }}"
         operator_event_note: "{{ entity_event_note }}"
+        # recorded above in this run: the CR as read predates it, so mark_phase does not write it again
+        operator_event_phase_recorded: "{{ 'Creating' if (entity_is_new | bool) else '' }}"
         operator_reporting_controller: entity-operator
         operator_event_regarding:
           apiVersion: hybridsovereign.redhat/v1alpha1

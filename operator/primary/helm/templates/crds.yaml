@@ -1886,8 +1886,8 @@ spec:
                   type: string
                   maxLength: 128
                   description: >-
-                    Where the site is, in words shown to tenants (for example a city or a data-centre
-                    name). Region-based sites (aws, gcp) use their region instead.
+                    Where the site is, in words shown to tenants (for example a city, a data-centre
+                    name or a cloud region's name). An aws or gcp site without it shows its region.
                 credentialsRef:
                   type: object
                   description: >-

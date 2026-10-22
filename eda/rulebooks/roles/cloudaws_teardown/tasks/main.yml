@@ -93,8 +93,10 @@
         cr_name: "{{ fab_name }}"
         cr_namespace: "{{ fab_namespace }}"
         patch_ignore_not_found: true
+        # the final write of every teardown: a successful write (status ready) on a deleting object is
+        # Ready=False/Deleted and ends an earlier Stalled=TeardownFailed (status library)
         cr_status_body:
-          status: deleted
+          status: ready
           ready: false
           deletionComplete: true
           message: "Zone {{ cad_dns.zone | default('(none)') }} and its delegation removed"

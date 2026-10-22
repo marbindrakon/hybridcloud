@@ -1,8 +1,26 @@
 ---
+# A finished teardown (the job wrote deletionComplete, Ready=False/Deleted) only waits for the finalizer: release it
+# without another status write, so the Deleted summary and message stay as the job wrote them.
+- name: Exit cleanly when EDA completed deletion
+  ansible.builtin.meta: end_host
+  when: _hybridsovereign_redhat_entity.status.deletionComplete | default(false) | bool
+
 - block:
     - name: Get current timestamp
       ansible.builtin.set_fact:
         entity_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+    # phase Deleting from the delete request on (the first write below), with its start kept across requeues
+    - name: Decide the phase start
+      ansible.builtin.set_fact:
+        _entity_was_deleting: "{{ (_hybridsovereign_redhat_entity.status.phase | default('')) == 'Deleting' }}"
+        _entity_was_blocked: >-
+          {{ ((_hybridsovereign_redhat_entity.status.conditions | default([], true)
+               | selectattr('type', 'equalto', 'DeletionBlocked') | selectattr('status', 'equalto', 'True') | list) | length > 0)
+             or ((_hybridsovereign_redhat_entity.status.deletionBlockedBy | default([], true)) | length > 0) }}
+        _entity_phase_since: >-
+          {{ _hybridsovereign_redhat_entity.status.phaseSince | default(entity_delete_transition_time, true)
+             if (_hybridsovereign_redhat_entity.status.phase | default('')) == 'Deleting' else entity_delete_transition_time }}
 
     # The tenant namespace is this Entity's only when it carries this Entity's label (a namespace that existed
     # before the Entity was refused, never adopted): otherwise nothing in it is touched or deleted.
@@ -26,11 +44,13 @@
         kind: Entity
         name: "{{ ansible_operator_meta.name }}"
         namespace: "{{ ansible_operator_meta.namespace }}"
-        status:
-          status: reconciling
-          ready: false
-          message: Awaiting EDA delete
-          lastReconciledAt: "{{ entity_delete_transition_time }}"
+        # the summary only at the delete request: a requeue keeps the summary a later write gave (a tier wait,
+        # a failed teardown)
+        status: >-
+          {{ {'status': 'reconciling', 'ready': false, 'message': 'Awaiting EDA delete',
+              'lastReconciledAt': entity_delete_transition_time,
+              'phase': 'Deleting', 'phaseSince': _entity_phase_since | trim}
+             | combine({} if (_entity_was_deleting | bool) else {'summary': 'Being deleted.'}) }}
 
     - name: Build compact Entity delete event note (K8s Event note field max 1024 chars)
       ansible.builtin.set_fact:
@@ -156,9 +176,6 @@
     - name: Set the cascade facts
       ansible.builtin.set_fact:
         _entity_cascade: "{{ _entity_tier_json | from_json }}"
-        _entity_phase_since: >-
-          {{ _hybridsovereign_redhat_entity.status.phaseSince | default(entity_delete_transition_time, true)
-             if (_hybridsovereign_redhat_entity.status.phase | default('')) == 'Deleting' else entity_delete_transition_time }}
 
     - name: Stop at kinds the cascade does not know
       when: _entity_cascade.unknown | length > 0
@@ -254,6 +271,9 @@
               reason: AsExpected
               message: ""
               lastTransitionTime: "{{ entity_delete_transition_time }}"
+      # once, when the cascade ends (or ended at the delete request): a requeue while the teardown job runs or after
+      # it failed keeps the job's summary
+      when: (not (_entity_was_deleting | bool)) or (_entity_was_blocked | bool)
 
     # The tenant namespace delete guard admits the namespace's deletion only with this annotation. It is written
     # only now that every tier is gone: written earlier, a direct namespace delete during the cascade (which can
@@ -308,10 +328,6 @@
     - name: Re-raise to signal finalizer failure
       ansible.builtin.fail:
         msg: "Entity {{ ansible_operator_meta.name }} deletion failed — see status.message for details"
-
-- name: Exit cleanly when EDA completed deletion
-  ansible.builtin.meta: end_host
-  when: _hybridsovereign_redhat_entity.status.deletionComplete | default(false) | bool
 
 - name: Derive entity tenant namespace for teardown
   ansible.builtin.set_fact:
