@@ -5286,14 +5286,14 @@ tenancyDashboard:
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
 sovereignAdminPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.28"
+  chartVersion: "0.1.29"  # 0.1.29: admin perspective on the navigation registry, real HTTP status mapping (forbidden / not found states), display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.3.8"
+      tag: "img-1.4.0"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
