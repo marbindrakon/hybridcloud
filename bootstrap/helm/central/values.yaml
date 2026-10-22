@@ -5214,7 +5214,7 @@ cloudAWSOperator:
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.9.18-shc.3"  # shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
+  chartVersion: "0.9.18-shc.4"  # shc.4: oauth-proxy passes bearer tokens to the app; shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
   syncWave: "40"
   destinationNamespace: sovereign-cloud
   values:
@@ -5251,7 +5251,7 @@ sovereignDashboard:
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "1.1.13-shc.3"  # shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
+  chartVersion: "1.1.13-shc.4"  # shc.4: oauth-proxy passes bearer tokens to the app; shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
   syncWave: "41"
   destinationNamespace: sovereign-cloud
   values:
@@ -5413,7 +5413,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.19"  # shc.19: TenantProfile CRD, Entity displayName/contacts/allowedSites, categories + alias short names, REASON/AGE columns, API-only descriptions, admission policies (P0/P3/P4 Warn, P12 + delete guard + access-field ladder Deny), GitOps marks; shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
+  chartVersion: "0.1.22-shc.20"  # shc.20: a current team admin manages the Team access lists (OD28 revised); shc.19: TenantProfile CRD, Entity displayName/contacts/allowedSites, categories + alias short names, REASON/AGE columns, API-only descriptions, admission policies (P0/P3/P4 Warn, P12 + delete guard + access-field ladder Deny), GitOps marks; shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
