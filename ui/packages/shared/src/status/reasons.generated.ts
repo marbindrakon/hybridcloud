@@ -98,6 +98,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "Waiting": { actor: "A", class: "waiting", summary: "Waiting for a prerequisite." },
   "WaitingForAccessGroup": { actor: "T", class: "waiting", summary: "Waiting for the named access groups to be ready." },
   "WaitingForAddressSpace": { actor: "A", class: "waiting", summary: "Waiting for address space to be assigned." },
+  "WaitingForCluster": { actor: "T", class: "waiting", summary: "Waiting for a cluster: name the OpenShift cluster to deploy onto." },
   "WaitingForDependencies": { actor: "A", class: "waiting", summary: "Waiting for the objects this one depends on." },
   "WaitingForDependents": { actor: "A", class: "waiting", summary: "Waiting for the objects that depend on this one to be deleted." },
   "WaitingForFabric": { actor: "A", class: "waiting", summary: "Waiting for the network fabric to be ready." },

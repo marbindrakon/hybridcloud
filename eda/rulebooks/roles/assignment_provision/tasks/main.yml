@@ -142,7 +142,9 @@
         cr_name: "{{ assignment_cr_name }}"
         cr_namespace: "{{ assignment_cr_namespace }}"
         cr_status_body:
-          status: "{{ 'ready' if (assignment_ready | bool) else 'reconciling' }}"
+          # the job's last write: ready, or waiting (pending) for its Team or cluster. Never "reconciling", which
+          # would leave Reconciling=True/JobRunning and the job "running" after it ended (GF2-F1)
+          status: "{{ 'ready' if (assignment_ready | bool) else 'pending' }}"
           ready: "{{ assignment_ready | bool }}"
           observedGeneration: "{{ assignment_generation }}"
           lastReconciledAt: "{{ assignment_status_transition_time }}"
@@ -165,7 +167,9 @@
             - type: Ready
               status: "{{ 'True' if (assignment_ready | bool) else 'False' }}"
               lastTransitionTime: "{{ assignment_status_transition_time }}"
-              reason: "{{ 'EDASucceeded' if (assignment_ready | bool) else 'LinkedNotReady' }}"
+              reason: >-
+                {{ 'EDASucceeded' if (assignment_ready | bool)
+                   else ('WaitingForCluster' if assignment_openshift | length == 0 else 'WaitingForDependencies') }}
               message: >-
                 Team={{ assignment_team }}(ready={{ team_is_ready }}),
                 Projects={{ assignment_projects | length }},

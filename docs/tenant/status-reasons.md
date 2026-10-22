@@ -112,6 +112,7 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | `Waiting` | Waiting for a prerequisite. | Nobody: it continues by itself |
 | `WaitingForAccessGroup` | Waiting for the named access groups to be ready. | You (the tenant) |
 | `WaitingForAddressSpace` | Waiting for address space to be assigned. | Nobody: it continues by itself |
+| `WaitingForCluster` | Waiting for a cluster: name the OpenShift cluster to deploy onto. | You (the tenant) |
 | `WaitingForDependencies` | Waiting for the objects this one depends on. | Nobody: it continues by itself |
 | `WaitingForDependents` | Waiting for the objects that depend on this one to be deleted. | Nobody: it continues by itself |
 | `WaitingForFabric` | Waiting for the network fabric to be ready. | Nobody: it continues by itself |

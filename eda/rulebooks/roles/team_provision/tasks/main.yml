@@ -95,6 +95,21 @@
               message: "{{ team_ready_message }}"
             - "{{ team_access_condition | combine({'lastTransitionTime': team_status_transition_time}) }}"
 
+    # an Assignment that recorded this Team as not ready waits for it: wake it now (GF2-F1). Only those, so the
+    # Assignment's own wake of its Team (wake_assignment_teams.yml) does not bounce back.
+    - name: Wake the Assignments that wait for this Team
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for a in _ta_assignments.resources | default([]) -%}
+            {%- if (a.spec | default({}, true)).team | default('') == team_cr_name and a.metadata.deletionTimestamp is not defined
+                  and not ((a.status | default({}, true)).teamReady | default(false) | bool) -%}
+              {%- set _ = out.append({'kind': 'Assignment', 'namespace': team_cr_namespace, 'name': a.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
   rescue:
     - name: Mark Team as failed on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
