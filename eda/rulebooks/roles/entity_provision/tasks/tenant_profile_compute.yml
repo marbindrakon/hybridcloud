@@ -20,16 +20,19 @@
   register: _tp_sites
 
 - name: The sites this tenant may use
-  vars:
-    _allowed: "{{ entity_spec.allowedSites | default(none) }}"
+  # allowedSites unset or null means "every site the entityRefs rule allows". The test is done inside the
+  # template: a task var templated to None becomes the string "None" without native Jinja (ansible-core 2.16).
   ansible.builtin.set_fact:
     _tp_site_objs: >-
       {%- set out = [] -%}
+      {%- set _spec = entity_spec | default({}, true) -%}
+      {%- set _restricted = (_spec.allowedSites is defined) and (_spec.allowedSites is not none) -%}
+      {%- set _allowed = _spec.allowedSites if _restricted else [] -%}
       {%- for o in _tp_sites.resources | default([]) | sort(attribute='metadata.name') -%}
         {%- set refs = (o.spec | default({}, true)).entityRefs | default([], true) | map(attribute='name') | list -%}
         {%- if o.metadata.deletionTimestamp is not defined
               and (refs | length == 0 or entity_cr_name in refs)
-              and (_allowed is none or o.metadata.name in _allowed) -%}
+              and ((not _restricted) or o.metadata.name in _allowed) -%}
           {%- set _ = out.append(o) -%}
         {%- endif -%}
       {%- endfor -%}
