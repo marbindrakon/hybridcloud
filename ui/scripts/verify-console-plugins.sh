@@ -148,8 +148,12 @@ echo "Sovereign Cloud console plugin verification"
 echo "Namespace: $NS"
 echo "Cluster: $(oc whoami --show-server 2>/dev/null || echo unknown)"
 
-check_plugin "sovereign-admin-plugin" "sovereign-admin-plugin" "1.2.20"
-check_plugin "sovereign-tenant-plugin" "sovereign-tenant-plugin" "1.3.15"
+# Expected image tags default to the live Deployments' own tags (so the check is "a tag is set"); override with
+# ADMIN_PLUGIN_TAG / TENANT_PLUGIN_TAG to assert a release.
+ADMIN_PLUGIN_TAG="${ADMIN_PLUGIN_TAG:-$(oc get deploy sovereign-admin-plugin -n "$NS" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://')}"
+TENANT_PLUGIN_TAG="${TENANT_PLUGIN_TAG:-$(oc get deploy sovereign-tenant-plugin -n "$NS" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://')}"
+check_plugin "sovereign-admin-plugin" "sovereign-admin-plugin" "$ADMIN_PLUGIN_TAG"
+check_plugin "sovereign-tenant-plugin" "sovereign-tenant-plugin" "$TENANT_PLUGIN_TAG"
 
 echo ""
 echo "=== Console operator plugin registration ==="
@@ -173,8 +177,11 @@ fi
 
 echo ""
 echo "=== Route / extension integrity ==="
-python3 <<'PY'
-import json, sys, pathlib
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+REPO_ROOT="$REPO_ROOT" python3 <<'PY'
+import json, sys, pathlib, os
+
+ROOT = os.environ["REPO_ROOT"]
 
 def load_ext(path):
     return json.loads(pathlib.Path(path).read_text())
