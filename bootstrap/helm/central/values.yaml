@@ -5311,14 +5311,14 @@ sovereignAdminPlugin:
 # ─── Sovereign Tenant Console Plugin (services cluster) ──────────────────────
 sovereignTenantPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.23"
+  chartVersion: "0.1.24"  # 0.1.24: tenant scope from identity (no default tenant), navigation registry, forms matching the API, status phase, Attach dialog, display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.4.8"
+      tag: "img-1.5.0"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
