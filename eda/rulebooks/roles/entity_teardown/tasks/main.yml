@@ -45,6 +45,27 @@
              or (((entity_namespace_lookup.resources[0].metadata.labels | default({}, true))['hybridsovereign.redhat/entity']
                   | default('')) == entity_cr_name) }}
 
+    # the tenant namespace delete guard admits the deletion only when the namespace names its Entity as deleting
+    # (the Entity's controller writes it at the delete request; written again here for a namespace marked earlier)
+    - name: Mark the entity namespace as deleted through its Entity
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: patched
+        api_version: v1
+        kind: Namespace
+        name: "{{ entity_namespace }}"
+        definition:
+          metadata:
+            annotations:
+              hybridsovereign.redhat/entity-deleting: "{{ entity_cr_name }}"
+      # the controller wrote it already; a refused patch must not stop the teardown
+      failed_when: false
+      when:
+        - entity_namespace_owned | bool
+        - entity_namespace_lookup.resources | length > 0
+
     - name: Delete entity namespace on services cluster
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"

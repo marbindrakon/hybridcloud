@@ -11,6 +11,13 @@ platform. A request from anyone but platform automation, the per-tenant namespac
 sets one of these fields, or changes its stored value, is refused (Deny) or answered with a warning (Warn). A field
 that is absent, or unchanged from the stored object, always passes, so objects that already exist keep working.
 
+shc-tenant-namespace-delete-guard: a tenant namespace (labelled hybridsovereign.redhat/entity) is deleted by deleting its
+Entity, which removes the tenant's objects first and then the namespace. A direct delete removes the tenant's controller
+together with the objects, so their teardown never runs and the namespace hangs. The delete is refused unless the
+namespace carries the annotation hybridsovereign.redhat/entity-deleting naming its own Entity, which the Entity's
+deletion writes (break glass for a namespace whose Entity is gone: set that annotation by hand, then delete).
+Platform automation is exempt; platform groups are exempt only with admission.tenantNamespaceDeleteGuard.exemptPlatformGroups.
+
 Exemptions are exact usernames and groups from .Values.admission; they can never name a tenant-facing server
 account or kube:admin (render-time check below).
 */}}
@@ -148,4 +155,59 @@ metadata:
 spec:
   policyName: shc-platform-only-fields
   validationActions: {{ include "primary-operator.vapActions" $adm.platformOnlyFields.mode }}
+{{- end }}
+{{- if $adm.tenantNamespaceDeleteGuard.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-tenant-namespace-delete-guard
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $adm.tenantNamespaceDeleteGuard.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["DELETE"]
+        resources: ["namespaces"]
+  matchConditions:
+    - name: tenant-namespace
+      expression: >-
+        has(oldObject.metadata.labels)
+        && 'hybridsovereign.redhat/entity' in oldObject.metadata.labels
+        && oldObject.metadata.labels['hybridsovereign.redhat/entity'] != ''
+    - name: not-exempt
+      expression: >-
+        !({{ include "primary-operator.isAutomationCEL" . }}
+        {{- if $adm.tenantNamespaceDeleteGuard.exemptPlatformGroups }}
+        || {{ include "primary-operator.isPlatformGroupCEL" . }}
+        {{- end }})
+  variables:
+    - name: entity
+      expression: oldObject.metadata.labels['hybridsovereign.redhat/entity']
+    - name: deleting
+      expression: >-
+        has(oldObject.metadata.annotations)
+        && 'hybridsovereign.redhat/entity-deleting' in oldObject.metadata.annotations
+        ? oldObject.metadata.annotations['hybridsovereign.redhat/entity-deleting'] : ''
+  validations:
+    - expression: variables.deleting == variables.entity
+      messageExpression: >-
+        'Namespace ' + oldObject.metadata.name + ' belongs to the tenant ' + variables.entity
+        + '. Delete the tenant (Entity ' + variables.entity + ') instead: it removes the tenant objects first, '
+        + 'then this namespace. Deleting the namespace directly leaves their teardown undone.'
+      # Invalid (HTTP 422), not Forbidden: the requester may delete namespaces in general
+      reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-tenant-namespace-delete-guard
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-tenant-namespace-delete-guard
+  validationActions: {{ include "primary-operator.vapActions" $adm.tenantNamespaceDeleteGuard.mode }}
 {{- end }}

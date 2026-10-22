@@ -59,6 +59,9 @@
           metadata:
             labels:
               hybridsovereign.redhat/deleting: "true"
+            # the tenant namespace delete guard admits the namespace's deletion only with this annotation
+            annotations:
+              hybridsovereign.redhat/entity-deleting: "{{ ansible_operator_meta.name }}"
       failed_when: false
       when: entity_ns_owned | bool
 

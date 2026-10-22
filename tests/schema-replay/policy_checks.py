@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Behaviour of the GitOps admission policies (shc-fabric-ledger-guard, shc-gitops-managed, shc-gitops-delete-guard)
-in a replay cluster.
+and, with --tenant-namespace-guard, of shc-tenant-namespace-delete-guard, in a replay cluster.
 
 Run by test-policies.sh through `replay.py --exec`: KUBECONFIG points at the throwaway API server that holds the
 baseline objects and the rendered policies; REPLAY_KUBECTL is the kubectl to use. Every request that could change
 an object is a server-side dry run, so the checks can run in any order.
 
 usage: policy_checks.py --gitops-mode Warn|Deny [--fabric NS/NAME] [--object KIND/NS/NAME] [--unmarked KIND/NS/NAME]
+                        [--tenant-namespace-guard]
 """
 import argparse
 import json
@@ -21,8 +22,12 @@ USER = "replay-tenant-user"
 RESULTS = []
 
 
-def kubectl(args, as_user=None, body=None):
+PLATFORM_GROUP = "sovereign-admin"
+
+
+def kubectl(args, as_user=None, body=None, as_groups=()):
     cmd = [os.environ.get("REPLAY_KUBECTL", "kubectl")] + args + ([f"--as={as_user}"] if as_user else [])
+    cmd += [f"--as-group={g}" for g in as_groups]
     r = subprocess.run(cmd, input=json.dumps(body) if body is not None else None, capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 
@@ -132,6 +137,42 @@ def delete_guard_checks(kind, ns, name, unmarked):
     kubectl(["-n", ns, "annotate", kind, name, "hybridsovereign.redhat/gitops-override-"])
 
 
+def tenant_namespace_guard_checks():
+    """shc-tenant-namespace-delete-guard (UX-102): a tenant namespace is deleted through its Entity."""
+    ns, entity, plain = "entity-replay-guard", "replay-guard", "replay-plain-ns"
+    for name, labels in ((ns, {"hybridsovereign.redhat/entity": entity}), (plain, {})):
+        body = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": name, "labels": labels}}
+        rc, _, err = kubectl(["apply", "-f", "-"], body=body)
+        if rc:
+            check(f"namespace guard: create {name}", False, err.strip())
+            return
+
+    def delete_dry(name, as_user=USER, groups=()):
+        return kubectl(["delete", "namespace", name, "--dry-run=server"], as_user=as_user, as_groups=groups)
+
+    def annotate(value):
+        arg = "hybridsovereign.redhat/entity-deleting" + (f"={value}" if value is not None else "-")
+        return kubectl(["annotate", "namespace", ns, arg] + (["--overwrite"] if value is not None else []))
+
+    rc, _, err = delete_dry(ns)
+    check("namespace guard denies a direct delete of a tenant namespace, naming the Entity",
+          rc != 0 and f"Delete the tenant (Entity {entity})" in err, err.strip())
+    rc, _, err = delete_dry(ns, groups=(PLATFORM_GROUP,))
+    check("namespace guard denies a platform group too (exemptPlatformGroups false)",
+          rc != 0 and "Delete the tenant" in err, err.strip())
+    rc, _, err = delete_dry(ns, AUTOMATION)
+    check("namespace guard exempts platform automation", rc == 0, err.strip())
+    rc, _, err = delete_dry(plain)
+    check("namespace guard does not match a namespace without the tenant label", rc == 0, err.strip())
+    annotate("another-entity")
+    rc, _, err = delete_dry(ns)
+    check("namespace guard denies when the annotation names another Entity", rc != 0, err.strip())
+    annotate(entity)
+    rc, _, err = delete_dry(ns)
+    check("namespace guard admits the delete once the Entity's deletion marked the namespace", rc == 0, err.strip())
+    annotate(None)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gitops-mode", choices=("Warn", "Deny"), required=True)
@@ -139,11 +180,15 @@ def main():
     ap.add_argument("--object", default="cloudinfrastructure/sovereign-cloud/iaas1")
     ap.add_argument("--unmarked", default="",
                     help="KIND/NS/NAME of an object of a guarded kind without the managed-by label (optional)")
+    ap.add_argument("--tenant-namespace-guard", action="store_true",
+                    help="also check shc-tenant-namespace-delete-guard (rendered with exemptPlatformGroups false)")
     a = ap.parse_args()
     fns, fname, kind, ons, oname = setup(a.fabric, a.object)
     fabric_checks(fns, fname)
     gitops_checks(a.gitops_mode, kind, ons, oname)
     delete_guard_checks(kind, ons, oname, a.unmarked)
+    if a.tenant_namespace_guard:
+        tenant_namespace_guard_checks()
     failed = [n for n, ok in RESULTS if not ok]
     print(f"policy_checks: {len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
     return 1 if failed else 0

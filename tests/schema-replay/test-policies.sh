@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Behaviour test of the primary chart's GitOps admission policies (shc-fabric-ledger-guard, shc-gitops-managed,
-# shc-gitops-delete-guard):
+# shc-gitops-delete-guard) and of shc-tenant-namespace-delete-guard (rendered Deny, platform groups not exempt):
 # renders them from the chart (P4 once as Warn, once as Deny), replays OBJECTS into an envtest API server with
 # them and runs policy_checks.py there.
 #   tests/schema-replay/test-policies.sh OBJECTS_DIR [VALUES_FILE ...]
@@ -20,9 +20,13 @@ rc=0
 for mode in Warn Deny; do
   helm template hybridsovereign-primary-operator "${ROOT}/operator/primary/helm" "${VALUES[@]}" \
     --set "admission.gitopsManaged.mode=${mode}" --show-only templates/gitops-policies.yaml >"${WORK}/policies-${mode}.yaml"
+  helm template hybridsovereign-primary-operator "${ROOT}/operator/primary/helm" "${VALUES[@]}" \
+    --set admission.tenantNamespaceDeleteGuard.enabled=true --set admission.tenantNamespaceDeleteGuard.mode=Deny \
+    --set admission.tenantNamespaceDeleteGuard.exemptPlatformGroups=false \
+    --show-only templates/admission-policies.yaml >"${WORK}/ns-policies-${mode}.yaml"
   echo "== shc-gitops-managed ${mode}, shc-fabric-ledger-guard as rendered"
   python3 -I "${HERE}/replay.py" --objects "${OBJECTS}" --crds "${ROOT}/operator/primary/helm/templates/crds.yaml" \
-    --policies "${WORK}/policies-${mode}.yaml" \
-    --exec "python3 -I ${HERE}/policy_checks.py --gitops-mode ${mode} ${POLICY_CHECK_ARGS:-}" || rc=1
+    --policies "${WORK}/policies-${mode}.yaml" --policies "${WORK}/ns-policies-${mode}.yaml" \
+    --exec "python3 -I ${HERE}/policy_checks.py --gitops-mode ${mode} --tenant-namespace-guard ${POLICY_CHECK_ARGS:-}" || rc=1
 done
 exit "${rc}"
