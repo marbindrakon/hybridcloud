@@ -61,21 +61,11 @@
     - name: Delete Quay org
       when: _quay_config.resources | default([]) | length > 0
       block:
-        - name: Read Quay admin secret
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            kind: Secret
-            name: "{{ _quay_config.resources[0].spec.secret }}"
-            namespace: "{{ plugin_quay_config_namespace }}"
-          register: _quay_secret
-          no_log: true
-
-        - name: Decode credentials
-          ansible.builtin.set_fact:
-            quay_api_token: "{{ _quay_secret.resources[0].data.token | b64decode }}"
-          no_log: true
+        # the same credentials and URL the provision role uses (central Vault KV quay-services-admin); the
+        # QuayConfig's spec.secret is a legacy pointer without a token, so the delete below ran with an undefined
+        # token while the deletion was still reported complete
+        - name: Load Quay admin credentials from Vault
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_quay_admin_credentials.yml"
 
         - name: Delete organization from Quay
           ansible.builtin.uri:
@@ -85,7 +75,7 @@
               Authorization: "Bearer {{ quay_api_token }}"
             validate_certs: false
             status_code: [200, 204, 404]
-      ignore_errors: true
+      # a tool-side failure fails the teardown (TeardownFailed, retried) instead of leaving the organization behind
 
     - name: Get current timestamp for status
       ansible.builtin.set_fact:

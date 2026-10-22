@@ -61,22 +61,11 @@
     - name: Delete AAP org and teams
       when: _aap_config.resources | default([]) | length > 0
       block:
-        - name: Read AAP admin secret
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            kind: Secret
-            name: "{{ _aap_config.resources[0].spec.secret }}"
-            namespace: "{{ plugin_aap_config_namespace }}"
-          register: _aap_secret
-          no_log: true
-
-        - name: Decode AAP credentials
-          ansible.builtin.set_fact:
-            aap_username: "{{ _aap_secret.resources[0].data.username | b64decode }}"
-            aap_password: "{{ _aap_secret.resources[0].data.password | b64decode }}"
-          no_log: true
+        # the same credentials the provision role uses (central Vault KV aap-admin: username/password); the
+        # AAPConfig's spec.secret is a legacy pointer that holds no username, so decoding it failed and every
+        # gateway call below ran with undefined credentials while the deletion was still reported complete
+        - name: Load AAP admin credentials from Vault
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_aap_admin_credentials.yml"
 
         - name: Discover AAP gateway Route from services cluster
           kubernetes.core.k8s_info:
@@ -137,7 +126,8 @@
             validate_certs: false
             status_code: [200, 204, 404]
           loop: "{{ _auth_maps.json.results | default([]) }}"
-      ignore_errors: true
+      # a tool-side failure fails the teardown (the object shows TeardownFailed and retries) instead of
+      # reporting a deletion that left the organization, its teams and maps behind
 
     - name: Get current timestamp for status
       ansible.builtin.set_fact:
