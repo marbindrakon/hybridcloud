@@ -936,7 +936,13 @@
     "chooseTitle": "Choisir un locataire",
     "chooseBody": "Vous avez accès à plusieurs locataires. Choisissez celui dans lequel travailler ; vous pouvez changer à tout moment dans l'en-tête.",
     "loading": "Vérification de vos accès",
-    "loadingBody": "Recherche de vos groupes et de vos locataires."
+    "loadingBody": "Recherche de vos groupes et de vos locataires.",
+    "denyTenantGrant": "L'appartenance à l'un des groupes d'accès du locataire le permet ; le rôle {{role}} y ajoute des personnes.",
+    "denyTenantAsk": "Demandez aux administrateurs du locataire ou à l'équipe plateforme de vous ajouter à l'un d'eux.",
+    "platformAdminRole": "Administrateur de la plateforme",
+    "platformViewRole": "Lecteur de la plateforme",
+    "denyOwnContacts": "Contacts de {{tenant}} : {{contacts}}.",
+    "denyAskPlatform": "Demandez à l'équipe plateforme."
   },
   "access": {
     "checking": "Vérification de vos accès…",

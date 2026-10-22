@@ -4,6 +4,7 @@ import { LockIcon, UserIcon } from '@patternfly/react-icons';
 import { useTranslation } from '../i18n';
 import { useOptionalScope } from './ScopeProvider';
 import { tenantLabel } from './resolveIdentity';
+import { scopeDenialText } from '../access/errorText';
 
 // EmptyState takes an icon component; the console plugins compile shared code
 // against another @types/react, so the component types are passed untyped.
@@ -44,10 +45,18 @@ export function NoAccessState({ requested }: { requested?: string }): React.Reac
     }
   }, [t, label]);
   const others = ctx?.tenants ?? [];
+  // Who grants it and whom to ask, as on a forbidden page inside a tenant (PGT-F1).
+  const hint = scopeDenialText(t, {
+    requested: name === 'all' ? 'all' : name === 'platform' ? 'platform' : 'tenant',
+    ownTenants: others.map((o) => ({ label: tenantLabel(o), contacts: o.contacts })),
+  });
   return (
-    <EmptyState titleText={t('scope.noAccessTitle', { tenant: label })} headingLevel="h1" icon={iconOf(LockIcon)}>
+    <EmptyState titleText={t('scope.noAccessTitle', { tenant: label })} headingLevel="h1" icon={iconOf(LockIcon)} className="sc-forbidden">
       <EmptyStateBody>
         <p>{t('scope.noAccessBody')}</p>
+        {hint.map((h) => (
+          <p key={h}>{h}</p>
+        ))}
         <p>{t('scope.newGroupHint')}</p>
       </EmptyStateBody>
       {others.length > 0 && (

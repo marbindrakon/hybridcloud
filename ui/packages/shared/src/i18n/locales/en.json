@@ -936,7 +936,13 @@
     "chooseTitle": "Choose a tenant",
     "chooseBody": "You have access to more than one tenant. Pick the one to work in; you can switch at any time in the header.",
     "loading": "Checking your access",
-    "loadingBody": "Looking up your groups and tenants."
+    "loadingBody": "Looking up your groups and tenants.",
+    "denyTenantGrant": "Membership in one of the tenant's access groups grants it; the {{role}} role adds people to them.",
+    "denyTenantAsk": "Ask the tenant's administrators or the platform team to add you to one.",
+    "platformAdminRole": "Platform administrator",
+    "platformViewRole": "Platform viewer",
+    "denyOwnContacts": "Contacts of {{tenant}}: {{contacts}}.",
+    "denyAskPlatform": "Ask the platform team."
   },
   "access": {
     "checking": "Checking your access…",

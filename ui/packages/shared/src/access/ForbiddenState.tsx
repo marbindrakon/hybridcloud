@@ -6,7 +6,8 @@ import { KIND_PLURALS, type HybridSovereignKind } from '../types';
 import { useOptionalScope } from '../scope/ScopeProvider';
 import { errorText, roleHintText } from './errorText';
 import { hintRoles } from './roleHints';
-import { kindTerm } from '../i18n/vocabulary';
+import { kindTerm, kindTermInText } from '../i18n/vocabulary';
+import { PLATFORM_KINDS, PLUGIN_KINDS } from './permissionGate';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const iconOf = (c: unknown): any => c;
@@ -39,8 +40,8 @@ export function ForbiddenState({
 }): React.ReactElement {
   const { t } = useTranslation();
   const { tenantLabel, contacts } = useScopeLabels();
-  const kindLabel = kindTerm(t, kind, 'many');
-  const oneLabel = kindTerm(t, kind);
+  const kindLabel = kindTermInText(t, kind, 'many');
+  const oneLabel = kindTermInText(t, kind);
   const title = name
     ? tenantLabel
       ? t('errors.forbiddenObject', { kind: oneLabel, name, tenant: tenantLabel })
@@ -48,8 +49,11 @@ export function ForbiddenState({
     : tenantLabel
       ? t('errors.forbiddenList', { kind: kindLabel, tenant: tenantLabel })
       : t('errors.forbiddenKind', { kind: kindLabel });
+  const tenantRoles = hintRoles(KIND_PLURALS[kind], name ? 'get' : 'list').map((r) => t(`roles.${r}`));
+  // A platform kind: no tenant role grants it; the platform roles do (PGT-F1).
+  const platformKind = PLATFORM_KINDS.includes(kind) || PLUGIN_KINDS.includes(kind);
   const hint = roleHintText(t, {
-    roleNames: hintRoles(KIND_PLURALS[kind], name ? 'get' : 'list').map((r) => t(`roles.${r}`)),
+    roleNames: tenantRoles.length || !platformKind ? tenantRoles : [t('scope.platformAdminRole'), t('scope.platformViewRole')],
     contacts,
   });
   if (compact) {
