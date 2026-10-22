@@ -57,7 +57,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
               {blockers.map((b, i) => (
                 <li key={`${b.kind}-${b.name}-${i}`}>
                   {objectLabel(t, { kind: b.kind, name: b.name ?? '', namespace: b.namespace }, { dense: true })}
-                  {b.reason ? <span className="sc-text-muted"> ({b.reason})</span> : null}
+                  {b.reason ? <span className="sc-text-muted"> ({displayText(t, b.reason)})</span> : null}
                 </li>
               ))}
             </ul>

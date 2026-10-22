@@ -51,6 +51,14 @@ export const API_KINDS = [
 ] as const;
 
 const KIND_SET = new Set<string>(API_KINDS);
+
+/**
+ * Kinds of other API groups the status text names (the VMs a VM environment's delete waits for).
+ * Their words are vocabulary.otherKinds.<Kind> (one) and vocabulary.otherKinds.<Kind>s (many).
+ */
+export const OTHER_KINDS = ['VirtualMachine'] as const;
+const OTHER_SET = new Set<string>(OTHER_KINDS);
+const isKnownKind = (word: string): boolean => KIND_SET.has(word) || OTHER_SET.has(word);
 /** Kinds with more than one word in their name, longest first (for keys that start with one). */
 const LEADING_KINDS = [...API_KINDS].filter((k) => /^[A-Z][a-z]+[A-Z]/.test(k)).sort((a, b) => b.length - a.length);
 
@@ -67,6 +75,10 @@ export type KindForm = 'one' | 'many' | 'dense';
  * word "Object", never the API word.
  */
 export function kindTerm(t: VocabT, kind: string | undefined | null, form: KindForm = 'one'): string {
+  if (kind && OTHER_SET.has(kind)) {
+    const other = t(`vocabulary.otherKinds.${kind}${form === 'many' ? 's' : ''}`, { defaultValue: '' });
+    if (other) return other;
+  }
   if (!kind || !isApiKind(kind)) return t(form === 'many' ? 'vocabulary.objects' : 'vocabulary.object');
   const one = t(`kindsOne.${kind}`, { defaultValue: '' });
   const fallback = one || t(`kinds.${kind}`, { defaultValue: '' }) || t('vocabulary.object');
@@ -98,37 +110,52 @@ export interface ObjectRef {
   kind?: string;
   name: string;
   namespace?: string;
+  /** What the reference is about, as the API adds it: "(internet egress)", ": in use". */
+  detail?: string;
 }
 
 /**
  * An object reference as the API writes it: "Kind/name", "Kind / name",
- * "Kind namespace/name" or "Kind name". Returns null when the text does not
- * start with an API kind.
+ * "Kind namespace/name" or "Kind name", optionally followed by a detail in
+ * brackets or after a colon ("HybridFabric ns/fab (internet egress)",
+ * "CloudGateway ns/gw (VRF x)"). Returns null when the text does not start with
+ * a known kind (an API kind, or one of OTHER_KINDS).
  */
 export function parseObjectRef(text: string | undefined | null): ObjectRef | null {
   if (!text) return null;
-  const m = /^\s*([A-Z][A-Za-z]+)\s*(?:\/\s*|\s+)(\S+)\s*$/.exec(text);
-  if (!m || !isApiKind(m[1])) return null;
+  const m = /^\s*([A-Z][A-Za-z]+)\s*(?:\/\s*|\s+)([^\s():]+)\s*(?:\((.*)\)|:\s*(.*?))?\s*$/.exec(text);
+  if (!m || !isKnownKind(m[1])) return null;
   const rest = m[2];
+  const detail = (m[3] ?? m[4] ?? '').trim();
   const slash = rest.indexOf('/');
-  if (slash > 0) return { kind: m[1], namespace: rest.slice(0, slash), name: rest.slice(slash + 1) };
-  return { kind: m[1], name: rest };
+  const ref: ObjectRef =
+    slash > 0 ? { kind: m[1], namespace: rest.slice(0, slash), name: rest.slice(slash + 1) } : { kind: m[1], name: rest };
+  if (detail) ref.detail = detail;
+  return ref;
 }
 
-/** "VM environment g-vmenv-1" (dense) or "OpenShift Virtualization environment g-vmenv-1". */
+/**
+ * "VM environment g-vmenv-1" (dense) or "OpenShift Virtualization environment g-vmenv-1",
+ * with the detail in brackets. A reference without a kind (free text) is shown through
+ * displayText, so a kind word inside it still reads as its term.
+ */
 export function objectLabel(
   t: VocabT,
   ref: ObjectRef | string | undefined | null,
   opts: { dense?: boolean } = {},
 ): string {
   if (!ref) return '';
-  const r = typeof ref === 'string' ? parseObjectRef(ref) ?? { name: displayText(t, ref) } : ref;
+  const r = typeof ref === 'string' ? parseObjectRef(ref) ?? { name: ref } : ref;
   const name = r.namespace ? `${r.namespace}/${r.name}` : r.name;
-  if (!r.kind) return name;
-  return `${kindTerm(t, r.kind, opts.dense ? 'dense' : 'one')} ${name}`.trim();
+  const detail = r.detail ? ` (${displayText(t, r.detail)})` : '';
+  if (!r.kind) return `${displayText(t, name)}${detail}`;
+  return `${kindTerm(t, r.kind, opts.dense ? 'dense' : 'one')} ${name}`.trim() + detail;
 }
 
-const KIND_WORD = new RegExp(`\\b(${[...API_KINDS].sort((a, b) => b.length - a.length).join('|')})(s)?\\b`, 'g');
+const KIND_WORD = new RegExp(
+  `\\b(${[...API_KINDS, ...OTHER_KINDS].sort((a, b) => b.length - a.length).join('|')})(s)?\\b`,
+  'g',
+);
 
 /**
  * Free text from the API (condition messages, waitingFor entries, summaries)
@@ -140,7 +167,7 @@ export function displayText(t: VocabT, text: string | undefined | null): string 
   if (!text) return '';
   return text
     .replace(/\b([A-Z][A-Za-z]+)\s*\/\s*([a-z0-9][a-z0-9.-]*(?:\/[a-z0-9][a-z0-9.-]*)?)/g, (all, kind: string, name: string) =>
-      isApiKind(kind) ? `${inText(kindTerm(t, kind, 'dense'))} ${name}` : all,
+      isKnownKind(kind) ? `${inText(kindTerm(t, kind, 'dense'))} ${name}` : all,
     )
     .replace(KIND_WORD, (_all, kind: string, plural?: string) => kindTermInText(t, kind, plural ? 'many' : 'one'));
 }

@@ -232,9 +232,14 @@ export function deletionBlockers(item: PhaseSubject | null | undefined): Deletio
   return raw
     .map((b): DeletionBlocker | null => {
       if (typeof b === 'string') {
-        // "Kind/name" (the API's short form) is split so pages show the display term, not the kind.
+        // "Kind/name" (the API's short form) is split so pages show the display term, not the kind;
+        // a detail after it ("HybridFabric ns/fab (internet egress)") becomes the reason.
         const ref = parseObjectRef(b);
-        if (ref) return { kind: ref.kind, name: ref.name, namespace: ref.namespace };
+        if (ref) {
+          const out: DeletionBlocker = { kind: ref.kind, name: ref.name, namespace: ref.namespace };
+          if (ref.detail) out.reason = ref.detail;
+          return out;
+        }
         return b.trim() ? { name: b.trim() } : null;
       }
       if (b && typeof b === 'object') {

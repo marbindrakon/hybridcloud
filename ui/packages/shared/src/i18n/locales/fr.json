@@ -1334,6 +1334,10 @@
   "vocabulary": {
     "object": "Objet",
     "objects": "Objets",
+    "otherKinds": {
+      "VirtualMachine": "Machine virtuelle",
+      "VirtualMachines": "Machines virtuelles"
+    },
     "tenantCaption": "Locataire · {{tenant}}"
   },
   "fieldWords": {

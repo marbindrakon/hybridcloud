@@ -74,3 +74,42 @@ test('deletionBlockedBy strings in the short form are split into kind and name',
     { kind: 'NetworkPlacement', name: 'p', namespace: undefined, reason: undefined },
   ]);
 });
+
+// The formats the teardowns write (hybridnetwork_teardown, networkplacement_teardown, cloudvirt_teardown).
+const PRODUCER_BLOCKERS = [
+  'HybridFabric shc-platform/fab-a (internet egress)',
+  'CloudGateway shc-platform/gw-a (VRF net-a)',
+  'VirtualMachine entity-x-vms/vm-1',
+];
+
+test('teardown references with a detail are split into kind, name and detail', () => {
+  assert.deepEqual(v.parseObjectRef(PRODUCER_BLOCKERS[0]), {
+    kind: 'HybridFabric', namespace: 'shc-platform', name: 'fab-a', detail: 'internet egress',
+  });
+  assert.deepEqual(v.parseObjectRef(PRODUCER_BLOCKERS[1]), {
+    kind: 'CloudGateway', namespace: 'shc-platform', name: 'gw-a', detail: 'VRF net-a',
+  });
+  assert.deepEqual(v.parseObjectRef(PRODUCER_BLOCKERS[2]), { kind: 'VirtualMachine', namespace: 'entity-x-vms', name: 'vm-1' });
+  assert.deepEqual(v.parseObjectRef('CloudVirt/g-vmenv-1: still in use'), { kind: 'CloudVirt', name: 'g-vmenv-1', detail: 'still in use' });
+  assert.equal(v.objectLabel(t, PRODUCER_BLOCKERS[0]), `${v.kindTerm(t, 'HybridFabric')} shc-platform/fab-a (internet egress)`);
+  assert.equal(v.objectLabel(t, PRODUCER_BLOCKERS[2]), 'Virtual machine entity-x-vms/vm-1');
+  assert.equal(v.objectLabel(tFr, PRODUCER_BLOCKERS[2]), 'Machine virtuelle entity-x-vms/vm-1');
+  assert.equal(v.displayText(t, 'Deletion waits for 2 VM(s) on c: VirtualMachine ns/a, VirtualMachine ns/b'),
+    'Deletion waits for 2 VM(s) on c: virtual machine ns/a, virtual machine ns/b');
+});
+
+test('a reference without a kind is shown through displayText', () => {
+  assert.equal(v.objectLabel(t, { name: 'HybridFabric shc-platform/fab-a is busy' }), `${v.kindTermInText(t, 'HybridFabric')} shc-platform/fab-a is busy`);
+});
+
+test('teardown deletionBlockedBy entries show no API kind word on the page', () => {
+  const item = { status: { deletionBlockedBy: [...PRODUCER_BLOCKERS, 'port p1 (compute:nova)'] } };
+  const blockers = phase.deletionBlockers(item);
+  assert.deepEqual(blockers[0], { kind: 'HybridFabric', namespace: 'shc-platform', name: 'fab-a', reason: 'internet egress' });
+  assert.deepEqual(blockers[1], { kind: 'CloudGateway', namespace: 'shc-platform', name: 'gw-a', reason: 'VRF net-a' });
+  for (const b of blockers) {
+    // the way StatusWaitBlocks and the Deleting callout build the line
+    const label = v.objectLabel(t, { kind: b.kind, name: b.name ?? '', namespace: b.namespace, detail: b.reason }, { dense: true });
+    assert.doesNotMatch(label, /\b(HybridFabric|CloudGateway|VirtualMachine)\b/, label);
+  }
+});

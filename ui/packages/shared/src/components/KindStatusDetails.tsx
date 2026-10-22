@@ -203,7 +203,7 @@ export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactEl
   const { t } = useTranslation();
   const waiting = Array.isArray(item.status?.waitingFor) ? item.status?.waitingFor ?? [] : [];
   const blocked = deletionBlockers(item).map((b) =>
-    objectLabel(t, { kind: b.kind, name: b.name ?? '', namespace: b.namespace }, { dense: true }),
+    objectLabel(t, { kind: b.kind, name: b.name ?? '', namespace: b.namespace, detail: b.reason }, { dense: true }),
   );
   if (!waiting.length && !blocked.length) return null;
   return (

@@ -52,6 +52,17 @@ for (const kind of vocab.API_KINDS) {
   add(`displayText(${kind} word)`, vocab.displayText(t, `network a via ${kind} b; two ${kind}s`), kind);
 }
 add('kindTerm(unknown)', vocab.kindTerm(t, 'NoSuchKind'));
+// The deletionBlockedBy formats the teardowns write, labelled the way StatusWaitBlocks and the
+// Deleting callout label them (hybridnetwork_teardown, networkplacement_teardown, cloudvirt_teardown);
+// `kind` is the tenant kind whose page shows the entry.
+for (const [kind, text] of [
+  ['HybridNetwork', 'HybridFabric ns/x (internet egress)'],
+  ['NetworkPlacement', 'CloudGateway ns/x (VRF y)'],
+  ['CloudVirt', 'VirtualMachine ns/x'],
+]) {
+  add(`objectLabel(${text})`, vocab.objectLabel(t, text, { dense: true }), kind);
+  add(`objectLabel(${text}, no kind)`, vocab.objectLabel(t, { name: text }), kind);
+}
 add('objectLabel(unknown)', vocab.objectLabel(t, 'NoSuchKind/x'));
 
 // Catalogue templates that take a kind, filled the way the pages fill them.
