@@ -956,7 +956,10 @@
     "server": "Ce n'est pas de votre fait.",
     "serverBody": "Réessayez ; si le problème persiste, contactez l'équipe plateforme.",
     "serverBodyRef": "Réessayez ; si le problème persiste, contactez l'équipe plateforme avec la référence {{ref}}.",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "forbiddenObject": "Vous n'avez pas accès à {{kind}} {{name}} dans {{tenant}}.",
+    "forbiddenObjectNoTenant": "Vous n'avez pas accès à {{kind}} {{name}}.",
+    "notFoundObject": "{{kind}} {{name}} a été supprimé ou n'a jamais existé dans ce locataire."
   },
   "roles": {
     "entityAdmin": "Administrateur du locataire",

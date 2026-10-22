@@ -32,6 +32,7 @@ import { RefreshFailedAlert } from './ResourceListTable';
 import { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind } from './PlacementTabs';
 import { WayInPanel } from './WayInPanel';
 import { GatedButton } from '../access/GatedButton';
+import { ForbiddenState } from '../access/ForbiddenState';
 import { errorText } from '../access/errorText';
 import { useTranslation } from '../i18n';
 import { condStatus, phaseOf, retryQueued } from '../status/phase';
@@ -325,10 +326,14 @@ export function ResourceDetail({
     if (deleteRequested && classifyError(error) === 'notFound') {
       return <Alert variant="info" isInline title={t('toasts.deleted', { kind: kindLabel, name })} />;
     }
+    const cls = classifyError(error);
+    // A forbidden page says who grants access, like a forbidden list (GT-F5).
+    if (cls === 'forbidden') return <ForbiddenState kind={kind} name={name} />;
     const txt = errorText(error, t, { kindLabel, action: 'get' });
+    // A gone object says so in words, without the raw API text (GT-F9).
     return (
-      <Alert variant={classifyError(error) === 'notFound' ? 'warning' : 'danger'} title={txt.title} isInline>
-        {txt.body || error.message}
+      <Alert variant={cls === 'notFound' ? 'warning' : 'danger'} title={txt.title} isInline>
+        {cls === 'notFound' ? t('errors.notFoundObject', { kind: kindLabel, name }) : txt.body || error.message}
       </Alert>
     );
   }

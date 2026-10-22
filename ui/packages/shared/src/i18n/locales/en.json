@@ -956,7 +956,10 @@
     "server": "Not your fault.",
     "serverBody": "Try again; if it persists, contact the platform team.",
     "serverBodyRef": "Try again; if it persists, contact the platform team with reference {{ref}}.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "forbiddenObject": "You don't have access to {{kind}} {{name}} in {{tenant}}.",
+    "forbiddenObjectNoTenant": "You don't have access to {{kind}} {{name}}.",
+    "notFoundObject": "{{kind}} {{name}} was deleted or never existed in this tenant."
   },
   "roles": {
     "entityAdmin": "Tenant administrator",
