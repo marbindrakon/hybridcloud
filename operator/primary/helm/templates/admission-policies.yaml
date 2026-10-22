@@ -15,7 +15,8 @@ shc-tenant-namespace-delete-guard: a tenant namespace (labelled hybridsovereign.
 Entity, which removes the tenant's objects first and then the namespace. A direct delete removes the tenant's controller
 together with the objects, so their teardown never runs and the namespace hangs. The delete is refused unless the
 namespace carries the annotation hybridsovereign.redhat/entity-deleting naming its own Entity, which the Entity's
-deletion writes (break glass for a namespace whose Entity is gone: set that annotation by hand, then delete).
+deletion writes once the tenant objects are gone (break glass for a namespace whose Entity is gone: set that
+annotation by hand, then delete).
 Platform automation is exempt; platform groups are exempt only with admission.tenantNamespaceDeleteGuard.exemptPlatformGroups.
 
 Exemptions are exact usernames and groups from .Values.admission; they can never name a tenant-facing server
