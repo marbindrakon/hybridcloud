@@ -9,7 +9,9 @@
 #   state         Available when the last probe authenticated (status.capabilities.api), the site is not failed
 #                 and not being deleted (the rule of resolve_cloud_infrastructure.yml); else Unavailable
 #   capabilities  Virtualization (openshift site with OpenShift Virtualization), HybridNetworking (evpn), DNS (dns)
-#   region        aws and gcp sites only (spec.<type>.region, else the probed region); location for the others
+#   location      spec.location, in words, for every site type when the platform set it (a tenant view shows it,
+#                 falling back to the region of an aws or gcp site)
+#   region        aws and gcp sites only (spec.<type>.region, else the probed region)
 #   storageClasses  OpenShift StorageClasses (status.site.storageClasses) or OpenStack public volume types
 #                   (status.site.volumeTypes)
 - name: Summarize the sites for tenants
@@ -46,7 +48,8 @@
         {%- if regional -%}
           {%- set r = (spec[type] | default({}, true)).region | default(site.region | default('', true), true) -%}
           {%- if r -%}{%- set _ = e.update({'region': r | string}) -%}{%- endif -%}
-        {%- elif spec.location | default('', true) -%}
+        {%- endif -%}
+        {%- if spec.location | default('', true) -%}
           {%- set _ = e.update({'location': spec.location | string}) -%}
         {%- endif -%}
         {%- if sc -%}{%- set _ = e.update({'storageClasses': sc | sort(attribute='name')}) -%}{%- endif -%}

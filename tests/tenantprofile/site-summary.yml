@@ -22,7 +22,7 @@
           capabilities: {api: true, dns: true, evpn: false}
           site: {endpoint: https://keystone.example.invalid, projectDomainId: abc123, volumeTypes: [{name: standard}]}
       - metadata: {name: aws-x}
-        spec: {type: aws, location: ignored for regional sites, aws: {region: eu-west-1}}
+        spec: {type: aws, location: Europe (Ireland), aws: {region: eu-west-1}}
         status:
           capabilities: {api: true, dns: true, evpn: true}
           site: {account: "123456789012", vpc: vpc-0abc, region: eu-west-1}
@@ -45,7 +45,9 @@
         storageClasses: [{name: ceph-rbd, default: true}, {name: zfs, default: false}]
       - {name: os-b, type: openstack, billable: false, state: Unavailable, capabilities: [DNS],
          storageClasses: [{name: standard, default: false}]}
-      - {name: aws-x, type: aws, region: eu-west-1, billable: true, state: Available, capabilities: [HybridNetworking, DNS]}
+      # spec.location is the tenant's word for every site type; a regional site keeps its region next to it
+      - {name: aws-x, type: aws, region: eu-west-1, location: Europe (Ireland), billable: true, state: Available,
+         capabilities: [HybridNetworking, DNS]}
       - {name: gcp-y, type: gcp, region: europe-west4, billable: true, state: Unavailable, capabilities: []}
       - {name: ext-z, type: external, billable: false, state: Unavailable, capabilities: []}
   tasks:
