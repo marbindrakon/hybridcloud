@@ -207,6 +207,13 @@ spec:
         - name: Updated
           type: date
           jsonPath: .status.lastUpdatedTime
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="ControllerAvailable")].reason
+        - name: Delivery
+          type: string
+          priority: 1
+          jsonPath: .status.conditions[?(@.type=="DeliveryStalled")].reason
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
