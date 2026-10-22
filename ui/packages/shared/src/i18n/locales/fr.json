@@ -1253,7 +1253,8 @@
       "projectDeveloperRbac": "développeurs du projet applicatif",
       "projectViewerRbac": "lecteurs du projet applicatif",
       "networkViewerRbac": "lecteurs du réseau"
-    }
+    },
+    "tenantRolesHidden": "Les rôles du locataire qui lui sont attribués sont gérés par l'équipe plateforme et ne sont pas listés ici ; ses membres les perdent aussi."
   },
   "donut": {
     "total": "Total",

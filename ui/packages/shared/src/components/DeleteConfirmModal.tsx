@@ -17,6 +17,7 @@ import { useTranslation } from '../i18n';
 import { fetchResource, fetchResourceList } from '../hooks/k8s';
 import { useRouteFor } from '../nav/useNav';
 import { tenantOfNamespace } from '../scope/parseGroups';
+import { useOptionalScope } from '../scope/ScopeProvider';
 import type { HybridSovereignKind, K8sResource } from '../types';
 import {
   ACCESS_GROUP_KINDS,
@@ -38,7 +39,7 @@ interface LoadState {
 }
 
 /** Reads what the preview of `kind` needs, once per opening. */
-function usePreviewContext(kind: string, item: K8sResource | null, isOpen: boolean): LoadState {
+function usePreviewContext(kind: string, item: K8sResource | null, isOpen: boolean, readTenant: boolean): LoadState {
   const [state, setState] = useState<LoadState>({ ctx: {}, loading: false, partial: false });
   const namespace = item?.metadata.namespace ?? '';
   const name = item?.metadata.name ?? '';
@@ -65,8 +66,9 @@ function usePreviewContext(kind: string, item: K8sResource | null, isOpen: boole
         )
       : [];
     jobs.push(...relatedJobs);
+    // Only platform readers may read the tenant object (its role bindings); tenants are told so instead.
     const tenantJob =
-      needsRelated && tenant ? fetchResource<K8sResource>('Entity', tenant, TENANT_OBJECTS_NAMESPACE) : Promise.resolve(null);
+      needsRelated && tenant && readTenant ? fetchResource<K8sResource>('Entity', tenant, TENANT_OBJECTS_NAMESPACE) : Promise.resolve(null);
     jobs.push(tenantJob);
     Promise.allSettled(jobs).then((results) => {
       if (cancelled) return;
@@ -83,7 +85,7 @@ function usePreviewContext(kind: string, item: K8sResource | null, isOpen: boole
     return () => {
       cancelled = true;
     };
-  }, [kind, namespace, name, isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kind, namespace, name, isOpen, readTenant]); // eslint-disable-line react-hooks/exhaustive-deps
   return state;
 }
 
@@ -159,7 +161,8 @@ export interface DeleteConfirmModalProps {
  */
 export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConfirm, onCancel }: DeleteConfirmModalProps): React.ReactElement | null {
   const { t } = useTranslation();
-  const { ctx, loading, partial } = usePreviewContext(kind, item, isOpen);
+  const platformReader = !!useOptionalScope()?.identity?.platform.reader;
+  const { ctx, loading, partial } = usePreviewContext(kind, item, isOpen, platformReader);
   const [typed, setTyped] = useState('');
   useEffect(() => {
     if (isOpen) setTyped('');
@@ -200,6 +203,7 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
               </div>
             ))}
             {preview.sections.length === 0 && <p className="sc-text-muted sc-mb">{t('deletePreview.nothingElse')}</p>}
+            {kind === 'Rbac' && !platformReader && <p className="sc-text-muted sc-mb">{t('deletePreview.tenantRolesHidden')}</p>}
             {partial && <p className="sc-text-muted sc-mb">{t('deletePreview.partial')}</p>}
           </>
         )}

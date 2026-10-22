@@ -1253,7 +1253,8 @@
       "projectDeveloperRbac": "app project developers",
       "projectViewerRbac": "app project viewers",
       "networkViewerRbac": "network viewers"
-    }
+    },
+    "tenantRolesHidden": "The tenant roles given to it are kept by the platform team and are not listed here; its members lose them too."
   },
   "donut": {
     "total": "Total",
