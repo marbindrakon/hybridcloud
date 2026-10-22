@@ -37,7 +37,7 @@ services cluster only.
 
 | Field | On a | The access groups listed may |
 |---|---|---|
-| `teamAdmin` | team setup | view and change the team setup and the app projects its cluster assignments list; view those cluster assignments |
+| `teamAdmin` | team setup | view and change the team setup, including its three access lists, and the app projects its cluster assignments list; view those cluster assignments |
 | `teamMemberRbac` | team setup | view the team setup; view and change those app projects |
 | `teamViewerRbac` | team setup | view the team setup, those app projects and those cluster assignments |
 | `projectAdmin` | app project | view, change and delete the app project |
@@ -48,9 +48,10 @@ Rules that follow from this:
 
 - Nobody gets **create** from these fields: creating a team setup, app project or cluster
   assignment needs a role on the tenant.
-- **Changing an access list** needs the right to delete the object. A team setup's own three
-  lists are therefore changed by people with a tenant role (team setup admin or tenant admin), not
-  by its `teamAdmin` groups; an app project's lists can be changed by its `projectAdmin` groups.
+- **Changing an access list**: a team setup's three lists (`teamAdmin` included) are managed by
+  its `teamAdmin` groups; otherwise only people allowed to delete the team setup (team setup admin
+  or tenant admin) can change them. An app project's lists can be changed by people allowed to
+  delete it, which includes its `projectAdmin` groups.
 - **Cluster assignments are view-only** through a team setup: changing one changes who gets into
   the tenant's clusters, which stays with the cluster assignment admin role.
 - **Nothing on clusters**: the fields grant no access on the tenant's OpenShift clusters. That is

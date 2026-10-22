@@ -50,14 +50,16 @@ spec:
 - **Name**: lowercase letters, digits and `-`, no dots (the sign-in groups use the first dot to
   separate tenant and group), no `--`, at most 56 characters (so that `entity-<name>` is a valid
   namespace name). The name cannot change later; `displayName` can.
-- `billingID` is required and becomes a label on the tenant namespace.
+- `description` and `billingID` are required; `billingID` becomes a label on the tenant
+  namespace.
 - `displayName`, `contacts` (up to 10, each a name with an optional email or https URL) and
   `allowedSites` are available with this release. The tenant's users see them in their tenant
   profile.
 - `namespaceRbac` gives roles to access groups (step 4). You can list access groups before they
   exist; a role whose access groups do not exist yet grants nothing.
 
-Wait until the tenant is ready and its namespace exists:
+Wait until the tenant is ready (the **READY** column shows `True`; **REASON** says why not, and
+`-o wide` adds **SUMMARY**) and its namespace exists:
 
 ```bash
 oc get entity example-corp -n sovereign-cloud
@@ -134,9 +136,10 @@ Available with this release: the access fields of team setups (`teamAdmin`, `tea
 `teamViewerRbac`) and app projects (`projectAdmin`, `projectDeveloperRbac`, `projectViewerRbac`)
 grant access groups rights on those objects only, on the services cluster. They are the interim
 form of a resource-scoped role assignment. A team setup's `teamAdmin` groups may change the team
-setup and its app projects and view its cluster assignments, but not change the team setup's
-access lists (only people allowed to delete an object can change its lists). Nothing in these
-fields grants access on clusters. The tenant-facing summary is
+setup, its three access lists and its app projects, and view its cluster assignments; otherwise
+only users allowed to delete a team setup can change its lists (for an app project, users allowed
+to delete it, which includes its `projectAdmin` groups). Nothing in these fields grants access on
+clusters. The tenant-facing summary is
 [Access and delegation](../tenant/access-and-delegation.md).
 
 ## 5. Add people to the access groups

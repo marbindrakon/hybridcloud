@@ -51,6 +51,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "InvalidSecret": { actor: "P", class: "failed", summary: "A required credential is not valid. The platform team is looking at it." },
   "InvalidSpec": { actor: "T", class: "failed", summary: "The request is not valid; correct the fields named in the message." },
   "JobRunning": { actor: "A", class: "progress", summary: "Applying the change." },
+  "LinkedNotReady": { actor: "A", class: "waiting", summary: "Waiting for its team setup, app projects and OpenShift cluster to be ready." },
   "MapperMissing": { actor: "P", class: "failed", summary: "Sign-in is not set up for this service yet. The platform team is looking at it." },
   "MappingFailed": { actor: "P", class: "failed", summary: "The sign-in mapping could not be set up. The platform team is looking at it." },
   "NameInUse": { actor: "T", class: "failed", summary: "This name is already used by an OpenStack environment of another tenant. Create it with another name." },

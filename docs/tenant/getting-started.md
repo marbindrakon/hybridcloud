@@ -137,10 +137,11 @@ this placement for you; on the command line, apply the manifest.
 oc get hybridnetworks,cloudvirts,networkplacements -n entity-<tenant>
 ```
 
-Each object shows its state (Waiting, Creating, Updating, Ready, Degraded, Failed or Deleting)
-and a one-line summary of what the platform is doing or waiting for; the **Reason** column says
-why ([status reasons](status-reasons.md)). A new environment and its placement are usually ready
-within a few minutes. The
+The **STATUS** column is the object's state (`status.phase`: Waiting, Creating, Updating, Ready,
+Degraded, Failed or Deleting); **READY** and **REASON** follow it, and the **REASON** says why
+([status reasons](status-reasons.md)). Add `-o wide` for the **SUMMARY** column, one line on what
+the platform is doing or waiting for. The dashboard lists show the same Status and Reason. A new
+environment and its placement are usually ready within a few minutes. The
 placement waits for the environment, and the environment's namespace joins the network once the
 placement is ready.
 

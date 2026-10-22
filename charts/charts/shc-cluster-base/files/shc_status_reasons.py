@@ -62,6 +62,7 @@ REASONS = {
     "WaitingForAddressSpace": _r("A", WAITING, "Waiting for address space to be assigned."),
     "WaitingForAccessGroup": _r("T", WAITING, "Waiting for the named access groups to be ready."),
     "WaitingForCluster": _r("T", WAITING, "Waiting for a cluster: name the OpenShift cluster to deploy onto."),
+    "LinkedNotReady": _r("A", WAITING, "Waiting for its team setup, app projects and OpenShift cluster to be ready."),
     "ReferenceDeleting": _r("T", WAITING, "An object this one refers to is being deleted."),
     "NoMembersYet": _r("T", WAITING, "Ready; sign-in will be verified once a granted access group has a member."),
     "CredentialsUnavailable": _r("P", WAITING, "The site credentials are not available yet. The platform team is looking at it."),

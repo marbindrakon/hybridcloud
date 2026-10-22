@@ -52,7 +52,7 @@ objects live in `sovereign-cloud` (integration settings in `sovereign-cloud-plug
 
 | Area | Display term (kind) |
 |---|---|
-| Tenancy and access | tenant (`Entity`), access group (`Rbac`) |
+| Tenancy and access | tenant (`Entity`), tenant profile (`TenantProfile`, read-only, written by the platform), access group (`Rbac`) |
 | Environments | OpenShift Virtualization environment (`CloudVirt`), OpenStack environment (`CloudOSO`), AWS environment (`CloudAWS`), Google Cloud environment (`CloudGCP`) |
 | Networks | network (`HybridNetwork`), network placement (`NetworkPlacement`), edge connection (`AttachmentCircuit`) |
 | Clusters | OpenShift cluster (`PlatformOpenshift`), team setup (`Team`), app project (`Project`), cluster assignment (`Assignment`) |

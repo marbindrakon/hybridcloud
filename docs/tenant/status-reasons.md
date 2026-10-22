@@ -1,7 +1,8 @@
 # Status, Retry now and deletion
 
 Every object you create shows what the platform is doing with it: one **state**, a one-line
-**summary**, and a **reason** that you can look up below. This page explains them, how to ask
+**summary**, and a **reason** that you can look up below (the reasons of a Ready object, such as
+`EDASucceeded` or `GroupClaimVerified`, only say that the work finished and are not listed). This page explains them, how to ask
 the platform to try again, and how deleting works.
 
 ## States
@@ -19,14 +20,17 @@ the platform to try again, and how deleting works.
 On the command line:
 
 ```bash
-oc get hybridnetworks,cloudvirts,networkplacements -n entity-<tenant>   # Reason and Summary columns
+oc get hybridnetworks,cloudvirts,networkplacements -n entity-<tenant>   # STATUS, READY, REASON
+oc get hybridnetworks,cloudvirts,networkplacements -n entity-<tenant> -o wide   # adds SUMMARY
 oc get networkplacement <name> -n entity-<tenant> -o jsonpath='{.status.phase}: {.status.summary}{"\n"}'
 oc describe networkplacement <name> -n entity-<tenant>                  # all conditions
 ```
 
-The state is in `status.phase` (since `status.phaseSince`), the summary in `status.summary`, and
-the reason is the `reason` of the `Ready` condition (`status.conditions`). The dashboards show the
-same three. `status.message` has more detail where the platform wrote one.
+The state is in `status.phase` (since `status.phaseSince`) and is what the **STATUS** column of
+`oc get` and the **Status** column of the dashboard lists show. The summary is in
+`status.summary` (the **SUMMARY** column with `-o wide`), and the reason is the `reason` of the
+`Ready` condition (`status.conditions`, the **REASON** column). `status.message` has more detail
+where the platform wrote one.
 
 ## Retry now
 
@@ -107,6 +111,7 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | Reason | What it means | Who acts |
 |---|---|---|
 | `CredentialsUnavailable` | The site credentials are not available yet. The platform team is looking at it. | The platform team |
+| `LinkedNotReady` | Waiting for its team setup, app projects and OpenShift cluster to be ready. | Nobody: it continues by itself |
 | `NoMembersYet` | Ready; sign-in will be verified once a granted access group has a member. | You (the tenant) |
 | `ReferenceDeleting` | An object this one refers to is being deleted. | You (the tenant) |
 | `Waiting` | Waiting for a prerequisite. | Nobody: it continues by itself |
