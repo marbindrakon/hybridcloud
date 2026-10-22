@@ -225,7 +225,10 @@
     "cloudProjectsSection": "Cloud projects (tenant)",
     "cloudProjectsSectionSubtitle": "CloudOSO, CloudAWS and CloudVirt projects in entity namespaces, each on a Cloud Infrastructure",
     "networkOverviewDesc": "The hybrid fabric end to end: each fabric and its border gateway nodes, the sites attached through Cloud Gateways, and every tenant network across the environments it is placed on.",
-    "allEntitiesReadOnly": "Tenant objects of every entity, read-only. Tenants manage them from their own pages."
+    "allEntitiesReadOnly": "Tenant objects of every entity, read-only. Tenants manage them from their own pages.",
+    "sharedWithYouTitle": "Shared with you",
+    "sharedWithYouBody": "You can open these by name: they were shared with one of your access groups, although your role does not list everything of their kind.",
+    "sharedWithYouLabel": "Shared with you"
   },
   "list": {
     "showing": "{{count}} resources",

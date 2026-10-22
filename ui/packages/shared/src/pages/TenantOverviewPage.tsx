@@ -36,6 +36,7 @@ import { useTranslation } from '../i18n';
 import { classifyError } from '../hooks/errors';
 import { UnavailableState } from '../access/ForbiddenState';
 import { usePermission } from '../access/PermissionProvider';
+import { useSharedObjects } from '../access/sharedWithYou';
 import { useTenantScope } from '../scope/ScopeProvider';
 import { useNav, useBreadcrumbs, useDocumentTitle } from '../nav/useNav';
 import { tenantLabel } from '../scope/resolveIdentity';
@@ -63,6 +64,13 @@ function SelfServiceCard({ kind, labelKey, onOpen }: { kind: HybridSovereignKind
   );
   if (allowed) return card;
   return <Tooltip content={loading ? t('access.checking') : t('access.notAllowed')}>{card}</Tooltip>;
+}
+
+/** Link to an object's page, or its name when the kind has no page here. */
+function ObjectLink({ kind, name }: { kind: string; name: string }): React.ReactElement {
+  const nav = useNav();
+  const href = nav.routeFor(kind, name);
+  return href ? <Link to={href}>{name}</Link> : <>{name}</>;
 }
 
 function bucket(items: K8sResource[]) {
@@ -125,20 +133,28 @@ export function TenantOverviewPage(): React.ReactElement {
     NetworkPlacement: networkplacements,
   };
 
+  // A kind the user may not list answers 403. Objects of it the user holds by name (team setup
+  // and app project grants) are read one by one and shown (GT-F4); a kind with none is locked,
+  // never shown as zero (UX-057).
+  const forbiddenKinds: HybridSovereignKind[] = OVERVIEW_KINDS.filter((k) => classifyError(hookByKind[k]?.error) === 'forbidden');
+  const shared = useSharedObjects(forbiddenKinds, namespace, !!namespace && forbiddenKinds.length > 0);
+  const sharedOf = (k: HybridSovereignKind): K8sResource[] => shared.byKind[k] ?? [];
+  const isShared = (k: HybridSovereignKind) => forbiddenKinds.includes(k) && sharedOf(k).length > 0;
+  const isLocked = (k: HybridSovereignKind) => forbiddenKinds.includes(k) && !isShared(k) && !shared.loading;
+
   const lists: Record<string, K8sResource[]> = Object.fromEntries(
-    OVERVIEW_KINDS.map((k) => [k, hookByKind[k]?.items ?? []]),
+    OVERVIEW_KINDS.map((k) => [k, forbiddenKinds.includes(k) ? sharedOf(k) : hookByKind[k]?.items ?? []]),
   );
 
   const all = useMemo(
-    () => OVERVIEW_KINDS.flatMap((k) => hookByKind[k]?.items ?? []),
+    () => OVERVIEW_KINDS.flatMap((k) => lists[k] ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    OVERVIEW_KINDS.map((k) => hookByKind[k]?.items),
+    [...OVERVIEW_KINDS.map((k) => hookByKind[k]?.items), shared.byKind],
   );
+  const sharedItems = forbiddenKinds.flatMap((k) => sharedOf(k));
   const overall = bucket(all);
-  const loading = OVERVIEW_KINDS.some((k) => hookByKind[k]?.loading);
-  // A kind the user's role doesn't cover answers 403: it is shown locked, never as zero (UX-057).
-  const isLocked = (k: HybridSovereignKind) => classifyError(hookByKind[k]?.error) === 'forbidden';
-  const lockedKinds = OVERVIEW_KINDS.filter((k) => hookByKind[k]?.error && isLocked(k));
+  const loading = OVERVIEW_KINDS.some((k) => hookByKind[k]?.loading) || shared.loading;
+  const lockedKinds = OVERVIEW_KINDS.filter((k) => isLocked(k));
   const firstError =
     OVERVIEW_KINDS.map((k) => hookByKind[k]?.error).find(
       (e) => !!e && classifyError(e) !== 'forbidden',
@@ -250,8 +266,48 @@ export function TenantOverviewPage(): React.ReactElement {
                     <Tbody>
                       {failedItems.map((item) => (
                         <Tr key={`${item.kind}/${item.metadata.name}`}>
-                          <Td>{item.kind}</Td>
-                          <Td>{item.metadata.name}</Td>
+                          <Td>{t(`kindsOne.${item.kind}`, { defaultValue: item.kind })}</Td>
+                          <Td>
+                            <ObjectLink kind={item.kind} name={item.metadata.name} />
+                          </Td>
+                          <Td>
+                            <StatusBadge item={item} />
+                          </Td>
+                        </Tr>
+                      ))}
+                    </Tbody>
+                  </Table>
+                </div>
+              </CardBody>
+            </Card>
+          )}
+
+          {sharedItems.length > 0 && (
+            <Card className="sc-panel sc-mb">
+              <CardTitle>{t('pages.sharedWithYouTitle')}</CardTitle>
+              <CardBody>
+                <p className="sc-text-muted">{t('pages.sharedWithYouBody')}</p>
+                <div className="sc-table-wrap">
+                  <Table variant="compact" aria-label={t('pages.sharedWithYouTitle')}>
+                    <Thead>
+                      <Tr>
+                        <Th>{t('common.resources')}</Th>
+                        <Th>{t('common.name')}</Th>
+                        <Th>{t('common.status')}</Th>
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {sharedItems.map((item) => (
+                        <Tr key={`${item.kind}/${item.metadata.name}`}>
+                          <Td>
+                            <span className="sc-kind-cell">
+                              <KindIcon kind={item.kind} size="sm" />
+                              {t(`kindsOne.${item.kind}`, { defaultValue: item.kind })}
+                            </span>
+                          </Td>
+                          <Td>
+                            <ObjectLink kind={item.kind} name={item.metadata.name} />
+                          </Td>
                           <Td>
                             <StatusBadge item={item} />
                           </Td>
@@ -308,7 +364,17 @@ export function TenantOverviewPage(): React.ReactElement {
                           {row.label}
                         </span>
                       </Td>
-                      <Td>{b.total}</Td>
+                      <Td>
+                        {b.total}
+                        {isShared(row.kind) && (
+                          <>
+                            {' '}
+                            <Label isCompact color="blue">
+                              {t('pages.sharedWithYouLabel')}
+                            </Label>
+                          </>
+                        )}
+                      </Td>
                       <Td>
                         <span className="sc-text-success">{b.ready}</span>
                       </Td>

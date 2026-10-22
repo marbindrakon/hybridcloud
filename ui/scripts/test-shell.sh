@@ -28,6 +28,7 @@ entries=(
   "hooks/k8s.ts:k8s"
   "hooks/overviewCrs.ts:overviewCrs"
   "forms/attachable.ts:attachable"
+  "access/sharedWithYou.ts:sharedWithYou"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

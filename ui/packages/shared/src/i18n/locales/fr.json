@@ -225,7 +225,10 @@
     "cloudProjectsSection": "Projets cloud (locataire)",
     "cloudProjectsSectionSubtitle": "Projets CloudOSO, CloudAWS et CloudVirt dans les espaces de noms des entités, chacun sur une infrastructure cloud",
     "networkOverviewDesc": "Le fabric hybride de bout en bout : chaque fabric et ses nœuds de bordure, les sites rattachés par des Cloud Gateways, et chaque réseau locataire sur les environnements où il est placé.",
-    "allEntitiesReadOnly": "Objets locataires de toutes les entités, en lecture seule. Les locataires les gèrent depuis leurs propres pages."
+    "allEntitiesReadOnly": "Objets locataires de toutes les entités, en lecture seule. Les locataires les gèrent depuis leurs propres pages.",
+    "sharedWithYouTitle": "Partagés avec vous",
+    "sharedWithYouBody": "Vous pouvez les ouvrir par leur nom : ils ont été partagés avec l'un de vos groupes d'accès, même si votre rôle ne liste pas tous les objets de ce type.",
+    "sharedWithYouLabel": "Partagé avec vous"
   },
   "list": {
     "showing": "{{count}} ressources",
