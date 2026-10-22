@@ -11,6 +11,10 @@ Passes (each configurable, config file sections in brackets):
               one derived from their current status (shc_status.derive_phase). write: false only reports.
 4. [failedRecheck] a failed object of a kind without a periodic re-run gets a Retry-now request every
               intervalMinutes, at most maxRechecks times, then waits for a person.
+5. [finalizerRelease] an object being deleted whose teardown finished (status.deletionComplete) but which still
+              has its finalizer after afterMinutes gets a machine wake (reconcileNow) on every run, so its
+              controller releases it (also after Stalled=TeardownFailed and a successful retry); one still there
+              after problemMinutes is reported.
 
 Exits 1 when any pass found a problem (the platform's job alert fires), 2 on an API error.
 usage: shc_tenancy.py [--config FILE] [--dry-run]
@@ -34,6 +38,7 @@ RECONCILE_NOW = eda_redrive.RECONCILE_NOW
 RECONCILE_REQUEST = eda_redrive.RECONCILE_REQUEST
 RECHECKS = f"{GROUP}/rechecks"
 RECHECKED_AT = f"{GROUP}/recheckedAt"
+NUDGED = f"{GROUP}/nudged"
 OPERATOR = "hybridsovereign-namespace-operator"
 STALLED_MESSAGE = "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."
 
@@ -45,6 +50,7 @@ DEFAULTS = {
     "phase": {"enabled": True, "write": False, "reportLimit": 50},
     "failedRecheck": {"enabled": True, "intervalMinutes": 30, "maxRechecks": 6,
                       "kinds": ["Rbac", "Team", "Project", "Persona", "Vault", "VaultKV", "AAPOrg", "QuayOrg"]},
+    "finalizerRelease": {"enabled": True, "afterMinutes": 2, "problemMinutes": 30},
 }
 
 
@@ -310,6 +316,46 @@ def run_failed_recheck(api, kinds, cfg, now, dry_run):
     return counts, actions
 
 
+# ---- pass 5: finalizer release of finished teardowns -------------------------------------------------------------
+
+def finished_since(cr):
+    """When the teardown of a deleting object finished (its completing job write), or None when it did not."""
+    meta, status = cr.get("metadata") or {}, cr.get("status") or {}
+    if not meta.get("deletionTimestamp") or status.get("deletionComplete") is not True or not meta.get("finalizers"):
+        return None
+    delivery = status.get("delivery") or {}
+    return delivery.get("completedAt") or status.get("lastReconciledAt") or meta.get("deletionTimestamp")
+
+
+def run_finalizer_release(api, kinds, cfg, now, dry_run):
+    rcfg = cfg["finalizerRelease"]
+    counts = {"finalizerWakes": 0, "finalizerStuck": 0}
+    actions, problems = [], []
+    for k in kinds:
+        for cr in k["items"]:
+            since = finished_since(cr)
+            age = minutes_since(since, now) if since else None
+            if age is None or age < rcfg["afterMinutes"]:
+                continue
+            meta = cr["metadata"]
+            ns, name = meta["namespace"], meta["name"]
+            counts["finalizerWakes"] += 1
+            actions.append(f"wake {k['kind']} {ns}/{name}: teardown finished {age:.0f} min ago, finalizer still set")
+            if age >= rcfg["problemMinutes"]:
+                counts["finalizerStuck"] += 1
+                problems.append(f"{k['kind']} {ns}/{name}: teardown finished {age:.0f} min ago but the finalizer "
+                                f"{', '.join(meta.get('finalizers') or [])} is still set")
+            if not dry_run:
+                try:
+                    api.patch_namespaced_custom_object(
+                        GROUP, k["version"], ns, k["plural"], name,
+                        {"metadata": {"annotations": {RECONCILE_NOW: RECONCILE_REQUEST, NUDGED: stamp(now)}}})
+                except ApiException as exc:
+                    if exc.status != 404:  # gone meanwhile
+                        raise
+    return counts, actions, problems
+
+
 def status_kinds(kinds):
     """The kinds the redrive, phase and re-check passes look at: not those whose CRD carries teardown-tier "skip"
     (TenantProfile: platform-written, no Ready/phase of its own; it only gets the tenancy conditions)."""
@@ -347,6 +393,12 @@ def main():
     if cfg["failedRecheck"].get("enabled", True):
         counts, actions = run_failed_recheck(api, managed, cfg, now, args.dry_run)
         summary["failedRecheck"] = counts
+        for a in actions:
+            print(("would " if args.dry_run else "") + a)
+    if cfg["finalizerRelease"].get("enabled", True):
+        counts, actions, probs = run_finalizer_release(api, managed, cfg, now, args.dry_run)
+        summary["finalizerRelease"] = counts
+        problems += probs
         for a in actions:
             print(("would " if args.dry_run else "") + a)
     print(json.dumps(summary))

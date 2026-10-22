@@ -92,6 +92,7 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | `AwaitingEDA` | Queued; the change starts shortly. | Nobody: it continues by itself |
 | `ClusterBuildCreated` | The cluster build has started. | Nobody: it continues by itself |
 | `ClusterBuildProvisioned` | The cluster is being installed. | Nobody: it continues by itself |
+| `Deleted` | Deleted; being removed. | Nobody: it continues by itself |
 | `Deleting` | Being deleted. | Nobody: it continues by itself |
 | `DeletionRequested` | Being deleted. | Nobody: it continues by itself |
 | `InProgress` | Applying the change. | Nobody: it continues by itself |

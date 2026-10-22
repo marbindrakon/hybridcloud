@@ -273,6 +273,43 @@ class MachineWakeTest(unittest.TestCase):
         self.assertEqual(api.annotations[0][T.RECONCILE_NOW], "true")
 
 
+class FinalizerReleaseTest(unittest.TestCase):
+    """GA2-F12: a finished teardown whose finalizer is still set gets a machine wake; a long one is reported."""
+
+    def cr(self, completed_min, complete=True, finalizers=("hybridsovereign.redhat/assignment-cleanup",)):
+        at = (NOW - dt.timedelta(minutes=completed_min)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {"metadata": {"namespace": "entity-a", "name": "a1", "deletionTimestamp": "2026-10-21T10:00:00Z",
+                             "finalizers": list(finalizers)},
+                "status": {"deletionComplete": complete, "delivery": {"completedAt": at},
+                           "conditions": [{"type": "Stalled", "status": "True", "reason": "TeardownFailed"}]}}
+
+    def run_pass(self, cr):
+        api = FakeApi()
+        kinds = [{"kind": "Assignment", "plural": "assignments", "version": "v1alpha1", "items": [cr]}]
+        counts, actions, problems = T.run_finalizer_release(api, kinds, T.DEFAULTS, NOW, False)
+        return api, counts, problems
+
+    def test_recent_finish_waits(self):
+        api, counts, _ = self.run_pass(self.cr(1))
+        self.assertEqual((counts["finalizerWakes"], api.annotations), (0, []))
+
+    def test_finished_teardown_is_woken(self):
+        api, counts, problems = self.run_pass(self.cr(5))
+        self.assertEqual(counts["finalizerWakes"], 1)
+        self.assertEqual(api.annotations[0][T.RECONCILE_NOW], "true")
+        self.assertEqual(problems, [])
+
+    def test_long_stuck_finalizer_is_a_problem(self):
+        _, counts, problems = self.run_pass(self.cr(45))
+        self.assertEqual(counts["finalizerStuck"], 1)
+        self.assertEqual(len(problems), 1)
+
+    def test_unfinished_or_released_is_left_alone(self):
+        for cr in (self.cr(45, complete=False), self.cr(45, finalizers=())):
+            api, counts, _ = self.run_pass(cr)
+            self.assertEqual((counts["finalizerWakes"], api.annotations), (0, []))
+
+
 class StatusKindsTest(unittest.TestCase):
     def test_skip_tier_kinds_are_left_out(self):
         kinds = [{"kind": "TenantProfile", "labels": {"hybridsovereign.redhat/teardown-tier": "skip"}, "items": []},

@@ -304,6 +304,9 @@ def build_summary(obj, conditions, phase):
             if _cond_true(conds, ctype):
                 deciding = find_condition(conds, ctype)
                 break
+        ready_cond = find_condition(conds, "Ready")
+        if deciding is None and ready_cond is not None and ready_cond.get("reason") == "Deleted":
+            deciding = ready_cond
     elif phase == "Failed" and _cond_true(conds, "Stalled"):
         deciding = find_condition(conds, "Stalled")
     elif phase == "Degraded":
@@ -378,10 +381,20 @@ def compute_status_patch(obj, body, opts=None, now=None):
                               "message": running_message})
         elif find_condition(old_conds, "Reconciling") is not None or action in _JOB_STATUS:
             new_conds.append({"type": "Reconciling", "status": "False", "reason": "AsExpected", "message": ""})
-    if not partial and action != "failed" and not (obj.get("metadata") or {}).get("deletionTimestamp"):
-        # a successful write ends an earlier give-up
-        if _cond_true(old_conds, "Stalled") and action in ("ready", "success"):
+    deleting = bool((obj.get("metadata") or {}).get("deletionTimestamp"))
+    if not partial and action in ("ready", "success"):
+        # a successful write ends an earlier give-up, also a teardown that succeeded after Stalled=TeardownFailed
+        # (Retry now, a re-delivered event or a job started by hand): the controller then releases the finalizer
+        if _cond_true(old_conds, "Stalled"):
             new_conds.append({"type": "Stalled", "status": "False", "reason": "AsExpected", "message": ""})
+        if deleting and cur_status.get("retry"):
+            body["retry"] = None
+    if not partial and deleting and body.get("deletionComplete") is True:
+        # a finished teardown: the object only waits for its finalizer; it is not ready (whatever the job wrote)
+        new_conds = [c for c in new_conds if c.get("type") != "Ready"]
+        new_conds.append({"type": "Ready", "status": "False", "reason": "Deleted",
+                          "message": str(body.get("message") or "Deleted")})
+        body["ready"] = False
     stalled = count_teardown_failure(obj, body, action, opts.get("give_up_attempts", DEFAULT_GIVE_UP_ATTEMPTS), now)
     if stalled is not None:
         new_conds.append(stalled)

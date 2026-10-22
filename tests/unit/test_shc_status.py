@@ -185,6 +185,45 @@ class Patch(unittest.TestCase):
         self.assertEqual(S.find_condition(st["conditions"], "Stalled")["reason"], "TeardownFailed")
         self.assertEqual(info["phase"], "Deleting")
 
+    def test_successful_teardown_after_give_up_clears_stalled(self):
+        # GA2-F12: a teardown that succeeds after Stalled=True/TeardownFailed clears Stalled and the retry count
+        stalled = {"type": "Stalled", "status": "True", "reason": "TeardownFailed", "message": "x",
+                   "lastTransitionTime": EARLY}
+        o = obj({"retry": {"attempts": 10, "failingSince": EARLY}, "conditions": [stalled]}, deleting=True)
+        body = {"status": "ready", "ready": False, "deletionComplete": True, "message": "Deleted"}
+        patch, info = S.compute_status_patch(o, body, {}, NOW)
+        st = patch["status"]
+        self.assertEqual(S.find_condition(st["conditions"], "Stalled")["status"], "False")
+        self.assertIsNone(st["retry"])
+        self.assertEqual(info["phase"], "Deleting")
+
+    def test_finished_teardown_is_not_ready(self):
+        # GA2-F7: the object awaiting its finalizer shows Ready=False/Deleted, ready false, phase Deleting
+        ready = {"type": "Ready", "status": "True", "reason": "Ready", "message": "", "lastTransitionTime": EARLY}
+        o = obj({"ready": True, "conditions": [ready]}, deleting=True)
+        body = {"status": "ready", "ready": False, "deletionComplete": True, "message": "Deleted"}
+        patch, info = S.compute_status_patch(o, body, {}, NOW)
+        st = patch["status"]
+        cond = S.find_condition(st["conditions"], "Ready")
+        self.assertEqual((cond["status"], cond["reason"]), ("False", "Deleted"))
+        self.assertIs(st["ready"], False)
+        self.assertEqual(info["phase"], "Deleting")
+        self.assertEqual(st["phase"], "Deleting")
+        self.assertEqual(st["summary"], "Deleted; being removed.")
+
+    def test_finished_teardown_overrides_a_ready_condition_in_the_body(self):
+        o = obj({}, deleting=True)
+        body = {"status": "ready", "deletionComplete": True,
+                "conditions": [{"type": "Ready", "status": "True", "reason": "Ready"}]}
+        patch, _ = S.compute_status_patch(o, body, {}, NOW)
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Ready")["reason"], "Deleted")
+
+    def test_teardown_wait_keeps_stalled(self):
+        stalled = {"type": "Stalled", "status": "True", "reason": "TeardownFailed", "message": "x"}
+        o = obj({"conditions": [stalled]}, deleting=True)
+        patch, _ = S.compute_status_patch(o, {"status": "pending"}, {}, NOW)
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Stalled")["status"], "True")
+
     def test_pending_never_counts(self):
         o = obj({"retry": {"attempts": 3}}, deleting=True)
         patch, _ = S.compute_status_patch(o, {"status": "pending"}, {}, NOW)

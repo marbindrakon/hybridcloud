@@ -50,6 +50,7 @@ REASONS = {
     "ClusterBuildProvisioned": _r("A", PROGRESS, "The cluster is being installed."),
     "Deleting": _r("A", PROGRESS, "Being deleted."),
     "DeletionRequested": _r("A", PROGRESS, "Being deleted."),
+    "Deleted": _r("A", PROGRESS, "Deleted; being removed."),
     # ---- waiting -----------------------------------------------------------------------
     "Waiting": _r("A", WAITING, "Waiting for a prerequisite."),
     "WaitingForDependencies": _r("A", WAITING, "Waiting for the objects this one depends on."),

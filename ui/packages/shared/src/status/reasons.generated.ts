@@ -31,6 +31,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "CredentialsMissing": { actor: "P", class: "failed", summary: "The site credentials are missing. The platform team is looking at it." },
   "CredentialsUnavailable": { actor: "P", class: "waiting", summary: "The site credentials are not available yet. The platform team is looking at it." },
   "Declared": { actor: "A", class: "ready", summary: "Declared." },
+  "Deleted": { actor: "A", class: "progress", summary: "Deleted; being removed." },
   "Deleting": { actor: "A", class: "progress", summary: "Being deleted." },
   "DeletionRequested": { actor: "A", class: "progress", summary: "Being deleted." },
   "DnsProjectNotFound": { actor: "P", class: "failed", summary: "The DNS project does not exist. The platform team is looking at it." },

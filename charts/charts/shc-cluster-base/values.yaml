@@ -161,6 +161,12 @@ ops:
         enabled: true
         intervalMinutes: 30
         maxRechecks: 6
+      # a finished teardown (deletionComplete) whose finalizer is still set: wake its controller after
+      # afterMinutes, report it after problemMinutes
+      finalizerRelease:
+        enabled: true
+        afterMinutes: 2
+        problemMinutes: 30
   # Former name of shcTenancy (its config = shcTenancy.config.redrive); read for one release.
   edaRedrive:
     enabled: false
