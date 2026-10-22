@@ -4,11 +4,6 @@ import {
   Button,
   ExpandableSection,
   Label,
-  Modal,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  ModalVariant,
   Spinner,
   Tab,
   Tabs,
@@ -31,6 +26,7 @@ import { ToastHost, pushToast } from './ToastHost';
 import { RefreshFailedAlert } from './ResourceListTable';
 import { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind } from './PlacementTabs';
 import { WayInPanel } from './WayInPanel';
+import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { GatedButton } from '../access/GatedButton';
 import { ForbiddenState } from '../access/ForbiddenState';
 import { errorText } from '../access/errorText';
@@ -475,18 +471,15 @@ export function ResourceDetail({
         </Tab>
       </Tabs>
 
-      <Modal variant={ModalVariant.small} isOpen={confirmDelete} onClose={() => setConfirmDelete(false)}>
-        <ModalHeader title={t('detail.deleteTitle', { kind: kindLabel, name })} />
-        <ModalBody>{t('detail.deleteBody', { name, namespace })}</ModalBody>
-        <ModalFooter>
-          <Button key="confirm" variant="danger" isDisabled={deleting} onClick={() => void handleDelete()}>
-            {deleting ? t('detail.deleting') : t('common.delete')}
-          </Button>
-          <Button key="cancel" variant="link" onClick={() => setConfirmDelete(false)}>
-            {t('common.cancel')}
-          </Button>
-        </ModalFooter>
-      </Modal>
+      <DeleteConfirmModal
+        isOpen={confirmDelete}
+        kind={kind}
+        item={resource}
+        deleting={deleting}
+        error={confirmDelete ? actionError : null}
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

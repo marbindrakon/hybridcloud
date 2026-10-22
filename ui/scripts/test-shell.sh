@@ -29,6 +29,7 @@ entries=(
   "hooks/overviewCrs.ts:overviewCrs"
   "forms/attachable.ts:attachable"
   "access/sharedWithYou.ts:sharedWithYou"
+  "status/deletePreview.ts:deletePreview"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

@@ -2774,3 +2774,10 @@ html.pf-v5-theme-dark .sc-console-page,
   justify-content: flex-end;
   margin-bottom: var(--pf-t--global--spacer--sm, 0.5rem);
 }
+
+/* Delete dialog: what the delete takes with it (GT-F8) */
+.sc-delete-preview__list {
+  list-style: disc;
+  margin: 0.25rem 0 0 1.25rem;
+  padding: 0;
+}
