@@ -2575,7 +2575,7 @@ iaasClusterDefaults:
       letsencrypt:
         dnsZones: [shc.signal9.gg]
         rfc2136:
-          nameserver: "75.8.222.11:53"
+          nameserver: "dns-update.lab.signal9.gg:53"
           tsigKeyName: shc-acme.
         tsigSecret:
           vaultKey: dns/shc-acme-tsig
@@ -3477,7 +3477,7 @@ shcClusterBaseServices:
     letsencrypt:
       dnsZones: [shc.signal9.gg]
       rfc2136:
-        nameserver: "75.8.222.11:53"
+        nameserver: "dns-update.lab.signal9.gg:53"
         tsigKeyName: shc-acme.
       tsigSecret:
         vaultKey: dns/shc-acme-tsig
