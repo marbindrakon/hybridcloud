@@ -66,8 +66,9 @@ spec:
                     those cluster assignments. Interim form of a resource-scoped role assignment: it
                     grants access to these objects on the services cluster only and nothing on
                     clusters (cluster access comes from a cluster assignment's spec.toolRbac). The
-                    three access lists of a team setup can be changed only by users allowed to
-                    delete it; the groups listed here cannot change them.
+                    groups listed here manage the team setup's three access lists, this one
+                    included; otherwise the lists can be changed only by users allowed to delete
+                    the team setup.
                   type: array
                   maxItems: 32
                   x-kubernetes-list-type: set
@@ -81,8 +82,8 @@ spec:
                     setup and view and change the app projects its cluster assignments list. Interim
                     form of a resource-scoped role assignment: it grants access to these objects on
                     the services cluster only and nothing on clusters (cluster access comes from a
-                    cluster assignment's spec.toolRbac). Changes to this list are accepted only from
-                    users allowed to delete this team setup.
+                    cluster assignment's spec.toolRbac). Changes to this list are accepted from the
+                    groups in teamAdmin and from users allowed to delete this team setup.
                   type: array
                   maxItems: 32
                   x-kubernetes-list-type: set
@@ -96,8 +97,8 @@ spec:
                     setup, its cluster assignments and the app projects they list. Interim form of a
                     resource-scoped role assignment: it grants access to these objects on the
                     services cluster only and nothing on clusters (cluster access comes from a
-                    cluster assignment's spec.toolRbac). Changes to this list are accepted only from
-                    users allowed to delete this team setup.
+                    cluster assignment's spec.toolRbac). Changes to this list are accepted from the
+                    groups in teamAdmin and from users allowed to delete this team setup.
                   type: array
                   maxItems: 32
                   x-kubernetes-list-type: set

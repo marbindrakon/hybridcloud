@@ -25,8 +25,9 @@ AUTOMATION = "system:serviceaccount:open-cluster-management-agent-addon:shc-auto
 RESULTS = []
 
 
-def kubectl(args, as_user=None, body=None):
-    cmd = [os.environ.get("REPLAY_KUBECTL", "kubectl")] + args + ([f"--as={as_user}"] if as_user else [])
+def kubectl(args, as_user=None, body=None, as_groups=()):
+    cmd = ([os.environ.get("REPLAY_KUBECTL", "kubectl")] + args + ([f"--as={as_user}"] if as_user else [])
+           + [f"--as-group={g}" for g in as_groups])
     r = subprocess.run(cmd, input=json.dumps(body) if body is not None else None, capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 
@@ -52,9 +53,10 @@ def apply(docs):
         sys.exit(f"access_field_checks: setup: {err}")
 
 
-def patch(kind, name, spec, user):
+def patch(kind, name, spec, user, groups=()):
+    # groups: the requester's sign-in groups (<entity>.<access group>); the entity of NS is "ladder"
     return kubectl(["-n", NS, "patch", f"{kind}.{GROUP}", name, "--type=merge", "--dry-run=server",
-                    "-p", json.dumps({"spec": spec})], as_user=user)
+                    "-p", json.dumps({"spec": spec})], as_user=user, as_groups=groups)
 
 
 def main():
@@ -74,27 +76,38 @@ def main():
           + role("p-admin", "projects", "webshop", edit + ["delete"], "project-admin-user")
           + role("t-automation", "teams", "platform", edit, AUTOMATION))
 
-    denied = (lambda rc, err: rc != 0 and "Only users allowed to delete this object" in err) if a.mode == "Deny" \
-        else (lambda rc, err: rc == 0 and "Only users allowed to delete this object" in err)
+    MSG = "can change who has access to it"
+    denied = (lambda rc, err: rc != 0 and MSG in err) if a.mode == "Deny" else (lambda rc, err: rc == 0 and MSG in err)
     mode = "refused" if a.mode == "Deny" else "warned"
-
-    rc, _, err = patch("teams", "platform", {"teamAdmin": ["admins", "leads", "devs"]}, "team-admin-user")
-    check(f"R10c a team admin (edit on the Team) changing the Team's teamAdmin is {mode}", denied(rc, err), err)
-    rc, _, err = patch("teams", "platform", {"teamViewerRbac": ["devs"]}, "team-admin-user")
-    check(f"R10c a team admin adding teamViewerRbac is {mode}", denied(rc, err), err)
+    # team-admin-user holds edit on the Team through the teamAdmin grant; which sign-in groups it carries decides
+    # whether it is a current team admin (ladder.admins / ladder.leads) or only an editor (ladder.devs).
+    rc, _, err = patch("teams", "platform", {"teamAdmin": ["admins", "leads", "devs"]}, "team-admin-user",
+                       groups=["ladder.devs"])
+    check(f"R10c an editor of the Team whose group is not in teamAdmin changing teamAdmin is {mode}",
+          denied(rc, err), err)
+    rc, _, err = patch("teams", "platform", {"teamViewerRbac": ["devs"]}, "team-admin-user", groups=["ladder.devs"])
+    check(f"R10c the same editor adding teamViewerRbac is {mode}", denied(rc, err), err)
+    rc, _, err = patch("teams", "platform", {"teamAdmin": ["admins", "leads", "devs"]}, "team-admin-user",
+                       groups=["ladder.admins"])
+    check("R10e a current team admin (group in teamAdmin) may change the Team's teamAdmin (OD28)",
+          rc == 0 and MSG not in err, err)
+    rc, _, err = patch("teams", "platform", {"teamViewerRbac": ["devs"]}, "team-admin-user", groups=["ladder.leads"])
+    check("R10e a current team admin may change teamViewerRbac", rc == 0 and MSG not in err, err)
+    rc, _, err = patch("teams", "platform", {"teamAdmin": ["leads"]}, "team-admin-user", groups=["other.admins"])
+    check(f"R10e the same access group of another tenant is not a team admin here: {mode}", denied(rc, err), err)
     rc, _, err = patch("teams", "platform", {"features": {"argo": True}}, "team-admin-user")
-    check("a team admin may change other Team fields", rc == 0 and "Only users" not in err, err)
+    check("a team editor may change other Team fields", rc == 0 and MSG not in err, err)
     rc, _, err = patch("teams", "platform", {"teamAdmin": ["leads", "admins"]}, "team-admin-user")
-    check("reordering a list is no change", rc == 0 and "Only users" not in err, err)
-    rc, _, err = patch("projects", "webshop", {"projectAdmin": ["admins", "devs"]}, "team-member-user")
+    check("reordering a list is no change", rc == 0 and MSG not in err, err)
+    rc, _, err = patch("projects", "webshop", {"projectAdmin": ["admins", "devs"]}, "team-member-user",
+                       groups=["ladder.devs"])
     check(f"R10b a group with edit on the Project adding itself to projectAdmin is {mode}", denied(rc, err), err)
     rc, _, err = patch("projects", "webshop", {"description": "new"}, "team-member-user")
-    check("a project editor may change the description", rc == 0 and "Only users" not in err, err)
+    check("a project editor may change the description", rc == 0 and MSG not in err, err)
     rc, _, err = patch("projects", "webshop", {"projectDeveloperRbac": ["devs", "ops"]}, "project-admin-user")
-    check("R10d a project admin (holds delete) may change the Project's lists", rc == 0 and "Only users" not in err,
-          err)
+    check("R10d a project admin (holds delete) may change the Project's lists", rc == 0 and MSG not in err, err)
     rc, _, err = patch("teams", "platform", {"teamAdmin": ["admins"]}, AUTOMATION)
-    check("platform automation is exempt", rc == 0 and "Only users" not in err, err)
+    check("platform automation is exempt", rc == 0 and MSG not in err, err)
     rc, _, err = kubectl(["-n", NS, "create", "--dry-run=server", "-f", "-"], body={
         "apiVersion": f"{GROUP}/v1alpha1", "kind": "Team", "metadata": {"name": "other", "namespace": NS},
         "spec": {"teamAdmin": ["x"]}})

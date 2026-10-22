@@ -3,10 +3,13 @@ shc-access-field-ladder (ValidatingAdmissionPolicy, services cluster).
 
 The access lists of a team setup (Team spec.teamAdmin, teamMemberRbac, teamViewerRbac) and of an app project
 (Project spec.projectAdmin, projectDeveloperRbac, projectViewerRbac) grant resource-scoped access to those objects.
-A change to any of them is accepted only from a requester allowed to delete that object (an authorizer check on the
-object's name), so a group that may only change the object cannot promote itself or another group. Creation is not
-matched: the creator already holds create in the namespace, and resource-scoped grants never include create.
-Platform automation and platform groups are exempt (exact names from .Values.admission).
+A change to any of them is accepted from a requester allowed to delete that object (an authorizer check on the
+object's name) and, for a Team, from a member of a group the Team's current teamAdmin list names (self-service
+membership: a team admin manages the team's lists, including the admin list itself). Any other group that may
+only change the object cannot promote itself or another group. Creation is not matched: the creator already holds
+create in the namespace, and resource-scoped grants never include create. Platform automation and platform groups
+are exempt (exact names from .Values.admission). Sign-in groups are named <entity>.<access group>, and the entity
+is the namespace without its entity- prefix.
 */}}
 {{- $adm := .Values.admission }}
 {{- $pol := $adm.accessFieldLadder | default dict }}
@@ -46,13 +49,21 @@ spec:
 {{- range $i, $f := $fields }}
         {{ if $i }}|| {{ end }}!(variables.new{{ $i }}.all(g, g in variables.old{{ $i }}) && variables.old{{ $i }}.all(g, g in variables.new{{ $i }}))
 {{- end }}
+    - name: entityName
+      expression: >-
+        object.metadata.namespace.startsWith('entity-') ? object.metadata.namespace.substring(7) : object.metadata.namespace
+    - name: currentTeamAdmin
+      expression: >-
+        request.resource.resource == 'teams'
+        && variables.old0.exists(r, (variables.entityName + '.' + string(r)) in request.userInfo.groups)
   validations:
     - expression: >-
         !variables.accessChanged
+        || variables.currentTeamAdmin
         || authorizer.group('hybridsovereign.redhat').resource(request.resource.resource)
         .namespace(object.metadata.namespace).name(object.metadata.name).check('delete').allowed()
       message: >-
-        Only users allowed to delete this object can change who has access to it.
+        Only a team admin (for a team) or a user allowed to delete this object can change who has access to it.
       reason: Forbidden
   auditAnnotations:
     - key: access-change
