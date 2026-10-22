@@ -21,7 +21,7 @@ COMMON = os.path.join(ROOT, "operator", "roles", "_common", "tasks")
 
 @unittest.skipUnless(shutil.which("ansible-playbook"), "ansible-playbook not installed")
 class DecideTest(unittest.TestCase):
-    def decide(self, status, deleting=False):
+    def decide(self, status, deleting=False, recorded=None):
         with open(os.path.join(COMMON, "mark_phase.yml")) as f:
             decide_task = yaml.safe_load(f)[0]
         tmp = tempfile.mkdtemp(prefix="shc-mp-test-")
@@ -44,7 +44,10 @@ class DecideTest(unittest.TestCase):
                 f.write("[defaults]\n")
             out = os.path.join(tmp, "out.json")
             with open(os.path.join(tmp, "vars.json"), "w") as f:
-                json.dump({"mark_phase_cr": {"status": status}, "mark_phase_deleting": deleting, "out": out}, f)
+                ev = {"mark_phase_cr": {"status": status}, "mark_phase_deleting": deleting, "out": out}
+                if recorded is not None:
+                    ev["mark_phase_recorded"] = recorded
+                json.dump(ev, f)
             env = dict(os.environ, ANSIBLE_CONFIG=os.path.join(tmp, "ansible.cfg"),
                        ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_INVENTORY_UNPARSED_WARNING="false",
                        ANSIBLE_REMOTE_TMP=os.path.join(tmp, "remote-tmp"),
@@ -68,6 +71,12 @@ class DecideTest(unittest.TestCase):
         # an object from before stored phases (handled, no phase): not a create
         self.assertEqual(self.decide({"observedGeneration": 2, "ready": True}), "Keep")
         self.assertEqual(self.decide({"realized": True}), "Keep")
+
+    def test_phase_recorded_earlier_in_the_run_is_not_written_again(self):
+        # the caller wrote Creating after reading the CR (the Entity's first write): no second write
+        self.assertEqual(self.decide(None, recorded="Creating"), "Keep")
+        self.assertEqual(self.decide(None, recorded=""), "Creating")
+        self.assertEqual(self.decide({"phase": "Ready"}, deleting=True, recorded=""), "Deleting")
 
     def test_delete_request_is_deleting_once(self):
         self.assertEqual(self.decide({"phase": "Ready", "ready": True}, deleting=True), "Deleting")
