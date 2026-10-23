@@ -78,7 +78,10 @@ Installation settings of the dashboards (chart values, empty by default):
 `SHC_HELP_BASE_URL` (documentation for the Help menu), `SHC_CONSOLE_URL`,
 `oauthProxy.logoutUrl` (where Sign out sends the browser), and for the admin
 dashboard `oauthProxy.openshiftSar` (the access review that admits platform
-administrators).
+administrators) and `oauthProxy.pages` (the proxy's own sign-in and error pages in
+the product's words: `grantingRole` named on the page a user who fails the review
+gets, `productName`, an optional `tenantDashboardUrl`; `enabled: false` keeps the
+stock pages).
 
 ## Migration Notes
 

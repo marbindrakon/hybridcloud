@@ -1,0 +1,81 @@
+    :root {
+      --sc-surface: #ffffff;
+      --sc-page: #f2f2f2;
+      --sc-text: #151515;
+      --sc-muted: #6a6e73;
+      --sc-border: #d2d2d2;
+      --sc-link: #0066cc;
+      --sc-primary: #0066cc;
+      --sc-on-primary: #ffffff;
+      --sc-bar: #151515;
+      --sc-on-bar: #ffffff;
+      --sc-accent: #ee0000;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --sc-surface: #1f1f1f;
+        --sc-page: #151515;
+        --sc-text: #e0e0e0;
+        --sc-muted: #a3a3a3;
+        --sc-border: #444548;
+        --sc-link: #92c5f9;
+        --sc-primary: #4394e5;
+        --sc-on-primary: #151515;
+        --sc-bar: #0f1012;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--sc-page);
+      color: var(--sc-text);
+      font-family: "Red Hat Text", "RedHatText", "Overpass", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+    .sc-bar {
+      background: var(--sc-bar);
+      color: var(--sc-on-bar);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      height: 2.75rem;
+      padding: 0 1rem;
+      font-weight: 600;
+    }
+    .sc-mark {
+      display: inline-block;
+      width: 0.75rem;
+      height: 0.75rem;
+      border-radius: 50%;
+      background: var(--sc-accent);
+    }
+    .sc-card {
+      background: var(--sc-surface);
+      border: 1px solid var(--sc-border);
+      border-radius: 0.5rem;
+      margin: 3rem auto;
+      max-width: 40rem;
+      padding: 1.5rem 2rem;
+      width: calc(100% - 2rem);
+    }
+    h1 { font-size: 1.5rem; font-weight: 500; margin: 0 0 1rem; }
+    p { margin: 0 0 0.75rem; }
+    a { color: var(--sc-link); }
+    .sc-muted { color: var(--sc-muted); }
+    .sc-actions { margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+    .sc-btn {
+      background: var(--sc-primary);
+      border: 0;
+      border-radius: 999px;
+      color: var(--sc-on-primary);
+      cursor: pointer;
+      display: inline-block;
+      font: inherit;
+      padding: 0.375rem 1rem;
+      text-decoration: none;
+    }
+    .sc-btn--link { background: transparent; color: var(--sc-link); padding-left: 0; padding-right: 0; }
+    .sc-facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1rem 0 0; }
+    .sc-facts dt { color: var(--sc-muted); }
+    .sc-facts dd { margin: 0; overflow-wrap: anywhere; }

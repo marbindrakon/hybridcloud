@@ -35,6 +35,17 @@ oauthProxy:
     resource: hybridfabrics
     resourceAPIGroup: hybridsovereign.redhat
     verb: list
+  # The proxy's own pages (sign-in, and the error page a signed-in user who fails the access review
+  # above gets) in the product's words instead of the stock oauth-proxy pages. The denial names the
+  # role that grants access and says the platform team adds members; it names no tenant contacts.
+  pages:
+    enabled: true
+    # Product name in the page header and title
+    productName: Sovereign Admin Console
+    # The role that passes the access review above, as people know it
+    grantingRole: Platform administrator
+    # Tenant dashboard URL offered to tenant users on the denial page (https://...; empty = no link)
+    tenantDashboardUrl: ""
 
 replicas: 1
 

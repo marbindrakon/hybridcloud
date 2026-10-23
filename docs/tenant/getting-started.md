@@ -27,6 +27,11 @@ You can do everything on this page in either of these, with the same sign-in:
 
 Ask your platform team for the two domains.
 
+The services cluster also runs an admin dashboard for the platform team. It opens only for the
+**Platform administrator** role: if you sign in there with a tenant account, it shows a page that
+says so, names that role and tells you that the platform team adds members to it. It lists no
+tenant and no contacts. You do not need it; use the tenant dashboard.
+
 ## 2. Sign in
 
 On the services cluster the sign-in page offers two buttons:
@@ -184,7 +189,27 @@ oc annotate hybridnetwork example-net -n entity-<tenant> \
 ## 10. Delete, in order
 
 Delete placements first, then the environments and networks. A delete that has to wait says what
-it is waiting for in its status. `spec.deletionProtection: true` on an environment, network or
+it is waiting for in its status.
+
+In the dashboards and the console, **Delete** opens a dialog that lists what the delete takes with
+it, read from your tenant's objects as they are now:
+
+- **Deleted with it**: what is removed where it was set up (a subnet on a site, a cloud project, a
+  DNS zone, a tool organization, sign-in groups);
+- **The delete waits until these are gone**: for example the placements of a network, or the VMs
+  still in a VM environment's site namespaces, listed per namespace when the environment reports
+  them (with "and N more" when there are many);
+- **Not deleted with it**: objects you delete separately, and objects that stay but change (the
+  cluster assignments of a team setup, the app projects whose access ends);
+- **Access that ends with it**: the access groups that lose a role or an access list entry.
+
+For an object that owns something outside your tenant namespace (a network, environment or
+placement once it is set up on a site or in a cloud, an access group, a team setup, an app
+project, a cluster assignment, an OpenShift cluster, a tool organization, the tenant) the dialog
+asks you to type the object's name before **Delete** is enabled. If your role
+cannot read some of the objects that may name it, the dialog says that the list may be incomplete.
+On the command line, `oc delete` asks nothing: check first with the dialog or with
+`oc get <kind> -n entity-<tenant>`. `spec.deletionProtection: true` on an environment, network or
 OpenShift cluster keeps it when the tenant is deleted (the tenant deletion waits until protection
 is off); it does not stop you from deleting the object itself. Details:
 [Status reasons](status-reasons.md#deleting).

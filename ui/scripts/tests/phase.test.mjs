@@ -45,6 +45,40 @@ test('summaryOf prefers the stored summary, then the registry sentence, then the
   assert.ok(phase.summaryOf({ metadata: {}, status: { phase: 'Failed', summary: long } }).length <= phase.SUMMARY_MAX);
 });
 
+// P2AC-O5: a waiting cluster assignment names its team setup (and app projects) when they are not ready.
+test('a waiting cluster assignment names what it waits for', () => {
+  const asg = (reason, st) => ({
+    metadata: { generation: 1 },
+    status: {
+      phase: 'Waiting',
+      summary: 'Waiting for a cluster: name the OpenShift cluster to deploy onto.',
+      conditions: [{ type: 'Ready', status: 'False', reason }],
+      ...st,
+    },
+  });
+  assert.equal(
+    phase.summaryOf(asg('WaitingForCluster', { team: 'platform', teamReady: false, openshift: '', openshiftReady: false, projects: [{ name: 'web', ready: true }] })),
+    'Waiting for team setup platform to be ready, and for a cluster: name the OpenShift cluster to deploy onto.',
+  );
+  // the automation writes the flags as strings too
+  assert.equal(
+    phase.summaryOf(asg('LinkedNotReady', { team: 'platform', teamReady: 'False', openshift: 'oc1', openshiftReady: 'False', projects: [{ name: 'web', ready: false }, { name: 'api', ready: false }] })),
+    'Waiting for team setup platform, app projects web, api and OpenShift cluster oc1 to be ready.',
+  );
+  assert.equal(
+    phase.summaryOf(asg('LinkedNotReady', { team: 'platform', teamReady: true, openshift: 'oc1', openshiftReady: false, projects: [] })),
+    'Waiting for OpenShift cluster oc1 to be ready.',
+  );
+  // only the cluster is missing: the stored sentence stays
+  assert.equal(
+    phase.summaryOf(asg('WaitingForCluster', { team: 'platform', teamReady: true, openshift: '', openshiftReady: false })),
+    'Waiting for a cluster: name the OpenShift cluster to deploy onto.',
+  );
+  // other kinds and other phases are untouched
+  assert.equal(phase.linkedWaitSummary({ metadata: {}, status: { phase: 'Waiting', conditions: [{ type: 'Ready', status: 'False', reason: 'LinkedNotReady' }] } }), null);
+  assert.equal(phase.linkedWaitSummary({ ...asg('LinkedNotReady', { teamReady: false, openshiftReady: false }), status: { phase: 'Ready', ready: true, teamReady: false, openshiftReady: false } }), null);
+});
+
 test('reasonOf names the deciding condition', () => {
   const stalled = {
     metadata: {},

@@ -59,10 +59,30 @@ Rules that follow from this:
 - These fields are the interim form of a resource-scoped role assignment. A later release replaces
   them with role assignments; the access they grant stays the same.
 
+Platform roles (Platform administrator, Platform viewer) are not tenant roles: they come from
+the platform team. The admin dashboard opens only for the Platform administrator role; a tenant
+account that signs in there sees a page naming that role and saying that the platform team adds
+members. It shows no tenant contacts.
+
 People with access through these fields see the objects by name, not in a tenant-wide list:
 `oc get team <name> -n entity-<tenant>` works, `oc get teams -n entity-<tenant>` is refused. The
 dashboards' list pages show them with the line "You may not list all of these; ... shared with
 you".
+
+## Deleting a team setup or an app project
+
+Deleting a team setup or an app project removes the access its lists grant and releases its
+sign-in groups on the services cluster. The delete dialog lists, before you confirm:
+
+- the access groups whose access ends, with the list each one is on;
+- for a team setup, the cluster assignments that name it and the app projects of those
+  assignments. They are **not** deleted: the assignments wait until a team setup with that name is
+  ready again, and the access the team setup's lists gave on those app projects ends;
+- for an app project, the cluster assignments that list it (not deleted; they wait until an app
+  project with that name is ready again) and the team setups whose lists reached it.
+
+You type the name of the team setup or app project to confirm. Neither owns memberships in a tool
+organization (AAP, Quay, Vault): those come from the tool objects' own access lists and stay.
 
 ## Checking access
 

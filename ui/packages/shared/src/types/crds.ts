@@ -406,10 +406,32 @@ export interface CloudVirtNamespaceStatus {
   message?: string;
 }
 
+/** The VMs of one site namespace of a VM environment */
+export interface CloudVirtNamespaceVms {
+  /** The namespace's name in spec.namespaces; empty when it left the spec */
+  name?: string;
+  /** Namespace on the site */
+  namespace?: string;
+  /** How many VMs the namespace holds (always complete) */
+  count?: number;
+  /** VM names, sorted; capped (see `truncated`) */
+  names?: string[];
+  truncated?: boolean;
+}
+
+export interface CloudVirtVms {
+  observedAt?: string;
+  total?: number;
+  truncated?: boolean;
+  namespaces?: CloudVirtNamespaceVms[];
+}
+
 export interface CloudVirtStatus extends OperatorStatus {
   site?: { name?: string; endpoint?: string; console?: string; [key: string]: unknown };
   storageClass?: string;
   namespaces?: CloudVirtNamespaceStatus[];
+  /** The VMs in the environment's site namespaces, as last read from the site */
+  virtualMachines?: CloudVirtVms;
   /** The environment's DNS zone */
   dns?: { zone?: string; nameservers?: string[]; [key: string]: unknown };
 }
