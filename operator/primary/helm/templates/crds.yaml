@@ -616,6 +616,9 @@ spec:
         - name: Provisioned
           type: boolean
           jsonPath: .status.assignmentProvisioned
+        - name: Status
+          type: string
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
@@ -3341,6 +3344,9 @@ spec:
           type: string
           jsonPath: .status.openshiftConsoleURL
           priority: 1
+        - name: Status
+          type: string
+          jsonPath: .status.phase
         - name: Ready
           type: string
           jsonPath: .status.conditions[?(@.type=="Ready")].status
@@ -6387,6 +6393,9 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
+        - name: Status
+          type: string
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready

@@ -176,6 +176,9 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
+        - name: Status
+          type: string
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready

@@ -236,6 +236,9 @@ spec:
         - name: Provisioned
           type: boolean
           jsonPath: .status.assignmentProvisioned
+        - name: Status
+          type: string
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
