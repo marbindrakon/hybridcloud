@@ -96,13 +96,24 @@ const PROPER_WORDS = new Set(['Google', 'Vault', 'Vaults', 'Quay', 'OpenShift', 
  * `term` / `plural` of docs/content/terms.yaml for every kind (tested).
  */
 export function inText(term: string): string {
-  const first = term.split(/\s+/)[0] ?? '';
-  if (!first || PROPER_WORDS.has(first) || !/^[A-ZÀ-Ý][a-zà-ÿ'’-]*$/.test(first)) return term;
-  return term.charAt(0).toLowerCase() + term.slice(1);
+  const words = term.split(/(\s+)/);
+  const first = words[0] ?? '';
+  const plain = (w: string): boolean => !PROPER_WORDS.has(w) && /^[A-ZÀ-Ý][a-zà-ÿ'’-]*$/.test(w);
+  if (!first || !plain(first)) return term;
+  // "Cloud Infrastructure" -> "cloud infrastructure", not "cloud Infrastructure".
+  return words.map((w) => (plain(w) ? w.charAt(0).toLowerCase() + w.slice(1) : w)).join('');
 }
 
-/** The display term for use inside a sentence ("No networks match …"). */
+/**
+ * The display term for use inside a sentence ("No networks match …"). A kind
+ * whose label is a platform word has a running-text word for the tenant pages
+ * under vocabulary.inText.<Kind> / <Kind>s (CloudGateway: "site connection").
+ */
 export function kindTermInText(t: VocabT, kind: string | undefined | null, form: KindForm = 'one'): string {
+  if (kind && isApiKind(kind)) {
+    const own = t(`vocabulary.inText.${kind}${form === 'many' ? 's' : ''}`, { defaultValue: '' });
+    if (own) return own;
+  }
   return inText(kindTerm(t, kind, form));
 }
 
@@ -165,11 +176,36 @@ const KIND_WORD = new RegExp(
  */
 export function displayText(t: VocabT, text: string | undefined | null): string {
   if (!text) return '';
+  const linked = linkedSummary(t, text);
+  if (linked) return linked;
   return text
     .replace(/\b([A-Z][A-Za-z]+)\s*\/\s*([a-z0-9][a-z0-9.-]*(?:\/[a-z0-9][a-z0-9.-]*)?)/g, (all, kind: string, name: string) =>
       isKnownKind(kind) ? `${inText(kindTerm(t, kind, 'dense'))} ${name}` : all,
     )
     .replace(KIND_WORD, (_all, kind: string, plural?: string) => kindTermInText(t, kind, plural ? 'many' : 'one'));
+}
+
+/** The cluster assignment's summary as its automation writes it: Team=a(ready=True), Projects=1, Openshift=b(ready=False). */
+const LINKED_SUMMARY = /^\s*Team=([^\s(),]*)\(ready=(True|False)\),\s*Projects=(\d+),\s*Openshift=([^\s(),]*)\(ready=(True|False)\)\s*$/;
+
+/**
+ * That summary as a sentence: "Team setup platform is ready; 1 app project;
+ * no OpenShift cluster is named yet." Null for any other text.
+ */
+export function linkedSummary(t: VocabT, text: string): string | null {
+  const m = LINKED_SUMMARY.exec(text);
+  if (!m) return null;
+  const [, team, teamReady, projects, cluster, clusterReady] = m;
+  const parts = [
+    team
+      ? t(teamReady === 'True' ? 'vocabulary.linked.teamReady' : 'vocabulary.linked.teamNotReady', { name: team })
+      : t('vocabulary.linked.teamNone'),
+    t(Number(projects) === 1 ? 'vocabulary.linked.projectsOne' : 'vocabulary.linked.projectsMany', { count: Number(projects) }),
+    cluster
+      ? t(clusterReady === 'True' ? 'vocabulary.linked.clusterReady' : 'vocabulary.linked.clusterNotReady', { name: cluster })
+      : t('vocabulary.linked.clusterNone'),
+  ];
+  return sentence(`${parts.join('; ')}.`);
 }
 
 /** Words of field keys shown as-is in upper case. */

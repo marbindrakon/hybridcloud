@@ -32,7 +32,7 @@ import { ForbiddenState } from '../access/ForbiddenState';
 import { errorText } from '../access/errorText';
 import { useTranslation } from '../i18n';
 import { displayText, fieldLabel, inText, kindTerm } from '../i18n/vocabulary';
-import { condStatus, phaseOf, retryQueued } from '../status/phase';
+import { condStatus, phaseOf, requestMessage, retryQueued } from '../status/phase';
 import { formatRelativeTime } from '../list/listColumns';
 import {
   COMMON_STATUS_KEYS,
@@ -139,6 +139,7 @@ function ConditionsTab({ item }: { item: K8sResource }): React.ReactElement {
         const bad = NEGATIVE_POLARITY.has(c.type) ? value === 'True' : value === 'False';
         const color = value === 'Unknown' ? 'grey' : c.type === 'Reconciling' && value === 'True' ? 'blue' : bad ? 'red' : 'green';
         const rel = c.lastTransitionTime ? formatRelativeTime(c.lastTransitionTime) : undefined;
+        const request = requestMessage(c.message, c.reason);
         return (
           <div key={`${c.type}-${i}`} className="sc-condition">
             <Label color={color as 'green' | 'red' | 'blue' | 'grey'} isCompact>
@@ -146,7 +147,15 @@ function ConditionsTab({ item }: { item: K8sResource }): React.ReactElement {
             </Label>
             <div>
               <div className="sc-condition__type">{value}</div>
-              {c.message && <div className="sc-condition__message">{displayText(t, c.message)}</div>}
+              {request ? (
+                request.summary && (
+                  <div className="sc-condition__message" title={t('detail.conditionEvent', { id: request.event })}>
+                    {request.summary}
+                  </div>
+                )
+              ) : (
+                c.message && <div className="sc-condition__message">{displayText(t, c.message)}</div>
+              )}
               {c.reason && (
                 <div className="sc-condition__message">
                   {t('status.reason')}: <code>{c.reason}</code>
