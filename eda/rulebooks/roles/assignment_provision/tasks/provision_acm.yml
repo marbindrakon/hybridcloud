@@ -57,6 +57,47 @@
     acm_policy_name: "{{ assignment_stored_acm_policy_name | default('', true) | trim or assignment_acm_name | trim }}"
     acm_owner: "{{ assignment_cr_namespace }}/{{ assignment_cr_name }}"
 
+# <tenant>-<assignment> is ambiguous across tenants (a + b-c, a-b + c; R2A-F3). Before anything is recorded, an ACM
+# object of another Assignment under the plain name makes this Assignment take its per-Assignment form
+# (assignment_acm_name_unique), which the record then keeps. An object without the owner annotation is taken as
+# this Assignment's, as apply_acm_resource.yml does.
+- name: Look for ACM objects of another Assignment under the name
+  ansible.builtin.uri:
+    url: "{{ central_api_server }}/apis/{{ item }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ acm_central_token }}"
+    validate_certs: false
+    timeout: 120
+    status_code: [200, 404]
+  loop:
+    - "policy.open-cluster-management.io/v1/namespaces/{{ acm_policy_namespace }}/policies/{{ acm_policy_name }}"
+    - "cluster.open-cluster-management.io/v1beta1/namespaces/{{ acm_policy_namespace }}/placements/placement-{{ acm_policy_name }}"
+    - "policy.open-cluster-management.io/v1/namespaces/{{ acm_policy_namespace }}/placementbindings/binding-{{ acm_policy_name }}"
+  register: acm_name_probe
+  no_log: true
+  when:
+    - assignment_stored_acm_policy_name | default('', true) | trim | length == 0
+    - (assignment_acm_name | trim) != (assignment_acm_name_unique | trim)
+
+- name: Take the per-Assignment name when the plain name is another Assignment's
+  vars:
+    _acm_name_foreign: >-
+      {%- set ns = namespace(found=false) -%}
+      {%- for r in acm_name_probe.results | default([]) -%}
+        {%- if (r.status | default(0) | int) == 200 -%}
+          {%- set owner = ((((r.json | default({}, true)).metadata | default({}, true)).annotations | default({}, true))
+                           ['hybridsovereign.redhat/assignment'] | default('', true)) | string | trim -%}
+          {%- if owner != '' and owner != acm_owner -%}{%- set ns.found = true -%}{%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.found }}
+  ansible.builtin.set_fact:
+    acm_policy_name: "{{ assignment_acm_name_unique | trim }}"
+  when:
+    - acm_name_probe.results is defined
+    - _acm_name_foreign | bool
+
 - name: Resolve spoke cluster name for Placement
   ansible.builtin.set_fact:
     acm_spoke_cluster_name: "{{ openshift_cluster_name | default(assignment_openshift) | default('') }}"

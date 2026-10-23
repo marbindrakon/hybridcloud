@@ -355,9 +355,10 @@ class ProvisionStopsOnDeleteWiring(unittest.TestCase):
         self.assertEqual(recheck["kind"], "Assignment")
         for name in CENTRAL_STEPS:
             self.assertEqual(by_name(acm, name)["when"], "not (assignment_deleting | bool)", name)
-        # nothing else in the file talks to central before the recheck
+        # nothing else in the file writes to central before the recheck (the name check of R2A-F3 only reads)
         for t in acm[:names.index(RECHECK)]:
-            self.assertNotIn("ansible.builtin.uri", t, t["name"])
+            if "ansible.builtin.uri" in t:
+                self.assertEqual(t["ansible.builtin.uri"].get("method"), "GET", t["name"])
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
