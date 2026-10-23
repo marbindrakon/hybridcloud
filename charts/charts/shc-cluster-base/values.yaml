@@ -183,6 +183,12 @@ ops:
         enabled: true
         afterMinutes: 2
         problemMinutes: 30
+      # the VirtualMachine lists of the environments on a Ready OpenShift site (CloudVirt status.virtualMachines):
+      # older than intervalMinutes, the site's probe is woken to refresh them (at most once per interval per site)
+      vmRefresh:
+        enabled: true
+        intervalMinutes: 10
+        maxSitesPerRun: 10
   # Former name of shcTenancy (its config = shcTenancy.config.redrive); read for one release.
   edaRedrive:
     enabled: false

@@ -15,6 +15,11 @@ Passes (each configurable, config file sections in brackets):
               has its finalizer after afterMinutes gets a machine wake (reconcileNow) on every run, so its
               controller releases it (also after Stalled=TeardownFailed and a successful retry); one still there
               after problemMinutes is reported.
+6. [vmRefresh] an OpenShift site (CloudInfrastructure, Ready) whose environments (CloudVirts with namespaces there)
+              hold a VirtualMachine list (status.virtualMachines) older than intervalMinutes gets a machine wake, so
+              its probe job, which can read the site, refreshes the lists (a partial status write of that field).
+              At most once per intervalMinutes per site, never while the site has an event outstanding, at most
+              maxSitesPerRun sites per run.
 
 Exits 1 when any pass found a problem (the platform's job alert fires), 2 on an API error.
 usage: shc_tenancy.py [--config FILE] [--dry-run]
@@ -39,6 +44,7 @@ RECONCILE_REQUEST = eda_redrive.RECONCILE_REQUEST
 RECHECKS = f"{GROUP}/rechecks"
 RECHECKED_AT = f"{GROUP}/recheckedAt"
 NUDGED = f"{GROUP}/nudged"
+VM_REFRESH_AT = f"{GROUP}/vmRefreshRequestedAt"
 OPERATOR = "hybridsovereign-namespace-operator"
 STALLED_MESSAGE = "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."
 
@@ -51,6 +57,7 @@ DEFAULTS = {
     "failedRecheck": {"enabled": True, "intervalMinutes": 30, "maxRechecks": 6,
                       "kinds": ["Rbac", "Team", "Project", "Persona", "Vault", "VaultKV", "AAPOrg", "QuayOrg"]},
     "finalizerRelease": {"enabled": True, "afterMinutes": 2, "problemMinutes": 30},
+    "vmRefresh": {"enabled": True, "intervalMinutes": 10, "maxSitesPerRun": 10},
 }
 
 
@@ -383,6 +390,71 @@ def run_finalizer_release(api, kinds, cfg, now, dry_run):
     return counts, actions, problems
 
 
+# ---- pass 6: VirtualMachine lists of the environments on OpenShift sites ----------------------------------------
+
+def vm_refresh_sites(kinds, cfg, now):
+    """[(site CR, [stale CloudVirt refs])] of the OpenShift sites whose probe should run now for the VM lists."""
+    vcfg = cfg["vmRefresh"]
+    interval = vcfg["intervalMinutes"]
+    by_kind = {k["kind"]: k for k in kinds}
+    sites = (by_kind.get("CloudInfrastructure") or {}).get("items") or []
+    cloudvirts = (by_kind.get("CloudVirt") or {}).get("items") or []
+    out = []
+    for site in sorted(sites, key=lambda o: (o["metadata"].get("namespace", ""), o["metadata"]["name"])):
+        meta, status = site["metadata"], site.get("status") or {}
+        if (site.get("spec") or {}).get("type") != "openshift" or meta.get("deletionTimestamp"):
+            continue
+        if shc_status.derive_phase(site) not in ("Ready", "Degraded"):
+            continue  # a failed site is retried by its controller on every reconcile period
+        ann = meta.get("annotations") or {}
+        if str(ann.get(RECONCILE_NOW, "")).strip().lower() == RECONCILE_REQUEST:
+            continue  # a wake is already pending
+        delivery = status.get("delivery") or {}
+        if delivery.get("eventId") and delivery.get("completedEventId") != delivery.get("eventId"):
+            continue  # a probe is queued or running
+        ages = [minutes_since(v, now) for v in (status.get("lastReconciledAt"), ann.get(VM_REFRESH_AT))]
+        if any(a is not None and a < interval for a in ages):
+            continue  # probed or woken within the interval
+        stale = []
+        for cv in cloudvirts:
+            cmeta, cst = cv["metadata"], cv.get("status") or {}
+            if ((cv.get("spec") or {}).get("cloudRef") or {}).get("name") != meta["name"]:
+                continue
+            if cmeta.get("deletionTimestamp") or not cst.get("namespaces"):
+                continue  # the same environments the probe refreshes
+            age = minutes_since((cst.get("virtualMachines") or {}).get("observedAt"), now)
+            if age is None or age >= interval:
+                stale.append(f"{cmeta['namespace']}/{cmeta['name']}")
+        if stale:
+            out.append((site, sorted(stale)))
+            if len(out) >= vcfg["maxSitesPerRun"]:
+                break
+    return out
+
+
+def run_vm_refresh(api, kinds, cfg, now, dry_run):
+    counts = {"vmRefreshWakes": 0}
+    actions = []
+    version = next((k["version"] for k in kinds if k["kind"] == "CloudInfrastructure"), "v1alpha1")
+    plural = next((k["plural"] for k in kinds if k["kind"] == "CloudInfrastructure"), "cloudinfrastructures")
+    for site, stale in vm_refresh_sites(kinds, cfg, now):
+        meta = site["metadata"]
+        ns, name = meta["namespace"], meta["name"]
+        counts["vmRefreshWakes"] += 1
+        actions.append(f"wake CloudInfrastructure {ns}/{name}: VirtualMachine lists older than "
+                       f"{cfg['vmRefresh']['intervalMinutes']} min ({', '.join(stale[:5])}"
+                       f"{', …' if len(stale) > 5 else ''})")
+        if not dry_run:
+            try:
+                api.patch_namespaced_custom_object(
+                    GROUP, version, ns, plural, name,
+                    {"metadata": {"annotations": {RECONCILE_NOW: RECONCILE_REQUEST, VM_REFRESH_AT: stamp(now)}}})
+            except ApiException as exc:
+                if exc.status != 404:  # gone meanwhile
+                    raise
+    return counts, actions
+
+
 def status_kinds(kinds):
     """The kinds the redrive, phase and re-check passes look at: not those whose CRD carries teardown-tier "skip"
     (TenantProfile: platform-written, no Ready/phase of its own; it only gets the tenancy conditions)."""
@@ -426,6 +498,11 @@ def main():
         counts, actions, probs = run_finalizer_release(api, managed, cfg, now, args.dry_run)
         summary["finalizerRelease"] = counts
         problems += probs
+        for a in actions:
+            print(("would " if args.dry_run else "") + a)
+    if cfg["vmRefresh"].get("enabled", True):
+        counts, actions = run_vm_refresh(api, kinds, cfg, now, args.dry_run)
+        summary["vmRefresh"] = counts
         for a in actions:
             print(("would " if args.dry_run else "") + a)
     print(json.dumps(summary))
