@@ -1,0 +1,46 @@
+---
+# The periodic refresh of status.virtualMachines on the CloudVirts of this site (the CloudVirt job fills it when it
+# runs; VMs come and go without one). Reads with the site's fabric credential, which may list VirtualMachines (the
+# probe credential may not). A failure here never fails the probe: the lists keep their last value and observedAt.
+# Input: _ci_dependents (the CloudGateway/CloudAWS/CloudVirt lists of main.yml), ci_cr_spec.
+- name: The environments on this site with namespaces there
+  ansible.builtin.set_fact:
+    _civ_cloudvirts: >-
+      {%- set out = [] -%}
+      {%- for r in _ci_dependents.results | default([]) if r.item == 'CloudVirt' -%}
+        {%- for o in r.resources | default([]) -%}
+          {%- if (o.spec.cloudRef | default({})).name | default('') == cloudinfrastructure_cr_name
+                and o.metadata.deletionTimestamp is not defined
+                and ((o.status | default({}, true)).namespaces | default([], true) | length > 0) -%}
+            {%- set _ = out.append(o) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Refresh their VirtualMachine lists
+  when: _civ_cloudvirts | length > 0
+  block:
+    - name: The site's fabric credential
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
+      vars:
+        ci_spec: "{{ ci_cr_spec }}"
+        site_kc_tag: "ci-vms-{{ cloudinfrastructure_cr_name }}"
+
+    - name: Read and record each environment's VirtualMachines
+      ansible.builtin.include_tasks: cloudvirt_vm_write.yml
+      loop: "{{ _civ_cloudvirts }}"
+      loop_control:
+        loop_var: civ_cv
+        label: "{{ civ_cv.metadata.namespace }}/{{ civ_cv.metadata.name }}"
+  rescue:
+    - name: Note that the VirtualMachine lists were not refreshed
+      ansible.builtin.debug:
+        msg: >-
+          VirtualMachine lists of the environments on {{ cloudinfrastructure_cr_name }} not refreshed:
+          {{ ansible_failed_result.msg | default('failed') }}
+  always:
+    - name: Remove the site kubeconfig of the refresh
+      ansible.builtin.file:
+        path: "/tmp/eda-ci-vms-{{ cloudinfrastructure_cr_name }}-kubeconfig"
+        state: absent

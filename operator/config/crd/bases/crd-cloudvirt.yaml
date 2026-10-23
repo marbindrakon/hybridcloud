@@ -188,6 +188,54 @@ spec:
                       message:
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                virtualMachines:
+                  type: object
+                  description: >-
+                    The virtual machines in the environment's namespaces on the site, as last read from the
+                    site. Deleting the environment waits until there are none. Written when the environment is
+                    processed and refreshed periodically.
+                  properties:
+                    observedAt:
+                      type: string
+                      format: date-time
+                      description: When the list was read from the site (RFC 3339).
+                    total:
+                      type: integer
+                      format: int32
+                      description: Number of virtual machines in all of the environment's namespaces.
+                    truncated:
+                      type: boolean
+                      description: True when the names of at least one namespace are not all listed.
+                    namespaces:
+                      type: array
+                      description: >-
+                        One entry per namespace on the site, including a namespace that was removed from
+                        spec.namespaces but still holds virtual machines.
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            description: >-
+                              The namespace's name in spec.namespaces; empty for a namespace that was removed
+                              from the spec.
+                          namespace:
+                            type: string
+                            description: Namespace on the site.
+                          count:
+                            type: integer
+                            format: int32
+                            description: Number of virtual machines in the namespace.
+                          names:
+                            type: array
+                            description: >-
+                              Names of the virtual machines, sorted. The list is capped; truncated says when
+                              names are left out, count is always complete.
+                            items:
+                              type: string
+                          truncated:
+                            type: boolean
+                            description: True when names are left out of the list.
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)

@@ -1,0 +1,41 @@
+---
+# The VirtualMachines a CloudVirt's site namespaces hold, for status.virtualMachines (what an environment delete
+# waits for, shown before the delete). Read with a site kubeconfig that may list kubevirt.io VirtualMachines (the
+# site's fabric credential). Per namespace: the count, the names (sorted, at most cvs_names_cap of them) and whether
+# names were left out.
+# Inputs: cvs_kubeconfig (path), cvs_namespaces (list of {namespace, name}: the site namespace and the environment's
+#         name for it, '' for a namespace that left the spec but still holds VMs), cvs_names_cap (default 50).
+# Sets: cv_vm_status ({} when a namespace could not be read: the caller then keeps what was there).
+- name: List the VirtualMachines in the environment's site namespaces
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cvs_kubeconfig }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    namespace: "{{ item.namespace }}"
+  loop: "{{ cvs_namespaces | default([], true) }}"
+  loop_control:
+    label: "{{ item.namespace }}"
+  register: _cvs_vms
+  failed_when: false
+
+- name: Summarize the VirtualMachines per namespace
+  vars:
+    _cap: "{{ cvs_names_cap | default(50, true) | int }}"
+  ansible.builtin.set_fact:
+    cv_vm_status: >-
+      {%- set rows = [] -%}
+      {%- set ns = namespace(total=0, truncated=false, failed=false) -%}
+      {%- for r in _cvs_vms.results | default([]) -%}
+        {%- if r.failed | default(false) or (r.msg is defined and r.resources is not defined) -%}
+          {%- set ns.failed = true -%}
+        {%- else -%}
+          {%- set names = r.resources | default([]) | map(attribute='metadata.name') | sort -%}
+          {%- set cut = (names | length) > (_cap | int) -%}
+          {%- set ns.total = ns.total + (names | length) -%}
+          {%- set ns.truncated = ns.truncated or cut -%}
+          {%- set _ = rows.append({'name': r.item.name | default('', true), 'namespace': r.item.namespace,
+                                   'count': names | length, 'names': names[:(_cap | int)], 'truncated': cut}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ {} if ns.failed else {'observedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ'), 'total': ns.total,
+                               'truncated': ns.truncated, 'namespaces': rows} }}

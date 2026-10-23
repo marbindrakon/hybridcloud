@@ -290,6 +290,22 @@
             cv_kept: >-
               {{ _cv_stale_vms.results | default([]) | rejectattr('resources', 'equalto', []) | map(attribute='item') | list }}
 
+        # what the environment's namespaces hold (status.virtualMachines; the site probe refreshes it)
+        - name: The VirtualMachines in the environment's namespaces
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/cloudvirt_vm_status.yml"
+          vars:
+            cvs_kubeconfig: "{{ site_kubeconfig }}"
+            cvs_names_cap: "{{ cloudvirt_vm_names_cap }}"
+            cvs_namespaces: >-
+              {%- set out = [] -%}
+              {%- for n in cv_namespaces -%}
+                {%- set _ = out.append({'namespace': n.namespace, 'name': n.name}) -%}
+              {%- endfor -%}
+              {%- for k in cv_kept -%}
+                {%- set _ = out.append({'namespace': k, 'name': ''}) -%}
+              {%- endfor -%}
+              {{ out }}
+
         - name: The platform's realization parameters
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
           vars:
@@ -321,7 +337,8 @@
         fab_status: >-
           {{ cv_status | combine({'access': cv_access}) | combine({'endpoints': cv_endpoints | default({})})
              | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {})
-             | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {}) }}
+             | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {})
+             | combine({'virtualMachines': cv_vm_status} if cv_vm_status | default({}) | length > 0 else {}) }}
 
   rescue:
     - name: Mark the CloudVirt failed

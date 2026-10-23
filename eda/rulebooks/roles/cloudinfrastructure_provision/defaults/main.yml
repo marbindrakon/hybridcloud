@@ -3,3 +3,5 @@
 # openshift sites: the fabric underlay's BGP sessions are read from frr-k8s BGPSessionStates here
 # (default VRF only; tenant VRF sessions don't count as underlay).
 ci_frr_namespace: openshift-frr-k8s
+# status.virtualMachines of the site's CloudVirts (refreshed on every probe): names listed per site namespace
+cloudvirt_vm_names_cap: 50
