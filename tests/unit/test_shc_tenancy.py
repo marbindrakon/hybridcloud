@@ -65,6 +65,63 @@ class Controller(unittest.TestCase):
         self.assertEqual(T.controller_condition(deploy(), [pod(4, "Error", 60)], TCFG, NOW)["status"], "True")
 
 
+class NewEntityGrace(unittest.TestCase):
+    """H2AC-O1: a new Entity whose namespace operator has not started yet is not reported (grace window)."""
+
+    @staticmethod
+    def entity(created_min, deleting=False):
+        meta = {"name": "t1", "creationTimestamp": (NOW - dt.timedelta(minutes=created_min)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        if deleting:
+            meta["deletionTimestamp"] = "2026-10-21T11:59:00Z"
+        return {"metadata": meta}
+
+    def test_new_entity_without_controller_is_quiet(self):
+        self.assertIsNone(T.entity_controller_condition(self.entity(3), None, [], TCFG, NOW))
+        self.assertIsNone(T.entity_controller_condition(self.entity(9), deploy(0, 5), [], TCFG, NOW))
+
+    def test_after_the_grace_window_it_is_reported(self):
+        cond = T.entity_controller_condition(self.entity(11), None, [], TCFG, NOW)
+        self.assertEqual((cond["status"], cond["reason"]), ("False", "ControllerUnavailable"))
+
+    def test_grace_never_hides_a_problem_of_a_running_controller_or_a_delete(self):
+        self.assertEqual(T.entity_controller_condition(self.entity(3), deploy(), [pod()], TCFG, NOW)["status"], "True")
+        self.assertEqual(T.entity_controller_condition(self.entity(3), deploy(), [pod(1, "OOMKilled", 1)], TCFG, NOW)
+                         ["reason"], "ControllerOutOfMemory")
+        self.assertEqual(T.entity_controller_condition(self.entity(3, deleting=True), None, [], TCFG, NOW)["status"],
+                         "False")
+
+    def test_default_window(self):
+        self.assertEqual(T.DEFAULTS["tenancy"]["newEntityGraceMinutes"], 10)
+
+    def test_tenancy_pass_neither_alerts_nor_writes_the_controller_condition(self):
+        class Apps:
+            def read_namespaced_deployment(self, name, ns):
+                exc = T.ApiException()
+                exc.status = 404
+                raise exc
+
+        class Api:
+            def __init__(self):
+                self.patches = []
+
+            def patch_namespaced_custom_object_status(self, group, version, ns, plural, name, body):
+                self.patches.append(body)
+
+        ent = dict(self.entity(2), status={})
+        ent["metadata"].update(namespace="sovereign-cloud", resourceVersion="1")
+        kinds = [{"kind": "Entity", "plural": "entities", "version": "v1alpha1", "items": [ent]}]
+        saved = (getattr(T.client, "AppsV1Api", None), getattr(T.client, "CoreV1Api", None))
+        T.client.AppsV1Api, T.client.CoreV1Api = Apps, lambda: None
+        try:
+            api = Api()
+            counts, problems, _ = T.run_tenancy(api, kinds, T.load_config("/nonexistent"), NOW, False)
+        finally:
+            T.client.AppsV1Api, T.client.CoreV1Api = saved
+        self.assertEqual((counts["controllerUnavailable"], problems), (0, []))
+        types_written = [c["type"] for b in api.patches for c in b["status"]["conditions"]]
+        self.assertNotIn("ControllerAvailable", types_written)
+
+
 def cr(name, ready=True, generation=1, observed=1, delivery=None, created="2026-10-21T10:00:00Z"):
     st = {"observedGeneration": observed, "delivery": delivery or {}}
     if ready:
@@ -353,6 +410,87 @@ class FinalizerReleaseTest(unittest.TestCase):
         for cr in (self.cr(45, complete=False), self.cr(45, finalizers=())):
             api, counts, _ = self.run_pass(cr)
             self.assertEqual((counts["finalizerWakes"], api.annotations), (0, []))
+
+
+class VmRefreshTest(unittest.TestCase):
+    """H2AC-F2: the VirtualMachine lists of a Ready OpenShift site's environments are refreshed about every
+    intervalMinutes by waking the site's probe (the job that can read the site), bounded per site and per run."""
+
+    @staticmethod
+    def at(minutes):
+        return (NOW - dt.timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+
+    def site(self, name="site1", type_="openshift", probed_min=30, ready=True, ann=None, delivery=None):
+        st = {"lastReconciledAt": self.at(probed_min), "observedGeneration": 1, "delivery": delivery or {},
+              "conditions": [{"type": "Ready", "status": "True" if ready else "False",
+                              "reason": "EDASucceeded" if ready else "EDAFailed"}]}
+        if not ready:
+            st["status"] = "failed"
+        return {"metadata": {"namespace": "sovereign-cloud", "name": name, "generation": 1, "annotations": ann or {}},
+                "spec": {"type": type_}, "status": st}
+
+    def cv(self, name, site="site1", observed_min=30, namespaces=True, deleting=False):
+        st = {"namespaces": [{"name": "vms", "namespace": "t-" + name}] if namespaces else []}
+        if observed_min is not None:
+            st["virtualMachines"] = {"observedAt": self.at(observed_min)[:19] + "Z", "total": 0}
+        meta = {"namespace": "entity-t", "name": name}
+        if deleting:
+            meta["deletionTimestamp"] = self.at(1)
+        return {"metadata": meta, "spec": {"cloudRef": {"name": site}}, "status": st}
+
+    def kinds(self, sites, cvs):
+        return [{"kind": "CloudInfrastructure", "plural": "cloudinfrastructures", "version": "v1alpha1", "items": sites},
+                {"kind": "CloudVirt", "plural": "cloudvirts", "version": "v1alpha1", "items": cvs}]
+
+    def run_pass(self, sites, cvs, cfg=None):
+        api = FakeApi()
+        counts, actions = T.run_vm_refresh(api, self.kinds(sites, cvs), cfg or T.DEFAULTS, NOW, False)
+        return api, counts, actions
+
+    def test_stale_lists_wake_the_site_probe(self):
+        api, counts, actions = self.run_pass([self.site()], [self.cv("b", observed_min=25), self.cv("a", observed_min=None)])
+        self.assertEqual(counts["vmRefreshWakes"], 1)
+        self.assertEqual(api.annotations[0][T.RECONCILE_NOW], "true")
+        self.assertEqual(api.annotations[0][T.VM_REFRESH_AT], "2026-10-21T12:00:00Z")
+        self.assertIn("entity-t/a, entity-t/b", actions[0])
+
+    def test_fresh_lists_or_recent_probe_or_wake_wait(self):
+        for sites, cvs in (([self.site()], [self.cv("a", observed_min=4)]),
+                           ([self.site(probed_min=6)], [self.cv("a")]),
+                           ([self.site(ann={T.VM_REFRESH_AT: "2026-10-21T11:55:00Z"})], [self.cv("a")])):
+            api, counts, _ = self.run_pass(sites, cvs)
+            self.assertEqual((counts["vmRefreshWakes"], api.annotations), (0, []))
+
+    def test_only_ready_openshift_sites_without_pending_work(self):
+        cases = [self.site(type_="openstack"), self.site(ready=False),
+                 self.site(ann={T.RECONCILE_NOW: "true"}),
+                 self.site(delivery={"eventId": "e2", "completedEventId": "e1"})]
+        for site in cases:
+            api, counts, _ = self.run_pass([site], [self.cv("a")])
+            self.assertEqual((counts["vmRefreshWakes"], api.annotations), (0, []), site)
+        # a finished event and an old timestamp request do not hold it back
+        site = self.site(ann={T.RECONCILE_NOW: "2026-10-20T10:00:00Z"}, delivery={"eventId": "e1", "completedEventId": "e1"})
+        self.assertEqual(self.run_pass([site], [self.cv("a")])[1]["vmRefreshWakes"], 1)
+
+    def test_environments_the_probe_skips_do_not_count(self):
+        cvs = [self.cv("a", namespaces=False), self.cv("b", deleting=True), self.cv("c", site="other")]
+        api, counts, _ = self.run_pass([self.site()], cvs)
+        self.assertEqual((counts["vmRefreshWakes"], api.annotations), (0, []))
+
+    def test_sites_per_run_are_bounded(self):
+        sites = [self.site("s%d" % i) for i in range(4)]
+        cvs = [self.cv("v%d" % i, site="s%d" % i) for i in range(4)]
+        cfg = dict(T.DEFAULTS, vmRefresh=dict(T.DEFAULTS["vmRefresh"], maxSitesPerRun=2))
+        api, counts, _ = self.run_pass(sites, cvs, cfg)
+        self.assertEqual(counts["vmRefreshWakes"], 2)
+
+    def test_dry_run_writes_nothing(self):
+        api = FakeApi()
+        counts, actions = T.run_vm_refresh(api, self.kinds([self.site()], [self.cv("a")]), T.DEFAULTS, NOW, True)
+        self.assertEqual((counts["vmRefreshWakes"], api.annotations, len(actions)), (1, [], 1))
+
+    def test_default_interval_matches_the_reconcile_period(self):
+        self.assertEqual(T.DEFAULTS["vmRefresh"]["intervalMinutes"], 10)
 
 
 class StatusKindsTest(unittest.TestCase):

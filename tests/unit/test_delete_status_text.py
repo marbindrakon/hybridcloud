@@ -143,5 +143,32 @@ class DependentsWait(unittest.TestCase):
         self.assertEqual(S.phase_fields(obj, obj["status"])["summary"], "Being deleted.")
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class DependentsOrder(unittest.TestCase):
+    """H2C-O1: the list a waiting delete records is in a stable order, so a requeue does not rewrite the status."""
+
+    def find(self, results, all_ns=False):
+        tasks = load(os.path.join(COMMON, "block_on_dependents.yml"))
+        return run_play([by_name(tasks, "Find the dependents"), write_out("_dependents")],
+                        {"_dependents_lists": {"results": results}, "dependents_all_namespaces": all_ns})
+
+    @staticmethod
+    def listing(kind, names, ns="entity-t", match=None):
+        return {"item": {"kind": kind, "match": match or {}},
+                "resources": [{"metadata": {"namespace": ns, "name": n}, "status": {}} for n in names]}
+
+    def test_same_dependents_in_any_order_give_the_same_list(self):
+        one = self.find([self.listing("Assignment", ["platform-webshop", "g-api-asg2"]),
+                         self.listing("Assignment", ["g-api-asg2"])])
+        two = self.find([self.listing("Assignment", ["g-api-asg2", "platform-webshop"])])
+        self.assertEqual(one, ["Assignment/g-api-asg2", "Assignment/platform-webshop"])
+        self.assertEqual(one, two)
+
+    def test_kinds_and_namespaces_sort_too(self):
+        got = self.find([self.listing("HybridNetwork", ["n2"], ns="entity-b"),
+                         self.listing("CloudGateway", ["g1"], ns="entity-a")], all_ns=True)
+        self.assertEqual(got, ["CloudGateway entity-a/g1", "HybridNetwork entity-b/n2"])
+
+
 if __name__ == "__main__":
     unittest.main()

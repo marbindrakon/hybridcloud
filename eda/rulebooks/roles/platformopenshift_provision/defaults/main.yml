@@ -8,6 +8,9 @@ keycloak_external_url: "{{ lookup('env', 'KEYCLOAK_EXTERNAL_URL') }}"
 keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants', true) }}"
 # shc (§11.6 phase C): RHBK admin account in central Vault (the RbacConfig's secret)
 keycloak_admin_vault_path: rhbk-services-admin
+# Name of the identity provider the cluster's OAuth gets (keycloak_oidc.yml); also the last path segment of the sign-in
+# client's only redirect URI, https://oauth-openshift.apps.<cluster domain>/oauth2callback/<name>
+platformopenshift_oidc_idp_name: keycloak-sso
 
 # shc (§11.6 phase C): installation settings through the sovereign-localhost inventory variable
 # `platformopenshift_defaults` (config-as-code env PLATFORMOPENSHIFT_DEFAULTS). A CR field wins.

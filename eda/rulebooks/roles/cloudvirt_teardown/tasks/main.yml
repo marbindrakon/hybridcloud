@@ -64,7 +64,7 @@
                   {%- set _ = out.append('VirtualMachine ' ~ r.item ~ '/' ~ vm.metadata.name) -%}
                 {%- endfor -%}
               {%- endfor -%}
-              {{ out }}
+              {{ out | sort }}
 
         - name: Report the VMs that block the deletion
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

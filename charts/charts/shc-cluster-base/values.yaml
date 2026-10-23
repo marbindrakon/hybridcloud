@@ -168,6 +168,8 @@ ops:
         restartWindowMinutes: 15
         restartThreshold: 3
         deliveryStalledMinutes: 15
+        # a new Entity's controller starts after its namespace exists: not reported for this long after creation
+        newEntityGraceMinutes: 10
       # write: false only reports the objects whose stored phase differs
       phase:
         write: false
@@ -181,6 +183,12 @@ ops:
         enabled: true
         afterMinutes: 2
         problemMinutes: 30
+      # the VirtualMachine lists of the environments on a Ready OpenShift site (CloudVirt status.virtualMachines):
+      # older than intervalMinutes, the site's probe is woken to refresh them (at most once per interval per site)
+      vmRefresh:
+        enabled: true
+        intervalMinutes: 10
+        maxSitesPerRun: 10
   # Former name of shcTenancy (its config = shcTenancy.config.redrive); read for one release.
   edaRedrive:
     enabled: false

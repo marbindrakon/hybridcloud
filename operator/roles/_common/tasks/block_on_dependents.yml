@@ -53,8 +53,9 @@
           {%- if ns.ok and not done -%}{%- set _ = out.append(label) -%}{%- endif -%}
         {%- endfor -%}
       {%- endfor -%}
-      {#- several checks of one kind (alternative match paths) can find the same CR -#}
-      {{ out | unique | list }}
+      {#- several checks of one kind (alternative match paths) can find the same CR; sorted, so a requeue that
+          finds the same dependents in another list order writes nothing -#}
+      {{ out | unique | sort | list }}
 
 # The wait is also a condition (DeletionBlocked=True/WaitingForDependents): the status library derives the same
 # summary from it, so a later status write (the tenancy pass, a job) keeps this summary instead of switching to
