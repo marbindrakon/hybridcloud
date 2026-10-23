@@ -1243,7 +1243,7 @@ export function CreateResourceForm({
                   />
                   <RefSelect
                     id="platform-env"
-                    label={platformType === 'aws' ? 'CloudAWS environment' : platformType === 'gcp' ? 'CloudGCP environment' : 'CloudOSO environment'}
+                    label={kindTerm(t, platformType === 'aws' ? 'CloudAWS' : platformType === 'gcp' ? 'CloudGCP' : 'CloudOSO')}
                     value={platformEnv || (platformType === 'aws' ? cloudAwsRef : platformType === 'gcp' ? cloudGcpRef : cloudosoRef)}
                     onChange={(v) => {
                       setPlatformEnv(v);
@@ -1429,7 +1429,7 @@ export function CreateResourceForm({
                   </FormGroup>
                   <RefSelect
                     id="cloudoso"
-                    label="CloudOSO"
+                    label={kindTerm(t, 'CloudOSO')}
                     value={cloudosoRef}
                     onChange={setCloudosoRef}
                     options={names(cloudosos.items)}

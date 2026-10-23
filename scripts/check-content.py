@@ -6,7 +6,8 @@ Reads docs/content/terms.yaml (the content contract) and checks
      kind-description convention, undocumented spec fields),
   b) the UI string catalogues (en.json, fr.json values; console-extensions.json names, labels and
      descriptions) and the display strings hard-coded in ui/packages/*/src/**/*.ts(x) (JSX text,
-     display props such as title= / label= / aria-label=, display keys of object literals such
+     display props such as title= / label= / aria-label= with the literal branches of a ternary
+     in them, display keys of object literals such
      as title: / label: / defaultValue:), ratcheted by docs/content/lint-baseline.txt,
   c) the README, docs/ and samples/ (banned words outside code; tenant words in docs/tenant/),
   d) lab knowledge in CRDs, samples, README and docs/ (the patterns of
@@ -16,7 +17,9 @@ Reads docs/content/terms.yaml (the content contract) and checks
      terms table of docs/tenant/glossary.md, the reasons table of docs/tenant/status-reasons.md),
   g) runtime labels: the catalogue kind terms (kinds, kindsOne, kindsDense in en.json) match
      terms.yaml for every kind a tenant meets; the UI sources pass no raw kind into a display
-     string; and the labels the vocabulary module builds at runtime (ui/scripts/runtime-strings.mjs:
+     string, and no display string of a .tsx source (JSX text, label="..." and the other display
+     props, literal ternary branches such as label={a ? 'X' : 'Y'}, display keys) shows a kind
+     word (the `rendered` words and every CamelCase kind name); and the labels the vocabulary module builds at runtime (ui/scripts/runtime-strings.mjs:
      kind terms, object references, field labels of every CRD field, the templates that take a
      kind) show no banned or `rendered` word. Needs node and ui/node_modules (npm ci in ui/);
      without them this part is skipped with a warning.
@@ -69,6 +72,11 @@ JSX_TEXT = re.compile(r"(?<![=\-])>([^<>{}`;=&|?]*[A-Za-z][^<>{}`;=&|?]*)(?=<|\{
 # title="..." / title={'...'} / title={`...`}
 JSX_PROP = re.compile(r"(?<![\w-])(?:" + DISPLAY_PROPS + r")=(?:\"([^\"\n]*)\"|\{\s*'([^'\n]*)'\s*\}|"
                       r"\{\s*\"([^\"\n]*)\"\s*\}|\{\s*`([^`]*)`\s*\})")
+# title={cond ? 'A' : other ? "B" : `C`}: the literal branches of a ternary.
+JSX_PROP_EXPR = re.compile(r"(?<![\w-])(?:" + DISPLAY_PROPS + r")=\{([^{}\n]*\?[^{}\n]*)\}")
+TERNARY_LIT = re.compile(r"(?:^|[?:])\s*(?:'([^'\n]*)'|\"([^\"\n]*)\"|`([^`\n]*)`)")
+# Code a JSX-text match picked up between generic type arguments: f<T>(items, 'Kind'), ...
+CODE_TEXT = re.compile(r"[(,]\s*['\"]|['\"]\s*[),]")
 # { title: '...' } / defaultValue: `...`
 OBJ_KEY = re.compile(r"(?<![\w.])(?:" + DISPLAY_KEYS + r")\s*:\s*(?:'([^'\n]*)'|\"([^\"\n]*)\"|`([^`]*)`)")
 # Interpolations and the translation-key look of a literal are not words.
@@ -314,9 +322,21 @@ def ui_source_strings(text):
             val = " ".join(TEMPLATE_EXPR.sub(" ", val).split())
             if not val or not re.search(r"[A-Za-z]", val) or I18N_KEY.match(val):
                 continue
-            if rx is JSX_TEXT and val.count("(") != val.count(")"):
-                continue  # code between two comparisons, not text
+            if rx is JSX_TEXT and (val.count("(") != val.count(")") or CODE_TEXT.search(val)):
+                continue  # code between two comparisons or type arguments, not text
             found.append((src.count("\n", 0, m.start()) + 1, val))
+    for m in JSX_PROP_EXPR.finditer(src):
+        expr = m.group(1)
+        while True:  # arguments of a call are not display text: kindTerm(t, a ? 'X' : 'Y')
+            flat = re.sub(r"\([^()]*\)", "()", expr)
+            if flat == expr:
+                break
+            expr = flat
+        for lit in TERNARY_LIT.finditer(expr):
+            val = next((g for g in lit.groups() if g is not None), "")
+            val = " ".join(TEMPLATE_EXPR.sub(" ", val).split())
+            if val and re.search(r"[A-Za-z]", val) and not I18N_KEY.match(val):
+                found.append((src.count("\n", 0, m.start()) + 1, val))
     return sorted(found)
 
 
@@ -574,6 +594,26 @@ def _raw_kind_count(text):
     return len(raw_kinds(text)[1])
 
 
+def source_kind_hits(text, rendered):
+    """(line, word, string) of each kind word (CloudOSO, Rbac, Entity, ...) in a display string of a
+    .tsx source: JSX text, display props (literals and literal ternary branches), display keys."""
+    for line, value in ui_source_strings(text):
+        for _pat, word in rendered_hits(value, rendered):
+            yield line, word, value
+
+
+def check_source_kinds(rep, terms):
+    """No kind word in the display strings of the .tsx sources: a label names a kind through
+    kindTerm() of i18n/vocabulary, which gives the terms.yaml words."""
+    rendered = rendered_rules(terms)
+    for path, rel in _ui_source_files():
+        if not rel.endswith(".tsx"):
+            continue
+        for line, word, value in source_kind_hits(path.read_text(encoding="utf-8"), rendered):
+            rep.error(f"{rel}:{line}", f"kind word '{word}' in a display string",
+                      f"{_excerpt(value, 80)} (use kindTerm of i18n/vocabulary)")
+
+
 def check_raw_kinds(rep):
     """No raw kind in display strings of the UI sources (the vocabulary module names kinds)."""
     for path, rel in _ui_source_files():
@@ -704,6 +744,12 @@ def self_test(rules, crd_rules):
         if got != sorted(case["hits"]):
             failed += 1
             print(f"FAIL rendered {case['text']!r}: {got}, expected {case['hits']}")
+    for case in fx.get("source_kinds", []):
+        total += 1
+        got = sorted({w for _, w, _ in source_kind_hits(case["source"], rendered)})
+        if got != sorted(case["hits"]):
+            failed += 1
+            print(f"FAIL source kind {case['source']!r}: {got}, expected {case['hits']}")
     print(f"self-test: {total - failed}/{total} cases pass")
     return 1 if failed else 0
 
@@ -743,6 +789,7 @@ def main():
     check_glossary(rep, terms)
     check_vocabulary(rep, terms)
     check_raw_kinds(rep)
+    check_source_kinds(rep, terms)
     with tempfile.TemporaryDirectory() as tmp:
         check_runtime(rep, rules, terms, tmp)
     for e in rep.errors:
