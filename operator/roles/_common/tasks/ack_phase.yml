@@ -1,0 +1,34 @@
+---
+# Stored phase carried by a controller's acknowledgement write ("Mark <Kind> as reconciling"), so that no status
+# write of a new or changed object is without a phase (status contract, status.phase):
+# - a new object (no phase or Creating, never handled, not ready, not realized) is Creating;
+# - a spec change (metadata.generation above status.observedGeneration) of an object that has a phase is Updating,
+#   as is an object handled before stored phases existed (no phase);
+# - otherwise (a re-check of a Waiting or Failed object) the stored phase stays, with its start time and summary.
+# phaseSince is kept when the phase does not change. Later phases come from the jobs' status writes (status library).
+# Input: ack_phase_cr (the object as the controller read it). Sets: ack_phase {phase, phaseSince, summary}.
+- name: Decide the phase of the acknowledgement
+  ansible.builtin.set_fact:
+    ack_phase: >-
+      {%- set obj = ack_phase_cr | default({}, true) -%}
+      {%- set st = obj.status | default({}, true) -%}
+      {%- set cur = st.phase | default('', true) -%}
+      {%- set observed = st.observedGeneration | default(0, true) | int -%}
+      {%- set generation = (obj.metadata | default({}, true)).generation | default(0, true) | int -%}
+      {%- set summaries = {'Waiting': 'Waiting for a prerequisite.', 'Creating': 'Being created.',
+                           'Updating': 'Applying the latest change.', 'Ready': 'Ready.',
+                           'Degraded': 'Working with reduced health.',
+                           'Failed': 'Could not be completed; see the reason.', 'Deleting': 'Being deleted.'} -%}
+      {%- if cur in ['', 'Creating'] and observed == 0 and not (st.ready | default(false, true) | bool)
+             and not (st.realized | default(false, true) | bool) -%}
+        {%- set phase = 'Creating' -%}
+      {%- elif cur == '' or (cur != 'Deleting' and generation > observed) -%}
+        {%- set phase = 'Updating' -%}
+      {%- else -%}
+        {%- set phase = cur -%}
+      {%- endif -%}
+      {%- set keep = (phase == cur) and (st.phaseSince | default('', true) | length > 0) -%}
+      {{ {'phase': phase,
+          'phaseSince': (st.phaseSince if keep else lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')),
+          'summary': ((st.summary | default('', true)) if (keep and (st.summary | default('', true) | length > 0))
+                      else summaries.get(phase, ''))} }}

@@ -45,6 +45,16 @@
       ansible.builtin.set_fact:
         assignment_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # The acknowledgement carries the phase (Creating for a new Assignment, Updating for a change), so no status
+    # write is without a phase (_common/tasks/ack_phase.yml).
+    - name: Decide the phase of the acknowledgement
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: ack_phase
+      vars:
+        ack_phase_cr: "{{ _hybridsovereign_redhat_assignment }}"
+      when: not (reconcile_keeps_ready | default(false) | bool)
+
     # A create or a spec change: Ready=False until the job reports. A re-run of a Ready object (Retry now,
     # a wake from another job, a periodic re-check) keeps ready/conditions as they are until the job
     # reports, and only Reconciling says that a run is queued (reconcile_keeps_ready, reconcile_request.yml).
@@ -57,6 +67,9 @@
         status:
           status: reconciling
           ready: false
+          phase: "{{ ack_phase.phase }}"
+          phaseSince: "{{ ack_phase.phaseSince }}"
+          summary: "{{ ack_phase.summary }}"
           lastReconciledAt: "{{ assignment_status_transition_time }}"
           conditions:
             - type: Ready
@@ -90,6 +103,8 @@
         operator_event_action: "{{ assignment_event_action }}"
         operator_event_note: "{{ assignment_spec | to_json }}"
         operator_reporting_controller: assignment-operator
+        operator_event_phase_recorded: >-
+          {{ '' if (reconcile_keeps_ready | default(false) | bool) else (ack_phase | default({})).phase | default('') }}
         operator_event_regarding:
           apiVersion: hybridsovereign.redhat/v1alpha1
           kind: Assignment
