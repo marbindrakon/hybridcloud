@@ -737,7 +737,7 @@
     "backendReady": "Environnement prêt",
     "borderGatewayNodes": "Nœuds de la passerelle de bordure",
     "capabilities": "Capacités",
-    "cloudGateway": "Cloud Gateway",
+    "cloudGateway": "Connexion du site",
     "coreSessions": "Sessions cœur",
     "countOf": "{{count}} sur {{total}}",
     "countOfReady": "{{count}} sur {{total}} prêts",
@@ -830,7 +830,8 @@
     "deleteBody": "Supprime {{name}} de {{namespace}}. La page affiche la progression jusqu'à sa disparition.",
     "deleting": "Suppression…",
     "cliGet": "oc get {{resource}} {{name}}",
-    "cliGetTitle": "Lire cet objet en ligne de commande"
+    "cliGetTitle": "Lire cet objet en ligne de commande",
+    "conditionEvent": "Événement {{id}}"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1295,6 +1296,7 @@
       "cluster": "Cluster OpenShift {{name}} : il est déprovisionné avec tout ce qui y tourne, avec ses noms DNS, ses identifiants stockés et son client de connexion",
       "assignment": "Ce qu'elle a mis sur le cluster {{cluster}} : les projets applicatifs {{name}} et les accès de ses groupes",
       "assignmentAccess": "Ce qu'elle a mis sur le cluster {{cluster}} : les accès de ses groupes",
+      "assignmentNotDelivered": "Elle n'a jamais atteint de cluster : rien n'y a été déployé et rien n'est supprimé sur un cluster",
       "tenantSignIn": "Les rôles de connexion du locataire",
       "networkFabric": "Le réseau sur la fabric et son espace d'adressage, là où ils ont été mis en place",
       "placementSite": "Son sous-réseau et son routage sur son site, là où ils ont été mis en place",
@@ -1338,7 +1340,21 @@
       "VirtualMachine": "Machine virtuelle",
       "VirtualMachines": "Machines virtuelles"
     },
-    "tenantCaption": "Locataire · {{tenant}}"
+    "tenantCaption": "Locataire · {{tenant}}",
+    "inText": {
+      "CloudGateway": "connexion du site",
+      "CloudGateways": "connexions des sites"
+    },
+    "linked": {
+      "teamReady": "l'équipe {{name}} est prête",
+      "teamNotReady": "l'équipe {{name}} n'est pas encore prête",
+      "teamNone": "aucune équipe n'est indiquée",
+      "projectsOne": "{{count}} projet applicatif",
+      "projectsMany": "{{count}} projets applicatifs",
+      "clusterReady": "le cluster OpenShift {{name}} est prêt",
+      "clusterNotReady": "le cluster OpenShift {{name}} n'est pas encore prêt",
+      "clusterNone": "aucun cluster OpenShift n'est encore indiqué"
+    }
   },
   "fieldWords": {
     "entity": "locataire",
@@ -1360,6 +1376,8 @@
     "namespaceRbac": "rôles du locataire",
     "cloudGateway": "connexion du site",
     "cloudoso": "environnement OpenStack",
-    "cloudOSO": "environnement OpenStack"
+    "cloudOSO": "environnement OpenStack",
+    "openshift": "cluster OpenShift",
+    "openshiftReady": "cluster prêt"
   }
 }

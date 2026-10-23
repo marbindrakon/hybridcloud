@@ -24,12 +24,12 @@ export interface CloudVirtSelectProps {
  */
 export function CloudVirtSelect({
   id = 'cloudvirt-select',
-  label = 'CloudVirt backend',
+  label = 'OpenShift Virtualization environment',
   value,
   onChange,
   options,
   isRequired,
-  placeholder = 'Select CloudVirt…',
+  placeholder = 'Select an OpenShift Virtualization environment…',
 }: CloudVirtSelectProps): React.ReactElement {
   const [isOpen, setIsOpen] = useState(false);
   const selectedOption = options.find((o) => o.value === value);
@@ -65,7 +65,7 @@ export function CloudVirtSelect({
         <SelectList>
           {options.length === 0 ? (
             <SelectOption isDisabled value="">
-              No CloudVirt environments available
+              No OpenShift Virtualization environments available
             </SelectOption>
           ) : (
             options.map((o) => (

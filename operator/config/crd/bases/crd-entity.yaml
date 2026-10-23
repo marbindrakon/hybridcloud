@@ -358,6 +358,9 @@ spec:
           type: string
           jsonPath: .status.openshiftConsoleURL
           priority: 1
+        - name: Status
+          type: string
+          jsonPath: .status.phase
         - name: Ready
           type: string
           jsonPath: .status.conditions[?(@.type=="Ready")].status

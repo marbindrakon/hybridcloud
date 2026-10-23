@@ -103,6 +103,25 @@ export function reasonEntry(reason: string | undefined | null): ReasonEntry | un
   return undefined;
 }
 
+/** The message of the Published condition: "<Kind><Action>Requested event <id>". */
+const REQUEST_MESSAGE = /^\s*([A-Z][A-Za-z]*Requested)\s+event\s+(\S+)\s*$/;
+
+/**
+ * A request message read through the reasons table: the summary of the request
+ * code when the table has one (<Kind>DeleteRequested), else the summary of the
+ * condition's reason (Published). The event id is detail for a tooltip. Null
+ * when the message is not a request message.
+ */
+export function requestMessage(
+  message: string | undefined | null,
+  reason?: string | null,
+): { code: string; event: string; summary?: string } | null {
+  const m = REQUEST_MESSAGE.exec(message ?? '');
+  if (!m) return null;
+  const entry = reasonEntry(m[1]) ?? reasonEntry(reason);
+  return { code: m[1], event: m[2], summary: entry?.summary };
+}
+
 export function reasonClass(reason: string | undefined | null): ReasonClass | undefined {
   return reasonEntry(reason)?.class;
 }

@@ -113,3 +113,43 @@ test('teardown deletionBlockedBy entries show no API kind word on the page', () 
     assert.doesNotMatch(label, /\b(HybridFabric|CloudGateway|VirtualMachine)\b/, label);
   }
 });
+
+// PGT2-F3: the cluster assignment's words, the site connection in running text, request messages.
+test('cluster assignment fields and its summary read as plain words', () => {
+  assert.equal(v.fieldLabel(t, 'openshift'), 'OpenShift cluster');
+  assert.equal(v.fieldLabel(t, 'openshiftReady'), 'Cluster ready');
+  assert.equal(v.fieldLabel(t, 'teamReady'), 'Team ready');
+  assert.equal(
+    v.displayText(t, 'Team=platform(ready=True), Projects=1, Openshift=(ready=False)'),
+    'Team setup platform is ready; 1 app project; no OpenShift cluster is named yet.',
+  );
+  assert.equal(
+    v.displayText(t, 'Team=platform(ready=False),  Projects=2, Openshift=oc1(ready=True)'),
+    'Team setup platform is not ready yet; 2 app projects; OpenShift cluster oc1 is ready.',
+  );
+  const fr = v.displayText(tFr, 'Team=platform(ready=True), Projects=1, Openshift=(ready=False)');
+  assert.ok(!/Team=|Openshift|ready=/.test(fr), fr);
+  assert.equal(v.linkedSummary(t, 'Team setup=platform'), null);
+});
+
+test('the site gateway reads as the site connection in running text, in one case', () => {
+  assert.equal(
+    v.displayText(t, '10.205.0.0/24 on iaas1 through CloudGateway iaas1 (VNI 51004)'),
+    '10.205.0.0/24 on iaas1 through site connection iaas1 (VNI 51004)',
+  );
+  assert.equal(v.kindTermInText(t, 'CloudGateway', 'many'), 'site connections');
+  assert.equal(v.kindTermInText(t, 'CloudInfrastructure'), terms.kinds.CloudInfrastructure.term);
+  assert.equal(v.inText('Hybrid Fabric'), 'hybrid fabric');
+  assert.equal(v.inText('OpenShift cluster'), 'OpenShift cluster');
+  assert.equal(v.inText('AAP organization'), 'AAP organization');
+});
+
+test('a Published request message is read through the reasons table; the event id is detail', () => {
+  const r = phase.requestMessage('RbacCreateRequested event 7ed3c40e-b033-4fb4-985e-9c9fcdcbc9e0', 'Published');
+  assert.equal(r.code, 'RbacCreateRequested');
+  assert.equal(r.event, '7ed3c40e-b033-4fb4-985e-9c9fcdcbc9e0');
+  assert.equal(r.summary, phase.reasonEntry('Published').summary);
+  const d = phase.requestMessage('NetworkPlacementDeleteRequested event ee4c41fe', 'Published');
+  assert.equal(d.summary, phase.reasonEntry('DeletionRequested').summary);
+  assert.equal(phase.requestMessage('Team=platform(ready=True)', 'Published'), null);
+});

@@ -737,7 +737,7 @@
     "backendReady": "Environment ready",
     "borderGatewayNodes": "Border gateway nodes",
     "capabilities": "Capabilities",
-    "cloudGateway": "Cloud Gateway",
+    "cloudGateway": "Site connection",
     "coreSessions": "Core sessions",
     "countOf": "{{count}} of {{total}}",
     "countOfReady": "{{count}} of {{total}} ready",
@@ -830,7 +830,8 @@
     "deleteBody": "This deletes {{name}} from {{namespace}}. The page shows the progress until it is gone.",
     "deleting": "Deleting…",
     "cliGet": "oc get {{resource}} {{name}}",
-    "cliGetTitle": "Read this object from the command line"
+    "cliGetTitle": "Read this object from the command line",
+    "conditionEvent": "Event {{id}}"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1295,6 +1296,7 @@
       "cluster": "OpenShift cluster {{name}}: it is deprovisioned with everything that runs on it, with its DNS names, stored credentials and sign-in client",
       "assignment": "What it put on cluster {{cluster}}: the app projects {{name}} and the access its groups have there",
       "assignmentAccess": "What it put on cluster {{cluster}}: the access its groups have there",
+      "assignmentNotDelivered": "It never reached a cluster, so nothing was put on one and nothing on a cluster is removed",
       "tenantSignIn": "The tenant's sign-in roles",
       "networkFabric": "The network on the fabric and its address space, where they were set up",
       "placementSite": "Its subnet and routing on its site, where they were set up",
@@ -1338,7 +1340,21 @@
       "VirtualMachine": "Virtual machine",
       "VirtualMachines": "Virtual machines"
     },
-    "tenantCaption": "Tenant · {{tenant}}"
+    "tenantCaption": "Tenant · {{tenant}}",
+    "inText": {
+      "CloudGateway": "site connection",
+      "CloudGateways": "site connections"
+    },
+    "linked": {
+      "teamReady": "team setup {{name}} is ready",
+      "teamNotReady": "team setup {{name}} is not ready yet",
+      "teamNone": "no team setup is named",
+      "projectsOne": "{{count}} app project",
+      "projectsMany": "{{count}} app projects",
+      "clusterReady": "OpenShift cluster {{name}} is ready",
+      "clusterNotReady": "OpenShift cluster {{name}} is not ready yet",
+      "clusterNone": "no OpenShift cluster is named yet"
+    }
   },
   "fieldWords": {
     "entity": "tenant",
@@ -1360,6 +1376,8 @@
     "namespaceRbac": "tenant roles",
     "cloudGateway": "site connection",
     "cloudoso": "OpenStack environment",
-    "cloudOSO": "OpenStack environment"
+    "cloudOSO": "OpenStack environment",
+    "openshift": "OpenShift cluster",
+    "openshiftReady": "cluster ready"
   }
 }

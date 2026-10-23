@@ -75,3 +75,19 @@ rendered:
   - {text: "Open https://console.example.com/k8s/cloudvirts", hits: []}
   - {text: "Environment VM environment g-vmenv-1", hits: []}
   - {text: "Waiting for the platform; was Pending", hits: [Pending]}
+# Kind words in display strings of .tsx sources (g): `hits` are the words the check reports.
+source_kinds:
+  - source: "<RefSelect id=\"cloudoso\" label=\"CloudOSO\" value={v} />"
+    hits: [CloudOSO]
+  - source: "<RefSelect label={p === 'aws' ? 'CloudAWS environment' : p === 'gcp' ? \"CloudGCP environment\" : `CloudOSO environment`} />"
+    hits: [CloudAWS, CloudGCP, CloudOSO]
+  - source: "<RefSelect label={kindTerm(t, p === 'aws' ? 'CloudAWS' : 'CloudOSO')} />"
+    hits: []
+  - source: "<SelectOption isDisabled value=\"\">No CloudVirt environments available</SelectOption>"
+    hits: [CloudVirt]
+  - source: "<FormGroup label={ok ? 'Rbac ready' : 'Entity'} fieldId=\"x\">"
+    hits: [Entity, Rbac]
+  - source: "const all = [...itemsOfKind<K8sResource>(items, 'CloudVirt'), ...itemsOfKind<K8sResource>(items, 'CloudOSO')];"
+    hits: []
+  - source: "<Tooltip content={x}>{open ? t('a.b') : t('a.c')}</Tooltip>"
+    hits: []

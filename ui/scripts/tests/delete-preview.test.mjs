@@ -139,9 +139,13 @@ test('tool objects name what their teardown removes and ask for the name, realiz
   ]);
   assert.deepEqual(vault.sections[1].entries.map((e) => e.name), ['apps']);
   assert.equal(vault.realized, true);
-  const asg = m.deletePreview('Assignment', obj('Assignment', 'a1', { openshift: 'c1', projects: ['web', 'api'] }));
+  const asg = m.deletePreview('Assignment', obj('Assignment', 'a1', { openshift: 'c1', projects: ['web', 'api'] }, { assignmentProvisioned: true }));
   assert.deepEqual(ext(asg), [['assignment', 'web, api', { cluster: 'c1' }]]);
   assert.equal(asg.realized, true);
+  // PGT2-F4: an assignment that never reached a cluster says so, with no empty cluster name.
+  for (const [specArgs, st] of [[{ projects: ['webshop'] }, {}], [{ openshift: 'c1', projects: ['web'] }, { assignmentProvisioned: false }]]) {
+    assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a2', specArgs, st))), [['assignmentNotDelivered', '', {}]]);
+  }
 });
 
 test('a cluster is deprovisioned and its delete waits for its assignments and placements', () => {
