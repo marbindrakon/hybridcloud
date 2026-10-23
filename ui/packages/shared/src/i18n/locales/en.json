@@ -1320,9 +1320,13 @@
       "access": "The members of the access groups listed lose that access with it.",
       "teamAccess": "The members of the access groups listed lose that access with it. Memberships in tool organizations (AAP, Quay, Vault) come from the tool objects' own access lists and stay."
     },
-    "vmsAndMore": "{{names}} and {{count}} more",
-    "vmsCount_one": "{{count}} VM",
-    "vmsCount_other": "{{count}} VMs"
+    "vmsListed_one": "({{count}} VM): {{names}}",
+    "vmsListed_other": "({{count}} VMs): {{names}}",
+    "vmsListedAndMore_one": "({{count}} VM): {{names}} and {{more}} more",
+    "vmsListedAndMore_other": "({{count}} VMs): {{names}} and {{more}} more",
+    "vmsInNamespace_one": "({{count}} VM)",
+    "vmsInNamespace_other": "({{count}} VMs)",
+    "listedAt": "Listed from the site at {{time}}; a VM created or deleted since then may be missing or still listed. The delete waits for the VMs that are really there."
   },
   "donut": {
     "total": "Total",

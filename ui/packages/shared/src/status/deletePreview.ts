@@ -123,6 +123,8 @@ export interface PreviewSection {
   key: PreviewSectionKey;
   group: PreviewGroup;
   entries: PreviewEntry[];
+  /** When the listed entries were read on the site (the VMs of an environment's namespaces) */
+  asOf?: string;
 }
 
 export interface DeletePreview {
@@ -394,11 +396,14 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
         .filter((n) => n.name);
       // PGT2-F2: the VMs each site namespace holds, including a namespace that left the spec but still holds VMs.
       const vmRows = vmsByNamespace(status);
+      // GUI O-2: the list is a snapshot of the site; the dialog says when it was taken.
+      const asOf = (status.virtualMachines as { observedAt?: unknown } | undefined)?.observedAt;
+      const vmSections = section('waitVms', vmRows).map((s) => (typeof asOf === 'string' && asOf ? { ...s, asOf } : s));
       return {
         sections: [
           ...section('namespaces', nsRows),
           ...section('dnsZone', zoneRows),
-          ...section('waitVms', vmRows),
+          ...vmSections,
           ...section('keptPlacements', placements),
         ],
         realized: hasRealization || nsRows.length > 0,

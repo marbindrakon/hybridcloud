@@ -213,9 +213,12 @@ test('a VM environment lists the VMs its site namespaces hold, with the count wh
     { name: 'x-vm-db', items: ['db-1'], more: 0 },
     { name: 'x-vm-old', items: [], more: 3 },
   ]);
+  // GUI O-2: the section carries the time the list was read on the site
+  assert.equal(p.sections[1].asOf, '2026-10-23T10:00:00Z');
   // a status without the VM fields lists none (older releases)
   const old = m.deletePreview('CloudVirt', obj('CloudVirt', 'vm', {}, { namespaces: [{ name: 'web', namespace: 'x-vm-web' }] }));
   assert.ok(!old.sections.some((s) => s.key === 'waitVms'));
+  assert.ok(old.sections.every((s) => s.asOf === undefined));
 });
 
 // F2: kinds whose teardown removes state outside the API say what goes, and ask for the name.
