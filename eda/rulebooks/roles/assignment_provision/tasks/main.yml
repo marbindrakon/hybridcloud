@@ -124,10 +124,15 @@
         openshift_cluster_name: ""
       when: assignment_openshift | length == 0
 
+    # Ready only when the Team, every app Project and the OpenShift cluster are Ready; until then the Assignment
+    # waits (LinkedNotReady, or WaitingForCluster while no cluster is named) and is re-checked periodically.
     - name: Determine overall readiness
       ansible.builtin.set_fact:
         all_projects_ready: "{{ (projects_ready_list | length == 0) or (projects_ready_list | map(attribute='ready') | list | min | bool) }}"
-        assignment_ready: "{{ (team_is_ready | bool) and (openshift_is_ready | bool) }}"
+
+    - name: Determine Assignment readiness
+      ansible.builtin.set_fact:
+        assignment_ready: "{{ (team_is_ready | bool) and (all_projects_ready | bool) and (openshift_is_ready | bool) }}"
         assignment_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     - name: Provision via ACM Policy on central cluster
@@ -169,7 +174,7 @@
               lastTransitionTime: "{{ assignment_status_transition_time }}"
               reason: >-
                 {{ 'EDASucceeded' if (assignment_ready | bool)
-                   else ('WaitingForCluster' if assignment_openshift | length == 0 else 'WaitingForDependencies') }}
+                   else ('WaitingForCluster' if assignment_openshift | length == 0 else 'LinkedNotReady') }}
               message: >-
                 Team={{ assignment_team }}(ready={{ team_is_ready }}),
                 Projects={{ assignment_projects | length }},
