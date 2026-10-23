@@ -1,2 +1,4 @@
 kubernetes>=28.1.0
 requests>=2.31.0
+# the Kafka producer (src/forwarder.py); the same version as the operators (operator/*/Dockerfile)
+kafka-python==3.0.11
