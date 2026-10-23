@@ -2851,9 +2851,11 @@ aapCentral:
       enabled: true
       name: aap-pgcluster
       instances: 1
-      storage: 40Gi
-      backupStorage: 10Gi
-      syncRunId: "2026-08-26-pg-wal-disk-fix"
+      # 10-23: both volumes ran full (pgBackRest repo1 10Gi full -> WAL archiving failed -> /pgdata 40Gi full,
+      # Postgres in crash recovery, controller/EDA down) after a day of gate rounds and a tenant cluster build.
+      storage: 60Gi
+      backupStorage: 40Gi
+      syncRunId: "2026-10-23-pg-wal-disk-full"
 
 # ─── Plugin IaaC Operator (services cluster) — Go direct Gitea sync ─────────
 pluginIaac:
