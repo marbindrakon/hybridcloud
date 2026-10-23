@@ -1317,7 +1317,8 @@
       "acmPolicy": "La stratégie ACM {{name}}, qui l'y a mis"
     },
     "typeHelp": {
-      "access": "Les membres des groupes d'accès listés perdent cet accès avec lui."
+      "access": "Les membres des groupes d'accès listés perdent cet accès avec lui.",
+      "teamAccess": "Les membres des groupes d'accès listés perdent cet accès avec lui. Les appartenances aux organisations des outils (AAP, Quay, Vault) viennent des listes d'accès des objets de ces outils et restent."
     },
     "vmsAndMore": "{{names}} et {{count}} de plus",
     "vmsCount_one": "{{count}} VM",

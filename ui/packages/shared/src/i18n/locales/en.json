@@ -1317,7 +1317,8 @@
       "acmPolicy": "ACM policy {{name}}, which put it there"
     },
     "typeHelp": {
-      "access": "The members of the access groups listed lose that access with it."
+      "access": "The members of the access groups listed lose that access with it.",
+      "teamAccess": "The members of the access groups listed lose that access with it. Memberships in tool organizations (AAP, Quay, Vault) come from the tool objects' own access lists and stay."
     },
     "vmsAndMore": "{{names}} and {{count}} more",
     "vmsCount_one": "{{count}} VM",

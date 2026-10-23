@@ -493,7 +493,7 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
           ...section('scopeGrants', rows),
         ],
         realized: true,
-        typeHelp: 'access',
+        typeHelp: 'teamAccess',
       };
     }
     const listing = assignments.filter((a) => names((a.spec as { projects?: unknown } | undefined)?.projects).includes(name));
@@ -508,7 +508,7 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
         ...section('projectTeams', teamRows),
       ],
       realized: true,
-      typeHelp: 'access',
+      typeHelp: 'teamAccess',
     };
   }
 

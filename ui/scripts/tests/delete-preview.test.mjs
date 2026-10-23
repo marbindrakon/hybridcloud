@@ -129,7 +129,7 @@ test('a team setup lists the access its lists grant', () => {
   assert.deepEqual(grants.entries.map((e) => `${e.name}:${e.detail}`), ['admins:teamAdmin', 'devs:teamMemberRbac']);
   // OD47: the name is typed, with the access sentence under the field
   assert.equal(p.realized, true);
-  assert.equal(p.typeHelp, 'access');
+  assert.equal(p.typeHelp, 'teamAccess');
 });
 
 // OD47, PGT-F5: team setup and app project deletes list their dependants and ask for the name.
@@ -181,7 +181,7 @@ test('an app project lists the cluster assignments that list it and the team set
   assert.deepEqual(p.sections[2].entries.map((e) => `${e.name}:${e.detail}`), ['admins:projectAdmin', 'devs:projectDeveloperRbac']);
   assert.deepEqual(p.sections[3].entries, [{ kind: 'Team', name: 'ops' }, { kind: 'Team', name: 'platform' }]);
   assert.equal(p.realized, true);
-  assert.equal(p.typeHelp, 'access');
+  assert.equal(p.typeHelp, 'teamAccess');
   assert.deepEqual(m.previewReads('Project', obj('Project', 'web')).map((r) => r.kind), ['Assignment']);
 });
 
