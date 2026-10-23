@@ -31,7 +31,7 @@
         wat_assignment: "{{ assignment_cr_name }}"
         wat_team: "{{ (shc_live_spec | default({}, true)).team | default('', true) }}"
 
-    # The name of the ACM objects: <tenant>-<assignment> (common/tasks/assignment_acm_name.yml, the same task the
+    # The name of the ACM objects: <tenant>-<assignment>-<hash> (common/tasks/assignment_acm_name.yml, the same task the
     # provision job uses). It is used only where nothing is recorded; a recorded status.acmPolicyName always wins.
     - name: The ACM name of this Assignment
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/assignment_acm_name.yml"

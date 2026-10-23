@@ -1,9 +1,10 @@
-"""ACM object names of an Assignment (O-1, OD48): <tenant>-<assignment>, from one shared task.
+"""ACM object names of an Assignment (O-1, OD48, M1): <tenant>-<assignment>-<hash>, from one shared task.
 
 eda/common/tasks/assignment_acm_name.yml computes the name; assignment_provision (when nothing is recorded yet) and
 assignment_teardown (when nothing is recorded) both include it, and status.acmPolicyName records what was used. The
-name is DNS-label safe and capped so that the policy namespace and the name stay within ACM's 62 characters; a longer
-name ends in a short hash. An ACM object that already exists under the name and belongs to another Assignment (owner
+name is DNS-label safe and capped so that the policy namespace and the name stay within ACM's 62 characters, and it
+always ends in a short hash of <namespace>/<assignment>: the readable part alone is not unique (tenant acme with
+Assignment corp-web and tenant acme-corp with Assignment web read the same). An ACM object that already exists under the name and belongs to another Assignment (owner
 annotation) is neither taken over by the provision job nor removed by the teardown.
 """
 import hashlib
@@ -43,7 +44,7 @@ class Wiring(unittest.TestCase):
             self.assertNotIn("legacy", text, path)
 
     def test_provision_keeps_a_recorded_name(self):
-        step = by_name(load(PROVISION_ACM), "Build ACM Policy name (recorded, else <tenant>-<assignment>)")
+        step = by_name(load(PROVISION_ACM), "Build ACM Policy name (recorded, else <tenant>-<assignment>-<hash>)")
         expr = step["ansible.builtin.set_fact"]["acm_policy_name"]
         self.assertLess(expr.index("assignment_stored_acm_policy_name"), expr.index("assignment_acm_name"))
 
@@ -68,47 +69,80 @@ class Names(unittest.TestCase):
                         {"aan_namespace": namespace, "aan_assignment": assignment,
                          "aan_policy_namespace": policy_ns, "aan_max_length": max_length})
 
+    @staticmethod
+    def digest(namespace, assignment):
+        return hashlib.sha256(("%s/%s" % (namespace, assignment)).encode()).hexdigest()[:8]
+
     def test_tenant_prefix(self):
-        self.assertEqual(self.name("entity-acme-corp", "web"), "acme-corp-web")
-        self.assertEqual(self.name("entity-globex", "web"), "globex-web")
+        self.assertEqual(self.name("entity-acme-corp", "web"), "acme-corp-web-" + self.digest("entity-acme-corp", "web"))
+        self.assertEqual(self.name("entity-globex", "web"), "globex-web-" + self.digest("entity-globex", "web"))
         # a namespace without the tenant prefix is used as it is
-        self.assertEqual(self.name("team-a", "web"), "team-a-web")
+        self.assertEqual(self.name("team-a", "web"), "team-a-web-" + self.digest("team-a", "web"))
 
     def test_dns_safe(self):
-        self.assertEqual(self.name("entity-Acme_Corp", "Web..App-"), "acme-corp-web-app")
+        got = self.name("entity-Acme_Corp", "Web..App-")
+        self.assertEqual(got, "acme-corp-web-app-" + self.digest("entity-Acme_Corp", "Web..App-"))
+        self.assertRegex(got, r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+    def test_readable_collisions_get_distinct_names(self):
+        # M1: the same readable part across tenants, and within one tenant
+        for (ns1, a1), (ns2, a2) in ((("entity-acme", "corp-web"), ("entity-acme-corp", "web")),
+                                     (("entity-acme", "a.b"), ("entity-acme", "a-b")),
+                                     (("entity-acme", "Web"), ("entity-acme", "web"))):
+            one, two = self.name(ns1, a1), self.name(ns2, a2)
+            self.assertNotEqual(one, two, (ns1, a1, ns2, a2))
+            self.assertEqual(one.rsplit("-", 1)[0], two.rsplit("-", 1)[0])
+            self.assertEqual(one, self.name(ns1, a1))  # stable
 
     def test_cap_and_hash(self):
         ns, asg = "entity-a-very-long-tenant-name", "and-an-even-longer-assignment-name"
         got = self.name(ns, asg)
         # sovereign-cloud-helpers (23) + name <= 62
         self.assertLessEqual(len(got), 62 - len("sovereign-cloud-helpers"))
-        digest = hashlib.sha256(("%s/%s" % (ns, asg)).encode()).hexdigest()[:8]
-        self.assertTrue(got.endswith("-" + digest), got)
+        self.assertTrue(got.endswith("-" + self.digest(ns, asg)), got)
         self.assertTrue(got.startswith("a-very-long-tenant-name-and-an"), got)
         self.assertNotIn("--", got)
         # stable, and distinct for another tenant
         self.assertEqual(self.name(ns, asg), got)
         self.assertNotEqual(self.name("entity-a-very-long-tenant-name-2", asg), got)
 
-    def test_short_names_are_never_hashed(self):
-        got = self.name("entity-acme", "a" * 34)  # 4 + 1 + 34 = 39, the cap
-        self.assertEqual(got, "acme-" + "a" * 34)
+    def test_short_names_are_hashed_too(self):
+        got = self.name("entity-acme", "a" * 25)  # 4 + 1 + 25 + 9 = 39, the cap
+        self.assertEqual(got, "acme-" + "a" * 25 + "-" + self.digest("entity-acme", "a" * 25))
+        self.assertEqual(len(got), 39)
+        # one character more: the readable part is cut, the hash stays
+        got = self.name("entity-acme", "a" * 26)
+        self.assertEqual(got, "acme-" + "a" * 25 + "-" + self.digest("entity-acme", "a" * 26))
+
+    def test_cut_never_leaves_a_double_hyphen(self):
+        # the cut falls right after a hyphen of the readable part
+        got = self.name("entity-acme", "a" * 24 + "-bcd")
+        self.assertEqual(got, "acme-" + "a" * 24 + "-" + self.digest("entity-acme", "a" * 24 + "-bcd"))
 
     def test_cap_follows_the_policy_namespace_and_the_override(self):
-        self.assertEqual(len(self.name("entity-acme", "a" * 40, policy_ns="p")), 45)
+        self.assertEqual(len(self.name("entity-acme", "a" * 60, policy_ns="p")), 61)
+        self.assertEqual(len(self.name("entity-acme", "a" * 40, policy_ns="p")), 45 + 9)
         self.assertEqual(len(self.name("entity-acme", "a" * 40, max_length="30")), 30)
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class Ownership(unittest.TestCase):
-    def refused(self, live_owner, status=409):
+    def refused(self, live_owner, status=409, message=False):
         step = by_name(load(APPLY), "Refuse an ACM object of another Assignment — {{ acm_resource_name }}")
         meta = {"annotations": {"hybridsovereign.redhat/assignment": live_owner}} if live_owner is not None else {}
         harness = [{"block": [step, write_out("'continued'")],
-                    "rescue": [write_out("'refused'")]}]
+                    "rescue": [write_out("ansible_failed_result.msg" if message else "'refused'")]}]
         return run_play(harness, {"acm_post_result": {"status": status},
                                   "acm_get_result": {"json": {"metadata": meta}},
                                   "acm_resource_name": "Policy acme-web", "acm_owner": "entity-acme/web"})
+
+    def test_refusal_does_not_name_the_other_assignment(self):
+        # M1: the message reaches the tenant's status; it names this Assignment's object only
+        msg = self.refused("entity-globex/secret-app", message=True)
+        self.assertNotIn("globex", msg)
+        self.assertNotIn("secret-app", msg)
+        self.assertIn("Policy acme-web", msg)
+        self.assertIn("another assignment", msg)
 
     def test_provision_refuses_another_assignments_object(self):
         self.assertEqual(self.refused("entity-acme-x/y"), "refused")

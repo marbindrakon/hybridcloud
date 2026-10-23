@@ -1,16 +1,20 @@
 ---
 # The name of the ACM objects an Assignment puts on the management cluster (Policy <name>, Placement
-# placement-<name>, PlacementBinding binding-<name>, all in the ACM policy namespace): <tenant>-<assignment>, so
-# two tenants with an Assignment of the same name never share a policy. The tenant is the Entity the namespace
-# belongs to (namespace entity-<tenant>; a namespace without that prefix is used as it is). The name is
-# DNS-label safe (lowercase letters, digits, single hyphens) and capped so that the policy namespace and the name
-# together stay within ACM's 62 characters (the replicated policy on a managed cluster is named
-# <namespace>.<name>); a longer name keeps its start and ends in -<8 hex of sha256(<namespace>/<assignment>)>.
+# placement-<name>, PlacementBinding binding-<name>, all in the ACM policy namespace):
+# <tenant>-<assignment>-<8 hex of sha256(<namespace>/<assignment>)>. The readable part alone is not unique: tenant
+# acme with Assignment corp-web and tenant acme-corp with Assignment web both read acme-corp-web, and a.b and a-b
+# of one tenant both read a-b. The hash of the namespace and the Assignment name, always appended, keeps every
+# Assignment's name its own. The tenant is the Entity the namespace belongs to (namespace entity-<tenant>; a
+# namespace without that prefix is used as it is). The name is DNS-label safe (lowercase letters, digits, single
+# hyphens) and capped so that the policy namespace and the name together stay within ACM's 62 characters (the
+# replicated policy on a managed cluster is named <namespace>.<name>); a longer readable part is cut so the hash
+# still fits.
 # The one place the name is computed: the provision job (when nothing is recorded yet) and the teardown (when
-# nothing is recorded) both include this file; status.acmPolicyName records what was used.
+# nothing is recorded) both include this file; status.acmPolicyName records what was used, and a recorded name is
+# kept for the Assignment's life.
 # Inputs: aan_namespace (the Assignment's namespace), aan_assignment (its name), aan_policy_namespace (default
 # sovereign-cloud-helpers), aan_max_length (optional override of the cap). Sets: assignment_acm_name.
-- name: The ACM name of the Assignment (<tenant>-<assignment>)
+- name: The ACM name of the Assignment (<tenant>-<assignment>-<hash>)
   vars:
     _aan_tenant: "{{ aan_namespace | string | regex_replace('^entity-', '') }}"
     _aan_full: >-
@@ -23,5 +27,4 @@
     _aan_hash: "{{ ((aan_namespace | string) ~ '/' ~ (aan_assignment | string)) | hash('sha256') }}"
   ansible.builtin.set_fact:
     assignment_acm_name: >-
-      {{ _aan_full if (_aan_full | length) <= (_aan_max | int)
-         else ((_aan_full[:(_aan_max | int) - 9] | regex_replace('-+$', '')) ~ '-' ~ _aan_hash[:8]) }}
+      {{ (_aan_full[:(_aan_max | int) - 9] | regex_replace('-+$', '')) ~ '-' ~ _aan_hash[:8] }}
