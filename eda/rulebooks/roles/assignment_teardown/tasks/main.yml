@@ -31,17 +31,17 @@
         wat_assignment: "{{ assignment_cr_name }}"
         wat_team: "{{ (shc_live_spec | default({}, true)).team | default('', true) }}"
 
-    # An Assignment that never reached a cluster (no cluster named, or the provision never ran) owns no ACM policy:
-    # nothing to tear down there, so the ACM steps (which need the ACM creator credentials) are skipped.
+    # An Assignment that never reached a cluster owns no ACM policy: nothing to tear down there, so the ACM steps
+    # (which need the ACM creator credentials) are skipped. Only what the provision job records counts
+    # (status.assignmentProvisioned, status.acmPolicyName; written once the ACM policy was applied). A named cluster
+    # (spec.openshift) or its name in status.clusterName does not: the provision job records both while it still
+    # waits for the cluster (P2AC-F3).
     - name: Derive ACM policy name from Assignment CR name (unique per cluster)
       vars:
         _asg_status: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
-        _asg_spec: "{{ assignment_cr_lookup.resources[0].spec | default({}, true) }}"
         _asg_provisioned: >-
           {{ (_asg_status.assignmentProvisioned | default(false, true) | bool)
-             or ((_asg_status.acmPolicyName | default('', true)) | length > 0)
-             or ((_asg_status.clusterName | default('', true)) | length > 0)
-             or ((_asg_spec.openshift | default({}, true)) | length > 0) }}
+             or ((_asg_status.acmPolicyName | default('', true)) | length > 0) }}
       ansible.builtin.set_fact:
         delete_acm_policy_name: >-
           {{ (assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', ''))
@@ -92,13 +92,20 @@
           register: acm_sa_secret
           no_log: true
 
-        - name: Assert ACM creator SA secret available for delete
-          ansible.builtin.assert:
-            that:
-              - acm_sa_secret.resources | default([]) | length > 0
-            fail_msg: >-
-              Cannot delete ACM Policy '{{ delete_acm_policy_name }}': ACM creator SA secret
-              '{{ acm_central_sa_secret_name }}' not found.
+        # A provisioned Assignment needs the ACM creator credential to remove its policy. Without it the teardown
+        # stops with CredentialsMissing and names the Secret: the platform team provides it, then Retry now.
+        - name: Record that the ACM creator credential is missing
+          ansible.builtin.set_fact:
+            assignment_teardown_reason: CredentialsMissing
+          when: acm_sa_secret.resources | default([]) | length == 0
+
+        - name: Stop when the ACM creator credential is missing
+          ansible.builtin.fail:
+            msg: >-
+              Cannot remove ACM policy {{ delete_acm_policy_name }}: Secret {{ acm_central_sa_secret_name }} (the ACM
+              creator credential) is missing in namespace {{ assignment_operator_namespace }}. The platform team must
+              provide it; then use Retry now.
+          when: acm_sa_secret.resources | default([]) | length == 0
 
         - name: Decode ACM central SA credentials for delete
           ansible.builtin.set_fact:
@@ -232,7 +239,7 @@
         cr_namespace: "{{ assignment_cr_namespace }}"
         cr_status_body:
           status: failed
-          reason: TeardownFailed
+          reason: "{{ assignment_teardown_reason | default('TeardownFailed') }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA teardown failed')) }}"
