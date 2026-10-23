@@ -33,7 +33,10 @@ sys.path.insert(0, LIB)
 import shc_status as S  # noqa: E402
 import shc_status_reasons as R  # noqa: E402
 
-DERIVE = "Derive ACM policy name from Assignment CR name (unique per cluster)"
+DERIVE = "Derive ACM policy name from what the provision job recorded"
+NAME_TASK = "The ACM name of this Assignment"
+ACM_NAME = os.path.join(ROOT, "eda", "common", "tasks", "assignment_acm_name.yml")
+NS = "entity-acme"
 ACM_BLOCK = "Teardown ACM resources when provisioned"
 SKIP_BLOCK = "Skip ACM teardown if Assignment was never provisioned"
 PROBE = "Look for the ACM creator credential of a named cluster without a record"
@@ -45,12 +48,20 @@ def tasks():
     return load(TEARDOWN)
 
 
+def name_tasks():
+    """The shared name task (common/tasks/assignment_acm_name.yml) with the inputs the roles give it."""
+    return [dict(t, vars=dict(t.get("vars") or {}, aan_namespace="{{ assignment_cr_namespace }}",
+                              aan_assignment="{{ assignment_cr_name }}",
+                              aan_policy_namespace="sovereign-cloud-helpers")) for t in load(ACM_NAME)]
+
+
 class Wiring(unittest.TestCase):
     def test_predicate_reads_only_what_the_provision_job_records(self):
         derive = by_name(tasks(), DERIVE)
         pred = derive["vars"]["_asg_provisioned"]
         self.assertIn("assignmentProvisioned", pred)
-        self.assertIn("acmPolicyName", pred)
+        self.assertIn("_asg_recorded", pred)
+        self.assertIn("acmPolicyName", derive["vars"]["_asg_recorded"])
         # the record decides; a named cluster alone leads to the ACM path only through the credential check
         self.assertNotIn("openshift", pred)
         self.assertNotIn("clusterName", pred)
@@ -80,7 +91,10 @@ class Wiring(unittest.TestCase):
         self.assertIn(404, fetch["ansible.builtin.uri"]["status_code"])
         for t in block:
             if t.get("name", "").startswith(("Patch ACM Policy", "Wait for ACM", "Delete ACM")):
-                self.assertEqual(t["when"], "acm_policy_fetch.status == 200")
+                self.assertEqual(t["when"], "acm_policy_ours | bool")
+        names = [t.get("name") for t in block]
+        self.assertLess(names.index("Fetch current ACM Policy to get resourceVersion"),
+                        names.index("Decide whether the fetched ACM Policy is this Assignment's"))
 
     def test_provision_job_records_the_fields(self):
         prov = os.path.join(ROOT, "eda", "rulebooks", "roles", "assignment_provision", "tasks")
@@ -98,8 +112,12 @@ class Wiring(unittest.TestCase):
         apply = load(os.path.join(prov, "apply_acm_resource.yml"))
         names = [t["name"].split(" — ")[0] for t in apply]
         rec = names.index("Record the ACM policy of this Assignment")
-        self.assertEqual(names[rec - 1], "Fail when ACM POST returned an unexpected status")
-        self.assertEqual(rec, 2)
+        # O-1: an object of another Assignment under the same name is refused before anything is recorded
+        self.assertEqual(names[:rec], ["POST ACM resource", "Fail when ACM POST returned an unexpected status",
+                                       "GET existing ACM resource for update",
+                                       "Refuse an ACM object of another Assignment"])
+        self.assertLess(rec, names.index("PUT ACM resource on 409 (update existing)"))
+        self.assertLess(rec, names.index("Verify ACM resource exists after apply"))
         acm = load(os.path.join(prov, "provision_acm.yml"))
         acm_names = [t["name"] for t in acm]
         self.assertLess(acm_names.index("Apply ACM Policy to central cluster"),
@@ -126,8 +144,9 @@ class Predicate(unittest.TestCase):
         derive = by_name(tasks(), DERIVE)
         take = by_name(tasks(), TAKE)
         cr = {"metadata": {"name": "app-on-ocp1"}, "spec": spec, "status": status}
-        return run_play([derive, take, write_out("delete_acm_policy_name | trim")],
-                        {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]},
+        return run_play(name_tasks() + [derive, take, write_out("delete_acm_policy_name | trim")],
+                        {"assignment_cr_name": "app-on-ocp1", "assignment_cr_namespace": NS,
+                         "assignment_cr_lookup": {"resources": [cr]},
                          "acm_sa_secret_unrecorded": {"resources": [SECRET] if secret else []}})
 
     def test_named_cluster_never_reached_skips_acm(self):
@@ -142,10 +161,11 @@ class Predicate(unittest.TestCase):
         # R3A2-F1: the first provision job has POSTed but not yet written its record; the credential exists
         waiting = {"openshift": "ocp1", "clusterName": "ocp1", "openshiftReady": True,
                    "assignmentProvisioned": False, "acmPolicyName": ""}
-        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, waiting, secret=True), "app-on-ocp1")
-        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, None, secret=True), "app-on-ocp1")
+        # nothing recorded: the <tenant>-<assignment> name of the shared task (O-1)
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, waiting, secret=True), "acme-app-on-ocp1")
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, None, secret=True), "acme-app-on-ocp1")
         # the cluster name only in status (spec.openshift already cleared)
-        self.assertEqual(self.policy_name({"team": "t"}, {"clusterName": "ocp1"}, secret=True), "app-on-ocp1")
+        self.assertEqual(self.policy_name({"team": "t"}, {"clusterName": "ocp1"}, secret=True), "acme-app-on-ocp1")
 
     def test_no_record_and_no_credential_skips_acm(self):
         # P2AC-F3 holds: without the credential the provision job cannot have created anything on central
@@ -159,20 +179,26 @@ class Predicate(unittest.TestCase):
         derive = by_name(tasks(), DERIVE)
         take = by_name(tasks(), TAKE)
         cr = {"metadata": {"name": "app-on-ocp1"}, "spec": {"openshift": "ocp1"}, "status": {}}
-        got = run_play([derive, take, write_out("delete_acm_policy_name | trim")],
-                       {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]},
+        got = run_play(name_tasks() + [derive, take, write_out("delete_acm_policy_name | trim")],
+                       {"assignment_cr_name": "app-on-ocp1", "assignment_cr_namespace": NS,
+                        "assignment_cr_lookup": {"resources": [cr]},
                         "acm_sa_secret_unrecorded": {"skipped": True, "changed": False}})
         self.assertEqual(got, "")
 
     def test_provisioned_assignment_runs_acm(self):
+        # the recorded name is what is deleted, whatever the naming scheme was when it was recorded (O-1)
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
+                                          {"assignmentProvisioned": True, "acmPolicyName": "acme-app-on-ocp1"}),
+                         "acme-app-on-ocp1")
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
                                           {"assignmentProvisioned": True, "acmPolicyName": "app-on-ocp1"}),
                          "app-on-ocp1")
+        # provisioned but no name recorded: the shared task's name, never the bare Assignment name
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
-                                          {"assignmentProvisioned": "True"}), "app-on-ocp1")
-        # recorded by an earlier provision version: the policy name alone
+                                          {"assignmentProvisioned": "True"}), "acme-app-on-ocp1")
+        # the policy name alone counts as a record
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
-                                          {"acmPolicyName": "app-on-ocp1"}), "app-on-ocp1")
+                                          {"acmPolicyName": "acme-app-on-ocp1"}), "acme-app-on-ocp1")
 
 
 PROVISION = os.path.join(ROOT, "eda", "rulebooks", "roles", "assignment_provision", "tasks", "main.yml")
@@ -249,8 +275,9 @@ class FailureKeepsRecord(unittest.TestCase):
         derive = by_name(tasks(), DERIVE)
         cr = {"metadata": {"name": "app-on-ocp1"}, "spec": {"openshift": "ocp1"},
               "status": {"assignmentProvisioned": got["assignmentProvisioned"], "acmPolicyName": got["acmPolicyName"]}}
-        self.assertEqual(run_play([derive, write_out("delete_acm_policy_name | trim")],
-                                  {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]}}),
+        self.assertEqual(run_play(name_tasks() + [derive, write_out("delete_acm_policy_name | trim")],
+                                  {"assignment_cr_name": "app-on-ocp1", "assignment_cr_namespace": NS,
+                                   "assignment_cr_lookup": {"resources": [cr]}}),
                          "app-on-ocp1")
 
     def test_stored_record_goes_with_the_failure(self):

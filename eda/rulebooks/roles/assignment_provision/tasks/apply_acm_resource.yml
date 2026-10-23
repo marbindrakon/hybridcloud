@@ -25,13 +25,6 @@
       {{ acm_post_result.msg | default(acm_post_result.json | default('')) }}
   when: acm_post_result.status | default(0) not in [201, 409]
 
-# An ACM object of this Assignment now exists on central (created, or already there): record it at once, so a
-# failure later in the job (another POST, the compliance wait) still leaves the teardown a policy to remove (R3A-F2).
-- name: Record the ACM policy of this Assignment — {{ acm_resource_name }}
-  ansible.builtin.set_fact:
-    assignment_acm_policy_name: "{{ acm_policy_name }}"
-    assignment_provisioned: true
-
 - name: GET existing ACM resource for update — {{ acm_resource_name }}
   ansible.builtin.uri:
     url: "{{ acm_resource_url }}"
@@ -44,6 +37,29 @@
   register: acm_get_result
   no_log: true
   when: acm_post_result.status | default(0) == 409
+
+# The name is <tenant>-<assignment>, capped: an object that already exists under it and says it belongs to another
+# Assignment is never taken over (nor recorded, so this Assignment's teardown never removes it).
+- name: Refuse an ACM object of another Assignment — {{ acm_resource_name }}
+  vars:
+    _acm_live_owner: >-
+      {{ (((acm_get_result.json | default({}, true)).metadata | default({}, true)).annotations | default({}, true))
+         ['hybridsovereign.redhat/assignment'] | default('', true) }}
+  ansible.builtin.fail:
+    msg: >-
+      {{ acm_resource_name }} on the management cluster belongs to Assignment {{ _acm_live_owner | trim }}, not to
+      {{ acm_owner }}. Rename this Assignment, or ask the platform team.
+  when:
+    - acm_post_result.status | default(0) == 409
+    - _acm_live_owner | trim | length > 0
+    - (_acm_live_owner | trim) != (acm_owner | default('', true))
+
+# An ACM object of this Assignment now exists on central (created, or already there): record it at once, so a
+# failure later in the job (another POST, the compliance wait) still leaves the teardown a policy to remove (R3A-F2).
+- name: Record the ACM policy of this Assignment — {{ acm_resource_name }}
+  ansible.builtin.set_fact:
+    assignment_acm_policy_name: "{{ acm_policy_name }}"
+    assignment_provisioned: true
 
 - name: Build merged ACM resource body from live object — {{ acm_resource_name }}
   ansible.builtin.set_fact:

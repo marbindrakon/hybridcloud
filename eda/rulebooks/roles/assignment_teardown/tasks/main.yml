@@ -31,25 +31,33 @@
         wat_assignment: "{{ assignment_cr_name }}"
         wat_team: "{{ (shc_live_spec | default({}, true)).team | default('', true) }}"
 
+    # The name of the ACM objects: <tenant>-<assignment> (common/tasks/assignment_acm_name.yml, the same task the
+    # provision job uses). It is used only where nothing is recorded; a recorded status.acmPolicyName always wins.
+    - name: The ACM name of this Assignment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/assignment_acm_name.yml"
+      vars:
+        aan_namespace: "{{ assignment_cr_namespace }}"
+        aan_assignment: "{{ assignment_cr_name }}"
+        aan_policy_namespace: "{{ acm_policy_namespace }}"
+        aan_max_length: "{{ acm_policy_name_max_length | default('', true) }}"
+
     # An Assignment that never reached a cluster owns no ACM policy: nothing to tear down there, so the ACM steps
     # (which need the ACM creator credentials) are skipped. What the provision job records decides
     # (status.assignmentProvisioned, status.acmPolicyName; recorded once the first ACM object exists on central,
     # also when the job fails after that, and carried forward by later runs). A named cluster
     # (spec.openshift) or its name in status.clusterName alone does not: the provision job records both while it
-    # still waits for the cluster (P2AC-F3).
-    - name: Derive ACM policy name from Assignment CR name (unique per cluster)
+    # still waits for the cluster (P2AC-F3). The objects are deleted by the recorded name (O-1, OD48).
+    - name: Derive ACM policy name from what the provision job recorded
       vars:
         _asg_status: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
         _asg_spec: "{{ assignment_cr_lookup.resources[0].spec | default({}, true) }}"
+        _asg_recorded: "{{ (_asg_status.acmPolicyName | default('', true)) | string | trim }}"
         _asg_provisioned: >-
           {{ (_asg_status.assignmentProvisioned | default(false, true) | bool)
-             or ((_asg_status.acmPolicyName | default('', true)) | length > 0) }}
+             or (_asg_recorded | length > 0) }}
       ansible.builtin.set_fact:
         delete_acm_policy_name: >-
-          {{ (assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', ''))
-             if (_asg_provisioned | bool) else '' }}
-        delete_acm_policy_name_legacy: >-
-          {{ _asg_status.acmPolicyName | default('') }}
+          {{ (_asg_recorded or (assignment_acm_name | trim)) if (_asg_provisioned | bool) else '' }}
         delete_acm_cluster_named: >-
           {{ ((_asg_spec.openshift | default('', true)) | length > 0)
              or ((_asg_status.clusterName | default('', true)) | length > 0) }}
@@ -78,7 +86,7 @@
 
     - name: Take the ACM path for a named cluster without a record when the credential exists
       ansible.builtin.set_fact:
-        delete_acm_policy_name: "{{ assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}"
+        delete_acm_policy_name: "{{ assignment_acm_name | trim }}"
       when:
         - assignment_cr_lookup.resources | length > 0
         - delete_acm_policy_name | length == 0
@@ -87,8 +95,7 @@
 
     - name: Default ACM policy name when CR unavailable
       ansible.builtin.set_fact:
-        delete_acm_policy_name: "{{ assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}"
-        delete_acm_policy_name_legacy: ""
+        delete_acm_policy_name: "{{ assignment_acm_name | trim }}"
       when: assignment_cr_lookup.resources | length == 0
 
     - name: Skip ACM teardown if Assignment was never provisioned
@@ -167,6 +174,18 @@
           register: acm_policy_fetch
           no_log: true
 
+        # never remove a policy another Assignment put there under the same name (a policy without the owner
+        # annotation was made before the annotation existed and is taken as this Assignment's)
+        - name: Decide whether the fetched ACM Policy is this Assignment's
+          vars:
+            _acm_owner: >-
+              {{ ((((acm_policy_fetch.json | default({}, true)).metadata | default({}, true)).annotations
+                  | default({}, true))['hybridsovereign.redhat/assignment'] | default('', true)) | trim }}
+          ansible.builtin.set_fact:
+            acm_policy_ours: >-
+              {{ (acm_policy_fetch.status | default(0) | int == 200)
+                 and (_acm_owner in ['', assignment_cr_namespace ~ '/' ~ assignment_cr_name]) }}
+
         - name: Patch ACM Policy — set all ConfigurationPolicy templates to mustnothave
           ansible.builtin.uri:
             url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/{{ acm_policy_namespace }}/policies/{{ delete_acm_policy_name }}"
@@ -193,13 +212,13 @@
             status_code: [200]
           no_log: true
           ignore_errors: true
-          when: acm_policy_fetch.status == 200
+          when: acm_policy_ours | bool
 
         - name: Wait for ACM to enforce mustnothave on spoke cluster
           ansible.builtin.pause:
             seconds: 60
             prompt: "Waiting for ACM to remove spoke resources via mustnothave enforcement..."
-          when: acm_policy_fetch.status == 200
+          when: acm_policy_ours | bool
 
         - name: Delete ACM PlacementBinding from central
           ansible.builtin.uri:
@@ -212,7 +231,7 @@
             status_code: [200, 202, 404]
           no_log: true
           ignore_errors: true
-          when: acm_policy_fetch.status == 200
+          when: acm_policy_ours | bool
 
         - name: Delete ACM Placement from central
           ansible.builtin.uri:
@@ -225,7 +244,7 @@
             status_code: [200, 202, 404]
           no_log: true
           ignore_errors: true
-          when: acm_policy_fetch.status == 200
+          when: acm_policy_ours | bool
 
         - name: Delete ACM Policy from central
           ansible.builtin.uri:
@@ -238,7 +257,7 @@
             status_code: [200, 202, 404]
           no_log: true
           ignore_errors: true
-          when: acm_policy_fetch.status == 200
+          when: acm_policy_ours | bool
 
         - name: Cleanup temp CA file
           ansible.builtin.file:

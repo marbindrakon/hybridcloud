@@ -522,7 +522,9 @@ spec:
                 acmPolicyName:
                   type: string
                   description: >-
-                    Name of the policy that delivers the assignment to the cluster. Platform detail.
+                    Name of the policy that delivers the assignment to the cluster, recorded when the policy is
+                    first created and kept for the assignment's life; deleting the assignment removes the policy
+                    of this name. Platform detail.
                 helperName:
                   type: string
                   description: No longer set.
