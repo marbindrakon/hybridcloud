@@ -1230,7 +1230,8 @@
     "group": {
       "deleted": "Supprimé avec lui :",
       "waits": "La suppression attend que ceux-ci aient disparu (il reste en suppression jusque-là) :",
-      "kept": "Non supprimés avec lui (à supprimer séparément) :"
+      "kept": "Non supprimés avec lui (à supprimer séparément) :",
+      "affected": "Non supprimés avec lui, mais modifiés par la suppression :"
     },
     "section": {
       "namespaces": "Espaces de noms du site, supprimés une fois vides de VM (la suppression attend tant qu'une VM reste)",
@@ -1252,7 +1253,12 @@
       "tenantNamespace": "L'espace de noms du locataire",
       "waitAssignments": "Affectations de cluster sur ce cluster",
       "waitProtected": "Objets protégés contre la suppression (la suppression du locataire s'y arrête jusqu'à ce que la protection soit retirée)",
-      "keptSecretEngines": "Moteurs de secrets KV sur ce Vault (leurs secrets disparaissent avec le Vault)"
+      "keptSecretEngines": "Moteurs de secrets KV sur ce Vault (leurs secrets disparaissent avec le Vault)",
+      "waitVms": "Machines virtuelles dans ces espaces de noms (supprimez-les d'abord ; la suppression attend qu'elles aient disparu)",
+      "teamAssignments": "Affectations de cluster qui le nomment : elles restent et ont besoin qu'une configuration d'équipe de ce nom soit de nouveau prête",
+      "teamProjects": "Projets d'application de ces affectations de cluster : ils restent ; l'accès que ses listes y donnent prend fin",
+      "projectAssignments": "Affectations de cluster qui le listent : elles restent et ont besoin qu'un projet d'application de ce nom soit de nouveau prêt",
+      "projectTeams": "Configurations d'équipe dont les listes y donnent accès (cet accès prend fin) :"
     },
     "fields": {
       "aapAdminRbac": "Administrateurs AAP",
@@ -1303,12 +1309,19 @@
       "placementSite": "Son sous-réseau et son routage sur son site, là où ils ont été mis en place",
       "circuit": "La connexion de bordure sur la fabric, avec son VLAN et son sous-réseau de lien, là où ils ont été mis en place",
       "environmentResources": "Ce que l'environnement a créé sur son site ou dans son cloud",
-      "signInGroups": "Ses groupes de connexion et les rôles donnés dans son périmètre",
+      "signInGroups": "Ses groupes de connexion sur le cluster de services et les rôles donnés par ses listes d'accès",
       "signInClient": "Son client de connexion dans le fournisseur d'identité",
       "gateway": "La passerelle sur son site, avec sa bordure et son point de terminaison de tunnel",
       "fabric": "Le routage de la fabric sur ses passerelles de bordure",
-      "site": "Le lien du site avec la plateforme (la suppression attend tant qu'un objet utilise le site)"
-    }
+      "site": "Le lien du site avec la plateforme (la suppression attend tant qu'un objet utilise le site)",
+      "acmPolicy": "La stratégie ACM {{name}}, qui l'y a mis"
+    },
+    "typeHelp": {
+      "access": "Les membres des groupes d'accès listés perdent cet accès avec lui."
+    },
+    "vmsAndMore": "{{names}} et {{count}} de plus",
+    "vmsCount_one": "{{count}} VM",
+    "vmsCount_other": "{{count}} VM"
   },
   "donut": {
     "total": "Total",

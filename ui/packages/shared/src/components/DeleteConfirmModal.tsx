@@ -141,8 +141,28 @@ function EntryText({ section, entry }: { section: PreviewSection; entry: Preview
       );
     case 'tenantNamespace':
       return <>{t('deletePreview.namespaceLast', { name: entry.name })}</>;
+    case 'waitVms': {
+      // a site namespace and the VMs it holds (the environment's status may list only the first ones)
+      const shown = entry.items ?? [];
+      const more = entry.more ?? 0;
+      return (
+        <>
+          <code>{entry.name}</code>
+          {': '}
+          {shown.length
+            ? more > 0
+              ? t('deletePreview.vmsAndMore', { names: shown.join(', '), count: more })
+              : shown.join(', ')
+            : t('deletePreview.vmsCount', { count: more })}
+        </>
+      );
+    }
     case 'waitAssignments':
     case 'keptSecretEngines':
+    case 'teamAssignments':
+    case 'teamProjects':
+    case 'projectAssignments':
+    case 'projectTeams':
       return (
         <>
           {label}
@@ -202,6 +222,7 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
   const namespace = item.metadata.namespace ?? '';
   const kindLabel = kindTerm(t, kind);
   const mustType = preview.realized;
+  const typeHelp = preview.typeHelp === null ? null : t(preview.typeHelp ? `deletePreview.typeHelp.${preview.typeHelp}` : 'deletePreview.typeNameHelp');
   const confirmOk = !mustType || typed.trim() === name;
   const canDelete = confirmOk && !deleting && !loading;
 
@@ -257,12 +278,14 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
                 value={typed}
                 onChange={(_e, v) => setTyped(v)}
                 autoComplete="off"
-                aria-describedby="sc-delete-confirm-help"
+                aria-describedby={typeHelp ? 'sc-delete-confirm-help' : undefined}
                 validated={typed && !confirmOk ? 'error' : 'default'}
               />
-              <p id="sc-delete-confirm-help" className="sc-text-muted">
-                {t('deletePreview.typeNameHelp')}
-              </p>
+              {typeHelp && (
+                <p id="sc-delete-confirm-help" className="sc-text-muted">
+                  {typeHelp}
+                </p>
+              )}
             </FormGroup>
           </Form>
         )}

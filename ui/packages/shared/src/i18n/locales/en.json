@@ -1230,7 +1230,8 @@
     "group": {
       "deleted": "Deleted with it:",
       "waits": "The delete waits until these are gone (it shows Deleting until then):",
-      "kept": "Not deleted with it (delete them separately):"
+      "kept": "Not deleted with it (delete them separately):",
+      "affected": "Not deleted with it, but changed by the delete:"
     },
     "section": {
       "namespaces": "Site namespaces, removed once they hold no VMs (the delete waits while any VM remains)",
@@ -1252,7 +1253,12 @@
       "tenantNamespace": "The tenant namespace",
       "waitAssignments": "Cluster assignments on it",
       "waitProtected": "Objects with delete protection on (the tenant's delete stops there until it is turned off)",
-      "keptSecretEngines": "KV secrets engines on it (their secrets go with the Vault)"
+      "keptSecretEngines": "KV secrets engines on it (their secrets go with the Vault)",
+      "waitVms": "Virtual machines in those namespaces (delete them first; the delete waits until they are gone)",
+      "teamAssignments": "Cluster assignments that name it: they stay, and need a team setup with this name to be ready again",
+      "teamProjects": "App projects of those cluster assignments: they stay; the access its lists give on them ends",
+      "projectAssignments": "Cluster assignments that list it: they stay, and need an app project with this name to be ready again",
+      "projectTeams": "Team setups whose lists give access to it (that access ends):"
     },
     "fields": {
       "aapAdminRbac": "AAP admins",
@@ -1303,12 +1309,19 @@
       "placementSite": "Its subnet and routing on its site, where they were set up",
       "circuit": "The edge connection on the fabric, with its VLAN and link subnet, where they were set up",
       "environmentResources": "What the environment created on its site or in its cloud",
-      "signInGroups": "Its sign-in groups and the roles it gave in its scope",
+      "signInGroups": "Its sign-in groups on the services cluster and the roles its access lists gave",
       "signInClient": "Its sign-in client in the identity provider",
       "gateway": "The gateway on its site, with its edge and tunnel endpoint",
       "fabric": "The fabric's routing on its border gateways",
-      "site": "The site's link to the platform (the delete waits while any object uses the site)"
-    }
+      "site": "The site's link to the platform (the delete waits while any object uses the site)",
+      "acmPolicy": "ACM policy {{name}}, which put it there"
+    },
+    "typeHelp": {
+      "access": "The members of the access groups listed lose that access with it."
+    },
+    "vmsAndMore": "{{names}} and {{count}} more",
+    "vmsCount_one": "{{count}} VM",
+    "vmsCount_other": "{{count}} VMs"
   },
   "donut": {
     "total": "Total",

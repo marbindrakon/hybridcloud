@@ -115,7 +115,88 @@ test('a team setup lists the access its lists grant', () => {
   const p = m.deletePreview('Team', obj('Team', 'platform', { teamAdmin: ['admins'], teamMemberRbac: ['devs'] }));
   const grants = p.sections.find((s) => s.key === 'scopeGrants');
   assert.deepEqual(grants.entries.map((e) => `${e.name}:${e.detail}`), ['admins:teamAdmin', 'devs:teamMemberRbac']);
-  assert.equal(p.realized, false);
+  // OD47: the name is typed, with the access sentence under the field
+  assert.equal(p.realized, true);
+  assert.equal(p.typeHelp, 'access');
+});
+
+// OD47, PGT-F5: team setup and app project deletes list their dependants and ask for the name.
+test('a team setup lists its cluster assignments and their app projects, which stay', () => {
+  const asg = (name, team, projects, extra = {}) => ({ ...obj('Assignment', name, { team, projects }), ...extra });
+  const objects = {
+    Assignment: [
+      asg('a1', 'platform', ['web', 'api']),
+      asg('a2', 'platform', ['api', 'batch']),
+      asg('a3', 'other', ['ops']),
+      { ...asg('a4', 'platform', ['gone']), metadata: { name: 'a4', namespace: 'entity-x', deletionTimestamp: '2026-10-23T00:00:00Z' } },
+    ],
+  };
+  const p = m.deletePreview('Team', obj('Team', 'platform', { teamViewerRbac: ['auditors'] }), { objects });
+  assert.deepEqual(keys(p), [
+    ['deleted', 'external'],
+    ['affected', 'teamAssignments'],
+    ['affected', 'teamProjects'],
+    ['access', 'scopeGrants'],
+  ]);
+  assert.deepEqual(ext(p), [['signInGroups', '', {}]]);
+  assert.deepEqual(p.sections[1].entries, [{ kind: 'Assignment', name: 'a1' }, { kind: 'Assignment', name: 'a2' }]);
+  assert.deepEqual(p.sections[2].entries.map((e) => `${e.kind}/${e.name}`), ['Project/api', 'Project/batch', 'Project/web']);
+  assert.deepEqual(p.sections[3].entries.map((e) => `${e.name}:${e.detail}`), ['auditors:teamViewerRbac']);
+  assert.ok(!p.sections.some((s) => s.group === 'deleted' && s.entries.some((e) => e.kind)), 'assignments and projects are not deleted');
+  assert.deepEqual(m.previewReads('Team', obj('Team', 'platform')), [{ kind: 'Assignment', namespace: 'entity-x' }]);
+  // nothing names it: still typed, still says what goes
+  const lone = m.deletePreview('Team', obj('Team', 'lone'));
+  assert.deepEqual(keys(lone), [['deleted', 'external']]);
+  assert.equal(lone.realized, true);
+});
+
+test('an app project lists the cluster assignments that list it and the team setups whose access ends', () => {
+  const objects = {
+    Assignment: [
+      obj('Assignment', 'a1', { team: 'platform', projects: ['web'] }),
+      obj('Assignment', 'a2', { team: 'ops', projects: ['web', 'api'] }),
+      obj('Assignment', 'a3', { team: 'platform', projects: ['api'] }),
+    ],
+  };
+  const p = m.deletePreview('Project', obj('Project', 'web', { projectAdmin: ['admins'], projectDeveloperRbac: ['devs'] }), { objects });
+  assert.deepEqual(keys(p), [
+    ['deleted', 'external'],
+    ['affected', 'projectAssignments'],
+    ['access', 'scopeGrants'],
+    ['access', 'projectTeams'],
+  ]);
+  assert.deepEqual(p.sections[1].entries.map((e) => e.name), ['a1', 'a2']);
+  assert.deepEqual(p.sections[2].entries.map((e) => `${e.name}:${e.detail}`), ['admins:projectAdmin', 'devs:projectDeveloperRbac']);
+  assert.deepEqual(p.sections[3].entries, [{ kind: 'Team', name: 'ops' }, { kind: 'Team', name: 'platform' }]);
+  assert.equal(p.realized, true);
+  assert.equal(p.typeHelp, 'access');
+  assert.deepEqual(m.previewReads('Project', obj('Project', 'web')).map((r) => r.kind), ['Assignment']);
+});
+
+// PGT2-F2: the VMs each site namespace holds, from the environment's status.
+test('a VM environment lists the VMs its site namespaces hold, with the count when the list is cut', () => {
+  const vm = obj('CloudVirt', 'vm', {}, {
+    namespaces: [
+      { name: 'web', namespace: 'x-vm-web', virtualMachines: ['web-1', 'web-2'], virtualMachineCount: 5, truncated: true },
+      { name: 'db', namespace: 'x-vm-db', virtualMachines: ['db-1'], virtualMachineCount: 1 },
+      { name: 'empty', namespace: 'x-vm-empty', virtualMachines: [], virtualMachineCount: 0 },
+      { name: 'counted', namespace: 'x-vm-counted', virtualMachineCount: 3 },
+      { name: 'old', namespace: 'x-vm-old' },
+    ],
+  });
+  const p = m.deletePreview('CloudVirt', vm);
+  assert.deepEqual(keys(p), [
+    ['deleted', 'namespaces'],
+    ['waits', 'waitVms'],
+  ]);
+  assert.deepEqual(p.sections[1].entries, [
+    { name: 'x-vm-web', items: ['web-1', 'web-2'], more: 3 },
+    { name: 'x-vm-db', items: ['db-1'], more: 0 },
+    { name: 'x-vm-counted', items: [], more: 3 },
+  ]);
+  // a status without the VM fields lists none (older releases)
+  const old = m.deletePreview('CloudVirt', obj('CloudVirt', 'vm', {}, { namespaces: [{ name: 'web', namespace: 'x-vm-web' }] }));
+  assert.ok(!old.sections.some((s) => s.key === 'waitVms'));
 });
 
 // F2: kinds whose teardown removes state outside the API say what goes, and ask for the name.
@@ -147,17 +228,23 @@ test('tool objects name what their teardown removes and ask for the name, realiz
     assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a2', specArgs, st))), [['assignmentNotDelivered', '', {}]]);
   }
   // R3U-F1: the dialog reads the delete job's record (provisioned, or a policy name), not this run's readiness.
+  assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a3', { openshift: 'c1', projects: ['web'] }, { assignmentProvisioned: 'True', clusterName: 'c1', ready: false }))),
+    [['assignment', 'web', { cluster: 'c1' }]]);
+  // the ACM policy it recorded is named (status.acmPolicyName, tenant-prefixed since OD48)
   for (const st of [
-    { assignmentProvisioned: 'True', clusterName: 'c1', ready: false },
-    { assignmentProvisioned: false, acmPolicyName: 'a3', clusterName: 'c1' },
-    { acmPolicyName: 'a3', openshiftReady: false },
+    { assignmentProvisioned: false, acmPolicyName: 'x-a3', clusterName: 'c1' },
+    { acmPolicyName: 'x-a3', openshiftReady: false },
   ]) {
     assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a3', { openshift: 'c1', projects: ['web'] }, st))),
-      [['assignment', 'web', { cluster: 'c1' }]]);
+      [['assignment', 'web', { cluster: 'c1' }], ['acmPolicy', 'x-a3', {}]]);
   }
   // delivered, but no cluster is named any more: it still says something was put on a cluster
-  assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a4', { projects: ['web'] }, { acmPolicyName: 'a4' }))),
-    [['assignmentUnnamedCluster', '', {}]]);
+  assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a4', { projects: ['web'] }, { acmPolicyName: 'x-a4' }))),
+    [['assignmentUnnamedCluster', '', {}], ['acmPolicy', 'x-a4', {}]]);
+  // P3R-O1: never delivered: one sentence, no second line under the name field
+  const never = m.deletePreview('Assignment', obj('Assignment', 'a5', { openshift: 'c1' }));
+  assert.equal(never.realized, true);
+  assert.equal(never.typeHelp, null);
 });
 
 test('a cluster is deprovisioned and its delete waits for its assignments and placements', () => {
@@ -232,6 +319,7 @@ test('every kind with a teardown says what goes with it', () => {
   const persona = m.deletePreview('Persona', obj('Persona', 'p'));
   assert.deepEqual(persona.sections, []);
   assert.equal(persona.realized, false);
-  // team setups keep the one-click confirm (their access is listed)
-  assert.equal(m.deletePreview('Team', obj('Team', 't')).realized, false);
+  // OD47: team setups and app projects ask for the name
+  assert.equal(m.deletePreview('Team', obj('Team', 't')).realized, true);
+  assert.equal(m.deletePreview('Project', obj('Project', 'p')).realized, true);
 });

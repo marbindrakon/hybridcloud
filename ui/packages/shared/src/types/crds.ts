@@ -404,6 +404,12 @@ export interface CloudVirtNamespaceStatus {
   network?: string;
   ready?: boolean;
   message?: string;
+  /** Names of the VMs in the namespace (the first ones when `truncated`) */
+  virtualMachines?: string[];
+  /** How many VMs the namespace holds */
+  virtualMachineCount?: number;
+  /** `virtualMachines` lists only part of them */
+  truncated?: boolean;
 }
 
 export interface CloudVirtStatus extends OperatorStatus {
