@@ -5218,7 +5218,7 @@ cloudAWSOperator:
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.9.18-shc.6"  # shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: delete preview with dependants and type-to-confirm, forbidden pages name role and contacts, display vocabulary; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
+  chartVersion: "0.9.18-shc.7"  # shc.7: form labels and Conditions tab through the display vocabulary, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: delete preview with dependants and type-to-confirm, forbidden pages name role and contacts, display vocabulary; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
   syncWave: "40"
   destinationNamespace: sovereign-cloud
   values:
@@ -5226,7 +5226,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.3.1"
+      tag: "img-2.3.2"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5255,7 +5255,7 @@ sovereignDashboard:
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "1.1.13-shc.6"  # shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: Attach dialog offers only attachable networks, Shared-with-you Home and nav for per-object users, delete preview, forbidden pages name role and contacts; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
+  chartVersion: "1.1.13-shc.7"  # shc.7: form labels, cluster assignment and placement pages and the Conditions tab in plain words, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: Attach dialog offers only attachable networks, Shared-with-you Home and nav for per-object users, delete preview, forbidden pages name role and contacts; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
   syncWave: "41"
   destinationNamespace: sovereign-cloud
   values:
@@ -5263,7 +5263,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.3.1"
+      tag: "img-5.3.2"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5290,14 +5290,14 @@ tenancyDashboard:
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
 sovereignAdminPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.31"  # 0.1.31: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.30: display vocabulary and Status column on phase; 0.1.29: admin perspective on the navigation registry, real HTTP status mapping (forbidden / not found states), display names
+  chartVersion: "0.1.32"  # 0.1.32: form labels and Conditions tab through the display vocabulary; 0.1.31: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.30: display vocabulary and Status column on phase; 0.1.29: admin perspective on the navigation registry, real HTTP status mapping (forbidden / not found states), display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.4.2"
+      tag: "img-1.4.3"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5315,14 +5315,14 @@ sovereignAdminPlugin:
 # ─── Sovereign Tenant Console Plugin (services cluster) ──────────────────────
 sovereignTenantPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.26"  # 0.1.26: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.25: Attach dialog filter, delete preview, forbidden state, Status column on phase; 0.1.24: tenant scope from identity (no default tenant), navigation registry, forms matching the API, status phase, Attach dialog, display names
+  chartVersion: "0.1.27"  # 0.1.27: form labels, cluster assignment and placement pages in plain words; 0.1.26: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.25: Attach dialog filter, delete preview, forbidden state, Status column on phase; 0.1.24: tenant scope from identity (no default tenant), navigation registry, forms matching the API, status phase, Attach dialog, display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.5.2"
+      tag: "img-1.5.3"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5417,7 +5417,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.23"  # shc.23: CloudInfrastructure spec.location description (PCR-F1); shc.22: edaJobs status enum accepts waiting (PGF-F1); shc.21: tenant namespace delete guard, Entity READY and TenantProfile REASON columns, reasons Deleted and WaitingForCluster, Kafka protocol version value; shc.20: a current team admin manages the Team access lists (OD28 revised); shc.19: TenantProfile CRD, Entity displayName/contacts/allowedSites, categories + alias short names, REASON/AGE columns, API-only descriptions, admission policies (P0/P3/P4 Warn, P12 + delete guard + access-field ladder Deny), GitOps marks; shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
+  chartVersion: "0.1.22-shc.24"  # shc.24: Status column on Assignment, Entity and Rbac (P2DC-O1); shc.23: CloudInfrastructure spec.location description (PCR-F1); shc.22: edaJobs status enum accepts waiting (PGF-F1); shc.21: tenant namespace delete guard, Entity READY and TenantProfile REASON columns, reasons Deleted and WaitingForCluster, Kafka protocol version value; shc.20: a current team admin manages the Team access lists (OD28 revised); shc.19: TenantProfile CRD, Entity displayName/contacts/allowedSites, categories + alias short names, REASON/AGE columns, API-only descriptions, admission policies (P0/P3/P4 Warn, P12 + delete guard + access-field ladder Deny), GitOps marks; shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
@@ -5431,11 +5431,11 @@ hybridsovereignPrimaryOperator:
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.35"  # img-0.1.35: Entity phase Creating at the first write and Deleting at the delete request, Stalled cleared after CloudAWS/CloudGCP teardowns, LinkedNotReady; img-0.1.34: phase Creating/Deleting at the first and the delete write, Stalled cleared after a successful teardown, Kafka protocol pin 2.6.0 with kafka-python pinned, entity-deleting annotation after the cascade; img-0.1.33: shc_status library (stored status.phase, no Ready flip on re-runs), per-kind reconcile caps, probes, canary namespace-operator image, TenantProfile written by the Entity job; img-0.1.32: ProviderEdge watch (P9.1); img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.29: fabric delete guards (P7.3.3); img-0.1.30: a waiting delete is not marked failed; img-0.1.31: CloudVirt-owned namespaces (guards)
+      tag: "img-0.1.36"  # img-0.1.36: Retry now resets status.retry without a module failure (P2AC-F4); img-0.1.35: Entity phase Creating at the first write and Deleting at the delete request, Stalled cleared after CloudAWS/CloudGCP teardowns, LinkedNotReady; img-0.1.34: phase Creating/Deleting at the first and the delete write, Stalled cleared after a successful teardown, Kafka protocol pin 2.6.0 with kafka-python pinned, entity-deleting annotation after the cascade; img-0.1.33: shc_status library (stored status.phase, no Ready flip on re-runs), per-kind reconcile caps, probes, canary namespace-operator image, TenantProfile written by the Entity job; img-0.1.32: ProviderEdge watch (P9.1); img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.29: fabric delete guards (P7.3.3); img-0.1.30: a waiting delete is not marked failed; img-0.1.31: CloudVirt-owned namespaces (guards)
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.24"  # img-0.1.24: shared operator library update (mark_phase, publish_operator_event), no behaviour change; img-0.1.23: phase Creating/Deleting, Stalled cleared after a successful teardown, placement wakes on network/environment Ready, Kafka protocol pin; img-0.1.22: shc_status library (stored phase, no Ready flip), per-kind reconcile caps, probes, reconcileNow with any value, optional connection references, tenantprofiles grant (canary-tested on globex-industries and acme-corp); img-0.1.21: CloudGCP watch + roles (P11.4); img-0.1.20: AttachmentCircuit watch, HybridNetwork delete waits for circuits (P9.1); img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
+        tag: "img-0.1.25"  # img-0.1.25: the acknowledgement write carries the phase (P2AC-F1), Retry now resets status.retry (P2AC-F4); img-0.1.24: shared operator library update (mark_phase, publish_operator_event), no behaviour change; img-0.1.23: phase Creating/Deleting, Stalled cleared after a successful teardown, placement wakes on network/environment Ready, Kafka protocol pin; img-0.1.22: shc_status library (stored phase, no Ready flip), per-kind reconcile caps, probes, reconcileNow with any value, optional connection references, tenantprofiles grant (canary-tested on globex-industries and acme-corp); img-0.1.21: CloudGCP watch + roles (P11.4); img-0.1.20: AttachmentCircuit watch, HybridNetwork delete waits for circuits (P9.1); img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
     amqKafka:
       enabled: true
       vaultPath: amq-producer
