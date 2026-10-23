@@ -19,6 +19,7 @@ Policy GET answers 404 when nothing was created); without the credential nothing
 ACM steps stay skipped. The provision job re-reads the Assignment before its first POST and creates nothing on
 central once the Assignment is being deleted.
 """
+import hashlib
 import os
 import sys
 import unittest
@@ -37,6 +38,8 @@ DERIVE = "Derive ACM policy name from what the provision job recorded"
 NAME_TASK = "The ACM name of this Assignment"
 ACM_NAME = os.path.join(ROOT, "eda", "common", "tasks", "assignment_acm_name.yml")
 NS = "entity-acme"
+# the name the shared task gives Assignment app-on-ocp1 of tenant acme: <tenant>-<assignment>-<hash> (M1)
+COMPUTED = "acme-app-on-ocp1-" + hashlib.sha256(b"entity-acme/app-on-ocp1").hexdigest()[:8]
 ACM_BLOCK = "Teardown ACM resources when provisioned"
 SKIP_BLOCK = "Skip ACM teardown if Assignment was never provisioned"
 PROBE = "Look for the ACM creator credential of a named cluster without a record"
@@ -161,11 +164,11 @@ class Predicate(unittest.TestCase):
         # R3A2-F1: the first provision job has POSTed but not yet written its record; the credential exists
         waiting = {"openshift": "ocp1", "clusterName": "ocp1", "openshiftReady": True,
                    "assignmentProvisioned": False, "acmPolicyName": ""}
-        # nothing recorded: the <tenant>-<assignment> name of the shared task (O-1)
-        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, waiting, secret=True), "acme-app-on-ocp1")
-        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, None, secret=True), "acme-app-on-ocp1")
+        # nothing recorded: the <tenant>-<assignment>-<hash> name of the shared task (O-1, M1)
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, waiting, secret=True), COMPUTED)
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, None, secret=True), COMPUTED)
         # the cluster name only in status (spec.openshift already cleared)
-        self.assertEqual(self.policy_name({"team": "t"}, {"clusterName": "ocp1"}, secret=True), "acme-app-on-ocp1")
+        self.assertEqual(self.policy_name({"team": "t"}, {"clusterName": "ocp1"}, secret=True), COMPUTED)
 
     def test_no_record_and_no_credential_skips_acm(self):
         # P2AC-F3 holds: without the credential the provision job cannot have created anything on central
@@ -195,7 +198,7 @@ class Predicate(unittest.TestCase):
                          "app-on-ocp1")
         # provisioned but no name recorded: the shared task's name, never the bare Assignment name
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
-                                          {"assignmentProvisioned": "True"}), "acme-app-on-ocp1")
+                                          {"assignmentProvisioned": "True"}), COMPUTED)
         # the policy name alone counts as a record
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
                                           {"acmPolicyName": "acme-app-on-ocp1"}), "acme-app-on-ocp1")

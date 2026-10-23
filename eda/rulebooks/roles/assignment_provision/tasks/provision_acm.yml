@@ -42,7 +42,7 @@
     acm_entity: "{{ assignment_entity | lower | regex_replace('[^a-z0-9-]', '-') }}"
     acm_team: "{{ assignment_team | lower | regex_replace('[^a-z0-9-]', '-') }}"
 
-# <tenant>-<assignment> (one shared task with the teardown); a name an earlier run recorded is kept, so the
+# <tenant>-<assignment>-<hash> (one shared task with the teardown); a name an earlier run recorded is kept, so the
 # objects on central keep their name for the Assignment's whole life
 - name: The ACM name of this Assignment
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/assignment_acm_name.yml"
@@ -52,7 +52,7 @@
     aan_policy_namespace: "{{ acm_policy_namespace }}"
     aan_max_length: "{{ acm_policy_name_max_length | default('', true) }}"
 
-- name: Build ACM Policy name (recorded, else <tenant>-<assignment>)
+- name: Build ACM Policy name (recorded, else <tenant>-<assignment>-<hash>)
   ansible.builtin.set_fact:
     acm_policy_name: "{{ assignment_stored_acm_policy_name | default('', true) | trim or assignment_acm_name | trim }}"
     acm_owner: "{{ assignment_cr_namespace }}/{{ assignment_cr_name }}"
