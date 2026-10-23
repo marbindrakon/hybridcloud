@@ -85,10 +85,10 @@ class MarkOnce(unittest.TestCase):
 class DeleteRequestNotReady(unittest.TestCase):
     def status_written(self, deleting):
         tasks = load(os.path.join(COMMON, "mark_phase.yml"))
-        record = tasks[1]
+        record = tasks[-1]
         render = {"name": "render", "vars": record["vars"],
                   "ansible.builtin.set_fact": {"_st": record["operator_sdk.util.k8s_status"]["status"]}}
-        return run_play([tasks[0], render, write_out("_st")],
+        return run_play(tasks[:-1] + [render, write_out("_st")],
                         {"mark_phase_cr": {"status": {"phase": "Ready", "ready": True}} if deleting else {},
                          "mark_phase_deleting": deleting})
 

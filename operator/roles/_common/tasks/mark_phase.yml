@@ -23,6 +23,21 @@
 
 # At the delete request the object stops being ready in the same write (Ready=False/Deleting, status.ready false), so
 # no reader sees READY True next to phase Deleting (PAC-O1). The teardown's own writes follow.
+# A Ready condition that is already False keeps its reason (R2A-F1): k8s_status replaces the stored condition, and
+# the teardown's first task (eda/common/tasks/teardown_unrealized.yml) reads that reason to delete an object refused
+# at validation (SiteNotAllowed, NameInUse, ...) without a site cleanup. Likewise an object without a Ready condition
+# whose status.reason is set keeps it (that is the reason the teardown falls back to).
+- name: Decide whether the delete request replaces the Ready condition
+  ansible.builtin.set_fact:
+    _mark_phase_ready_condition: >-
+      {%- set st = (mark_phase_cr | default({}, true)).status | default({}, true) -%}
+      {%- set ready_c = st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list -%}
+      {%- if ready_c -%}
+        {{ ((ready_c | first).status | default('') | string) != 'False' }}
+      {%- else -%}
+        {{ (st.reason | default('', true)) == '' }}
+      {%- endif -%}
+
 - name: "Record phase {{ _mark_phase_value | trim }}"
   vars:
     _mark_phase_now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
@@ -35,8 +50,9 @@
     namespace: "{{ mark_phase_regarding.namespace }}"
     status: >-
       {{ {'phase': _mark_phase_value | trim, 'phaseSince': _mark_phase_now, 'summary': _mark_phase_summary | trim}
-         | combine({'ready': false,
-                    'conditions': [{'type': 'Ready', 'status': 'False', 'reason': 'Deleting',
+         | combine({'ready': false} if (_mark_phase_value | trim) == 'Deleting' else {})
+         | combine({'conditions': [{'type': 'Ready', 'status': 'False', 'reason': 'Deleting',
                                     'message': 'Being deleted.', 'lastTransitionTime': _mark_phase_now}]}
-                   if (_mark_phase_value | trim) == 'Deleting' else {}) }}
+                   if ((_mark_phase_value | trim) == 'Deleting' and (_mark_phase_ready_condition | default(false) | bool))
+                   else {}) }}
   when: (_mark_phase_value | trim) in ['Creating', 'Deleting']
