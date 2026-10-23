@@ -17,6 +17,8 @@
 !**/tasks/*token*.yml
 # shc: likewise the EDA credential helpers (obtain_*_admin_credentials.yml) upstream never committed
 !**/tasks/*credentials*.yml
+# shc: unit tests named after the objects they test (test_*secret*.py, test_*token*.py) were silently dropped
+!tests/unit/test_*.py
 kubeconfig
 clouds.yaml
 
