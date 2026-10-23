@@ -18,6 +18,11 @@ that no job completed yet: a re-run keeps a Ready object Ready until its job wri
 - not published and status.delivery.publishFailingSince older than publishFailedMinutes: reported
   (the operator is already retrying)
 
+Each verdict is recorded with the event it is about (status.delivery.stateEventId) and holds only for that event:
+a newer event, an acknowledgement after NoAcknowledgement or a finished job clears it, so a stale NoCompletion,
+Stalled or NoAcknowledgement never outlives the event it was about (review m7). A verdict recorded before
+stateEventId existed is cleared and decided again in the same pass.
+
 Exits 1 while any CR is NoAcknowledgement, Stalled, NoCompletion or PublishFailed, so the platform's job alert
 fires. Events from operators without eventId support carry no status.delivery and are skipped.
 
@@ -141,6 +146,18 @@ def settled(status):
     return not event_id or delivery.get("completedEventId") == event_id
 
 
+STATE_FIELDS = ("state", "stateSince", "stateEventId")
+
+
+def stale_state(delivery):
+    """True when status.delivery.state is a verdict about another event than the current one (or about no recorded
+    event: written before stateEventId existed)."""
+    delivery = delivery or {}
+    if not delivery.get("state"):
+        return False
+    return delivery.get("stateEventId") != delivery.get("eventId")
+
+
 def run_redrive(api, kinds, cfg, now, dry_run):
     """Pass over every CR: re-drive unacknowledged events, mark stalled jobs. Returns (counts, problems)."""
     cfg = dict(DEFAULTS, **(cfg or {}))
@@ -169,6 +186,20 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                 if not args.dry_run:
                     api.patch_namespaced_custom_object_status(
                         GROUP, version, ns, plural, name, {"status": {"delivery": delivery_patch}})
+                # the later passes of this run (tenancy) see what was written
+                for key, value in delivery_patch.items():
+                    if value is None:
+                        delivery.pop(key, None)
+                    else:
+                        delivery[key] = value
+
+            def set_state(verdict):
+                """Record the verdict for the current event, or clear a recorded one (verdict None)."""
+                if verdict is None:
+                    if any(delivery.get(k) for k in STATE_FIELDS):
+                        patch_status({k: None for k in STATE_FIELDS})
+                elif delivery.get("state") != verdict or delivery.get("stateEventId") != event_id:
+                    patch_status({"state": verdict, "stateSince": stamp, "stateEventId": event_id})
 
             def patch_annotations(ann):
                 if not args.dry_run:
@@ -180,9 +211,11 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                 # ready and nothing outstanding: clear our bookkeeping
                 if REDRIVES in annotations:
                     patch_annotations({REDRIVES: None})
-                if delivery.get("state"):
-                    patch_status({"state": None, "stateSince": None})
+                set_state(None)
                 continue
+            if stale_state(delivery):
+                # a verdict about an earlier event (m7): it no longer applies; this pass decides for the current one
+                set_state(None)
 
             if status.get("ready") is True:
                 counts["readyOutstanding"] += 1  # a re-run of a Ready object: its event still has to finish
@@ -195,6 +228,7 @@ def run_redrive(api, kinds, cfg, now, dry_run):
             # (The Published condition is informational: EDA's merge patches replace the conditions list.)
             if not delivery.get("publishedAt"):
                 # failing: the operator retries with backoff; report once it has failed for a while
+                set_state(None)
                 age = minutes_since(delivery.get("publishFailingSince"), now)
                 if age is not None and age > cfg["publishFailedMinutes"]:
                     published = next((c for c in status.get("conditions") or [] if c.get("type") == "Published"), {})
@@ -206,6 +240,7 @@ def run_redrive(api, kinds, cfg, now, dry_run):
             acknowledged = delivery.get("acknowledgedEventId") == event_id
             completed = delivery.get("completedEventId") == event_id
             if completed:
+                set_state(None)
                 continue  # EDA finished this event (failed or not); not a delivery problem
             if acknowledged:
                 counts["acknowledged"] += 1
@@ -214,8 +249,7 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                     counts["stalled"] += 1
                     problems.append(f"{ref}: Stalled, job {delivery.get('jobId', '?')} started {age:.0f} min ago "
                                     f"(timeout {job_timeout} min)")
-                    if delivery.get("state") != "Stalled":
-                        patch_status({"state": "Stalled", "stateSince": stamp})
+                    set_state("Stalled")
                     continue
                 overdue = no_completion(kind, status, cfg, now)
                 if overdue is not None:
@@ -223,12 +257,14 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                     problems.append(f"{ref}: NoCompletion, job {delivery.get('jobId', '?')} started {overdue:.0f} min ago "
                                     f"and has not written its final status (expected within "
                                     f"{job_finished_minutes(kind, cfg)} min); it most likely ended early")
-                    if delivery.get("state") != "NoCompletion":
-                        patch_status({"state": "NoCompletion", "stateSince": stamp})
+                    set_state("NoCompletion")
+                else:
+                    set_state(None)  # a job runs within its time (an earlier NoAcknowledgement no longer holds)
                 continue
 
             age = minutes_since(delivery.get("publishedAt"), now)
             if age is None or age <= cfg["ackTimeoutMinutes"]:
+                set_state(None)
                 continue
             redrives = int(annotations.get(REDRIVES, "0") or 0)
             if may_redrive and redrives < cfg["maxRedrives"]:
@@ -238,12 +274,12 @@ def run_redrive(api, kinds, cfg, now, dry_run):
                 trigger = REDELIVER if meta.get("deletionTimestamp") else RECONCILE_NOW
                 patch_annotations({trigger: RECONCILE_REQUEST if trigger == RECONCILE_NOW else "true",
                                    REDRIVES: str(redrives + 1)})
+                set_state(None)
             else:
                 counts["noAcknowledgement"] += 1
                 why = "redrive disabled for this kind" if not may_redrive else f"{redrives} redrives"
                 problems.append(f"{ref}: NoAcknowledgement for event {event_id}, {age:.0f} min ({why})")
-                if delivery.get("state") != "NoAcknowledgement":
-                    patch_status({"state": "NoAcknowledgement", "stateSince": stamp})
+                set_state("NoAcknowledgement")
 
     return counts, problems
 

@@ -128,7 +128,7 @@ def delivery_condition(crs, tcfg, now, rcfg=None):
     """DeliveryStalled condition of one tenant from its CRs.
 
     Counts only undelivered work: an event published but not picked up by a job (or whose publish keeps
-    failing), a redrive verdict (Stalled/NoAcknowledgement) for the current event, or a change with no
+    failing), a redrive verdict (Stalled/NoAcknowledgement/NoCompletion) about the current event, or a change with no
     event at all (generation > observedGeneration). Not counted: objects whose current event's job finished
     (completedEventId == eventId), objects whose job is running, objects a controller reported as
     failed, blocked or waiting (phase Failed or Waiting: a refused input, OperatorFailed, a dependency wait),
@@ -150,7 +150,13 @@ def delivery_condition(crs, tcfg, now, rcfg=None):
             continue  # settled; a re-run keeps phase Ready, so a Ready object with a pending event still counts
         if completed:
             continue  # a job finished this event (failed or not): not a delivery problem
-        if delivery.get("state") in ("Stalled", "NoAcknowledgement", "NoCompletion"):
+        # a redrive verdict counts only for the event it is about (stateEventId; a verdict recorded before that
+        # field existed is taken as the current event's): a newer event clears it (review m7), and so does an
+        # acknowledgement after NoAcknowledgement
+        state = delivery.get("state")
+        state_event = delivery.get("stateEventId", event_id)
+        if state in ("Stalled", "NoAcknowledgement", "NoCompletion") and state_event == event_id \
+                and not (state == "NoAcknowledgement" and acknowledged):
             stalled.append(ref)
             continue
         if acknowledged:
