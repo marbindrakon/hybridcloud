@@ -4,7 +4,7 @@ installCRDs: true
 
 image:
   repository: /hybrid-sovereign/hybridsovereign-primary-operator
-  tag: "img-0.1.38"
+  tag: "img-0.1.39"
   pullPolicy: Always
 
 imagePullSecrets:
@@ -13,7 +13,7 @@ imagePullSecrets:
 namespaceOperator:
   image:
     repository: /hybrid-sovereign/hybridsovereign-namespace-operator
-    tag: "img-0.1.27"
+    tag: "img-0.1.28"
   chartVersion: "0.1.0"
 
 serviceAccount:

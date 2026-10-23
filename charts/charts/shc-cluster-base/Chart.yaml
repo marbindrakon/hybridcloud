@@ -5,5 +5,5 @@ description: >-
   Let's Encrypt RFC 2136 issuer and the API/ingress certificates, chrony, the Red Hat External
   Secrets operator and cluster monitoring. Replaces the lab ocp-base-config chart upstream assumed.
 type: application
-version: 0.3.19
+version: 0.3.20
 appVersion: "4.22"
