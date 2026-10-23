@@ -6,6 +6,9 @@ ACM steps; spec.openshift and status.clusterName (both set while the Assignment 
 not. A provisioned Assignment whose ACM creator credential Secret is missing stops with CredentialsMissing and a
 message naming the Secret (a platform-team step), not with a generic failure. The expressions run in
 ansible-playbook (skipped when absent); the wiring checks always run.
+
+R3U-F1: a later provision run that skips the ACM step (a linked object not Ready) keeps what an earlier run recorded,
+so the teardown of a provisioned Assignment still takes the ACM path.
 """
 import os
 import sys
@@ -87,6 +90,55 @@ class Predicate(unittest.TestCase):
         # recorded by an earlier provision version: the policy name alone
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
                                           {"acmPolicyName": "app-on-ocp1"}), "app-on-ocp1")
+
+
+PROVISION = os.path.join(ROOT, "eda", "rulebooks", "roles", "assignment_provision", "tasks", "main.yml")
+KEEP = "Keep what an earlier run put on a cluster"
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RecordSurvivesLaterRuns(unittest.TestCase):
+    """R3U-F1: a provision run that skips the ACM step keeps what an earlier run recorded; only the teardown clears it."""
+
+    def provision_record(self, stored, acm_ran):
+        prov = load(PROVISION)
+        body = by_name(prov, "Update Assignment status on services cluster")["vars"]["cr_status_body"]
+        render = {"name": "render", "ansible.builtin.set_fact": {
+            "_prov": body["assignmentProvisioned"], "_policy": body["acmPolicyName"]}}
+        extra = {"assignment_cr_lookup": {"resources": [{"metadata": {"name": "app-on-ocp1"}, "status": stored}]}}
+        if acm_ran:
+            # what provision_acm.yml sets once it applied the policy
+            extra.update({"assignment_provisioned": True, "assignment_acm_policy_name": "app-on-ocp1"})
+        got = run_play([by_name(prov, KEEP), render, write_out(
+            "{'assignmentProvisioned': _prov | bool, 'acmPolicyName': _policy | trim}")], extra)
+        return got
+
+    def test_not_ready_run_after_ready_run_keeps_the_record_and_teardown_takes_acm(self):
+        first = self.provision_record(None, acm_ran=True)
+        self.assertEqual(first, {"assignmentProvisioned": True, "acmPolicyName": "app-on-ocp1"})
+        # the next run finds the cluster (or Team, or a Project) not Ready: no ACM step this time
+        stored = {"ready": True, "clusterName": "ocp1", **first}
+        second = self.provision_record(stored, acm_ran=False)
+        self.assertEqual(second, {"assignmentProvisioned": True, "acmPolicyName": "app-on-ocp1"})
+        third = self.provision_record({**stored, **second, "ready": False}, acm_ran=False)
+        self.assertEqual(third, second)
+        # the delete then still removes the ACM policy
+        self.assertEqual(Predicate().policy_name({"team": "t", "openshift": "ocp1"}, {**stored, **third}),
+                         "app-on-ocp1")
+
+    def test_string_record_from_an_earlier_write_is_kept(self):
+        got = self.provision_record({"assignmentProvisioned": "True", "acmPolicyName": "app-on-ocp1"}, acm_ran=False)
+        self.assertEqual(got, {"assignmentProvisioned": True, "acmPolicyName": "app-on-ocp1"})
+
+    def test_never_provisioned_stays_unrecorded(self):
+        for stored in (None, {}, {"assignmentProvisioned": False, "acmPolicyName": "", "clusterName": "ocp1"}):
+            self.assertEqual(self.provision_record(stored, acm_ran=False),
+                             {"assignmentProvisioned": False, "acmPolicyName": ""})
+
+    def test_keep_runs_before_the_status_write(self):
+        names = [t.get("name") for t in load(PROVISION)[0]["block"]]
+        self.assertLess(names.index(KEEP), names.index("Update Assignment status on services cluster"))
+        self.assertLess(names.index("Read Assignment CR from services cluster"), names.index(KEEP))
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")

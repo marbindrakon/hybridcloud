@@ -35,6 +35,16 @@
         assignment_openshift: "{{ assignment_spec.openshift | default('') }}"
         assignment_generation: "{{ assignment_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
 
+    # What an earlier run put on a cluster stays recorded until the teardown removes it: a later run that finds a
+    # linked object not Ready (and so skips the ACM step) must not clear it, or the teardown would skip the ACM
+    # policy that still enforces on the cluster (R3U-F1).
+    - name: Keep what an earlier run put on a cluster
+      vars:
+        _asg_stored: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
+      ansible.builtin.set_fact:
+        assignment_stored_provisioned: "{{ _asg_stored.assignmentProvisioned | default(false, true) | bool }}"
+        assignment_stored_acm_policy_name: "{{ _asg_stored.acmPolicyName | default('', true) }}"
+
     - name: Read entity Namespace
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -164,8 +174,13 @@
           openshift: "{{ assignment_openshift }}"
           openshiftReady: "{{ openshift_is_ready | bool }}"
           clusterName: "{{ openshift_cluster_name }}"
-          assignmentProvisioned: "{{ assignment_provisioned | default(false) | bool }}"
-          acmPolicyName: "{{ assignment_acm_policy_name | default('') }}"
+          # this run's ACM step, or what an earlier run recorded: only the teardown clears these (R3U-F1)
+          assignmentProvisioned: >-
+            {{ (assignment_provisioned | default(false) | bool)
+               or (assignment_stored_provisioned | default(false) | bool) }}
+          acmPolicyName: >-
+            {{ assignment_acm_policy_name | default('', true)
+               or assignment_stored_acm_policy_name | default('', true) }}
           helperName: ""
           helperProvider: ""
           conditions:
