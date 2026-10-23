@@ -32,14 +32,15 @@
         wat_team: "{{ (shc_live_spec | default({}, true)).team | default('', true) }}"
 
     # An Assignment that never reached a cluster owns no ACM policy: nothing to tear down there, so the ACM steps
-    # (which need the ACM creator credentials) are skipped. Only what the provision job records counts
+    # (which need the ACM creator credentials) are skipped. What the provision job records decides
     # (status.assignmentProvisioned, status.acmPolicyName; recorded once the first ACM object exists on central,
     # also when the job fails after that, and carried forward by later runs). A named cluster
-    # (spec.openshift) or its name in status.clusterName does not: the provision job records both while it still
-    # waits for the cluster (P2AC-F3).
+    # (spec.openshift) or its name in status.clusterName alone does not: the provision job records both while it
+    # still waits for the cluster (P2AC-F3).
     - name: Derive ACM policy name from Assignment CR name (unique per cluster)
       vars:
         _asg_status: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
+        _asg_spec: "{{ assignment_cr_lookup.resources[0].spec | default({}, true) }}"
         _asg_provisioned: >-
           {{ (_asg_status.assignmentProvisioned | default(false, true) | bool)
              or ((_asg_status.acmPolicyName | default('', true)) | length > 0) }}
@@ -49,7 +50,40 @@
              if (_asg_provisioned | bool) else '' }}
         delete_acm_policy_name_legacy: >-
           {{ _asg_status.acmPolicyName | default('') }}
+        delete_acm_cluster_named: >-
+          {{ ((_asg_spec.openshift | default('', true)) | length > 0)
+             or ((_asg_status.clusterName | default('', true)) | length > 0) }}
       when: assignment_cr_lookup.resources | length > 0
+
+    # A delete during the first provision job: until that job writes its status (at the end, or in its rescue) the
+    # record exists only in the job, and that write is then dropped as superseded. So with no record but a named
+    # cluster, the ACM path is taken when the ACM creator credential exists: without it the provision job cannot
+    # create anything on central (it stops before its first POST), with it the Policy GET answers 404 when nothing
+    # was created and the ACM steps are skipped (R3A2-F1).
+    - name: Look for the ACM creator credential of a named cluster without a record
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Secret
+        name: "{{ acm_central_sa_secret_name }}"
+        namespace: "{{ assignment_operator_namespace }}"
+      register: acm_sa_secret_unrecorded
+      no_log: true
+      when:
+        - assignment_cr_lookup.resources | length > 0
+        - delete_acm_policy_name | length == 0
+        - delete_acm_cluster_named | bool
+
+    - name: Take the ACM path for a named cluster without a record when the credential exists
+      ansible.builtin.set_fact:
+        delete_acm_policy_name: "{{ assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}"
+      when:
+        - assignment_cr_lookup.resources | length > 0
+        - delete_acm_policy_name | length == 0
+        - delete_acm_cluster_named | bool
+        - (acm_sa_secret_unrecorded.resources | default([])) | length > 0
 
     - name: Default ACM policy name when CR unavailable
       ansible.builtin.set_fact:

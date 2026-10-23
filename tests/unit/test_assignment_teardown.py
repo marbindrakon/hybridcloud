@@ -3,7 +3,7 @@
 P2AC-F3: an Assignment that names a cluster it never reached owns no ACM policy. Only what the provision job
 records once an ACM object of the Assignment exists (status.assignmentProvisioned, status.acmPolicyName) sends
 the teardown to the ACM steps; spec.openshift and status.clusterName (both set while the Assignment still waits
-for its cluster) do not. A provisioned Assignment whose ACM creator credential Secret is missing stops with
+for its cluster) alone do not. A provisioned Assignment whose ACM creator credential Secret is missing stops with
 CredentialsMissing and a message naming the Secret (a platform-team step), not with a generic failure. The
 expressions run in ansible-playbook (skipped when absent); the wiring checks always run.
 
@@ -12,6 +12,12 @@ so the teardown of a provisioned Assignment still takes the ACM path.
 
 R3A-F2: the record is set as soon as an ACM POST returned 201/409, and a job that fails after that (a later POST,
 the compliance wait) writes it with the failure.
+
+R3A2-F1: a delete during the first provision job finds no record (the job's own write comes later and is dropped
+as superseded). With a named cluster and the ACM creator credential present the teardown takes the ACM path (the
+Policy GET answers 404 when nothing was created); without the credential nothing can have been created and the
+ACM steps stay skipped. The provision job re-reads the Assignment before its first POST and creates nothing on
+central once the Assignment is being deleted.
 """
 import os
 import sys
@@ -30,6 +36,9 @@ import shc_status_reasons as R  # noqa: E402
 DERIVE = "Derive ACM policy name from Assignment CR name (unique per cluster)"
 ACM_BLOCK = "Teardown ACM resources when provisioned"
 SKIP_BLOCK = "Skip ACM teardown if Assignment was never provisioned"
+PROBE = "Look for the ACM creator credential of a named cluster without a record"
+TAKE = "Take the ACM path for a named cluster without a record when the credential exists"
+SECRET = {"metadata": {"name": "assignment-acm-creator-sa"}}
 
 
 def tasks():
@@ -42,8 +51,36 @@ class Wiring(unittest.TestCase):
         pred = derive["vars"]["_asg_provisioned"]
         self.assertIn("assignmentProvisioned", pred)
         self.assertIn("acmPolicyName", pred)
+        # the record decides; a named cluster alone leads to the ACM path only through the credential check
         self.assertNotIn("openshift", pred)
         self.assertNotIn("clusterName", pred)
+
+    def test_named_cluster_without_record_checks_the_credential(self):
+        # R3A2-F1
+        derive = by_name(tasks(), DERIVE)
+        named = derive["ansible.builtin.set_fact"]["delete_acm_cluster_named"]
+        self.assertIn("openshift", named)
+        self.assertIn("clusterName", named)
+        probe = by_name(tasks(), PROBE)
+        self.assertEqual(probe["kubernetes.core.k8s_info"]["kind"], "Secret")
+        self.assertIn("acm_central_sa_secret_name", probe["kubernetes.core.k8s_info"]["name"])
+        self.assertTrue(probe["no_log"])
+        self.assertIn("delete_acm_cluster_named | bool", probe["when"])
+        take = by_name(tasks(), TAKE)
+        self.assertIn("delete_acm_cluster_named | bool", take["when"])
+        self.assertTrue(any("acm_sa_secret_unrecorded" in w for w in take["when"]))
+        names = [t.get("name") for t in tasks()[0]["block"]]
+        self.assertLess(names.index(DERIVE), names.index(PROBE))
+        self.assertLess(names.index(PROBE), names.index(TAKE))
+        self.assertLess(names.index(TAKE), names.index(SKIP_BLOCK))
+        self.assertLess(names.index(TAKE), names.index(ACM_BLOCK))
+        # a Policy that was never created answers 404 and the delete steps are skipped
+        block = by_name(tasks(), ACM_BLOCK)["block"]
+        fetch = by_name(block, "Fetch current ACM Policy to get resourceVersion")
+        self.assertIn(404, fetch["ansible.builtin.uri"]["status_code"])
+        for t in block:
+            if t.get("name", "").startswith(("Patch ACM Policy", "Wait for ACM", "Delete ACM")):
+                self.assertEqual(t["when"], "acm_policy_fetch.status == 200")
 
     def test_provision_job_records_the_fields(self):
         prov = os.path.join(ROOT, "eda", "rulebooks", "roles", "assignment_provision", "tasks")
@@ -84,11 +121,14 @@ class Wiring(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class Predicate(unittest.TestCase):
-    def policy_name(self, spec, status):
+    def policy_name(self, spec, status, secret=False):
+        # the derive step and the credential fallback; the credential read itself is replaced by its result
         derive = by_name(tasks(), DERIVE)
+        take = by_name(tasks(), TAKE)
         cr = {"metadata": {"name": "app-on-ocp1"}, "spec": spec, "status": status}
-        return run_play([derive, write_out("delete_acm_policy_name | trim")],
-                        {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]}})
+        return run_play([derive, take, write_out("delete_acm_policy_name | trim")],
+                        {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]},
+                         "acm_sa_secret_unrecorded": {"resources": [SECRET] if secret else []}})
 
     def test_named_cluster_never_reached_skips_acm(self):
         # the provision job's write while it waits for the cluster: clusterName known, nothing provisioned
@@ -97,6 +137,32 @@ class Predicate(unittest.TestCase):
                                            "assignmentProvisioned": False, "acmPolicyName": ""}), "")
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, None), "")
         self.assertEqual(self.policy_name({"team": "t"}, {}), "")
+
+    def test_delete_during_first_provision_with_credential_runs_acm(self):
+        # R3A2-F1: the first provision job has POSTed but not yet written its record; the credential exists
+        waiting = {"openshift": "ocp1", "clusterName": "ocp1", "openshiftReady": True,
+                   "assignmentProvisioned": False, "acmPolicyName": ""}
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, waiting, secret=True), "app-on-ocp1")
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"}, None, secret=True), "app-on-ocp1")
+        # the cluster name only in status (spec.openshift already cleared)
+        self.assertEqual(self.policy_name({"team": "t"}, {"clusterName": "ocp1"}, secret=True), "app-on-ocp1")
+
+    def test_no_record_and_no_credential_skips_acm(self):
+        # P2AC-F3 holds: without the credential the provision job cannot have created anything on central
+        self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
+                                          {"clusterName": "ocp1", "assignmentProvisioned": False}, secret=False), "")
+        # no named cluster: the credential is not even read
+        self.assertEqual(self.policy_name({"team": "t"}, {}, secret=True), "")
+
+    def test_unread_credential_result_skips_acm(self):
+        # the credential read skipped (its registered result has no resources)
+        derive = by_name(tasks(), DERIVE)
+        take = by_name(tasks(), TAKE)
+        cr = {"metadata": {"name": "app-on-ocp1"}, "spec": {"openshift": "ocp1"}, "status": {}}
+        got = run_play([derive, take, write_out("delete_acm_policy_name | trim")],
+                       {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]},
+                        "acm_sa_secret_unrecorded": {"skipped": True, "changed": False}})
+        self.assertEqual(got, "")
 
     def test_provisioned_assignment_runs_acm(self):
         self.assertEqual(self.policy_name({"team": "t", "openshift": "ocp1"},
@@ -240,6 +306,47 @@ class MissingSecret(unittest.TestCase):
                         "acm_central_sa_secret_name": "assignment-acm-creator-sa",
                         "assignment_operator_namespace": "sovereign-cloud", "delete_acm_policy_name": "x"})
         self.assertEqual(got["reason"], "TeardownFailed")
+
+
+PROVISION_ACM = os.path.join(ROOT, "eda", "rulebooks", "roles", "assignment_provision", "tasks", "provision_acm.yml")
+RECHECK = "Re-read the Assignment before creating anything on central"
+DELETING = "Note whether the Assignment is being deleted"
+CENTRAL_STEPS = ("Apply ACM Policy to central cluster", "Apply ACM Placement to central cluster",
+                 "Apply ACM PlacementBinding to central cluster",
+                 "Wait for ACM Policy to report compliance on target spoke")
+
+
+class ProvisionStopsOnDeleteWiring(unittest.TestCase):
+    """R3A2-F1: the provision job re-reads the Assignment and creates nothing on central once it is being deleted."""
+
+    def test_recheck_runs_before_the_first_post_and_gates_every_central_step(self):
+        acm = load(PROVISION_ACM)
+        names = [t["name"] for t in acm]
+        self.assertLess(names.index(RECHECK), names.index(DELETING))
+        self.assertEqual(names.index(DELETING) + 1, names.index(CENTRAL_STEPS[0]))
+        recheck = by_name(acm, RECHECK)["kubernetes.core.k8s_info"]
+        self.assertEqual(recheck["kind"], "Assignment")
+        for name in CENTRAL_STEPS:
+            self.assertEqual(by_name(acm, name)["when"], "not (assignment_deleting | bool)", name)
+        # nothing else in the file talks to central before the recheck
+        for t in acm[:names.index(RECHECK)]:
+            self.assertNotIn("ansible.builtin.uri", t, t["name"])
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ProvisionStopsOnDelete(unittest.TestCase):
+    def deleting(self, resources):
+        step = by_name(load(PROVISION_ACM), DELETING)
+        return run_play([step, write_out("assignment_deleting | bool")],
+                        {"assignment_cr_recheck": {"resources": resources}})
+
+    def test_deleting_or_gone_stops(self):
+        self.assertIs(self.deleting([{"metadata": {"name": "a", "deletionTimestamp": "2026-10-22T12:00:00Z"}}]), True)
+        self.assertIs(self.deleting([]), True)
+
+    def test_live_assignment_continues(self):
+        self.assertIs(self.deleting([{"metadata": {"name": "a"}}]), False)
+        self.assertIs(self.deleting([{"metadata": {"name": "a", "deletionTimestamp": None}}]), False)
 
 
 if __name__ == "__main__":
