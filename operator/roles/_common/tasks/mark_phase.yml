@@ -21,15 +21,22 @@
         Keep
       {%- endif -%}
 
+# At the delete request the object stops being ready in the same write (Ready=False/Deleting, status.ready false), so
+# no reader sees READY True next to phase Deleting (PAC-O1). The teardown's own writes follow.
 - name: "Record phase {{ _mark_phase_value | trim }}"
+  vars:
+    _mark_phase_now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+    _mark_phase_summary: >-
+      {{ mark_phase_summary | default("Being deleted." if (_mark_phase_value | trim) == "Deleting" else "Being created.", true) }}
   operator_sdk.util.k8s_status:
     api_version: "{{ mark_phase_regarding.apiVersion }}"
     kind: "{{ mark_phase_regarding.kind }}"
     name: "{{ mark_phase_regarding.name }}"
     namespace: "{{ mark_phase_regarding.namespace }}"
-    status:
-      phase: "{{ _mark_phase_value | trim }}"
-      phaseSince: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-      summary: >-
-        {{ mark_phase_summary | default("Being deleted." if (_mark_phase_value | trim) == "Deleting" else "Being created.", true) }}
+    status: >-
+      {{ {'phase': _mark_phase_value | trim, 'phaseSince': _mark_phase_now, 'summary': _mark_phase_summary | trim}
+         | combine({'ready': false,
+                    'conditions': [{'type': 'Ready', 'status': 'False', 'reason': 'Deleting',
+                                    'message': 'Being deleted.', 'lastTransitionTime': _mark_phase_now}]}
+                   if (_mark_phase_value | trim) == 'Deleting' else {}) }}
   when: (_mark_phase_value | trim) in ['Creating', 'Deleting']

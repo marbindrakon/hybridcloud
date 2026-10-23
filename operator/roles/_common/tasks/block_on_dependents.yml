@@ -56,6 +56,9 @@
       {#- several checks of one kind (alternative match paths) can find the same CR -#}
       {{ out | unique | list }}
 
+# The wait is also a condition (DeletionBlocked=True/WaitingForDependents): the status library derives the same
+# summary from it, so a later status write (the tenancy pass, a job) keeps this summary instead of switching to
+# "Being deleted." until the next requeue (P2AC-O3).
 - name: Record what the delete is waiting for
   operator_sdk.util.k8s_status:
     api_version: "{{ dependents_status.apiVersion }}"
@@ -71,6 +74,12 @@
       phase: Deleting
       phaseSince: "{{ _dependents_phase_since }}"
       summary: Waiting for the objects that depend on this one to be deleted.
+      conditions:
+        - type: DeletionBlocked
+          status: "True"
+          reason: WaitingForDependents
+          message: "Deletion waits for {{ _dependents | join(', ') }}"
+          lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
   vars:
     _dependents_cr_status: >-
       {{ (lookup('ansible.builtin.vars', '_hybridsovereign_redhat_' ~ (dependents_status.kind | lower), default={})
@@ -80,6 +89,32 @@
          if ((_dependents_cr_status.phase | default('')) == 'Deleting' and (_dependents_cr_status.phaseSince | default('', true)) != '')
          else lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
   when: _dependents | length > 0
+
+# the dependents are gone: the wait ends (once; the teardown's writes follow)
+- name: Record that the delete no longer waits
+  vars:
+    _dependents_cr_status: >-
+      {{ (lookup('ansible.builtin.vars', '_hybridsovereign_redhat_' ~ (dependents_status.kind | lower), default={})
+          | default({}, true)).status | default({}, true) }}
+  operator_sdk.util.k8s_status:
+    api_version: "{{ dependents_status.apiVersion }}"
+    kind: "{{ dependents_status.kind }}"
+    name: "{{ dependents_status.name }}"
+    namespace: "{{ dependents_namespace }}"
+    status:
+      deletionBlockedBy: []
+      summary: Being deleted.
+      conditions:
+        - type: DeletionBlocked
+          status: "False"
+          reason: AsExpected
+          message: ""
+          lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when:
+    - _dependents | length == 0
+    - (_dependents_cr_status.conditions | default([], true) | selectattr('type', 'equalto', 'DeletionBlocked')
+       | selectattr('status', 'equalto', 'True') | list | length > 0)
+      or (_dependents_cr_status.deletionBlockedBy | default([], true) | length > 0)
 
 - name: Requeue until the dependents are gone
   ansible.builtin.fail:
