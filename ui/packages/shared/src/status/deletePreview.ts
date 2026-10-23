@@ -5,31 +5,38 @@
  *   deleted -> removed with the object
  *   waits   -> the delete waits (the object stays Deleting) until these are gone
  *   kept    -> not deleted with it; delete them separately
+ *   affected -> not deleted with it, but changed by the delete
  *   access  -> access its members or other groups lose
  *
  *   network      -> waits for its placements, the VM environments whose
  *                   namespaces use it and its attachment circuits
  *   environment  -> OpenStack, AWS, Google Cloud: waits for its placements and
  *                   its clusters; its cloud project and DNS zone are deleted
- *                   VMs: its site namespaces are removed once they hold no VMs,
+ *                   VMs: its site namespaces are removed once they hold no VMs
+ *                   (the VMs each namespace holds are listed from the status),
  *                   its DNS zone is deleted; its placements are kept
  *   placement    -> the subnet it holds on its site; on a VM environment it
  *                   waits until no namespace of that environment uses the network
  *   access group -> its group in the identity provider; the tenant roles, tool
  *                   roles and access lists naming it
- *   team setup / app project -> its sign-in groups; the access its lists grant
+ *   team setup   -> its sign-in groups and the access its lists grant; the
+ *                   cluster assignments naming it and their app projects stay
+ *   app project  -> its sign-in groups and the access its lists grant; the
+ *                   cluster assignments listing it stay, and the access their
+ *                   team setups give on it ends
  *   tool objects -> what the teardown removes in the tool: the Quay or AAP
  *                   organization, the KV engine and its secrets, the Vault
  *                   instance, the cluster, what an assignment put on a cluster
+ *                   (with the ACM policy it recorded)
  *   tenant       -> every object of the tenant, tier by tier, then its namespace
  *
  * An object that owns realized resources (any kind whose teardown removes
  * state outside the API) asks for its name to be typed; plain objects keep the
  * one-click confirm. A kind with a teardown always says what goes with it.
  */
-import type { K8sResource } from '../types';
+import { KIND_PLURALS, type K8sResource } from '../types';
 
-export type PreviewGroup = 'deleted' | 'waits' | 'kept' | 'access';
+export type PreviewGroup = 'deleted' | 'waits' | 'kept' | 'affected' | 'access';
 
 export type PreviewSectionKey =
   // deleted with it
@@ -48,14 +55,20 @@ export type PreviewSectionKey =
   | 'waitSiteNamespace'
   | 'waitAssignments'
   | 'waitProtected'
+  | 'waitVms'
   // not deleted with it
   | 'keptPlacements'
   | 'keptSecretEngines'
+  // not deleted with it, but changed by the delete
+  | 'teamAssignments'
+  | 'teamProjects'
+  | 'projectAssignments'
   // access that ends
   | 'tenantRoles'
   | 'toolRoles'
   | 'accessLists'
-  | 'scopeGrants';
+  | 'scopeGrants'
+  | 'projectTeams';
 
 export const SECTION_GROUP: Record<PreviewSectionKey, PreviewGroup> = {
   namespaces: 'deleted',
@@ -72,16 +85,21 @@ export const SECTION_GROUP: Record<PreviewSectionKey, PreviewGroup> = {
   waitSiteNamespace: 'waits',
   waitAssignments: 'waits',
   waitProtected: 'waits',
+  waitVms: 'waits',
   keptPlacements: 'kept',
   keptSecretEngines: 'kept',
+  teamAssignments: 'affected',
+  teamProjects: 'affected',
+  projectAssignments: 'affected',
   tenantRoles: 'access',
   toolRoles: 'access',
   accessLists: 'access',
   scopeGrants: 'access',
+  projectTeams: 'access',
 };
 
 /** The order the dialog shows the groups in. */
-export const PREVIEW_GROUPS: PreviewGroup[] = ['deleted', 'waits', 'kept', 'access'];
+export const PREVIEW_GROUPS: PreviewGroup[] = ['deleted', 'waits', 'kept', 'affected', 'access'];
 
 export interface PreviewEntry {
   /** Kind of a linked object (absent for plain text entries) */
@@ -95,18 +113,29 @@ export interface PreviewEntry {
   args?: Record<string, string>;
   /** The object is in another namespace than the deleted one: shown without a link */
   noLink?: boolean;
+  /** Names listed after the entry (the VMs of a site namespace) */
+  items?: string[];
+  /** How many more there are than `items` lists (0 when `items` is complete) */
+  more?: number;
 }
 
 export interface PreviewSection {
   key: PreviewSectionKey;
   group: PreviewGroup;
   entries: PreviewEntry[];
+  /** When the listed entries were read on the site (the VMs of an environment's namespaces) */
+  asOf?: string;
 }
 
 export interface DeletePreview {
   sections: PreviewSection[];
   /** The object owns realized resources: the name must be typed to delete */
   realized: boolean;
+  /**
+   * The line under the name field (deletePreview.typeHelp.<key>); absent = the
+   * general one, null = none (the sections already say what goes).
+   */
+  typeHelp?: string | null;
 }
 
 /** Objects the preview reads, by kind, from the object's namespace (and the tenant). */
@@ -171,6 +200,8 @@ export const REALIZED_KINDS = new Set([
   'Assignment',
   'Entity',
   'Rbac',
+  'Team',
+  'Project',
   'AAPConfig',
   'QuayConfig',
   'RbacConfig',
@@ -204,8 +235,21 @@ export interface PreviewRead {
   namespace: string;
 }
 
-/** The lists the preview of `item` reads (all in the object's namespace). */
+/**
+ * A kind the UI can list: it has an API path (plural). A dependant kind without one (an edge
+ * connection) is not read, so a preview never asks for `<namespace>/undefined` and never says
+ * that objects of that kind could not be read (H2TG-F4).
+ */
+export function listableKind(kind: string): boolean {
+  return Object.prototype.hasOwnProperty.call(KIND_PLURALS, kind);
+}
+
+/** The lists the preview of `item` reads (all in the object's namespace), for kinds the UI can list. */
 export function previewReads(kind: string, item: K8sResource): PreviewRead[] {
+  return previewReadsAll(kind, item).filter((r) => listableKind(r.kind));
+}
+
+function previewReadsAll(kind: string, item: K8sResource): PreviewRead[] {
   const namespace = item.metadata.namespace ?? '';
   if (!namespace) return [];
   let kinds: string[] = [];
@@ -214,6 +258,7 @@ export function previewReads(kind: string, item: K8sResource): PreviewRead[] {
   else if (ENVIRONMENT_KINDS.includes(kind)) kinds = ['NetworkPlacement', 'PlatformOpenshift'];
   else if (kind === 'NetworkPlacement') kinds = backendOf(item).kind === 'CloudVirt' ? ['CloudVirt'] : [];
   else if (kind === 'Rbac') kinds = ACCESS_GROUP_KINDS;
+  else if (kind === 'Team' || kind === 'Project') kinds = ['Assignment'];
   else if (kind === 'PlatformOpenshift') kinds = ['Assignment', 'NetworkPlacement'];
   else if (kind === 'Vault') kinds = ['VaultKV'];
   // a tenant's objects live in its own namespace
@@ -252,6 +297,31 @@ function backendOf(o: K8sResource): Backend {
 function networkOf(o: K8sResource): string | undefined {
   return (o.spec as { network?: string } | undefined)?.network;
 }
+/**
+ * The VMs each site namespace of a VM environment holds, from status.virtualMachines.namespaces
+ * (names sorted and capped, count complete). Namespaces without VMs, and an environment whose
+ * status does not report them, give none.
+ */
+type NamespaceVms = { name?: unknown; namespace?: unknown; count?: unknown; names?: unknown };
+export function vmsByNamespace(status: Record<string, unknown>): PreviewEntry[] {
+  const vms = status.virtualMachines as { namespaces?: unknown } | undefined;
+  const list = vms && Array.isArray(vms.namespaces) ? (vms.namespaces as NamespaceVms[]) : [];
+  return list
+    .filter((n) => n && typeof n === 'object')
+    .map((n) => {
+      const items = names(n.names);
+      const counted = typeof n.count === 'number' && Number.isFinite(n.count) ? n.count : items.length;
+      const ns = (typeof n.namespace === 'string' && n.namespace) || (typeof n.name === 'string' && n.name) || '';
+      return { name: ns, items, more: Math.max(counted, items.length) - items.length };
+    })
+    .filter((e) => e.name && (e.items.length > 0 || e.more > 0));
+}
+
+/** The Assignments of `team` (spec.team), not being deleted. */
+function assignmentsOfTeam(list: K8sResource[], team: string): K8sResource[] {
+  return list.filter((a) => (a.spec as { team?: string } | undefined)?.team === team && !a.metadata.deletionTimestamp);
+}
+
 /** The namespaces of a VM environment that use `network` (spec, as the network and placement deletes read it). */
 function vmNamespacesUsing(env: K8sResource, network: string): string[] {
   return ((env.spec as { namespaces?: { name?: string; network?: string }[] } | undefined)?.namespaces ?? [])
@@ -276,7 +346,9 @@ export function deletePreview(kind: string, item: K8sResource, ctx: PreviewConte
   const fallback = EXTERNAL_FALLBACK[kind];
   // A kind with a teardown never reads as "nothing else is deleted".
   const sections = fallback && !p.sections.some((s) => s.group === 'deleted') ? [...external(fallback), ...p.sections] : p.sections;
-  return { sections, realized: p.realized || REALIZED_KINDS.has(kind) };
+  const out: DeletePreview = { sections, realized: p.realized || REALIZED_KINDS.has(kind) };
+  if (p.typeHelp !== undefined) out.typeHelp = p.typeHelp;
+  return out;
 }
 
 function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): DeletePreview {
@@ -322,8 +394,18 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
       const nsRows: PreviewEntry[] = ((status.namespaces as { name?: string; namespace?: string }[] | undefined) ?? [])
         .map((n) => ({ name: n.namespace || n.name || '' }))
         .filter((n) => n.name);
+      // PGT2-F2: the VMs each site namespace holds, including a namespace that left the spec but still holds VMs.
+      const vmRows = vmsByNamespace(status);
+      // GUI O-2: the list is a snapshot of the site; the dialog says when it was taken.
+      const asOf = (status.virtualMachines as { observedAt?: unknown } | undefined)?.observedAt;
+      const vmSections = section('waitVms', vmRows).map((s) => (typeof asOf === 'string' && asOf ? { ...s, asOf } : s));
       return {
-        sections: [...section('namespaces', nsRows), ...section('dnsZone', zoneRows), ...section('keptPlacements', placements)],
+        sections: [
+          ...section('namespaces', nsRows),
+          ...section('dnsZone', zoneRows),
+          ...vmSections,
+          ...section('keptPlacements', placements),
+        ],
         realized: hasRealization || nsRows.length > 0,
       };
     }
@@ -395,11 +477,44 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
   }
 
   if (kind === 'Team' || kind === 'Project') {
+    // OD47: the same dialog as networks, environments and access groups. The teardown releases the sign-in groups and
+    // removes the roles its lists grant (on itself and, for a team setup, on its app projects and cluster assignments);
+    // the cluster assignments and app projects themselves are not deleted.
     const rows: PreviewEntry[] = [];
     for (const f of ACCESS_GROUP_FIELDS[kind]) {
       for (const g of names(at(spec, f.path))) rows.push({ kind: 'Rbac', name: g, detail: lastKey(f.path) });
     }
-    return { sections: section('scopeGrants', rows), realized: hasRealization };
+    const assignments = list('Assignment').filter((a) => !a.metadata.deletionTimestamp);
+    if (kind === 'Team') {
+      const mine = assignmentsOfTeam(assignments, name);
+      const asgRows = mine.map((a) => ({ kind: 'Assignment', name: a.metadata.name }));
+      const projectNames = Array.from(new Set(mine.flatMap((a) => names((a.spec as { projects?: unknown } | undefined)?.projects)))).sort();
+      const projectRows = projectNames.map((p) => ({ kind: 'Project', name: p }));
+      return {
+        sections: [
+          ...external('signInGroups'),
+          ...section('teamAssignments', asgRows),
+          ...section('teamProjects', projectRows),
+          ...section('scopeGrants', rows),
+        ],
+        realized: true,
+        typeHelp: 'teamAccess',
+      };
+    }
+    const listing = assignments.filter((a) => names((a.spec as { projects?: unknown } | undefined)?.projects).includes(name));
+    const asgRows = listing.map((a) => ({ kind: 'Assignment', name: a.metadata.name }));
+    const teams = Array.from(new Set(listing.map((a) => (a.spec as { team?: string } | undefined)?.team ?? '').filter(Boolean))).sort();
+    const teamRows = teams.map((tm) => ({ kind: 'Team', name: tm }));
+    return {
+      sections: [
+        ...external('signInGroups'),
+        ...section('projectAssignments', asgRows),
+        ...section('scopeGrants', rows),
+        ...section('projectTeams', teamRows),
+      ],
+      realized: true,
+      typeHelp: 'teamAccess',
+    };
   }
 
   if (kind === 'QuayOrg') return { sections: external('quayOrg', tenantPrefixed(item, status)), realized: true };
@@ -440,9 +555,15 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
     const provisioned = status.assignmentProvisioned;
     const delivered =
       provisioned === true || String(provisioned ?? '').toLowerCase() === 'true' || !!(status.acmPolicyName as string | undefined);
-    if (!delivered) return { sections: external('assignmentNotDelivered'), realized: true };
-    if (!cluster) return { sections: external('assignmentUnnamedCluster'), realized: true };
-    return { sections: external(projects ? 'assignment' : 'assignmentAccess', projects, { cluster }), realized: true };
+    // P3R-O1: one sentence; the name is still typed (the record can lag behind the cluster).
+    if (!delivered) return { sections: external('assignmentNotDelivered'), realized: true, typeHelp: null };
+    // The policy that put it there, as the provision job recorded it (OD48: tenant-prefixed names).
+    const policy = ((status.acmPolicyName as string | undefined) ?? '').trim();
+    const policyRows: PreviewEntry[] = policy ? [{ name: policy, detail: 'acmPolicy' }] : [];
+    const first: PreviewEntry = !cluster
+      ? { name: '', detail: 'assignmentUnnamedCluster' }
+      : { name: projects, detail: projects ? 'assignment' : 'assignmentAccess', args: { cluster } };
+    return { sections: section('external', [first, ...policyRows]), realized: true };
   }
   if (kind === 'Entity') {
     // The tenant's delete removes its objects tier by tier (protected ones stop it), then its namespace.

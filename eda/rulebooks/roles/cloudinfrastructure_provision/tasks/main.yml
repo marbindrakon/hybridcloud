@@ -167,6 +167,11 @@
           {%- endfor -%}
           {{ out }}
 
+    # the environments on this site: what their namespaces hold now (the delete preview lists the VMs)
+    - name: Refresh the VirtualMachine lists of the environments on this site
+      ansible.builtin.include_tasks: cloudvirt_vms.yml
+      when: ci_cr_type == 'openshift'
+
   rescue:
     # a key left out of the merge-patch keeps its last value: switch every stored capability off
     - name: Every capability of the failed site is off

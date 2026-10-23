@@ -6,6 +6,8 @@ central_api_server: "{{ (lookup('env', 'CENTRAL_API_SERVER') | trim) or 'https:/
 oci_registry_host: "{{ (lookup('env', 'OCI_HOST') | trim) or 'quay.signal9.gg' }}"
 sovereign_assignment_chart_version: "0.2.3"
 assignment_acm_policy_name: ""
+# cap of the ACM policy name; empty = what ACM allows next to acm_policy_namespace (62 characters together)
+acm_policy_name_max_length: ""
 assignment_provisioned: false
 
 eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"

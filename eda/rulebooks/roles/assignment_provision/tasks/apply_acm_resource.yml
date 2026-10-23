@@ -25,13 +25,6 @@
       {{ acm_post_result.msg | default(acm_post_result.json | default('')) }}
   when: acm_post_result.status | default(0) not in [201, 409]
 
-# An ACM object of this Assignment now exists on central (created, or already there): record it at once, so a
-# failure later in the job (another POST, the compliance wait) still leaves the teardown a policy to remove (R3A-F2).
-- name: Record the ACM policy of this Assignment — {{ acm_resource_name }}
-  ansible.builtin.set_fact:
-    assignment_acm_policy_name: "{{ acm_policy_name }}"
-    assignment_provisioned: true
-
 - name: GET existing ACM resource for update — {{ acm_resource_name }}
   ansible.builtin.uri:
     url: "{{ acm_resource_url }}"
@@ -44,6 +37,31 @@
   register: acm_get_result
   no_log: true
   when: acm_post_result.status | default(0) == 409
+
+# The name is <tenant>-<assignment>-<hash> (common/tasks/assignment_acm_name.yml), so it is this Assignment's own;
+# should an object that already exists under it say it belongs to another Assignment, it is never taken over (nor
+# recorded, so this Assignment's teardown never removes it). The message is shown to the tenant: it does not name
+# the other Assignment or its namespace (the annotation tells the platform team).
+- name: Refuse an ACM object of another Assignment — {{ acm_resource_name }}
+  vars:
+    _acm_live_owner: >-
+      {{ (((acm_get_result.json | default({}, true)).metadata | default({}, true)).annotations | default({}, true))
+         ['hybridsovereign.redhat/assignment'] | default('', true) }}
+  ansible.builtin.fail:
+    msg: >-
+      {{ acm_resource_name }} already exists on the management cluster and belongs to another assignment, so it was
+      left as it is. Rename this assignment, or ask the platform team.
+  when:
+    - acm_post_result.status | default(0) == 409
+    - _acm_live_owner | trim | length > 0
+    - (_acm_live_owner | trim) != (acm_owner | default('', true))
+
+# An ACM object of this Assignment now exists on central (created, or already there): record it at once, so a
+# failure later in the job (another POST, the compliance wait) still leaves the teardown a policy to remove (R3A-F2).
+- name: Record the ACM policy of this Assignment — {{ acm_resource_name }}
+  ansible.builtin.set_fact:
+    assignment_acm_policy_name: "{{ acm_policy_name }}"
+    assignment_provisioned: true
 
 - name: Build merged ACM resource body from live object — {{ acm_resource_name }}
   ansible.builtin.set_fact:

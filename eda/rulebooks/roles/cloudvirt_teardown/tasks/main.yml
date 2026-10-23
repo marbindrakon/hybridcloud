@@ -43,6 +43,8 @@
                  | zip(fab_check_result.selector.values()) | map('join', '=') | list }}
           register: _cvd_ns
 
+        # no_log (R2A-F2): the results are whole VirtualMachine objects (cloud-init userData can carry a password);
+        # the names collected next are what is logged.
         - name: List their VMs
           kubernetes.core.k8s_info:
             kubeconfig: "{{ site_kubeconfig }}"
@@ -51,6 +53,7 @@
             namespace: "{{ item }}"
           loop: "{{ _cvd_ns.resources | default([]) | map(attribute='metadata.name') | list }}"
           register: _cvd_vms
+          no_log: true
 
         - name: Collect the VMs
           ansible.builtin.set_fact:
@@ -61,7 +64,7 @@
                   {%- set _ = out.append('VirtualMachine ' ~ r.item ~ '/' ~ vm.metadata.name) -%}
                 {%- endfor -%}
               {%- endfor -%}
-              {{ out }}
+              {{ out | sort }}
 
         - name: Report the VMs that block the deletion
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

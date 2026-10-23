@@ -32,7 +32,10 @@ usage:
   check-content.py --write-baseline  record today's UI hits as accepted (the baseline only shrinks)
   check-content.py --write-glossary  rewrite the generated terms table of docs/tenant/glossary.md
   check-content.py --rendered PATH...  check saved page texts (a GUI crawl of tenant pages, .txt
-                                   files or directories of them) for the `rendered` words
+                                   files or directories of them) for the `rendered` words; object
+                                   names are skipped (hyphen- or dot-joined lower-case tokens, the
+                                   page's own Name fields and columns)
+  check-content.py --rendered PATH... --names FILE  also skip the object names listed in FILE
 """
 import argparse
 import ast
@@ -624,20 +627,96 @@ def check_raw_kinds(rep):
             rep.error(f"{rel}:{src.count(chr(10), 0, off) + 1}", rule, code)
 
 
+# Platform kinds whose display term in the catalogue (kindsOne) is their name split into words.
+SPLIT_KIND_TERMS = {"CloudGateway"}
+
+
+def _kind_words(kind):
+    """The words of a CamelCase kind name: CloudInfrastructure -> Cloud, Infrastructure; CloudOSO ->
+    Cloud, OSO; PlatformOpenshift -> Platform, Openshift; OpenStackMigration -> OpenStack, Migration."""
+    return re.findall(r"Open[Ss]tack|Open[Ss]hift|[A-Z]+(?![a-z])|[A-Z][a-z0-9]*", kind)
+
+
 def rendered_rules(terms):
-    pats = list(terms.get("rendered") or [])
-    pats += [rf"\b{k}s?\b" for k in sorted(terms["kinds"]) if re.match(r"^[A-Z][a-z]+[A-Z]", k)]
-    return [re.compile(p, re.I) for p in pats]
+    multi = [k for k in sorted(terms["kinds"]) if re.match(r"^[A-Z][a-z]+[A-Z]", k)]
+    rules = [re.compile(p, re.I) for p in list(terms.get("rendered") or [])]
+    rules += [re.compile(rf"\b{k}s?\b", re.I) for k in multi]
+    # H2TG-F2: the same names split into words ("Site (Cloud Infrastructure)"), matched as written
+    # so that prose such as "your cloud infrastructure" is not a hit. SPLIT_KIND_TERMS: kinds whose
+    # catalogue term is the split name itself (platform pages).
+    for k in multi:
+        if k in SPLIT_KIND_TERMS:
+            continue
+        words = [("Open[sS]hift" if w.lower() == "openshift" else re.escape(w)) for w in _kind_words(k)]
+        if len(words) > 1:
+            rules.append(re.compile(r"\b" + " ".join(words) + r"s?\b"))
+    return rules
 
 
-def rendered_hits(text, rendered):
-    """(rendered pattern, matched text) on one line of page text."""
+# An object name (a DNS name: g-oso-1, uxr-corp-g-vmenv-1-vms, web.oso.example).
+OBJECT_NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
+NAME_TOKEN = re.compile(r"[A-Za-z0-9]+(?:[-.][A-Za-z0-9]+)+")
+
+
+def _in_object_name(text, m):
+    """The match is part of a hyphen- or dot-joined lower-case token (an object name such as
+    g-oso-1), not a word of its own (H2TG-F3)."""
+    for t in NAME_TOKEN.finditer(text):
+        if t.start() <= m.start() and m.end() <= t.end() and (t.start(), t.end()) != (m.start(), m.end()):
+            return bool(OBJECT_NAME.match(t.group(0)))
+    return False
+
+
+def mask_names(text, names):
+    """Object names (tenant data) are not text: blank each whole occurrence."""
+    for n in sorted(names, key=len, reverse=True):
+        text = re.sub(r"(?<![\w.-])" + re.escape(n) + r"(?![\w-]|\.\w)", " ", text)
+    return text
+
+
+def rendered_hits(text, rendered, names=()):
+    """(rendered pattern, matched text) on one line of page text; object names are skipped."""
     for rx in RENDERED_NOT_TEXT:
         text = rx.sub(" ", text)
+    if names:
+        text = mask_names(text, names)
     for rx in rendered:
-        m = rx.search(text)
-        if m:
-            yield rx.pattern, m.group(0)
+        for m in rx.finditer(text):
+            if not _in_object_name(text, m):
+                yield rx.pattern, m.group(0)
+                break
+
+
+NAME_FIELDS = ("Name", "Nom")
+
+
+def page_names(lines):
+    """Object names a saved page text shows in its own Name fields and Name columns: the line after
+    a "Name" label, and the Name cell of each row under a tab-separated header with a Name column."""
+    out = set()
+    col = None
+    for i, line in enumerate(lines):
+        cells = [c.strip() for c in line.split("\t")]
+        if len(cells) > 1:
+            if any(c in NAME_FIELDS for c in cells):
+                col = next(j for j, c in enumerate(cells) if c in NAME_FIELDS)
+                continue
+            if col is not None and col < len(cells) and OBJECT_NAME.match(cells[col]):
+                out.add(cells[col])
+            continue
+        col = None
+        if line.strip() in NAME_FIELDS:
+            nxt = next((x.strip() for x in lines[i + 1:] if x.strip()), "")
+            if OBJECT_NAME.match(nxt):
+                out.add(nxt)
+    return out
+
+
+def read_names(path):
+    """A --names file: one object name per line; # starts a comment."""
+    if not path:
+        return set()
+    return {ln.split("#", 1)[0].strip() for ln in Path(path).read_text(encoding="utf-8").splitlines()} - {""}
 
 
 def _crd_field_paths(kinds):
@@ -690,17 +769,21 @@ def check_runtime(rep, rules, terms, tmpdir):
     rep.runtime_checked = True
 
 
-def check_rendered(terms, targets):
-    """Saved page texts (a crawl of tenant pages) checked for the rendered words; exit code."""
+def check_rendered(terms, targets, names_file=None):
+    """Saved page texts (a crawl of tenant pages) checked for the rendered words; exit code. Object
+    names (the page's own Name fields and columns, and the --names file) are not text."""
     rendered = rendered_rules(terms)
+    extra = read_names(names_file)
     files = []
     for t in targets:
         p = Path(t)
         files += sorted(p.rglob("*.txt")) if p.is_dir() else [p]
     hits = 0
     for f in files:
-        for n, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            for _pat, word in rendered_hits(line, rendered):
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        names = extra | page_names(lines)
+        for n, line in enumerate(lines, 1):
+            for _pat, word in rendered_hits(line, rendered, names):
                 hits += 1
                 print(f"{f}:{n}: rendered '{word}': {_excerpt(line)}")
     print(f"check-content --rendered: {len(files)} file(s), {hits} hit(s)")
@@ -744,6 +827,14 @@ def self_test(rules, crd_rules):
         if got != sorted(case["hits"]):
             failed += 1
             print(f"FAIL rendered {case['text']!r}: {got}, expected {case['hits']}")
+    for case in fx.get("rendered_pages", []):
+        total += 1
+        lines = case["lines"]
+        names = set(case.get("names", [])) | page_names(lines)
+        got = sorted({w for ln in lines for _, w in rendered_hits(ln, rendered, names)})
+        if got != sorted(case["hits"]):
+            failed += 1
+            print(f"FAIL rendered page {lines!r}: {got}, expected {case['hits']}")
     for case in fx.get("source_kinds", []):
         total += 1
         got = sorted({w for _, w, _ in source_kind_hits(case["source"], rendered)})
@@ -762,10 +853,14 @@ def main():
     ap.add_argument("--warnings", action="store_true", help="print warnings, not only a count")
     ap.add_argument("--rendered", nargs="+", metavar="PATH",
                     help="check saved page texts for the rendered words (and nothing else)")
+    ap.add_argument("--names", metavar="FILE",
+                    help="with --rendered: object names (one per line) that are not text")
     args = ap.parse_args()
     terms, rules, crd_rules = load_terms()
+    if args.names and not args.rendered:
+        ap.error("--names needs --rendered")
     if args.rendered:
-        sys.exit(check_rendered(terms, args.rendered))
+        sys.exit(check_rendered(terms, args.rendered, args.names))
     if args.self_test:
         sys.exit(self_test(rules, crd_rules))
     if args.write_glossary:

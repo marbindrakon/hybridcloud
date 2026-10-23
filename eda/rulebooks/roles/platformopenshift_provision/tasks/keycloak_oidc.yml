@@ -8,6 +8,8 @@
 #   cluster_console_url - https://console-openshift-console.apps.<slug>.<domain>
 #   cluster_api_url     - https://api.<slug>.<domain>:6443
 #   cluster_apps_url    - https://apps.<slug>.<domain>
+#   cluster_domain      - the cluster's DNS domain (<name>.<environment domain>); its OAuth server is
+#                         oauth-openshift.apps.<cluster_domain>. Empty: taken from cluster_api_url (https://api.<domain>:6443)
 #   cluster_namespace   - CR namespace (e.g. entity-acme-corp)
 #   central_token       - Bearer token for central cluster API
 #
@@ -59,6 +61,29 @@
     ocp_oidc_client_id: "{{ cluster_name }}-keycloak-oidc"
   when: not (skip_oidc_setup | bool)
 
+# The client accepts only the cluster's own OAuth callback (oauth2callback/<identity provider name>), exact, as every
+# sign-in client of the tenant realm does: Keycloak matches a wildcard only at the end, so a host pattern never matched.
+- name: Set the cluster's OAuth callback for the sign-in client
+  vars:
+    _domain: >-
+      {{ cluster_domain | default('', true)
+         or (cluster_api_url | default('') | regex_replace('^https://api\.([^:/]+)(:[0-9]+)?/?$', '\1')
+             if (cluster_api_url | default('')) is match('^https://api\.[^:/]+(:[0-9]+)?/?$') else '') }}
+  ansible.builtin.set_fact:
+    ocp_oidc_cluster_domain: "{{ _domain | trim | lower }}"
+    ocp_oidc_redirect_uris:
+      - "https://oauth-openshift.apps.{{ _domain | trim | lower }}/oauth2callback/{{ platformopenshift_oidc_idp_name }}"
+  when: not (skip_oidc_setup | bool)
+
+- name: Refuse a sign-in callback without the cluster's domain
+  ansible.builtin.assert:
+    that:
+      - ocp_oidc_cluster_domain is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$')
+      - ocp_oidc_redirect_uris | select('search', '[*]') | list | length == 0
+    fail_msg: "{{ ocp_oidc_client_id }}: the cluster's domain is unknown, so its sign-in callback cannot be registered"
+    quiet: true
+  when: not (skip_oidc_setup | bool)
+
 - name: Check if OIDC client already exists
   ansible.builtin.uri:
     url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ ocp_oidc_client_id }}"
@@ -87,9 +112,7 @@
       standardFlowEnabled: true
       serviceAccountsEnabled: false
       rootUrl: "{{ cluster_console_url | regex_replace('/+$', '') }}"
-      redirectUris:
-        - "{{ cluster_console_url | regex_replace('/+$', '') }}/*"
-        - "https://oauth-openshift.apps.{{ cluster_ocp_name | default(cluster_name) }}.*/*"
+      redirectUris: "{{ ocp_oidc_redirect_uris }}"
       webOrigins:
         - "{{ cluster_apps_url | regex_replace('/+$', '') }}"
       attributes:
@@ -111,6 +134,23 @@
     status_code: [200]
   register: _kc_client_info
   when: not (skip_oidc_setup | bool)
+
+# A client made before the exact callback (or for another domain) is converged in place; other fields are kept.
+- name: Converge the sign-in callback of an existing OIDC client
+  ansible.builtin.uri:
+    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ kc_admin_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ _kc_client_info.json[0] | combine({'redirectUris': ocp_oidc_redirect_uris}) }}"
+    validate_certs: false
+    status_code: [204]
+  when:
+    - not (skip_oidc_setup | bool)
+    - (_kc_client_info.json[0].redirectUris | default([], true) | sort | list) != (ocp_oidc_redirect_uris | sort | list)
+  no_log: true
 
 - name: Get OIDC client secret
   ansible.builtin.uri:
@@ -224,7 +264,7 @@
                         name: cluster
                       spec:
                         identityProviders:
-                          - name: keycloak-sso
+                          - name: "{{ platformopenshift_oidc_idp_name }}"
                             mappingMethod: claim
                             type: OpenID
                             openID:

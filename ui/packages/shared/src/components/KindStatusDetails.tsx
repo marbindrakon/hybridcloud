@@ -802,6 +802,7 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
               <Th modifier="wrap">{t('common.name')}</Th>
               <Th modifier="wrap">{t('detail.siteNamespace')}</Th>
               <Th modifier="wrap">{t('fields.namespaceNetwork')}</Th>
+              <Th modifier="wrap">{t('detail.vms')}</Th>
               <Th modifier="wrap">{t('detail.ready')}</Th>
               <Th modifier="wrap">{t('common.message')}</Th>
             </Tr>
@@ -818,6 +819,12 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
                     <Mono>{s?.namespace}</Mono>
                   </Td>
                   <Td dataLabel={t('fields.namespaceNetwork')}>{network || t('form.siteDefaultNetwork')}</Td>
+                  <Td dataLabel={t('detail.vms')}>
+                    {(() => {
+                      const vms = st.virtualMachines?.namespaces?.find((v) => (s?.namespace && v.namespace === s.namespace) || v.name === name);
+                      return typeof vms?.count === 'number' ? vms.count : <Dash />;
+                    })()}
+                  </Td>
                   <Td dataLabel={t('detail.ready')}>
                     <ReadyLabel ready={s?.ready} />
                   </Td>

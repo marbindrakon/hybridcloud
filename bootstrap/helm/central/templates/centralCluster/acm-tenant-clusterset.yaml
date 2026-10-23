@@ -1,0 +1,116 @@
+{{- /*
+R2B-F1: the ManagedClusterSet of tenant-built clusters. The Assignment jobs' hub account may create
+enforcing ACM Policies and Placements in its policy namespace, and an enforcing ConfigurationPolicy
+runs with cluster-admin rights on every cluster its Placement selects. A Placement selects only from
+the sets bound in its namespace, so that namespace binds this set alone (assignment-central-rbac
+chart), never `default`, which holds the hub (local-cluster) and the platform clusters.
+
+The two admission policies keep the boundary when someone with bind or join rights makes a mistake:
+- the policy namespace may bind no set but this one;
+- the hub and the listed platform clusters may never carry this set's label.
+*/ -}}
+{{- if include "sovereign-central.tenantClusterSetEnabled" . }}
+{{- $set := include "sovereign-central.tenantClusterSet" . }}
+{{- $cs := .Values.acmTenantClusterSet | default dict }}
+{{- $ns := .Values.assignmentCentralRbac.values.namespace | default "sovereign-cloud-helpers" }}
+{{- $wave := $cs.syncWave | default "11" }}
+{{- $platform := $cs.platformClusters | default list }}
+---
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSet
+metadata:
+  name: {{ $set }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  clusterSelector:
+    selectorType: ExclusiveClusterSetLabel
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sovereign-tenant-clusterset-binding
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $ns }}
+    resourceRules:
+      - apiGroups: ["cluster.open-cluster-management.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["managedclustersetbindings"]
+  # A binding that is already being deleted is left alone: the garbage collector's finalizer
+  # removal is an UPDATE too, and refusing it would keep an old binding (and its namespace)
+  # from ever going away.
+  matchConditions:
+    - name: not-being-deleted
+      expression: "!has(object.metadata.deletionTimestamp)"
+  validations:
+    - expression: "object.spec.clusterSet == '{{ $set }}'"
+      message: {{ printf "Namespace %s may bind only the ManagedClusterSet %s (tenant clusters)." $ns $set | quote }}
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sovereign-tenant-clusterset-binding
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  policyName: sovereign-tenant-clusterset-binding
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: sovereign-tenant-clusterset-members
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["cluster.open-cluster-management.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["managedclusters"]
+  matchConditions:
+    - name: joins-tenant-set
+      expression: >-
+        has(object.metadata.labels) &&
+        'cluster.open-cluster-management.io/clusterset' in object.metadata.labels &&
+        object.metadata.labels['cluster.open-cluster-management.io/clusterset'] == '{{ $set }}'
+  validations:
+    - expression: >-
+        object.metadata.name != 'local-cluster' &&
+        !('local-cluster' in object.metadata.labels && object.metadata.labels['local-cluster'] == 'true') &&
+        !(object.metadata.name in {{ toJson $platform }})
+      messageExpression: >-
+        'ManagedCluster ' + object.metadata.name + ' is the hub or a platform cluster and may not join the ManagedClusterSet {{ $set }} (tenant clusters).'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: sovereign-tenant-clusterset-members
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  policyName: sovereign-tenant-clusterset-members
+  validationActions: ["Deny"]
+{{- end }}

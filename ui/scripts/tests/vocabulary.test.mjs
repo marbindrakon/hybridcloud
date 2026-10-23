@@ -119,6 +119,19 @@ test('cluster assignment fields and its summary read as plain words', () => {
   assert.equal(v.fieldLabel(t, 'openshift'), 'OpenShift cluster');
   assert.equal(v.fieldLabel(t, 'openshiftReady'), 'Cluster ready');
   assert.equal(v.fieldLabel(t, 'teamReady'), 'Team ready');
+  // P3R-O2: the ACM record of the assignment
+  assert.equal(v.fieldLabel(t, 'acmPolicyName'), 'ACM policy');
+  assert.equal(v.fieldLabel(t, 'assignmentProvisioned'), 'Delivered to its cluster');
+  assert.equal(v.fieldLabel(tFr, 'acmPolicyName'), 'Stratégie ACM');
+  // PGT2-F3 (placement half): the placement's messages name the site connection, never the kind
+  for (const msg of [
+    '10.20.0.0/24 on iaas1 through CloudGateway gw-iaas1',
+    'Site side ready; waiting for CloudGateway gw-iaas1 to carry the network (VRF t-n1)',
+  ]) {
+    const out = v.displayText(t, msg);
+    assert.match(out, /site connection gw-iaas1/, out);
+    assert.doesNotMatch(out, /CloudGateway|Cloud Gateway|cloud Gateway/, out);
+  }
   assert.equal(
     v.displayText(t, 'Team=platform(ready=True), Projects=1, Openshift=(ready=False)'),
     'Team setup platform is ready; 1 app project; no OpenShift cluster is named yet.',

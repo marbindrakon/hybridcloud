@@ -11,12 +11,15 @@
 !**/templates/externalsecret.yaml
 !**/templates/*-externalsecret.yaml
 !**/templates/externalsecret-*.yaml
+!**/templates/pushsecret*.yaml
 *token*
 !**/templates/*token*.yaml
 # shc: Ansible task files named *token* were silently dropped (obtain_openshift_access_token.yml)
 !**/tasks/*token*.yml
 # shc: likewise the EDA credential helpers (obtain_*_admin_credentials.yml) upstream never committed
 !**/tasks/*credentials*.yml
+# shc: unit tests named after the objects they test (test_*secret*.py, test_*token*.py) were silently dropped
+!tests/unit/test_*.py
 kubeconfig
 clouds.yaml
 

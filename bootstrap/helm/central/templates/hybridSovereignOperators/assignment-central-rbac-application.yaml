@@ -24,7 +24,11 @@ spec:
     helm:
       releaseName: assignment-central-rbac
       values: |
-        {{- toYaml .Values.assignmentCentralRbac.values | nindent 8 }}
+        {{- $rbacValues := deepCopy .Values.assignmentCentralRbac.values }}
+        {{- if include "sovereign-central.tenantClusterSetEnabled" . }}
+        {{- $_ := set $rbacValues "clusterSet" (include "sovereign-central.tenantClusterSet" .) }}
+        {{- end }}
+        {{- toYaml $rbacValues | nindent 8 }}
 
   destination:
     server: https://kubernetes.default.svc

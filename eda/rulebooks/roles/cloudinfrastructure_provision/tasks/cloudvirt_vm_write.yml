@@ -1,0 +1,35 @@
+---
+# One CloudVirt (civ_cv): read the VirtualMachines of its site namespaces (status.namespaces, and the ones that left
+# the spec but still hold VMs, status.realization.siteNamespacesKept) and write status.virtualMachines alone (a
+# partial write: no event, job or delivery change; the object's phase is derived again as on every write).
+- name: "The VirtualMachines of {{ civ_cv.metadata.namespace ~ '/' ~ civ_cv.metadata.name }}"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/cloudvirt_vm_status.yml"
+  vars:
+    _civ_st: "{{ civ_cv.status | default({}, true) }}"
+    cvs_kubeconfig: "{{ site_kubeconfig }}"
+    cvs_names_cap: "{{ cloudvirt_vm_names_cap }}"
+    cvs_namespaces: >-
+      {%- set out = [] -%}
+      {%- for n in _civ_st.namespaces | default([], true) if n is mapping and n.namespace | default('') | length > 0 -%}
+        {%- set _ = out.append({'namespace': n.namespace, 'name': n.name | default('', true)}) -%}
+      {%- endfor -%}
+      {%- for k in (_civ_st.realization | default({}, true)).siteNamespacesKept | default([], true) -%}
+        {%- set _ = out.append({'namespace': k, 'name': ''}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: "Record the VirtualMachines of {{ civ_cv.metadata.namespace ~ '/' ~ civ_cv.metadata.name }}"
+  hybridsovereign.shc.cr_status:
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    plural: cloudvirts
+    name: "{{ civ_cv.metadata.name }}"
+    namespace: "{{ civ_cv.metadata.namespace }}"
+    status:
+      virtualMachines: "{{ cv_vm_status }}"
+    action: reconcile
+    partial: true
+    ignore_not_found: true
+  when: cv_vm_status | default({}) | length > 0

@@ -79,6 +79,12 @@ function usePreviewContext(kind: string, item: K8sResource | null, isOpen: boole
   return state;
 }
 
+/** The time a listed snapshot was taken, in the viewer's locale. */
+function formatListedAt(iso: string): string {
+  const then = Date.parse(iso);
+  return Number.isNaN(then) ? iso : new Date(then).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 function EntryText({ section, entry }: { section: PreviewSection; entry: PreviewEntry }): React.ReactElement {
   const { t } = useTranslation();
   const routeFor = useRouteFor();
@@ -141,8 +147,29 @@ function EntryText({ section, entry }: { section: PreviewSection; entry: Preview
       );
     case 'tenantNamespace':
       return <>{t('deletePreview.namespaceLast', { name: entry.name })}</>;
+    case 'waitVms': {
+      // a site namespace, how many VMs it holds and their names (the environment's status may list only the
+      // first ones); the count is always shown (H2TG-F1)
+      const shown = entry.items ?? [];
+      const more = entry.more ?? 0;
+      const count = shown.length + more;
+      return (
+        <>
+          <code>{entry.name}</code>{' '}
+          {shown.length
+            ? more > 0
+              ? t('deletePreview.vmsListedAndMore', { names: shown.join(', '), count, more })
+              : t('deletePreview.vmsListed', { names: shown.join(', '), count })
+            : t('deletePreview.vmsInNamespace', { count })}
+        </>
+      );
+    }
     case 'waitAssignments':
     case 'keptSecretEngines':
+    case 'teamAssignments':
+    case 'teamProjects':
+    case 'projectAssignments':
+    case 'projectTeams':
       return (
         <>
           {label}
@@ -202,6 +229,7 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
   const namespace = item.metadata.namespace ?? '';
   const kindLabel = kindTerm(t, kind);
   const mustType = preview.realized;
+  const typeHelp = preview.typeHelp === null ? null : t(preview.typeHelp ? `deletePreview.typeHelp.${preview.typeHelp}` : 'deletePreview.typeNameHelp');
   const confirmOk = !mustType || typed.trim() === name;
   const canDelete = confirmOk && !deleting && !loading;
 
@@ -239,6 +267,7 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
                           </li>
                         ))}
                       </ul>
+                      {s.asOf && <div className="sc-text-muted">{t('deletePreview.listedAt', { time: formatListedAt(s.asOf) })}</div>}
                     </div>
                   ))}
                 </div>
@@ -257,12 +286,14 @@ export function DeleteConfirmModal({ isOpen, kind, item, deleting, error, onConf
                 value={typed}
                 onChange={(_e, v) => setTyped(v)}
                 autoComplete="off"
-                aria-describedby="sc-delete-confirm-help"
+                aria-describedby={typeHelp ? 'sc-delete-confirm-help' : undefined}
                 validated={typed && !confirmOk ? 'error' : 'default'}
               />
-              <p id="sc-delete-confirm-help" className="sc-text-muted">
-                {t('deletePreview.typeNameHelp')}
-              </p>
+              {typeHelp && (
+                <p id="sc-delete-confirm-help" className="sc-text-muted">
+                  {typeHelp}
+                </p>
+              )}
             </FormGroup>
           </Form>
         )}

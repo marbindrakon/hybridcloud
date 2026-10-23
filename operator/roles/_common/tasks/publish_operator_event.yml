@@ -83,6 +83,7 @@
           cluster: services
           timestamp: "{{ operator_event_time }}"
 
+    # a redrive verdict (status.delivery.state) is about the event it names; a new event starts without one (m7)
     - name: Record the event id before publishing
       operator_sdk.util.k8s_status:
         api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -94,6 +95,9 @@
             eventId: "{{ operator_event_id }}"
             reason: "{{ operator_event_reason }}"
             publishedAt: null
+            state: null
+            stateSince: null
+            stateEventId: null
           conditions:
             - type: Published
               status: Unknown

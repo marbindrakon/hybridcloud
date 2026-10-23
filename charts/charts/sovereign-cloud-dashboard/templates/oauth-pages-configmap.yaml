@@ -1,0 +1,38 @@
+{{- /*
+  Pages the oauth-proxy serves itself, in the product's words (oauth-proxy --custom-templates-dir
+  reads sign_in.html and error.html from one directory; both must exist). error.html carries the
+  page a signed-in user without the platform role gets (the proxy's 403 "Invalid Account" after the
+  access review): which role grants access and that the platform team adds members. It names no
+  tenant and no tenant contacts. The files are oauth-proxy (Go html/template) templates; the chart
+  only fills the @@...@@ placeholders.
+*/ -}}
+{{- with .Values.oauthProxy.pages }}
+{{- if .enabled }}
+{{- $plain := "^[^<>&\"{}]+$" }}
+{{- if not (regexMatch $plain (.productName | default "")) }}{{ fail "oauthProxy.pages.productName: plain text without < > & \" { }" }}{{ end }}
+{{- if not (regexMatch $plain (.grantingRole | default "")) }}{{ fail "oauthProxy.pages.grantingRole: plain text without < > & \" { }" }}{{ end }}
+{{- $link := "" }}
+{{- with .tenantDashboardUrl }}
+{{- if not (regexMatch "^https://[^\\s<>&\"'{}]+$" .) }}{{ fail "oauthProxy.pages.tenantDashboardUrl: an https:// URL without < > & quotes or braces" }}{{ end }}
+{{- $link = printf "<p><a href=\"%s\">Open the tenant dashboard</a></p>" . }}
+{{- end }}
+{{- $style := $.Files.Get "files/oauth-templates/style.css" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dashboard.name" $ }}-oauth-pages
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "dashboard.labels" $ | nindent 4 }}
+data:
+{{- range $file := list "sign_in.html" "error.html" }}
+  {{ $file }}: |
+    {{- $.Files.Get (printf "files/oauth-templates/%s" $file)
+        | replace "@@STYLE@@" $style
+        | replace "@@PRODUCT@@" $.Values.oauthProxy.pages.productName
+        | replace "@@GRANTING_ROLE@@" $.Values.oauthProxy.pages.grantingRole
+        | replace "@@TENANT_LINK@@" $link
+        | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

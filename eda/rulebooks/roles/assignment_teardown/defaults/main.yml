@@ -1,0 +1,4 @@
+---
+# Must stay identical to assignment_provision/defaults/main.yml (tests/unit/test_assignment_central_api.py):
+# the teardown deletes on the same hub the provision role created on.
+central_api_server: "{{ (lookup('env', 'CENTRAL_API_SERVER') | trim) or 'https://api.central.shc.signal9.gg:6443' }}"

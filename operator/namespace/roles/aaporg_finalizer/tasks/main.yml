@@ -15,6 +15,11 @@
           ready: false
           message: Awaiting EDA delete
           lastReconciledAt: "{{ aaporg_delete_transition_time }}"
+      # once per delete: a requeue (and the release after the teardown) keeps the teardown's message
+      when:
+        - not ((_hybridsovereign_redhat_aaporg.status | default({}, true)).deletionComplete | default(false) | bool)
+        - not ((((_hybridsovereign_redhat_aaporg.status | default({}, true)).delivery | default({}, true)).reason
+                | default('', true)) is search('DeleteRequested$'))
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:
@@ -59,6 +64,8 @@
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('Deletion failed')) }}"
       ignore_errors: true
+      # a delete that waits (for dependents, or for the EDA teardown) is not failed: the status it set stays
+      when: not (ansible_failed_result.msg | default('') is match('(Deletion waits for |Waiting for EDA to complete deletion)'))
 
     - name: Re-raise to signal finalizer failure
       ansible.builtin.fail:

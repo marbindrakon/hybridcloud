@@ -35,6 +35,11 @@
           ready: false
           message: Awaiting EDA delete
           lastReconciledAt: "{{ hybridnetwork_delete_transition_time }}"
+      # once per delete: a requeue (and the release after the teardown) keeps the teardown's message
+      when:
+        - not ((_hybridsovereign_redhat_hybridnetwork.status | default({}, true)).deletionComplete | default(false) | bool)
+        - not ((((_hybridsovereign_redhat_hybridnetwork.status | default({}, true)).delivery | default({}, true)).reason
+                | default('', true)) is search('DeleteRequested$'))
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:

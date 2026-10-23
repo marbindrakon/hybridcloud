@@ -215,13 +215,53 @@ function trimSummary(text: string): string {
   return one.length > SUMMARY_MAX ? `${one.slice(0, SUMMARY_MAX - 1).trimEnd()}…` : one;
 }
 
+/** A team setup, app project or cluster an Assignment waits for, from its status (P2AC-O5). */
+const WAITING_FOR_LINKED = new Set(['WaitingForCluster', 'LinkedNotReady']);
+
 /**
- * One line that says what is going on: the stored tenant-safe summary, else
- * the registry sentence of the deciding reason, else the legacy message, else
- * the phase sentence.
+ * A waiting cluster assignment names what it waits for: the team setup, the app
+ * projects and the cluster that are not ready (its status records each), instead
+ * of the reason's general sentence, which names only the cluster when none is
+ * named. Null when the object is no cluster assignment, is not waiting on them,
+ * or its status does not say which one is not ready.
+ */
+export function linkedWaitSummary(item: PhaseSubject | null | undefined): string | null {
+  const status = statusOf(item) as Record<string, unknown>;
+  // only the cluster assignment's status carries both readiness flags
+  if (!('teamReady' in status) || !('openshiftReady' in status)) return null;
+  if (phaseOf(item) !== 'Waiting') return null;
+  const reason = reasonOf(item);
+  if (!reason || !WAITING_FOR_LINKED.has(reason)) return null;
+  const team = typeof status.team === 'string' ? status.team : '';
+  const teamWaits = condStatus(status.teamReady) === 'False';
+  const projects = Array.isArray(status.projects) ? (status.projects as { name?: unknown; ready?: unknown }[]) : [];
+  const projectsWaiting = projects
+    .filter((p) => p && typeof p.name === 'string' && p.name && condStatus(p.ready) === 'False')
+    .map((p) => p.name as string);
+  const cluster = typeof status.openshift === 'string' ? status.openshift : '';
+  const clusterWaits = !!cluster && condStatus(status.openshiftReady) === 'False';
+  const parts: string[] = [];
+  if (teamWaits) parts.push(team ? `team setup ${team}` : 'a team setup (none is named)');
+  if (projectsWaiting.length) parts.push(`${projectsWaiting.length === 1 ? 'app project' : 'app projects'} ${projectsWaiting.join(', ')}`);
+  if (clusterWaits) parts.push(`OpenShift cluster ${cluster}`);
+  const noCluster = reason === 'WaitingForCluster' || !cluster;
+  // WaitingForCluster with everything else ready: the reason's own sentence says it
+  if (!parts.length) return null;
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  return noCluster
+    ? `Waiting for ${list} to be ready, and for a cluster: name the OpenShift cluster to deploy onto.`
+    : `Waiting for ${list} to be ready.`;
+}
+
+/**
+ * One line that says what is going on: what a waiting cluster assignment waits
+ * for, else the stored tenant-safe summary, else the registry sentence of the
+ * deciding reason, else the legacy message, else the phase sentence.
  */
 export function summaryOf(item: PhaseSubject | null | undefined): string {
   const status = statusOf(item);
+  const linked = linkedWaitSummary(item);
+  if (linked) return trimSummary(linked);
   if (typeof status.summary === 'string' && status.summary.trim()) return trimSummary(status.summary);
   const phase = phaseOf(item);
   const entry = reasonEntry(reasonOf(item));

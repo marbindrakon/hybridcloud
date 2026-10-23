@@ -15,6 +15,11 @@ Passes (each configurable, config file sections in brackets):
               has its finalizer after afterMinutes gets a machine wake (reconcileNow) on every run, so its
               controller releases it (also after Stalled=TeardownFailed and a successful retry); one still there
               after problemMinutes is reported.
+6. [vmRefresh] an OpenShift site (CloudInfrastructure, Ready) whose environments (CloudVirts with namespaces there)
+              hold a VirtualMachine list (status.virtualMachines) older than intervalMinutes gets a machine wake, so
+              its probe job, which can read the site, refreshes the lists (a partial status write of that field).
+              At most once per intervalMinutes per site, never while the site has an event outstanding, at most
+              maxSitesPerRun sites per run.
 
 Exits 1 when any pass found a problem (the platform's job alert fires), 2 on an API error.
 usage: shc_tenancy.py [--config FILE] [--dry-run]
@@ -39,6 +44,7 @@ RECONCILE_REQUEST = eda_redrive.RECONCILE_REQUEST
 RECHECKS = f"{GROUP}/rechecks"
 RECHECKED_AT = f"{GROUP}/recheckedAt"
 NUDGED = f"{GROUP}/nudged"
+VM_REFRESH_AT = f"{GROUP}/vmRefreshRequestedAt"
 OPERATOR = "hybridsovereign-namespace-operator"
 STALLED_MESSAGE = "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."
 
@@ -46,11 +52,12 @@ DEFAULTS = {
     "redrive": {"enabled": True},
     "tenancy": {"enabled": True, "unavailableMinutes": 2, "restartWindowMinutes": 15, "restartThreshold": 3,
                 "deliveryStalledMinutes": 15, "operatorDeployment": OPERATOR, "entityNamespace": "sovereign-cloud",
-                "tenantNamespacePrefix": "entity-"},
+                "tenantNamespacePrefix": "entity-", "newEntityGraceMinutes": 10},
     "phase": {"enabled": True, "write": False, "reportLimit": 50},
     "failedRecheck": {"enabled": True, "intervalMinutes": 30, "maxRechecks": 6,
                       "kinds": ["Rbac", "Team", "Project", "Persona", "Vault", "VaultKV", "AAPOrg", "QuayOrg"]},
     "finalizerRelease": {"enabled": True, "afterMinutes": 2, "problemMinutes": 30},
+    "vmRefresh": {"enabled": True, "intervalMinutes": 10, "maxSitesPerRun": 10},
 }
 
 
@@ -120,6 +127,22 @@ def controller_condition(deploy, pods, tcfg, now):
     return {"type": "ControllerAvailable", "status": "True", "reason": "AsExpected", "message": ""}
 
 
+def entity_controller_condition(entity, deploy, pods, tcfg, now):
+    """ControllerAvailable of one Entity, or None while a new Entity's controller is still being set up.
+
+    A tenant's namespace operator starts only after the Entity's job made its namespace: within
+    newEntityGraceMinutes of the Entity's creation a controller that is not deployed or not yet available is neither
+    reported nor written (one that restarts or runs out of memory still is).
+    """
+    ctrl = controller_condition(deploy, pods, tcfg, now)
+    meta = entity.get("metadata") or {}
+    age = minutes_since(meta.get("creationTimestamp"), now)
+    if ctrl["reason"] == "ControllerUnavailable" and not meta.get("deletionTimestamp") and age is not None \
+            and age < tcfg.get("newEntityGraceMinutes", 0):
+        return None
+    return ctrl
+
+
 # Ready reasons that report a delivery problem themselves; a Failed/Waiting phase with one of them still counts.
 DELIVERY_REASONS = ("NoJobStarted", "ControllerUnavailable", "ControllerRestarting", "ControllerOutOfMemory")
 
@@ -128,7 +151,7 @@ def delivery_condition(crs, tcfg, now, rcfg=None):
     """DeliveryStalled condition of one tenant from its CRs.
 
     Counts only undelivered work: an event published but not picked up by a job (or whose publish keeps
-    failing), a redrive verdict (Stalled/NoAcknowledgement) for the current event, or a change with no
+    failing), a redrive verdict (Stalled/NoAcknowledgement/NoCompletion) about the current event, or a change with no
     event at all (generation > observedGeneration). Not counted: objects whose current event's job finished
     (completedEventId == eventId), objects whose job is running, objects a controller reported as
     failed, blocked or waiting (phase Failed or Waiting: a refused input, OperatorFailed, a dependency wait),
@@ -150,7 +173,13 @@ def delivery_condition(crs, tcfg, now, rcfg=None):
             continue  # settled; a re-run keeps phase Ready, so a Ready object with a pending event still counts
         if completed:
             continue  # a job finished this event (failed or not): not a delivery problem
-        if delivery.get("state") in ("Stalled", "NoAcknowledgement", "NoCompletion"):
+        # a redrive verdict counts only for the event it is about (stateEventId; a verdict recorded before that
+        # field existed is taken as the current event's): a newer event clears it (review m7), and so does an
+        # acknowledgement after NoAcknowledgement
+        state = delivery.get("state")
+        state_event = delivery.get("stateEventId", event_id)
+        if state in ("Stalled", "NoAcknowledgement", "NoCompletion") and state_event == event_id \
+                and not (state == "NoAcknowledgement" and acknowledged):
             stalled.append(ref)
             continue
         if acknowledged:
@@ -233,22 +262,23 @@ def run_tenancy(api, kinds, cfg, now, dry_run):
             pods = core.list_namespaced_pod(ns, label_selector=f"app.kubernetes.io/name={tcfg['operatorDeployment']}").items
         if meta.get("deletionTimestamp") and deploy is None:
             continue  # the cascade removed the controller on purpose
-        ctrl = controller_condition(deploy, pods, tcfg, now)
+        ctrl = entity_controller_condition(entity, deploy, pods, tcfg, now)
         crs = [(k["kind"], cr) for k in kinds if k["kind"] not in ("Entity", "TenantProfile")
                for cr in k["items"] if cr["metadata"].get("namespace") == ns]
         deliv, stalled = delivery_condition(crs, tcfg, now, cfg.get("redrive"))
-        if ctrl["status"] == "False":
+        if ctrl is not None and ctrl["status"] == "False":
             counts["controllerUnavailable"] += 1
             problems.append(f"Entity {name}: ControllerAvailable=False/{ctrl['reason']}: {ctrl['message']}")
         if deliv["status"] == "True":
             counts["deliveryStalled"] += 1
             problems.append(f"Entity {name}: DeliveryStalled for {', '.join(stalled[:10])}")
-        if write_conditions(api, entity_kind["version"], entity_kind["plural"], entity, [ctrl, deliv], now, dry_run, writes):
+        conds = [c for c in (ctrl, deliv) if c is not None]
+        if write_conditions(api, entity_kind["version"], entity_kind["plural"], entity, conds, now, dry_run, writes):
             counts["conditionWrites"] += 1
         if profile_kind:
             for prof in profile_kind["items"]:
                 if prof["metadata"].get("namespace") == ns and prof["metadata"]["name"] == "shc":
-                    if write_conditions(api, profile_kind["version"], profile_kind["plural"], prof, [ctrl, deliv],
+                    if write_conditions(api, profile_kind["version"], profile_kind["plural"], prof, conds,
                                         now, dry_run, writes):
                         counts["conditionWrites"] += 1
     return counts, problems, writes
@@ -360,6 +390,71 @@ def run_finalizer_release(api, kinds, cfg, now, dry_run):
     return counts, actions, problems
 
 
+# ---- pass 6: VirtualMachine lists of the environments on OpenShift sites ----------------------------------------
+
+def vm_refresh_sites(kinds, cfg, now):
+    """[(site CR, [stale CloudVirt refs])] of the OpenShift sites whose probe should run now for the VM lists."""
+    vcfg = cfg["vmRefresh"]
+    interval = vcfg["intervalMinutes"]
+    by_kind = {k["kind"]: k for k in kinds}
+    sites = (by_kind.get("CloudInfrastructure") or {}).get("items") or []
+    cloudvirts = (by_kind.get("CloudVirt") or {}).get("items") or []
+    out = []
+    for site in sorted(sites, key=lambda o: (o["metadata"].get("namespace", ""), o["metadata"]["name"])):
+        meta, status = site["metadata"], site.get("status") or {}
+        if (site.get("spec") or {}).get("type") != "openshift" or meta.get("deletionTimestamp"):
+            continue
+        if shc_status.derive_phase(site) not in ("Ready", "Degraded"):
+            continue  # a failed site is retried by its controller on every reconcile period
+        ann = meta.get("annotations") or {}
+        if str(ann.get(RECONCILE_NOW, "")).strip().lower() == RECONCILE_REQUEST:
+            continue  # a wake is already pending
+        delivery = status.get("delivery") or {}
+        if delivery.get("eventId") and delivery.get("completedEventId") != delivery.get("eventId"):
+            continue  # a probe is queued or running
+        ages = [minutes_since(v, now) for v in (status.get("lastReconciledAt"), ann.get(VM_REFRESH_AT))]
+        if any(a is not None and a < interval for a in ages):
+            continue  # probed or woken within the interval
+        stale = []
+        for cv in cloudvirts:
+            cmeta, cst = cv["metadata"], cv.get("status") or {}
+            if ((cv.get("spec") or {}).get("cloudRef") or {}).get("name") != meta["name"]:
+                continue
+            if cmeta.get("deletionTimestamp") or not cst.get("namespaces"):
+                continue  # the same environments the probe refreshes
+            age = minutes_since((cst.get("virtualMachines") or {}).get("observedAt"), now)
+            if age is None or age >= interval:
+                stale.append(f"{cmeta['namespace']}/{cmeta['name']}")
+        if stale:
+            out.append((site, sorted(stale)))
+            if len(out) >= vcfg["maxSitesPerRun"]:
+                break
+    return out
+
+
+def run_vm_refresh(api, kinds, cfg, now, dry_run):
+    counts = {"vmRefreshWakes": 0}
+    actions = []
+    version = next((k["version"] for k in kinds if k["kind"] == "CloudInfrastructure"), "v1alpha1")
+    plural = next((k["plural"] for k in kinds if k["kind"] == "CloudInfrastructure"), "cloudinfrastructures")
+    for site, stale in vm_refresh_sites(kinds, cfg, now):
+        meta = site["metadata"]
+        ns, name = meta["namespace"], meta["name"]
+        counts["vmRefreshWakes"] += 1
+        actions.append(f"wake CloudInfrastructure {ns}/{name}: VirtualMachine lists older than "
+                       f"{cfg['vmRefresh']['intervalMinutes']} min ({', '.join(stale[:5])}"
+                       f"{', …' if len(stale) > 5 else ''})")
+        if not dry_run:
+            try:
+                api.patch_namespaced_custom_object(
+                    GROUP, version, ns, plural, name,
+                    {"metadata": {"annotations": {RECONCILE_NOW: RECONCILE_REQUEST, VM_REFRESH_AT: stamp(now)}}})
+            except ApiException as exc:
+                if exc.status != 404:  # gone meanwhile
+                    raise
+    return counts, actions
+
+
 def status_kinds(kinds):
     """The kinds the redrive, phase and re-check passes look at: not those whose CRD carries teardown-tier "skip"
     (TenantProfile: platform-written, no Ready/phase of its own; it only gets the tenancy conditions)."""
@@ -403,6 +498,11 @@ def main():
         counts, actions, probs = run_finalizer_release(api, managed, cfg, now, args.dry_run)
         summary["finalizerRelease"] = counts
         problems += probs
+        for a in actions:
+            print(("would " if args.dry_run else "") + a)
+    if cfg["vmRefresh"].get("enabled", True):
+        counts, actions = run_vm_refresh(api, kinds, cfg, now, args.dry_run)
+        summary["vmRefresh"] = counts
         for a in actions:
             print(("would " if args.dry_run else "") + a)
     print(json.dumps(summary))

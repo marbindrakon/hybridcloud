@@ -97,7 +97,7 @@
             labels:
               cloud: "{{ cb_acm_cloud_label | default('Amazon') }}"
               vendor: OpenShift
-              cluster.open-cluster-management.io/clusterset: default
+              cluster.open-cluster-management.io/clusterset: "{{ platformopenshift_managed_cluster_set }}"
               platformopenshift: "{{ ansible_operator_meta.name }}"
           spec:
             hubAcceptsClient: true

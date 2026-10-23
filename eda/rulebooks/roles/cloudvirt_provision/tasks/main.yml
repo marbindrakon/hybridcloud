@@ -264,6 +264,8 @@
               {{ _cv_site_ns.resources | default([]) | map(attribute='metadata.name')
                  | difference(cv_namespaces | map(attribute='namespace')) | list }}
 
+        # no_log (R2A-F2): the results are whole VirtualMachine objects (cloud-init userData can carry a password);
+        # only the per-namespace counts below are logged and looped over.
         - name: Count the VMs in the namespaces to remove
           kubernetes.core.k8s_info:
             kubeconfig: "{{ site_kubeconfig }}"
@@ -272,6 +274,16 @@
             namespace: "{{ item }}"
           loop: "{{ cv_stale }}"
           register: _cv_stale_vms
+          no_log: true
+
+        - name: Summarize the VMs in the namespaces to remove
+          ansible.builtin.set_fact:
+            cv_stale_counts: >-
+              {%- set out = [] -%}
+              {%- for r in _cv_stale_vms.results | default([]) -%}
+                {%- set _ = out.append({'namespace': r.item, 'count': r.resources | default([]) | length}) -%}
+              {%- endfor -%}
+              {{ out }}
 
         - name: Remove the namespaces without VMs
           kubernetes.core.k8s:
@@ -279,16 +291,31 @@
             state: absent
             api_version: v1
             kind: Namespace
-            name: "{{ item.item }}"
-          loop: "{{ _cv_stale_vms.results | default([]) }}"
+            name: "{{ item.namespace }}"
+          loop: "{{ cv_stale_counts | selectattr('count', 'equalto', 0) | list }}"
           loop_control:
-            label: "{{ item.item }}"
-          when: item.resources | default([]) | length == 0
+            label: "{{ item.namespace }}"
 
         - name: Keep the removed namespaces that still hold VMs
           ansible.builtin.set_fact:
             cv_kept: >-
-              {{ _cv_stale_vms.results | default([]) | rejectattr('resources', 'equalto', []) | map(attribute='item') | list }}
+              {{ cv_stale_counts | rejectattr('count', 'equalto', 0) | map(attribute='namespace') | list }}
+
+        # what the environment's namespaces hold (status.virtualMachines; the site probe refreshes it)
+        - name: The VirtualMachines in the environment's namespaces
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/cloudvirt_vm_status.yml"
+          vars:
+            cvs_kubeconfig: "{{ site_kubeconfig }}"
+            cvs_names_cap: "{{ cloudvirt_vm_names_cap }}"
+            cvs_namespaces: >-
+              {%- set out = [] -%}
+              {%- for n in cv_namespaces -%}
+                {%- set _ = out.append({'namespace': n.namespace, 'name': n.name}) -%}
+              {%- endfor -%}
+              {%- for k in cv_kept -%}
+                {%- set _ = out.append({'namespace': k, 'name': ''}) -%}
+              {%- endfor -%}
+              {{ out }}
 
         - name: The platform's realization parameters
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
@@ -321,7 +348,8 @@
         fab_status: >-
           {{ cv_status | combine({'access': cv_access}) | combine({'endpoints': cv_endpoints | default({})})
              | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {})
-             | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {}) }}
+             | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {})
+             | combine({'virtualMachines': cv_vm_status} if cv_vm_status | default({}) | length > 0 else {}) }}
 
   rescue:
     - name: Mark the CloudVirt failed

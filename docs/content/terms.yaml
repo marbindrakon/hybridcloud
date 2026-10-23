@@ -322,8 +322,9 @@ banned:
   - match: '(?i)\bevent forwarder\b'
     use: (retired; see the retired components)
     where: [crd, ui, docs]
-  - match: '\bCloud Virt\b|\bCloud OSO\b|\bOpenshift Virt|\bPlatform Openshift\b'
-    use: OpenShift Virtualization environment, OpenStack environment, OpenShift cluster
+  # API kind names split into words (H2TG-F2): write the display term instead
+  - match: '\bCloud (Virt|OSO|AWS|GCP|Infrastructure)s?\b|\bOpenshift Virt|\bPlatform Open[sS]hift\b|\bHybrid (Network|Fabric)s?\b|\bNetwork Placements?\b|\bAttachment Circuits?\b|\bTenant Profiles?\b'
+    use: the display term (OpenShift Virtualization environment, OpenStack environment, site, OpenShift cluster, network, fabric, network placement, edge connection, tenant profile)
     where: [ui, docs]
   - match: '\bIAA[SC]\b'
     use: the display term of the object
@@ -401,8 +402,12 @@ banned:
 # label in capitals). They are checked on the labels the UI builds at runtime (kind terms, object
 # references, field labels, the catalogue templates that take a kind; check-content.py runs
 # ui/scripts/runtime-strings.mjs) and on saved page texts (check-content.py --rendered). Namespace
-# names (entity-<name>) and `oc get` command lines are not text. Every API kind name with more
-# than one word in it (CloudVirt, HybridNetwork, ...) is checked as well.
+# names (entity-<name>), `oc get` command lines and object names are not text: a word joined to
+# others by hyphens or dots (g-oso-1, web.oso.example) is part of a name, and --rendered also
+# skips the names in the page's own Name fields and columns and in a --names file. Every API
+# kind name with more than one word in it is checked as well, in CamelCase (CloudVirt,
+# HybridNetwork) without regard to case, and split into capitalised words (Cloud Virt, Hybrid
+# Network, Cloud Infrastructure) as written.
 rendered:
   - '\bPending\b'
   - '\bEntit(y|ies)\b'

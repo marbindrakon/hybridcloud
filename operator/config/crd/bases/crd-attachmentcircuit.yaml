@@ -311,6 +311,53 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                delivery:
+                  type: object
+                  description: >-
+                    Delivery of the latest change to the platform's automation. Platform detail, for the platform team.
+                  properties:
+                    eventId:
+                      type: string
+                      description: The latest change request sent to the automation.
+                    reason:
+                      type: string
+                      description: What the latest change request asks for.
+                    publishedAt:
+                      type: string
+                      description: When the latest change request was handed over (RFC 3339); empty while it is being sent.
+                    publishFailingSince:
+                      type: string
+                      description: Since when handing over the latest change request has been failing (RFC 3339).
+                    acknowledgedEventId:
+                      type: string
+                      description: The change request the automation last started work on.
+                    jobId:
+                      type: string
+                      description: The automation run working on the acknowledged change request.
+                    jobStartedAt:
+                      type: string
+                      description: When that run started (RFC 3339).
+                    completedEventId:
+                      type: string
+                      description: The change request the automation last finished, successfully or not.
+                    completedAt:
+                      type: string
+                      description: When that change request was finished (RFC 3339).
+                    state:
+                      type: string
+                      description: >-
+                        A delivery problem of the change request in stateEventId: NoAcknowledgement (no run picked it
+                        up), Stalled (its run takes longer than allowed) or NoCompletion (its run ended without
+                        finishing it). Empty when there is none.
+                    stateSince:
+                      type: string
+                      description: Since when the delivery problem has been seen (RFC 3339).
+                    stateEventId:
+                      type: string
+                      description: >-
+                        The change request the delivery problem is about. A problem about an earlier change request
+                        than eventId no longer applies.
+                  x-kubernetes-preserve-unknown-fields: true
                 conditions:
                   description: >-
                     Standard conditions. Ready says whether the object is usable; the others say

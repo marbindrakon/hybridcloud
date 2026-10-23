@@ -45,12 +45,21 @@
         name: "{{ ansible_operator_meta.name }}"
         namespace: "{{ ansible_operator_meta.namespace }}"
         # the summary only at the delete request: a requeue keeps the summary a later write gave (a tier wait,
-        # a failed teardown)
+        # a failed teardown); the Ready condition goes False with it (the READY column reads it, PAC-O1)
         status: >-
           {{ {'status': 'reconciling', 'ready': false, 'message': 'Awaiting EDA delete',
               'lastReconciledAt': entity_delete_transition_time,
               'phase': 'Deleting', 'phaseSince': _entity_phase_since | trim}
-             | combine({} if (_entity_was_deleting | bool) else {'summary': 'Being deleted.'}) }}
+             | combine({} if (_entity_was_deleting | bool) else
+                        {'summary': 'Being deleted.',
+                         'conditions': [{'type': 'Ready', 'status': 'False', 'reason': 'Deleting',
+                                         'message': 'Being deleted.',
+                                         'lastTransitionTime': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}]}) }}
+      # once per delete: a requeue (and the release after the teardown) keeps the teardown's message
+      when:
+        - not ((_hybridsovereign_redhat_entity.status | default({}, true)).deletionComplete | default(false) | bool)
+        - not ((((_hybridsovereign_redhat_entity.status | default({}, true)).delivery | default({}, true)).reason
+                | default('', true)) is search('DeleteRequested$'))
 
     - name: Build compact Entity delete event note (K8s Event note field max 1024 chars)
       ansible.builtin.set_fact:

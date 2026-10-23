@@ -1,6 +1,9 @@
 ---
 # Provision assignment via ACM Policy/Placement on central cluster.
-# Uses the assignment-acm-creator SA token (least-privilege: ACM Policy/Placement CRUD only).
+# Uses the assignment-acm-creator SA token: Policy/Placement/PlacementBinding CRUD in acm_policy_namespace
+# only. That is not low privilege: an enforcing ConfigurationPolicy runs with cluster-admin rights on every
+# cluster its Placement selects. The namespace binds only the tenant cluster set (no hub or platform cluster),
+# and the account cannot create ManagedClusterSetBindings, so it reaches tenant-built clusters only.
 
 - name: Read ACM creator SA secret
   kubernetes.core.k8s_info:
@@ -42,9 +45,20 @@
     acm_entity: "{{ assignment_entity | lower | regex_replace('[^a-z0-9-]', '-') }}"
     acm_team: "{{ assignment_team | lower | regex_replace('[^a-z0-9-]', '-') }}"
 
-- name: Build ACM Policy name from Assignment CR (unique per cluster + team)
+# <tenant>-<assignment>-<hash> (one shared task with the teardown); a name an earlier run recorded is kept, so the
+# objects on central keep their name for the Assignment's whole life
+- name: The ACM name of this Assignment
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/assignment_acm_name.yml"
+  vars:
+    aan_namespace: "{{ assignment_cr_namespace }}"
+    aan_assignment: "{{ assignment_cr_name }}"
+    aan_policy_namespace: "{{ acm_policy_namespace }}"
+    aan_max_length: "{{ acm_policy_name_max_length | default('', true) }}"
+
+- name: Build ACM Policy name (recorded, else <tenant>-<assignment>-<hash>)
   ansible.builtin.set_fact:
-    acm_policy_name: "{{ assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}"
+    acm_policy_name: "{{ assignment_stored_acm_policy_name | default('', true) | trim or assignment_acm_name | trim }}"
+    acm_owner: "{{ assignment_cr_namespace }}/{{ assignment_cr_name }}"
 
 - name: Resolve spoke cluster name for Placement
   ansible.builtin.set_fact:
@@ -128,6 +142,7 @@
         name: "{{ acm_policy_name }}"
         namespace: "{{ acm_policy_namespace }}"
         annotations:
+          hybridsovereign.redhat/assignment: "{{ acm_owner }}"
           policy.open-cluster-management.io/standards: Hybrid Sovereign Cloud
           policy.open-cluster-management.io/categories: Assignment
           policy.open-cluster-management.io/controls: Team Environment
@@ -156,6 +171,8 @@
       metadata:
         name: "placement-{{ acm_policy_name }}"
         namespace: "{{ acm_policy_namespace }}"
+        annotations:
+          hybridsovereign.redhat/assignment: "{{ acm_owner }}"
       spec:
         predicates:
           - requiredClusterSelector:
@@ -171,6 +188,8 @@
       metadata:
         name: "binding-{{ acm_policy_name }}"
         namespace: "{{ acm_policy_namespace }}"
+        annotations:
+          hybridsovereign.redhat/assignment: "{{ acm_owner }}"
       placementRef:
         name: "placement-{{ acm_policy_name }}"
         kind: Placement

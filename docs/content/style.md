@@ -68,4 +68,9 @@ Tenant"). `make check-content` fails on a raw kind passed into a display string,
 or `rendered` word (terms.yaml) in the labels the module builds for every kind a tenant meets and
 every status field of those kinds (it needs `npm ci` in `ui/`; without it that part is skipped
 with a warning). To check a crawl of rendered tenant pages, save each page's text and run
-`python3 -I scripts/check-content.py --rendered <dir>`.
+`python3 -I scripts/check-content.py --rendered <dir>`. Kind names count in CamelCase
+(`CloudVirt`) and split into capitalised words (`Cloud Infrastructure`, `Hybrid Network`); write the
+display term instead ("site", "network"). Object names are tenant data, not text: a word inside a
+hyphen- or dot-joined lower-case name (`g-oso-1`) is skipped, and so are the names the page shows
+in its own Name fields and Name columns; add `--names <file>` (one name per line) for names shown
+anywhere else.

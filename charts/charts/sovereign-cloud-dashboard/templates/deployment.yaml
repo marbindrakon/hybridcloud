@@ -20,9 +20,16 @@ spec:
       {{- /* shc: Argo renders without cluster access, so lookup finds nothing; leave the
            annotation to the oauth-sync job then, or Argo and the job flip it every run. */}}
       {{- $oauthRev := include "dashboard.oauthSecretChecksum" . }}
-      {{- if ne $oauthRev "pending" }}
+      {{- $pages := .Values.oauthProxy.pages | default dict }}
+      {{- if or (ne $oauthRev "pending") $pages.enabled }}
       annotations:
+        {{- if ne $oauthRev "pending" }}
         oauth-client-secret-version: {{ $oauthRev | quote }}
+        {{- end }}
+        {{- if $pages.enabled }}
+        # a change to the proxy's pages restarts the pod (oauth-proxy reads them at start)
+        oauth-pages-checksum: {{ include (print $.Template.BasePath "/oauth-pages-configmap.yaml") . | sha256sum | quote }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "dashboard.name" . }}
@@ -37,6 +44,11 @@ spec:
         - name: oauth-client-secret
           secret:
             secretName: {{ include "dashboard.name" . }}-oauth-client
+        {{- if $pages.enabled }}
+        - name: oauth-pages
+          configMap:
+            name: {{ include "dashboard.name" . }}-oauth-pages
+        {{- end }}
       containers:
         - name: oauth-proxy
           image: {{ .Values.oauthProxy.image }}
@@ -68,6 +80,10 @@ spec:
             - --pass-basic-auth=false
             - --skip-auth-regex=^/healthz$
             - --skip-provider-button=true
+            {{- if $pages.enabled }}
+            # sign-in and error pages in the product's words, with the page for a user without the platform role
+            - --custom-templates-dir=/etc/oauth-proxy/pages
+            {{- end }}
             {{- with .Values.oauthProxy.logoutUrl }}
             - --logout-url={{ . }}
             {{- end }}
@@ -90,6 +106,11 @@ spec:
             - name: oauth-client-secret
               mountPath: /var/run/secrets/oauth
               readOnly: true
+            {{- if $pages.enabled }}
+            - name: oauth-pages
+              mountPath: /etc/oauth-proxy/pages
+              readOnly: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /oauth/healthz

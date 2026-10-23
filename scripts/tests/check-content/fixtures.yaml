@@ -75,6 +75,28 @@ rendered:
   - {text: "Open https://console.example.com/k8s/cloudvirts", hits: []}
   - {text: "Environment VM environment g-vmenv-1", hits: []}
   - {text: "Waiting for the platform; was Pending", hits: [Pending]}
+  # H2TG-F2: kind names split into words, as written (prose in lower case is not a kind name)
+  - {text: "Site (Cloud Infrastructure)", hits: [Cloud Infrastructure]}
+  - {text: "The Hybrid Network to place.", hits: [Hybrid Network]}
+  - {text: "Request a Cloud Virt or a Platform OpenShift", hits: [Cloud Virt, Platform OpenShift]}
+  - {text: "Built on your own cloud infrastructure", hits: []}
+  # H2TG-F3: a word inside an object name is not text; the same word on its own still is
+  - {text: "OpenStack environment g-oso-1", hits: []}
+  - {text: "Zone g-vmenv.oso.example", hits: []}
+  - {text: "An OSO-backed site", hits: [OSO]}
+  - {text: "OSO environment g-oso-1", hits: [OSO]}
+# Whole saved pages (H2TG-F3): names from the page's own Name fields and Name columns, and from
+# a --names file (`names`), are not text.
+rendered_pages:
+  - lines: ["Name", "oso", "OpenStack environment oso is ready"]
+    hits: []
+  - lines: ["Name\tSite namespace\tVMs", "oso\tuxr-oso\t1", "Environment oso: 1 VM"]
+    hits: []
+  - lines: ["Tenant", "oso", "OpenStack environment oso"]
+    names: [oso]
+    hits: []
+  - lines: ["Tenant", "oso", "OpenStack environment oso"]
+    hits: [oso]
 # Kind words in display strings of .tsx sources (g): `hits` are the words the check reports.
 source_kinds:
   - source: "<RefSelect id=\"cloudoso\" label=\"CloudOSO\" value={v} />"

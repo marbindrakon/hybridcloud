@@ -4,7 +4,7 @@ installCRDs: true
 
 image:
   repository: /hybrid-sovereign/hybridsovereign-primary-operator
-  tag: "img-0.1.37"
+  tag: "img-0.1.39"
   pullPolicy: Always
 
 imagePullSecrets:
@@ -13,7 +13,7 @@ imagePullSecrets:
 namespaceOperator:
   image:
     repository: /hybrid-sovereign/hybridsovereign-namespace-operator
-    tag: "img-0.1.26"
+    tag: "img-0.1.28"
   chartVersion: "0.1.0"
 
 serviceAccount:
@@ -38,6 +38,17 @@ amqKafka:
   vaultPath: amq-producer
   secretStoreName: vault-backend
   secretStoreKind: ClusterSecretStore
+
+# The ACM creator credential of the management cluster as the Secret the Assignment jobs read (namespace above):
+# keys token and ca.crt from the store's key vaultPath (written there by the management cluster). Needed only for
+# Assignments that name a cluster.
+assignmentAcmCreator:
+  enabled: false
+  secretName: assignment-acm-creator-sa
+  vaultPath: assignment-acm-creator
+  secretStoreName: vault-backend
+  secretStoreKind: ClusterSecretStore
+  refreshInterval: 1h
 
 metrics:
   enabled: true

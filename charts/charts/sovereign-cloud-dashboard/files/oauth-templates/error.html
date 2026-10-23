@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  {{- if and (eq .Title "403 Permission Denied") (eq .Message "Invalid Account") }}
+  <title>No platform role · @@PRODUCT@@</title>
+  {{- else }}
+  <title>Sign-in did not complete · @@PRODUCT@@</title>
+  {{- end }}
+  <style>
+@@STYLE@@
+  </style>
+</head>
+<body>
+  <header class="sc-bar"><span class="sc-mark" aria-hidden="true"></span>@@PRODUCT@@</header>
+  <main class="sc-card" role="main">
+  {{- if and (eq .Title "403 Permission Denied") (eq .Message "Invalid Account") }}
+    <h1>This dashboard is for the platform team</h1>
+    <p>You are signed in, but your account holds no platform role, so this dashboard does not open for you.</p>
+    <p>The <strong>@@GRANTING_ROLE@@</strong> role grants access to it. The platform team adds members to platform roles; ask them if you need access.</p>
+    <p>If you work in a tenant, you do not need this dashboard: your tenant's objects are in the tenant dashboard and in the OpenShift console.</p>
+    @@TENANT_LINK@@
+    <p class="sc-actions"><a class="sc-btn sc-btn--link" href="{{.ProxyPrefix}}/sign_out">Sign out</a></p>
+  {{- else }}
+    <h1>Sign-in did not complete</h1>
+    <p>The sign-in to @@PRODUCT@@ stopped before it finished. Try again; if it keeps failing, tell the platform team what this page shows.</p>
+    <dl class="sc-facts">
+      <dt>Status</dt><dd>{{.Title}}</dd>
+      {{- if .Message }}
+      <dt>Detail</dt><dd>{{.Message}}</dd>
+      {{- end }}
+    </dl>
+    <p class="sc-actions"><a class="sc-btn" href="{{.ProxyPrefix}}/start">Try again</a> <a class="sc-btn sc-btn--link" href="{{.ProxyPrefix}}/sign_out">Sign out</a></p>
+  {{- end }}
+  </main>
+</body>
+</html>
