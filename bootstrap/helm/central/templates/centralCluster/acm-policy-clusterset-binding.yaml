@@ -17,4 +17,21 @@ metadata:
     argocd.argoproj.io/sync-wave: {{ .Values.acmPolicies.syncWave | quote }}
 spec:
   clusterSet: default
+{{- if include "sovereign-central.tenantClusterSetEnabled" . }}
+{{- $set := include "sovereign-central.tenantClusterSet" . }}
+---
+# R2B-F1: the clusters the PlatformOpenshift jobs build join the tenant cluster set, not default; their
+# per-cluster policies in this namespace select them from there.
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSetBinding
+metadata:
+  name: {{ $set }}
+  namespace: {{ .Values.acmPolicies.namespace }}
+  labels:
+    {{- include "sovereign-central.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.acmPolicies.syncWave | quote }}
+spec:
+  clusterSet: {{ $set }}
+{{- end }}
 {{- end }}

@@ -1,0 +1,38 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.role.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: assignment-central-rbac
+    app.kubernetes.io/component: assignment-acm-creator
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+rules:
+  - apiGroups:
+      - policy.open-cluster-management.io
+    resources:
+      - policies
+      - placementbindings
+    verbs:
+      - create
+      - update
+      - patch
+      - delete
+      - get
+      - list
+      - watch
+  # No managedclustersetbindings and no managedclustersets/bind: the namespace's binding is fixed by
+  # this chart, so a Placement can never reach a cluster outside the tenant cluster set.
+  - apiGroups:
+      - cluster.open-cluster-management.io
+    resources:
+      - placements
+    verbs:
+      - create
+      - update
+      - patch
+      - delete
+      - get
+      - list
+      - watch

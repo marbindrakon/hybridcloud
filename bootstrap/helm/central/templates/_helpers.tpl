@@ -178,3 +178,19 @@ spec:
           remoteKey: {{ .vaultKey }}
           property: kubeconfig
 {{- end }}
+
+{{/*
+The ManagedClusterSet of tenant-built clusters (R2B-F1). The PlatformOpenshift jobs label the clusters
+they build into it; the Assignment policy namespace binds this set only. Values (all optional):
+acmTenantClusterSet.enabled (default true), .name (default sovereign-tenant-clusters),
+.platformClusters (ManagedCluster names that must never join it, besides the hub itself).
+*/}}
+{{- define "sovereign-central.tenantClusterSet" -}}
+{{- $cs := .Values.acmTenantClusterSet | default dict -}}
+{{- default "sovereign-tenant-clusters" $cs.name -}}
+{{- end }}
+
+{{- define "sovereign-central.tenantClusterSetEnabled" -}}
+{{- $cs := .Values.acmTenantClusterSet | default dict -}}
+{{- if and (include "sovereign-central.applicationsEnabled" .) (ne (toString $cs.enabled) "false") }}true{{- end }}
+{{- end }}

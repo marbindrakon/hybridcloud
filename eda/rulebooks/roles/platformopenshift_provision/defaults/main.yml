@@ -38,3 +38,7 @@ mce_cluster_build_chart: >-
   {{ platformopenshift_defaults.mceClusterBuildChart
      | default('oci://' ~ oci_registry_host ~ '/hybrid-sovereign/mce-cluster-build', true) }}
 mce_cluster_build_chart_version: "{{ platformopenshift_defaults.mceClusterBuildChartVersion | default('0.2.0') }}"
+# The ACM ManagedClusterSet every cluster these jobs build joins (platformopenshift_defaults key
+# managedClusterSet). It holds tenant-built clusters only: the Assignment policy namespace on the hub binds
+# this set alone, so an Assignment's Placement can never select the hub or a platform cluster.
+platformopenshift_managed_cluster_set: "{{ platformopenshift_defaults.managedClusterSet | default('sovereign-tenant-clusters', true) }}"

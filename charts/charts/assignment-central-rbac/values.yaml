@@ -1,0 +1,21 @@
+namespace: sovereign-cloud-helpers
+
+# The only ManagedClusterSet bound in `namespace`. Placements there can select only clusters of this
+# set, so it must hold tenant-built clusters only: never the hub (local-cluster) or a platform cluster.
+# The set itself is created with the hub's ACM configuration; the PlatformOpenshift jobs label the
+# clusters they build into it.
+clusterSet: sovereign-tenant-clusters
+
+serviceAccount:
+  name: assignment-acm-creator
+
+role:
+  name: assignment-acm-creator
+
+pushSecret:
+  enabled: true
+  name: assignment-acm-creator-push
+  secretStoreName: vault-backend
+  secretStoreKind: ClusterSecretStore
+  vaultPath: assignment-acm-creator
+  refreshInterval: "1h"

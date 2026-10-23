@@ -1,0 +1,17 @@
+apiVersion: v2
+appVersion: 0.1.0
+description: ServiceAccount on the hub cluster for the Assignment jobs to create and manage ACM
+  Policy/Placement/PlacementBinding resources in one namespace. The namespace is bound to one
+  ManagedClusterSet only (the tenant cluster set, which holds no hub or platform cluster), and the
+  account cannot bind other sets. Includes a PushSecret to deliver the account token to Vault for
+  ExternalSecret consumption on the services cluster.
+keywords:
+- openshift
+- rbac
+- assignment
+- acm
+maintainers:
+- name: hybrid-sovereign-cloud
+name: assignment-central-rbac
+type: application
+version: 0.1.3

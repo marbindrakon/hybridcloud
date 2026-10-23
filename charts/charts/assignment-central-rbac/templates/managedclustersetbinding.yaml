@@ -1,0 +1,21 @@
+{{- /*
+The namespace's only ManagedClusterSetBinding. It names the tenant cluster set, never `default` or
+`global`: ACM puts the hub (local-cluster) and every imported cluster without a set label into
+`default`, and an enforcing ConfigurationPolicy runs with cluster-admin rights on the clusters a
+Placement selects. The binding is created by Argo; the Assignment account has no bind right.
+*/ -}}
+{{- if or (eq .Values.clusterSet "default") (eq .Values.clusterSet "global") (not .Values.clusterSet) }}
+{{- fail "clusterSet must name a set of tenant clusters, not default or global" }}
+{{- end }}
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSetBinding
+metadata:
+  name: {{ .Values.clusterSet }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: assignment-central-rbac
+    app.kubernetes.io/component: assignment-acm-creator
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  clusterSet: {{ .Values.clusterSet }}

@@ -2,6 +2,7 @@
 cluster:
   name: {{ cb_cluster_name }}
   importToHub: true
+  managedClusterSet: "{{ platformopenshift_managed_cluster_set }}"
   useACM: true
   createGitopsManifestWorks: false
   createGitopsSyncSet: false

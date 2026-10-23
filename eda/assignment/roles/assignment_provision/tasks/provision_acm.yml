@@ -1,6 +1,9 @@
 ---
 # Provision assignment via ACM Policy/Placement on central cluster.
-# Uses the assignment-acm-creator SA token (least-privilege: ACM Policy/Placement CRUD only).
+# Uses the assignment-acm-creator SA token: Policy/Placement/PlacementBinding CRUD in acm_policy_namespace
+# only. That is not low privilege: an enforcing ConfigurationPolicy runs with cluster-admin rights on every
+# cluster its Placement selects. The namespace binds only the tenant cluster set (no hub or platform cluster),
+# and the account cannot create ManagedClusterSetBindings, so it reaches tenant-built clusters only.
 
 - name: Read ACM creator SA secret
   kubernetes.core.k8s_info:
