@@ -15,10 +15,44 @@ export interface OperatorStatus {
   entity?: string;
   /** What a pending object waits for */
   waitingFor?: string[];
-  /** What a requested delete waits for */
-  deletionBlockedBy?: string[];
+  /** What a requested delete waits for (typed entries; older objects hold names) */
+  deletionBlockedBy?: Array<string | { kind?: string; name?: string; namespace?: string; reason?: string }>;
   deletionComplete?: boolean;
   edaJobs?: EdaJobStatus[];
+  /** Stored phase (Waiting, Creating, Updating, Ready, Degraded, Failed, Deleting) */
+  phase?: string;
+  /** When the phase last changed (RFC 3339 UTC) */
+  phaseSince?: string;
+  /** One tenant-safe line saying what is going on */
+  summary?: string;
+  /** Last Retry now request the controller picked up */
+  lastHandledReconcileRequest?: string;
+  /** How to reach and sign in to an environment */
+  endpoints?: EnvironmentEndpoints;
+  /** The integration connection the platform used when the object names none */
+  config?: string;
+  /** Platform realization detail (shown collapsed) */
+  realization?: Record<string, unknown>;
+}
+
+/** How to reach an environment (status.endpoints). */
+export interface EnvironmentEndpoints {
+  /** Web console of the environment, when the site offers one */
+  console?: string;
+  /** API endpoint (Kubernetes API, Keystone, cloud API) */
+  api?: string;
+  signIn?: {
+    /** TenantSSO (the tenant's sign-in), ApplicationCredential, NotAvailable */
+    method?: string;
+    /** Name of the sign-in button on the site's login page */
+    idpName?: string;
+  };
+  /** Groups whose members can sign in */
+  signInGroups?: string[];
+  /** Site namespaces or the cloud project */
+  project?: string | string[];
+  domain?: string;
+  location?: string;
 }
 
 /** One automation job run recorded on the object */
@@ -43,7 +77,10 @@ export interface ObjectMeta {
   namespace?: string;
   uid?: string;
   generation?: number;
+  resourceVersion?: string;
   creationTimestamp?: string;
+  /** Set when a delete was requested; the object stays until its finalizers finish */
+  deletionTimestamp?: string;
   labels?: Record<string, string>;
   annotations?: Record<string, string>;
 }
@@ -70,6 +107,9 @@ export interface EntitySpec {
   billingID?: string;
   websiteLink?: string;
   namespaceRbac?: EntityNamespaceRbac;
+  displayName?: string;
+  contacts?: { name: string; email?: string; url?: string }[];
+  allowedSites?: string[];
 }
 
 export type Entity = K8sResource<EntitySpec>;
@@ -81,12 +121,18 @@ export interface TeamSpec {
     argo?: boolean;
     istio?: boolean;
   };
-  /**
-   * Rbac CR names in the tenant namespace. Members of the viewer Rbacs' groups
-   * (the admin Rbacs' when no viewer Rbac is set) can view the Team.
+  /*
+   * Access groups (Rbac names in the tenant namespace): the interim form of a
+   * resource-scoped role assignment, on the services cluster only (nothing on
+   * clusters; cluster access is the Assignment's toolRbac). The Team's Projects
+   * are the spec.projects of the Assignments that name the Team. The three lists
+   * can be changed only by users allowed to delete the Team.
    */
+  /** View and change this Team and its Projects; view its Assignments */
   teamAdmin?: string[];
+  /** View this Team; view and change its Projects */
   teamMemberRbac?: string[];
+  /** View this Team, its Assignments and its Projects */
   teamViewerRbac?: string[];
 }
 
@@ -112,7 +158,20 @@ export type Assignment = K8sResource<AssignmentSpec>;
 
 /** Project — entity-scoped project namespace */
 export interface ProjectSpec {
+  displayName?: string;
   description?: string;
+  /*
+   * Access groups (Rbac names in the tenant namespace): the interim form of a
+   * resource-scoped role assignment on this Project, on the services cluster
+   * only. Changes to the lists are accepted only from users allowed to delete
+   * the Project.
+   */
+  /** View, change and delete this Project, including its access lists */
+  projectAdmin?: string[];
+  /** View and change this Project (not its access lists) */
+  projectDeveloperRbac?: string[];
+  /** View this Project */
+  projectViewerRbac?: string[];
 }
 
 export type Project = K8sResource<ProjectSpec>;
@@ -242,6 +301,8 @@ export interface CloudInfrastructureSpec {
   /** Immutable; selects the typed section */
   type: CloudInfrastructureType;
   displayName?: string;
+  /** Where the site is, in words shown to tenants; aws and gcp sites use their region */
+  location?: string;
   credentialsRef?: VaultPathRef;
   /** Entities allowed to reference this site; empty means every Entity */
   entityRefs?: NameRef[];
@@ -675,6 +736,7 @@ export type UIHealthChecker = K8sResource<UIHealthCheckerSpec>;
 /** Union of all Hybrid Sovereign CR kinds */
 export type HybridSovereignKind =
   | 'Entity'
+  | 'TenantProfile'
   | 'Team'
   | 'Assignment'
   | 'Project'
@@ -704,6 +766,7 @@ export type HybridSovereignKind =
 /** Plural resource names for K8s API paths */
 export const KIND_PLURALS: Record<HybridSovereignKind, string> = {
   Entity: 'entities',
+  TenantProfile: 'tenantprofiles',
   Team: 'teams',
   Assignment: 'assignments',
   Project: 'projects',

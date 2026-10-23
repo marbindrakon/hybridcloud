@@ -1,7 +1,8 @@
 {{- /*
 shc (design/P7-PLAN.md P7.3.3): the platform's HybridFabrics in the platform namespace, keyed by name, each
-{spec: <HybridFabric spec>} (enabled: false skips one). Removing one deletes it; its finalizer waits until no
-CloudGateway or HybridNetwork uses it.
+{spec: <HybridFabric spec>} (enabled: false skips one). Removing one from values does not delete it (Prune=false):
+delete it by hand; its finalizer waits until no CloudGateway or HybridNetwork uses it, and the admission policy
+shc-fabric-ledger-guard refuses the delete while the fabric holds allocations.
 */}}
 {{- range $name, $f := .Values.hybridFabrics }}
 {{- if ne (toString $f.enabled) "false" }}
@@ -11,9 +12,14 @@ kind: HybridFabric
 metadata:
   name: {{ $name }}
   namespace: {{ $.Values.namespace }}
+  labels:
+    hybridsovereign.redhat/managed-by: gitops
   annotations:
     argocd.argoproj.io/sync-wave: "3"
-    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # Never pruned or deleted by Argo CD: removing it from values leaves it in the cluster (shown as
+    # requiring pruning); delete it by hand once nothing uses it.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Prune=false,Delete=false
+    hybridsovereign.redhat/gitops-source: {{ printf "%s/hybridFabrics/%s" (include "primary-operator.gitopsApp" $) $name | quote }}
 spec:
   {{- toYaml $f.spec | nindent 2 }}
 {{- end }}

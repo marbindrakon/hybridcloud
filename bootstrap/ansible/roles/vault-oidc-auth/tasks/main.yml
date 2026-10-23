@@ -80,12 +80,34 @@
       user_claim: "sub"
       groups_claim: "groups"
       allowed_redirect_uris: "{{ vault_redirect_uris }}"
+      # only members of the platform admin group get the admin policy; the realm's other users are refused
+      bound_claims:
+        groups:
+          - "{{ vault_admin_group_claim }}"
+      bound_claims_type: string
       policies:
         - "{{ admin_policy_name }}"
       ttl: "8h"
     status_code: [200, 204]
   retries: 3
   delay: 5
+
+- name: Read back the central Vault admin role
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/auth/{{ vault_oidc_mount }}/role/{{ oidc_role_name }}"
+    method: GET
+    validate_certs: false
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    status_code: [200]
+  register: central_vault_admin_role
+
+- name: The central Vault admin role is bound to the admin group
+  ansible.builtin.assert:
+    that:
+      - (central_vault_admin_role.json.data.bound_claims | default({}, true)).groups | default([]) == [vault_admin_group_claim]
+    fail_msg: "central Vault role {{ oidc_role_name }} is not bound to group {{ vault_admin_group_claim }}"
+    quiet: true
 
 - name: Create OIDC group alias mapping sovereign-admin → admin policy on central vault
   block:
@@ -132,19 +154,8 @@
       ansible.builtin.set_fact:
         oidc_accessor: "{{ central_auth_methods_for_accessor.json[vault_oidc_mount + '/'].accessor }}"
 
-    - name: Check existing group aliases for sovereign-admin
-      ansible.builtin.uri:
-        url: "{{ vault_addr }}/v1/identity/group-alias/id?list=true"
-        method: GET
-        validate_certs: false
-        headers:
-          X-Vault-Token: "{{ vault_root_token }}"
-        status_code: [200, 404]
-      register: existing_aliases
-      retries: 3
-      delay: 5
-
-    - name: Create group alias for sovereign-admin claim
+    # the alias is the claim value: the full group path the groups mapper emits (/sovereign-admin)
+    - name: Create group alias for the sovereign-admin claim
       ansible.builtin.uri:
         url: "{{ vault_addr }}/v1/identity/group-alias"
         method: POST
@@ -153,10 +164,31 @@
           X-Vault-Token: "{{ vault_root_token }}"
         body_format: json
         body:
-          name: "{{ vault_admin_group }}"
+          name: "{{ vault_admin_group_claim }}"
           canonical_id: "{{ admin_group_result.json.data.id }}"
           mount_accessor: "{{ oidc_accessor }}"
-        status_code: [200, 400]
+        status_code: [200, 204]
+      when: (admin_group_result.json.data.alias | default({}, true)).id | default('') | length == 0
+      retries: 3
+      delay: 5
+
+    - name: Rename the group alias to the sovereign-admin claim value
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/identity/group-alias/id/{{ admin_group_result.json.data.alias.id }}"
+        method: POST
+        validate_certs: false
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          name: "{{ vault_admin_group_claim }}"
+          canonical_id: "{{ admin_group_result.json.data.id }}"
+          mount_accessor: "{{ oidc_accessor }}"
+        status_code: [200, 204]
+      when:
+        - (admin_group_result.json.data.alias | default({}, true)).id | default('') | length > 0
+        - admin_group_result.json.data.alias.name != vault_admin_group_claim
+          or admin_group_result.json.data.alias.mount_accessor != oidc_accessor
       retries: 3
       delay: 5
 
@@ -215,16 +247,95 @@
           standardFlowEnabled: true
           implicitFlowEnabled: false
           directAccessGrantsEnabled: false
-          redirectUris:
-            - "{{ lookup('env', 'VAULT_SERVICES_URL') | regex_replace('/$', '') ~ '/ui/vault/auth/oidc/oidc/callback' }}"
-            - "http://localhost:8250/oidc/callback"
+          redirectUris: "{{ vault_services_keycloak_redirect_uris }}"
           webOrigins:
             - "+"
+          protocolMappers:
+            - "{{ vault_keycloak_groups_mapper }}"
         status_code: [201]
       register: vault_services_client_create
       when: vault_services_client_check.json | length == 0
       retries: 3
       delay: 5
+
+    - name: Converge the existing vault client (exact callbacks, no password grant, groups claim)
+      when: vault_keycloak_converge | bool and vault_services_client_check.json | length > 0
+      block:
+        - name: Read the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}"
+            method: GET
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+            status_code: [200]
+          register: vault_services_client_full
+          no_log: true
+
+        - name: Work out what changes on the vault client
+          vars:
+            _cur: "{{ vault_services_client_full.json }}"
+          ansible.builtin.set_fact:
+            vault_client_fields: >-
+              {{ (['redirectUris'] if (_cur.redirectUris | default([]) | sort | list) != (vault_services_keycloak_redirect_uris | sort | list) else [])
+                 + (['directAccessGrantsEnabled'] if _cur.directAccessGrantsEnabled | default(false) | bool else []) }}
+            vault_client_mapper: "{{ (_cur.protocolMappers | default([]) | selectattr('name', 'equalto', vault_keycloak_groups_mapper.name) | list + [{}]) | first }}"
+
+        - name: Vault client changes
+          ansible.builtin.debug:
+            msg: >-
+              {{ keycloak_services_realm }}/{{ vault_services_client_id }}:
+              {{ (vault_client_fields + ([] if (vault_client_mapper.config | default({})).get('full.path') == 'true'
+                  and vault_client_mapper.protocolMapper | default('') == vault_keycloak_groups_mapper.protocolMapper else ['mapper groups']))
+                 | join(', ') or 'no change' }}{{ ' (plan only)' if vault_keycloak_plan_only | bool else '' }}
+
+        - name: Update the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}"
+            method: PUT
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: >-
+              {{ vault_services_client_full.json | combine({'redirectUris': vault_services_keycloak_redirect_uris,
+                 'directAccessGrantsEnabled': false}) }}
+            status_code: [204]
+          when: vault_client_fields | length > 0 and not (vault_keycloak_plan_only | bool)
+          no_log: true
+
+        - name: Add the groups mapper to the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}/protocol-mappers/models"
+            method: POST
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: "{{ vault_keycloak_groups_mapper }}"
+            status_code: [201]
+          when: vault_client_mapper | length == 0 and not (vault_keycloak_plan_only | bool)
+
+        - name: Update the groups mapper of the vault client
+          ansible.builtin.uri:
+            url: "{{ keycloak_services_url }}/admin/realms/{{ keycloak_services_realm }}/clients/{{ vault_services_client_check.json[0].id }}/protocol-mappers/models/{{ vault_client_mapper.id }}"
+            method: PUT
+            validate_certs: false
+            headers:
+              Authorization: "Bearer {{ kc_services_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: >-
+              {{ vault_keycloak_groups_mapper | combine({'id': vault_client_mapper.id,
+                 'config': (vault_client_mapper.config | default({})) | combine(vault_keycloak_groups_mapper.config)}) }}
+            status_code: [204]
+          when:
+            - vault_client_mapper | length > 0
+            - (vault_client_mapper.config | default({})).get('full.path') != 'true'
+              or vault_client_mapper.protocolMapper | default('') != vault_keycloak_groups_mapper.protocolMapper
+            - not (vault_keycloak_plan_only | bool)
 
     - name: Get vault client secret from services keycloak
       ansible.builtin.uri:
@@ -340,9 +451,31 @@
           user_claim: "sub"
           groups_claim: "groups"
           allowed_redirect_uris: "{{ vault_redirect_uris }}"
+          # only members of the platform admin group get the admin policy; tenant users of the realm are refused
+          bound_claims:
+            groups:
+              - "{{ vault_admin_group_claim }}"
+          bound_claims_type: string
           policies:
             - "{{ admin_policy_name }}"
           ttl: "8h"
         status_code: [200, 204]
       retries: 3
       delay: 5
+
+    - name: Read back the services Vault admin role
+      ansible.builtin.uri:
+        url: "{{ vault_services_addr }}/v1/auth/oidc/role/{{ oidc_role_name }}"
+        method: GET
+        validate_certs: false
+        headers:
+          X-Vault-Token: "{{ vault_services_root_token }}"
+        status_code: [200]
+      register: svc_vault_admin_role
+
+    - name: The services Vault admin role is bound to the admin group
+      ansible.builtin.assert:
+        that:
+          - (svc_vault_admin_role.json.data.bound_claims | default({}, true)).groups | default([]) == [vault_admin_group_claim]
+        fail_msg: "services Vault role {{ oidc_role_name }} is not bound to group {{ vault_admin_group_claim }}"
+        quiet: true

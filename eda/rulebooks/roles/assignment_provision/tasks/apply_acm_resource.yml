@@ -25,6 +25,13 @@
       {{ acm_post_result.msg | default(acm_post_result.json | default('')) }}
   when: acm_post_result.status | default(0) not in [201, 409]
 
+# An ACM object of this Assignment now exists on central (created, or already there): record it at once, so a
+# failure later in the job (another POST, the compliance wait) still leaves the teardown a policy to remove (R3A-F2).
+- name: Record the ACM policy of this Assignment — {{ acm_resource_name }}
+  ansible.builtin.set_fact:
+    assignment_acm_policy_name: "{{ acm_policy_name }}"
+    assignment_provisioned: true
+
 - name: GET existing ACM resource for update — {{ acm_resource_name }}
   ansible.builtin.uri:
     url: "{{ acm_resource_url }}"

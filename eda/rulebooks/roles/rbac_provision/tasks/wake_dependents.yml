@@ -1,0 +1,64 @@
+---
+# An access group (Rbac) that just became ready, or whose Keycloak group changed, wakes what names it: the Entity
+# when a spec.namespaceRbac list names it, and the Teams and Projects of the namespace whose access fields name it.
+# Without this they keep the binding without the group until their next change. Objects being deleted are skipped.
+# Only on a transition (not ready -> ready, or a new group), so a steady access group nudges nothing.
+# Input: rbac_cr_name, rbac_cr_namespace, entity_name, rbac_group_path_display, shc_live_cr (the Rbac before the job)
+- name: Did this run make the access group usable?
+  vars:
+    _before: "{{ (shc_live_cr | default({}, true)).status | default({}, true) }}"
+    _ready_cond: "{{ _before.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list }}"
+    _was_ready: >-
+      {{ (_ready_cond[0].status | default('') == 'True') if _ready_cond | length > 0
+         else (_before.ready | default(false) | bool) }}
+  ansible.builtin.set_fact:
+    rbac_transitioned: >-
+      {{ not (_was_ready | bool) or (_before.group | default('', true) | string) != (rbac_group_path_display | string) }}
+
+- name: Read the tenant's Entity
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Entity
+    name: "{{ entity_name }}"
+    namespace: "{{ fabric_platform_namespace }}"
+  register: _wd_entity
+  when: rbac_transitioned | bool
+
+- name: List the namespace's Teams and Projects
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ item }}"
+    namespace: "{{ rbac_cr_namespace }}"
+  loop: [Team, Project]
+  register: _wd_objs
+  when: rbac_transitioned | bool
+
+- name: Wake the objects that name this access group
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    _fields: [teamAdmin, teamMemberRbac, teamViewerRbac, projectAdmin, projectDeveloperRbac, projectViewerRbac]
+    nudge_crs: >-
+      {%- set out = [] -%}
+      {%- for e in _wd_entity.resources | default([]) if e.metadata.deletionTimestamp is not defined -%}
+        {%- set nr = (e.spec | default({}, true)).namespaceRbac | default({}, true) -%}
+        {%- if nr.values() | select('iterable') | map('list') | flatten | select('equalto', rbac_cr_name) | list | length > 0 -%}
+          {%- set _ = out.append({'kind': 'Entity', 'namespace': e.metadata.namespace, 'name': e.metadata.name}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- for r in _wd_objs.results | default([]) -%}
+        {%- for o in r.resources | default([]) if o.metadata.deletionTimestamp is not defined -%}
+          {%- set sp = o.spec | default({}, true) -%}
+          {%- if _fields | map('extract', sp) | select('defined') | select('iterable') | map('list') | flatten
+                 | select('equalto', rbac_cr_name) | list | length > 0 -%}
+            {%- set _ = out.append({'kind': r.item, 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+  when: rbac_transitioned | bool

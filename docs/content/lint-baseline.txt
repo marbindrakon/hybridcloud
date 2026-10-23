@@ -1,0 +1,32 @@
+# Accepted banned-word hits in UI strings and CRD text, written by check-content.py --write-baseline.
+# A new hit fails the lint; a fixed hit must be removed from this file, so the list only shrinks.
+# file<TAB>key<TAB>word<TAB>count
+operator/config/crd/bases/crd-project.yaml	Project spec.rbacConfig	CR	1
+operator/config/crd/bases/crd-team.yaml	Team spec.rbacConfig	CR	1
+ui/packages/admin-console-plugin/console-extensions.json	[10].properties.name	Site gateways	1
+ui/packages/shared/src/i18n/locales/en.json	detail.l2Vni	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPool	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPoolEnd	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.l2vniPoolStart	Layer 2	1
+ui/packages/shared/src/i18n/locales/en.json	fields.personaType	Persona	1
+ui/packages/shared/src/i18n/locales/en.json	hybridTopology.networkTableCaption	backend	1
+ui/packages/shared/src/i18n/locales/en.json	kinds.Persona	Personas	1
+ui/packages/shared/src/i18n/locales/en.json	nav.cloudVirt	Openshift Virt	1
+ui/packages/shared/src/i18n/locales/en.json	nav.gateways	Site gateways	1
+ui/packages/shared/src/i18n/locales/en.json	nav.hybridVpc	Hybrid VPC	1
+ui/packages/shared/src/i18n/locales/en.json	nav.iaasNetworking	IAAS	1
+ui/packages/shared/src/i18n/locales/en.json	nav.iaasPlatform	IAAS	1
+ui/packages/shared/src/i18n/locales/en.json	nav.personas	Personas	1
+ui/packages/shared/src/i18n/locales/en.json	nav.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	pages.operatorsSubtitle	RBAC	1
+ui/packages/shared/src/i18n/locales/en.json	pages.uiHealthPodNoteBody	CRs	1
+ui/packages/shared/src/i18n/locales/fr.json	hybridTopology.networkTableCaption	backend	1
+ui/packages/shared/src/i18n/locales/fr.json	kinds.Persona	Personas	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.hybridVpc	Hybrid VPC	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.iaasNetworking	IAAS	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.iaasPlatform	IAAS	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.personas	Personas	1
+ui/packages/shared/src/i18n/locales/fr.json	nav.rbac	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	pages.operatorsSubtitle	RBAC	1
+ui/packages/shared/src/i18n/locales/fr.json	pages.personasSubtitle	Personas	1
+ui/packages/shared/src/i18n/locales/fr.json	pages.uiHealthPodNoteBody	CR	1

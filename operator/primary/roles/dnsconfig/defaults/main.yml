@@ -1,4 +1,4 @@
 ---
-# shc (design/TENANT-DNS.md D1): a Ready DNSConfig is probed again after this many seconds; reconcileNow
-# probes at once.
+# shc (design/TENANT-DNS.md D1): a Ready DNSConfig is probed again after this many seconds; a Retry-now request
+# (reconcileNow, any new value) probes at once.
 dnsconfig_reprobe_seconds: 21600

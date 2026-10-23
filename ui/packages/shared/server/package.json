@@ -1,0 +1,6 @@
+{
+  "name": "@hybridsovereign/shared-server",
+  "private": true,
+  "description": "Node modules shared by the two dashboard servers (no dependencies; copied into the dashboard images)",
+  "type": "module"
+}

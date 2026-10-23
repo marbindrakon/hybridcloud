@@ -2,3 +2,5 @@
 plugin_rbac_operator_namespace: sovereign-cloud-plugins
 plugin_rbac_keycloak_realm: sovereign-tenants
 plugin_rbac_keycloak_url_default: "https://rhbk-services.apps.services.shc.signal9.gg"
+# namespace of the platform's objects (Entity): the Rbac job wakes the Entity that names a newly ready access group
+fabric_platform_namespace: sovereign-cloud

@@ -24,12 +24,12 @@ export interface CloudOSOSelectProps {
  */
 export function CloudOSOSelect({
   id = 'cloudoso-select',
-  label = 'CloudOSO backend',
+  label = 'OpenStack environment',
   value,
   onChange,
   options,
   isRequired,
-  placeholder = 'Select CloudOSO…',
+  placeholder = 'Select an OpenStack environment…',
 }: CloudOSOSelectProps): React.ReactElement {
   const [isOpen, setIsOpen] = useState(false);
   const selectedOption = options.find((o) => o.value === value);
@@ -65,7 +65,7 @@ export function CloudOSOSelect({
         <SelectList>
           {options.length === 0 ? (
             <SelectOption isDisabled value="">
-              No CloudOSO environments available
+              No OpenStack environments available
             </SelectOption>
           ) : (
             options.map((o) => (

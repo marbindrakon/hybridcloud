@@ -18,6 +18,18 @@ vault_services_secret_namespace: "services-vault"
 # Vault policy name granted to ESO for reading platform secrets
 eso_policy_name: "external-secrets-policy"
 
+# Vault policy of the services cluster's ESO role (kubernetes-services mount): the ESO grants minus the paths
+# below (relative to the KV mount; a trailing * covers a subtree). Platform credentials that only the
+# automation on central reads: the automation accounts' kubeconfigs (services and sites), the realm automation
+# clients, the cluster kubeadmin logins.
+eso_services_policy_name: "external-secrets-services-policy"
+eso_services_denied_paths:
+  - "shc-automation/*"
+  - "cloudinfra/*"
+  - "keycloak-automation/*"
+  - "openshift-central-kubeadmin"
+  - "openshift-services-kubeadmin"
+
 # Vault role name bound to the ESO SA
 eso_role_name: "external-secrets"
 

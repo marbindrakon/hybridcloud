@@ -2,7 +2,7 @@ namespace: sovereign-cloud
 
 image:
   repository: /hybrid-sovereign/sovereign-tenant-plugin
-  tag: "1.3.13"
+  tag: "img-1.5.3"
   pullPolicy: Always
 
 imagePullSecrets:

@@ -1,0 +1,10 @@
+# An access group (Rbac). Members sign in with the group example-corp.example-developers; the platform team
+# adds people to example-corp/example-developers in the sign-in directory.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Rbac
+metadata:
+  name: example-developers
+  namespace: entity-example-corp
+spec:
+  description: Developers of Example Corp's applications.

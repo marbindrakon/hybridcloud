@@ -2,7 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.5): the site side of a gateway on an OpenShift site: the VTEP named after the fabric
 # (mode Unmanaged: the nodes' VTEP addresses on the site underlay are set by the site's own network config), which
 # the placements' networks reference. Uses the site's fabric credential (CloudInfrastructure
-# spec.openshift.fabricCredentialsRef, default credentialsRef). Sets cg_site_extra.
+# spec.openshift.fabricCredentialsRef, default credentialsRef: the platform automation account shc-automation).
+# Sets cg_site_extra.
 - name: Read the site's fabric credential
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
   vars:

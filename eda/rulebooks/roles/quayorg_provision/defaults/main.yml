@@ -1,0 +1,6 @@
+---
+# Id of the registry's external login service for the tenant realm (same value as quayconfig_provision): the sign-in
+# client the org check verifies is the CLIENT_ID the registry publishes for this service in its /config. When no
+# service has this id and the registry has exactly one OIDC login service, that one is used; else the QuayConfig's
+# client.
+quay_login_service_id: rhbk

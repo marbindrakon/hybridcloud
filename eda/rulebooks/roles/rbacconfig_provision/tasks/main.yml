@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         rbac_config_cr_name: "{{ event_payload.regarding.name }}"
         rbac_config_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        rbac_config_spec: "{{ event_payload.note | from_json }}"
+        rbac_config_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -112,122 +112,34 @@
         validate_certs: false
         status_code: [201, 409]
 
-    - name: Look up Keycloak client by clientId
-      ansible.builtin.uri:
-        url: >-
-          {{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients?clientId={{ rbac_config_cr_name | urlencode }}
-        method: GET
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        validate_certs: false
-        status_code: [200]
-      register: kc_client_pre
-      retries: 5
-      delay: 5
-
-    - name: Create Keycloak confidential OIDC client when absent
-      when: kc_client_pre.json | length == 0
-      ansible.builtin.uri:
-        url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients"
-        method: POST
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token, 'Content-Type': 'application/json'} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        body_format: json
-        body:
-          clientId: "{{ rbac_config_cr_name }}"
-          name: "{{ rbac_config_cr_name }}"
-          enabled: true
-          clientAuthenticatorType: client-secret
-          serviceAccountsEnabled: true
-          directAccessGrantsEnabled: true
-          standardFlowEnabled: false
-          publicClient: false
-        validate_certs: false
-        status_code: [201, 409]
-
-    - name: Resolve Keycloak client id
-      ansible.builtin.uri:
-        url: >-
-          {{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients?clientId={{ rbac_config_cr_name | urlencode }}
-        method: GET
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        validate_certs: false
-        status_code: [200]
-      register: kc_client_lookup
-      retries: 10
-      delay: 3
-      until: kc_client_lookup.json | length > 0
+    # Realm automation: the membership client (this RbacConfig's name; users, groups, group role mappings) and the
+    # clients client (<name>-clients; clients, client roles, mappers), each a service account with exactly its
+    # realm-management roles (role defaults). Their credentials go to central Vault for the jobs that manage the
+    # realm (eda/common/tasks/obtain_keycloak_realm_token.yml); the master realm admin stays with this job.
+    - name: Maintain the realm automation clients
+      ansible.builtin.include_tasks: automation_client.yml
+      loop: "{{ plugin_rbac_automation_clients }}"
+      loop_control:
+        loop_var: rac
+        label: "{{ rac.purpose }}"
 
     - name: Record internal Keycloak client id
       ansible.builtin.set_fact:
-        kc_client_internal_id: "{{ kc_client_lookup.json[0].id }}"
-
-    - name: Get service account user for client
-      ansible.builtin.uri:
-        url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients/{{ kc_client_internal_id }}/service-account-user"
-        method: GET
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        validate_certs: false
-        status_code: [200]
-      register: svc_acct_user
-      retries: 5
-      delay: 5
-
-    - name: Look up realm-management client
-      ansible.builtin.uri:
-        url: >-
-          {{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients?clientId=realm-management
-        method: GET
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        validate_certs: false
-        status_code: [200]
-      register: realm_mgmt_client
-      retries: 3
-      delay: 5
-
-    - name: Get available realm-management roles
-      ansible.builtin.uri:
-        url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients/{{ realm_mgmt_client.json[0].id }}/roles"
-        method: GET
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        validate_certs: false
-        status_code: [200]
-      register: realm_mgmt_roles
-      retries: 3
-      delay: 5
-
-    - name: Filter to required roles
-      ansible.builtin.set_fact:
-        required_roles: >-
-          {{
-            realm_mgmt_roles.json
-            | selectattr('name', 'in', ['manage-users', 'manage-clients', 'manage-realm', 'view-users'])
-            | list
-          }}
-
-    - name: Assign realm-management roles to service account
-      ansible.builtin.uri:
-        url: >-
-          {{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/users/{{ svc_acct_user.json.id }}/role-mappings/clients/{{ realm_mgmt_client.json[0].id }}
-        method: POST
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token, 'Content-Type': 'application/json'} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        body_format: json
-        body: "{{ required_roles }}"
-        validate_certs: false
-        status_code: [200, 204]
-      retries: 3
-      delay: 5
-      when: required_roles | length > 0
-
-    - name: Retrieve client secret from Keycloak
-      ansible.builtin.uri:
-        url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients/{{ kc_client_internal_id }}/client-secret"
-        method: GET
-        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-        validate_certs: false
-        status_code: [200]
-      register: kc_client_secret_result
-      retries: 5
-      delay: 5
+        kc_client_internal_id: "{{ rbac_automation.membership.id }}"
+        kc_client_secret_result: {json: {value: "{{ rbac_automation.membership.secret }}"}}
       no_log: true
+
+    - name: Publish the realm automation credentials in central Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
+      vars:
+        vault_kv_path: "{{ keycloak_automation_vault_prefix }}/{{ rbac_config_cr_name }}"
+        vault_kv_write_data:
+          membershipClientId: "{{ rbac_automation.membership.clientId }}"
+          membershipClientSecret: "{{ rbac_automation.membership.secret }}"
+          clientsClientId: "{{ rbac_automation.clients.clientId }}"
+          clientsClientSecret: "{{ rbac_automation.clients.secret }}"
+          realm: "{{ plugin_rbac_keycloak_realm }}"
+          url: "{{ plugin_rbac_keycloak_url }}"
 
     - name: Set client credential facts
       ansible.builtin.set_fact:
@@ -275,8 +187,13 @@
         cr_namespace: "{{ rbac_config_cr_namespace }}"
         cr_status_body:
           status: ready
+          message: The sign-in connection is ready.
           clientId: "{{ rbac_config_cr_name }}"
           clientSecretName: "{{ plugin_generated_secret_name }}"
+          realmAutomation:
+            membershipClientId: "{{ rbac_automation.membership.clientId }}"
+            clientsClientId: "{{ rbac_automation.clients.clientId }}"
+            vaultKey: "{{ keycloak_automation_vault_prefix }}/{{ rbac_config_cr_name }}"
           ready: true
           observedGeneration: "{{ rbac_config_generation }}"
           lastReconciledAt: "{{ rbac_status_transition_time }}"
@@ -298,6 +215,7 @@
         cr_namespace: "{{ rbac_config_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: ProvisionFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"

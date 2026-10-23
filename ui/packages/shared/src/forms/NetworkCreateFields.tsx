@@ -23,18 +23,23 @@ import type {
   HybridNetwork,
   K8sResource,
   NetworkPlacementBackendKind,
+  TenantProfileSite,
 } from '../types';
 import { EntityMultiSelect } from '../components/EntityMultiSelect';
 import { FabricSelect } from '../components/FabricSelect';
 import { CloudInfrastructureSelect } from '../components/CloudInfrastructureSelect';
 import { RbacMultiSelect } from '../components/RbacMultiSelect';
+import { SitePicker } from '../components/SitePicker';
+import { useOptionalScope } from '../scope/ScopeProvider';
 import { BackendSelect, buildBackendOptions } from '../components/BackendSelect';
+import { attachBlock } from './attachable';
 import { ObjectListEditor, type ObjectListRow } from '../components/ObjectListEditor';
 import { ListTextArea } from '../components/ListTextArea';
 import {
   ASN_MAX,
   ASN_MIN,
   CLOUD_INFRASTRUCTURE_TYPES,
+  GCP_ATTACHMENTS,
   DEFAULT_CLOUDVIRT_NAMESPACES,
   DEFAULT_CREATE_PROJECT_DOMAIN,
   DEFAULT_EXTERNAL_EVPN,
@@ -63,6 +68,7 @@ import {
   PLACEMENT_IPV4_MAX_AWS,
   PLACEMENT_IPV4_MIN,
 } from './hybridFabricDefaults';
+import { kindTerm } from '../i18n/vocabulary';
 
 export const PLATFORM_NAMESPACE = 'sovereign-cloud';
 
@@ -291,10 +297,10 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
   const [bootImage, setBootImage] = useState('');
   const [storageClass, setStorageClass] = useState('');
   const [fabricCredVault, setFabricCredVault] = useState('');
-  // aws
-  const [awsAccount, setAwsAccount] = useState('');
+  // aws, gcp: a region (the platform's own workload identity reaches it; no stored keys)
   const [awsRegion, setAwsRegion] = useState('');
-  const [awsBaseDomain, setAwsBaseDomain] = useState('');
+  const [gcpRegion, setGcpRegion] = useState('');
+  const [gcpAttachment, setGcpAttachment] = useState<string>('vpn');
   // external
   const [evpn, setEvpn] = useState(DEFAULT_EXTERNAL_EVPN);
   // dns (openstack, openshift)
@@ -306,13 +312,13 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
   const [dnsZoneQuota, setDnsZoneQuota] = useState(String(DEFAULT_SITE_DNS.zoneQuota));
 
   const needsCreds = cloudInfrastructureNeedsCredentials(type, clusterRef.trim());
-  const showCreds = type !== 'external';
+  const showCreds = type === 'openstack' || type === 'openshift';
   const hasDns = type === 'openstack' || type === 'openshift';
-  const awsAccountOk = /^[0-9]{12}$/.test(awsAccount.trim());
   const zoneQuotaOk = !dnsZoneQuota.trim() || isIntInRange(dnsZoneQuota, 1, Number.MAX_SAFE_INTEGER);
 
   let valid = !needsCreds || !!credVault.trim();
-  if (type === 'aws' && (!awsAccountOk || !awsRegion.trim())) valid = false;
+  if (type === 'aws' && !awsRegion.trim()) valid = false;
+  if (type === 'gcp' && (!gcpRegion.trim() || gcpAttachment !== 'vpn')) valid = false;
   if (hasDns && dnsMode === 'native' && !dnsProject.trim()) valid = false;
   if (hasDns && !zoneQuotaOk) valid = false;
 
@@ -334,15 +340,8 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
       if (fabricCredVault.trim()) ocp.fabricCredentialsRef = { vaultPath: fabricCredVault.trim() };
       return { openshift: ocp };
     }
-    if (type === 'aws') {
-      return {
-        aws: {
-          accountId: awsAccount.trim(),
-          region: awsRegion.trim(),
-          ...(awsBaseDomain.trim() ? { baseDomain: awsBaseDomain.trim() } : {}),
-        },
-      };
-    }
+    if (type === 'aws') return { aws: { region: awsRegion.trim() } };
+    if (type === 'gcp') return { gcp: { region: gcpRegion.trim(), attachment: gcpAttachment } };
     return { external: { evpn } };
   };
 
@@ -463,21 +462,29 @@ export function CloudInfrastructureCreateFields({ onChange }: { onChange: SpecCh
       )}
 
       {type === 'aws' && (
+        <FormGroup label={t('fields.region')} fieldId="ci-aws-region" isRequired>
+          <TextInput id="ci-aws-region" value={awsRegion} onChange={(_e, v) => setAwsRegion(v)} />
+          <Help>{t('fields.publicCloudSiteHelp')}</Help>
+        </FormGroup>
+      )}
+
+      {type === 'gcp' && (
         <>
-          <FormGroup label={t('fields.awsAccountId')} fieldId="ci-aws-account" isRequired>
-            <TextInput
-              id="ci-aws-account"
-              value={awsAccount}
-              onChange={(_e, v) => setAwsAccount(v)}
-              validated={!awsAccount || awsAccountOk ? 'default' : 'error'}
-            />
+          <FormGroup label={t('fields.region')} fieldId="ci-gcp-region" isRequired>
+            <TextInput id="ci-gcp-region" value={gcpRegion} onChange={(_e, v) => setGcpRegion(v)} />
+            <Help>{t('fields.publicCloudSiteHelp')}</Help>
           </FormGroup>
-          <FormGroup label={t('fields.region')} fieldId="ci-aws-region" isRequired>
-            <TextInput id="ci-aws-region" value={awsRegion} onChange={(_e, v) => setAwsRegion(v)} />
-          </FormGroup>
-          <FormGroup label={t('fields.baseDomain')} fieldId="ci-aws-base">
-            <TextInput id="ci-aws-base" value={awsBaseDomain} onChange={(_e, v) => setAwsBaseDomain(v)} />
-            <Help>{t('fields.awsBaseDomainHelp')}</Help>
+          <FormGroup label={t('fields.gcpAttachment')} fieldId="ci-gcp-attachment" isRequired>
+            <FormSelect id="ci-gcp-attachment" value={gcpAttachment} onChange={(_e, v) => setGcpAttachment(v)}>
+              {GCP_ATTACHMENTS.map((a) => (
+                <FormSelectOption
+                  key={a}
+                  value={a}
+                  label={a === 'vpn' ? t('fields.gcpAttachmentVpn') : t('fields.gcpAttachmentInterconnect')}
+                  isDisabled={a !== 'vpn'}
+                />
+              ))}
+            </FormSelect>
           </FormGroup>
         </>
       )}
@@ -833,12 +840,10 @@ export function HybridNetworkCreateFields({
 }): React.ReactElement {
   const { t } = useTranslation();
   const fabrics = useK8sResourceList<HybridFabric>('HybridFabric', { namespace: PLATFORM_NAMESPACE });
-  const rbacs = useK8sResourceList<K8sResource>('Rbac', { namespace, enabled: !!namespace });
   const [description, setDescription] = useState('');
   const [fabricRef, setFabricRef] = useState('');
   const [mtu, setMtu] = useState('');
   const [egress, setEgress] = useState(false);
-  const [viewers, setViewers] = useState<string[]>([]);
   const [prefixes, setPrefixes] = useState<string[]>([]);
 
   const fabricsReadable = !fabrics.error;
@@ -872,7 +877,6 @@ export function HybridNetworkCreateFields({
         ...(fabricRef.trim() ? { fabricRef: { name: fabricRef.trim() } } : {}),
         ...(mtu.trim() ? { mtu: Number(mtu) } : {}),
         egress: { internet: egress },
-        ...(viewers.length ? { networkViewerRbac: viewers } : {}),
       }
     : null;
   useReportSpec(spec, onChange);
@@ -935,14 +939,7 @@ export function HybridNetworkCreateFields({
         />
         <Help>{t('fields.egressInternetHelp')}</Help>
       </FormGroup>
-      <RbacMultiSelect
-        id="hn-viewers"
-        label={t('fields.networkViewerRbac')}
-        value={viewers}
-        onChange={setViewers}
-        options={names(rbacs.items)}
-        placeholder={t('form.selectRbac')}
-      />
+      {/* networkViewerRbac is not offered: no job reads it, so it would grant nothing (UX-015, UX-088). */}
     </>
   );
 }
@@ -969,13 +966,21 @@ export function NetworkPlacementCreateFields({
   const [prefixLength, setPrefixLength] = useState(String(PLACEMENT_IPV4_DEFAULT));
   const [pinned, setPinned] = useState('');
 
+  // GT-F3: an environment none of whose namespaces names the chosen network is offered greyed.
+  const envItem = (kind: string, name: string) =>
+    kind === 'CloudVirt' ? cloudvirts.items.find((i) => i.metadata.name === name) : undefined;
   const backendOptions = useMemo(
     () =>
-      buildBackendOptions({ cloudosos: cloudosos.items, cloudvirts: cloudvirts.items, cloudawss: cloudawss.items, cloudgcps: cloudgcps.items }).filter(
-        (o) => o.kind === backendKind,
-      ),
-    [cloudosos.items, cloudvirts.items, cloudawss.items, cloudgcps.items, backendKind],
+      buildBackendOptions({ cloudosos: cloudosos.items, cloudvirts: cloudvirts.items, cloudawss: cloudawss.items, cloudgcps: cloudgcps.items })
+        .filter((o) => o.kind === backendKind)
+        .map((o) =>
+          network && attachBlock(o.kind, envItem(o.kind, o.name), network)
+            ? { ...o, disabledReason: t('attach.noNamespaceShort') }
+            : o,
+        ),
+    [cloudosos.items, cloudvirts.items, cloudawss.items, cloudgcps.items, backendKind, network, t],
   );
+  const pairBlock = network && backendName ? attachBlock(backendKind, envItem(backendKind, backendName), network) : null;
 
   // the chosen network's IPv4 space (as the platform holds it, else as asked for) for the size hint and the pinned check
   const chosen = networks.items.find((n) => n.metadata.name === network);
@@ -988,7 +993,7 @@ export function NetworkPlacementCreateFields({
   const pinnedText = pinned.trim();
   const pinnedOk =
     !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
-  const valid = !!network && !!backendName && pinnedOk;
+  const valid = !!network && !!backendName && pinnedOk && !pairBlock;
   const spec = valid
     ? {
         network,
@@ -1020,7 +1025,7 @@ export function NetworkPlacementCreateFields({
           aria-label={t('fields.backendKind')}
         >
           {PLACEMENT_BACKEND_KINDS.map((k) => (
-            <FormSelectOption key={k} value={k} label={t(`kinds.${k}`, { defaultValue: k })} />
+            <FormSelectOption key={k} value={k} label={kindTerm(t, k, 'many')} />
           ))}
         </FormSelect>
       </FormGroup>
@@ -1033,7 +1038,11 @@ export function NetworkPlacementCreateFields({
         placeholder={t('form.selectPlaceholder')}
         isRequired
       />
-      <Help>{t('fields.placementBackendHelp')}</Help>
+      <Help>
+        {pairBlock
+          ? t('attach.notAttachable', { network, environment: `${kindTerm(t, backendKind)} ${backendName}` })
+          : t('fields.placementBackendHelp')}
+      </Help>
       <FormGroup label={t('fields.placementIpv4Size')} fieldId="np-ipv4-length" isRequired>
         <FormSelect
           id="np-ipv4-length"
@@ -1083,13 +1092,19 @@ export function CloudVirtCreateFields({
   namespace,
   entityName,
   onChange,
+  audience = 'tenant',
 }: {
   namespace: string;
   entityName: string;
   onChange: SpecChange;
+  /** Tenant pages pick sites and storage classes from the tenant profile (OD9). */
+  audience?: 'admin' | 'tenant';
 }): React.ReactElement {
   const { t } = useTranslation();
   const enabled = !!namespace;
+  const identity = useOptionalScope()?.identity;
+  const [profileSite, setProfileSite] = useState<TenantProfileSite | undefined>();
+  const [editTouched, setEditTouched] = useState(false);
   const networks = useK8sResourceList<K8sResource>('HybridNetwork', { namespace, enabled });
   const rbacs = useK8sResourceList<K8sResource>('Rbac', { namespace, enabled });
   const [description, setDescription] = useState('');
@@ -1142,15 +1157,28 @@ export function CloudVirtCreateFields({
     : null;
   useReportSpec(spec, onChange);
 
-  const siteStorageClass = siteObj?.spec?.openshift?.storageClass;
+  const profileClasses = profileSite?.storageClasses ?? [];
+  const siteStorageClass = siteObj?.spec?.openshift?.storageClass ?? profileClasses.find((c) => c.default)?.name;
   const rbacOptions = names(rbacs.items);
+
+  // Groups that can sign in: pre-filled with the creator's access groups in this tenant (W5, NC-06),
+  // <tenant>.<access group> groups of the signed-in user mapped to access groups that exist here.
+  useEffect(() => {
+    if (editTouched || editRbac.length || !identity || !entityName || !rbacs.items.length) return;
+    const prefix = `${entityName}.`;
+    const mine = identity.groups
+      .filter((g) => g.startsWith(prefix))
+      .map((g) => g.slice(prefix.length))
+      .filter((r) => rbacs.items.some((i) => i.metadata.name === r));
+    if (mine.length) setEditRbac(Array.from(new Set(mine)));
+  }, [identity, entityName, rbacs.items, editTouched]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
       <FormGroup label={t('fields.description')} fieldId="cv-desc">
         <TextArea id="cv-desc" value={description} onChange={(_e, v) => setDescription(v)} rows={2} />
       </FormGroup>
-      <CloudInfrastructureSelect
+      <SitePicker
         id="cv-site"
         label={t('fields.site')}
         value={site}
@@ -1158,9 +1186,11 @@ export function CloudVirtCreateFields({
           setSite(v);
           if (!v) setSiteObj(undefined);
         }}
-        onSelectInfrastructure={setSiteObj}
+        onInfrastructure={setSiteObj}
+        onSite={setProfileSite}
         types={['openshift']}
-        entityName={entityName}
+        namespace={namespace}
+        audience={audience}
         capability="virtualization"
         isRequired
       />
@@ -1232,32 +1262,46 @@ export function CloudVirtCreateFields({
         <Help>{t('fields.quotaHelp')}</Help>
       </FormGroup>
       <FormGroup label={t('fields.storageClass')} fieldId="cv-sc">
-        <TextInput
-          id="cv-sc"
-          value={storageClass}
-          onChange={(_e, v) => setStorageClass(v)}
-          placeholder={siteStorageClass ? t('form.siteDefaultValue', { value: siteStorageClass }) : t('form.siteDefault')}
-        />
+        {profileClasses.length ? (
+          // The site's storage classes from the tenant profile, the default marked (NC-52).
+          <FormSelect id="cv-sc" value={storageClass} onChange={(_e, v) => setStorageClass(v)} aria-label={t('fields.storageClass')}>
+            <FormSelectOption
+              value=""
+              label={siteStorageClass ? t('form.siteDefaultValue', { value: siteStorageClass }) : t('form.siteDefault')}
+            />
+            {profileClasses.map((c) => (
+              <FormSelectOption key={c.name} value={c.name} label={c.default ? t('form.storageClassDefault', { name: c.name }) : c.name} />
+            ))}
+          </FormSelect>
+        ) : (
+          <TextInput
+            id="cv-sc"
+            value={storageClass}
+            onChange={(_e, v) => setStorageClass(v)}
+            placeholder={siteStorageClass ? t('form.siteDefaultValue', { value: siteStorageClass }) : t('form.siteDefault')}
+          />
+        )}
         <Help>{t('fields.cloudVirtStorageClassHelp')}</Help>
       </FormGroup>
       <RbacMultiSelect
         id="cv-edit-rbac"
-        label={t('fields.editRbac')}
+        label={t('fields.signInGroups')}
         value={editRbac}
-        onChange={setEditRbac}
+        onChange={(v) => {
+          setEditTouched(true);
+          setEditRbac(v);
+        }}
         options={rbacOptions}
-        placeholder={t('form.selectRbac')}
+        helperText={t('fields.signInGroupsHelp')}
       />
-      <Help>{t('fields.editRbacHelp')}</Help>
       <RbacMultiSelect
         id="cv-view-rbac"
         label={t('fields.viewRbac')}
         value={viewRbac}
         onChange={setViewRbac}
         options={rbacOptions}
-        placeholder={t('form.selectRbac')}
+        helperText={t('fields.viewRbacHelp')}
       />
-      <Help>{t('fields.viewRbacHelp')}</Help>
     </>
   );
 }

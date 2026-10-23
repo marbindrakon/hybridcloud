@@ -206,8 +206,8 @@
     oso_api_vip: "{{ ep_os.fips.api.ip }}"
     oso_ingress_vip: "{{ ep_os.fips.ingress.ip }}"
     oso_external_network: "{{ ep_external_network }}"
+    # the status record: ids only, no account or Vault path (eda/common/tasks/resolve_cloudoso_accounts.yml)
     oso_record:
-      accountVaultPath: "{{ ep_vault_path }}"
       appCredentialId: "{{ ep_os.app_cred.id }}"
       apiFloatingIPId: "{{ ep_os.fips.api.id }}"
       ingressFloatingIPId: "{{ ep_os.fips.ingress.id }}"
@@ -230,9 +230,6 @@
             'ownerProjectId': oso_env_dns.ownerProjectId, 'sharedWith': ep_env_zone.shared_with,
             'shareId': ep_env_zone.share_id, 'nameservers': ep_env_zone.nameservers,
             'delegated': ep_env_delegate | bool, 'dnsConfig': oso_env_dns.dnsConfig,
-            'dnsConfigSecret': oso_env_dns.dnsConfigSecret, 'globalProjectId': oso_env_dns.globalProjectId,
+            'dnsConfigSecret': none, 'globalProjectId': oso_env_dns.globalProjectId,
             'globalZoneId': oso_env_dns.globalZoneId}
            if ep_dns_provider == 'zone' else {} }}
-      route53VaultPath: "{{ ep_route53_vault_path if ep_dns_provider == 'route53' else '' }}"
-      vaultPaths:
-        - "{{ ep_clouds_config_vault }}"

@@ -67,6 +67,18 @@
       ready: false
       message: "Deletion waits for {{ _dependents | join(', ') }}"
       deletionBlockedBy: "{{ _dependents }}"
+      # phase Deleting from the delete request on, also while the delete waits (no job has written yet)
+      phase: Deleting
+      phaseSince: "{{ _dependents_phase_since }}"
+      summary: Waiting for the objects that depend on this one to be deleted.
+  vars:
+    _dependents_cr_status: >-
+      {{ (lookup('ansible.builtin.vars', '_hybridsovereign_redhat_' ~ (dependents_status.kind | lower), default={})
+          | default({}, true)).status | default({}, true) }}
+    _dependents_phase_since: >-
+      {{ (_dependents_cr_status.phaseSince | default('', true))
+         if ((_dependents_cr_status.phase | default('')) == 'Deleting' and (_dependents_cr_status.phaseSince | default('', true)) != '')
+         else lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
   when: _dependents | length > 0
 
 - name: Requeue until the dependents are gone

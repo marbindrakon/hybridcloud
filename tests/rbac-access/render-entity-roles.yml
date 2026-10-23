@@ -1,0 +1,47 @@
+---
+# Renders a tenant's namespace Roles and RoleBindings with the production task file
+# (eda/rulebooks/roles/entity_provision/tasks/namespace_roles.yml) against a THROWAWAY API server, for
+# sar_matrix.py --cluster envtest --render-roles. The role is copied to a temporary directory with its sign-in step
+# (signin.yml: OpenShift groups via Keycloak, not part of the RBAC matrix) replaced by a no-op; namespace_roles.yml
+# runs unchanged. Extra vars: services_api_host, services_bearer_token, render_entity, render_namespace_rbac.
+- name: Render the tenant's namespace roles
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Temporary role copy
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: sar-roles
+      register: render_tmp
+
+    - name: Render, then remove the copy
+      block:
+        - name: Copy the entity_provision role
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../../eda/rulebooks/roles/entity_provision/"
+            dest: "{{ render_tmp.path }}/entity_provision/"
+            mode: "0700"
+
+        - name: No sign-in groups in the throwaway cluster
+          ansible.builtin.copy:
+            content: "--- []\n"
+            dest: "{{ render_tmp.path }}/entity_provision/tasks/signin.yml"
+            mode: "0600"
+
+        - name: The role matrix
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../../eda/rulebooks/roles/entity_provision/vars/main.yml"
+
+        - name: Namespace roles as the Entity job renders them
+          ansible.builtin.include_tasks: "{{ render_tmp.path }}/entity_provision/tasks/namespace_roles.yml"
+          vars:
+            entity_cr_name: "{{ render_entity }}"
+            entity_namespace: "entity-{{ render_entity }}"
+            shc_common_dir: "{{ playbook_dir }}/../../eda/common"
+            entity_spec:
+              namespaceRbac: "{{ render_namespace_rbac }}"
+      always:
+        - name: Remove the copy
+          ansible.builtin.file:
+            path: "{{ render_tmp.path }}"
+            state: absent

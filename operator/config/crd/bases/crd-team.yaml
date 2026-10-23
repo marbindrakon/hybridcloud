@@ -2,9 +2,11 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: teams.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "5"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -12,6 +14,10 @@ spec:
     listKind: TeamList
     plural: teams
     singular: team
+    categories:
+      - shc
+      - shc-tenant
+      - shc-appplatform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -19,7 +25,11 @@ spec:
       storage: true
       schema:
         openAPIV3Schema:
-          description: Team defines a team with feature flags within a sovereign cloud entity.
+          description: >-
+            A team setup: the tooling a team gets on a tenant OpenShift cluster (Argo CD, service
+            mesh), comparable to an Argo CD AppProject. It holds no people; access groups do. It
+            takes effect only through a cluster assignment (Assignment); without one it creates
+            nothing on any cluster.
           type: object
           required:
             - spec
@@ -31,109 +41,172 @@ spec:
             metadata:
               type: object
             spec:
-              description: Desired state of the Team
+              description: The team's tooling.
               type: object
               properties:
                 features:
-                  description: Feature flags for this team
+                  description: Tooling to install for the team on each cluster it is assigned to.
                   type: object
                   properties:
                     istio:
-                      description: Enable Istio service mesh for this team
+                      description: Install the service mesh for the team.
                       type: boolean
                       default: false
                     argo:
-                      description: Enable Argo Workflows for this team
+                      description: Install Argo CD for the team.
                       type: boolean
                       default: false
                 rbacConfig:
                   description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
                   type: string
                 teamAdmin:
-                  description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
+                  description: >-
+                    Access groups (names of Rbac objects in this namespace) that may view and change
+                    this team setup and the app projects its cluster assignments list, and view
+                    those cluster assignments. Interim form of a resource-scoped role assignment: it
+                    grants access to these objects on the services cluster only and nothing on
+                    clusters (cluster access comes from a cluster assignment's spec.toolRbac). The
+                    groups listed here manage the team setup's three access lists, this one
+                    included; otherwise the lists can be changed only by users allowed to delete
+                    the team setup.
                   type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: set
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 teamMemberRbac:
-                  description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
+                  description: >-
+                    Access groups (names of Rbac objects in this namespace) that may view this team
+                    setup and view and change the app projects its cluster assignments list. Interim
+                    form of a resource-scoped role assignment: it grants access to these objects on
+                    the services cluster only and nothing on clusters (cluster access comes from a
+                    cluster assignment's spec.toolRbac). Changes to this list are accepted from the
+                    groups in teamAdmin and from users allowed to delete this team setup.
                   type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: set
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 teamViewerRbac:
-                  description: "Deprecated — do not set. RBAC is managed via Assignment CR toolRbac."
+                  description: >-
+                    Access groups (names of Rbac objects in this namespace) that may view this team
+                    setup, its cluster assignments and the app projects they list. Interim form of a
+                    resource-scoped role assignment: it grants access to these objects on the
+                    services cluster only and nothing on clusters (cluster access comes from a
+                    cluster assignment's spec.toolRbac). Changes to this list are accepted from the
+                    groups in teamAdmin and from users allowed to delete this team setup.
                   type: array
+                  maxItems: 32
+                  x-kubernetes-list-type: set
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
-              description: Observed state populated by team-operator reconciliation
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 name:
+                  description: Name of the team setup.
                   type: string
                 namespace:
+                  description: Namespace of the team setup.
                   type: string
                 entity:
+                  description: The tenant this team setup belongs to.
                   type: string
                 billingId:
+                  description: The tenant's billing identifier.
                   type: string
                 description:
+                  description: The tenant's description.
                   type: string
                 features:
+                  description: The tooling as applied.
                   type: object
                   properties:
                     istio:
+                      description: Service mesh requested.
                       type: boolean
                     argo:
+                      description: Argo CD requested.
                       type: boolean
                 status:
                   type: string
-                  description: Lifecycle status (reconciling, ready, failed)
+                  description: Short state word written by the platform's automation.
                 lastReconciledAt:
                   type: string
                   format: date-time
-                  description: Timestamp of the last reconciliation attempt
+                  description: When the platform last finished processing this object (RFC 3339).
                 message:
                   type: string
-                  description: Human-readable status message (set on failure)
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
               x-kubernetes-preserve-unknown-fields: true
@@ -151,13 +224,20 @@ spec:
           jsonPath: .status.features.argo
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

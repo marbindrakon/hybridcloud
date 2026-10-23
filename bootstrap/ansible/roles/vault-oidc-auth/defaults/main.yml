@@ -25,6 +25,9 @@ vault_services_client_id: "vault"
 vault_admin_group: "sovereign-admin"
 admin_policy_name: "sovereign-admin-policy"
 oidc_role_name: "sovereign-admin"
+# The value of the groups claim (full group path, as the client's groups mapper emits it) that a token must
+# carry to use the admin role; the role's bound_claims and the central external group alias use it.
+vault_admin_group_claim: "/{{ vault_admin_group }}"
 
 # Default redirect URIs for Vault UI (central + services routes + CLI).
 # Lab route callbacks come from env (VAULT_CENTRAL_URL / VAULT_SERVICES_URL).
@@ -33,4 +36,23 @@ vault_redirect_uris_base:
   - "http://localhost:8250/oidc/callback"
   - "https://ui.vault.hashicorp.com/oidc/callback"
 vault_central_oidc_callback: "{{ (lookup('env', 'VAULT_CENTRAL_URL') | default('', true) | regex_replace('/$', '')) ~ '/ui/vault/auth/oidc/oidc/callback' if (lookup('env', 'VAULT_CENTRAL_URL') | default('', true) | length > 0) else '' }}"
-vault_services_oidc_callback: "{{ (lookup('env', 'VAULT_SERVICES_URL') | default('', true) | regex_replace('/$', '')) ~ '/ui/vault/auth/oidc/oidc/callback' if (lookup('env', 'VAULT_SERVICES_URL') | default('', true) | length > 0) else '' }}"
+# the services Vault's external URL: VAULT_SERVICES_URL, else VAULT_SERVICES_ADDR (what the job sets)
+vault_services_external_url: "{{ lookup('env', 'VAULT_SERVICES_URL') | default(lookup('env', 'VAULT_SERVICES_ADDR'), true) | default('', true) | regex_replace('/$', '') }}"
+vault_services_oidc_callback: "{{ (vault_services_external_url ~ '/ui/vault/auth/oidc/oidc/callback') if vault_services_external_url | length > 0 else '' }}"
+
+# Keycloak side of the services Vault sign-in client: exact callbacks (UI and CLI), no password grant, and the
+# groups claim with full group paths (/<entity>/<access group>), converged on existing clients when
+# vault_keycloak_converge is true (env KEYCLOAK_CONVERGE); KEYCLOAK_PLAN_ONLY prints the change instead.
+vault_keycloak_converge: "{{ lookup('env', 'KEYCLOAK_CONVERGE') | default('false', true) | bool }}"
+vault_keycloak_plan_only: "{{ lookup('env', 'KEYCLOAK_PLAN_ONLY') | default('false', true) | bool }}"
+vault_services_keycloak_redirect_uris: "{{ ([vault_services_oidc_callback] if vault_services_oidc_callback | length > 0 else []) + ['http://localhost:8250/oidc/callback'] }}"
+vault_keycloak_groups_mapper:
+  name: groups
+  protocol: openid-connect
+  protocolMapper: oidc-group-membership-mapper
+  config:
+    claim.name: groups
+    full.path: "true"
+    id.token.claim: "true"
+    access.token.claim: "true"
+    userinfo.token.claim: "true"

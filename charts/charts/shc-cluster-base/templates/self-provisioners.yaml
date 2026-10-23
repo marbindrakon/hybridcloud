@@ -1,0 +1,41 @@
+{{- /*
+Who may create projects (certs layer). The ClusterRoleBinding self-provisioners is replaced with an explicit
+subject list: selfProvisioning.groups (empty: nobody but cluster admins). autoupdate false keeps the API server
+from restoring the default subjects (every signed-in user). Rendered when selfProvisioning.restricted is true, and
+implied by tenantAccess.enabled with tenantAccess.selfProvisioners false (empty list).
+*/}}
+{{- $sp := .Values.selfProvisioning | default dict }}
+{{- $t := .Values.tenantAccess | default dict }}
+{{- $implied := and $t.enabled (not $t.selfProvisioners) }}
+{{- if and .Values.layers.certs (or $sp.restricted $implied) }}
+{{- $groups := $sp.groups | default list }}
+---
+{{- if not $sp.restricted }}
+# nobody gets to create projects: the platform creates the tenants' namespaces (autoupdate false keeps the API
+# server from restoring the default subjects)
+{{- else }}
+# only the listed groups may create projects; the platform creates the tenants' namespaces (autoupdate false keeps
+# the API server from restoring the default subjects)
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: self-provisioners
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "false"
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: self-provisioner
+{{- if $groups }}
+subjects:
+{{- range $groups }}
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: {{ . | quote }}
+{{- end }}
+{{- else }}
+subjects: []
+{{- end }}
+{{- end }}

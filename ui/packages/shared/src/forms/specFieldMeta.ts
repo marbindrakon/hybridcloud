@@ -13,7 +13,15 @@ export type SpecFieldWidget =
   | 'select'
   /** Array of small objects, one row per item (see columns) */
   | 'objectList'
-  | 'json';
+  | 'json'
+  /** List of access group (Rbac) names in the object's namespace, edited with the create form's picker */
+  | 'rbacRefList'
+  /** One access group (Rbac) name in the object's namespace */
+  | 'rbacRef'
+  /** Site names (CloudInfrastructure) that allow this tenant; Entity.spec.allowedSites */
+  | 'allowedSites'
+  /** The name of an object of refKind in the object's namespace */
+  | 'refName';
 
 /** Show a field only when another spec path matches (type-keyed sections). */
 export interface SpecFieldVisibleWhen {
@@ -36,6 +44,11 @@ export interface SpecFieldColumn {
   emptyLabelKey?: string;
   /** Disabled on items that existed before editing (list-map items whose field is fixed) */
   lockedOnExisting?: boolean;
+  /** Flag the cell when the row has other values but this one is empty */
+  required?: boolean;
+  /** Flag a non-empty cell that does not match (regular expression source) */
+  pattern?: string;
+  placeholder?: string;
 }
 
 export interface SpecFieldMeta {
@@ -56,11 +69,20 @@ export interface SpecFieldMeta {
   clearWhenHidden?: boolean | string;
   /** Platform-only field (e.g. a Vault path): not shown on tenant pages */
   adminOnly?: boolean;
+  /**
+   * Access list of the object itself (Team/Project): only users allowed to delete the object may change it
+   * (admission rule); for others the field is read-only.
+   */
+  accessList?: boolean;
+  /** Changing it needs namespace-wide update on the kind (not a grant on this one object). */
+  namespaceEditOnly?: boolean;
   /** namedRef: the key inside the reference object (default name) */
   refKey?: string;
   /** number bounds */
   min?: number;
   max?: number;
+  /** refName: the kind whose names are offered */
+  refKind?: HybridSovereignKind;
   /** objectList */
   columns?: SpecFieldColumn[];
   keyField?: string;
@@ -90,7 +112,8 @@ const cinfraOpenshift = whenType('type', 'openshift');
 const cinfraAws = whenType('type', 'aws');
 const cinfraGcp = whenType('type', 'gcp');
 const cinfraExternal = whenType('type', 'external');
-const cinfraCreds = whenType('type', ['openstack', 'openshift', 'aws']);
+// aws and gcp sites use the platform's workload identity (no stored credential)
+const cinfraCreds = whenType('type', ['openstack', 'openshift']);
 const cinfraDns = whenType('type', ['openstack', 'openshift']);
 const dnsNative = whenType('dns.mode', 'native');
 const poOpenstack = whenType('type', 'openstack');
@@ -106,32 +129,54 @@ const VNI = { min: 1, max: 16777215 };
 export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> = {
   Entity: {
     fields: [
+      { path: 'displayName', labelKey: 'fields.displayName', widget: 'text', omitWhenEmpty: true, helpKey: 'entityForm.displayNameHelp' },
       { path: 'description', labelKey: 'fields.description', widget: 'textarea' },
       { path: 'billingID', labelKey: 'fields.billingID', widget: 'text', immutable: true },
       { path: 'websiteLink', labelKey: 'fields.websiteLink', widget: 'text' },
+      {
+        path: 'contacts',
+        labelKey: 'entityForm.contacts',
+        widget: 'objectList',
+        omitWhenEmpty: true,
+        maxItems: 10,
+        helpKey: 'entityForm.contactsHelp',
+        columns: [
+          { key: 'name', labelKey: 'entityForm.contactName', required: true },
+          { key: 'email', labelKey: 'entityForm.contactEmail', pattern: '^[^\\s@]+@[^\\s@]+$' },
+          { key: 'url', labelKey: 'entityForm.contactUrl', pattern: '^https://', placeholder: 'https://' },
+        ],
+      },
+      { path: 'allowedSites', labelKey: 'entityForm.allowedSites', widget: 'allowedSites', omitWhenEmpty: true },
     ],
   },
   Team: {
     fields: [
       { path: 'features.istio', labelKey: 'fields.istio', widget: 'boolean' },
       { path: 'features.argo', labelKey: 'fields.argo', widget: 'boolean' },
+      // the interim form of a role assignment on the team setup (OD15)
+      { path: 'teamAdmin', accessList: true, labelKey: 'form.roles.teamAdmins', widget: 'rbacRefList', helpKey: 'form.roles.teamAdminsHelp' },
+      { path: 'teamMemberRbac', accessList: true, labelKey: 'form.roles.teamMembers', widget: 'rbacRefList', helpKey: 'form.roles.teamMembersHelp' },
+      { path: 'teamViewerRbac', accessList: true, labelKey: 'form.roles.teamViewers', widget: 'rbacRefList', helpKey: 'form.roles.teamViewersHelp' },
     ],
   },
   Project: {
     fields: [
       { path: 'displayName', labelKey: 'fields.displayName', widget: 'text' },
       { path: 'description', labelKey: 'fields.description', widget: 'textarea' },
+      { path: 'projectAdmin', accessList: true, labelKey: 'form.roles.projectAdmins', widget: 'rbacRefList', helpKey: 'form.roles.projectAdminsHelp' },
+      { path: 'projectDeveloperRbac', accessList: true, labelKey: 'form.roles.projectDevelopers', widget: 'rbacRefList', helpKey: 'form.roles.projectDevelopersHelp' },
+      { path: 'projectViewerRbac', accessList: true, labelKey: 'form.roles.projectViewers', widget: 'rbacRefList', helpKey: 'form.roles.projectViewersHelp' },
     ],
   },
   Assignment: {
     fields: [
-      { path: 'team', labelKey: 'fields.team', widget: 'text', immutable: true },
+      { path: 'team', labelKey: 'kindsOne.Team', widget: 'refName', refKind: 'Team', immutable: true },
       { path: 'projects', labelKey: 'fields.projects', widget: 'stringList' },
-      { path: 'openshift', labelKey: 'fields.openshift', widget: 'text' },
-      { path: 'toolRbac.assignmentAdmin', labelKey: 'fields.assignmentAdmin', widget: 'text' },
-      { path: 'toolRbac.assignmentDeveloper', labelKey: 'fields.assignmentDeveloper', widget: 'text' },
-      { path: 'toolRbac.assignmentViewer', labelKey: 'fields.assignmentViewer', widget: 'text' },
-      { path: 'toolRbac.assignmentOps', labelKey: 'fields.assignmentOps', widget: 'text' },
+      { path: 'openshift', labelKey: 'kindsOne.PlatformOpenshift', widget: 'refName', refKind: 'PlatformOpenshift', omitWhenEmpty: true },
+      { path: 'toolRbac.assignmentAdmin', labelKey: 'form.roles.assignmentAdmin', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
+      { path: 'toolRbac.assignmentDeveloper', labelKey: 'form.roles.assignmentDeveloper', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
+      { path: 'toolRbac.assignmentViewer', labelKey: 'form.roles.assignmentViewer', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
+      { path: 'toolRbac.assignmentOps', labelKey: 'form.roles.assignmentOps', widget: 'rbacRef', omitWhenEmpty: true, namespaceEditOnly: true },
     ],
   },
   PlatformOpenshift: {
@@ -186,11 +231,11 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'gcp.workerCount', labelKey: 'fields.workerCount', widget: 'number', visibleWhen: poGcp },
       { path: 'gcp.controllerFlavor', labelKey: 'fields.controllerFlavor', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
       { path: 'gcp.workerFlavor', labelKey: 'fields.workerFlavor', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
-      { path: 'toolRbac.clusterAdminRbac', labelKey: 'fields.clusterAdminRbac', widget: 'stringList' },
-      { path: 'toolRbac.clusterOperatorRbac', labelKey: 'fields.clusterOperatorRbac', widget: 'stringList' },
-      { path: 'toolRbac.clusterDeveloperRbac', labelKey: 'fields.clusterDeveloperRbac', widget: 'stringList' },
-      { path: 'toolRbac.clusterViewerRbac', labelKey: 'fields.clusterViewerRbacTool', widget: 'stringList' },
-      { path: 'clusterViewerRbac', labelKey: 'fields.clusterViewerRbac', widget: 'stringList' },
+      { path: 'toolRbac.clusterAdminRbac', labelKey: 'form.roles.clusterAdmins', widget: 'rbacRefList' },
+      { path: 'toolRbac.clusterOperatorRbac', labelKey: 'form.roles.clusterOperators', widget: 'rbacRefList' },
+      { path: 'toolRbac.clusterDeveloperRbac', labelKey: 'form.roles.clusterDevelopers', widget: 'rbacRefList' },
+      { path: 'toolRbac.clusterViewerRbac', labelKey: 'form.roles.clusterViewers', widget: 'rbacRefList' },
+      { path: 'clusterViewerRbac', labelKey: 'fields.clusterViewerRbac', widget: 'rbacRefList' },
     ],
   },
   Persona: {
@@ -201,7 +246,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
   },
   Rbac: {
     fields: [
-      { path: 'config', labelKey: 'fields.rbacConfig', widget: 'text', immutable: true },
+      { path: 'config', labelKey: 'form.connection', widget: 'text', immutable: true, adminOnly: true },
       { path: 'description', labelKey: 'fields.description', widget: 'textarea' },
     ],
   },
@@ -252,9 +297,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         visibleWhen: cinfraOpenshift,
         adminOnly: true,
       },
-      { path: 'aws.accountId', labelKey: 'fields.awsAccountId', widget: 'text', visibleWhen: cinfraAws },
       { path: 'aws.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraAws },
-      { path: 'aws.baseDomain', labelKey: 'fields.baseDomain', widget: 'text', helpKey: 'fields.awsBaseDomainHelp', visibleWhen: cinfraAws, omitWhenEmpty: true },
       { path: 'gcp.region', labelKey: 'fields.region', widget: 'text', visibleWhen: cinfraGcp },
       {
         path: 'gcp.attachment',
@@ -317,16 +360,13 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'designateProjectId', labelKey: 'fields.designateProjectId', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
       { path: 'vaultPath', labelKey: 'fields.vaultPath', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', adminOnly: true, omitWhenEmpty: true },
       { path: 'route53VaultPath', labelKey: 'fields.route53VaultPath', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', adminOnly: true, omitWhenEmpty: true },
-      { path: 'enableVRF', labelKey: 'fields.enableVRF', widget: 'boolean' },
-      { path: 'vrfId', labelKey: 'fields.vrfId', widget: 'text', omitWhenEmpty: true },
+      // enableVRF and vrfId are not offered: they have no effect yet (UX-088)
     ],
   },
   CloudAWS: {
+    // The API has the site only; the platform assigns the account (UX-038).
     fields: [
-      { path: 'account', labelKey: 'fields.account', widget: 'text' },
-      { path: 'vaultPath', labelKey: 'fields.vaultPath', widget: 'text' },
-      { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text' },
-      { path: 'landingzone', labelKey: 'fields.landingzone', widget: 'text' },
+      { path: 'cloudRef', labelKey: 'fields.site', widget: 'namedRef', immutable: true, helpKey: 'fields.cloudAwsSiteHelp' },
     ],
   },
   CloudGCP: {
@@ -362,8 +402,8 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'quota.storage', labelKey: 'fields.quotaStorage', widget: 'text', omitWhenEmpty: true },
       { path: 'quota.virtualMachines', labelKey: 'fields.quotaVirtualMachines', widget: 'number', min: 0, omitWhenEmpty: true },
       { path: 'storageClass', labelKey: 'fields.storageClass', widget: 'text', helpKey: 'fields.cloudVirtStorageClassHelp', omitWhenEmpty: true },
-      { path: 'toolRbac.editRbac', labelKey: 'fields.editRbac', widget: 'stringList', helpKey: 'fields.editRbacHelp' },
-      { path: 'toolRbac.viewRbac', labelKey: 'fields.viewRbac', widget: 'stringList', helpKey: 'fields.viewRbacHelp' },
+      { path: 'toolRbac.editRbac', labelKey: 'fields.signInGroups', widget: 'rbacRefList', helpKey: 'fields.editRbacHelp' },
+      { path: 'toolRbac.viewRbac', labelKey: 'fields.viewRbac', widget: 'rbacRefList', helpKey: 'fields.viewRbacHelp' },
     ],
   },
   OpenStackMigration: {
@@ -378,32 +418,32 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
   Vault: {
     fields: [
       { path: 'ha', labelKey: 'fields.ha', widget: 'boolean' },
-      { path: 'rbacConfig', labelKey: 'fields.rbacConfig', widget: 'text', immutable: true },
+      { path: 'rbacConfig', labelKey: 'form.connection', widget: 'text', immutable: true, adminOnly: true },
     ],
   },
   VaultKV: {
     fields: [
-      { path: 'vault', labelKey: 'fields.vault', widget: 'text', immutable: true },
-      { path: 'vaultAdminRbac', labelKey: 'fields.vaultAdminRbac', widget: 'stringList' },
-      { path: 'vaultReaderRbac', labelKey: 'fields.vaultReaderRbac', widget: 'stringList' },
-      { path: 'vaultOpsRbac', labelKey: 'fields.vaultOpsRbac', widget: 'stringList' },
-      { path: 'vaultDeveloperRbac', labelKey: 'fields.vaultDeveloperRbac', widget: 'stringList' },
+      { path: 'vault', labelKey: 'kindsOne.Vault', widget: 'refName', refKind: 'Vault', immutable: true },
+      { path: 'vaultAdminRbac', labelKey: 'form.roles.vaultAdmin', widget: 'rbacRefList', helpKey: 'form.roles.vaultAdminHelp' },
+      { path: 'vaultReaderRbac', labelKey: 'form.roles.vaultReader', widget: 'rbacRefList', helpKey: 'form.roles.vaultReaderHelp' },
+      { path: 'vaultOpsRbac', labelKey: 'form.roles.vaultOps', widget: 'rbacRefList', helpKey: 'form.roles.vaultOpsHelp' },
+      { path: 'vaultDeveloperRbac', labelKey: 'form.roles.vaultDeveloper', widget: 'rbacRefList', helpKey: 'form.roles.vaultDeveloperHelp' },
     ],
   },
   AAPOrg: {
     fields: [
-      { path: 'aapConfig', labelKey: 'fields.aapConfig', widget: 'text', immutable: true },
-      { path: 'aapAdminRbac', labelKey: 'fields.aapAdminRbac', widget: 'stringList' },
-      { path: 'aapJobExecutorRbac', labelKey: 'fields.aapJobExecutorRbac', widget: 'stringList' },
-      { path: 'aapViewerRbac', labelKey: 'fields.aapViewerRbac', widget: 'stringList' },
+      { path: 'aapConfig', labelKey: 'form.connection', widget: 'text', immutable: true, adminOnly: true },
+      { path: 'aapAdminRbac', labelKey: 'form.roles.aapAdmin', widget: 'rbacRefList', helpKey: 'form.roles.aapAdminHelp' },
+      { path: 'aapJobExecutorRbac', labelKey: 'form.roles.aapJobExecutor', widget: 'rbacRefList', helpKey: 'form.roles.aapJobExecutorHelp' },
+      { path: 'aapViewerRbac', labelKey: 'form.roles.aapViewer', widget: 'rbacRefList', helpKey: 'form.roles.aapViewerHelp' },
     ],
   },
   QuayOrg: {
     fields: [
-      { path: 'quayConfig', labelKey: 'fields.quayConfig', widget: 'text', immutable: true },
-      { path: 'quayAdminRbac', labelKey: 'fields.quayAdminRbac', widget: 'stringList' },
-      { path: 'quayCreatorRbac', labelKey: 'fields.quayCreatorRbac', widget: 'stringList' },
-      { path: 'quayMemberRbac', labelKey: 'fields.quayMemberRbac', widget: 'stringList' },
+      { path: 'quayConfig', labelKey: 'form.connection', widget: 'text', immutable: true, adminOnly: true },
+      { path: 'quayAdminRbac', labelKey: 'form.roles.quayAdmin', widget: 'rbacRefList', helpKey: 'form.roles.quayAdminHelp' },
+      { path: 'quayCreatorRbac', labelKey: 'form.roles.quayCreator', widget: 'rbacRefList', helpKey: 'form.roles.quayCreatorHelp' },
+      { path: 'quayMemberRbac', labelKey: 'form.roles.quayMember', widget: 'rbacRefList', helpKey: 'form.roles.quayMemberHelp' },
     ],
   },
   HybridNetwork: {
@@ -426,7 +466,8 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         ...MTU,
       },
       { path: 'egress.internet', labelKey: 'fields.egressInternet', widget: 'boolean', helpKey: 'fields.egressInternetHelp' },
-      { path: 'networkViewerRbac', labelKey: 'fields.networkViewerRbac', widget: 'stringList' },
+      // no job reads networkViewerRbac yet (UX-015, UX-088): platform administrators only
+      { path: 'networkViewerRbac', labelKey: 'fields.networkViewerRbac', widget: 'rbacRefList', adminOnly: true },
     ],
   },
   NetworkPlacement: {

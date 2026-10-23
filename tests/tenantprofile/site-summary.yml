@@ -1,0 +1,119 @@
+---
+# Unit test (no cluster) of eda/common/tasks/site_tenant_summary.yml: synthetic sites in, tenant-word entries out.
+#   ansible-playbook -i localhost, -c local tests/tenantprofile/site-summary.yml
+- name: Site summary for tenants
+  hosts: localhost
+  gather_facts: false
+  vars:
+    sites:
+      - metadata: {name: ocp-a, generation: 2}
+        spec: {type: openshift, displayName: OCP A, location: Room 1, openshift: {clusterRef: local}}
+        status:
+          status: ready
+          capabilities: {api: true, virtualization: true, evpn: true, frrK8s: true}
+          site:
+            endpoint: https://api.example.invalid:6443
+            version: "4.22.1"
+            storageClasses: [{name: zfs, default: false}, {name: ceph-rbd, default: true}]
+      - metadata: {name: os-b}
+        spec: {type: openstack, credentialsRef: {vaultPath: secret/x}}
+        status:
+          status: failed
+          capabilities: {api: true, dns: true, evpn: false}
+          site: {endpoint: https://keystone.example.invalid, projectDomainId: abc123, volumeTypes: [{name: standard}]}
+      - metadata: {name: aws-x}
+        spec: {type: aws, location: Europe (Ireland), aws: {region: eu-west-1}}
+        status:
+          capabilities: {api: true, dns: true, evpn: true}
+          site: {account: "123456789012", vpc: vpc-0abc, region: eu-west-1}
+      - metadata: {name: gcp-y, deletionTimestamp: "2026-01-01T00:00:00Z"}
+        spec: {type: gcp, gcp: {}}
+        status:
+          capabilities: {api: true}
+          site: {region: europe-west4}
+      - metadata: {name: ext-z}
+        spec: {type: external}
+        status: {}
+    expected:
+      - name: ocp-a
+        displayName: OCP A
+        type: openshift
+        location: Room 1
+        billable: false
+        state: Available
+        capabilities: [Virtualization, HybridNetworking]
+        storageClasses: [{name: ceph-rbd, default: true}, {name: zfs, default: false}]
+      - {name: os-b, type: openstack, billable: false, state: Unavailable, capabilities: [DNS],
+         storageClasses: [{name: standard, default: false}]}
+      # spec.location is the tenant's word for every site type; a regional site keeps its region next to it
+      - {name: aws-x, type: aws, region: eu-west-1, location: Europe (Ireland), billable: true, state: Available,
+         capabilities: [HybridNetworking, DNS]}
+      - {name: gcp-y, type: gcp, region: europe-west4, billable: true, state: Unavailable, capabilities: []}
+      - {name: ext-z, type: external, billable: false, state: Unavailable, capabilities: []}
+  tasks:
+    - name: Summarize
+      ansible.builtin.include_tasks: ../../eda/common/tasks/site_tenant_summary.yml
+      vars:
+        sts_sites: "{{ sites }}"
+
+    - name: Compare
+      ansible.builtin.assert:
+        that: site_tenant_summaries == expected
+        fail_msg: "{{ site_tenant_summaries | to_nice_yaml }}"
+
+    - name: Nothing of the platform's detail leaks
+      ansible.builtin.assert:
+        that: (site_tenant_summaries | to_json) is not search('https://|vpc-|123456789012|abc123|secret/')
+
+# A site that stays failed must leave the tenants' view steady (no Entity wake on every run). The jobs write status
+# by merge-patch; the "stored" CRs below are built the same way (recursive combine, lists replaced).
+- name: A site that stays failed wakes nothing
+  hosts: localhost
+  gather_facts: false
+  vars:
+    role_dir: "{{ playbook_dir }}/../../eda/rulebooks/roles/cloudinfrastructure_provision"
+    ready_sites:
+      - metadata: {name: ocp-a, namespace: hybrid-sovereign, generation: 3}
+        spec: {type: openshift, location: Room 1, openshift: {clusterRef: local}}
+        status:
+          status: ready
+          observedGeneration: 3
+          capabilities: {api: true, virtualization: true, evpn: true, frrK8s: true}
+          site: {storageClasses: [{name: ceph-rbd, default: true}]}
+      - metadata: {name: os-b, namespace: hybrid-sovereign, generation: 1}
+        spec: {type: openstack, credentialsRef: {vaultPath: secret/x}}
+        status:
+          status: ready
+          observedGeneration: 1
+          capabilities: {api: true, dns: true, evpn: true}
+          site: {volumeTypes: [{name: standard}]}
+  tasks:
+    - name: Two failed runs in a row, per site
+      ansible.builtin.include_tasks: site-summary-failed-runs.yml
+      loop: "{{ ready_sites }}"
+      loop_control:
+        loop_var: ready_site
+        label: "{{ ready_site.metadata.name }}"
+
+# The rescue path of the role must use the failure capabilities for both the status write and the tenants' view
+# (the plays above run the task files; this reads main.yml as data, so a rescue that falls back to a fixed
+# capability pair, which leaves probe-specific keys true in the stored map, is caught).
+- name: The failure body and the tenant view of the rescue path use the failure capabilities
+  hosts: localhost
+  gather_facts: false
+  vars:
+    main_yml: "{{ playbook_dir }}/../../eda/rulebooks/roles/cloudinfrastructure_provision/tasks/main.yml"
+    _rescue: >-
+      {{ (lookup('file', main_yml) | from_yaml | selectattr('rescue', 'defined') | first).rescue }}
+    _first: "{{ _rescue | first }}"
+    _status_write: "{{ _rescue | selectattr('vars.cr_status_body', 'defined') | first }}"
+    _view: "{{ _rescue | selectattr('vars.civ_after_status', 'defined') | first }}"
+  tasks:
+    - name: The failure capabilities run first, and both writers take their result
+      ansible.builtin.assert:
+        that:
+          - _first['ansible.builtin.include_tasks'] == 'failed_capabilities.yml'
+          - _status_write.vars.cr_status_body.capabilities is search('_ci_failed_caps')
+          - _view.vars.civ_after_status.capabilities is search('_ci_failed_caps')
+          - _view['ansible.builtin.include_tasks'] == 'tenant_view.yml'
+        fail_msg: "rescue tasks: {{ _rescue | map(attribute='name') | list }}"

@@ -1,0 +1,46 @@
+# SAR cases for the security closures (runner: tests/rbac-access, format in its README).
+# Placeholders: {entity}, {other_entity}, {group:<namespaceRbac key>}, {automation}.
+# The admission rows (P0/P3) are not SAR rows: tests/rbac-access/security-probes.sh runs them as dry-run requests.
+- id: SEC-01
+  resolves: [Q3, UX-101]
+  principal: {user: probe-signed-in, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: ""
+  resource: {group: project.openshift.io, resource: projectrequests}
+  verbs: [create]
+  expect: deny
+- id: SEC-02
+  resolves: [Q3, UX-101]
+  principal: {user: probe-platform, groups: [sovereign-admin, system:authenticated]}
+  namespace: ""
+  resource: {group: project.openshift.io, resource: projectrequests}
+  verbs: [create]
+  expect: allow
+- id: SEC-03
+  resolves: [Q3, I-1]
+  principal: {user: probe-entity-admin, groups: ["{group:entityAdmin}", system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: hybridsovereign.redhat, resource: platformopenshifts}
+  verbs: [create, update, patch]
+  # granted tenants write these kinds with their own token: the platform-only fields are guarded by admission
+  expect: allow
+- id: SEC-04
+  resolves: [Q3, I-1]
+  principal: {user: probe-entity-admin, groups: ["{group:entityAdmin}", system:authenticated]}
+  namespace: "entity-{entity}"
+  resource: {group: hybridsovereign.redhat, resource: cloudosos, subresource: status}
+  verbs: [update, patch]
+  expect: deny
+- id: SEC-05
+  resolves: [Q3, UX-101]
+  principal: {user: probe-entity-admin, groups: ["{group:entityAdmin}", system:authenticated]}
+  namespace: ""
+  resource: {group: "", resource: namespaces}
+  verbs: [create, patch, update]
+  expect: deny
+- id: SEC-06
+  resolves: [Q3]
+  principal: {user: probe-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: "entity-{entity}"
+  resource: {group: hybridsovereign.redhat, resource: cloudosos}
+  verbs: [create]
+  expect: deny

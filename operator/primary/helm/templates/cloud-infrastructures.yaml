@@ -1,6 +1,7 @@
 {{- /*
 shc (design/P7-PLAN.md P7.1): the platform's cloud sites as CloudInfrastructure CRs in the platform
-namespace. Removing one from values deletes it; its finalizer waits until no tenant object uses it.
+namespace. Removing one from values does not delete it (Prune=false): delete it by hand; its finalizer
+waits until no tenant object uses it.
 */}}
 {{- range $name, $c := .Values.cloudInfrastructures }}
 {{- if ne (toString $c.enabled) "false" }}
@@ -10,9 +11,14 @@ kind: CloudInfrastructure
 metadata:
   name: {{ $name }}
   namespace: {{ $.Values.namespace }}
+  labels:
+    hybridsovereign.redhat/managed-by: gitops
   annotations:
     argocd.argoproj.io/sync-wave: "3"
-    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # Never pruned or deleted by Argo CD: removing it from values leaves it in the cluster (shown as
+    # requiring pruning); delete it by hand once nothing uses it.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Prune=false,Delete=false
+    hybridsovereign.redhat/gitops-source: {{ printf "%s/cloudInfrastructures/%s" (include "primary-operator.gitopsApp" $) $name | quote }}
 spec:
   {{- toYaml $c.spec | nindent 2 }}
 {{- end }}

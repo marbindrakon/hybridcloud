@@ -1,0 +1,11 @@
+namespace: hybridsovereign
+name: shc
+version: 0.1.0
+readme: README.md
+authors:
+  - Hybrid Sovereign Cloud
+description: Status contract of the hybridsovereign.redhat API (status writer module and filters).
+license:
+  - Apache-2.0
+tags:
+  - kubernetes

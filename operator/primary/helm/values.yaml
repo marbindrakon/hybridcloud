@@ -4,7 +4,7 @@ installCRDs: true
 
 image:
   repository: /hybrid-sovereign/hybridsovereign-primary-operator
-  tag: "0.1.0"
+  tag: "img-0.1.37"
   pullPolicy: Always
 
 imagePullSecrets:
@@ -13,7 +13,7 @@ imagePullSecrets:
 namespaceOperator:
   image:
     repository: /hybrid-sovereign/hybridsovereign-namespace-operator
-    tag: "0.1.0"
+    tag: "img-0.1.26"
   chartVersion: "0.1.0"
 
 serviceAccount:
@@ -31,6 +31,10 @@ replicas: 2
 
 amqKafka:
   enabled: true
+  # Kafka protocol version the operators' event producer speaks, for the primary operator and every tenant
+  # namespace operator. Empty: the version built into the operator image. "auto": probe the brokers first.
+  # Otherwise a dotted version such as "2.6.0".
+  apiVersion: ""
   vaultPath: amq-producer
   secretStoreName: vault-backend
   secretStoreKind: ClusterSecretStore
@@ -69,3 +73,40 @@ hybridFabrics: {}
 cloudGateways: {}
 # shc (P9): provider edges for attachment circuits (templates/provider-edges.yaml), same shape
 providerEdges: {}
+
+# Admission policies (ValidatingAdmissionPolicy) installed with this chart.
+# mode Warn renders validationActions [Warn, Audit] with failurePolicy Ignore;
+# mode Deny renders [Deny, Audit] with failurePolicy Fail.
+admission:
+  # Exact usernames of platform automation; never kube:admin.
+  automationUsernames:
+    - system:serviceaccount:open-cluster-management-agent-addon:shc-automation
+    - system:serviceaccount:sovereign-cloud:hybridsovereign-primary-operator
+  # Exact usernames of the GitOps controller (exempt from shc-gitops-managed only).
+  gitopsUsernames:
+    - system:serviceaccount:kube-system:argocd-manager
+  # Service account of the per-tenant namespace operators (system:serviceaccount:entity-<e>:<name>).
+  namespaceOperatorServiceAccount: hybridsovereign-namespace-operator
+  # Groups with platform authority.
+  platformGroups:
+    - system:cluster-admins
+    - sovereign-admin
+  namespaceLabelIntegrity: {enabled: true, mode: Warn}   # shc-namespace-label-integrity
+  platformOnlyFields: {enabled: true, mode: Warn}        # shc-platform-only-fields
+  gitopsManaged: {enabled: true, mode: Warn}             # shc-gitops-managed
+  fabricLedgerGuard: {enabled: true, mode: Deny}         # shc-fabric-ledger-guard
+  gitopsDeleteGuard: {enabled: true, mode: Deny}         # shc-gitops-delete-guard
+  # Exact usernames of the cluster's own deleters (namespace deletion, owner-reference cleanup); exempt from
+  # shc-gitops-delete-guard only.
+  systemDeleters:
+    - system:serviceaccount:kube-system:namespace-controller
+    - system:serviceaccount:kube-system:generic-garbage-collector
+  accessFieldLadder: {enabled: true, mode: Deny}         # shc-access-field-ladder (Team/Project access lists)
+  # shc-tenant-namespace-delete-guard: a tenant namespace is deleted through its Entity (DELETE refused unless the
+  # namespace carries hybridsovereign.redhat/entity-deleting=<its entity>, written by the Entity's deletion once
+  # the tenant objects are gone).
+  # exemptPlatformGroups: false keeps platform administrators on the product path too.
+  tenantNamespaceDeleteGuard: {enabled: true, mode: Deny, exemptPlatformGroups: false}
+# Argo CD application name written into the gitops-source annotation of GitOps-owned objects.
+gitopsSource:
+  app: ""

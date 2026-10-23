@@ -7,7 +7,10 @@
 # shc (LAB-PLAN §11.6, design/TENANT-TEARDOWN.md §3.2): a delete finalizer runs this on every requeue;
 # a delete event is published once. Not again while it is in flight (published, its job not finished),
 # never after deletionComplete; again when the last delete job finished without completing (failed) or
-# when the re-drive CronJob set the hybridsovereign.redhat/redeliver annotation.
+# when the re-drive CronJob set the hybridsovereign.redhat/redeliver annotation, or on a new Retry-now request
+# (reconcileNow differs from status.lastHandledReconcileRequest; see reconcile_request.yml), which also resets
+# status.retry. After repeated failed teardown jobs (Stalled=True/TeardownFailed, counted by the status
+# library) the delete event is not published again until one of those two.
 - name: Read the CR before publishing a delete event
   kubernetes.core.k8s_info:
     api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -17,17 +20,44 @@
   register: _publish_cr
   when: operator_event_reason is search('DeleteRequested$')
 
+- name: Read the Retry-now request of the deleting CR
+  ansible.builtin.include_tasks: reconcile_request.yml
+  vars:
+    reconcile_request_cr: "{{ _publish_cr.resources[0] }}"
+  when:
+    - operator_event_reason is search('DeleteRequested$')
+    - _publish_cr.resources | default([]) | length > 0
+
+# phase Creating on the first write of a new object, Deleting at the delete request (not when its job writes)
+- name: Record the phase of a new or deleting object
+  ansible.builtin.include_tasks: mark_phase.yml
+  vars:
+    mark_phase_regarding: "{{ operator_event_regarding }}"
+    mark_phase_deleting: "{{ operator_event_reason is search('DeleteRequested$') }}"
+    mark_phase_recorded: "{{ operator_event_phase_recorded | default('', true) }}"
+    mark_phase_cr: >-
+      {{ (_publish_cr.resources | default([]) | first | default({}, true))
+         if (operator_event_reason is search('DeleteRequested$'))
+         else lookup('ansible.builtin.vars', '_hybridsovereign_redhat_' ~ (operator_event_regarding.kind | lower), default={}) }}
+  when: amq_kafka_enabled | default(true) | bool
+
 - name: Decide whether to publish
   ansible.builtin.set_fact:
     _publish_redeliver: >-
       {{ (operator_event_reason is search('DeleteRequested$')) and (_publish_cr.resources | default([]) | length > 0)
-         and (((_publish_cr.resources[0].metadata.annotations | default({}, true))['hybridsovereign.redhat/redeliver'] | default('')) == 'true') }}
+         and ((((_publish_cr.resources[0].metadata.annotations | default({}, true))['hybridsovereign.redhat/redeliver'] | default('')) == 'true')
+              or (reconcile_now | default(false) | bool)) }}
     _publish_skip: >-
       {%- if operator_event_reason is search('DeleteRequested$') and (_publish_cr.resources | default([]) | length > 0) -%}
         {%- set st = _publish_cr.resources[0].status | default({}, true) -%}
         {%- set d = st.delivery | default({}, true) -%}
-        {%- set redeliver = ((_publish_cr.resources[0].metadata.annotations | default({}, true))['hybridsovereign.redhat/redeliver'] | default('')) == 'true' -%}
+        {%- set redeliver = (((_publish_cr.resources[0].metadata.annotations | default({}, true))['hybridsovereign.redhat/redeliver'] | default('')) == 'true')
+                            or (reconcile_now | default(false) | bool) -%}
+        {%- set gave_up = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Stalled')
+                           | selectattr('status', 'equalto', 'True') | selectattr('reason', 'equalto', 'TeardownFailed')
+                           | list | length) > 0 -%}
         {{ (st.deletionComplete | default(false) | bool)
+           or ((not redeliver) and gave_up)
            or ((not redeliver) and (d.reason | default('')) == operator_event_reason
                and (d.publishedAt | default('', true)) != ''
                and (d.completedEventId | default('')) != (d.eventId | default('-'))) }}
@@ -133,6 +163,63 @@
               message: "{{ operator_event_reason }} event {{ operator_event_id }}"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
       when: amq_kafka_enabled | default(true) | bool
+
+    # Retry now: the request is handled once its event is published (the annotation is never cleared,
+    # except the legacy literal "true", which is removed instead of recorded; see reconcile_request.yml).
+    - name: Remove a handled legacy Retry-now request ("true")
+      kubernetes.core.k8s:
+        state: patched
+        api_version: "{{ operator_event_regarding.apiVersion }}"
+        kind: "{{ operator_event_regarding.kind }}"
+        name: "{{ operator_event_regarding.name }}"
+        namespace: "{{ operator_event_regarding.namespace }}"
+        definition:
+          metadata:
+            annotations:
+              ansible.sdk.operatorframework.io/reconcileNow: null
+      when:
+        - amq_kafka_enabled | default(true) | bool
+        - reconcile_now | default(false) | bool
+        - reconcile_request_legacy | default(false) | bool
+
+    - name: Record the handled Retry-now request
+      operator_sdk.util.k8s_status:
+        api_version: "{{ operator_event_regarding.apiVersion }}"
+        kind: "{{ operator_event_regarding.kind }}"
+        name: "{{ operator_event_regarding.name }}"
+        namespace: "{{ operator_event_regarding.namespace }}"
+        status:
+          lastHandledReconcileRequest: "{{ reconcile_request | string }}"
+      when:
+        - amq_kafka_enabled | default(true) | bool
+        - reconcile_now | default(false) | bool
+        - not (reconcile_request_legacy | default(false) | bool)
+        - (reconcile_request | default('') | string) | length > 0
+
+    # A new request on a deleting CR starts the teardown attempts again. k8s_status cannot take `retry: null`
+    # (its no-change check calls .items() on the value and fails) and `retry: {}` is a no-op in a merge patch, so
+    # each counter field the status library writes (status.retry: attempts, failingSince, lastFailureTime) is
+    # removed by a null; status.retry is left an empty mapping.
+    - name: Reset the teardown retry count
+      operator_sdk.util.k8s_status:
+        api_version: "{{ operator_event_regarding.apiVersion }}"
+        kind: "{{ operator_event_regarding.kind }}"
+        name: "{{ operator_event_regarding.name }}"
+        namespace: "{{ operator_event_regarding.namespace }}"
+        status:
+          retry:
+            attempts: null
+            failingSince: null
+            lastFailureTime: null
+          conditions:
+            - type: Stalled
+              status: "False"
+              reason: AsExpected
+              message: ""
+              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      when:
+        - amq_kafka_enabled | default(true) | bool
+        - _publish_redeliver | bool
 
     - name: Emit optional Kubernetes Event for debugging
       kubernetes.core.k8s:

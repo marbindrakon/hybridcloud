@@ -1,9 +1,10 @@
 # Hybrid Sovereign Cloud — Architecture Index
 
-**Last reviewed**: 2026-07-15  
-**Source of truth for topology**: [c4/context.md](c4/context.md) → [c4/containers.md](c4/containers.md) → [c4/components/](c4/components/)
+Checked by `make check-content` (words, links in scope) · **Source of truth for topology**: [c4/context.md](c4/context.md) → [c4/containers.md](c4/containers.md) → [c4/components/](c4/components/)
 
 Use this page as a catalog. Prefer C4 for structure; use technical docs for component depth; use concepts for stakeholder narratives.
+
+Start here instead if you use the platform: [Getting started](../../docs/tenant/getting-started.md) (tenants), [Onboard a tenant](../../docs/platform/onboard-a-tenant.md) (platform team), the [documentation index](../../docs/README.md). Some pages below describe earlier designs; the CRDs and `oc explain` are authoritative where they differ.
 
 ---
 
@@ -15,7 +16,7 @@ Use this page as a catalog. Prefer C4 for structure; use technical docs for comp
 | L2 Containers | [c4/containers.md](c4/containers.md) |
 | L3 Operator | [c4/components/operator.md](c4/components/operator.md) |
 | L3 Event system | [c4/components/event-system.md](c4/components/event-system.md) |
-| L3 IAAC | [c4/components/iaac.md](c4/components/iaac.md) |
+| L3 Git export (iaac) | [c4/components/iaac.md](c4/components/iaac.md) |
 | L3 UI | [c4/components/ui.md](c4/components/ui.md) |
 | L3 Secrets & identity | [c4/components/vault-identity.md](c4/components/vault-identity.md) |
 | L3 Platform services | [c4/components/platform-services.md](c4/components/platform-services.md) |
@@ -32,7 +33,7 @@ Use this page as a catalog. Prefer C4 for structure; use technical docs for comp
 | [concepts/02-how-it-works.md](concepts/02-how-it-works.md) | Simple flow |
 | [concepts/03-security-model.md](concepts/03-security-model.md) | Security at a glance |
 | [concepts/04-components-overview.md](concepts/04-components-overview.md) | Component map |
-| [concepts/05-rbac-model.md](concepts/05-rbac-model.md) | 14-role RBAC narrative |
+| [concepts/05-rbac-model.md](concepts/05-rbac-model.md) | Tenant roles narrative (earlier model; the role table is in [Onboard a tenant](../../docs/platform/onboard-a-tenant.md)) |
 | [concepts/006-eda-overview.md](concepts/006-eda-overview.md) | EDA overview |
 | [concepts/008-persona-overview.md](concepts/008-persona-overview.md) | Persona model |
 | [concepts/10-component-interaction-map.md](concepts/10-component-interaction-map.md) | Interaction diagrams |
@@ -59,7 +60,6 @@ Use this page as a catalog. Prefer C4 for structure; use technical docs for comp
 | [technical/14-gitea.md](technical/14-gitea.md) | Gitea (central) |
 | [technical/15-sovereign-dashboard.md](technical/15-sovereign-dashboard.md) | Admin dashboard |
 | [technical/16-dashboard-api-reference.md](technical/16-dashboard-api-reference.md) | Dashboard API |
-| [technical/18-secrets-flow.md](technical/18-secrets-flow.md) | Vault / ESO / PushSecret |
 | [technical/19-plugin-rbac.md](technical/19-plugin-rbac.md) | RbacConfig / Rbac |
 | [technical/20-tenancy-dashboard.md](technical/20-tenancy-dashboard.md) | Tenant dashboard |
 | [technical/21-plugin-vault.md](technical/21-plugin-vault.md) | Vault / VaultKV CRs |
@@ -82,6 +82,7 @@ Use this page as a catalog. Prefer C4 for structure; use technical docs for comp
 | [technical/50-security-interaction-diagrams.md](technical/50-security-interaction-diagrams.md) | Security diagrams |
 | [technical/51-qa-test-checklist.md](technical/51-qa-test-checklist.md) | QA checklist |
 | [technical/56-openstack-migration.md](technical/56-openstack-migration.md) | OpenStack migration |
+| [technical/57-hybridvpc-uihealth.md](technical/57-hybridvpc-uihealth.md) | Networks, sites and endpoint health checks in the UI |
 | [technical/006-eda-architecture.md](technical/006-eda-architecture.md) | EDA architecture |
 | [technical/007-services-aap-scope.md](technical/007-services-aap-scope.md) | Services AAP scope |
 | [technical/deviations.md](technical/deviations.md) | Known deviations tracker |
@@ -116,6 +117,7 @@ CN V tutorials / ansible variants: [technical/10-openshift-cnv-tutorial.md](tech
 | [tutorial/07-tenancy-dashboard.md](tutorial/07-tenancy-dashboard.md) | Tenant dashboard |
 | [tutorial/08-entity-rbac-tutorial.md](tutorial/08-entity-rbac-tutorial.md) | Entity RBAC |
 | [tutorial/006-eda-developer-guide.md](tutorial/006-eda-developer-guide.md) | EDA developer guide |
+| [tutorial/09-hybrid-networks.md](tutorial/09-hybrid-networks.md) | Hybrid networks across sites (current) |
 
 ---
 
@@ -128,14 +130,13 @@ CN V tutorials / ansible variants: [technical/10-openshift-cnv-tutorial.md](tech
 
 ---
 
-## Quick topology (accurate as of 2026-07-15)
+## Quick topology
 
 | Cluster | Runs |
 |---------|------|
 | **Central** | ArgoCD, RHACM, Vault HA (`central-vault`), ESO, Gitea, RHBK (`central-rhbk`), AAP Controller + **EDA**, AMQ Streams, CNV/MTV, ACS Central, Sovereign Jobs |
-| **Services** | RHBK (`services-rhbk`), Vault HA (`services-vault`), ESO, AAP Controller (no EDA), primary + namespace operators, IAAC git-sync, admin/tenant dashboards + console plugins |
+| **Services** | RHBK (`services-rhbk`), Vault HA (`services-vault`), ESO, AAP Controller (no EDA), primary + namespace operators, Git export (`iaac-git-sync`), admin/tenant dashboards + console plugins |
 | **Both** | ODF/Noobaa, Quay workload, Crunchy Postgres |
-| **Disabled / retired** | Event Forwarder (`eventForwarder.enabled: false`), Go plugin-iaac operator (`pluginIaac.enabled: false`) — replaced by direct operator→Kafka and Python `iaacGitSync` |
 
 ### Namespace rules
 
@@ -162,6 +163,20 @@ Entity namespaces must carry label `hybridsovereign.redhat/entity`.
 - Secrets for OAuth clients come from Vault via ExternalSecret only.
 
 ---
+
+## Retired components
+
+Components of earlier releases that no longer run. Pages that still show them describe history.
+
+<!-- retired:begin -->
+| Retired | Replaced by |
+|---|---|
+| Event Forwarder (`eventForwarder.enabled: false`) | the operators publish their events to Kafka and the automation reads them there |
+| Plugin SDX (Go plugin-iaac, `pluginIaac.enabled: false`) | the namespace operator and the automation; the Git export is `iaacGitSync` |
+| OSOHelper and AWSHelper (and the helper-creator ServiceAccount) | the environment objects (CloudOSO, CloudAWS) do the work themselves |
+| Hybrid VPC naming | networks (HybridNetwork) and network placements (NetworkPlacement) |
+| BobsTeam role key | auditor |
+<!-- retired:end -->
 
 ## Archive
 

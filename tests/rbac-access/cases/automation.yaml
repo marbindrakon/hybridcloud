@@ -1,0 +1,138 @@
+# The platform automation account on services (servicesCluster.automation in the central values): allowed what the
+# EDA jobs do, denied what they never need.
+- id: automation-shc-kinds
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: "@shc-kinds"}
+  verbs: [get, list, watch, create, update, patch, delete]
+  expect: allow
+- id: automation-shc-status
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: hybridnetworks, subresource: status}
+  verbs: [get, update, patch]
+  expect: allow
+- id: automation-platform-kinds
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: sovereign-cloud
+  resource: {group: hybridsovereign.redhat, resource: hybridfabrics}
+  verbs: [get, list, patch]
+  expect: allow
+- id: automation-namespaces
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  resource: {group: "", resource: namespaces}
+  verbs: [get, list, watch, create, patch, delete]
+  expect: allow
+- id: automation-core
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: configmaps}
+  verbs: [get, list, create, update, patch, delete]
+  expect: allow
+- id: automation-secrets
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: secrets}
+  verbs: [get, create, update, delete]
+  expect: allow
+- id: automation-events
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: events.k8s.io, resource: events}
+  verbs: [create, patch, get, list]
+  expect: allow
+- id: automation-leases
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: sovereign-cloud
+  resource: {group: coordination.k8s.io, resource: leases}
+  verbs: [get, create, update, delete]
+  expect: allow
+- id: automation-roles
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: rolebindings}
+  verbs: [get, list, create, update, patch, delete]
+  expect: allow
+- id: automation-bind-view
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: clusterroles, name: view}
+  verbs: [bind]
+  expect: allow
+- id: automation-routes-consoles
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  resource: {group: config.openshift.io, resource: consoles, name: cluster}
+  verbs: [get]
+  expect: allow
+- id: automation-projects
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  resource: {group: project.openshift.io, resource: projects, name: "entity-{entity}"}
+  verbs: [get]
+  expect: allow
+- id: automation-reviews
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  resource: {group: authorization.k8s.io, resource: subjectaccessreviews}
+  verbs: [create]
+  expect: allow
+# never needed
+- id: automation-no-clusterrolebindings
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  resource: {group: rbac.authorization.k8s.io, resource: clusterrolebindings}
+  verbs: [create, update, patch, delete]
+  expect: deny
+- id: automation-no-bind-cluster-admin
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: clusterroles, name: cluster-admin}
+  verbs: [bind, escalate]
+  expect: deny
+- id: automation-no-nodes
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  resource: {group: "", resource: nodes}
+  verbs: [delete, patch]
+  expect: deny
+- id: automation-no-roles-escalate
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: roles}
+  verbs: [escalate]
+  expect: deny
+- id: automation-no-pods-exec
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: pods, subresource: exec}
+  verbs: [create]
+  expect: deny
+# a tenant Vault is initialized and unsealed through its HTTP API over the API server's pod proxy (no exec)
+- id: automation-pods-proxy
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: pods, subresource: proxy}
+  verbs: [get, create]
+  expect: allow
+- id: automation-no-pods-attach
+  resolves: [UX-107]
+  principal: {user: "{automation}", groups: [system:serviceaccounts, system:authenticated]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: pods, subresource: attach}
+  verbs: [create]
+  expect: deny

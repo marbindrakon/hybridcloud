@@ -1,0 +1,114 @@
+# The acme-corp demo tenant: a tenant with five access groups, tenant-wide roles for four of them and a team
+# setup and an app project whose access lists give the fifth (developers) access to those two objects only.
+# Applied by the operator-samples job (bootstrap/ansible/project/operator-samples.yml), in this order: the tenant,
+# then the access groups in its namespace once that exists, then the tenant's roles, then the team setup, the app
+# project and the tenant's AAP and Quay organizations. Byte copy: samples/demo/acme-corp.yaml
+# (scripts/check-demo-samples.sh). What each group may do: samples/demo/README.md.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Entity
+metadata:
+  name: acme-corp
+  namespace: sovereign-cloud
+spec:
+  billingID: ACME-001
+  description: Acme Corporation
+  websiteLink: https://acme.example.com
+  displayName: Acme Corporation
+  contacts:
+    - name: Acme cloud desk
+      email: cloud@acme.example
+  namespaceRbac:
+    entityAdmin: [platform-admins]
+    identityAdmin: [platform-admins]
+    cloudVirtAdmin: [infra]
+    cloudOSOAdmin: [infra]
+    networkAdmin: [infra]
+    cloudVirtView: [editors]
+    cloudOSOView: [editors]
+    networkView: [editors]
+    auditor: [viewers]
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Rbac
+metadata:
+  name: platform-admins
+  namespace: entity-acme-corp
+spec:
+  description: Acme platform administrators (tenant admins, access group admins)
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Rbac
+metadata:
+  name: infra
+  namespace: entity-acme-corp
+spec:
+  description: Acme infrastructure team (VM and OpenStack environments, networks)
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Rbac
+metadata:
+  name: editors
+  namespace: entity-acme-corp
+spec:
+  description: Acme engineers who run the team setup and the app project
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Rbac
+metadata:
+  name: viewers
+  namespace: entity-acme-corp
+spec:
+  description: Acme auditors (read everything)
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Rbac
+metadata:
+  name: developers
+  namespace: entity-acme-corp
+spec:
+  description: Acme developers (the team setup and the app project only)
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Team
+metadata:
+  name: platform-engineering
+  namespace: entity-acme-corp
+spec:
+  features:
+    argo: true
+    istio: false
+  teamAdmin: [editors]
+  teamMemberRbac: [developers]
+  teamViewerRbac: [viewers]
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Project
+metadata:
+  name: api-services
+  namespace: entity-acme-corp
+spec:
+  displayName: API services
+  description: Namespaces of the Acme API services.
+  projectAdmin: [editors]
+  projectDeveloperRbac: [developers]
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: AAPOrg
+metadata:
+  name: automation
+  namespace: entity-acme-corp
+spec:
+  aapAdminRbac: [platform-admins]
+  aapJobExecutorRbac: [editors]
+  aapViewerRbac: [viewers]
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: QuayOrg
+metadata:
+  name: registry
+  namespace: entity-acme-corp
+spec:
+  quayAdminRbac: [platform-admins]
+  quayCreatorRbac: [editors]
+  quayMemberRbac: [developers, viewers]

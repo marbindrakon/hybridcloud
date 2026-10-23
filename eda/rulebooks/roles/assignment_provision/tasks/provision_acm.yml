@@ -180,7 +180,27 @@
           kind: Policy
           apiGroup: policy.open-cluster-management.io
 
+# A delete that arrived while this job pulled and rendered the chart: create nothing on central (the teardown of
+# that delete finds no record of this job, R3A2-F1).
+- name: Re-read the Assignment before creating anything on central
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Assignment
+    name: "{{ assignment_cr_name }}"
+    namespace: "{{ assignment_cr_namespace }}"
+  register: assignment_cr_recheck
+
+- name: Note whether the Assignment is being deleted
+  ansible.builtin.set_fact:
+    assignment_deleting: >-
+      {{ (assignment_cr_recheck.resources | default([])) | length == 0
+         or ((assignment_cr_recheck.resources[0].metadata.deletionTimestamp | default('', true)) | length > 0) }}
+
 - name: Apply ACM Policy to central cluster
+  when: not (assignment_deleting | bool)
   ansible.builtin.include_tasks: apply_acm_resource.yml
   vars:
     acm_resource_url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/{{ acm_policy_namespace }}/policies/{{ acm_policy_name }}"
@@ -188,6 +208,7 @@
     acm_resource_name: "Policy {{ acm_policy_name }}"
 
 - name: Apply ACM Placement to central cluster
+  when: not (assignment_deleting | bool)
   ansible.builtin.include_tasks: apply_acm_resource.yml
   vars:
     acm_resource_url: "{{ central_api_server }}/apis/cluster.open-cluster-management.io/v1beta1/namespaces/{{ acm_policy_namespace }}/placements/placement-{{ acm_policy_name }}"
@@ -195,18 +216,15 @@
     acm_resource_name: "Placement placement-{{ acm_policy_name }}"
 
 - name: Apply ACM PlacementBinding to central cluster
+  when: not (assignment_deleting | bool)
   ansible.builtin.include_tasks: apply_acm_resource.yml
   vars:
     acm_resource_url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/{{ acm_policy_namespace }}/placementbindings/binding-{{ acm_policy_name }}"
     acm_resource_body: "{{ acm_placementbinding_body }}"
     acm_resource_name: "PlacementBinding binding-{{ acm_policy_name }}"
 
-- name: Set provisioned status facts
-  ansible.builtin.set_fact:
-    assignment_acm_policy_name: "{{ acm_policy_name }}"
-    assignment_provisioned: true
-
 - name: Wait for ACM Policy to report compliance on target spoke
+  when: not (assignment_deleting | bool)
   ansible.builtin.uri:
     url: >-
       {{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/{{ acm_policy_namespace }}/policies/{{ acm_policy_name }}

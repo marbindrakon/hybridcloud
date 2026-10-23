@@ -130,6 +130,16 @@
               reason: "{{ ci_evpn_reason | default('Checked') }}"
               message: "{{ ci_evpn_message | default('') | trim }}"
 
+    # tenants see this site in their TenantProfile: wake the Entities when that view changed
+    - name: Refresh the tenants' view of the site
+      ansible.builtin.include_tasks: tenant_view.yml
+      vars:
+        civ_before: "{{ shc_live_cr | default(cloudinfrastructure_cr_lookup.resources[0], true) }}"
+        civ_after_status:
+          status: ready
+          capabilities: "{{ ci_capabilities_out }}"
+          site: "{{ ci_site_out }}"
+
     # what waited for this site (pending on it) runs now instead of on its reconcile period
     - name: List what may wait for this site
       kubernetes.core.k8s_info:
@@ -158,6 +168,10 @@
           {{ out }}
 
   rescue:
+    # a key left out of the merge-patch keeps its last value: switch every stored capability off
+    - name: Every capability of the failed site is off
+      ansible.builtin.include_tasks: failed_capabilities.yml
+
     - name: Mark CloudInfrastructure failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
@@ -171,7 +185,7 @@
           ready: false
           message: "{{ _msg }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          capabilities: {evpn: false, api: false}
+          capabilities: "{{ _ci_failed_caps }}"
           conditions:
             - type: Ready
               status: "False"
@@ -180,6 +194,18 @@
               message: "{{ _msg }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
+
+    - name: Refresh the tenants' view of the failed site
+      ansible.builtin.include_tasks: tenant_view.yml
+      vars:
+        civ_before: "{{ shc_live_cr | default(cloudinfrastructure_cr_lookup.resources[0], true) }}"
+        civ_after_status:
+          status: failed
+          capabilities: "{{ _ci_failed_caps }}"
+        civ_check_generation: false
+      when:
+        - services_api_host is defined and services_bearer_token is defined
+        - (shc_live_cr | default({}, true)) | length > 0 or (cloudinfrastructure_cr_lookup.resources | default([])) | length > 0
 
     - name: Re-raise
       ansible.builtin.fail:

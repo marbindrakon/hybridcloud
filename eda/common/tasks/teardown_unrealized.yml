@@ -1,0 +1,78 @@
+---
+# First task of an environment/network teardown: an object that never got anything on a site (refused at
+# validation) is deleted without the site cleanup. Conservative: all three must hold, else the full
+# teardown runs:
+#   1. it was never ready (status.ready, status.realized and the Ready condition are not true),
+#   2. none of the kind's realization markers in status is set (teardown_unrealized_markers),
+#   3. its Ready reason is a validation reason (teardown_unrealized_reasons).
+# Input: shc_live_cr (acknowledge_event.yml). Sets teardown_nothing_realized; when true it records
+# deletionComplete, wakes the object so the operator drops its finalizer, and ends the job.
+- name: Decide whether anything was realized
+  ansible.builtin.set_fact:
+    teardown_nothing_realized: >-
+      {%- set cr = shc_live_cr | default({}, true) -%}
+      {%- set st = cr.status | default({}, true) -%}
+      {%- set conds = st.conditions | default([], true) -%}
+      {%- set ready_c = conds | selectattr('type', 'equalto', 'Ready') | list -%}
+      {%- set ready_reason = (ready_c | first).reason | default('') if ready_c else (st.reason | default('', true)) -%}
+      {%- set ever_ready = (st.ready | default(false) | bool) or (st.realized | default(false) | bool)
+                            or (ready_c and ((ready_c | first).status | string) == 'True') -%}
+      {%- set markers = teardown_unrealized_markers[cr.kind | default('')] | default(none) -%}
+      {%- set marked = [] -%}
+      {%- for m in (markers or []) -%}
+        {%- if st[m] is defined and st[m] not in [none, '', [], {}, false] -%}{%- set _ = marked.append(m) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ (cr.metadata is defined) and (markers is not none) and (not ever_ready) and (marked | length == 0)
+         and (ready_reason in teardown_unrealized_reasons) }}
+  vars:
+    teardown_unrealized_markers:
+      CloudVirt: [namespaces]
+      CloudOSO: [projectId, domainId, osoHelperCreated, route53ZoneId, apiVIP, ingressVIP]
+      CloudAWS: [awsAccountId, awsHelperCreated, route53ZoneId]
+      CloudGCP: [project, projectNumber, dnsZoneId]
+      NetworkPlacement: [realization, l3Vni, l2Vni, namespaces]
+      AttachmentCircuit: [realization, vlan, sessions]
+      PlatformOpenshift: [apiURL, clusterInstalled, provisionStatus, awsHelperName, buildName, dns]
+    teardown_unrealized_reasons:
+      - SiteTypeMismatch
+      - EntityNotAllowed
+      - SiteNotAllowed
+      - InvalidSpec
+      - SiteNotVirtualizationCapable
+      - SiteNotEvpnCapable
+      - TypeNotSupported
+      - RegionNotSupported
+      - FabricMismatch
+      - NamespaceTaken
+      - EnvironmentNameTaken
+      - NameInUse
+      - NoAccount
+      - NoProject
+      - CredentialsMissing
+
+- name: Delete without site cleanup
+  when: teardown_nothing_realized | bool
+  block:
+    - name: Record the deletion as complete
+      ansible.builtin.include_tasks: patch_cr_status.yml
+      vars:
+        cr_api_version: "{{ shc_live_cr.apiVersion }}"
+        cr_plural: "{{ shc_live_cr.kind | lower | regex_replace('(?<=[^aeiou])y$', 'ie') }}s"
+        cr_name: "{{ shc_live_cr.metadata.name }}"
+        cr_namespace: "{{ shc_live_cr.metadata.namespace }}"
+        patch_ignore_not_found: true
+        cr_status_body:
+          status: ready
+          ready: false
+          deletionComplete: true
+          deletionBlockedBy: []
+          message: Nothing was created on the site; deleted without site cleanup.
+
+    - name: Wake the object so its finalizer is released now
+      ansible.builtin.include_tasks: nudge_cr.yml
+      vars:
+        nudge_crs:
+          - {kind: "{{ shc_live_cr.kind }}", namespace: "{{ shc_live_cr.metadata.namespace }}", name: "{{ shc_live_cr.metadata.name }}"}
+
+    - name: End the job
+      ansible.builtin.meta: end_play

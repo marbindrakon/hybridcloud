@@ -10,7 +10,7 @@
         central_api_server: "{{ lookup('env', 'CENTRAL_API_SERVER') }}"
 
     - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
     - name: Read Assignment CR status from services cluster
       kubernetes.core.k8s_info:
@@ -23,12 +23,67 @@
         namespace: "{{ assignment_cr_namespace }}"
       register: assignment_cr_lookup
 
+    # the Assignment is going away: the Teams that reach it through their access fields drop it
+    - name: Wake the Teams whose access reaches this Assignment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_assignment_teams.yml"
+      vars:
+        wat_namespace: "{{ assignment_cr_namespace }}"
+        wat_assignment: "{{ assignment_cr_name }}"
+        wat_team: "{{ (shc_live_spec | default({}, true)).team | default('', true) }}"
+
+    # An Assignment that never reached a cluster owns no ACM policy: nothing to tear down there, so the ACM steps
+    # (which need the ACM creator credentials) are skipped. What the provision job records decides
+    # (status.assignmentProvisioned, status.acmPolicyName; recorded once the first ACM object exists on central,
+    # also when the job fails after that, and carried forward by later runs). A named cluster
+    # (spec.openshift) or its name in status.clusterName alone does not: the provision job records both while it
+    # still waits for the cluster (P2AC-F3).
     - name: Derive ACM policy name from Assignment CR name (unique per cluster)
+      vars:
+        _asg_status: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
+        _asg_spec: "{{ assignment_cr_lookup.resources[0].spec | default({}, true) }}"
+        _asg_provisioned: >-
+          {{ (_asg_status.assignmentProvisioned | default(false, true) | bool)
+             or ((_asg_status.acmPolicyName | default('', true)) | length > 0) }}
+      ansible.builtin.set_fact:
+        delete_acm_policy_name: >-
+          {{ (assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', ''))
+             if (_asg_provisioned | bool) else '' }}
+        delete_acm_policy_name_legacy: >-
+          {{ _asg_status.acmPolicyName | default('') }}
+        delete_acm_cluster_named: >-
+          {{ ((_asg_spec.openshift | default('', true)) | length > 0)
+             or ((_asg_status.clusterName | default('', true)) | length > 0) }}
+      when: assignment_cr_lookup.resources | length > 0
+
+    # A delete during the first provision job: until that job writes its status (at the end, or in its rescue) the
+    # record exists only in the job, and that write is then dropped as superseded. So with no record but a named
+    # cluster, the ACM path is taken when the ACM creator credential exists: without it the provision job cannot
+    # create anything on central (it stops before its first POST), with it the Policy GET answers 404 when nothing
+    # was created and the ACM steps are skipped (R3A2-F1).
+    - name: Look for the ACM creator credential of a named cluster without a record
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Secret
+        name: "{{ acm_central_sa_secret_name }}"
+        namespace: "{{ assignment_operator_namespace }}"
+      register: acm_sa_secret_unrecorded
+      no_log: true
+      when:
+        - assignment_cr_lookup.resources | length > 0
+        - delete_acm_policy_name | length == 0
+        - delete_acm_cluster_named | bool
+
+    - name: Take the ACM path for a named cluster without a record when the credential exists
       ansible.builtin.set_fact:
         delete_acm_policy_name: "{{ assignment_cr_name | lower | regex_replace('[^a-z0-9-]', '-') | regex_replace('-+$', '') }}"
-        delete_acm_policy_name_legacy: >-
-          {{ (assignment_cr_lookup.resources[0].status | default({})).acmPolicyName | default('') }}
-      when: assignment_cr_lookup.resources | length > 0
+      when:
+        - assignment_cr_lookup.resources | length > 0
+        - delete_acm_policy_name | length == 0
+        - delete_acm_cluster_named | bool
+        - (acm_sa_secret_unrecorded.resources | default([])) | length > 0
 
     - name: Default ACM policy name when CR unavailable
       ansible.builtin.set_fact:
@@ -44,7 +99,7 @@
             assignment_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
         - name: Mark Assignment deletion complete without ACM cleanup
-          ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
           vars:
             cr_api_version: hybridsovereign.redhat/v1alpha1
             cr_plural: assignments
@@ -72,13 +127,20 @@
           register: acm_sa_secret
           no_log: true
 
-        - name: Assert ACM creator SA secret available for delete
-          ansible.builtin.assert:
-            that:
-              - acm_sa_secret.resources | default([]) | length > 0
-            fail_msg: >-
-              Cannot delete ACM Policy '{{ delete_acm_policy_name }}': ACM creator SA secret
-              '{{ acm_central_sa_secret_name }}' not found.
+        # A provisioned Assignment needs the ACM creator credential to remove its policy. Without it the teardown
+        # stops with CredentialsMissing and names the Secret: the platform team provides it, then Retry now.
+        - name: Record that the ACM creator credential is missing
+          ansible.builtin.set_fact:
+            assignment_teardown_reason: CredentialsMissing
+          when: acm_sa_secret.resources | default([]) | length == 0
+
+        - name: Stop when the ACM creator credential is missing
+          ansible.builtin.fail:
+            msg: >-
+              Cannot remove ACM policy {{ delete_acm_policy_name }}: Secret {{ acm_central_sa_secret_name }} (the ACM
+              creator credential) is missing in namespace {{ assignment_operator_namespace }}. The platform team must
+              provide it; then use Retry now.
+          when: acm_sa_secret.resources | default([]) | length == 0
 
         - name: Decode ACM central SA credentials for delete
           ansible.builtin.set_fact:
@@ -189,7 +251,7 @@
             assignment_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
         - name: Mark Assignment deletion complete on services cluster
-          ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
           vars:
             cr_api_version: hybridsovereign.redhat/v1alpha1
             cr_plural: assignments
@@ -204,7 +266,7 @@
 
   rescue:
     - name: Mark Assignment delete as failed on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: assignments
@@ -212,6 +274,7 @@
         cr_namespace: "{{ assignment_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: "{{ assignment_teardown_reason | default('TeardownFailed') }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA teardown failed')) }}"

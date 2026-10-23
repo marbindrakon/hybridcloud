@@ -119,6 +119,37 @@
   retries: 3
   delay: 5
 
+# ─── Central vault: ESO policy for the services cluster ───────────────────────
+# The services cluster's store is used by the platform namespaces there; it gets the same grants minus the
+# platform credentials only the automation on central reads (eso_services_denied_paths, below the KV mount).
+- name: Create the services ESO policy on central vault
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/sys/policies/acl/{{ eso_services_policy_name }}"
+    method: POST
+    validate_certs: false
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    body_format: json
+    body:
+      policy: |
+        path "central/data/*" {
+          capabilities = ["create", "read", "update", "delete", "list"]
+        }
+        path "central/metadata/*" {
+          capabilities = ["create", "read", "update", "delete", "list"]
+        }
+        {% for p in eso_services_denied_paths %}
+        path "central/data/{{ p }}" {
+          capabilities = ["deny"]
+        }
+        path "central/metadata/{{ p }}" {
+          capabilities = ["deny"]
+        }
+        {% endfor %}
+    status_code: [200, 204]
+  retries: 3
+  delay: 5
+
 # ─── Central vault: create sovereign-admin-policy ─────────────────────────────
 - name: Create sovereign-admin-policy on central vault
   ansible.builtin.uri:
@@ -174,7 +205,7 @@
       bound_service_account_namespaces:
         - "{{ eso_namespace }}"
       policies:
-        - "{{ eso_policy_name }}"
+        - "{{ eso_services_policy_name }}"
       ttl: "1h"
       max_ttl: "4h"
     status_code: [200, 204]

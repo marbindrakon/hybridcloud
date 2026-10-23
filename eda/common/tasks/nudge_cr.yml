@@ -16,10 +16,14 @@
     definition:
       metadata:
         annotations:
+          # Machine wakes write the legacy literal "true": operators of every generation act on it each
+          # time and remove it after publishing (a timestamp is only understood by the current ones, and
+          # namespace operators are upgraded per tenant). The time in "nudged" makes every nudge an update
+          # the operator sees, also when "true" is still there.
           ansible.sdk.operatorframework.io/reconcileNow: "true"
-          # the delete roles leave reconcileNow "true", so a second nudge during a deletion would change nothing and
-          # wake nothing: the time makes every nudge an update the operator sees
-          hybridsovereign.redhat/nudged: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.%NZ') }}"
+          hybridsovereign.redhat/nudged: "{{ _nudge_time }}"
+  vars:
+    _nudge_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.%NZ') }}"
   loop: "{{ nudge_crs | default([]) | selectattr('name') | list }}"
   loop_control:
     label: "{{ item.kind }} {{ item.namespace }}/{{ item.name }}"

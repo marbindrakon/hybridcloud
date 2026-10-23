@@ -53,7 +53,57 @@
   ignore_errors: true
   when: gw_org_id | int > 0 and viewer_groups | length > 0
 
-- name: Configure authenticator map for admin groups
+# Authenticator maps: one per (team, access group). The sign-in claim carries full group paths
+# (/<entity>/<access group>), so the trigger is '/' + the Rbac's group. Maps are created, updated when their trigger
+# or team differ, and this organization's maps that are no longer wanted are deleted.
+- name: Wanted authenticator maps of this organization
+  ansible.builtin.set_fact:
+    aaporg_wanted_maps: >-
+      {%- set out = [] -%}
+      {%- for kind, team, order, groups in [('admin', 'admins', 1, admin_groups), ('executor', 'executors', 2, executor_groups),
+                                            ('viewer', 'viewers', 3, viewer_groups)] -%}
+        {%- for g in groups -%}
+          {%- set _ = out.append({'name': org_name ~ '-' ~ kind ~ '-map-' ~ g, 'team': org_name ~ '-' ~ team,
+                                   'order': order, 'group': '/' ~ (g | regex_replace('^/+', ''))}) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Read the authenticator's maps
+  ansible.builtin.uri:
+    url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticators/{{ aap_auth_id }}/authenticator_maps/?page_size=200"
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200]
+  register: _aaporg_maps
+  when: aap_auth_id | length > 0
+
+- name: Work out the map changes
+  vars:
+    _have: "{{ (_aaporg_maps.json | default({})).results | default([]) }}"
+    _prefix_re: "{{ '^' ~ (org_name | regex_escape) ~ '-(admin|executor|viewer)-map-' }}"
+  ansible.builtin.set_fact:
+    aaporg_maps_create: "{{ aaporg_wanted_maps | rejectattr('name', 'in', _have | map(attribute='name') | list) | list }}"
+    aaporg_maps_update: >-
+      {%- set out = [] -%}
+      {%- for w in aaporg_wanted_maps -%}
+        {%- for h in _have if h.name == w.name -%}
+          {%- set trig = ((h.triggers | default({}, true)).groups | default({}, true)).has_or | default([], true) -%}
+          {%- if trig != [w.group] or (h.team | default('', true) | string) != w.team -%}
+            {%- set _ = out.append(w | combine({'id': h.id})) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+    aaporg_maps_delete: >-
+      {{ _have | selectattr('name', 'match', _prefix_re)
+         | rejectattr('name', 'in', aaporg_wanted_maps | map(attribute='name') | list) | list }}
+  when: aap_auth_id | length > 0
+
+- name: Create the authenticator maps
   ansible.builtin.uri:
     url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/"
     method: POST
@@ -62,71 +112,69 @@
     force_basic_auth: true
     body_format: json
     body:
-      name: "{{ org_name }}-admin-map-{{ item }}"
+      name: "{{ item.name }}"
       authenticator: "{{ aap_auth_id }}"
       map_type: team
       triggers:
         groups:
-          has_or: ["{{ item }}"]
+          has_or: ["{{ item.group }}"]
       organization: "{{ org_name }}"
-      team: "{{ org_name }}-admins"
-      order: 1
+      team: "{{ item.team }}"
+      # the gateway requires the team role a map grants (400 "You must specify a role with the selected map type")
+      role: "{{ aaporg_team_map_role | default('Team Member') }}"
+      order: "{{ item.order }}"
       revoke: true
     validate_certs: false
-    status_code: [200, 201, 400]
-  loop: "{{ admin_groups }}"
-  when: aap_auth_id | length > 0 and admin_groups | length > 0
+    status_code: [200, 201]
+  loop: "{{ aaporg_maps_create | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: aap_auth_id | length > 0
+  register: _aaporg_map_created
   ignore_errors: true
 
-- name: Configure authenticator map for executor groups
+- name: Update the authenticator maps whose trigger differs
   ansible.builtin.uri:
-    url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/"
-    method: POST
+    url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/{{ item.id }}/"
+    method: PATCH
     user: "{{ aap_username }}"
     password: "{{ aap_password }}"
     force_basic_auth: true
     body_format: json
     body:
-      name: "{{ org_name }}-executor-map-{{ item }}"
-      authenticator: "{{ aap_auth_id }}"
-      map_type: team
       triggers:
         groups:
-          has_or: ["{{ item }}"]
+          has_or: ["{{ item.group }}"]
       organization: "{{ org_name }}"
-      team: "{{ org_name }}-executors"
-      order: 2
-      revoke: true
+      team: "{{ item.team }}"
     validate_certs: false
-    status_code: [200, 201, 400]
-  loop: "{{ executor_groups }}"
-  when: aap_auth_id | length > 0 and executor_groups | length > 0
+    status_code: [200]
+  loop: "{{ aaporg_maps_update | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: aap_auth_id | length > 0
+  register: _aaporg_map_updated
   ignore_errors: true
 
-- name: Configure authenticator map for viewer groups
+- name: Delete this organization's maps that are no longer wanted
   ansible.builtin.uri:
-    url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/"
-    method: POST
+    url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/{{ item.id }}/"
+    method: DELETE
     user: "{{ aap_username }}"
     password: "{{ aap_password }}"
     force_basic_auth: true
-    body_format: json
-    body:
-      name: "{{ org_name }}-viewer-map-{{ item }}"
-      authenticator: "{{ aap_auth_id }}"
-      map_type: team
-      triggers:
-        groups:
-          has_or: ["{{ item }}"]
-      organization: "{{ org_name }}"
-      team: "{{ org_name }}-viewers"
-      order: 3
-      revoke: true
     validate_certs: false
-    status_code: [200, 201, 400]
-  loop: "{{ viewer_groups }}"
-  when: aap_auth_id | length > 0 and viewer_groups | length > 0
-  ignore_errors: true
+    status_code: [204, 404]
+  loop: "{{ aaporg_maps_delete | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: aap_auth_id | length > 0
+
+- name: Record whether the sign-in mapping is in place
+  ansible.builtin.set_fact:
+    aaporg_mapping_failed: >-
+      {{ ((_aaporg_map_created.results | default([])) + (_aaporg_map_updated.results | default([])))
+         | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0 }}
 
 - name: Fetch org object roles
   ansible.builtin.uri:

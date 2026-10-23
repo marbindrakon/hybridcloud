@@ -37,6 +37,29 @@ RUN curl -sL https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz | \
     tar -xz -C /tmp && mv /tmp/linux-amd64/helm /usr/local/bin/helm && \
     chmod +x /usr/local/bin/helm && rm -rf /tmp/linux-amd64
 
+# Schema replay and SAR matrix (tests/schema-replay, tests/rbac-access): envtest API server binaries (etcd,
+# kube-apiserver, kubectl) for the services cluster's Kubernetes minor, checked against the published sha512. kind is
+# not installed: it needs a container runtime, which this unprivileged image does not have.
+ARG ENVTEST_VERSION=v1.35.0
+ARG ENVTEST_SHA512=130369c16f076e724d089189afaede960316f5f5dea6cf57be7a4fc6f09c77342893192509790e4056e116e232dff832ed863f5bd55dcb55d38f3ab834828a11
+RUN curl -sSLf -o /tmp/envtest.tgz \
+      "https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-${ENVTEST_VERSION}/envtest-${ENVTEST_VERSION}-linux-amd64.tar.gz" && \
+    echo "${ENVTEST_SHA512}  /tmp/envtest.tgz" | sha512sum -c - && \
+    mkdir -p /usr/local/kubebuilder/bin && \
+    tar -xzf /tmp/envtest.tgz -C /usr/local/kubebuilder/bin --strip-components=2 && \
+    chmod 755 /usr/local/kubebuilder/bin/* && rm -f /tmp/envtest.tgz
+ENV KUBEBUILDER_ASSETS=/usr/local/kubebuilder/bin
+
+# The test tools with the repository files they read, in their repository layout under /runner/project/shc-tests:
+#   python3 -I /runner/project/shc-tests/tests/schema-replay/replay.py ...   (README there)
+#   python3 -I /runner/project/shc-tests/tests/rbac-access/sar_matrix.py ...
+COPY tests/schema-replay/ /runner/project/shc-tests/tests/schema-replay/
+COPY tests/rbac-access/ /runner/project/shc-tests/tests/rbac-access/
+COPY operator/config/crd/bases/ /runner/project/shc-tests/operator/config/crd/bases/
+COPY operator/primary/helm/templates/crds.yaml /runner/project/shc-tests/operator/primary/helm/templates/crds.yaml
+COPY eda/rulebooks/roles/entity_provision/ /runner/project/shc-tests/eda/rulebooks/roles/entity_provision/
+COPY eda/common/files/shc_ledger.py /runner/project/shc-tests/eda/common/files/shc_ledger.py
+
 # Copy ansible project, roles, and AAP config-as-code into the runner structure
 COPY bootstrap/ansible/project/ /runner/project/
 COPY bootstrap/ansible/roles/ /runner/project/roles/

@@ -167,7 +167,7 @@ print_manual_gates() {
             Follow tests/functional/README.md (TC-F001–F010)
 
   GATE-M03  RBAC matrix
-            Follow tests/rbac-access/README.md (TC-RBAC-001–008)
+            python3 -I tests/rbac-access/sar_matrix.py --entity <tenant>  (tests/rbac-access/README.md)
 
   GATE-M04  Cluster connectivity
             Follow tests/connectivity/README.md (TC-CONN-001–015)
@@ -189,6 +189,100 @@ EOF
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Phase 5: Python unit tests (status library, watches, tenancy) ───────────
+run_unit_tests() {
+  log_info "Python unit tests — tests/unit"
+  if ! require_cmd python3; then
+    return
+  fi
+  if (cd "${REPO_ROOT}" && python3 -m unittest discover -s tests/unit) >/tmp/shc-unit-tests.log 2>&1; then
+    log_pass "unit tests ($(grep -Eo 'Ran [0-9]+ tests' /tmp/shc-unit-tests.log))"
+  else
+    log_fail "unit tests"
+    tail -20 /tmp/shc-unit-tests.log || true
+  fi
+  if "${REPO_ROOT}/scripts/sync-shc-status.sh" --check; then
+    log_pass "status library copies in shc-cluster-base match the collection"
+  else
+    log_fail "status library copies drifted (run scripts/sync-shc-status.sh)"
+  fi
+}
+
+# --- be-foundations ---
+# ─── Phase 6: Repository consistency checks ──────────────────────────────────
+run_repo_checks() {
+  log_info "Repository consistency — EDA includes, generated CRDs"
+  if ! require_cmd python3; then
+    return
+  fi
+  if (cd "${REPO_ROOT}" && python3 -I scripts/check-includes.py) >/tmp/shc-check-includes.log 2>&1; then
+    log_pass "EDA includes resolve ($(tail -1 /tmp/shc-check-includes.log))"
+  else
+    log_fail "EDA includes (scripts/check-includes.py)"
+    grep MISSING /tmp/shc-check-includes.log | head -20 || true
+  fi
+  if (cd "${REPO_ROOT}" && python3 -m unittest discover -s tests/schema-replay -p 'test_*.py') >/tmp/shc-replay-unit.log 2>&1; then
+    log_pass "schema-replay unit tests ($(grep -Eo 'Ran [0-9]+ tests' /tmp/shc-replay-unit.log))"
+  else
+    log_fail "schema-replay unit tests"
+    tail -20 /tmp/shc-replay-unit.log || true
+  fi
+  if (cd "${REPO_ROOT}" && python3 -I scripts/gen-crds.py --check) >/tmp/shc-gen-crds.log 2>&1; then
+    log_pass "crds.yaml generated from operator/config/crd/bases"
+  else
+    log_fail "crds.yaml drift (run python3 -I scripts/gen-crds.py)"
+    cat /tmp/shc-gen-crds.log
+  fi
+  # the automation account's rules (central values) cover every call the EDA jobs make on services
+  if (cd "${REPO_ROOT}" && python3 -I scripts/check-automation-rules.py) >/tmp/shc-automation-rules.log 2>&1; then
+    if grep -q '^check-automation-rules: SKIP' /tmp/shc-automation-rules.log; then
+      log_skip "automation rules (no servicesCluster.automation.rules in the central values)"
+    else
+      log_pass "automation rules cover the EDA services calls ($(tail -1 /tmp/shc-automation-rules.log))"
+    fi
+  else
+    log_fail "automation rules miss permissions the EDA jobs use (scripts/check-automation-rules.py)"
+    grep MISSING /tmp/shc-automation-rules.log | head -20 || true
+  fi
+}
+# --- end be-foundations ---
+
+# --- be-tenantprofile-catalogue ---
+# ─── Phase 7: Tenant profile, scope roles, demo tenant ───────────────────────
+run_tenantprofile_checks() {
+  log_info "Tenant profile, scope roles and the demo tenant"
+  if (cd "${REPO_ROOT}" && bash scripts/check-demo-samples.sh) >/tmp/shc-demo-samples.log 2>&1; then
+    log_pass "samples/demo/acme-corp.yaml = the seeded demo"
+  else
+    log_fail "demo copies differ (scripts/check-demo-samples.sh)"
+    tail -20 /tmp/shc-demo-samples.log || true
+  fi
+  if ! command -v ansible-playbook &>/dev/null; then
+    log_skip "ansible-playbook not installed: scope-role render and site summary tests"
+  else
+    local t
+    for t in tests/access/scope-role-render.yml tests/access/assignment-move.yml tests/tenantprofile/site-summary.yml; do
+      if (cd "${REPO_ROOT}" && ansible-playbook -i localhost, -c local "${t}" </dev/null) >/tmp/shc-btp-test.log 2>&1; then
+        log_pass "${t}"
+      else
+        log_fail "${t}"
+        grep -E 'FAILED|fatal|msg' /tmp/shc-btp-test.log | head -20 || true
+      fi
+    done
+  fi
+  if [[ -n "${KUBEBUILDER_ASSETS:-}" ]] && command -v helm &>/dev/null; then
+    if (cd "${REPO_ROOT}" && bash tests/access/test-access-fields.sh) >/tmp/shc-access-fields.log 2>&1; then
+      log_pass "shc-access-field-ladder behaviour (envtest, Deny and Warn)"
+    else
+      log_fail "shc-access-field-ladder behaviour (tests/access/test-access-fields.sh)"
+      grep -E 'FAIL|Error' /tmp/shc-access-fields.log | head -20 || true
+    fi
+  else
+    log_skip "shc-access-field-ladder behaviour (needs KUBEBUILDER_ASSETS and helm)"
+  fi
+}
+# --- end be-tenantprofile-catalogue ---
+
 main() {
   echo "Hybrid Sovereign Test Runner"
   echo "Repository: ${REPO_ROOT}"
@@ -202,6 +296,12 @@ main() {
   run_secret_scan
   echo ""
   run_script_permissions
+  echo ""
+  run_unit_tests
+  echo ""
+  run_repo_checks
+  echo ""
+  run_tenantprofile_checks
   echo ""
   print_manual_gates
   echo ""

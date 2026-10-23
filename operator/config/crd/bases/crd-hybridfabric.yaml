@@ -4,7 +4,7 @@ metadata:
   name: hybridfabrics.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -14,6 +14,9 @@ spec:
     singular: hybridfabric
     shortNames:
       - hfab
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -22,12 +25,13 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            Platform-owned network fabric that connects tenant networks across cloud sites. Every site keeps its
-            own EVPN-VXLAN domain; a CloudGateway per site terminates it on the border gateway, and the border
-            gateway carries each tenant network between the sites it is placed on, isolated from every other
-            network. The fabric holds the site-visible numbering (VNI pools), the border gateway and its
-            credentials; tenants reference it from their HybridNetworks. How the border gateway realizes this is
-            the platform's choice.
+            A fabric: the platform-owned network that connects tenant networks across sites,
+            comparable to an AWS Cloud WAN core network. Every site keeps its own EVPN-VXLAN domain;
+            a CloudGateway per site terminates it on the border gateway, and the border gateway
+            carries each tenant network between the sites it is placed on, isolated from every other
+            network. The fabric holds the site-visible numbering (VNI pools), the border gateway and
+            its credentials; tenants reference it from their HybridNetworks. How the border gateway
+            realizes this is the platform's choice.
           type: object
           required:
             - spec
@@ -39,6 +43,7 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required: [domainAsn, overlayMtu, vniPool, l2vniPool, borderGateway]
               x-kubernetes-validations:
@@ -76,10 +81,12 @@ spec:
                       message: start must not exceed end
                   properties:
                     start:
+                      description: First VNI of the pool (1 to 16777215).
                       type: integer
                       minimum: 1
                       maximum: 16777215
                     end:
+                      description: Last VNI of the pool, not lower than start.
                       type: integer
                       minimum: 1
                       maximum: 16777215
@@ -94,10 +101,12 @@ spec:
                       message: start must not exceed end
                   properties:
                     start:
+                      description: First VNI of the pool (1 to 16777215).
                       type: integer
                       minimum: 1
                       maximum: 16777215
                     end:
+                      description: Last VNI of the pool, not lower than start.
                       type: integer
                       minimum: 1
                       maximum: 16777215
@@ -110,6 +119,7 @@ spec:
                   required: [nodes, credentialsRef]
                   properties:
                     nodes:
+                      description: The border gateway nodes, 1 to 8, by unique name.
                       type: array
                       minItems: 1
                       maxItems: 8
@@ -136,6 +146,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -151,6 +162,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -169,6 +181,7 @@ spec:
                         maxLength: 63
                         description: Entity name
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 ledger:
@@ -208,8 +221,11 @@ spec:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 waitingFor:
                   type: array
@@ -217,49 +233,71 @@ spec:
                   items:
                     type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 deletionBlockedBy:
                   type: array
                   items:
                     type: string
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:
@@ -273,10 +311,17 @@ spec:
           jsonPath: .spec.overlayMtu
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

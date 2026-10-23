@@ -4,13 +4,13 @@
       ansible.builtin.set_fact:
         project_cr_name: "{{ event_payload.regarding.name }}"
         project_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        project_spec: "{{ event_payload.note | from_json }}"
+        project_spec: "{{ shc_live_spec }}"
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"
 
     - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
     - name: Read Project CR from services cluster
       kubernetes.core.k8s_info:
@@ -42,15 +42,24 @@
       ansible.builtin.set_fact:
         project_entity: "{{ ns_info.resources[0].metadata.labels['hybridsovereign.redhat/entity'] | default('') }}"
         project_billing_id: "{{ ns_info.resources[0].metadata.labels['hybridsovereign.redhat/billing-id'] | default('') }}"
-        project_description: "{{ ns_info.resources[0].metadata.annotations['hybridsovereign.redhat/description'] | default('') }}"
+        project_description: "{{ (ns_info.resources[0].metadata.annotations | default({}, true))['hybridsovereign.redhat/description'] | default('') }}"
         project_generation: "{{ project_cr.resources[0].metadata.generation | default(0) | int }}"
+
+    - name: Refuse a Project outside an entity namespace
+      ansible.builtin.fail:
+        msg: "Project {{ project_cr_name }}: namespace {{ project_cr_namespace }} has no hybridsovereign.redhat/entity label"
+      when: project_entity | length == 0
+
+    # the access fields: sign-in groups and resource-scoped Roles on services (access.yml)
+    - name: Grant the Project's access groups
+      ansible.builtin.include_tasks: access.yml
 
     - name: Get current timestamp
       ansible.builtin.set_fact:
         project_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     - name: Update Project status as ready on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: projects
@@ -58,6 +67,7 @@
         cr_namespace: "{{ project_cr_namespace }}"
         cr_status_body:
           status: ready
+          message: The project is ready.
           ready: true
           observedGeneration: "{{ project_generation }}"
           lastReconciledAt: "{{ project_status_transition_time }}"
@@ -71,11 +81,12 @@
               status: "True"
               lastTransitionTime: "{{ project_status_transition_time }}"
               reason: EDASucceeded
-              message: Project {{ project_cr_name }} provisioned by EDA
+              message: The project is ready.
+            - "{{ project_access_condition | combine({'lastTransitionTime': project_status_transition_time}) }}"
 
   rescue:
     - name: Mark Project as failed on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: projects

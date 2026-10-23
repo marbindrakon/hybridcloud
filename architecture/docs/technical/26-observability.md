@@ -25,7 +25,7 @@ Operators in the Hybrid Sovereign Cloud platform expose Prometheus metrics via c
 | Plugin AAP | `plugin-aap-metrics` | `plugin-aap-rules` |
 | Plugin Quay | `plugin-quay-metrics` | `plugin-quay-rules` |
 | Plugin Vault | `plugin-vault-metrics` | `plugin-vault-rules` |
-| Plugin SDX | `plugin-sdx-metrics` | `plugin-sdx-rules` |
+| Plugin SDX (retired) | `plugin-sdx-metrics` | `plugin-sdx-rules` |
 
 ## Standard Prometheus Metrics (All Operators)
 
@@ -89,7 +89,7 @@ All operators emit structured events via the `events.k8s.io/v1` API.
 | Plugin Quay (QuayConfig) | Created/Updated | Reconcile | Quay connection configured |
 | Plugin Vault (VaultKV) | Created/Updated | Reconcile | Vault KV engine synced |
 | Plugin Vault (VaultConfig) | Created/Updated | Reconcile | Vault connection configured |
-| Plugin SDX | SyncComplete | Reconcile | Full CR sync to Gitea completed (`Iaac.status.conditions`) |
+| Plugin SDX (retired) | SyncComplete | Reconcile | Full CR sync to Gitea completed (`Iaac.status.conditions`) |
 
 ## Querying Metrics
 

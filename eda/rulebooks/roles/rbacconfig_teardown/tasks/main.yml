@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         rbac_config_cr_name: "{{ event_payload.regarding.name }}"
         rbac_config_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        rbac_config_spec: "{{ event_payload.note | from_json }}"
+        rbac_config_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -63,6 +63,31 @@
             validate_certs: false
             status_code: [204, 404]
 
+        - name: Look up the clients automation client
+          ansible.builtin.uri:
+            url: >-
+              {{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients?clientId={{ (rbac_config_cr_name ~ '-clients') | urlencode }}
+            method: GET
+            headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
+            validate_certs: false
+            status_code: [200]
+          register: kc_clients_client_lookup
+
+        - name: Delete the clients automation client when present
+          when: kc_clients_client_lookup.json | length > 0
+          ansible.builtin.uri:
+            url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients/{{ kc_clients_client_lookup.json[0].id }}"
+            method: DELETE
+            headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
+            validate_certs: false
+            status_code: [204, 404]
+
+    - name: Delete the realm automation credentials from central Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
+      vars:
+        vault_kv_delete_paths:
+          - "{{ keycloak_automation_vault_prefix | default('keycloak-automation') }}/{{ rbac_config_cr_name }}"
+
     - name: Delete Keycloak client credentials Secret
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"
@@ -92,7 +117,7 @@
           deletionComplete: true
           lastReconciledAt: "{{ rbac_delete_transition_time }}"
           message: >-
-            RbacConfig {{ rbac_config_cr_name }} finalized. Keycloak client and Secret removed by EDA.
+            RbacConfig {{ rbac_config_cr_name }} finalized. Keycloak clients, Secret and Vault credentials removed by EDA.
 
   rescue:
     - name: Mark RbacConfig delete as failed on services cluster
@@ -104,6 +129,7 @@
         cr_namespace: "{{ rbac_config_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA deletion failed')) }}"

@@ -5,15 +5,18 @@ import http from "http";
 import https from "https";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createK8sClient } from "./k8s-proxy.js";
-import { createApiK8sProxy } from "./api-k8s-proxy.js";
+import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
+import { createRequirePlatform } from "../../shared/server/platformGate.js";
+import { createPermissionsHandler } from "../../shared/server/permissions.js";
+import { mountSessionRoutes } from "../../shared/server/session.js";
+import { userToken } from "../../shared/server/upstream.js";
+import { sendStatus } from "../../shared/server/errors.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 const OCP_API = process.env.OCP_SERVICES_SERVER || "https://kubernetes.default.svc";
-const ENTITY_NAMESPACE = process.env.ENTITY_NAMESPACE || "sovereign-cloud";
 
 app.set("trust proxy", 1);
 
@@ -51,13 +54,6 @@ const apiLimiter = rateLimit({
   message: { message: "Too many requests, please try again later" },
 });
 
-const mutationLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { message: "Too many write requests, please try again later" },
-});
 
 app.use("/api/", apiLimiter);
 
@@ -81,34 +77,33 @@ app.use(
   }),
 );
 
-function extractUser(req, _res, next) {
-  const user = req.headers["x-forwarded-user"];
-  const email = req.headers["x-forwarded-email"];
-  const accessTokenRaw = req.headers["x-forwarded-access-token"];
-  const accessToken = typeof accessTokenRaw === "string" && accessTokenRaw.trim().length
-    ? accessTokenRaw.trim()
-    : undefined;
-  if (user || accessToken) {
-    req.user = { username: user || "unknown", email: email || "", ...(accessToken ? { accessToken } : {}) };
-  }
-  next();
-}
-
-app.use(extractUser);
-
+/**
+ * Every /api route runs on the caller's own token (X-Forwarded-Access-Token from
+ * the oauth-proxy, or the bearer token of the console's plugin proxy) and only
+ * for platform administrators: the oauth-proxy enforces --openshift-sar per
+ * session, requirePlatform re-checks per request. Nothing here uses the pod's
+ * service-account token.
+ */
 function requireAuth(req, res, next) {
-  if (!req.user) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
+  const token = userToken(req);
+  if (!token) return sendStatus(res, 401, "Your session ended. Sign in again.");
+  req.user = {
+    username: req.headers["x-forwarded-user"] || "unknown",
+    email: req.headers["x-forwarded-email"] || "",
+  };
   next();
 }
+
+const requirePlatform = createRequirePlatform({ apiServer: OCP_API });
 
 app.get("/healthz", (_req, res) => {
   res.removeHeader("X-Frame-Options");
   res.json({ status: "ok" });
 });
 
-app.get("/api/user", requireAuth, (req, res) => {
+app.use("/api/", requireAuth, requirePlatform);
+
+app.get("/api/user", (req, res) => {
   res.json({
     username: req.user.username,
     name: req.user.username,
@@ -116,29 +111,11 @@ app.get("/api/user", requireAuth, (req, res) => {
   });
 });
 
-const k8s = createK8sClient(OCP_API, ENTITY_NAMESPACE);
-
-app.get("/api/rbacconfigs", requireAuth, k8s.listRbacConfigs);
-
-app.get("/api/entities", requireAuth, k8s.list);
-app.post("/api/entities", requireAuth, mutationLimiter, k8s.create);
-app.get("/api/entities/:name/rbacs", requireAuth, k8s.listEntityRbacs);
-app.post("/api/entities/:name/rbacs", requireAuth, mutationLimiter, k8s.createEntityRbac);
-app.get("/api/entities/:name/personas", requireAuth, k8s.listEntityPersonas);
-app.post("/api/entities/:name/personas", requireAuth, mutationLimiter, k8s.createEntityPersona);
-app.patch("/api/entities/:name/rbacs/:rbacName", requireAuth, mutationLimiter, k8s.updateEntityRbac);
-app.get("/api/entities/:name", requireAuth, k8s.get);
-app.delete("/api/entities/:name", requireAuth, mutationLimiter, k8s.remove);
-
-app.get("/api/overview/crs", requireAuth, k8s.listAllCRs);
-app.get("/api/operators", requireAuth, k8s.listOperators);
-
-app.post("/api/k8s/patch-annotation", requireAuth, mutationLimiter, k8s.patchAnnotation);
+app.get("/api/permissions", createPermissionsHandler({ apiServer: OCP_API }));
+mountSessionRoutes(app, { apiServer: OCP_API });
 
 // Transparent K8s API proxy used by PatternFly UI shared hooks (/api/k8s/apis/...)
-app.use("/api/k8s", requireAuth, createApiK8sProxy(OCP_API));
-
-app.get("/api/routes", requireAuth, k8s.listRoutes);
+app.use("/api/k8s", createApiK8sProxy(OCP_API));
 
 function urlProbe(urlString, timeoutMs = 5000, expectedStatus = 200) {
   return new Promise((resolve) => {
@@ -187,46 +164,8 @@ function urlProbe(urlString, timeoutMs = 5000, expectedStatus = 200) {
   });
 }
 
-function httpsProbe(urlString, timeoutMs = 5000) {
-  return urlProbe(urlString, timeoutMs, 200).then((r) => ({
-    url: r.url,
-    status: r.status,
-    healthy: r.healthy,
-  }));
-}
-
-const HEALTH_PATHS = ["/healthz", "/health", "/api/health"];
-
-async function routeHealthCheck(baseUrl) {
-  for (const hp of HEALTH_PATHS) {
-    const result = await httpsProbe(`${baseUrl}${hp}`, 3000);
-    if (result.healthy) return { ...result, url: baseUrl, checkedPath: hp };
-  }
-  const result = await httpsProbe(baseUrl, 5000);
-  return { ...result, checkedPath: "/" };
-}
-
-app.get("/api/routes/healthcheck", requireAuth, async (req, res) => {
-  const urlParam = req.query.url;
-  if (!urlParam || typeof urlParam !== "string") {
-    return res.status(400).json({ message: "url query parameter is required" });
-  }
-  const result = await routeHealthCheck(urlParam.trim());
-  res.json(result);
-});
-
-app.post("/api/routes/healthcheck/batch", requireAuth, express.json(), async (req, res) => {
-  const urls = req.body?.urls;
-  if (!Array.isArray(urls) || urls.length === 0) {
-    return res.status(400).json({ message: "urls array is required" });
-  }
-  const capped = urls.slice(0, 50);
-  const results = await Promise.all(capped.map((u) => routeHealthCheck(String(u).trim())));
-  res.json(results);
-});
-
 /** Probe UIHealthChecker targets from the dashboard pod (no browser CORS). */
-app.post("/api/uihealth/probe", requireAuth, express.json(), async (req, res) => {
+app.post("/api/uihealth/probe", async (req, res) => {
   const targets = req.body?.targets;
   if (!Array.isArray(targets) || targets.length === 0) {
     return res.status(400).json({ message: "targets array is required" });
@@ -254,6 +193,9 @@ app.post("/api/uihealth/probe", requireAuth, express.json(), async (req, res) =>
   );
   res.json({ results });
 });
+
+// Unknown API paths answer 404 JSON instead of falling through to the SPA.
+app.all("/api/{*rest}", (_req, res) => sendStatus(res, 404, "Not found"));
 
 const distPath = path.resolve(__dirname, "../dist");
 app.use(express.static(distPath, {

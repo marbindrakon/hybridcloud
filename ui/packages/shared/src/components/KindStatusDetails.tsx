@@ -22,7 +22,11 @@ import type {
   NetworkPlacement,
 } from '../types';
 import { useTranslation } from '../i18n';
+import { displayText, objectLabel } from '../i18n/vocabulary';
 import { formatRelativeTime } from '../list/listColumns';
+import { deletionBlockers } from '../status/phase';
+import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHiddenPaths';
+import { ToolSignInPanel } from './ToolSignInPanel';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -43,30 +47,20 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
     'validated',
     'lastValidatedAt',
   ],
-  CloudVirt: ['site', 'namespaces', 'dns', 'storageClass'],
+  // access: shown by the way-in panel (groups that can sign in)
+  CloudVirt: ['site', 'namespaces', 'dns', 'storageClass', 'access'],
+  // loginUrl / orgUrl: shown by the sign-in panel
+  AAPOrg: ['loginUrl', 'orgUrl'],
+  QuayOrg: ['loginUrl', 'orgUrl'],
+  VaultKV: ['loginUrl'],
+  Vault: ['loginUrl'],
 };
 
 /** Status keys shown by the common blocks on every kind. */
 export const COMMON_STATUS_KEYS = ['waitingFor', 'deletionBlockedBy', 'realization', 'conditions', 'edaJobs'];
 
-/**
- * Paths never shown on tenant pages: platform credentials and Vault path references (spec and
- * status). Tenant-supplied required inputs (CloudAWS spec.vaultPath) stay visible.
- */
-export const TENANT_HIDDEN_PATHS: Partial<Record<HybridSovereignKind, string[]>> = {
-  CloudOSO: ['spec.vaultPath', 'spec.route53VaultPath'],
-  PlatformOpenshift: [
-    'spec.openstack.pullSecretVaultPath',
-    'spec.openstack.sshKeyVaultPath',
-    'status.adminPasswordVaultPath',
-    'status.kubeconfigVaultPath',
-    'status.secretsVaultPath',
-  ],
-  CloudInfrastructure: ['spec.credentialsRef', 'spec.openshift.fabricCredentialsRef'],
-  HybridFabric: ['spec.borderGateway.credentialsRef', 'spec.bgp'],
-  CloudGateway: ['spec.bgp'],
-  TransportLink: ['spec.vaultConfigRef'],
-};
+/** Paths never shown on tenant pages (one list for the UI: security/tenantHiddenPaths.ts). */
+export { TENANT_HIDDEN_PATHS };
 
 /** Copy of the object without the paths tenants must not see. */
 export function redactForTenant<T extends K8sResource>(kind: HybridSovereignKind, item: T): T {
@@ -82,6 +76,19 @@ export function redactForTenant<T extends K8sResource>(kind: HybridSovereignKind
     }
     if (cur) delete cur[parts[parts.length - 1]];
   }
+  // Status keys that look like Vault paths or secret references never reach a tenant page, at any depth.
+  const scrub = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(scrub);
+    if (!v || typeof v !== 'object') return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (TENANT_SECRET_KEY_RE.test(k)) continue;
+      out[k] = scrub(val);
+    }
+    return out;
+  };
+  const withStatus = copy as unknown as { status?: unknown };
+  if (withStatus.status) withStatus.status = scrub(withStatus.status);
   return copy;
 }
 
@@ -195,7 +202,9 @@ function RelativeTime({ iso }: { iso?: string }): React.ReactElement {
 export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactElement | null {
   const { t } = useTranslation();
   const waiting = Array.isArray(item.status?.waitingFor) ? item.status?.waitingFor ?? [] : [];
-  const blocked = Array.isArray(item.status?.deletionBlockedBy) ? item.status?.deletionBlockedBy ?? [] : [];
+  const blocked = deletionBlockers(item).map((b) =>
+    objectLabel(t, { kind: b.kind, name: b.name ?? '', namespace: b.namespace, detail: b.reason }, { dense: true }),
+  );
   if (!waiting.length && !blocked.length) return null;
   return (
     <div style={{ display: 'grid', gap: '0.5rem', marginBottom: '1rem' }}>
@@ -203,7 +212,7 @@ export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactEl
         <Alert variant="info" isInline isPlain title={t('detail.waitingFor')}>
           <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
             {waiting.map((w) => (
-              <li key={w}>{w}</li>
+              <li key={w}>{objectLabel(t, String(w), { dense: true })}</li>
             ))}
           </ul>
         </Alert>
@@ -211,8 +220,8 @@ export function StatusWaitBlocks({ item }: { item: K8sResource }): React.ReactEl
       {blocked.length > 0 && (
         <Alert variant="warning" isInline isPlain title={t('detail.deletionBlockedBy')}>
           <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
-            {blocked.map((w) => (
-              <li key={w}>{w}</li>
+            {blocked.map((w, i) => (
+              <li key={`${w}-${i}`}>{w}</li>
             ))}
           </ul>
         </Alert>
@@ -300,7 +309,7 @@ function HybridFabricDetails({ item }: { item: HybridFabric }): React.ReactEleme
                   <Td dataLabel={t('detail.lastApplied')}>
                     <RelativeTime iso={s?.lastAppliedAt} />
                   </Td>
-                  <Td dataLabel={t('common.message')}>{s?.message || <Dash />}</Td>
+                  <Td dataLabel={t('common.message')}>{s?.message ? displayText(t, s.message) : <Dash />}</Td>
                 </Tr>
               );
             })}
@@ -460,7 +469,7 @@ function CloudGatewayDetails({ item }: { item: CloudGateway }): React.ReactEleme
                       <UpDownLabel up={n.tunnel} />
                     </Td>
                   )}
-                  <Td dataLabel={t('common.message')}>{n.message || <Dash />}</Td>
+                  <Td dataLabel={t('common.message')}>{n.message ? displayText(t, n.message) : <Dash />}</Td>
                 </Tr>
               ))}
             </Tbody>
@@ -716,7 +725,7 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
     <Facts>
       <Fact label={t('fields.network')}>{spec.network}</Fact>
       <Fact label={t('fields.backendName')}>
-        {spec.backend ? `${spec.backend.kind} / ${spec.backend.name}` : undefined}
+        {spec.backend ? objectLabel(t, { kind: spec.backend.kind, name: spec.backend.name }, { dense: true }) : undefined}
       </Fact>
       <Fact label={t('detail.placementRequest')}>{placementRequestText(spec, t)}</Fact>
       <Fact label={t('detail.allocatedPrefixes')}>
@@ -769,7 +778,15 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
       <Facts>
         <Fact label={t('fields.site')}>{st.site?.name || spec.cloudRef?.name}</Fact>
         <Fact label={t('detail.siteConsole')}>
-          <Link href={typeof st.site?.console === 'string' ? st.site.console : undefined} />
+          <Link
+            href={
+              typeof st.endpoints?.console === 'string'
+                ? st.endpoints.console
+                : typeof st.site?.console === 'string'
+                  ? st.site.console
+                  : undefined
+            }
+          />
         </Fact>
         <Fact label={t('detail.endpoint')}>
           <Link href={typeof st.site?.endpoint === 'string' ? st.site.endpoint : undefined} />
@@ -804,7 +821,7 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
                   <Td dataLabel={t('detail.ready')}>
                     <ReadyLabel ready={s?.ready} />
                   </Td>
-                  <Td dataLabel={t('common.message')}>{s?.message || <Dash />}</Td>
+                  <Td dataLabel={t('common.message')}>{s?.message ? displayText(t, s.message) : <Dash />}</Td>
                 </Tr>
               );
             })}
@@ -835,6 +852,11 @@ export function KindStatusDetails({ kind, item }: KindStatusDetailsProps): React
       return <NetworkPlacementDetails item={item as NetworkPlacement} />;
     case 'CloudVirt':
       return <CloudVirtDetails item={item as CloudVirt} />;
+    case 'AAPOrg':
+    case 'QuayOrg':
+    case 'VaultKV':
+    case 'Vault':
+      return <ToolSignInPanel kind={kind} item={item} />;
     default:
       return null;
   }

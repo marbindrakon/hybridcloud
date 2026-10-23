@@ -4,6 +4,7 @@ metadata:
   name: cloudinfrastructures.hybridsovereign.redhat
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -13,6 +14,10 @@ spec:
     singular: cloudinfrastructure
     shortNames:
       - cinfra
+      - site
+    categories:
+      - shc
+      - shc-platform
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -21,10 +26,13 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            Platform-owned cloud site (an OpenStack cloud, an OpenShift cluster with OpenShift Virtualization,
-            or an AWS account) that tenant cloud projects and fabric gateways attach to. It holds the site's
-            infrastructure credential and settings; tenant objects never carry them. Exactly one of
-            spec.openstack, spec.openshift or spec.aws is set, matching spec.type.
+            A site: one place where infrastructure runs, comparable to an AWS Region, a Google Cloud
+            region, an Azure region or an OpenStack region. Platform-owned: an OpenStack cloud, an
+            OpenShift cluster with OpenShift Virtualization, an AWS account, a Google Cloud project
+            or an external site, that tenant environments and fabric gateways attach to. It holds
+            the site's infrastructure credential and settings; tenant objects never carry them. The
+            block named by spec.type (spec.openstack, spec.openshift, spec.aws, spec.gcp or
+            spec.external) holds the site's settings.
           type: object
           required:
             - spec
@@ -36,6 +44,7 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required:
                 - type
@@ -62,6 +71,12 @@ spec:
                   type: string
                   maxLength: 128
                   description: Human-readable site name shown in consoles.
+                location:
+                  type: string
+                  maxLength: 128
+                  description: >-
+                    Where the site is, in words shown to tenants (for example a city, a data-centre
+                    name or a cloud region's name). An aws or gcp site without it shows its region.
                 credentialsRef:
                   type: object
                   description: >-
@@ -145,6 +160,7 @@ spec:
                       required: [vaultPath]
                       properties:
                         vaultPath:
+                          description: Path of the secret in the platform's secret store.
                           type: string
                           minLength: 1
                           maxLength: 512
@@ -241,6 +257,7 @@ spec:
                         How tenant networks in this region attach to the fabric. vpn: HA VPN with BGP from each
                         placement's VPC. interconnect: Cloud Interconnect VLAN attachments (not available yet).
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 capabilities:
@@ -270,53 +287,78 @@ spec:
                   type: string
                   description: Lifecycle status (reconciling, ready, failed)
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 deletionBlockedBy:
                   type: array
                   items:
                     type: string
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:
@@ -330,10 +372,17 @@ spec:
           jsonPath: .status.capabilities.evpn
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

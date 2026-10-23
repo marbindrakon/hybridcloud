@@ -2,9 +2,11 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: attachmentcircuits.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -14,6 +16,10 @@ spec:
     singular: attachmentcircuit
     shortNames:
       - acirc
+    categories:
+      - shc
+      - shc-tenant
+      - shc-network
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -22,13 +28,16 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            Connects a HybridNetwork of this Entity to a customer edge router (CE) on a bearer of a ProviderEdge.
-            The platform allocates a VLAN and a link subnet on the bearer, peers with the CE from every node of the
-            edge, and exchanges routes with it inside the network: routes the CE sends that match spec.routing.accept
-            reach the network's placements, and the network's placement prefixes are advertised to the CE.
-            status.ceConfig lists what the CE needs. Routes inside the network's address space (HybridNetwork
-            spec.prefixes) or the platform's ranges are never accepted, and an accept entry inside the address
-            space is refused; a default route from the CE is accepted only while the network has no provider
+            An edge connection: connects a HybridNetwork of this tenant to a customer edge router
+            (CE) on a bearer of a ProviderEdge, comparable to an AWS Direct Connect virtual
+            interface, a Cloud Interconnect VLAN attachment or an ExpressRoute private peering. The
+            platform allocates a VLAN and a link subnet on the bearer, peers with the CE from every
+            node of the edge, and exchanges routes with it inside the network: routes the CE sends
+            that match spec.routing.accept reach the network's placements, and the network's
+            placement prefixes are advertised to the CE. status.ceConfig lists what the CE needs.
+            Routes inside the network's address space (HybridNetwork spec.prefixes) or the
+            platform's ranges are never accepted, and an accept entry inside the address space is
+            refused; a default route from the CE is accepted only while the network has no provider
             internet egress.
           type: object
           required:
@@ -41,6 +50,7 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required: [network, edgeRef, routing]
               properties:
@@ -61,10 +71,14 @@ spec:
                       message: spec.edgeRef is immutable
                   properties:
                     name:
+                      description: Name of the referenced object.
                       type: string
                       minLength: 1
                       maxLength: 253
                     bearer:
+                      description: >-
+                        Name of the bearer on that ProviderEdge (one of its spec.bearers) the
+                        circuit is ordered on.
                       type: string
                       minLength: 1
                       maxLength: 63
@@ -77,6 +91,7 @@ spec:
                     - rule: self == oldSelf
                       message: spec.ceKind is immutable
                 routing:
+                  description: How the network and the CE exchange routes.
                   type: object
                   required: [protocol]
                   x-kubernetes-validations:
@@ -88,6 +103,7 @@ spec:
                       description: How routes are exchanged with the CE.
                       enum: [bgp]
                     bgp:
+                      description: The BGP session with the CE. Required when protocol is bgp.
                       type: object
                       required: [peerAsn]
                       properties:
@@ -105,14 +121,20 @@ spec:
                             it to a Secret named in status.ceConfig.
                           properties:
                             type:
+                              description: >-
+                                md5: TCP MD5 password on the session (default). none: no password.
                               type: string
                               enum: [md5, none]
                               default: md5
                             secretRef:
+                              description: >-
+                                A Secret in this namespace whose key "password" holds the session
+                                password. Omit it to have the platform generate one.
                               type: object
                               required: [name]
                               properties:
                                 name:
+                                  description: Name of the referenced object.
                                   type: string
                                   minLength: 1
                                   maxLength: 253
@@ -121,11 +143,15 @@ spec:
                           description: How many routes the CE may send. teardown closes the session above the limit.
                           properties:
                             limit:
+                              description: Most routes the CE may send (1 to 100000, default 100).
                               type: integer
                               minimum: 1
                               maximum: 100000
                               default: 100
                             action:
+                              description: >-
+                                What happens above the limit. teardown (default): the session is
+                                closed. warning: the session stays up and the excess is only logged.
                               type: string
                               enum: [teardown, warning]
                               default: teardown
@@ -180,6 +206,7 @@ spec:
                             A default route, while the network has provider internet egress (the CE's own traffic
                             may then use it).
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 entity:
@@ -230,8 +257,11 @@ spec:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 realized:
                   type: boolean
@@ -240,49 +270,71 @@ spec:
                   items:
                     type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 deletionBlockedBy:
                   type: array
                   items:
                     type: string
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:
@@ -299,10 +351,17 @@ spec:
           jsonPath: .status.vlan
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

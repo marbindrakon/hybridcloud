@@ -9,7 +9,7 @@
 
 ## Overview
 
-Entity is the top-level tenancy boundary. Creating an Entity CR triggers a multi-step lifecycle spanning the primary operator, event forwarder, EDA, and per-entity namespace operator deployment.
+Entity is the top-level tenancy boundary. Creating an Entity CR triggers a multi-step lifecycle spanning the primary operator, the Kafka event bus, EDA, and per-entity namespace operator deployment.
 
 This document maps the state machine at code level — the transitions operators and EDA roles implement.
 
@@ -99,11 +99,11 @@ Creates in `entity-acme-corp`:
 - ServiceAccount, Role, RoleBinding
 - Deployment `hybridsovereign-namespace-operator` with `--watched-namespaces=entity-acme-corp`
 
-### 4. Event Forwarder
+### 4. Kafka
 
-**File**: `hybridcloud/eda/event-forwarder/src/forwarder.py`
-
-Filters `EntityCreateRequested` from `entity-operator` → POSTs to EDA event stream + Kafka topic.
+The primary operator publishes `EntityCreateRequested` itself to the Kafka topic `hybridsovereign-events` on
+the central cluster; the EDA activation consumes it there. (The Event Forwarder that used to relay Kubernetes
+Events is retired, see [retired components](../../architecture.md#retired-components).)
 
 ### 5. EDA Provisioning
 
@@ -115,7 +115,7 @@ resolve services cluster API token from Vault
   → read Entity CR from services cluster
   → create/label entity-<name> namespace
   → apply namespace annotations (description, website, console URL)
-  → namespace_roles.yml: 14 named RBAC Roles + RoleBindings
+  → namespace_roles.yml: one Role + RoleBinding per role in spec.namespaceRbac (role table: docs/platform/onboard-a-tenant.md)
   → patch status: ready=true, status=ready, reason=EDASucceeded
 ```
 
@@ -130,8 +130,8 @@ Primary operator sees `observedGeneration >= generation` and `ready=true` → sk
 | Trigger | Event reason | Behavior |
 |---------|--------------|----------|
 | `spec` field change | `EntityCreateRequested` | Generation mismatch → full re-provision |
-| `reconcileNow: "true"` annotation | `EntityReconcileRequested` | Force re-provision even if ready |
-| Annotation cleared | — | Primary operator nulls `reconcileNow` after read |
+| `reconcileNow` annotation with a new value (Retry now; write a timestamp) | `EntityReconcileRequested` | Force re-provision even if ready |
+| Request handled | — | The operator records the value in `status.lastHandledReconcileRequest` and leaves the annotation; a legacy `"true"` is removed instead |
 
 ---
 
@@ -195,7 +195,7 @@ sequenceDiagram
     participant PO as Primary Operator
     participant NS as entity-<name>
     participant NO as Namespace Operator
-    participant EF as Event Forwarder
+    participant KF as Kafka (central)
     participant EDA as EDA + AAP
     participant EP as entity_provision
 
@@ -204,7 +204,8 @@ sequenceDiagram
     PO->>PO: emit EntityCreateRequested
     PO->>NS: Create namespace
     PO->>NO: Deploy namespace operator
-    EF->>EDA: Forward event
+    PO->>KF: Produce EntityCreateRequested
+    KF->>EDA: Activation consumes event
     EDA->>EP: run entity_provision
     EP->>NS: Labels, annotations, RBAC roles
     EP->>CR: status=ready, ready=true
@@ -218,9 +219,9 @@ sequenceDiagram
 | Failure point | `status.reason` | Recovery |
 |---------------|-----------------|----------|
 | Primary operator validation | `OperatorFailed` | Fix spec; operator re-reconciles |
-| EDA provisioning timeout | `EDAFailed` | Fix root cause; set `reconcileNow: "true"` |
+| EDA provisioning timeout | `EDAFailed` | Fix root cause; Retry now (write a new timestamp into `reconcileNow`) |
 | EDA teardown failure | `EDAFailed` | Fix and re-delete, or manual namespace cleanup |
-| Finalizer stuck | `Awaiting EDA delete` | Ensure EDA activation healthy; check event forwarder |
+| Finalizer stuck | `Awaiting EDA delete` | Ensure the EDA activation is healthy and consuming from Kafka |
 
 ---
 
@@ -228,5 +229,5 @@ sequenceDiagram
 
 - [components/operator.md](../components/operator.md) — operator tiers
 - [components/event-system.md](../components/event-system.md) — event routing
-- [../decisions/ADR-002-multi-tier-operator.md](../decisions/ADR-002-multi-tier-operator.md)
-- [../technical/17-entity-operator.md](../technical/17-entity-operator.md)
+- [../decisions/ADR-002-multi-tier-operator.md](../../decisions/ADR-002-multi-tier-operator.md)
+- [../technical/17-entity-operator.md](../../archive/technical/17-entity-operator.md)

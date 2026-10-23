@@ -1,0 +1,19 @@
+# An OpenShift cluster (PlatformOpenshift) in the OpenStack environment example-osp. Leave the
+# fields the platform sets (the secret store locations) unset.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: PlatformOpenshift
+metadata:
+  name: example-cluster
+  namespace: entity-example-corp
+spec:
+  type: openstack
+  openstack:
+    environment: example-osp
+    controlPlaneCount: 3
+    workerCount: 2
+  toolRbac:
+    clusterAdminRbac:
+      - example-admins
+    clusterDeveloperRbac:
+      - example-developers

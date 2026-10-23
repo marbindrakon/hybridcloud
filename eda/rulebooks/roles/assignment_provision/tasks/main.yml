@@ -4,13 +4,13 @@
       ansible.builtin.set_fact:
         assignment_cr_name: "{{ event_payload.regarding.name }}"
         assignment_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        assignment_spec: "{{ event_payload.note | from_json }}"
+        assignment_spec: "{{ shc_live_spec }}"
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"
 
     - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
     - name: Read Assignment CR from services cluster
       kubernetes.core.k8s_info:
@@ -34,6 +34,16 @@
         assignment_projects: "{{ assignment_spec.projects | default([]) }}"
         assignment_openshift: "{{ assignment_spec.openshift | default('') }}"
         assignment_generation: "{{ assignment_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
+
+    # What an earlier run put on a cluster stays recorded until the teardown removes it: a later run that finds a
+    # linked object not Ready (and so skips the ACM step) must not clear it, or the teardown would skip the ACM
+    # policy that still enforces on the cluster (R3U-F1).
+    - name: Keep what an earlier run put on a cluster
+      vars:
+        _asg_stored: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
+      ansible.builtin.set_fact:
+        assignment_stored_provisioned: "{{ _asg_stored.assignmentProvisioned | default(false, true) | bool }}"
+        assignment_stored_acm_policy_name: "{{ _asg_stored.acmPolicyName | default('', true) }}"
 
     - name: Read entity Namespace
       kubernetes.core.k8s_info:
@@ -124,10 +134,15 @@
         openshift_cluster_name: ""
       when: assignment_openshift | length == 0
 
+    # Ready only when the Team, every app Project and the OpenShift cluster are Ready; until then the Assignment
+    # waits (LinkedNotReady, or WaitingForCluster while no cluster is named) and is re-checked periodically.
     - name: Determine overall readiness
       ansible.builtin.set_fact:
         all_projects_ready: "{{ (projects_ready_list | length == 0) or (projects_ready_list | map(attribute='ready') | list | min | bool) }}"
-        assignment_ready: "{{ (team_is_ready | bool) and (openshift_is_ready | bool) }}"
+
+    - name: Determine Assignment readiness
+      ansible.builtin.set_fact:
+        assignment_ready: "{{ (team_is_ready | bool) and (all_projects_ready | bool) and (openshift_is_ready | bool) }}"
         assignment_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     - name: Provision via ACM Policy on central cluster
@@ -135,14 +150,16 @@
       when: assignment_ready | bool
 
     - name: Update Assignment status on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: assignments
         cr_name: "{{ assignment_cr_name }}"
         cr_namespace: "{{ assignment_cr_namespace }}"
         cr_status_body:
-          status: "{{ 'ready' if (assignment_ready | bool) else 'reconciling' }}"
+          # the job's last write: ready, or waiting (pending) for its Team or cluster. Never "reconciling", which
+          # would leave Reconciling=True/JobRunning and the job "running" after it ended (GF2-F1)
+          status: "{{ 'ready' if (assignment_ready | bool) else 'pending' }}"
           ready: "{{ assignment_ready | bool }}"
           observedGeneration: "{{ assignment_generation }}"
           lastReconciledAt: "{{ assignment_status_transition_time }}"
@@ -157,15 +174,22 @@
           openshift: "{{ assignment_openshift }}"
           openshiftReady: "{{ openshift_is_ready | bool }}"
           clusterName: "{{ openshift_cluster_name }}"
-          assignmentProvisioned: "{{ assignment_provisioned | default(false) | bool }}"
-          acmPolicyName: "{{ assignment_acm_policy_name | default('') }}"
+          # this run's ACM step, or what an earlier run recorded: only the teardown clears these (R3U-F1)
+          assignmentProvisioned: >-
+            {{ (assignment_provisioned | default(false) | bool)
+               or (assignment_stored_provisioned | default(false) | bool) }}
+          acmPolicyName: >-
+            {{ assignment_acm_policy_name | default('', true)
+               or assignment_stored_acm_policy_name | default('', true) }}
           helperName: ""
           helperProvider: ""
           conditions:
             - type: Ready
               status: "{{ 'True' if (assignment_ready | bool) else 'False' }}"
               lastTransitionTime: "{{ assignment_status_transition_time }}"
-              reason: "{{ 'EDASucceeded' if (assignment_ready | bool) else 'LinkedNotReady' }}"
+              reason: >-
+                {{ 'EDASucceeded' if (assignment_ready | bool)
+                   else ('WaitingForCluster' if assignment_openshift | length == 0 else 'LinkedNotReady') }}
               message: >-
                 Team={{ assignment_team }}(ready={{ team_is_ready }}),
                 Projects={{ assignment_projects | length }},
@@ -175,15 +199,23 @@
             Projects={{ assignment_projects | length }},
             Openshift={{ assignment_openshift }}(ready={{ openshift_is_ready }})
 
+    # the Team's access fields reach this Assignment and its Projects: refresh the Team's scope roles
+    - name: Wake the Team (and a Team this Assignment named before)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_assignment_teams.yml"
+      vars:
+        wat_namespace: "{{ assignment_cr_namespace }}"
+        wat_assignment: "{{ assignment_cr_name }}"
+        wat_team: "{{ assignment_team }}"
+
   rescue:
     - name: Mark Assignment as failed on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: assignments
         cr_name: "{{ assignment_cr_name }}"
         cr_namespace: "{{ assignment_cr_namespace }}"
-        cr_status_body:
+        _asg_failed_body:
           status: failed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -194,6 +226,19 @@
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
               reason: EDAFailed
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+        # the ACM record goes with the failure once an ACM object exists (this run's, or what an earlier run
+        # recorded), so the teardown removes a policy this job created before it failed (R3A-F2). Not written when
+        # empty: a failure before the stored status was read must not erase it.
+        _asg_rec_provisioned: >-
+          {{ (assignment_provisioned | default(false) | bool)
+             or (assignment_stored_provisioned | default(false) | bool) }}
+        _asg_rec_policy: >-
+          {{ assignment_acm_policy_name | default('', true)
+             or assignment_stored_acm_policy_name | default('', true) }}
+        _asg_acm_record: >-
+          {{ {'assignmentProvisioned': _asg_rec_provisioned | bool, 'acmPolicyName': _asg_rec_policy | trim}
+             if ((_asg_rec_provisioned | bool) or (_asg_rec_policy | trim | length > 0)) else {} }}
+        cr_status_body: "{{ _asg_failed_body | combine(_asg_acm_record) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 

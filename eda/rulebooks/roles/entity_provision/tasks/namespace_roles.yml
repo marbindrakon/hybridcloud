@@ -3,6 +3,11 @@
   ansible.builtin.set_fact:
     ns_rbac: "{{ entity_spec.namespaceRbac | default({}) }}"
 
+# every tenant Role carries the baseline (its namespace, its project, the tenant profile): common/vars/scope_levels.yml
+- name: Tenant baseline rules
+  ansible.builtin.include_vars:
+    file: "{{ (shc_common_dir if shc_common_dir is defined else (role_path ~ '/../../../common')) ~ '/vars/scope_levels.yml' }}"
+
 - name: Build combined rules list for each named role
   ansible.builtin.set_fact:
     _role_rules: >-
@@ -27,6 +32,8 @@
              'resources': item.read_resources | map('regex_replace', '$', '/status') | list,
              'verbs': ['get','list','watch']}]
            if item.read_resources | length > 0 else [])
+          +
+          tenant_baseline_rules
         )
       }}
   loop: "{{ entity_named_roles }}"
@@ -177,3 +184,12 @@
   when:
     - ns_rbac[item.spec_key] is defined
     - (ns_rbac[item.spec_key] | default([]) | length) > 0
+
+- name: Remove the named roles and bindings namespaceRbac no longer asks for
+  ansible.builtin.include_tasks: prune_roles.yml
+  vars:
+    _keep_roles: "{{ entity_named_roles | selectattr('spec_key', 'in', ns_rbac.keys() | list) | map(attribute='role_name') | list }}"
+    _keep_bindings: >-
+      {{ entity_named_roles | selectattr('spec_key', 'in', ns_rbac.keys() | list)
+         | selectattr('spec_key', 'in', ns_rbac | dict2items | selectattr('value') | map(attribute='key') | list)
+         | map(attribute='role_name') | list }}

@@ -2,9 +2,11 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: hybridnetworks.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "4"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -14,6 +16,10 @@ spec:
     singular: hybridnetwork
     shortNames:
       - hnet
+    categories:
+      - shc
+      - shc-tenant
+      - shc-network
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -22,11 +28,14 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            A tenant's routed private network across cloud sites: one isolated routing domain (VRF) on the
-            platform's HybridFabric. NetworkPlacements put it on cloud environments (CloudOSO, CloudVirt,
-            CloudAWS); every placement's subnets can reach every other placement's subnets of the same network,
-            and nothing else. The network's address space (spec.prefixes) is the tenant's: the platform allocates
-            each placement's subnets from it. Networks may use the same addresses as other networks.
+            A network (hybrid network): the tenant's routed private network across sites, comparable
+            to an Amazon VPC, a Google Cloud VPC network, an Azure virtual network or a Neutron
+            network with its router. It is one isolated routing domain (VRF) on the platform's
+            HybridFabric. NetworkPlacements put it on environments (CloudOSO, CloudVirt, CloudAWS,
+            CloudGCP); every placement's subnets can reach every other placement's subnets of the
+            same network, and nothing else. The network's address space (spec.prefixes) is the
+            tenant's: the platform allocates each placement's subnets from it. Networks may use the
+            same addresses as other networks.
           type: object
           required:
             - spec
@@ -38,9 +47,16 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 description:
+                  description: What this object is for, in a few words.
                   type: string
                   maxLength: 512
                 fabricRef:
@@ -54,6 +70,7 @@ spec:
                       message: spec.fabricRef is immutable
                   properties:
                     name:
+                      description: Name of the referenced object.
                       type: string
                       minLength: 1
                       maxLength: 253
@@ -66,7 +83,9 @@ spec:
                     whose networks cannot reach it gets that site's maximum instead (shown on the placement).
                 networkViewerRbac:
                   type: array
-                  description: Rbac CR names whose groups can view this network and its placements.
+                  description: >-
+                    Access groups (Rbac names in this namespace) whose members can view this network
+                    and its placements.
                   items:
                     type: string
                 egress:
@@ -119,6 +138,7 @@ spec:
                 - rule: has(self.fabricRef) || !has(oldSelf.fabricRef)
                   message: spec.fabricRef cannot be removed
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 entity:
@@ -176,8 +196,11 @@ spec:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 waitingFor:
                   type: array
@@ -185,49 +208,71 @@ spec:
                   items:
                     type: string
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 deletionBlockedBy:
                   type: array
                   items:
                     type: string
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:
@@ -244,10 +289,17 @@ spec:
           jsonPath: .status.placementCount
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

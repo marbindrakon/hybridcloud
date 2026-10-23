@@ -1,0 +1,11 @@
+---
+# Tenant sign-in on services for the Team's access groups (common/tasks/services_signin_groups.yml, owner Team/<team>):
+# members of each Rbac's Keycloak group sign in with the group <entity>.<rbac>, which the scope RoleBindings name.
+# Input: team_entity, team_cr_name, team_signin_wanted ([{rbac, path, group}]; [] releases them).
+- name: Tenant sign-in groups of the Team
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+  vars:
+    ssg_entity: "{{ team_entity }}"
+    ssg_owner: "Team/{{ team_cr_name }}"
+    ssg_label: "Team {{ team_cr_name }}"
+    ssg_wanted: "{{ team_signin_wanted }}"

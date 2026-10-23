@@ -29,6 +29,17 @@
     validate_certs: false
     status_code: [200]
   register: cloudaws_raw
+  # The request carries the services API token in a header, which the uri module does not mask: keep the whole
+  # result out of the job output and report only the HTTP status and the API's message below.
+  no_log: true
+  failed_when: false
+
+- name: Fail when the CloudAWS could not be read
+  ansible.builtin.fail:
+    msg: >-
+      Reading CloudAWS '{{ aws_env_name }}' failed (HTTP {{ cloudaws_raw.status | default('?') }}):
+      {{ (cloudaws_raw.json | default({}, true)).message | default(cloudaws_raw.msg | default(''), true) }}
+  when: (cloudaws_raw.status | default(-1)) != 200
 
 - name: Fail if CloudAWS not ready
   ansible.builtin.assert:
@@ -104,6 +115,7 @@
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
     cr_status_body:
       status: "{{ 'ready' if cb_cluster_installed | bool else 'failed' }}"
+      reason: "{{ 'Ready' if cb_cluster_installed | bool else 'ProvisionFailed' }}"
       ready: "{{ cb_cluster_installed | bool }}"
       observedGeneration: "{{ platformopenshift_generation }}"
       lastReconciledAt: "{{ event_time }}"
@@ -124,10 +136,12 @@
       apiURL: "{{ cb_api_url }}"
       appsURL: "{{ cb_apps_url }}"
       consoleURL: "{{ cb_console_url | default('') }}"
-      adminPasswordVaultPath: "{{ cb_admin_password_vault | default('') }}"
-      kubeconfigVaultPath: "{{ cb_kubeconfig_vault | default('') }}"
-      secretsVaultPath: "{{ cb_secrets_vault_path | default('') }}"
-      vaultPaths: "{{ cb_vault_paths }}"
+      # Vault paths are not part of the record (eda/common/tasks/resolve_platformopenshift_paths.yml derives
+      # them); null removes what older runs stored
+      adminPasswordVaultPath: null
+      kubeconfigVaultPath: null
+      secretsVaultPath: null
+      vaultPaths: null
       clusterVersion: "{{ cb_cluster_version | default('') }}"
       powerState: "{{ cb_power_state | default('Unknown') }}"
       clusterHealth: "{{ cb_cluster_health | default('Unknown') }}"

@@ -2,9 +2,11 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: openstackmigrations.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "1"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
-    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/sync-options: Replace=true,Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -14,6 +16,9 @@ spec:
     singular: openstackmigration
     shortNames:
       - osm
+    categories:
+      - shc
+      - shc-tenant
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -22,9 +27,10 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            OpenStackMigration requests migration of a VM from VMware (via MTV catalog
-            or explicit plan) to a CloudOSO OpenStack project. EDA runs os-migrate
-            playbooks after resolving credentials from Vault.
+            Experimental. A VM migration to OpenStack: moves one virtual machine from VMware into an
+            OpenStack environment (CloudOSO) of the tenant, comparable to AWS Application Migration
+            Service or Azure Migrate. The platform's automation runs the migration with credentials
+            it reads from its secret store; the spec holds no secrets.
           type: object
           required:
             - spec
@@ -36,7 +42,7 @@ spec:
             metadata:
               type: object
             spec:
-              description: Migration request parameters
+              description: What to migrate and where to.
               type: object
               required:
                 - vmName
@@ -44,17 +50,20 @@ spec:
               properties:
                 source:
                   type: string
-                  description: MTV Provider CR name (forklift.konveyor.io/v1beta1) for UI catalog selection
+                  description: >-
+                    Name of the migration provider (a forklift.konveyor.io Provider) that lists the
+                    VM.
                 providerNamespace:
                   type: string
-                  description: Namespace of the MTV Provider CR
+                  description: Namespace of that provider.
                   default: openshift-mtv
                 vmName:
                   type: string
                   description: Virtual machine name to migrate
                 cloudoso:
                   type: string
-                  description: Target CloudOSO CR name in the same entity namespace
+                  description: >-
+                    Name of the target OpenStack environment (CloudOSO) in this namespace.
                 plan:
                   description: Detailed os-migrate migration plan (Vault refs only — no secrets in spec)
                   type: object
@@ -118,8 +127,10 @@ spec:
                           - targetNetwork
                         properties:
                           sourceNetwork:
+                            description: Network name on the source side.
                             type: string
                           targetNetwork:
+                            description: Network name in the target OpenStack project.
                             type: string
                     flavorStrategy:
                       type: string
@@ -127,98 +138,136 @@ spec:
                       enum: [auto, existing, specify]
                       default: auto
             status:
-              description: Observed migration state populated by operator and EDA
+              description: Observed state of the migration, written by the platform. Do not edit.
               type: object
               properties:
                 name:
+                  description: Name of the migration.
                   type: string
                 namespace:
+                  description: Namespace of the migration.
                   type: string
                 entity:
+                  description: Tenant the migration belongs to.
                   type: string
                 source:
+                  description: Migration provider the run used.
                   type: string
                 vmName:
+                  description: Virtual machine being migrated.
                   type: string
                 cloudoso:
+                  description: Target OpenStack environment.
                   type: string
                 targetProject:
+                  description: Target OpenStack project.
                   type: string
                 migrationMethod:
+                  description: Data transfer method the run used.
                   type: string
                 phase:
                   type: string
                   description: >-
-                    Current migration phase (validating, deployingConversionHost,
-                    exportingMetadata, convertingMetadata, importingWorkloads,
-                    cutover, ready, failed)
+                    Lifecycle phase, written by the platform: Waiting, Creating, Updating, Ready,
+                    Degraded, Failed or Deleting. The steps of the migration are in status.phases.
                 phases:
                   type: array
-                  description: Phase history with timestamps
+                  description: Steps of the migration, with timestamps.
                   items:
+                    description: One step.
                     type: object
                     properties:
                       name:
+                        description: Name of the step.
                         type: string
                       status:
+                        description: Result of the step.
                         type: string
                         enum: [pending, running, succeeded, failed]
                       startedAt:
+                        description: When the step started.
                         type: string
                         format: date-time
                       completedAt:
+                        description: When the step finished.
                         type: string
                         format: date-time
                       message:
+                        description: What happened in the step, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
                   description: Lifecycle status (reconciling, ready, failed)
                 lastReconciledAt:
+                  description: When the platform last finished processing this object (RFC 3339).
                   type: string
                   format: date-time
                 message:
+                  description: >-
+                    What happened last, in plain words. Read it when the object is not ready.
                   type: string
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 deletionComplete:
+                  description: True when everything this object created has been removed.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
-                        enum: [running, success, failed]
+                        enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
               x-kubernetes-preserve-unknown-fields: true
@@ -237,12 +286,16 @@ spec:
         - name: Phase
           type: string
           jsonPath: .status.phase
-        - name: Status
-          type: string
-          jsonPath: .status.status
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

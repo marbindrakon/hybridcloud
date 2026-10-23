@@ -472,6 +472,8 @@ def retrigger_crs(crs: list[tuple[str, str, str, dict]], context: str | None = N
         patch = {
             "metadata": {
                 "annotations": {
+                    # The legacy literal: operators of every generation act on it each time and remove
+                    # it after publishing (a timestamp is only understood by the current ones)
                     RECONCILE_ANN: "true",
                     FORCE_SYNC_ANN: ts,
                 }

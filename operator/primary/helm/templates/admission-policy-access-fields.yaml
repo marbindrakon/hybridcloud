@@ -1,0 +1,83 @@
+{{- /*
+shc-access-field-ladder (ValidatingAdmissionPolicy, services cluster).
+
+The access lists of a team setup (Team spec.teamAdmin, teamMemberRbac, teamViewerRbac) and of an app project
+(Project spec.projectAdmin, projectDeveloperRbac, projectViewerRbac) grant resource-scoped access to those objects.
+A change to any of them is accepted from a requester allowed to delete that object (an authorizer check on the
+object's name) and, for a Team, from a member of a group the Team's current teamAdmin list names (self-service
+membership: a team admin manages the team's lists, including the admin list itself). Any other group that may
+only change the object cannot promote itself or another group. Creation is not matched: the creator already holds
+create in the namespace, and resource-scoped grants never include create. Platform automation and platform groups
+are exempt (exact names from .Values.admission). Sign-in groups are named <entity>.<access group>, and the entity
+is the namespace without its entity- prefix.
+*/}}
+{{- $adm := .Values.admission }}
+{{- $pol := $adm.accessFieldLadder | default dict }}
+{{- if $pol.enabled }}
+{{- $fields := list "teamAdmin" "teamMemberRbac" "teamViewerRbac" "projectAdmin" "projectDeveloperRbac" "projectViewerRbac" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: shc-access-field-ladder
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: {{ include "primary-operator.vapFailurePolicy" $pol.mode }}
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["hybridsovereign.redhat"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["teams", "projects"]
+  matchConditions:
+    - name: not-platform
+      expression: >-
+        !({{ include "primary-operator.isAutomationCEL" . }}
+        || {{ include "primary-operator.isPlatformGroupCEL" . }})
+  variables:
+{{- range $i, $f := $fields }}
+    - name: new{{ $i }}
+      expression: >-
+        has(object.spec) && has(dyn(object.spec).{{ $f }}) ? dyn(object.spec).{{ $f }} : []
+    - name: old{{ $i }}
+      expression: >-
+        oldObject != null && has(oldObject.spec) && has(dyn(oldObject.spec).{{ $f }}) ? dyn(oldObject.spec).{{ $f }} : []
+{{- end }}
+    - name: accessChanged
+      expression: >-
+{{- range $i, $f := $fields }}
+        {{ if $i }}|| {{ end }}!(variables.new{{ $i }}.all(g, g in variables.old{{ $i }}) && variables.old{{ $i }}.all(g, g in variables.new{{ $i }}))
+{{- end }}
+    - name: entityName
+      expression: >-
+        object.metadata.namespace.startsWith('entity-') ? object.metadata.namespace.substring(7) : object.metadata.namespace
+    - name: currentTeamAdmin
+      expression: >-
+        request.resource.resource == 'teams'
+        && variables.old0.exists(r, (variables.entityName + '.' + string(r)) in request.userInfo.groups)
+  validations:
+    - expression: >-
+        !variables.accessChanged
+        || variables.currentTeamAdmin
+        || authorizer.group('hybridsovereign.redhat').resource(request.resource.resource)
+        .namespace(object.metadata.namespace).name(object.metadata.name).check('delete').allowed()
+      message: >-
+        Only a team admin (for a team) or a user allowed to delete this object can change who has access to it.
+      reason: Forbidden
+  auditAnnotations:
+    - key: access-change
+      valueExpression: >-
+        variables.accessChanged ? request.userInfo.username + ' changed the access lists of '
+        + request.resource.resource + '/' + object.metadata.name : ''
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: shc-access-field-ladder
+  labels:
+    {{- include "primary-operator.labels" . | nindent 4 }}
+spec:
+  policyName: shc-access-field-ladder
+  validationActions: {{ include "primary-operator.vapActions" $pol.mode }}
+{{- end }}

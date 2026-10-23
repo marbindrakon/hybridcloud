@@ -6,6 +6,10 @@
 #    goes with the circuit through its owner reference);
 # 3. deletionComplete; the edge is woken (its circuit counts).
 - block:
+    # nothing on a site (refused at validation): delete without site cleanup
+    - name: Skip the site cleanup when nothing was realized
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+
     - name: Read the AttachmentCircuit
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:
@@ -115,6 +119,7 @@
         patch_ignore_not_found: true
         cr_status_body:
           status: "{{ 'pending' if _waits else 'failed' }}"
+          reason: "{{ 'WaitingForDependents' if _waits else 'TeardownFailed' }}"
           ready: false
           message: "{{ ansible_failed_result.msg | default('AttachmentCircuit teardown failed') }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"

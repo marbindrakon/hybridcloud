@@ -1,10 +1,10 @@
 ---
 # shc (§11.6 phase C): delete the Designate records the provision recorded (status.dns), with the
-# account and zone project it recorded. Route53 OpenStack environments go through delete_dns_aws.yml.
+# zone project it recorded and the account resolve_platformopenshift_paths.yml derived. Route53 OpenStack environments go through delete_dns_aws.yml.
 - name: Load the OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
   vars:
-    os_account_vault_path: "{{ po_dns.accountVaultPath }}"
+    os_account_vault_path: "{{ po_dns_account_vault_path }}"
     os_account_tag: "po-teardown-{{ platformopenshift_cr_name }}"
 
 - name: Delete the recorded Designate records

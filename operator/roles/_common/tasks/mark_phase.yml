@@ -1,0 +1,35 @@
+---
+# Stored phase at the two moments a controller knows it without a job (status contract, status.phase):
+# - a new object (no phase, never handled, not ready) is Creating from its first write on;
+# - an object being deleted is Deleting from the delete request on (not only once its teardown job writes).
+# Later phases come from the jobs' status writes (status library). One write per transition: nothing is written
+# when the stored phase is already right (decision Keep).
+# Inputs: mark_phase_regarding {apiVersion, kind, name, namespace}; mark_phase_cr (the object as read, or {});
+# mark_phase_deleting (bool); mark_phase_summary (optional, the summary to write); mark_phase_recorded (optional,
+# the phase the caller already wrote in this run, when mark_phase_cr was read before that write).
+- name: Decide the phase to record
+  ansible.builtin.set_fact:
+    _mark_phase_value: >-
+      {%- set st = (mark_phase_cr | default({}, true)).status | default({}, true) -%}
+      {%- set cur = (mark_phase_recorded | default('', true)) or (st.phase | default('', true)) -%}
+      {%- if mark_phase_deleting | default(false) | bool -%}
+        {{ 'Deleting' if cur != 'Deleting' else 'Keep' }}
+      {%- elif cur == '' and (st.observedGeneration | default(0, true) | int) == 0
+               and not (st.ready | default(false, true) | bool) and not (st.realized | default(false, true) | bool) -%}
+        Creating
+      {%- else -%}
+        Keep
+      {%- endif -%}
+
+- name: "Record phase {{ _mark_phase_value | trim }}"
+  operator_sdk.util.k8s_status:
+    api_version: "{{ mark_phase_regarding.apiVersion }}"
+    kind: "{{ mark_phase_regarding.kind }}"
+    name: "{{ mark_phase_regarding.name }}"
+    namespace: "{{ mark_phase_regarding.namespace }}"
+    status:
+      phase: "{{ _mark_phase_value | trim }}"
+      phaseSince: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      summary: >-
+        {{ mark_phase_summary | default("Being deleted." if (_mark_phase_value | trim) == "Deleting" else "Being created.", true) }}
+  when: (_mark_phase_value | trim) in ['Creating', 'Deleting']

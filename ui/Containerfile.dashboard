@@ -7,6 +7,9 @@ WORKDIR /opt/app-root/src
 
 COPY packages/${APP_PACKAGE}/dist ./dist
 COPY packages/${APP_PACKAGE}/server ./server
+# Server modules shared by both dashboards; server/*.js import them as
+# ../../shared/server/<module>.js, which resolves here (its package.json sets type=module).
+COPY packages/shared/server /opt/app-root/shared/server
 
 # Minimal runtime package (no workspace deps — UI is prebuilt in dist/)
 RUN printf '%s\n' \
@@ -21,8 +24,8 @@ RUN printf '%s\n' \
   '  }' \
   '}' > package.json && \
   npm install --omit=dev && \
-  chown -R 1001:0 /opt/app-root/src && \
-  chmod -R g+rwX /opt/app-root/src
+  chown -R 1001:0 /opt/app-root/src /opt/app-root/shared && \
+  chmod -R g+rwX /opt/app-root/src && chmod -R g+rX /opt/app-root/shared
 
 USER 1001
 ENV PORT=8080

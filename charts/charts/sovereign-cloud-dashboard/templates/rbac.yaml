@@ -5,62 +5,9 @@ metadata:
   labels:
     {{- include "dashboard.labels" . | nindent 4 }}
 rules:
-  - apiGroups:
-      - hybridsovereign.redhat
-    resources:
-      - entities
-      - entities/status
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - delete
-  - apiGroups:
-      - hybridsovereign.redhat
-    resources:
-      - teams
-      - assignments
-      - projects
-      - platformopenshifts
-      - cloudosos
-      - rbacs
-      - rbacconfigs
-      - vaultkvs
-      - vaults
-      - aaporgs
-      - aapconfigs
-      - quayorgs
-      - quayconfigs
-      - iaacs
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - route.openshift.io
-    resources:
-      - routes
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - apps
-    resources:
-      - deployments
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - users
-      - groups
-      - serviceaccounts
-    verbs:
-      - impersonate
+  # The server answers every request with the caller's own token. Its service
+  # account needs no read access and no impersonation; the access review below
+  # is kept for the self-checks of the pod.
   - apiGroups:
       - authorization.k8s.io
     resources:

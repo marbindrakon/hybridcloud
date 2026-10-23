@@ -1,0 +1,42 @@
+---
+# Delete the Entity's named Roles and RoleBindings (labels managed-by=entity-operator, entity=<entity>) that
+# spec.namespaceRbac no longer asks for. Only names of entity_named_roles are ever touched.
+# Input: _keep_roles, _keep_bindings (role names to keep; [] when namespaceRbac is absent).
+- name: List the Entity's named Roles and RoleBindings
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: rbac.authorization.k8s.io/v1
+    kind: "{{ item }}"
+    namespace: "{{ entity_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/managed-by=entity-operator
+      - "hybridsovereign.redhat/entity={{ entity_cr_name }}"
+  loop: [RoleBinding, Role]
+  register: _er_existing
+
+- name: Delete the ones no longer asked for
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: absent
+    api_version: rbac.authorization.k8s.io/v1
+    kind: "{{ item.kind }}"
+    name: "{{ item.name }}"
+    namespace: "{{ entity_namespace }}"
+  loop: >-
+    {%- set named = entity_named_roles | map(attribute='role_name') | list -%}
+    {%- set out = [] -%}
+    {%- for r in _er_existing.results | default([]) -%}
+      {%- set keep = _keep_bindings if r.item == 'RoleBinding' else _keep_roles -%}
+      {%- for o in r.resources | default([]) -%}
+        {%- if o.metadata.name in named and o.metadata.name not in keep -%}
+          {%- set _ = out.append({'kind': r.item, 'name': o.metadata.name}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endfor -%}
+    {{ out }}
+  loop_control:
+    label: "{{ item.kind }} {{ item.name }}"

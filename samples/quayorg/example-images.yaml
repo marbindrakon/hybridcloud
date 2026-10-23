@@ -1,0 +1,12 @@
+# A Quay organization (QuayOrg), created through the platform's registry connection.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: QuayOrg
+metadata:
+  name: example-images
+  namespace: entity-example-corp
+spec:
+  quayAdminRbac:
+    - example-admins
+  quayMemberRbac:
+    - example-developers

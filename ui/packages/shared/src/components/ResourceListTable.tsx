@@ -4,11 +4,6 @@ import {
   Alert,
   Button,
   Label,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  ModalVariant,
   Spinner,
   Tooltip,
 } from '@patternfly/react-core';
@@ -18,6 +13,10 @@ import { useTranslation } from '../i18n';
 import type { HybridSovereignKind, K8sResource } from '../types/crds';
 import { KindIcon } from '../icons/kindIcons';
 import { StatusBadge } from './StatusBadge';
+import { ToastHost } from './ToastHost';
+import { DeleteConfirmModal } from './DeleteConfirmModal';
+import { phaseOf, summaryOf } from '../status/phase';
+import { useCompletionToasts } from '../status/useCompletionToasts';
 import { HealthStrip } from './StatTile';
 import type { StatVariant } from './StatTile';
 import { HealthDonut } from './HealthDonut';
@@ -30,6 +29,11 @@ import {
   resourceSearchBlob,
 } from '../list/listColumns';
 import { deleteDashboardResource } from '../hooks/k8s';
+import { classifyError } from '../hooks/errors';
+import { ForbiddenState, UnavailableState } from '../access/ForbiddenState';
+import { usePermissionsFor, useScopeGateNamespace } from '../access/PermissionProvider';
+import { errorText } from '../access/errorText';
+import { displayText, kindTerm, kindTermInText } from '../i18n/vocabulary';
 
 export interface ResourceListTableProps {
   kind: HybridSovereignKind;
@@ -47,6 +51,15 @@ export interface ResourceListTableProps {
   enableDelete?: boolean;
   /** Called after a successful delete so the parent can refresh */
   onDeleted?: () => void;
+  /** Offered as "Try again" when the list failed for another reason than access. */
+  onRetry?: () => void;
+  /**
+   * A refresh failed while rows were already loaded: the rows stay (last good
+   * answer) and an inline "retrying" alert says so instead of a full-page state.
+   */
+  refreshError?: Error | null;
+  /** Epoch ms of the rows shown (for the retrying alert). */
+  loadedAt?: number;
 }
 
 function isMarker(v: unknown): v is CellMarker {
@@ -155,10 +168,18 @@ export function ResourceListTable({
   linkMode = 'router',
   showNamespace = false,
   emptyMessage,
-  enableDelete = false,
+  enableDelete: enableDeleteProp = false,
   onDeleted,
+  onRetry,
+  refreshError,
+  loadedAt,
 }: ResourceListTableProps): React.ReactElement {
   const { t } = useTranslation();
+  // Row delete only where the permission gate allows it (UX-112); the API stays authoritative.
+  // Without a scope (pages not yet on the scope provider) the rows' namespace is used.
+  const scopeNs = useScopeGateNamespace();
+  const perms = usePermissionsFor(kind, { namespace: scopeNs ? undefined : items[0]?.metadata.namespace });
+  const enableDelete = enableDeleteProp && perms.can('delete');
   const columns = useMemo(() => getListColumns(kind, { showNamespace }), [kind, showNamespace]);
   const [sortId, setSortId] = useState<string>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -168,6 +189,8 @@ export function ResourceListTable({
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const colSpan = columns.length + 1 + (enableDelete ? 1 : 0);
+  // "<name> is ready / failed / deleted" when a row this page watched finishes (Q10, UX-059).
+  useCompletionToasts(error ? null : items, kind);
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
@@ -182,7 +205,8 @@ export function ResourceListTable({
       setPendingDelete(null);
       onDeleted?.();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Delete failed');
+      const txt = errorText(err, t, { kindLabel: kindTerm(t, kind, 'many'), action: 'action' });
+      setDeleteError([txt.title, txt.body].filter(Boolean).join(' '));
     } finally {
       setDeleting(false);
     }
@@ -191,7 +215,7 @@ export function ResourceListTable({
   const healthCounts = useMemo(() => {
     const counts = { ready: 0, failed: 0, pending: 0, reconciling: 0 };
     for (const item of items) {
-      const h = normalizeHealth(item.status?.ready, item.status?.status);
+      const h = normalizeHealth(item);
       if (h in counts) counts[h as keyof typeof counts] += 1;
     }
     return counts;
@@ -248,16 +272,25 @@ export function ResourceListTable({
     [kind, detailHref, showNamespace, t, linkMode],
   );
 
+  // A failed list never shows rows (or an empty table): forbidden says who can
+  // grant access, anything else says what happened (design section 6, UX-057).
+  if (error) {
+    return classifyError(error) === 'forbidden' ? (
+      <ForbiddenState kind={kind} />
+    ) : (
+      <UnavailableState error={error} kind={kind} onRetry={onRetry} />
+    );
+  }
+
   if (loading && items.length === 0) {
-    return <Spinner aria-label={t('pages.loadingKind', { kind })} />;
+    return <Spinner aria-label={t('pages.loadingKind', { kind: kindTermInText(t, kind, 'many') })} />;
   }
 
   return (
     <>
-      {error && (
-        <Alert variant="warning" title={t('common.k8sUnavailable')} isInline className="sc-mb">
-          {error.message}. {t('common.k8sUnavailableHint')}
-        </Alert>
+      <ToastHost />
+      {refreshError && (
+        <RefreshFailedAlert error={refreshError} loadedAt={loadedAt} onRetry={onRetry} />
       )}
 
       {items.length > 0 && (
@@ -282,7 +315,7 @@ export function ResourceListTable({
       )}
 
       <div className="sc-table-wrap">
-        <Table aria-label={`${kind} table`} variant="compact" className="sc-resource-list">
+        <Table aria-label={kindTerm(t, kind, 'many')} variant="compact" className="sc-resource-list">
           <Thead>
             <Tr>
               <Th screenReaderText={t('common.details')} />
@@ -317,7 +350,7 @@ export function ResourceListTable({
             <Tbody>
               <Tr>
                 <Td colSpan={colSpan}>
-                  {emptyMessage ?? t('pages.noMatch', { kind })}
+                  {emptyMessage ?? t('pages.noMatch', { kind: kindTermInText(t, kind, 'many') })}
                 </Td>
               </Tr>
             </Tbody>
@@ -359,14 +392,15 @@ export function ResourceListTable({
                         );
                       }
                       if (col.id === 'status') {
+                        const phase = phaseOf(item);
                         return (
                           <Td key={col.id} dataLabel={t(col.labelKey)}>
-                            <StatusBadge
-                              status={item.status?.status}
-                              ready={item.status?.ready}
-                              message={item.status?.message}
-                              lastTransition={item.status?.lastReconciledAt}
-                            />
+                            <StatusBadge item={item} />
+                            {phase !== 'Ready' && (
+                              <div className="sc-text-muted sc-status-summary" style={{ fontSize: '0.75rem' }}>
+                                {displayText(t, summaryOf(item))}
+                              </div>
+                            )}
                           </Td>
                         );
                       }
@@ -382,7 +416,8 @@ export function ResourceListTable({
                         <Button
                           variant="plain"
                           icon={<TrashIcon />}
-                          aria-label={`Delete ${item.metadata.name}`}
+                          isDisabled={phaseOf(item) === 'Deleting'}
+                          aria-label={t('list.deleteRow', { name: item.metadata.name })}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
@@ -399,12 +434,7 @@ export function ResourceListTable({
                         <ExpandableRowContent>
                           <div className="sc-list-expand">
                             <div className="sc-list-expand__header">
-                              <StatusBadge
-                                status={item.status?.status}
-                                ready={item.status?.ready}
-                                message={item.status?.message}
-                                lastTransition={item.status?.lastReconciledAt}
-                              />
+                              <StatusBadge item={item} />
                               <span className="sc-list-expand__title">{item.metadata.name}</span>
                             </div>
                             {expandRows.length === 0 ? (
@@ -414,7 +444,7 @@ export function ResourceListTable({
                                 {expandRows.map((r) => (
                                   <div key={r.label} className="sc-list-expand__card">
                                     <div className="sc-list-expand__card-label">{r.label}</div>
-                                    <div className="sc-list-expand__card-value">{r.value}</div>
+                                    <div className="sc-list-expand__card-value">{displayText(t, r.value)}</div>
                                   </div>
                                 ))}
                               </div>
@@ -455,34 +485,57 @@ export function ResourceListTable({
         </Table>
       </div>
 
-      <Modal
-        variant={ModalVariant.small}
+      <DeleteConfirmModal
         isOpen={!!pendingDelete}
-        onClose={() => (!deleting ? setPendingDelete(null) : undefined)}
-      >
-        <ModalHeader title={`Delete ${kind}?`} />
-        <ModalBody>
-          {deleteError && (
-            <Alert variant="danger" title="Delete failed" isInline className="sc-mb">
-              {deleteError}
-            </Alert>
-          )}
-          This will permanently delete <strong>{pendingDelete?.metadata.name}</strong>
-          {pendingDelete?.metadata.namespace
-            ? <> from namespace <strong>{pendingDelete.metadata.namespace}</strong></>
-            : null}
-          .
-        </ModalBody>
-        <ModalFooter>
-          <Button key="confirm" variant="danger" isDisabled={deleting} onClick={() => void confirmDelete()}>
-            {deleting ? 'Deleting…' : 'Delete'}
-          </Button>
-          <Button key="cancel" variant="link" isDisabled={deleting} onClick={() => setPendingDelete(null)}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
+        kind={kind}
+        item={pendingDelete}
+        deleting={deleting}
+        error={deleteError}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          setPendingDelete(null);
+          setDeleteError(null);
+        }}
+      />
     </>
+  );
+}
+
+/** Inline state for a failed refresh of data already on screen (the data stays). */
+export function RefreshFailedAlert({
+  error,
+  loadedAt,
+  onRetry,
+}: {
+  error: Error;
+  loadedAt?: number;
+  onRetry?: () => void;
+}): React.ReactElement {
+  const { t } = useTranslation();
+  const at = loadedAt ? new Date(loadedAt) : undefined;
+  return (
+    <Alert
+      variant="warning"
+      isInline
+      isPlain
+      className="sc-mb"
+      title={t('common.refreshFailed', { defaultValue: 'Refresh failed; retrying.' })}
+      actionLinks={
+        onRetry ? (
+          <Button variant="link" isInline onClick={onRetry}>
+            {t('errors.retry')}
+          </Button>
+        ) : undefined
+      }
+    >
+      {at
+        ? t('common.refreshFailedShowing', {
+            time: at.toLocaleTimeString(),
+            defaultValue: `Showing what was loaded at ${at.toLocaleTimeString()}.`,
+          })
+        : null}{' '}
+      <span className="sc-text-muted">{error.message}</span>
+    </Alert>
   );
 }
 

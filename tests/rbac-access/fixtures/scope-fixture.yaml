@@ -1,0 +1,39 @@
+# Team/Project/Assignment objects for the scope-role SAR cases (cases/scope-role.yaml), used by
+#   sar_matrix.py --cluster envtest --render-roles --scope-fixture tests/rbac-access/fixtures/scope-fixture.yaml
+# Every access field names its own access group, so each group holds only that field's grant (no tenant-wide role).
+# The namespace is set to entity-<entity> by the runner.
+---
+kind: Team
+metadata: {name: platform}
+spec:
+  teamAdmin: [team-admins]
+  teamMemberRbac: [team-members]
+  teamViewerRbac: [team-viewers]
+---
+kind: Team
+metadata: {name: other}
+spec:
+  teamAdmin: [other-admins]
+---
+kind: Assignment
+metadata: {name: platform-dev}
+spec: {team: platform, projects: [webshop, api]}
+---
+kind: Assignment
+metadata: {name: other-dev}
+spec: {team: other, projects: [billing]}
+---
+kind: Project
+metadata: {name: webshop}
+spec:
+  projectAdmin: [project-admins]
+  projectDeveloperRbac: [project-devs]
+  projectViewerRbac: [project-viewers]
+---
+kind: Project
+metadata: {name: api}
+spec: {description: no access fields}
+---
+kind: Project
+metadata: {name: billing}
+spec: {description: another team's project}

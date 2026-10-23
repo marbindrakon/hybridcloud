@@ -1,0 +1,13 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# An identity provider connection (RbacConfig). spec.secret names a Secret in this namespace with
+# the sign-in directory's admin credentials.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: RbacConfig
+metadata:
+  name: example-identity
+  namespace: sovereign-cloud-plugins
+spec:
+  type: keycloak
+  secret: example-identity-admin

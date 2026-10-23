@@ -13,6 +13,10 @@ import {
   PageHeader,
   useK8sResourceList,
   useTranslation,
+  UnavailableState,
+  pathFor,
+  useBreadcrumbs,
+  useDocumentTitle,
 } from '@hybridsovereign/shared';
 
 type ProbeResult = {
@@ -34,6 +38,8 @@ type ProbeApiRow = {
 export function UIHealthPage(): React.ReactElement {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const crumbs = useBreadcrumbs('ui-health');
+  useDocumentTitle('ui-health');
   const { items, loading, error, refresh } = useK8sResourceList<K8sResource>('UIHealthChecker', {
     namespace: 'sovereign-cloud',
   });
@@ -121,7 +127,7 @@ export function UIHealthPage(): React.ReactElement {
       <PageHeader
         title={t('nav.uiHealth')}
         subtitle={t('pages.uiHealthSubtitle')}
-        breadcrumbs={[{ label: t('nav.sovereignAdmin') }, { label: t('nav.uiHealth') }]}
+        breadcrumbs={crumbs}
         actions={
           <>
             <Button
@@ -142,7 +148,7 @@ export function UIHealthPage(): React.ReactElement {
             <Button
               variant="secondary"
               icon={<PlusCircleIcon />}
-              onClick={() => navigate('/create/uihealthchecker')}
+              onClick={() => navigate(pathFor('admin-dashboard', 'platform-create', { kind: 'global' }, { formType: 'uihealthchecker' }))}
             >
               {t('common.create')}
             </Button>
@@ -150,11 +156,7 @@ export function UIHealthPage(): React.ReactElement {
         }
       />
 
-      {error && (
-        <Alert variant="warning" isInline title={t('common.k8sUnavailable')} className="sc-mb">
-          {error.message}
-        </Alert>
-      )}
+      {error && <UnavailableState error={error} kind="UIHealthChecker" />}
 
       {probeError && (
         <Alert variant="danger" isInline title={t('pages.uiHealthProbeFailed')} className="sc-mb">
@@ -204,7 +206,7 @@ export function UIHealthPage(): React.ReactElement {
                   return (
                     <Tr key={item.metadata.name}>
                       <Td>
-                        <Link to={`/networking/uihealth/${item.metadata.name}`}>
+                        <Link to={pathFor('admin-dashboard', 'ui-health', { kind: 'global' }, { name: item.metadata.name })}>
                           {spec.displayName || item.metadata.name}
                         </Link>
                       </Td>

@@ -4,10 +4,26 @@
       ansible.builtin.set_fact:
         aaporg_cr_name: "{{ event_payload.regarding.name }}"
         aaporg_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        aaporg_spec: "{{ event_payload.note | from_json }}"
+        aaporg_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    # The automation connection is optional on the object: the teardown cleans up in the connection the
+    # object recorded in status.config (else the one it names, else the platform's default).
+    - name: Resolve the automation connection
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_integration_config.yml"
+      vars:
+        resolve_config_kind: AAPConfig
+        resolve_config_name: "{{ aaporg_spec.aapConfig | default('') }}"
+        resolve_config_recorded: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).config | default('', true) }}"
+        resolve_config_teardown: true
+        resolve_config_namespace: "{{ plugin_aap_config_namespace }}"
+        resolve_config_required: false
+
+    - name: Use the resolved automation connection
+      ansible.builtin.set_fact:
+        aaporg_spec: "{{ aaporg_spec | combine({'aapConfig': resolved_config_name}) }}"
 
     - name: Read entity Namespace for teardown
       kubernetes.core.k8s_info:
@@ -39,27 +55,17 @@
         name: "{{ aaporg_spec.aapConfig }}"
         namespace: "{{ plugin_aap_config_namespace }}"
       register: _aap_config
+      when: aaporg_spec.aapConfig | length > 0
       ignore_errors: true
 
     - name: Delete AAP org and teams
       when: _aap_config.resources | default([]) | length > 0
       block:
-        - name: Read AAP admin secret
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            kind: Secret
-            name: "{{ _aap_config.resources[0].spec.secret }}"
-            namespace: "{{ plugin_aap_config_namespace }}"
-          register: _aap_secret
-          no_log: true
-
-        - name: Decode AAP credentials
-          ansible.builtin.set_fact:
-            aap_username: "{{ _aap_secret.resources[0].data.username | b64decode }}"
-            aap_password: "{{ _aap_secret.resources[0].data.password | b64decode }}"
-          no_log: true
+        # the same credentials the provision role uses (central Vault KV aap-admin: username/password); the
+        # AAPConfig's spec.secret is a legacy pointer that holds no username, so decoding it failed and every
+        # gateway call below ran with undefined credentials while the deletion was still reported complete
+        - name: Load AAP admin credentials from Vault
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_aap_admin_credentials.yml"
 
         - name: Discover AAP gateway Route from services cluster
           kubernetes.core.k8s_info:
@@ -120,14 +126,15 @@
             validate_certs: false
             status_code: [200, 204, 404]
           loop: "{{ _auth_maps.json.results | default([]) }}"
-      ignore_errors: true
+      # a tool-side failure fails the teardown (the object shows TeardownFailed and retries) instead of
+      # reporting a deletion that left the organization, its teams and maps behind
 
     - name: Get current timestamp for status
       ansible.builtin.set_fact:
         aaporg_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     - name: Mark AAPOrg deletion complete on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: aaporgs
@@ -142,7 +149,7 @@
 
   rescue:
     - name: Mark AAPOrg delete as failed on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: aaporgs
@@ -150,6 +157,7 @@
         cr_namespace: "{{ aaporg_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA deletion failed')) }}"

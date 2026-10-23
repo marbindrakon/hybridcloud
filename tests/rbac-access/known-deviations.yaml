@@ -1,0 +1,4 @@
+# Rows of the SAR matrix that fail today for a known reason. Each entry: {id, finding, note}. A listed row that
+# fails is reported "known"; one that passes is reported "fixed" (remove the entry). Ids are the row ids printed by
+# sar_matrix.py (case id, plus "[<group>]" or "-<kind>" where a case expands).
+[]

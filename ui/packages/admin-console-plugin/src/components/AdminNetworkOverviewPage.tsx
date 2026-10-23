@@ -11,7 +11,7 @@ import {
   type HybridSovereignKind,
   type K8sResource,
 } from '@hybridsovereign/shared';
-import { consoleAdminDetailHref, ADMIN_LIST_PATH } from '../adminPaths';
+import { objectHref } from '../adminPaths';
 import '@hybridsovereign/shared/styles/openshift.css';
 
 /** Keep the page usable if the SVG/matrix subtree throws. */
@@ -42,15 +42,14 @@ export default function AdminNetworkOverviewPage(): React.ReactElement {
   const { items, loading, error, refresh } = useOverviewCRs(0);
 
   const onSelect = (kind: HybridSovereignKind, item: K8sResource) => {
-    const listPath = ADMIN_LIST_PATH[kind];
-    if (!listPath) return;
-    window.location.href = consoleAdminDetailHref(listPath, kind, item);
+    const href = objectHref(kind, item);
+    if (href) window.location.href = href;
   };
 
   return (
     <>
       <PageHeader
-        title={t('nav.networkOverview')}
+        title={t('nav.fabricMap')}
         subtitle={t('pages.networkOverviewDesc')}
         actions={
           <Button variant="secondary" icon={<SyncIcon />} onClick={refresh} isDisabled={loading}>
@@ -59,7 +58,7 @@ export default function AdminNetworkOverviewPage(): React.ReactElement {
         }
       />
       <PageSection>
-        <SectionErrorBoundary title="Network overview failed to render">
+        <SectionErrorBoundary title={t('pages.fabricMapFailed')}>
           <NetworkOverview
             resources={items}
             resourcesLoading={loading}

@@ -32,7 +32,7 @@
   ignore_errors: true
 
 - name: Update PlatformOpenshift status
-  ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
     cr_api_version: hybridsovereign.redhat/v1alpha1
     cr_plural: platformopenshifts
@@ -40,6 +40,7 @@
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
     cr_status_body:
       status: ready
+      message: The cluster is ready.
       ready: true
       observedGeneration: "{{ platformopenshift_generation }}"
       lastReconciledAt: "{{ event_time }}"

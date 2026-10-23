@@ -1,10 +1,18 @@
 export * from './types';
 export * from './hooks';
+export * from './scope';
+export * from './access';
+export * from './nav';
+export * from './shell';
+export * from './pages';
 export * from './theme';
 export * from './components';
 export * from './icons';
+export * from './status';
 export * from './forms/specFieldMeta';
 export { GenericSpecEditor } from './forms/GenericSpecEditor';
+export { fieldErrorsFrom, causeLines, normaliseFieldPath } from './forms/apiErrors';
+export type { FieldErrors } from './forms/apiErrors';
 export {
   getListColumns,
   formatRelativeTime,
@@ -24,6 +32,19 @@ export {
   isEmbeddedConsolePlugin,
 } from './i18n';
 export type { AppLocale, SovereignI18nProviderProps, LanguageToggleProps } from './i18n';
+export {
+  API_KINDS,
+  isApiKind,
+  kindTerm,
+  kindTermInText,
+  inText,
+  parseObjectRef,
+  objectLabel,
+  displayText,
+  fieldLabel,
+  tenantCaption,
+} from './i18n/vocabulary';
+export type { VocabT, KindForm, ObjectRef } from './i18n/vocabulary';
 export {
   createAccessFlagHook,
   type AccessCheck,

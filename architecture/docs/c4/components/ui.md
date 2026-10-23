@@ -1,6 +1,6 @@
 # C4 Level 3 — UI Packages
 
-**Scope**: `hybridcloud/ui/` PatternFly 5 monorepo  
+**Scope**: `hybridcloud/ui/` PatternFly 6 monorepo (dashboards React 18, console plugins React 17)  
 **API group**: `hybridsovereign.redhat/v1alpha1` (TypeScript types)  
 **Last updated**: 2026-08-25
 
@@ -74,7 +74,7 @@ Provides the contract between UI and operators:
 
 - **CRD types** — TypeScript interfaces for all `hybridsovereign.redhat/v1alpha1` kinds
 - **K8s hooks** — `useK8sWatch`, `useK8sList`, CRUD helpers
-- **Theme** — `SovereignThemeProvider` (PatternFly 5 light/dark)
+- **Theme** — `SovereignThemeProvider` (PatternFly 6 light/dark)
 
 ```typescript
 // Supported kinds (from hybridcloud/ui/packages/shared/)
@@ -100,7 +100,7 @@ UIHealthChecker
 - Entity onboarding (create `Entity` CR in `sovereign-cloud`)
 - Plugin config management (`RbacConfig`, `AAPConfig`, `QuayConfig`)
 - Platform-wide status and health views
-- **UI Health** (`/networking/uihealth`): `UIHealthChecker` URL registry; Refresh / Run checks probe from the dashboard pod (no CR reconcile). See [57-hybridvpc-uihealth.md](../technical/57-hybridvpc-uihealth.md).
+- **UI Health** (`/networking/uihealth`): `UIHealthChecker` URL registry; Refresh / Run checks probe from the dashboard pod (no CR reconcile). See [57-hybridvpc-uihealth.md](../../technical/57-hybridvpc-uihealth.md).
 - Hybrid VPC admin pages (fabrics, gateways, transport links)
 - Create + update forms for admin and shared tenancy kinds via `@hybridsovereign/shared`
 
@@ -120,10 +120,10 @@ UIHealthChecker
 
 ### Capabilities
 
-- Entity-scoped CRUD for Team, Project, Assignment, Persona, cloud CRs (including PlatformOpenshift / CloudOSO / CloudAWS create+update forms)
-- Hybrid VPC tenant kinds (`HybridNetwork`, `NetworkPlacement`) with create/update forms
+- Entity-scoped CRUD for Team, Project, Assignment, cloud CRs (including PlatformOpenshift / CloudOSO / CloudAWS create+update forms)
+- Network kinds (`HybridNetwork`, `NetworkPlacement`) with create/update forms and the Attach network dialog
 - Plugin CR management within entity namespace (Rbac, AAPOrg, QuayOrg, Vault)
-- 14 named RBAC roles enforced by K8s RoleBindings (see [operator.md](operator.md))
+- The tenant roles (one per key in `Entity.spec.namespaceRbac`, [role table](../../../../docs/platform/onboard-a-tenant.md#4-give-the-access-groups-roles)) enforced by K8s RoleBindings
 
 ### Security
 
@@ -139,7 +139,7 @@ UIHealthChecker
 - `hybridcloud/ui/packages/admin-console-plugin/`
 - `hybridcloud/ui/packages/tenant-console-plugin/`
 
-Both register as `console.openshift.io/v1` `ConsolePlugin` CRs with proxy endpoints to the dashboard backend services. PatternFly 5 styling matches standalone dashboards.
+Both register as `console.openshift.io/v1` `ConsolePlugin` CRs with proxy endpoints to the dashboard backend services. They render the same shared pages as the standalone dashboards (PatternFly 6).
 
 | Plugin | Console nav | Pages |
 |--------|-------------|-------|
@@ -184,6 +184,6 @@ sequenceDiagram
 ## Related Documents
 
 - [context.md](../context.md) — external actors
-- [../technical/15-sovereign-dashboard.md](../technical/15-sovereign-dashboard.md)
-- [../technical/20-tenancy-dashboard.md](../technical/20-tenancy-dashboard.md)
-- [../12-console-plugins.md](../12-console-plugins.md)
+- [../technical/15-sovereign-dashboard.md](../../technical/15-sovereign-dashboard.md)
+- [../technical/20-tenancy-dashboard.md](../../technical/20-tenancy-dashboard.md)
+- [../12-console-plugins.md](../../archive/technical/12-console-plugins.md)

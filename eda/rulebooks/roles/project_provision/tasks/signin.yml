@@ -1,0 +1,11 @@
+---
+# Tenant sign-in on services for the Project's access groups (common/tasks/services_signin_groups.yml, owner
+# Project/<project>): members of each Rbac's Keycloak group sign in with the group <entity>.<rbac>.
+# Input: project_entity, project_cr_name, project_signin_wanted ([{rbac, path, group}]; [] releases them).
+- name: Tenant sign-in groups of the Project
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+  vars:
+    ssg_entity: "{{ project_entity }}"
+    ssg_owner: "Project/{{ project_cr_name }}"
+    ssg_label: "Project {{ project_cr_name }}"
+    ssg_wanted: "{{ project_signin_wanted }}"

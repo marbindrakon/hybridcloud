@@ -62,10 +62,15 @@ spec:
             - --email-domain=*
             - --scope=user:full
             - --pass-access-token=true
+            # bearer-token callers (API clients, probes) authenticated through --openshift-delegate-urls reach the app with their token too
+            - --pass-user-bearer-token=true
             - --pass-user-headers=true
             - --pass-basic-auth=false
             - --skip-auth-regex=^/healthz$
             - --skip-provider-button=true
+            {{- with .Values.oauthProxy.logoutUrl }}
+            - --logout-url={{ . }}
+            {{- end }}
           volumeMounts:
             - name: proxy-tls
               mountPath: /etc/tls/private

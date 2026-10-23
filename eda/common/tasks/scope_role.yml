@@ -1,0 +1,149 @@
+---
+# Resource-scoped grants on the services cluster: one Role (with resourceNames) and one RoleBinding per grant, owned
+# by the object whose fields asked for them (sr_source). Used by the Team and Project jobs for their interim access
+# fields; the later RoleAssignment kind calls the same task with sr_source.kind RoleAssignment. Not its job: sign-in
+# client roles (services_signin_groups.yml) and anything on spoke clusters.
+#
+# Input:
+#   sr_namespace  tenant namespace (entity-<entity>)
+#   sr_source     {kind, name}: the object that owns the rendered Roles and RoleBindings
+#   sr_grants     [{kind, names: [..], level: view|edit|admin (or verbs: [..]), group: <entity>.<rbac>}];
+#                 grants without names or group are skipped; [] removes every object of the source (teardown)
+#   sr_apply      default true; false = render only (sets sr_rendered and sr_objects, writes and deletes nothing)
+#   sr_annotations  default {}; extra annotations on every rendered object (the source's own bookkeeping, for
+#                 example the Assignments a Team's grants were derived from); they do not change the object names
+#   sr_entity     default: sr_namespace without the entity- prefix
+#   shc_common_dir  default <role_path>/../../../common (set it when the task runs outside a role)
+# Output:
+#   sr_rendered   [{role, kind, names, level, verbs, group}]
+#   sr_objects    the rendered Role and RoleBinding manifests
+#   sr_pruned     names of the Roles/RoleBindings deleted because the source no longer asks for them
+#
+# Names: shc-scope-<source kind lowercased>-<source name>-<first 8 hex of sha256(kind|names|verbs|group)>; labels
+# app.kubernetes.io/managed-by=shc-access, hybridsovereign.redhat/entity, hybridsovereign.redhat/scope-source-kind
+# and hybridsovereign.redhat/scope-source-name (first 16 hex of sha256(source name): names can exceed a label value);
+# annotations hybridsovereign.redhat/scope-source-name (the name) and hybridsovereign.redhat/scope ("<Kind>/<names>
+# <level> <group>").
+- name: Scope levels and the tenant baseline
+  ansible.builtin.include_vars:
+    file: "{{ (shc_common_dir if shc_common_dir is defined else (role_path ~ '/../../../common')) ~ '/vars/scope_levels.yml' }}"
+
+- name: Render the scope Roles and RoleBindings of {{ sr_source.kind ~ '/' ~ sr_source.name }}
+  vars:
+    _entity: "{{ sr_entity | default(sr_namespace | regex_replace('^entity-', ''), true) }}"
+    _src_hash: "{{ (sr_source.name | hash('sha256'))[:16] }}"
+    _labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: "{{ sr_entity | default(sr_namespace | regex_replace('^entity-', ''), true) }}"
+      hybridsovereign.redhat/scope-source-kind: "{{ sr_source.kind }}"
+      hybridsovereign.redhat/scope-source-name: "{{ (sr_source.name | hash('sha256'))[:16] }}"
+  ansible.builtin.set_fact:
+    sr_source_labels: "{{ _labels }}"
+    sr_rendered: >-
+      {%- set out = [] -%}
+      {%- for g in sr_grants | default([], true) -%}
+        {%- set names = (g.names | default([], true)) | map('string') | reject('equalto', '') | unique | sort | list -%}
+        {%- set verbs = (g.verbs | default(scope_levels[g.level | default('view')], true)) | unique | list -%}
+        {%- if names and (g.group | default('', true)) -%}
+          {%- set key = g.kind ~ '|' ~ names | join(',') ~ '|' ~ verbs | join(',') ~ '|' ~ g.group -%}
+          {%- set base = ('shc-scope-' ~ (sr_source.kind | lower) ~ '-' ~ sr_source.name)[:240] -%}
+          {%- set _ = out.append({'role': base ~ '-' ~ (key | hash('sha256'))[:8], 'kind': g.kind, 'names': names,
+                                  'level': g.level | default('custom' if g.verbs is defined else 'view'),
+                                  'verbs': verbs, 'group': g.group}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out | unique(attribute='role') | list }}
+
+- name: Build the manifests
+  vars:
+    # CRD plurals of this API group: kind lowercased + s, a consonant + y -> ies
+    _plural: "{{ item.kind | lower | regex_replace('(?<=[^aeiou])y$', 'ie') }}s"
+    _meta:
+      name: "{{ item.role }}"
+      namespace: "{{ sr_namespace }}"
+      labels: "{{ sr_source_labels }}"
+      annotations: >-
+        {{ sr_annotations | default({}, true) | combine({
+             'hybridsovereign.redhat/scope-source-name': sr_source.name,
+             'hybridsovereign.redhat/scope': item.kind ~ '/' ~ (item.names | join(',')) ~ ' ' ~ item.level ~ ' ' ~ item.group}) }}
+  ansible.builtin.set_fact:
+    _sr_objects: >-
+      {{ (_sr_objects | default([])) + [
+           {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'Role', 'metadata': _meta,
+            'rules': [
+              {'apiGroups': ['hybridsovereign.redhat'], 'resources': [_plural], 'resourceNames': item.names,
+               'verbs': item.verbs},
+              {'apiGroups': ['hybridsovereign.redhat'], 'resources': [_plural ~ '/status'],
+               'resourceNames': item.names, 'verbs': ['get']}] + tenant_baseline_rules},
+           {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding', 'metadata': _meta,
+            'subjects': [{'kind': 'Group', 'apiGroup': 'rbac.authorization.k8s.io', 'name': item.group}],
+            'roleRef': {'kind': 'Role', 'apiGroup': 'rbac.authorization.k8s.io', 'name': item.role}}] }}
+  loop: "{{ sr_rendered }}"
+  loop_control:
+    label: "{{ item.role }}"
+
+- name: Keep the rendered manifests
+  ansible.builtin.set_fact:
+    sr_objects: "{{ _sr_objects | default([]) }}"
+    _sr_objects: []
+    sr_pruned: []
+
+- name: Apply the scope Roles and RoleBindings
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ sr_objects }}"
+  loop_control:
+    label: "{{ item.kind }} {{ item.metadata.name }}"
+  when: sr_apply | default(true) | bool
+
+- name: List the source's existing scope objects
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: rbac.authorization.k8s.io/v1
+    kind: "{{ item }}"
+    namespace: "{{ sr_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/managed-by=shc-access
+      - "hybridsovereign.redhat/scope-source-kind={{ sr_source.kind }}"
+      - "hybridsovereign.redhat/scope-source-name={{ sr_source_labels['hybridsovereign.redhat/scope-source-name'] }}"
+  loop: [RoleBinding, Role]
+  register: _sr_existing
+  when: sr_apply | default(true) | bool
+
+- name: Remove the ones the source no longer asks for
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    state: absent
+    api_version: rbac.authorization.k8s.io/v1
+    kind: "{{ item.kind }}"
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ sr_namespace }}"
+  loop: >-
+    {%- set keep = sr_rendered | map(attribute='role') | list -%}
+    {%- set out = [] -%}
+    {%- for r in _sr_existing.results | default([]) -%}
+      {%- for o in r.resources | default([]) -%}
+        {%- if o.metadata.name not in keep
+              and (o.metadata.annotations | default({}, true))['hybridsovereign.redhat/scope-source-name'] | default(sr_source.name) == sr_source.name -%}
+          {%- set _ = out.append(o) -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endfor -%}
+    {{ out }}
+  loop_control:
+    label: "{{ item.kind }} {{ item.metadata.name }}"
+  register: _sr_deleted
+  when: sr_apply | default(true) | bool
+
+- name: Record what was removed
+  ansible.builtin.set_fact:
+    sr_pruned: "{{ _sr_deleted.results | default([]) | selectattr('item', 'defined') | map(attribute='item.metadata.name') | unique | list }}"
+  when: sr_apply | default(true) | bool

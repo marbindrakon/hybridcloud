@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useTranslation } from '../i18n';
 
 export interface HealthDonutProps {
   ready: number;
@@ -16,9 +17,11 @@ export function HealthDonut({
   failed,
   pending,
   reconciling = 0,
-  title = 'Health',
+  title,
   size = 'md',
 }: HealthDonutProps): React.ReactElement {
+  const { t } = useTranslation();
+  const label = title ?? t('pages.platformHealth');
   const other = pending + reconciling;
   const total = ready + failed + other;
   const pct = total === 0 ? 0 : Math.round((ready / total) * 100);
@@ -44,7 +47,7 @@ export function HealthDonut({
   return (
     <div
       className={`sc-health-donut sc-health-donut--${size}`}
-      aria-label={`${title} ${pct}% healthy`}
+      aria-label={t('donut.aria', { title: label, pct })}
     >
       <div className="sc-health-donut__chart">
         <svg viewBox="0 0 120 120" width={dim} height={dim} role="img">
@@ -78,22 +81,22 @@ export function HealthDonut({
             {total}
           </text>
           <text x="60" y="70" textAnchor="middle" className="sc-health-donut__sub">
-            Total
+            {t('donut.total')}
           </text>
           <text x="60" y="86" textAnchor="middle" className="sc-health-donut__pct">
-            {total === 0 ? '—' : `${pct}% ok`}
+            {total === 0 ? '—' : t('donut.pctReady', { pct })}
           </text>
         </svg>
       </div>
       <ul className="sc-health-donut__legend">
         <li>
-          <span className="sc-dot sc-dot--ready" /> Ready <strong>{ready}</strong>
+          <span className="sc-dot sc-dot--ready" /> {t('status.ready')} <strong>{ready}</strong>
         </li>
         <li>
-          <span className="sc-dot sc-dot--failed" /> Failed <strong>{failed}</strong>
+          <span className="sc-dot sc-dot--failed" /> {t('status.failed')} <strong>{failed}</strong>
         </li>
         <li>
-          <span className="sc-dot sc-dot--pending" /> Pending <strong>{other}</strong>
+          <span className="sc-dot sc-dot--pending" /> {t('status.notReadyYet')} <strong>{other}</strong>
         </li>
       </ul>
     </div>

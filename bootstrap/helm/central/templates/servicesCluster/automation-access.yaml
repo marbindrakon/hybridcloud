@@ -1,0 +1,16 @@
+{{- /*
+The platform automation's account on the services cluster (the SHC API): ACM ManagedServiceAccount shc-automation,
+its ClusterRole (servicesCluster.automation.rules) and a kubeconfig in central Vault
+(servicesCluster.automation.vaultKey, property kubeconfig) that the EDA jobs use instead of the kubeadmin login.
+Username on services: system:serviceaccount:open-cluster-management-agent-addon:<serviceAccount>; the admission
+policies exempt it by that exact name. Rendered only when servicesCluster.automation.enabled.
+*/}}
+{{- $a := .Values.servicesCluster.automation | default dict }}
+{{- if and (include "sovereign-central.applicationsEnabled" .) $a.enabled }}
+{{ include "sovereign-central.managedAccount" (dict "root" $ "cluster" ($a.managedCluster | default "services")
+     "sa" ($a.serviceAccount | default "shc-automation") "wave" ($a.syncWave | default "0")
+     "tokenValidity" $a.tokenValidity "rules" (required "servicesCluster.automation.rules is required" $a.rules)
+     "server" .Values.servicesCluster.server
+     "vaultKey" (required "servicesCluster.automation.vaultKey is required" $a.vaultKey)
+     "deletionPolicy" $a.pushDeletionPolicy) }}
+{{- end }}

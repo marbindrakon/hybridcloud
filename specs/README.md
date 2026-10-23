@@ -1,13 +1,14 @@
 # Hybridcloud Feature Specifications
 
-Detailed specifications for platform features in the `hybridcloud/` monorepo.  
-**Relevance reviewed**: 2026-07-15
+Detailed specifications for platform features in the `hybridcloud/` monorepo. They record how each feature was
+designed; for what the API does today, the CRDs and `oc explain` are authoritative, and the user guides start at
+[docs/README.md](../docs/README.md).
 
 ## Status legend
 
 | Status | Meaning |
 |--------|---------|
-| **KEEP** | Spec matches current implementation |
+| **KEEP** | Historical design record of a current feature; the CRDs and `oc explain` are authoritative |
 | **UPDATE** | Spec still needed but details drift from live deploy |
 | **ARCHIVE** | Superseded — see `archive/` |
 

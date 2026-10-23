@@ -138,7 +138,7 @@ flowchart TB
 
 ## Related Documentation
 
-- [18-secrets-flow.md](./18-secrets-flow.md) — full path inventory and sync waves
+- [09-vault.md](./09-vault.md) — full path inventory and sync waves
 - [06-keycloak.md](./06-keycloak.md) — realm and client configuration
 - [006-eda-architecture.md](./006-eda-architecture.md) — event-driven automation topology
-- [security-state-2026.md](../../hardeningcheck/security-state-2026.md) — current findings
+- [security-state.md](../../hardeningcheck/security-state.md) — current findings

@@ -11,6 +11,8 @@ import { useK8sResourceList } from '../hooks/k8s';
 import { useOverviewCRs } from '../hooks/overviewCrs';
 import { useCanListKind } from '../hooks/permissions';
 import { normalizeHealth } from './StatusBadge';
+import { useTranslation } from '../i18n';
+import { kindTerm } from '../i18n/vocabulary';
 
 export interface TopologyNode {
   id: string;
@@ -85,8 +87,9 @@ const PAD_X = 20;
 const PAD_Y = 16;
 const LAYER_LABEL_H = 16;
 
-function statusFromReady(ready?: boolean, status?: string): TopologyNode['status'] {
-  return normalizeHealth(ready, status);
+/** The node state from the object's phase (stored status.phase, else derived from the Ready condition), Q10. */
+function statusOfItem(item: K8sResource): TopologyNode['status'] {
+  return normalizeHealth(item);
 }
 
 function statusColor(status: TopologyNode['status']): string {
@@ -179,6 +182,21 @@ function LegendGlyph({ status }: { status: TopologyNode['status'] }): React.Reac
 }
 
 /** Live entity topology — layered SVG graph matching design-assets */
+/** Status words of the topology (the list pages' vocabulary). */
+const STATUS_KEY: Record<TopologyNode['status'], string> = {
+  ready: 'status.ready',
+  failed: 'status.failed',
+  pending: 'status.notReadyYet',
+  reconciling: 'status.notReadyYet',
+  unknown: 'status.unknown',
+};
+
+/** Node caption: the display kind, the short form where the full one does not fit. */
+function kindCaption(kind: string, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const full = kindTerm(t, kind, 'dense');
+  return full.length > 24 ? `${full.slice(0, 23)}…` : full;
+}
+
 export function EntityTopology({
   entityNamespace,
   filterByPermissions = false,
@@ -186,6 +204,7 @@ export function EntityTopology({
   resourcesLoading,
   resourcesError,
 }: EntityTopologyProps): React.ReactElement {
+  const { t } = useTranslation();
   const ns = entityNamespace ?? '';
   const scoped = !!entityNamespace;
   // Admin platform view: never hit cluster-scoped list URLs (console proxy 404s).
@@ -270,7 +289,7 @@ export function EntityTopology({
       label: item.metadata.name,
       kind,
       namespace: item.metadata.namespace,
-      status: statusFromReady(item.status?.ready, item.status?.status),
+      status: statusOfItem(item),
     });
 
     type AssignSpec = {
@@ -378,7 +397,7 @@ export function EntityTopology({
         const ans = a.metadata.namespace;
         const spec = (a.spec || {}) as AssignSpec;
         const self = resolve('Assignment', ans, a.metadata.name);
-        const failed = statusFromReady(a.status?.ready, a.status?.status) === 'failed';
+        const failed = statusOfItem(a) === 'failed';
         if (spec.team) link(resolve('Team', ans, spec.team), self, failed);
         for (const pName of spec.projects ?? []) link(resolve('Project', ans, pName), self, failed);
         if (spec.openshift) link(resolve('PlatformOpenshift', ans, spec.openshift), self, failed);
@@ -396,7 +415,7 @@ export function EntityTopology({
       link(
         resolve('HybridFabric', gns, fabricName),
         resolve('CloudInfrastructure', gns, infraName),
-        statusFromReady(g.status?.ready, g.status?.status) === 'failed',
+        statusOfItem(g) === 'failed',
       );
     }
 
@@ -407,7 +426,7 @@ export function EntityTopology({
       link(
         resolve('CloudInfrastructure', item.metadata.namespace, infraName),
         nodeKey(kind, item.metadata.namespace, item.metadata.name),
-        statusFromReady(item.status?.ready, item.status?.status) === 'failed',
+        statusOfItem(item) === 'failed',
       );
     }
 
@@ -424,7 +443,7 @@ export function EntityTopology({
         const self = nodeKey('PlatformOpenshift', pns, p.metadata.name);
         if (!cloud) continue;
         platformHasCloudParent.add(self);
-        link(cloud, self, statusFromReady(p.status?.ready, p.status?.status) === 'failed');
+        link(cloud, self, statusOfItem(p) === 'failed');
       }
     }
 
@@ -449,7 +468,7 @@ export function EntityTopology({
       link(
         e.id,
         nodeKey(kind, item.metadata.namespace, item.metadata.name),
-        statusFromReady(item.status?.ready, item.status?.status) === 'failed',
+        statusOfItem(item) === 'failed',
       );
     }
 
@@ -467,7 +486,7 @@ export function EntityTopology({
         const self = nodeKey('PlatformOpenshift', p.metadata.namespace, p.metadata.name);
         if (platformHasCloudParent.has(self)) continue;
         const e = ownerNode(p);
-        link(e?.id, self, statusFromReady(p.status?.ready, p.status?.status) === 'failed');
+        link(e?.id, self, statusOfItem(p) === 'failed');
       }
     }
 
@@ -478,7 +497,7 @@ export function EntityTopology({
         const self = nodeKey('Assignment', a.metadata.namespace, a.metadata.name);
         if (claimed.has(self)) continue;
         const e = ownerNode(a);
-        link(e?.id, self, statusFromReady(a.status?.ready, a.status?.status) === 'failed');
+        link(e?.id, self, statusOfItem(a) === 'failed');
       }
     }
 
@@ -522,21 +541,21 @@ export function EntityTopology({
     const layers = (
       entityNamespace
         ? [
-            { title: 'Entity', nodes: entityNodes },
-            { title: 'Teams', nodes: filteredTeams },
-            { title: 'Projects', nodes: filteredProjects },
-            { title: 'Sites', nodes: filteredInfra },
-            { title: 'Cloud projects', nodes: filteredClouds },
-            { title: 'Clusters', nodes: filteredPlatforms },
-            { title: 'Assignments', nodes: filteredAssignments },
+            { title: t('kindsOne.Entity'), nodes: entityNodes },
+            { title: t('kinds.Team'), nodes: filteredTeams },
+            { title: t('kinds.Project'), nodes: filteredProjects },
+            { title: t('kinds.CloudInfrastructure'), nodes: filteredInfra },
+            { title: t('topology.environments'), nodes: filteredClouds },
+            { title: t('kinds.PlatformOpenshift'), nodes: filteredPlatforms },
+            { title: t('kinds.Assignment'), nodes: filteredAssignments },
           ]
         : [
-            { title: 'Fabric', nodes: filteredFabrics },
-            { title: 'Sites', nodes: filteredInfra },
-            { title: 'Entities', nodes: entityNodes },
-            { title: 'Cloud projects', nodes: filteredClouds },
-            { title: 'Clusters', nodes: filteredPlatforms },
-            { title: 'Assignments', nodes: filteredAssignments },
+            { title: t('kinds.HybridFabric'), nodes: filteredFabrics },
+            { title: t('kinds.CloudInfrastructure'), nodes: filteredInfra },
+            { title: t('kinds.Entity'), nodes: entityNodes },
+            { title: t('topology.environments'), nodes: filteredClouds },
+            { title: t('kinds.PlatformOpenshift'), nodes: filteredPlatforms },
+            { title: t('kinds.Assignment'), nodes: filteredAssignments },
           ]
     ).filter((l) => l.nodes.length > 0);
 
@@ -579,6 +598,7 @@ export function EntityTopology({
     cloudAwsPerm.allowed,
     cloudGcpPerm.allowed,
     cloudVirtPerm.allowed,
+    t,
   ]);
 
   const nodeById = useMemo(
@@ -611,27 +631,23 @@ export function EntityTopology({
       : overview.error;
 
   if (loading && graph.nodes.length === 0) {
-    return <Spinner aria-label="Loading topology" />;
+    return <Spinner aria-label={t('topology.loading')} />;
   }
 
   if (listError && graph.nodes.length === 0) {
     return (
-      <Alert variant="warning" title="Unable to load topology" isInline>
-        {listError.message || 'Failed to list Hybrid Sovereign resources.'}
+      <Alert variant="warning" title={t('topology.loadFailed')} isInline>
+        {listError.message || t('topology.loadFailedBody')}
       </Alert>
     );
   }
 
   if (graph.nodes.length === 0) {
     return (
-      <Alert variant="info" title="No topology data" isInline>
-        {filterByPermissions
-          ? `No resources visible for your access in ${
-              entityNamespace ? `namespace ${entityNamespace}` : 'the platform'
-            }.`
-          : `No Hybrid Sovereign resources found for ${
-              entityNamespace ? `namespace ${entityNamespace}` : 'the platform'
-            }.`}
+      <Alert variant="info" title={t('topology.empty')} isInline>
+        {entityNamespace
+          ? t(filterByPermissions ? 'topology.emptyVisibleIn' : 'topology.emptyIn', { namespace: entityNamespace })
+          : t(filterByPermissions ? 'topology.emptyVisiblePlatform' : 'topology.emptyPlatform')}
       </Alert>
     );
   }
@@ -647,35 +663,35 @@ export function EntityTopology({
   };
 
   return (
-    <div className="sc-topology-graph" aria-label="Entity topology">
+    <div className="sc-topology-graph" aria-label={t('common.topology')}>
       <div className="sc-topology-graph__toolbar">
         {/* Status is carried by the glyph shape and the text label as well as
             the colour, so it survives greyscale and forced-colors. */}
         <div className="sc-topo-legend">
           <span>
-            <LegendGlyph status="ready" /> Healthy
+            <LegendGlyph status="ready" /> {t(STATUS_KEY.ready)}
           </span>
           <span>
-            <LegendGlyph status="failed" /> Failed
+            <LegendGlyph status="failed" /> {t(STATUS_KEY.failed)}
           </span>
           <span>
-            <LegendGlyph status="pending" /> Pending
+            <LegendGlyph status="pending" /> {t(STATUS_KEY.pending)}
           </span>
         </div>
         <div className="sc-topology-graph__controls">
-          <Button variant="plain" size="sm" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(1.5, z + 0.1))}>
+          <Button variant="plain" size="sm" aria-label={t('topology.zoomIn')} onClick={() => setZoom((z) => Math.min(1.5, z + 0.1))}>
             <SearchPlusIcon />
           </Button>
-          <Button variant="plain" size="sm" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))}>
+          <Button variant="plain" size="sm" aria-label={t('topology.zoomOut')} onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))}>
             <SearchMinusIcon />
           </Button>
           <Button variant="secondary" size="sm" icon={<CompressAltIcon />} onClick={fit}>
-            Fit to view
+            {t('topology.fit')}
           </Button>
           <Button
             variant="plain"
             size="sm"
-            aria-label="Fullscreen"
+            aria-label={t('topology.fullscreen')}
             onClick={() => wrapRef.current?.requestFullscreen?.()}
           >
             <ExpandIcon />
@@ -734,11 +750,11 @@ export function EntityTopology({
           })}
           {graph.nodes.map((n) => (
             <g key={n.id} transform={`translate(${n.x}, ${n.y})`} className={`sc-topology-node sc-topology-node--${n.status}`}>
-              <title>{`${n.kind} ${n.label}${n.namespace ? ` (${n.namespace})` : ''} — ${n.status}`}</title>
+              <title>{`${kindTerm(t, n.kind)} ${n.label}${n.namespace ? ` (${n.namespace})` : ''} — ${t(STATUS_KEY[n.status])}`}</title>
               <rect width={NODE_W} height={NODE_H} rx={3} ry={3} />
               <StatusGlyph status={n.status} x={14} y={NODE_H / 2} />
               <text x={26} y={19} className="sc-topology-node__kind">
-                {n.kind}
+                {kindCaption(n.kind, t)}
               </text>
               <text x={26} y={35} className="sc-topology-node__name">
                 {n.label.length > 16 ? `${n.label.slice(0, 15)}…` : n.label}

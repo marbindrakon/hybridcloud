@@ -32,12 +32,26 @@
     fail_msg: "CloudOSO {{ cloudoso_cr_name }}: {{ ci_error }}"
   when: oso_cloudinfra_name | length > 0
 
-- name: Require the entity to be allowed on the site
+# one rule for every environment: spec.entityRefs of the site and Entity spec.allowedSites (fails closed)
+- name: Check that the tenant may use the site
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/tenant_site_allowed.yml"
+  vars:
+    tsa_entity: "{{ entity_name }}"
+    tsa_site: "{{ oso_cloudinfra_name }}"
+    tsa_site_spec: "{{ ci_spec }}"
+  when: oso_cloudinfra_name | length > 0
+
+- name: Record the refusal reason
+  ansible.builtin.set_fact:
+    cloudoso_failure_reason: "{{ tsa_reason }}"
+  when:
+    - oso_cloudinfra_name | length > 0
+    - not (tsa_allowed | bool)
+
+- name: Require the tenant to be allowed on the site
   ansible.builtin.assert:
-    that: >-
-      (ci_spec.entityRefs | default([]) | length == 0)
-      or (entity_name in (ci_spec.entityRefs | map(attribute='name') | list))
-    fail_msg: "Entity {{ entity_name }} may not use CloudInfrastructure {{ oso_cloudinfra_name }} (spec.entityRefs)."
+    that: tsa_allowed | bool
+    fail_msg: "{{ tsa_message }}"
   when: oso_cloudinfra_name | length > 0
 
 - name: Take the account and settings from the site
@@ -101,11 +115,23 @@
     - oso_cloudinfra_name | length > 0
     - ((ci_spec.dns | default({}, true)).mode | default('platform', true)) == 'native'
 
+# A legacy spec may name only the accounts the platform lists (cloudoso_allowed_vault_paths, role defaults): the
+# job reads them with the platform's Vault token.
 - name: Legacy settings (no cloudRef in effect)
   when: oso_cloudinfra_name | length == 0
+  vars:
+    _spec_account: "{{ oso_spec.vaultPath | default('', true) }}"
+    _spec_route53: "{{ oso_spec.route53VaultPath | default('', true) }}"
+    _ignored: >-
+      {{ ([] if _spec_account in ([''] + cloudoso_allowed_vault_paths) else ['vaultPath'])
+         + ([] if _spec_route53 in ([''] + cloudoso_allowed_vault_paths) else ['route53VaultPath']) }}
   ansible.builtin.set_fact:
+    oso_settings_note: >-
+      {{ ('Ignored spec.' ~ (_ignored | join(', spec.')) ~ ' (chosen by the platform).') if _ignored | length > 0 else '' }}
     oso_settings:
-      vaultPath: "{{ oso_spec.vaultPath | default(cloudoso_defaults.vaultPath | default(''), true) }}"
+      vaultPath: >-
+        {{ _spec_account if (_spec_account | length > 0 and 'vaultPath' not in _ignored)
+           else (cloudoso_defaults.vaultPath | default('')) }}
       projectDomain: "{{ oso_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true) }}"
       externalNetwork: "{{ oso_spec.externalNetwork | default(cloudoso_defaults.externalNetwork | default(''), true) }}"
       baseDomain: "{{ oso_spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
@@ -115,4 +141,6 @@
            | default('designate' if (oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true)) else 'route53', true) }}
       designateZoneId: "{{ oso_spec.designateZoneId | default(cloudoso_defaults.designateZoneId | default(''), true) }}"
       designateProjectId: "{{ oso_spec.designateProjectId | default(cloudoso_defaults.designateProjectId | default(''), true) }}"
-      route53VaultPath: "{{ oso_spec.route53VaultPath | default(cloudoso_defaults.route53VaultPath | default(''), true) }}"
+      route53VaultPath: >-
+        {{ _spec_route53 if (_spec_route53 | length > 0 and 'route53VaultPath' not in _ignored)
+           else (cloudoso_defaults.route53VaultPath | default('')) }}

@@ -8,8 +8,10 @@ keycloak_central_admin_password: ""
 keycloak_services_admin_user: "admin"
 keycloak_services_admin_password: ""
 
-# 8 persistent test users covering all Rbac layer groups for acme-corp
-# Groups: <entity>-<team>-<role> convention matching Rbac CRs
+# Persistent test users. The acme-corp ones are members of the demo tenant's access groups
+# (bootstrap/ansible/project/files/demo/acme-corp.yaml): a group that starts with "/" is a Keycloak group path
+# /<tenant>/<access group> (created when missing; the access group job adopts it), so each user signs in to the
+# services cluster with the group <tenant>.<access group>. Other names are top-level groups (sovereign-admin).
 # shc: passwords live in central Vault (keycloak_test_users_vault_path), one random per user.
 keycloak_test_users_vault_path: "keycloak-test-users"
 keycloak_test_users:
@@ -28,7 +30,8 @@ keycloak_test_users:
     firstName: "Acme"
     lastName: "PlatformEngAdmin"
     groups:
-      - "acme-corp-platform-engineering-admins"
+      - "/acme-corp/platform-admins"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "acme-platform-eng-editor"
@@ -36,7 +39,8 @@ keycloak_test_users:
     firstName: "Acme"
     lastName: "PlatformEngEditor"
     groups:
-      - "acme-corp-platform-engineering-editors"
+      - "/acme-corp/editors"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "acme-platform-eng-viewer"
@@ -44,7 +48,8 @@ keycloak_test_users:
     firstName: "Acme"
     lastName: "PlatformEngViewer"
     groups:
-      - "acme-corp-platform-engineering-viewers"
+      - "/acme-corp/viewers"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "acme-platform-ops-admin"
@@ -52,7 +57,8 @@ keycloak_test_users:
     firstName: "Acme"
     lastName: "PlatformOpsAdmin"
     groups:
-      - "acme-corp-platform-ops-admins"
+      - "/acme-corp/platform-admins"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "acme-platform-ops-editor"
@@ -60,7 +66,8 @@ keycloak_test_users:
     firstName: "Acme"
     lastName: "PlatformOpsEditor"
     groups:
-      - "acme-corp-platform-ops-editors"
+      - "/acme-corp/editors"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "acme-platform-ops-viewer"
@@ -68,7 +75,8 @@ keycloak_test_users:
     firstName: "Acme"
     lastName: "PlatformOpsViewer"
     groups:
-      - "acme-corp-platform-ops-viewers"
+      - "/acme-corp/viewers"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "acme-infra-admin"
@@ -76,8 +84,8 @@ keycloak_test_users:
     firstName: "Acme"
     lastName: "InfraAdmin"
     groups:
-      - "acme-corp-infra-admins"
-  # ── Assignment RBAC test users (ocp-ses10 assignment validation) ─────────────
+      - "/acme-corp/infra"
+  # ── more acme-corp users (editors, viewers, developers) ─────────────
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "test-assignment-admin"
@@ -85,7 +93,8 @@ keycloak_test_users:
     firstName: "Test"
     lastName: "AssignmentAdmin"
     groups:
-      - "acme-corp-assignment-admins"
+      - "/acme-corp/editors"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "test-assignment-developer"
@@ -93,7 +102,8 @@ keycloak_test_users:
     firstName: "Test"
     lastName: "AssignmentDeveloper"
     groups:
-      - "acme-corp-developers"
+      - "/acme-corp/developers"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "test-assignment-viewer"
@@ -101,7 +111,8 @@ keycloak_test_users:
     firstName: "Test"
     lastName: "AssignmentViewer"
     groups:
-      - "acme-corp-platform-viewers"
+      - "/acme-corp/viewers"
+
   - realm: "sovereign-tenants"
     keycloak_url_key: services
     username: "test-assignment-ops"
@@ -109,7 +120,7 @@ keycloak_test_users:
     firstName: "Test"
     lastName: "AssignmentOps"
     groups:
-      - "acme-corp-devops"
+      - "/acme-corp/developers"
   # Virtualization feature test users (feature 009)
   - realm: "sovereign-central"
     keycloak_url_key: central

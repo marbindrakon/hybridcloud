@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         uihealthchecker_cr_name: "{{ event_payload.regarding.name }}"
         uihealthchecker_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        uihealthchecker_spec: "{{ event_payload.note | from_json }}"
+        uihealthchecker_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -45,8 +45,8 @@
           message: "Stub provisioned by EDA hybridvpc (no infra changes)"
           lastReconciledAt: "{{ uihealthchecker_status_transition_time }}"
           observedGeneration: "{{ uihealthchecker_generation }}"
-          url: "{{ (event_payload.note | from_json).url | default('') }}"
-          group: "{{ (event_payload.note | from_json).group | default('custom') }}"
+          url: "{{ shc_live_spec.url | default('') }}"
+          group: "{{ shc_live_spec.group | default('custom') }}"
           conditions:
             - type: Ready
               status: "True"

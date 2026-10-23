@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Entity } from '../types';
 import { useK8sResourceList } from './k8s';
+import { classifyError } from './errors';
 
 /** Entity CRs are platform-owned and all live in this one namespace. */
 export const ENTITY_NS = 'sovereign-cloud';
@@ -40,7 +41,8 @@ export function entityNamespaceOf(entity: Entity): string {
 /** A 403/401 on sovereign-cloud is an access limit, not a broken page. */
 function isForbidden(error: Error | null): boolean {
   if (!error) return false;
-  return /\b(401|403)\b/.test(error.message);
+  const cls = classifyError(error);
+  return cls === 'forbidden' || cls === 'unauthenticated';
 }
 
 export interface UseEntityOptionsOptions {

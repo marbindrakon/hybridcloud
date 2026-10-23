@@ -16,8 +16,10 @@ import {
   PageHeader,
   useK8sResourceList,
   useTranslation,
+  errorText,
 } from '@hybridsovereign/shared';
 import '@hybridsovereign/shared/styles/openshift.css';
+import { ADMIN_LINKS } from '../adminPaths';
 
 const UIHEALTH_PROBE_URL =
   '/api/proxy/plugin/sovereign-admin-plugin/uihealth/api/uihealth/probe';
@@ -148,7 +150,7 @@ const AdminUIHealthPage: React.FC = () => {
               <Button
                 variant="secondary"
                 icon={<PlusCircleIcon />}
-                onClick={() => navigate('/hybridsovereign/create/uihealthchecker')}
+                onClick={() => navigate(ADMIN_LINKS.createHealthCheck)}
               >
                 {t('common.create')}
               </Button>
@@ -157,8 +159,8 @@ const AdminUIHealthPage: React.FC = () => {
         />
 
         {error && (
-          <Alert variant="warning" isInline title={t('common.k8sUnavailable')} className="sc-mb">
-            {error.message}
+          <Alert variant="warning" isInline title={errorText(error, t).title} className="sc-mb">
+            {errorText(error, t).body}
           </Alert>
         )}
 
@@ -211,7 +213,7 @@ const AdminUIHealthPage: React.FC = () => {
                       <Tr key={item.metadata.name}>
                         <Td>
                           <a
-                            href={`/hybridsovereign/networking/uihealth/${encodeURIComponent(item.metadata.name)}`}
+                            href={ADMIN_LINKS.healthCheck(item.metadata.name)}
                           >
                             {spec.displayName || item.metadata.name}
                           </a>

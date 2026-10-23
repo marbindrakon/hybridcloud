@@ -66,6 +66,27 @@
       vars:
         nudge_crs: [{kind: CloudInfrastructure, namespace: "{{ cloudinfrastructure_cr_namespace }}", name: "{{ cloudinfrastructure_cr_name }}"}]
 
+    # tenant profiles list the sites a tenant may use: the Entities drop this one (it is being deleted)
+    - name: List the Entities
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: Entity
+        namespace: "{{ cloudinfrastructure_cr_namespace }}"
+      register: _cit_entities
+
+    - name: Wake them
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for o in _cit_entities.resources | default([]) if o.metadata.deletionTimestamp is not defined -%}
+            {%- set _ = out.append({'kind': 'Entity', 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+          {%- endfor -%}
+          {{ out }}
+
   rescue:
     - name: Mark teardown refused or failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -78,6 +99,7 @@
         patch_ignore_not_found: true
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           deletionComplete: false
           message: "{{ _msg }}"

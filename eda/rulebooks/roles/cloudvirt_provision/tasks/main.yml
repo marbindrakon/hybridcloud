@@ -28,17 +28,23 @@
         ci_ref_namespace: "{{ fabric_platform_namespace }}"
         ci_expected_type: openshift
 
-    - name: Refuse a site of another type or one the Entity may not use
+    # one rule for every environment: spec.entityRefs of the site and Entity spec.allowedSites (fails closed)
+    - name: Check that the tenant may use the site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/tenant_site_allowed.yml"
+      vars:
+        tsa_entity: "{{ fab_entity }}"
+        tsa_site: "{{ cv_site_name }}"
+        tsa_site_spec: "{{ ci_spec }}"
+        tsa_platform_namespace: "{{ fabric_platform_namespace }}"
+      when: ci_found
+
+    - name: Refuse a site of another type or one the tenant may not use
       ansible.builtin.set_fact:
-        fab_fail_reason: "{{ 'SiteTypeMismatch' if (ci_found and ci_type != 'openshift') else 'EntityNotAllowed' }}"
+        fab_fail_reason: "{{ 'SiteTypeMismatch' if ci_type != 'openshift' else tsa_reason }}"
         fab_fail_msg: >-
           {{ ('CloudVirt ' ~ fab_name ~ ': CloudInfrastructure ' ~ cv_site_name ~ ' has type ' ~ ci_type ~ ', not openshift')
-             if (ci_found and ci_type != 'openshift')
-             else ('Entity ' ~ fab_entity ~ ' may not use CloudInfrastructure ' ~ cv_site_name ~ ' (spec.entityRefs)') }}
-      when: >-
-        ci_found and (ci_type != 'openshift'
-        or ((ci_spec.entityRefs | default([]) | length > 0)
-            and fab_entity not in (ci_spec.entityRefs | map(attribute='name') | list)))
+             if ci_type != 'openshift' else tsa_message }}
+      when: ci_found and (ci_type != 'openshift' or not (tsa_allowed | default(false) | bool))
 
     - name: Stop on a refused site
       ansible.builtin.fail:
@@ -162,7 +168,8 @@
         cv_status: >-
           {{ {'entity': fab_entity,
               'site': {'name': cv_site_name,
-                       'endpoint': ((ci_obj.status | default({}, true)).site | default({}, true)).endpoint | default('', true)},
+                       'endpoint': ((ci_obj.status | default({}, true)).site | default({}, true)).endpoint | default('', true),
+                       'console': ((ci_obj.status | default({}, true)).site | default({}, true)).console | default('', true)},
               'storageClass': fab_spec.storageClass | default((ci_spec.openshift | default({})).storageClass | default(''), true),
               'namespaces': cv_ns_status} }}
 
@@ -290,6 +297,9 @@
 
         - name: Tenant access to the namespaces (sign-in groups, RoleBindings)
           ansible.builtin.include_tasks: access.yml
+
+        - name: How tenants reach the environment (status.endpoints)
+          ansible.builtin.include_tasks: endpoints.yml
       always:
         - name: Remove the site kubeconfig
           ansible.builtin.file:
@@ -309,7 +319,7 @@
           ('; access for ' ~ cv_access.groups | join(', ')) if cv_access.groups | default([]) | length > 0 else '; no tenant access granted' }}{{
           ('; ' ~ cv_access_waiting | join('; ')) if cv_access_waiting | default([]) | length > 0 else '' }}
         fab_status: >-
-          {{ cv_status | combine({'access': cv_access})
+          {{ cv_status | combine({'access': cv_access}) | combine({'endpoints': cv_endpoints | default({})})
              | combine({'realization': {'siteNamespacesKept': cv_kept}} if cv_kept | length > 0 else {})
              | combine({'dns': cv_dns} if cv_dns | default({}) | length > 0 else {}) }}
 

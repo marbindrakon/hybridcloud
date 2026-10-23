@@ -27,7 +27,7 @@
       displayName: "{{ item.item.display_name | default(item.item.name) }}"
       registrationAllowed: false
       loginWithEmailAllowed: true
-      sslRequired: none
+      sslRequired: external
     validate_certs: false
     status_code: [201, 409]
   loop: "{{ realm_check.results }}"
@@ -36,3 +36,83 @@
     label: "{{ item.item.name }}"
   retries: 3
   delay: 5
+
+# Bring existing realms to keycloak_realm_security (partial update: only these fields), then read back and check.
+- name: Read the realms to harden
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: realm_current
+  loop: "{{ keycloak_realms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: keycloak_realms_harden | bool
+
+- name: Work out the realm fields that change
+  ansible.builtin.set_fact:
+    keycloak_realm_changes: >-
+      {%- set out = {} -%}
+      {%- for r in realm_current.results | default([]) if r.json is defined -%}
+        {%- set diff = [] -%}
+        {%- for k, v in keycloak_realm_security.items() if r.json.get(k) != v -%}{%- set _ = diff.append(k) -%}{%- endfor -%}
+        {%- if diff -%}{%- set _ = out.update({r.item.name: diff}) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  when: keycloak_realms_harden | bool
+
+- name: Realm fields that would change (plan only)
+  ansible.builtin.debug:
+    msg: "realm {{ item.key }}: {{ item.value | join(', ') }}"
+  loop: "{{ keycloak_realm_changes | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: keycloak_realms_harden | bool
+
+- name: Harden the realms
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.key }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ {'realm': item.key} | combine(keycloak_realm_security) }}"
+    validate_certs: false
+    status_code: [204]
+  loop: "{{ keycloak_realm_changes | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: keycloak_realms_harden | bool and not (keycloak_plan_only | bool)
+
+- name: Read the hardened realms back
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ item.name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token }}"
+    validate_certs: false
+    status_code: [200]
+  register: realm_after
+  loop: "{{ keycloak_realms }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: keycloak_realms_harden | bool and not (keycloak_plan_only | bool)
+
+- name: Check the realm settings
+  vars:
+    _mismatch: >-
+      {%- set b = [] -%}
+      {%- for k, v in keycloak_realm_security.items() if item.json.get(k) != v -%}{%- set _ = b.append(k) -%}{%- endfor -%}
+      {{ b }}
+  ansible.builtin.assert:
+    that: _mismatch | length == 0
+    fail_msg: "Realm {{ item.item.name }} did not take: {{ _mismatch | join(', ') }}"
+    quiet: true
+  loop: "{{ realm_after.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('') }}"
+  when: keycloak_realms_harden | bool and not (keycloak_plan_only | bool) and item.json is defined

@@ -1,0 +1,44 @@
+---
+# Wake the Entities when what a tenant sees of this site changed (their TenantProfile status.sites): the tenant-word
+# summary (common/tasks/site_tenant_summary.yml) of the CR as it was before this job against the CR as this job
+# leaves it, or a spec change (generation moved: entityRefs, location, display name). A steady site nudges nothing.
+# Input: civ_before (the CR before the job), civ_after_status (the status this job wrote: ready or failed),
+#        civ_check_generation (default true; false on the failure path, which does not record observedGeneration).
+- name: The tenant view before and after this job
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_tenant_summary.yml"
+  vars:
+    sts_sites:
+      - "{{ civ_before }}"
+      # the job writes status by merge-patch: maps merge key by key, lists and scalars are replaced
+      - "{{ civ_before | combine({'status': (civ_before.status | default({}, true)) | combine(civ_after_status, recursive=True)}) }}"
+
+- name: Decide whether the tenants' view changed
+  vars:
+    _gen: "{{ civ_before.metadata.generation | default(0) | int }}"
+    _seen: "{{ (civ_before.status | default({}, true)).observedGeneration | default(0) | int }}"
+  ansible.builtin.set_fact:
+    civ_changed: >-
+      {{ (site_tenant_summaries[0] != site_tenant_summaries[1])
+         or ((civ_check_generation | default(true) | bool) and (_gen | int != _seen | int)) }}
+
+- name: List the Entities
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Entity
+    namespace: "{{ cloudinfrastructure_cr_namespace }}"
+  register: _civ_entities
+  when: civ_changed | bool
+
+- name: Wake them (their tenant profiles list this site)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: >-
+      {%- set out = [] -%}
+      {%- for o in _civ_entities.resources | default([]) if o.metadata.deletionTimestamp is not defined -%}
+        {%- set _ = out.append({'kind': 'Entity', 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+      {%- endfor -%}
+      {{ out }}
+  when: civ_changed | bool

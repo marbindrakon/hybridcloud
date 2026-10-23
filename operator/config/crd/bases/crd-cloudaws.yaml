@@ -2,8 +2,11 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: cloudawss.hybridsovereign.redhat
+  labels:
+    hybridsovereign.redhat/teardown-tier: "3"
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   group: hybridsovereign.redhat
   names:
@@ -13,6 +16,11 @@ spec:
     singular: cloudaws
     shortNames:
       - caws
+      - awsenv
+    categories:
+      - shc
+      - shc-tenant
+      - shc-environment
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -21,9 +29,11 @@ spec:
       schema:
         openAPIV3Schema:
           description: >-
-            An entity's environment in an AWS site: an account the platform assigns and enters with its own
-            identity (no stored keys), and the environment's public DNS zone, delegated from the tenant zone.
-            Networks are placed into it with NetworkPlacement (backend kind CloudAWS), one VPC per placement.
+            An AWS environment: the tenant's environment on an AWS site, comparable to an AWS
+            account. It is an account the platform assigns and enters with its own identity (no
+            stored keys), with the environment's public DNS zone, delegated from the tenant zone.
+            Networks are placed into it with NetworkPlacement (spec.backend.kind CloudAWS), one VPC
+            per placement.
           type: object
           required:
             - spec
@@ -35,9 +45,15 @@ spec:
             metadata:
               type: object
             spec:
+              description: Desired state of this object.
               type: object
               required: [cloudRef]
               properties:
+                deletionProtection:
+                  type: boolean
+                  description: >-
+                    When true, deleting the tenant does not delete this object; the tenant deletion
+                    waits until protection is turned off.
                 cloudRef:
                   type: object
                   description: >-
@@ -49,10 +65,12 @@ spec:
                       message: spec.cloudRef is immutable
                   properties:
                     name:
+                      description: Name of the referenced object.
                       type: string
                       minLength: 1
                       maxLength: 253
             status:
+              description: Observed state, written by the platform. Do not edit.
               type: object
               properties:
                 name:
@@ -63,14 +81,14 @@ spec:
                   type: string
                 awsHelperName:
                   type: string
-                  description: "Name of the AWSHelper CR created in central cluster"
+                  description: No longer set.
                 awsHelperCreated:
                   type: boolean
                 centralApiServer:
                   type: string
                 slug:
                   type: string
-                  description: "5-character subdomain slug from AWSHelper"
+                  description: Short unique name of the environment, used in DNS names.
                 domain:
                   type: string
                   description: "Full domain: <slug>.<baseDomain>"
@@ -99,42 +117,63 @@ spec:
                   type: string
                   description: Human-readable status message (set on failure)
                 ready:
+                  description: True when the platform finished creating or updating this object.
                   type: boolean
                 observedGeneration:
+                  description: >-
+                    The metadata.generation the status describes. When it is lower than
+                    metadata.generation, the latest change has not been processed yet.
                   type: integer
                   format: int64
                 edaJobs:
+                  description: >-
+                    Recent automation runs for this object. Platform detail, for the platform team.
                   type: array
                   items:
+                    description: One automation run for this object.
                     type: object
                     properties:
                       name:
+                        description: Name of the automation job template.
                         type: string
                       jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       url:
+                        description: Link to the run in the automation controller.
                         type: string
                       timestamp:
+                        description: When the run was recorded.
                         type: string
                       status:
+                        description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
                 conditions:
+                  description: >-
+                    Standard conditions. Ready says whether the object is usable; the others say
+                    what the platform is waiting for or what failed.
                   type: array
                   items:
+                    description: One condition.
                     type: object
                     properties:
                       type:
+                        description: Condition type, for example Ready.
                         type: string
                       status:
+                        description: True, False or Unknown.
                         type: string
                       lastTransitionTime:
+                        description: When the condition last changed status.
                         type: string
                         format: date-time
                       reason:
+                        description: One-word reason in CamelCase, stable enough to match on.
                         type: string
                       message:
+                        description: What the reason means for this object, in plain words.
                         type: string
               x-kubernetes-preserve-unknown-fields: true
       subresources:
@@ -151,13 +190,20 @@ spec:
           jsonPath: .status.domain
         - name: Status
           type: string
-          jsonPath: .status.status
+          jsonPath: .status.phase
         - name: Last-Reconciled
-          type: string
+          type: date
           jsonPath: .status.lastReconciledAt
         - name: Ready
           type: boolean
           jsonPath: .status.ready
+        - name: Reason
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+        - name: Summary
+          type: string
+          priority: 1
+          jsonPath: .status.summary
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

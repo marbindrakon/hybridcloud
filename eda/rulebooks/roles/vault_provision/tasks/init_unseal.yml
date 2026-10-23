@@ -1,51 +1,59 @@
 ---
+# Initialize and unseal the first Vault pod through the Vault HTTP API, reached by the Kubernetes API pod proxy
+# (pods/proxy: GET = get, POST = create). The automation account has no pods/exec on services; the pod proxy reaches
+# the pod before it is Ready (the Services only route to unsealed pods), and no unseal key is put on a command line.
+- name: Set the Vault pod proxy URL
+  ansible.builtin.set_fact:
+    _vp_proxy: >-
+      {{ services_api_host | trim | regex_replace('/$', '') }}/api/v1/namespaces/{{ vault_cr_namespace
+      }}/pods/{{ vault_instance_name }}-0:8200/proxy
+
 - name: Wait for Vault container to start listening
-  kubernetes.core.k8s_exec:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    namespace: "{{ vault_cr_namespace }}"
-    pod: "{{ vault_instance_name }}-0"
-    container: vault
-    command: >-
-      sh -c 'export VAULT_ADDR=http://127.0.0.1:8200; vault status -format=json 2>/dev/null && exit 0 || exit 0'
+  ansible.builtin.uri:
+    url: "{{ _vp_proxy }}/v1/sys/seal-status"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    return_content: true
+    status_code: [200, 404, 500, 502, 503]
   register: vault_listen_check
   retries: 30
   delay: 5
+  # a refused call (401/403) ends the wait at once instead of after 30 attempts
   until: >-
-    vault_listen_check.rc is defined and
-    vault_listen_check.stdout is defined and
-    vault_listen_check.stdout | length > 0
-
-- name: Parse Vault status
-  ansible.builtin.set_fact:
-    vault_status: "{{ vault_listen_check.stdout | from_json }}"
+    (vault_listen_check.status | default(0) == 200 and vault_listen_check.json is defined)
+    or vault_listen_check.status | default(0) in [401, 403]
 
 - name: Set init and seal facts
   ansible.builtin.set_fact:
-    vault_is_initialized: "{{ vault_status.initialized | default(false) | bool }}"
-    vault_is_sealed: "{{ vault_status.sealed | default(true) | bool }}"
+    vault_is_initialized: "{{ vault_listen_check.json.initialized | default(false) | bool }}"
+    vault_is_sealed: "{{ vault_listen_check.json.sealed | default(true) | bool }}"
 
 - name: Initialize Vault when not initialized
   when: not vault_is_initialized
   block:
-    - name: Run vault operator init
-      kubernetes.core.k8s_exec:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        namespace: "{{ vault_cr_namespace }}"
-        pod: "{{ vault_instance_name }}-0"
-        container: vault
-        command: >-
-          sh -c 'export VAULT_ADDR=http://127.0.0.1:8200;
-          vault operator init -format=json -key-shares=1 -key-threshold=1'
-      register: vault_init_exec
+    - name: Run the Vault init
+      ansible.builtin.uri:
+        url: "{{ _vp_proxy }}/v1/sys/init"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        body_format: json
+        body:
+          secret_shares: 1
+          secret_threshold: 1
+        return_content: true
+        status_code: [200]
+      register: vault_init_call
       no_log: true
 
     - name: Parse init result
       ansible.builtin.set_fact:
-        vault_init_result_json: "{{ vault_init_exec.stdout | from_json }}"
+        vault_init_result_json:
+          root_token: "{{ vault_init_call.json.root_token }}"
+          unseal_keys_b64: "{{ vault_init_call.json.keys_base64 }}"
       no_log: true
 
     - name: Save root token and unseal keys to Secret
@@ -70,16 +78,17 @@
       no_log: true
 
     - name: Unseal Vault
-      kubernetes.core.k8s_exec:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        namespace: "{{ vault_cr_namespace }}"
-        pod: "{{ vault_instance_name }}-0"
-        container: vault
-        command: >-
-          sh -c 'export VAULT_ADDR=http://127.0.0.1:8200;
-          vault operator unseal {{ vault_init_result_json.unseal_keys_b64[0] }}'
+      ansible.builtin.uri:
+        url: "{{ _vp_proxy }}/v1/sys/unseal"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        body_format: json
+        body:
+          key: "{{ vault_init_result_json.unseal_keys_b64[0] }}"
+        return_content: true
+        status_code: [200]
       no_log: true
 
 - name: Read existing init secret
@@ -92,6 +101,7 @@
     name: "{{ vault_instance_name }}-init"
     namespace: "{{ vault_cr_namespace }}"
   register: existing_init_secret
+  no_log: true
 
 - name: Unseal if sealed (existing init)
   when:
@@ -99,29 +109,29 @@
     - existing_init_secret.resources | length > 0
   block:
     - name: Re-check seal status
-      kubernetes.core.k8s_exec:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        namespace: "{{ vault_cr_namespace }}"
-        pod: "{{ vault_instance_name }}-0"
-        container: vault
-        command: >-
-          sh -c 'export VAULT_ADDR=http://127.0.0.1:8200; vault status -format=json 2>/dev/null || true'
+      ansible.builtin.uri:
+        url: "{{ _vp_proxy }}/v1/sys/seal-status"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        return_content: true
+        status_code: [200]
       register: recheck_status
 
     - name: Unseal with stored key
-      when: (recheck_status.stdout | from_json).sealed | default(false) | bool
-      kubernetes.core.k8s_exec:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        namespace: "{{ vault_cr_namespace }}"
-        pod: "{{ vault_instance_name }}-0"
-        container: vault
-        command: >-
-          sh -c 'export VAULT_ADDR=http://127.0.0.1:8200;
-          vault operator unseal {{ existing_init_secret.resources[0].data.unseal_key_0 | b64decode }}'
+      when: recheck_status.json.sealed | default(false) | bool
+      ansible.builtin.uri:
+        url: "{{ _vp_proxy }}/v1/sys/unseal"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        body_format: json
+        body:
+          key: "{{ existing_init_secret.resources[0].data.unseal_key_0 | b64decode }}"
+        return_content: true
+        status_code: [200]
       no_log: true
 
 - name: Fail if Vault initialized but init secret missing

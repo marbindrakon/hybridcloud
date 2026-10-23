@@ -1,7 +1,10 @@
 ---
-- name: "Look up group {{ group_name }} in {{ test_user.realm }}"
+# Add the user to group_name. A name starting with "/" is a group path (/<tenant>/<access group>): the parent and
+# the child are created when missing (the access group job adopts an existing group). Any other name is a top-level
+# group looked up by exact name.
+- name: "Look up the group by name {{ group_name }}"
   ansible.builtin.uri:
-    url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/groups?search={{ group_name }}&exact=true"
+    url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/groups?search={{ group_name | urlencode }}&exact=true"
     method: GET
     headers:
       Authorization: "Bearer {{ _kc_token }}"
@@ -10,6 +13,85 @@
   register: group_lookup
   retries: 3
   delay: 3
+  when: not group_name.startswith('/')
+
+- name: "Group path {{ group_name }}"
+  when: group_name.startswith('/')
+  vars:
+    _parts: "{{ group_name.strip('/').split('/') }}"
+  block:
+    - name: "Look up the group by path {{ group_name }}"
+      ansible.builtin.uri:
+        url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/group-by-path/{{ _parts | map('urlencode') | join('/') }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _kc_token }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: _path_lookup
+
+    - name: "Create the missing group {{ group_name }}"
+      when: _path_lookup.status == 404
+      block:
+        - name: "Look up the parent /{{ _parts[0] }}"
+          ansible.builtin.uri:
+            url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/group-by-path/{{ _parts[0] | urlencode }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ _kc_token }}"
+            validate_certs: false
+            status_code: [200, 404]
+          register: _parent_lookup
+
+        - name: "Create the parent /{{ _parts[0] }}"
+          ansible.builtin.uri:
+            url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/groups"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ _kc_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: {name: "{{ _parts[0] }}"}
+            validate_certs: false
+            status_code: [201, 409]
+          when: _parent_lookup.status == 404
+
+        - name: "Read the parent /{{ _parts[0] }}"
+          ansible.builtin.uri:
+            url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/group-by-path/{{ _parts[0] | urlencode }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ _kc_token }}"
+            validate_certs: false
+            status_code: [200]
+          register: _parent
+
+        - name: "Create the child {{ group_name }}"
+          ansible.builtin.uri:
+            url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/groups/{{ _parent.json.id }}/children"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ _kc_token }}"
+              Content-Type: application/json
+            body_format: json
+            body: {name: "{{ _parts[1] }}"}
+            validate_certs: false
+            status_code: [201, 409]
+
+        - name: "Read the created group {{ group_name }}"
+          ansible.builtin.uri:
+            url: "{{ _kc_url }}/admin/realms/{{ test_user.realm }}/group-by-path/{{ _parts | map('urlencode') | join('/') }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ _kc_token }}"
+            validate_certs: false
+            status_code: [200]
+          register: _path_created
+
+    - name: "The group {{ group_name }}"
+      ansible.builtin.set_fact:
+        group_lookup:
+          json: "{{ [_path_created.json if _path_lookup.status == 404 else _path_lookup.json] }}"
 
 - name: "Add user to group {{ group_name }}"
   ansible.builtin.uri:

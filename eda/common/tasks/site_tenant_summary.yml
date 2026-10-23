@@ -1,0 +1,58 @@
+---
+# What a tenant sees of a site (CloudInfrastructure), in tenant words: the entries of TenantProfile status.sites.
+# Used by the Entity job (the sites a tenant may use) and by the site job (did the tenant view change?).
+# Never copies endpoints, accounts, project/VPC/gateway ids, peers, versions, Vault paths or fabric names.
+#
+# Input:  sts_sites  list of CloudInfrastructure objects (as read from the API)
+# Output: site_tenant_summaries  list of {name, displayName?, type, location?, region?, billable, state,
+#                                         capabilities, storageClasses?}, in the order of sts_sites
+#   state         Available when the last probe authenticated (status.capabilities.api), the site is not failed
+#                 and not being deleted (the rule of resolve_cloud_infrastructure.yml); else Unavailable
+#   capabilities  Virtualization (openshift site with OpenShift Virtualization), HybridNetworking (evpn), DNS (dns)
+#   location      spec.location, in words, for every site type when the platform set it (a tenant view shows it,
+#                 falling back to the region of an aws or gcp site)
+#   region        aws and gcp sites only (spec.<type>.region, else the probed region)
+#   storageClasses  OpenShift StorageClasses (status.site.storageClasses) or OpenStack public volume types
+#                   (status.site.volumeTypes)
+- name: Summarize the sites for tenants
+  ansible.builtin.set_fact:
+    site_tenant_summaries: >-
+      {%- set out = [] -%}
+      {%- for o in sts_sites | default([], true) -%}
+        {%- set spec = o.spec | default({}, true) -%}
+        {%- set st = o.status | default({}, true) -%}
+        {%- set caps = st.capabilities | default({}, true) -%}
+        {%- set site = st.site | default({}, true) -%}
+        {%- set type = spec.type | default('external', true) -%}
+        {%- set regional = type in ['aws', 'gcp'] -%}
+        {%- set usable = (caps.api | default(false) | bool) and (st.status | default('') != 'failed')
+                         and o.metadata.deletionTimestamp is not defined -%}
+        {%- set c = [] -%}
+        {%- if type == 'openshift' and (caps.virtualization | default(false) | bool) -%}{%- set _ = c.append('Virtualization') -%}{%- endif -%}
+        {%- if caps.evpn | default(false) | bool -%}{%- set _ = c.append('HybridNetworking') -%}{%- endif -%}
+        {%- if caps.dns | default(false) | bool -%}{%- set _ = c.append('DNS') -%}{%- endif -%}
+        {%- set sc = [] -%}
+        {%- for s in (site.storageClasses | default([], true)) if type == 'openshift' -%}
+          {%- if s is mapping and (s.name | default('', true)) -%}
+            {%- set _ = sc.append({'name': s.name | string, 'default': s.default | default(false) | bool}) -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- for s in (site.volumeTypes | default([], true)) if type == 'openstack' -%}
+          {%- if s is mapping and (s.name | default('', true)) -%}
+            {%- set _ = sc.append({'name': s.name | string, 'default': s.default | default(false) | bool}) -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- set e = {'name': o.metadata.name, 'type': type, 'billable': regional,
+                     'state': 'Available' if usable else 'Unavailable', 'capabilities': c} -%}
+        {%- if spec.displayName | default('', true) -%}{%- set _ = e.update({'displayName': spec.displayName | string}) -%}{%- endif -%}
+        {%- if regional -%}
+          {%- set r = (spec[type] | default({}, true)).region | default(site.region | default('', true), true) -%}
+          {%- if r -%}{%- set _ = e.update({'region': r | string}) -%}{%- endif -%}
+        {%- endif -%}
+        {%- if spec.location | default('', true) -%}
+          {%- set _ = e.update({'location': spec.location | string}) -%}
+        {%- endif -%}
+        {%- if sc -%}{%- set _ = e.update({'storageClasses': sc | sort(attribute='name')}) -%}{%- endif -%}
+        {%- set _ = out.append(e) -%}
+      {%- endfor -%}
+      {{ out }}

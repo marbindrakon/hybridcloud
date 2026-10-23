@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         platformopenshift_cr_name: "{{ event_payload.regarding.name }}"
         platformopenshift_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        platform_spec: "{{ event_payload.note | from_json }}"
+        platform_spec: "{{ shc_live_spec }}"
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"
@@ -120,6 +120,7 @@
         cr_namespace: "{{ platformopenshift_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: ProvisionFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"

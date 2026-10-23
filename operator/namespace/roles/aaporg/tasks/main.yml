@@ -7,11 +7,28 @@
         aaporg_observed_generation: "{{ _hybridsovereign_redhat_aaporg.status.observedGeneration | default(0) | int }}"
         aaporg_status: "{{ _hybridsovereign_redhat_aaporg.status.status | default('') }}"
         aaporg_ready: "{{ _hybridsovereign_redhat_aaporg.status.ready | default(false) | bool }}"
-        reconcile_now: >-
-          {{
-            (_hybridsovereign_redhat_aaporg.metadata.annotations | default({}))
-            .get('ansible.sdk.operatorframework.io/reconcileNow', '') | string == 'true'
-          }}
+
+    # The automation connection is optional on the object: the platform's default is used when it names none.
+    - name: Resolve the automation connection
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: resolve_integration_config
+      vars:
+        resolve_config_kind: AAPConfig
+        resolve_config_name: "{{ aaporg_spec.aapConfig | default('') }}"
+        resolve_config_recorded: "{{ (_hybridsovereign_redhat_aaporg.status | default({}, true)).config | default('', true) }}"
+        resolve_config_namespace: sovereign-cloud-plugins
+
+    - name: Use the resolved automation connection
+      ansible.builtin.set_fact:
+        aaporg_spec: "{{ aaporg_spec | combine({'aapConfig': resolved_config_name}) }}"
+
+    - name: Read the Retry-now request
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: reconcile_request
+      vars:
+        reconcile_request_cr: "{{ _hybridsovereign_redhat_aaporg }}"
 
     - name: Read entity Namespace
       kubernetes.core.k8s_info:
@@ -49,19 +66,6 @@
         msg: "AAPConfig {{ aaporg_spec.aapConfig }} is not ready"
       when: not (_aap_config.resources[0].status.ready | default(false))
 
-    - name: Clear reconcileNow annotation when forced reconcile
-      kubernetes.core.k8s:
-        state: patched
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: AAPOrg
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-        definition:
-          metadata:
-            annotations:
-              ansible.sdk.operatorframework.io/reconcileNow: null
-      when: reconcile_now | bool
-
     - name: Set event action and reason
       ansible.builtin.set_fact:
         aaporg_event_action: "{{ 'Reconcile' if reconcile_now | bool else 'Create' }}"
@@ -91,6 +95,19 @@
       ansible.builtin.set_fact:
         aaporg_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # The acknowledgement carries the phase (Creating for a new AAPOrg, Updating for a change), so no status
+    # write is without a phase (_common/tasks/ack_phase.yml).
+    - name: Decide the phase of the acknowledgement
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: ack_phase
+      vars:
+        ack_phase_cr: "{{ _hybridsovereign_redhat_aaporg }}"
+      when: not (reconcile_keeps_ready | default(false) | bool)
+
+    # A create or a spec change: Ready=False until the job reports. A re-run of a Ready object (Retry now,
+    # a wake from another job, a periodic re-check) keeps ready/conditions as they are until the job
+    # reports, and only Reconciling says that a run is queued (reconcile_keeps_ready, reconcile_request.yml).
     - name: Mark AAPOrg as reconciling
       operator_sdk.util.k8s_status:
         api_version: hybridsovereign.redhat/v1alpha1
@@ -100,6 +117,9 @@
         status:
           status: reconciling
           ready: false
+          phase: "{{ ack_phase.phase }}"
+          phaseSince: "{{ ack_phase.phaseSince }}"
+          summary: "{{ ack_phase.summary }}"
           lastReconciledAt: "{{ aaporg_status_transition_time }}"
           conditions:
             - type: Ready
@@ -107,6 +127,22 @@
               lastTransitionTime: "{{ aaporg_status_transition_time }}"
               reason: AwaitingEDA
               message: Awaiting EDA to complete provisioning
+      when: not (reconcile_keeps_ready | default(false) | bool)
+
+    - name: Mark AAPOrg as queued for a re-run
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: AAPOrg
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          conditions:
+            - type: Reconciling
+              status: "True"
+              lastTransitionTime: "{{ aaporg_status_transition_time }}"
+              reason: Queued
+              message: A re-run is queued.
+      when: reconcile_keeps_ready | default(false) | bool
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:
@@ -117,6 +153,8 @@
         operator_event_action: "{{ aaporg_event_action }}"
         operator_event_note: "{{ aaporg_spec | to_json }}"
         operator_reporting_controller: plugin-aap-operator
+        operator_event_phase_recorded: >-
+          {{ '' if (reconcile_keeps_ready | default(false) | bool) else (ack_phase | default({})).phase | default('') }}
         operator_event_regarding:
           apiVersion: hybridsovereign.redhat/v1alpha1
           kind: AAPOrg

@@ -16,7 +16,12 @@
     "dev:admin": "npm run dev -w @hybridsovereign/admin-dashboard",
     "dev:tenant": "npm run dev -w @hybridsovereign/tenant-dashboard",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck:baseline": "bash scripts/typecheck-baseline.sh --check",
+    "test:shell": "bash scripts/test-shell.sh",
+    "gen:console": "node scripts/gen-console-extensions.mjs",
+    "check:console": "node scripts/gen-console-extensions.mjs --check",
+    "gen:role-hints": "python3 -I scripts/gen-role-hints.py"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,0 +1,24 @@
+---
+# Resource-scoped access levels and the tenant baseline (one source for common/tasks/scope_role.yml and
+# rulebooks/roles/entity_provision/tasks/namespace_roles.yml).
+#
+# A level is the verb set a scope Role grants on the named objects (resourceNames). create is never resource-scoped.
+# list and watch with resourceNames answer only requests that select one name (fieldSelector metadata.name=<name>);
+# an unfiltered list stays forbidden, so a holder finds its objects by name (SelfSubjectRulesReview in the UI).
+scope_levels:
+  view: [get, list, watch]
+  edit: [get, list, watch, update, patch]
+  admin: [get, list, watch, update, patch, delete]
+
+# Every tenant Role (the Entity's named roles and every scope Role) carries these rules, so any member of a tenant
+# access group sees the tenant namespace (oc projects, the console project list) and the tenant profile.
+tenant_baseline_rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get]
+  - apiGroups: [project.openshift.io]
+    resources: [projects]
+    verbs: [get]
+  - apiGroups: [hybridsovereign.redhat]
+    resources: [tenantprofiles]
+    verbs: [get, list, watch]

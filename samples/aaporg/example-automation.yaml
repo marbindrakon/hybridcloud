@@ -1,0 +1,12 @@
+# An AAP organization (AAPOrg), created through the platform's automation connection.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: AAPOrg
+metadata:
+  name: example-automation
+  namespace: entity-example-corp
+spec:
+  aapAdminRbac:
+    - example-admins
+  aapJobExecutorRbac:
+    - example-developers

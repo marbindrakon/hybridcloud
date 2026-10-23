@@ -2,8 +2,8 @@ apiVersion: v2
 name: sovereign-admin-plugin
 description: Sovereign Admin - OpenShift Console Plugin for entity management
 type: application
-version: 0.1.28
-appVersion: "1.2.17"
+version: 0.1.32
+appVersion: "1.4.3"
 keywords:
   - openshift
   - console-plugin

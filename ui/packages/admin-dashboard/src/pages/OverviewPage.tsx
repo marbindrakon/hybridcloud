@@ -33,42 +33,17 @@ import {
   K8sResource,
   HybridSovereignKind,
   useTranslation,
+  kindTerm,
+  objectPath,
+  pathFor,
+  useBreadcrumbs,
+  useDocumentTitle,
+  UnavailableState,
+  phaseOf,
 } from '@hybridsovereign/shared';
-import { adminDetailHref } from './ResourceListPage';
-
-const KIND_LIST_PATH: Partial<Record<string, string>> = {
-  Entity: '/entities',
-  Team: '/teams',
-  Project: '/projects',
-  Assignment: '/assignments',
-  PlatformOpenshift: '/platforms',
-  CloudOSO: '/clouds/cloudoso',
-  CloudAWS: '/clouds/cloudaws',
-  CloudGCP: '/clouds/cloudgcp',
-  CloudVirt: '/clouds/cloudvirt',
-  CloudInfrastructure: '/clouds/infrastructure',
-  Persona: '/personas',
-  Rbac: '/operators/rbacs',
-  RbacConfig: '/operators/rbacconfigs',
-  AAPOrg: '/services/aaporgs',
-  AAPConfig: '/services/aapconfigs',
-  QuayOrg: '/services/quayorgs',
-  QuayConfig: '/services/quayconfigs',
-  Vault: '/services/vaults',
-  VaultKV: '/services/vaultkvs',
-  HybridFabric: '/networking/fabrics',
-  CloudGateway: '/networking/gateways',
-  TransportLink: '/networking/transport',
-  HybridNetwork: '/networking/networks',
-  NetworkPlacement: '/networking/placements',
-  UIHealthChecker: '/networking/uihealth',
-};
 
 function overviewItemHref(item: K8sResource): string | null {
-  const kind = (item.kind || '') as HybridSovereignKind;
-  const listPath = KIND_LIST_PATH[kind];
-  if (!listPath) return null;
-  return adminDetailHref(listPath, kind, item);
+  return objectPath('admin-dashboard', item.kind || '', item.metadata.namespace, item.metadata.name) ?? null;
 }
 
 function bucket(items: K8sResource[]) {
@@ -76,7 +51,7 @@ function bucket(items: K8sResource[]) {
   let failed = 0;
   let pending = 0;
   for (const i of items) {
-    const h = normalizeHealth(i.status?.ready, i.status?.status);
+    const h = normalizeHealth(i);
     if (h === 'ready') ready += 1;
     else if (h === 'failed') failed += 1;
     else pending += 1;
@@ -86,7 +61,12 @@ function bucket(items: K8sResource[]) {
 
 export function OverviewPage(): React.ReactElement {
   const { t } = useTranslation();
-  const { items, loading, error, refresh } = useOverviewCRs();
+  const { items, loading, error, refresh, forbiddenKinds } = useOverviewCRs();
+  const crumbs = useBreadcrumbs('platform-overview');
+  useDocumentTitle('platform-overview');
+  const H = 'admin-dashboard' as const;
+  const ALL = { kind: 'all' as const };
+  const GLOBAL = { kind: 'global' as const };
 
   const byKind = useMemo(() => {
     const map = new Map<string, K8sResource[]>();
@@ -104,7 +84,7 @@ export function OverviewPage(): React.ReactElement {
   const failedItems = useMemo(
     () =>
       items
-        .filter((i) => normalizeHealth(i.status?.ready, i.status?.status) === 'failed')
+        .filter((i) => normalizeHealth(i) === 'failed')
         .slice(0, 10),
     [items],
   );
@@ -113,7 +93,7 @@ export function OverviewPage(): React.ReactElement {
     <>
       <PageHeader
         title={t('pages.overviewTitle')}
-        showLanguageToggle={false}
+        breadcrumbs={crumbs}
         actions={
           <Button variant="secondary" icon={<SyncIcon />} onClick={refresh}>
             {t('common.refresh')}
@@ -121,11 +101,7 @@ export function OverviewPage(): React.ReactElement {
         }
       />
 
-      {error && (
-        <Alert variant="warning" isInline title={t('pages.overviewUnable')} className="sc-mb">
-          {error.message}
-        </Alert>
-      )}
+      {error && <UnavailableState error={error} onRetry={refresh} />}
 
       {loading && items.length === 0 ? (
         <Spinner />
@@ -150,7 +126,8 @@ export function OverviewPage(): React.ReactElement {
                 count={(byKind.get('Entity') ?? []).length}
                 hint={`${bucket(byKind.get('Entity') ?? []).ready} ready`}
                 kind="Entity"
-                href="/entities"
+                href={pathFor(H, 'tenants', GLOBAL)}
+                locked={forbiddenKinds.includes('Entity')}
                 status="success"
               />
               <InventoryCard
@@ -158,14 +135,16 @@ export function OverviewPage(): React.ReactElement {
                 count={(byKind.get('Team') ?? []).length}
                 hint={`${bucket(byKind.get('Team') ?? []).ready} ready`}
                 kind="Team"
-                href="/teams"
+                href={pathFor(H, 'teams', ALL)}
+                locked={forbiddenKinds.includes('Team')}
               />
               <InventoryCard
                 title={t('nav.cloudInfrastructure')}
                 count={(byKind.get('CloudInfrastructure') ?? []).length}
                 hint={`${bucket(byKind.get('CloudInfrastructure') ?? []).ready} ready`}
                 kind="CloudInfrastructure"
-                href="/clouds/infrastructure"
+                href={pathFor(H, 'sites', GLOBAL)}
+                locked={forbiddenKinds.includes('CloudInfrastructure')}
                 status={bucket(byKind.get('CloudInfrastructure') ?? []).failed ? 'danger' : 'default'}
               />
               <InventoryCard
@@ -173,7 +152,8 @@ export function OverviewPage(): React.ReactElement {
                 count={platforms.length}
                 hint={`${bucket(platforms).ready} ready`}
                 kind="PlatformOpenshift"
-                href="/platforms"
+                href={pathFor(H, 'clusters', ALL)}
+                locked={forbiddenKinds.includes('PlatformOpenshift')}
                 status={bucket(platforms).failed ? 'danger' : 'default'}
               />
               <InventoryCard
@@ -181,7 +161,8 @@ export function OverviewPage(): React.ReactElement {
                 count={(byKind.get('Assignment') ?? []).length}
                 hint={`${bucket(byKind.get('Assignment') ?? []).ready} ready`}
                 kind="Assignment"
-                href="/assignments"
+                href={pathFor(H, 'assignments', ALL)}
+                locked={forbiddenKinds.includes('Assignment')}
                 status={bucket(byKind.get('Assignment') ?? []).failed ? 'danger' : 'default'}
               />
             </div>
@@ -194,7 +175,7 @@ export function OverviewPage(): React.ReactElement {
               </Title>
               <div className="sc-cluster-grid sc-mb">
                 {platforms.slice(0, 6).map((p) => {
-                  const healthy = normalizeHealth(p.status?.ready, p.status?.status) === 'ready';
+                  const healthy = normalizeHealth(p) === 'ready';
                   return (
                     <Card key={p.metadata.name} className="sc-cluster-card" isCompact>
                       <CardHeader>
@@ -215,7 +196,7 @@ export function OverviewPage(): React.ReactElement {
                           </FlexItem>
                           <FlexItem align={{ default: 'alignEnd' }}>
                             <Label color={healthy ? 'green' : 'red'} icon={healthy ? <CheckCircleIcon /> : undefined}>
-                              {healthy ? 'Healthy' : 'Degraded'}
+                              {t(`phase.${phaseOf(p)}`)}
                             </Label>
                           </FlexItem>
                         </Flex>
@@ -223,12 +204,12 @@ export function OverviewPage(): React.ReactElement {
                       <CardBody>
                         <dl className="sc-meta-list">
                           <div>
-                            <dt>Namespace</dt>
+                            <dt>{t('common.namespace')}</dt>
                             <dd>{p.metadata.namespace ?? '—'}</dd>
                           </div>
                           <div>
-                            <dt>Status</dt>
-                            <dd>{p.status?.status ?? (healthy ? 'ready' : 'unknown')}</dd>
+                            <dt>{t('common.status')}</dt>
+                            <dd>{t(`phase.${phaseOf(p)}`)}</dd>
                           </div>
                         </dl>
                       </CardBody>
@@ -253,7 +234,7 @@ export function OverviewPage(): React.ReactElement {
                     </CardTitle>
                   </FlexItem>
                   <FlexItem align={{ default: 'alignEnd' }}>
-                    <Link to="/operators">View all</Link>
+                    <Link to={pathFor(H, 'access-groups', ALL)}>View all</Link>
                   </FlexItem>
                 </Flex>
               </CardHeader>
@@ -273,7 +254,7 @@ export function OverviewPage(): React.ReactElement {
                         const href = overviewItemHref(item);
                         return (
                           <Tr key={`${item.kind}/${item.metadata.namespace}/${item.metadata.name}`}>
-                            <Td dataLabel="Kind">{item.kind}</Td>
+                            <Td dataLabel={t('common.resources')}>{kindTerm(t, item.kind)}</Td>
                             <Td dataLabel={t('common.name')}>
                               {href ? (
                                 <Link className="sc-resource-link" to={href}>
@@ -286,11 +267,7 @@ export function OverviewPage(): React.ReactElement {
                             </Td>
                             <Td dataLabel={t('common.namespace')}>{item.metadata.namespace ?? '—'}</Td>
                             <Td dataLabel="Message">
-                              <StatusBadge
-                                status={item.status?.status}
-                                ready={item.status?.ready}
-                                message={item.status?.message}
-                              />
+                              <StatusBadge item={item} />
                             </Td>
                           </Tr>
                         );

@@ -4,10 +4,37 @@
       ansible.builtin.set_fact:
         aaporg_cr_name: "{{ event_payload.regarding.name }}"
         aaporg_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        aaporg_spec: "{{ event_payload.note | from_json }}"
+        aaporg_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    # The automation connection is optional on the object: the platform's default is used when it names none.
+    - name: Resolve the automation connection
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_integration_config.yml"
+      vars:
+        resolve_config_kind: AAPConfig
+        resolve_config_name: "{{ aaporg_spec.aapConfig | default('') }}"
+        resolve_config_recorded: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).config | default('', true) }}"
+        resolve_config_namespace: "{{ plugin_aap_config_namespace }}"
+        resolve_config_required: true
+
+    - name: Use the resolved automation connection
+      ansible.builtin.set_fact:
+        aaporg_spec: "{{ aaporg_spec | combine({'aapConfig': resolved_config_name}) }}"
+
+    # The connection is taken once: status.config keeps the object on it on every later run.
+    - name: Record the automation connection this object uses
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: aaporgs
+        cr_name: "{{ aaporg_cr_name }}"
+        cr_namespace: "{{ aaporg_cr_namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          config: "{{ resolved_config_name }}"
+      when: resolved_config_name != (((shc_live_cr | default({}, true)).status | default({}, true)).config | default('', true))
 
     - name: Load AAP admin credentials from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_aap_admin_credentials.yml"
@@ -81,6 +108,14 @@
       ansible.builtin.set_fact:
         aap_gateway_internal_url: "https://{{ aap_gw_route.resources[0].spec.host }}"
       when: aap_gw_route.resources | length > 0
+
+    # the web address people use: the gateway Route, else the connection's published URL, else the job setting
+    - name: Name the automation platform's web address
+      ansible.builtin.set_fact:
+        aaporg_gateway_url: >-
+          {{ (('https://' ~ aap_gw_route.resources[0].spec.host) if aap_gw_route.resources | length > 0
+              else (_aap_config.resources[0].status.aapControllerUrl | default('', true)
+                    or aap_gateway_url | default('', true))) | regex_replace('/$', '') }}
 
     - name: Read entity Namespace
       kubernetes.core.k8s_info:
@@ -250,8 +285,55 @@
       ansible.builtin.set_fact:
         aap_auth_id: "{{ _aap_config.resources[0].status.authMethodId | default('') }}"
 
+    # the team maps match on the authenticator's groups claim; any other claim name grants nobody anything
+    - name: Read the sign-in authenticator
+      ansible.builtin.uri:
+        url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticators/{{ aap_auth_id }}/"
+        method: GET
+        user: "{{ aap_username }}"
+        password: "{{ aap_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 404]
+      register: _aaporg_authenticator
+      when: aap_auth_id | length > 0
+
+    - name: Load the groups claim the sign-in clients send
+      ansible.builtin.include_vars:
+        file: "{{ role_path }}/../../../common/vars/keycloak_group_mapper.yml"
+
+    - name: Check the authenticator's groups claim
+      ansible.builtin.set_fact:
+        aaporg_groups_claim: >-
+          {{ ((_aaporg_authenticator.json | default({}, true)).configuration | default({}, true)).GROUPS_CLAIM | default('', true) }}
+        aaporg_groups_claim_wanted: "{{ keycloak_group_mapper.config['claim.name'] }}"
+
     - name: Configure teams, OIDC mappings, and role grants
       ansible.builtin.include_tasks: teams_and_roles.yml
+
+    - name: Granted access groups that exist
+      ansible.builtin.set_fact:
+        aaporg_granted_rbacs: >-
+          {{ (_admin_rbac_crs.results + _exec_rbac_crs.results + _viewer_rbac_crs.results)
+             | selectattr('resources', 'defined') | map(attribute='resources') | flatten
+             | selectattr('status.group', 'defined') | unique(attribute='metadata.name') | list }}
+
+    # Ready only with a mapped access group and the groups claim verified for a member (or no member yet)
+    - name: Check sign-in for the granted access groups
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/tool_org_signin_status.yml"
+      vars:
+        tos_kind: AAPOrg
+        tos_fields: [spec.aapAdminRbac, spec.aapJobExecutorRbac, spec.aapViewerRbac]
+        tos_rbacs: "{{ aaporg_granted_rbacs }}"
+        tos_mapping_failed: >-
+          {{ (aaporg_mapping_failed | default(false) | bool) or aap_auth_id | length == 0 or gw_org_id | int == 0
+             or aaporg_groups_claim != aaporg_groups_claim_wanted }}
+        tos_mapping_message: >-
+          {{ ('The automation platform reads groups from the sign-in claim "' ~ aaporg_groups_claim ~ '", but the sign-in client sends "'
+              ~ aaporg_groups_claim_wanted ~ '", so no member joins a team. A platform administrator reconciles the AAPConfig '
+              ~ aaporg_spec.aapConfig ~ '; then reconcile this AAPOrg.')
+             if (aap_auth_id | length > 0 and aaporg_groups_claim != aaporg_groups_claim_wanted) else '' }}
+        tos_client: "{{ _aap_config.resources[0].status.keycloakClientId | default('') }}"
 
     - name: Build team mapping summary string
       ansible.builtin.set_fact:
@@ -271,12 +353,14 @@
         cr_status_body:
           status: ready
           ready: true
+          config: "{{ resolved_config_name }}"
           observedGeneration: "{{ aaporg_generation }}"
           lastReconciledAt: "{{ aaporg_status_transition_time }}"
           orgId: "{{ aap_org_id | string }}"
           orgName: "{{ org_name }}"
-          aapControllerUrl: "{{ aap_controller_url }}"
-          loginUrl: "{{ aap_gateway_url }}"
+          aapControllerUrl: "{{ aaporg_gateway_url }}"
+          loginUrl: "{{ aaporg_gateway_url }}"
+          orgUrl: "{{ (aaporg_gateway_url ~ '/access/organizations/' ~ gw_org_id ~ '/details') if gw_org_id | int > 0 else '' }}"
           adminGroups: "{{ admin_groups }}"
           executorGroups: "{{ executor_groups }}"
           viewerGroups: "{{ viewer_groups }}"
@@ -284,12 +368,10 @@
           teamMappings: "{{ team_mappings_str }}"
           entity: "{{ entity_name }}"
           message: "Organization {{ org_name }} created with OIDC group mappings"
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ aaporg_status_transition_time }}"
-              reason: EDASucceeded
-              message: AAPOrg {{ aaporg_cr_name }} provisioned by EDA
+          conditions: >-
+            {{ [{'type': 'Ready', 'status': 'True', 'lastTransitionTime': aaporg_status_transition_time,
+                 'reason': tool_org_ready_reason, 'message': 'AAPOrg ' ~ aaporg_cr_name ~ ' provisioned by EDA'}]
+               + ([tool_org_signin_condition] if tool_org_signin_condition | default({}) | length > 0 else []) }}
 
   rescue:
     - name: Mark AAPOrg as failed on services cluster
@@ -301,15 +383,15 @@
         cr_namespace: "{{ aaporg_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: "{{ tool_org_failure_reason | default('EDAFailed') }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
-          conditions:
-            - type: Ready
-              status: "False"
-              lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
-              message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          conditions: >-
+            {{ [{'type': 'Ready', 'status': 'False', 'lastTransitionTime': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z'),
+                 'reason': tool_org_failure_reason | default('EDAFailed'),
+                 'message': ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed'))}]
+               + ([tool_org_signin_condition] if tool_org_signin_condition | default({}) | length > 0 else []) }}
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 

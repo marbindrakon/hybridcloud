@@ -64,6 +64,35 @@ applicationsEnabled: true
 # ─── Services cluster (managed by central ArgoCD) ────────────────────────────
 servicesCluster:
   server: "https://api.services.shc.signal9.gg:6443"
+  # OD12a: the platform automation account on services (templates/servicesCluster/automation-access.yaml): ACM
+  # ManagedServiceAccount shc-automation, its kubeconfig in central Vault shc-automation/services. The EDA jobs use
+  # it instead of the kubeadmin login (eda/common/tasks/resolve_services_cluster_connection.yml). Rules = what the
+  # jobs do on services (static scan of the EDA tasks + an audit-log sample of the kube:admin calls, 2026-10-21):
+  # no clusterrolebindings, bind/escalate only on admin/edit/view (the account holds every permission its
+  # namespaced Roles grant, so creating them needs no escalate).
+  automation:
+    enabled: true
+    serviceAccount: shc-automation
+    tokenValidity: 168h
+    vaultKey: shc-automation/services
+    rules:
+      - {apiGroups: [hybridsovereign.redhat], resources: ["*"], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [""], resources: [namespaces], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [""], resources: [secrets, configmaps, services, serviceaccounts], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: ["", events.k8s.io], resources: [events], verbs: [get, list, watch, create, patch]}
+      - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
+      # tenant Vault init/unseal over the API server's pod proxy (the Vault HTTP API); no pods/exec
+      - {apiGroups: [""], resources: [pods/proxy], verbs: [get, create]}
+      - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [route.openshift.io], resources: [routes], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [coordination.k8s.io], resources: [leases], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [rbac.authorization.k8s.io], resources: [roles, rolebindings], verbs: [get, list, watch, create, update, patch, delete]}
+      - {apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], verbs: [bind, escalate], resourceNames: [admin, edit, view]}
+      - {apiGroups: [config.openshift.io], resources: [consoles], verbs: [get, list]}
+      - {apiGroups: [project.openshift.io], resources: [projects], verbs: [get, list]}
+      - {apiGroups: [authorization.k8s.io], resources: [subjectaccessreviews, selfsubjectaccessreviews], verbs: [create]}
+      - {apiGroups: [authentication.k8s.io], resources: [selfsubjectreviews], verbs: [create]}
 
 # ─── OCI registry that stores platform Helm charts ───────────────────────────
 oci:
@@ -2546,7 +2575,7 @@ iaasClusterDefaults:
       letsencrypt:
         dnsZones: [shc.signal9.gg]
         rfc2136:
-          nameserver: "75.8.222.11:53"
+          nameserver: "dns-update.lab.signal9.gg:53"
           tsigKeyName: shc-acme.
         tsigSecret:
           vaultKey: dns/shc-acme-tsig
@@ -2644,13 +2673,19 @@ iaasClusterDefaults:
       - {apiGroups: [operator.openshift.io], resources: [networks], verbs: [get, list]}
       - {apiGroups: [frrk8s.metallb.io], resources: [bgpsessionstates], verbs: [get, list]}
       - {apiGroups: [storage.k8s.io], resources: [storageclasses], verbs: [get, list]}
+      # the way in for tenants: console URL and the sign-in button name (openshift_wayin.yml); read only
+      - {apiGroups: [config.openshift.io], resources: [consoles, oauths], verbs: [get]}
   # P7.3 (design/P7-PLAN.md §12.4 d, owner-approved RBAC 2026-10-13): the fabric jobs' write credential,
   # central Vault cloudinfra/<cluster>-fabric. Tenant VM namespaces get RoleBindings to `edit` only (bind is
   # limited to it); NADs/UDNs in those namespaces are denied by an admission policy on the cluster.
   fabricAccess:
     enabled: false
-    serviceAccount: shc-fabric
+    # OD12a: the platform automation account (was shc-fabric; same rules, same Vault key cloudinfra/<site>-fabric)
+    serviceAccount: shc-automation
     tokenValidity: 168h
+    # BF-09 step 1: the PushSecret no longer deletes the Vault key when it goes, so renaming the account (step 2)
+    # cannot remove cloudinfra/<site>-fabric between the old PushSecret's prune and the new one's push
+    pushDeletionPolicy: None
     apiServer: ""
     rules:
       - {apiGroups: [k8s.ovn.org], resources: [clusteruserdefinednetworks, routeadvertisements, vteps], verbs: [get, list, watch, create, update, patch, delete]}
@@ -3415,11 +3450,24 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.15"  # 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
+  chartVersion: "0.3.18"  # 0.3.18: LinkedNotReady reason and 30-minute job-finished windows per kind in shc-tenancy (GF2-F2); 0.3.17: shc-tenancy flags objects whose job ended without a status write, clears Stalled after a successful teardown; 0.3.16: shc-tenancy CronJob (redrive + ControllerAvailable/DeliveryStalled + stored phase; former eda-redrive), tenant-orphan-check in sync wave 10 and scoped to the account's cloud, restricted self-provisioning; 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
+  # BF-15: on services the ACM observability addon (endpoint-monitoring-operator) owns
+  # openshift-monitoring/cluster-monitoring-config data and rewrites it in its own normalized form, so Argo's copy
+  # never stays applied (permanent OutOfSync). Ignored, and with RespectIgnoreDifferences not re-applied, while the
+  # addon runs there: remove the entry when observability leaves services (then the chart owns it again).
+  extraIgnoreDifferences:
+    - kind: ConfigMap
+      name: cluster-monitoring-config
+      namespace: openshift-monitoring
+      jsonPointers: [/data]
   syncWaves:
     base: "0"
     certs: "2"
   values:
+    # only the platform group may create projects on services (tenants get their namespaces from the platform)
+    selfProvisioning:
+      restricted: true
+      groups: [sovereign-admin]
     cluster:
       name: services
       baseDomain: shc.signal9.gg
@@ -3429,7 +3477,7 @@ shcClusterBaseServices:
     letsencrypt:
       dnsZones: [shc.signal9.gg]
       rfc2136:
-        nameserver: "75.8.222.11:53"
+        nameserver: "dns-update.lab.signal9.gg:53"
         tsigKeyName: shc-acme.
       tsigSecret:
         vaultKey: dns/shc-acme-tsig
@@ -3470,14 +3518,19 @@ shcClusterBaseServices:
       issuerProbe:
         enabled: true
         issuers: [central, spire, services, iaas1, edge1]
-      # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md); the CRs live on services
-      edaRedrive:
+      # §11.1 dispatch re-drive (design/DELIVERY-HARDENING.md), now the shc-tenancy CronJob: redrive, the Entity
+      # conditions ControllerAvailable / DeliveryStalled and the stored status.phase (phase.write true since the
+      # legacy Running/Successful/Failure conditions were stripped); the CRs live on services
+      shcTenancy:
         enabled: true
         config:
-          # P7.3.2: + CloudInfrastructure/DNSConfig probes and the fabric kinds (their jobs are idempotent by design)
-          redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment,
-                         CloudInfrastructure, DNSConfig, HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt,
-                         ProviderEdge, AttachmentCircuit]
+          redrive:
+            # P7.3.2: + CloudInfrastructure/DNSConfig probes and the fabric kinds (their jobs are idempotent by design)
+            redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment,
+                           CloudInfrastructure, DNSConfig, HybridFabric, CloudGateway, HybridNetwork, NetworkPlacement, CloudVirt,
+                           ProviderEdge, AttachmentCircuit]
+          phase:
+            write: true
       # §11.6 phase D (design/TENANT-TEARDOWN.md §3.5): report-only orphan check of the tenant
       # Keystone domain and DNS zone against the CloudOSO/PlatformOpenshift CRs (owner: domain only)
       tenantOrphanCheck:
@@ -3486,7 +3539,10 @@ shcClusterBaseServices:
         accountVaultKey: oso/accounts/shc-tenant-admin
         config:
           domain: shc-tenants
-          ignoreProjects: [shc-tenant-dns]
+          # BF-15: the account is Atuin's; CloudOSOs on rhoso-bm are not compared with Atuin's projects
+          cloudInfrastructure: atuin
+          # hybrid-fabric: the fabric's platform project (CloudGateway placement networks), no CloudOSO by design
+          ignoreProjects: [shc-tenant-dns, hybrid-fabric]
           dnsZoneId: b19bb752-5aeb-4187-a303-12f9cb60378e
           dnsProjectId: 5074bdc4023c4fa09405a43ec7bbc6ea
 
@@ -3614,9 +3670,24 @@ vaultSecretStore:
 # Uses kubernetes-services auth mount on central vault (k8s auth, no root token)
 vaultSecretStoreServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.3.3-shc.2"  # shc: upstream 0.3.3 lost its templates; rebuilt with the public 0.3.0 templates
+  chartVersion: "0.3.3-shc.3"  # shc: 0.3.3 rebuilt with the public 0.3.0 templates; .3 adds spec.conditions
   syncWave: "0"  # shc: ESO + store before every ExternalSecret on services
   values:
+    # Only the platform namespaces on services may use the store (tenants create projects there; an
+    # ExternalSecret in a tenant project must not read central Vault). Add a namespace here when a platform
+    # chart starts using vault-backend in it.
+    conditions:
+      - namespaces:
+          - cert-manager
+          - openshift-storage
+          - services-quay
+          - services-rhbk
+          - services-vault
+          - shc-ops
+          - sovereign-cloud
+          - sovereign-cloud-helpers
+          - sovereign-cloud-jobs
+          - sovereign-cloud-plugins
     vault:
       server: "https://vault-central.apps.central.shc.signal9.gg"
       path: "central"
@@ -3773,6 +3844,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "26"
       env:
+        - name: KEYCLOAK_HARDEN
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "false"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v8"
         - name: KEYCLOAK_URL
           value: "http://rhbk-central-service.central-rhbk.svc:8080"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -3820,6 +3898,13 @@ sovereignJobs:
               remoteKey: keycloak-clients
               property: acs
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "false"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v8"
         - name: KEYCLOAK_URL
           value: "http://rhbk-central-service.central-rhbk.svc:8080"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -3831,7 +3916,7 @@ sovereignJobs:
         - name: VAULT_NAMESPACE
           value: "central-vault"
         - name: KEYCLOAK_CLIENTS
-          value: '[{"realm":"sovereign-central","client_id":"quay-central","name":"Quay Central","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"vault","name":"Vault","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"gitea","name":"Gitea","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"openshift-central","name":"OpenShift Central","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"]},{"realm":"sovereign-central","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"]}]'
+          value: '[{"realm":"sovereign-central","client_id":"quay-central","name":"Quay Central","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-central","client_id":"vault","name":"Vault","redirect_uris":["https://vault-central.apps.central.shc.signal9.gg/ui/vault/auth/oidc/oidc/callback","http://localhost:8250/oidc/callback"],"direct_access_grants":false,"protocol_mappers":[{"name":"groups","protocol":"openid-connect","protocolMapper":"oidc-group-membership-mapper","config":{"claim.name":"groups","full.path":"true","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-central","client_id":"gitea","name":"Gitea","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-central","client_id":"openshift-central","name":"OpenShift Central","redirect_uris":["https://oauth-openshift.apps.central.shc.signal9.gg/oauth2callback/sovereign-central"],"direct_access_grants":false},{"realm":"sovereign-central","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-central","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     keycloakRbac:
@@ -3848,6 +3933,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "27"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "false"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v8"
         - name: RUN_ID
           value: "2026-06-24-fix-oauth"
         - name: KEYCLOAK_CENTRAL_URL
@@ -3951,6 +4043,13 @@ sovereignJobs:
               remoteKey: rhbk-services-admin
               property: password
       env:
+        - name: KEYCLOAK_HARDEN
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "false"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v8"
         - name: KEYCLOAK_URL
           value: "https://rhbk-services.apps.services.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
@@ -3977,8 +4076,9 @@ sovereignJobs:
           value: "sovereign-tenants"
         - name: ADMIN_GROUP
           value: "sovereign-admin"
+        # acme-corp's access groups are /acme-corp/<rbac> (Rbac objects, demo seed); no flat acme-corp-* groups (F-31)
         - name: EXTRA_GROUPS
-          value: '[{"name":"acme-corp-platform-engineering-admins"},{"name":"acme-corp-platform-engineering-editors"},{"name":"acme-corp-platform-engineering-viewers"},{"name":"acme-corp-platform-ops-admins"},{"name":"acme-corp-platform-ops-editors"},{"name":"acme-corp-platform-ops-viewers"},{"name":"acme-corp-assignment-admins"},{"name":"acme-corp-developers"},{"name":"acme-corp-platform-viewers"},{"name":"acme-corp-devops"}]'
+          value: '[]'
     # shc (design/P7-PLAN.md §12.20): openshift-services' entity-groups mapper puts the user's roles of that client into
     # the groups claim; the Entity job gives each Rbac CR's Keycloak group the client role <entity>.<rbac> and binds that
     # group in the entity namespace (Keycloak group paths contain "/", which OpenShift group names can't).
@@ -3988,6 +4088,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "30"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "false"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v8"
         # shc: own Vault entry; central's job owns "keycloak-clients"
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-services"
@@ -4000,7 +4107,7 @@ sovereignJobs:
         - name: REALM_NAME
           value: "sovereign-tenants"
         - name: KEYCLOAK_CLIENTS
-          value: '[{"realm":"sovereign-tenants","client_id":"openshift-services","name":"OpenShift Services","redirect_uris":["*"],"protocol_mappers":[{"name":"entity-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-services","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"quay-services","name":"Quay Services","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"]},{"realm":"sovereign-tenants","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"]}]'
+          value: '[{"realm":"sovereign-tenants","client_id":"openshift-services","name":"OpenShift Services","redirect_uris":["https://oauth-openshift.apps.services.shc.signal9.gg/oauth2callback/sovereign-services"],"protocol_mappers":[{"name":"entity-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-services","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}],"direct_access_grants":false},{"realm":"sovereign-tenants","client_id":"quay-services","name":"Quay Services","redirect_uris":["https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg/oauth2/rhbk/callback","https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg/oauth2/rhbk/callback/attach","https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg/oauth2/rhbk/callback/cli"],"direct_access_grants":false,"root_url":"https://svc-sovereign-registry-quay-services-quay.apps.services.shc.signal9.gg","protocol_mappers":[{"name":"groups","protocol":"openid-connect","protocolMapper":"oidc-group-membership-mapper","config":{"claim.name":"groups","full.path":"true","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"aap","name":"Ansible Automation Platform","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true},{"realm":"sovereign-tenants","client_id":"acs","name":"Advanced Cluster Security","redirect_uris":["*"],"direct_access_grants":false,"allow_wildcard_redirect":true}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     # shc (P7.3.7, design/P7-PLAN.md §12.4 e / §12.15; owner 10-14: IdP changes allowed): tenant sign-in on the IaaS
@@ -4014,6 +4121,13 @@ sovereignJobs:
       activeDeadlineSeconds: 600
       syncWave: "30"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "false"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v8"
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-iaas"
         - name: KEYCLOAK_URL
@@ -4025,7 +4139,7 @@ sovereignJobs:
         - name: REALM_NAME
           value: "sovereign-tenants"
         - name: KEYCLOAK_CLIENTS
-          value: '[{"realm":"sovereign-tenants","client_id":"openshift-iaas1","name":"OpenShift iaas1","redirect_uris":["https://oauth-openshift.apps.iaas1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/iaas1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-iaas1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]},{"realm":"sovereign-tenants","client_id":"openshift-edge1","name":"OpenShift edge1","redirect_uris":["https://oauth-openshift.apps.edge1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/edge1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-edge1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}]}]'
+          value: '[{"realm":"sovereign-tenants","client_id":"openshift-iaas1","name":"OpenShift iaas1","redirect_uris":["https://oauth-openshift.apps.iaas1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/iaas1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-iaas1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}],"direct_access_grants":false},{"realm":"sovereign-tenants","client_id":"openshift-edge1","name":"OpenShift edge1","redirect_uris":["https://oauth-openshift.apps.edge1.shc.signal9.gg/oauth2callback/sovereign-tenants"],"vault_key":"clusters/edge1/tenant-oidc","protocol_mappers":[{"name":"site-groups","protocol":"openid-connect","protocolMapper":"oidc-usermodel-client-role-mapper","config":{"usermodel.clientRoleMapping.clientId":"openshift-edge1","claim.name":"groups","multivalued":"true","jsonType.label":"String","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}],"direct_access_grants":false}]'
         - name: SECRETS_NAMESPACE
           value: "sovereign-cloud-jobs"
     vaultServicesInit:
@@ -4048,6 +4162,13 @@ sovereignJobs:
       activeDeadlineSeconds: 1800
       syncWave: "29"
       env:
+        - name: KEYCLOAK_CONVERGE
+          value: "true"
+        # plan only first (R13 V7): print the changes, write nothing; V8 sets it to "false"
+        - name: KEYCLOAK_PLAN_ONLY
+          value: "false"
+        - name: SHC_SECURITY_RUN_ID
+          value: "ux-h1-v8"
         - name: VAULT_ADDR
           value: "http://vault-active.central-vault.svc:8200"
         - name: VAULT_SECRET_NAMESPACE
@@ -4056,6 +4177,10 @@ sovereignJobs:
           value: "vault-init-secrets"
         - name: VAULT_SERVICES_ADDR
           value: "https://vault-services.apps.services.shc.signal9.gg"
+        # the central Vault UI's external URL: its OIDC callback is added to the sovereign-admin role's allowed
+        # redirect URIs (without it no OIDC sign-in to central Vault is possible)
+        - name: VAULT_CENTRAL_URL
+          value: "https://vault-central.apps.central.shc.signal9.gg"
         # External HTTPS URL — Vault needs this to match the issuer in OIDC discovery doc.
         # central_ingress_ca_pem is fetched in pre_tasks and passed to the Vault OIDC config.
         - name: KEYCLOAK_CENTRAL_URL
@@ -4544,7 +4669,7 @@ sovereignJobs:
         - name: VAULT_ADDR
           value: "http://vault-active.central-vault.svc:8200"
         - name: RUN_ID
-          value: "2026-06-24-fix-keycloak-test-users"
+          value: "2026-10-21-ux-h1-acme-access-groups"
         - name: KEYCLOAK_CENTRAL_URL
           value: "https://rhbk-central.apps.central.shc.signal9.gg"
         - name: KEYCLOAK_SERVICES_URL
@@ -4595,13 +4720,14 @@ sovereignJobs:
     operatorSamples:
       enabled: true  # shc: P4 (services cluster) enabled
       playbook: operator-samples.yml
-      activeDeadlineSeconds: 900
+      # the acme-corp demo waits for its access groups to be ready (up to 10 minutes)
+      activeDeadlineSeconds: 1800
       syncWave: "45"
       env:
         - name: OCP_SERVICES_SERVER
           value: "https://api.services.shc.signal9.gg:6443"
         - name: RUN_ID
-          value: "3"
+          value: "4"
 
     # ─── Quay Central Config: init admin + store in Vault + configure OIDC ──────
     quayCentralConfig:
@@ -5092,7 +5218,7 @@ cloudAWSOperator:
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.9.18-shc.2"  # shc: vendored into charts/charts, ESO v1
+  chartVersion: "0.9.18-shc.7"  # shc.7: form labels and Conditions tab through the display vocabulary, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: delete preview with dependants and type-to-confirm, forbidden pages name role and contacts, display vocabulary; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
   syncWave: "40"
   destinationNamespace: sovereign-cloud
   values:
@@ -5100,7 +5226,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.1.9"
+      tag: "img-2.3.2"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5114,17 +5240,22 @@ sovereignDashboard:
         secretStoreKind: ClusterSecretStore
         vaultPath: "dashboard-oauth"
         refreshInterval: "1h"
+      # "Sign out" ends the Keycloak session too (realm sovereign-tenants, the sovereign-services IdP of this cluster)
+      logoutUrl: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
+      # openshiftSar: chart default (list hybridfabrics in sovereign-cloud = a platform role)
     route:
       enabled: true
     env:
       ENTITY_NAMESPACE: sovereign-cloud
       NODE_ENV: production
       OAUTH_SYNC_VERSION: "2"
+      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/ux-h1/docs
+      SHC_CONSOLE_URL: https://console-openshift-console.apps.services.shc.signal9.gg
 
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "1.1.13-shc.2"  # shc: vendored into charts/charts, ESO v1
+  chartVersion: "1.1.13-shc.7"  # shc.7: form labels, cluster assignment and placement pages and the Conditions tab in plain words, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: Attach dialog offers only attachable networks, Shared-with-you Home and nav for per-object users, delete preview, forbidden pages name role and contacts; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
   syncWave: "41"
   destinationNamespace: sovereign-cloud
   values:
@@ -5132,7 +5263,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.1.10"
+      tag: "img-5.3.2"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5146,23 +5277,27 @@ tenancyDashboard:
         secretStoreKind: ClusterSecretStore
         vaultPath: "tenancy-dashboard-oauth"
         refreshInterval: "1h"
+      # "Sign out" ends the Keycloak session too (realm sovereign-tenants, the sovereign-services IdP of this cluster)
+      logoutUrl: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
     route:
       enabled: true
     env:
       NODE_ENV: production
       OAUTH_SYNC_VERSION: "2"
+      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/ux-h1/docs
+      SHC_CONSOLE_URL: https://console-openshift-console.apps.services.shc.signal9.gg
 
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
 sovereignAdminPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.28"
+  chartVersion: "0.1.32"  # 0.1.32: form labels and Conditions tab through the display vocabulary; 0.1.31: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.30: display vocabulary and Status column on phase; 0.1.29: admin perspective on the navigation registry, real HTTP status mapping (forbidden / not found states), display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.3.8"
+      tag: "img-1.4.3"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5180,14 +5315,14 @@ sovereignAdminPlugin:
 # ─── Sovereign Tenant Console Plugin (services cluster) ──────────────────────
 sovereignTenantPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.23"
+  chartVersion: "0.1.27"  # 0.1.27: form labels, cluster assignment and placement pages in plain words; 0.1.26: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.25: Attach dialog filter, delete preview, forbidden state, Status column on phase; 0.1.24: tenant scope from identity (no default tenant), navigation registry, forms matching the API, status phase, Attach dialog, display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.4.8"
+      tag: "img-1.5.3"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5282,22 +5417,25 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.18"  # shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
+  chartVersion: "0.1.22-shc.25"  # shc.25: operator image defaults for the acknowledgement-phase fix; shc.24: Status column on Assignment, Entity and Rbac (P2DC-O1); shc.23: CloudInfrastructure spec.location description (PCR-F1); shc.22: edaJobs status enum accepts waiting (PGF-F1); shc.21: tenant namespace delete guard, Entity READY and TenantProfile REASON columns, reasons Deleted and WaitingForCluster, Kafka protocol version value; shc.20: a current team admin manages the Team access lists (OD28 revised); shc.19: TenantProfile CRD, Entity displayName/contacts/allowedSites, categories + alias short names, REASON/AGE columns, API-only descriptions, admission policies (P0/P3/P4 Warn, P12 + delete guard + access-field ladder Deny), GitOps marks; shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     pluginsNamespace: sovereign-cloud-plugins
+    # GitOps marks: hybridsovereign.redhat/gitops-source names this Argo application (Q16a)
+    gitopsSource:
+      app: hybridsovereign-primary-operator
     # shc: "img-" tags - the operator charts share these Quay repositories, and a chart push of
     # hybridsovereign-namespace-operator 0.1.10 replaced the 0.1.10 image (namespace operators then
     # failed "image not known"); chart versions are semver, so img-* can never collide.
     image:
       repository: quay.signal9.gg/shc/hybridsovereign-primary-operator
-      tag: "img-0.1.32"  # img-0.1.32: ProviderEdge watch (P9.1); img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.29: fabric delete guards (P7.3.3); img-0.1.30: a waiting delete is not marked failed; img-0.1.31: CloudVirt-owned namespaces (guards)
+      tag: "img-0.1.37"  # img-0.1.37: every acknowledgement write carries the phase on the nine remaining primary kinds (P3R-F1); img-0.1.36: Retry now resets status.retry without a module failure (P2AC-F4); img-0.1.35: Entity phase Creating at the first write and Deleting at the delete request, Stalled cleared after CloudAWS/CloudGCP teardowns, LinkedNotReady; img-0.1.34: phase Creating/Deleting at the first and the delete write, Stalled cleared after a successful teardown, Kafka protocol pin 2.6.0 with kafka-python pinned, entity-deleting annotation after the cascade; img-0.1.33: shc_status library (stored status.phase, no Ready flip on re-runs), per-kind reconcile caps, probes, canary namespace-operator image, TenantProfile written by the Entity job; img-0.1.32: ProviderEdge watch (P9.1); img-0.1.26: CloudInfrastructure watch (P7.1); img-0.1.27: DNSConfig watch (TENANT-DNS D1); img-0.1.28: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.29: fabric delete guards (P7.3.3); img-0.1.30: a waiting delete is not marked failed; img-0.1.31: CloudVirt-owned namespaces (guards)
     namespaceOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
-        tag: "img-0.1.21"  # img-0.1.21: CloudGCP watch + roles (P11.4); img-0.1.20: AttachmentCircuit watch, HybridNetwork delete waits for circuits (P9.1); img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
+        tag: "img-0.1.26"  # img-0.1.26: every acknowledgement write carries the phase on the twelve remaining namespace kinds incl. Rbac (P3R-F1); img-0.1.25: the acknowledgement write carries the phase (P2AC-F1), Retry now resets status.retry (P2AC-F4); img-0.1.24: shared operator library update (mark_phase, publish_operator_event), no behaviour change; img-0.1.23: phase Creating/Deleting, Stalled cleared after a successful teardown, placement wakes on network/environment Ready, Kafka protocol pin; img-0.1.22: shc_status library (stored phase, no Ready flip), per-kind reconcile caps, probes, reconcileNow with any value, optional connection references, tenantprofiles grant (canary-tested on globex-industries and acme-corp); img-0.1.21: CloudGCP watch + roles (P11.4); img-0.1.20: AttachmentCircuit watch, HybridNetwork delete waits for circuits (P9.1); img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
     amqKafka:
       enabled: true
       vaultPath: amq-producer
@@ -5313,6 +5451,7 @@ hybridsovereignPrimaryOperator:
         spec:
           type: openstack
           displayName: Atuin
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/atuin}
           openstack:
             region: ATUIN
@@ -5326,6 +5465,7 @@ hybridsovereignPrimaryOperator:
         spec:
           type: openstack
           displayName: RHOSO bare metal (FR6, EVPN)
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/rhoso-bm}
           openstack:
             region: regionOne
@@ -5339,22 +5479,32 @@ hybridsovereignPrimaryOperator:
         spec:
           type: openshift
           displayName: iaas1 (OpenShift Virtualization)
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/iaas1}
           openshift:
             clusterRef: iaas1
             storageClass: ocs-external-storagecluster-ceph-rbd
-            fabricCredentialsRef: {vaultPath: cloudinfra/iaas1-fabric}   # P7.3.2: write MSA shc-fabric
+            fabricCredentialsRef: {vaultPath: cloudinfra/iaas1-fabric}   # P7.3.2: write MSA (shc-automation)
           dns: {mode: platform}   # CloudVirt zones held by the platform (TENANT-DNS D3)
       edge1:
         spec:
           type: openshift
           displayName: edge1 (OpenShift Virtualization, compact)
+          location: On-premises
           credentialsRef: {vaultPath: cloudinfra/edge1}
           openshift:
             clusterRef: edge1
             storageClass: ocs-external-storagecluster-ceph-rbd
-            fabricCredentialsRef: {vaultPath: cloudinfra/edge1-fabric}   # P7.3.2: write MSA shc-fabric
+            fabricCredentialsRef: {vaultPath: cloudinfra/edge1-fabric}   # P7.3.2: write MSA (shc-automation)
           dns: {mode: platform}
+      # Billable (AWS us-east-2, owner account): brought into Git with its live spec verbatim (it had been applied
+      # by hand). No keys anywhere: the jobs reach AWS through web identity (AssumeRole) per CloudAWS.
+      aws-use2:
+        spec:
+          type: aws
+          displayName: AWS us-east-2
+          location: US East (Ohio)
+          aws: {region: us-east-2}
     # P7.3 (P7-PLAN §12.3, H2 = gateway as PE): the fabric and a gateway per EVPN site on the BGW blades bgw-1/2
     # (blades 5/8). The fabric is realized from P7.3.4 (ledger + root instance on both blades), the gateways from
     # P7.3.5 (one site at a time). SSH key and BGP password: central Vault fabric/bgw, fabric/bgp (seed-fabric-hosts).

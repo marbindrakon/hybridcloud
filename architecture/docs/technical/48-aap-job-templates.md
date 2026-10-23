@@ -219,5 +219,5 @@ Chart: `bootstrap/helm/charts/sovereign-job-rbac/` (current version `0.1.8`)
 ## Related Documentation
 
 - [006 EDA Architecture](006-eda-architecture.md) — full EDA flow and event contract
-- [47 Samples Testing Status](47-samples-testing-status.md) — current CR testing state
-- [Secrets Flow](18-secrets-flow.md) — Vault and ExternalSecret patterns
+- [47 Samples Testing Status](../archive/technical/47-samples-testing-status.md) — current CR testing state
+- [Vault and secret delivery](09-vault.md) — Vault and ExternalSecret patterns

@@ -4,7 +4,7 @@
       ansible.builtin.set_fact:
         cloudoso_cr_name: "{{ event_payload.regarding.name }}"
         cloudoso_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        oso_spec: "{{ event_payload.note | from_json }}"
+        oso_spec: "{{ shc_live_spec }}"
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"
@@ -70,6 +70,9 @@
           Namespace {{ cloudoso_cr_namespace }} is missing label
           hybridsovereign.redhat/entity. Cannot provision CloudOSO.
 
+    - name: Refuse a name another tenant already uses
+      ansible.builtin.include_tasks: name_unique.yml
+
     # shc (P7.1): the site (CloudInfrastructure) and its account and settings
     - name: Resolve the CloudOSO's site
       ansible.builtin.include_tasks: cloudref.yml
@@ -79,6 +82,9 @@
 
     - name: Log VRF spec passthrough for future use
       ansible.builtin.include_tasks: vrf_passthrough.yml
+
+    - name: How tenants reach the environment (status.endpoints)
+      ansible.builtin.include_tasks: endpoints.yml
 
     - name: Get reconciliation timestamp
       ansible.builtin.set_fact:
@@ -116,8 +122,9 @@
           apiVIP: "{{ oso_api_vip }}"
           ingressVIP: "{{ oso_ingress_vip }}"
           externalNetwork: "{{ oso_external_network }}"
-          # shc (§11.6 phase C): what provision created, for teardown
-          accountVaultPath: "{{ oso_record.accountVaultPath }}"
+          # what provision created, for teardown: ids only. Accounts and Vault paths are derived again where they
+          # are needed (eda/common/tasks/resolve_cloudoso_accounts.yml); null removes the keys older runs wrote.
+          accountVaultPath: null
           appCredentialId: "{{ oso_record.appCredentialId }}"
           apiFloatingIPId: "{{ oso_record.apiFloatingIPId }}"
           ingressFloatingIPId: "{{ oso_record.ingressFloatingIPId }}"
@@ -125,10 +132,11 @@
           dnsZoneId: "{{ oso_record.dnsZoneId }}"
           dnsZoneName: "{{ oso_record.dnsZoneName }}"
           dnsProjectId: "{{ oso_record.dnsProjectId }}"
-          route53VaultPath: "{{ oso_record.route53VaultPath }}"
-          vaultPaths: "{{ oso_record.vaultPaths }}"
+          route53VaultPath: null
+          vaultPaths: null
           # design/TENANT-DNS.md: the environment zone ({} without one)
           dns: "{{ oso_record.dns }}"
+          endpoints: "{{ oso_endpoints }}"
           conditions:
             - type: Ready
               status: "True"
@@ -137,6 +145,14 @@
               message: >-
                 OpenStack project {{ oso_project_name }} ({{ oso_project_id }})
                 provisioned by EDA in Keystone domain {{ oso_domain_name }}.
+
+    # a ready environment wakes the placements waiting for it (GA2-F4)
+    - name: Wake the placements waiting for this environment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_waiting_placements.yml"
+      vars:
+        wp_kind: CloudOSO
+        wp_name: "{{ cloudoso_cr_name }}"
+        wp_namespace: "{{ cloudoso_cr_namespace }}"
 
   rescue:
     - name: Mark CloudOSO as failed on services cluster
@@ -157,7 +173,7 @@
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ cloudoso_failure_reason | default('EDAFailed') }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined

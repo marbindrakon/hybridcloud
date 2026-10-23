@@ -3,6 +3,11 @@ vault:
   path: "central"
   caBundle: ""
 
+# ClusterSecretStore spec.conditions: the namespaces allowed to use the store, as a list of
+# {namespaces: [...]}, {namespaceSelector: {...}} or {namespaceRegexes: [...]} entries (any entry matching is
+# enough). Empty = every namespace may use it.
+conditions: []
+
 # auth.type: "kubernetes" (production default) | "token" (legacy init-only)
 auth:
   type: kubernetes

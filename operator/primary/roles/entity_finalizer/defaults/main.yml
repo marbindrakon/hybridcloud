@@ -2,9 +2,34 @@
 # shc (LAB-PLAN §11.6, design/TENANT-TEARDOWN.md §3.1): the entity namespace's CRs are deleted tier by
 # tier; each tier must be gone (its finalizers done) before the next starts, and the namespace operator
 # that runs those finalizers stays until all are gone.
+# The tiers come from the CRD label below ("1".."7"; "skip" = goes with the namespace). This static list
+# is the fallback when no CRD carries the label: placements and attachments, clusters, environments,
+# networks (after the environments that name them), access-dependent objects, Vault, access last.
+# CloudVirt goes with the placements: a placement on a VM environment waits until no namespace of that
+# environment names its network (networkplacement_delete), and CloudVirt's own delete has no guard, so a
+# later tier would never start. The other environments wait for their placements and clusters (tier 3).
+entity_teardown_tier_label: hybridsovereign.redhat/teardown-tier
 entity_teardown_tiers:
-  - [Assignment, NetworkPlacement, HybridNetwork, OpenStackMigration]
+  - [Assignment, AttachmentCircuit, NetworkPlacement, OpenStackMigration, CloudVirt]
   - [PlatformOpenshift]
-  - [CloudOSO, CloudAWS]
-  - [Team, Persona, Project, AAPOrg, QuayOrg, VaultKV]
-  - [Rbac, Vault]
+  - [CloudOSO, CloudAWS, CloudGCP]
+  - [HybridNetwork]
+  - [Team, Project, Persona, AAPOrg, QuayOrg, VaultKV]
+  - [Vault]
+  - [Rbac]
+# Kinds of the group the cascade never deletes and never reports as unknown: the platform kinds (never in a tenant
+# namespace) and TenantProfile (CRD tier "skip": written by the platform, goes with the namespace).
+entity_teardown_platform_kinds:
+  - Entity
+  - TenantProfile
+  - RbacConfig
+  - AAPConfig
+  - QuayConfig
+  - HybridFabric
+  - CloudGateway
+  - ProviderEdge
+  - TransportLink
+  - UIHealthChecker
+  - CloudInfrastructure
+  - DNSConfig
+  - Iaac

@@ -3,6 +3,30 @@
   ansible.builtin.set_fact:
     entity_tenant_namespace: "entity-{{ ansible_operator_meta.name }}"
 
+# Never adopt a namespace this Entity did not create: an existing entity-<name> must carry this Entity's label.
+- name: Read the entity tenant namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ entity_tenant_namespace }}"
+  register: entity_tenant_namespace_info
+
+- name: Refuse a tenant namespace that was not created for this Entity
+  when:
+    - entity_tenant_namespace_info.resources | length > 0
+    - ((entity_tenant_namespace_info.resources[0].metadata.labels | default({}, true))['hybridsovereign.redhat/entity']
+       | default('')) != ansible_operator_meta.name
+  block:
+    - name: Record the reason
+      ansible.builtin.set_fact:
+        entity_failure_reason: NamespaceNotOwned
+
+    - name: Stop before touching the namespace
+      ansible.builtin.fail:
+        msg: >-
+          Namespace {{ entity_tenant_namespace }} already exists and was not created for this tenant. The platform
+          team must remove or rename it; then use Retry now.
+
 - name: Ensure entity tenant namespace exists
   kubernetes.core.k8s:
     state: present
@@ -120,6 +144,41 @@
       type: Opaque
       data: "{{ lookup('kubernetes.core.k8s', kind='Secret', namespace='sovereign-cloud', resource_name='amq-producer-credentials').data }}"
 
+# Namespace operator image of this tenant (canary). The Entity annotation
+# hybridsovereign.redhat/namespace-operator-image selects it: a bare tag (img-0.1.22) or a full
+# reference in the same repository as the default image (<repo>:<tag> or <repo>@sha256:<digest>).
+# Anything else is refused with a Warning Event NamespaceOperatorImageRejected and the default
+# (NAMESPACE_OPERATOR_IMAGE) is used. The pod template records which one runs.
+- name: Select the namespace operator image
+  ansible.builtin.include_tasks: namespace_operator_image.yml
+
+- name: Report a refused namespace operator image request
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: events.k8s.io/v1
+      kind: Event
+      metadata:
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        generateName: "entity-{{ ansible_operator_meta.name }}-image-"
+      regarding:
+        apiVersion: "{{ _hybridsovereign_redhat_entity.apiVersion | default('hybridsovereign.redhat/v1alpha1') }}"
+        kind: Entity
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        uid: "{{ _hybridsovereign_redhat_entity.metadata.uid }}"
+      reason: NamespaceOperatorImageRejected
+      note: >-
+        {{ ('The annotation hybridsovereign.redhat/namespace-operator-image names an image outside '
+            ~ entity_ns_operator_image_repository ~ '; it must be a tag or a reference in that repository. '
+            ~ 'The default image is used.') | truncate(1024, True, '…') }}
+      type: Warning
+      action: SelectImage
+      reportingController: hybridsovereign-primary-operator
+      reportingInstance: hybridsovereign-primary-operator
+      eventTime: "{{ now(utc=true).isoformat() }}Z"
+  when: entity_ns_operator_image_rejected | bool
+
 - name: Deploy namespace operator Deployment
   kubernetes.core.k8s:
     state: present
@@ -141,6 +200,8 @@
           metadata:
             labels:
               app.kubernetes.io/name: hybridsovereign-namespace-operator
+            annotations:
+              hybridsovereign.redhat/namespace-operator-image-source: "{{ entity_ns_operator_image_source }}"
           spec:
             serviceAccountName: hybridsovereign-namespace-operator
             imagePullSecrets:
@@ -151,12 +212,27 @@
                 type: RuntimeDefault
             containers:
               - name: manager
-                image: "{{ lookup('env', 'NAMESPACE_OPERATOR_IMAGE') }}"
+                image: "{{ entity_ns_operator_image }}"
                 imagePullPolicy: Always
                 args:
                   - --leader-elect
                   - --leader-election-id=hybridsovereign-namespace-operator-{{ ansible_operator_meta.name }}
                   - --health-probe-bind-address=:6789
+                  - --max-concurrent-reconciles=1
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 6789
+                  initialDelaySeconds: 30
+                  periodSeconds: 20
+                  timeoutSeconds: 5
+                  failureThreshold: 6
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 6789
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
                 env:
                   - name: WATCH_NAMESPACE
                     value: "{{ entity_tenant_namespace }}"
@@ -197,6 +273,10 @@
                       secretKeyRef:
                         name: amq-producer-credentials
                         key: sasl_mechanism
+                  # Kafka protocol version of the event producer, the same as the primary operator's
+                  # (empty: the image default; "auto": probe the brokers).
+                  - name: KAFKA_API_VERSION
+                    value: "{{ lookup('env', 'KAFKA_API_VERSION') | default('', true) }}"
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:

@@ -2,105 +2,26 @@
 shc (design/P7-PLAN.md P7.1 §3.2, P7.3 §12.4 d): a platform IaaS cluster's credentials for the EDA jobs.
 Two accounts per cluster in .Values.iaasClusters, each rendered when its block is enabled:
   cloudInfra    shc-cloudinfra -> central Vault cloudinfra/<cluster>         site probe, read only
-  fabricAccess  shc-fabric     -> central Vault cloudinfra/<cluster>-fabric  fabric jobs (CUDN, RouteAdvertisements,
-                                                                              VTEP, tenant VM namespaces + RBAC)
-Per account, on central (the ACM hub), in the cluster's namespace:
-  ManagedServiceAccount  ACM creates the service account on the cluster and keeps a rotated token here
-  ClusterPermission      the account's ClusterRole on the cluster (<block>.rules)
-  PushSecret             a kubeconfig (cluster API + token) to central Vault, re-pushed when ACM rotates the token
-The cluster API serves a publicly trusted certificate, so the kubeconfig carries no CA.
+  fabricAccess  shc-automation -> central Vault cloudinfra/<cluster>-fabric  the platform automation account: fabric
+                                                                              jobs (CUDN, RouteAdvertisements, VTEP,
+                                                                              tenant VM namespaces + RBAC); the
+                                                                              admission policies exempt its username
+  (<block>.serviceAccount overrides the name; it was shc-fabric before the automation account was introduced)
+Per account: ManagedServiceAccount, ClusterPermission (<block>.rules) and PushSecret, rendered by the helper
+sovereign-central.managedAccount (_helpers.tpl). <block>.pushDeletionPolicy (default Delete) is the PushSecret's
+deletionPolicy: None keeps the Vault key when the PushSecret goes (an account rename).
 */}}
 {{- if include "sovereign-central.applicationsEnabled" . }}
 {{- range $name, $cluster := .Values.iaasClusters }}
 {{- $c := mergeOverwrite (deepCopy $.Values.iaasClusterDefaults) (deepCopy $cluster) }}
-{{- range $acc := list (dict "key" "cloudInfra" "sa" "shc-cloudinfra" "suffix" "") (dict "key" "fabricAccess" "sa" "shc-fabric" "suffix" "-fabric") }}
+{{- range $acc := list (dict "key" "cloudInfra" "sa" "shc-cloudinfra" "suffix" "") (dict "key" "fabricAccess" "sa" "shc-automation" "suffix" "-fabric") }}
 {{- $ci := get $c $acc.key | default dict }}
 {{- if and $c.enabled $ci.enabled }}
 {{- $sa := $ci.serviceAccount | default $acc.sa }}
 {{- $server := $ci.apiServer | default (printf "https://api.%s.%s:6443" $name $c.clusterBase.values.cluster.baseDomain) }}
----
-apiVersion: authentication.open-cluster-management.io/v1beta1
-kind: ManagedServiceAccount
-metadata:
-  name: {{ $sa }}
-  namespace: {{ $name }}
-  labels:
-    {{- include "sovereign-central.labels" $ | nindent 4 }}
-    sovereign-cloud/target: {{ $name }}
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.base | quote }}
-spec:
-  rotation:
-    enabled: true
-    validity: {{ $ci.tokenValidity | default "168h" }}
----
-apiVersion: rbac.open-cluster-management.io/v1alpha1
-kind: ClusterPermission
-metadata:
-  name: {{ $sa }}
-  namespace: {{ $name }}
-  labels:
-    {{- include "sovereign-central.labels" $ | nindent 4 }}
-    sovereign-cloud/target: {{ $name }}
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.base | quote }}
-spec:
-  clusterRole:
-    rules:
-      {{- toYaml $ci.rules | nindent 6 }}
-  clusterRoleBinding:
-    subject:
-      kind: ServiceAccount
-      name: {{ $sa }}
-      namespace: open-cluster-management-agent-addon
----
-apiVersion: external-secrets.io/v1alpha1
-kind: PushSecret
-metadata:
-  name: {{ $sa }}
-  namespace: {{ $name }}
-  labels:
-    {{- include "sovereign-central.labels" $ | nindent 4 }}
-    sovereign-cloud/target: {{ $name }}
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $c.syncWaves.base | quote }}
-spec:
-  refreshInterval: 1h
-  updatePolicy: Replace
-  deletionPolicy: Delete
-  secretStoreRefs:
-    - kind: ClusterSecretStore
-      name: vault-backend
-  selector:
-    secret:
-      name: {{ $sa }}
-  template:
-    engineVersion: v2
-    data:
-      kubeconfig: |
-        apiVersion: v1
-        kind: Config
-        clusters:
-          - name: {{ $name }}
-            cluster:
-              server: {{ $server }}
-        users:
-          - name: {{ $sa }}
-            user:
-              token: {{ "{{ .token }}" }}
-        contexts:
-          - name: {{ $name }}
-            context:
-              cluster: {{ $name }}
-              user: {{ $sa }}
-        current-context: {{ $name }}
-  data:
-    - conversionStrategy: None
-      match:
-        secretKey: kubeconfig
-        remoteRef:
-          remoteKey: cloudinfra/{{ $name }}{{ $acc.suffix }}
-          property: kubeconfig
+{{ include "sovereign-central.managedAccount" (dict "root" $ "cluster" $name "sa" $sa "wave" $c.syncWaves.base
+     "tokenValidity" $ci.tokenValidity "rules" $ci.rules "server" $server
+     "vaultKey" (printf "cloudinfra/%s%s" $name $acc.suffix) "deletionPolicy" $ci.pushDeletionPolicy) }}
 {{- end }}
 {{- end }}
 {{- end }}

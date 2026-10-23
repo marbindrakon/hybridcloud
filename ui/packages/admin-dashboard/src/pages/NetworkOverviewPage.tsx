@@ -2,7 +2,6 @@ import React from 'react';
 import { Button, PageSection } from '@patternfly/react-core';
 import { SyncIcon } from '@patternfly/react-icons';
 import { useNavigate } from 'react-router-dom';
-import { adminDetailHref } from './ResourceListPage';
 import {
   NetworkOverview,
   PageHeader,
@@ -10,35 +9,30 @@ import {
   useTranslation,
   type HybridSovereignKind,
   type K8sResource,
+  objectPath,
+  useBreadcrumbs,
+  useDocumentTitle,
 } from '@hybridsovereign/shared';
 
-/** Standalone-dashboard twin of the console plugin's Network Overview. */
-const DETAIL_PATH: Partial<Record<HybridSovereignKind, string>> = {
-  CloudGateway: '/networking/gateways',
-  HybridFabric: '/networking/fabrics',
-  CloudInfrastructure: '/clouds/infrastructure',
-  HybridNetwork: '/networking/networks',
-  NetworkPlacement: '/networking/placements',
-  CloudVirt: '/clouds/cloudvirt',
-  CloudOSO: '/clouds/cloudoso',
-};
-
+/** Standalone-dashboard twin of the console plugin's fabric map. */
 export default function NetworkOverviewPage(): React.ReactElement {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { items, loading, error, refresh } = useOverviewCRs(0);
 
+  const crumbs = useBreadcrumbs('fabric-map');
+  useDocumentTitle('fabric-map');
   const onSelect = (kind: HybridSovereignKind, item: K8sResource) => {
-    const base = DETAIL_PATH[kind];
-    if (!base) return;
-    navigate(adminDetailHref(base, kind, item));
+    const href = objectPath('admin-dashboard', kind, item.metadata.namespace, item.metadata.name);
+    if (href) navigate(href);
   };
 
   return (
     <>
       <PageHeader
-        title={t('nav.networkOverview')}
+        title={t('nav.fabricMap')}
         subtitle={t('pages.networkOverviewDesc')}
+        breadcrumbs={crumbs}
         actions={
           <Button variant="secondary" icon={<SyncIcon />} onClick={refresh} isDisabled={loading}>
             {t('common.refresh')}

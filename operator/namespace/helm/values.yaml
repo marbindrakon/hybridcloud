@@ -4,7 +4,7 @@ entityName: example
 
 image:
   repository: /hybrid-sovereign/hybridsovereign-namespace-operator
-  tag: "0.1.0"
+  tag: "img-0.1.22"
   pullPolicy: Always
 
 imagePullSecrets:

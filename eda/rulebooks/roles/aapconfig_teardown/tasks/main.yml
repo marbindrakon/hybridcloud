@@ -4,10 +4,10 @@
       ansible.builtin.set_fact:
         aapconfig_cr_name: "{{ event_payload.regarding.name }}"
         aapconfig_cr_namespace: "{{ event_payload.regarding.namespace }}"
-        aapconfig_spec: "{{ event_payload.note | from_json }}"
+        aapconfig_spec: "{{ shc_live_spec }}"
 
     - name: Resolve services cluster API connection
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
     - name: Read AAP admin secret
       kubernetes.core.k8s_info:
@@ -53,62 +53,43 @@
           when: _auth_lookup.json.results | length > 0
       ignore_errors: true
 
+    # the tenant realm's clients automation client (published by the RbacConfig job), not the master realm admin
     - name: Delete Keycloak OIDC client
       block:
-        - name: Read Keycloak admin secret
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            kind: Secret
-            name: rhbk-admin-credentials
-            namespace: "{{ aapconfig_cr_namespace }}"
-          register: _kc_secret
-          no_log: true
+        - name: Obtain the realm token for the sign-in client
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
+          vars:
+            krt_purpose: clients
+            krt_rbac_config: "{{ aapconfig_spec.rbacConfig | default('', true) }}"
+            krt_url: "{{ keycloak_internal_url | default('', true) }}"
+            krt_token_fact: aap_kc_realm_token
 
-        - name: Decode Keycloak credentials
-          ansible.builtin.set_fact:
-            kc_admin_user: "{{ _kc_secret.resources[0].data.username | default(_kc_secret.resources[0].data.ADMIN_USERNAME | default('')) | b64decode }}"
-            kc_admin_pass: "{{ _kc_secret.resources[0].data.password | default(_kc_secret.resources[0].data.ADMIN_PASSWORD | default('')) | b64decode }}"
-          no_log: true
-          when: _kc_secret.resources | default([]) | length > 0
-
-        - name: Get Keycloak token
-          ansible.builtin.uri:
-            url: "{{ keycloak_internal_url }}/realms/master/protocol/openid-connect/token"
-            method: POST
-            body_format: form-urlencoded
-            body:
-              grant_type: password
-              client_id: admin-cli
-              username: "{{ kc_admin_user }}"
-              password: "{{ kc_admin_pass }}"
-            validate_certs: false
-            status_code: [200]
-          register: _kc_token
-          no_log: true
-          when: _kc_secret.resources | default([]) | length > 0
-
+        # the client representation carries the client secret
         - name: Find Keycloak client
           ansible.builtin.uri:
-            url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId=aap-{{ aapconfig_cr_name }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId=aap-{{ aapconfig_cr_name }}"
             method: GET
             headers:
-              Authorization: "Bearer {{ _kc_token.json.access_token }}"
+              Authorization: "Bearer {{ aap_kc_realm_token }}"
             validate_certs: false
           register: _kc_client
-          when: _kc_token is defined
+          no_log: true
 
         - name: Delete Keycloak client
           ansible.builtin.uri:
-            url: "{{ keycloak_internal_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client.json[0].id }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client.json[0].id }}"
             method: DELETE
             headers:
-              Authorization: "Bearer {{ _kc_token.json.access_token }}"
+              Authorization: "Bearer {{ aap_kc_realm_token }}"
             validate_certs: false
             status_code: [204, 404]
-          when: _kc_client is defined and _kc_client.json | length > 0
-      when: _kc_secret is defined and _kc_secret.resources | default([]) | length > 0
+          when: _kc_client.json | default([]) | length > 0
+      always:
+        - name: Forget the realm token and the client
+          ansible.builtin.set_fact:
+            aap_kc_realm_token: ""
+            _kc_client: {}
+          no_log: true
       ignore_errors: true
 
     - name: Get current timestamp for status
@@ -116,7 +97,7 @@
         aapconfig_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     - name: Mark AAPConfig deletion complete on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: aapconfigs
@@ -131,7 +112,7 @@
 
   rescue:
     - name: Mark AAPConfig delete as failed on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: aapconfigs
@@ -139,6 +120,7 @@
         cr_namespace: "{{ aapconfig_cr_namespace }}"
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA deletion failed')) }}"

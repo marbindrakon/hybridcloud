@@ -5,6 +5,10 @@ export {
   deleteDashboardResource,
   forceReconcile,
   getK8sClientConfig,
+  k8sFetchJson,
+  k8sFetchWithWarnings,
+  fetchResourceList,
+  fetchResource,
   updateDashboardResource,
   useCanI,
   useK8sResource,
@@ -13,13 +17,28 @@ export {
 export type {
   K8sApiStyle,
   K8sClientConfig,
+  K8sAnswer,
+  WriteOptions,
   UseK8sResourceListOptions,
   UseK8sResourceListResult,
   UseK8sResourceOptions,
   UseK8sResourceResult,
 } from './k8s';
-export { useOverviewCRs, PLATFORM_NS, PLUGINS_NS } from './overviewCrs';
-export type { OverviewCRsResult, UseOverviewCRsOptions } from './overviewCrs';
+export { useOverviewCRs, fetchOverviewCRs, PLATFORM_NS, PLUGINS_NS } from './overviewCrs';
+export type { OverviewCRsResult, OverviewFetchResult, UseOverviewCRsOptions } from './overviewCrs';
+export {
+  K8sApiError,
+  isK8sApiError,
+  statusOf,
+  classifyError,
+  isForbiddenError,
+  parseStatusBody,
+  parseWarningHeaders,
+  errorFromResponse,
+  errorFromFetchFailure,
+  networkError,
+} from './errors';
+export type { ErrorClass, K8sStatusCause, K8sApiErrorContext } from './errors';
 export { useNetworkOverviewCRs } from './networkOverviewCrs';
 export type { NetworkOverviewCRsResult } from './networkOverviewCrs';
 export {
@@ -37,5 +56,7 @@ export {
   ENTITY_NS,
 } from './entityOptions';
 export type { EntityOption, UseEntityOptionsOptions, UseEntityOptionsResult } from './entityOptions';
-export { useEntityNamespace } from './entityNamespace';
-export type { UseEntityNamespaceOptions, UseEntityNamespaceResult } from './entityNamespace';
+export { useScopedResourceList } from './scopedList';
+export type { ScopedListResult } from './scopedList';
+export { useTenantProfile, sitesOfProfile } from './tenantProfile';
+export type { UseTenantProfileResult } from './tenantProfile';

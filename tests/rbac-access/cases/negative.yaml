@@ -1,0 +1,106 @@
+# What nobody without a role, and no tenant access group, may do (format: tests/rbac-access/README.md).
+# "@shc-kinds" expands to every kind of the hybridsovereign.redhat API group; principal groups ["{group:*}"] to every
+# access group the Entity maps.
+
+# A signed-in user with no role (only the groups every OAuth user has) sees no SHC object anywhere.
+- id: norole-tenant-namespace
+  resolves: [UX-010, UX-012]
+  principal: {user: uxr-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: hybridsovereign.redhat, resource: "@shc-kinds"}
+  verbs: [get, list, create, patch, delete]
+  expect: deny
+- id: norole-platform-namespace
+  resolves: [UX-010]
+  principal: {user: uxr-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: sovereign-cloud
+  resource: {group: hybridsovereign.redhat, resource: "@shc-kinds"}
+  verbs: [get, list, create, patch, delete]
+  expect: deny
+- id: norole-plugins-namespace
+  resolves: [UX-010]
+  principal: {user: uxr-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: sovereign-cloud-plugins
+  resource: {group: hybridsovereign.redhat, resource: "@shc-kinds"}
+  verbs: [get, list, create, patch, delete]
+  expect: deny
+- id: norole-secrets
+  resolves: [UX-010]
+  principal: {user: uxr-nobody, groups: [system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: secrets}
+  verbs: [get, list]
+  expect: deny
+
+# No tenant access group reads Secrets, runs or execs into pods, grants roles or edits its namespace.
+- id: tenant-secrets
+  resolves: [I-10]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: secrets}
+  verbs: [get, list, watch]
+  expect: deny
+- id: tenant-pods-create
+  resolves: [I-10]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: pods}
+  verbs: [create]
+  expect: deny
+- id: tenant-pods-exec
+  resolves: [I-10]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: "", resource: pods, subresource: exec}
+  verbs: [create, get]
+  expect: deny
+- id: tenant-rolebindings-create
+  resolves: [I-10]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: rolebindings}
+  verbs: [create, update, patch, delete]
+  expect: deny
+- id: tenant-roles-escalate
+  resolves: [I-10]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: roles}
+  verbs: [escalate, create]
+  expect: deny
+- id: tenant-bind-admin
+  resolves: [I-10]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: clusterroles, name: admin}
+  verbs: [bind]
+  expect: deny
+- id: tenant-bind-cluster-admin
+  resolves: [I-10]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{entity}
+  resource: {group: rbac.authorization.k8s.io, resource: clusterroles, name: cluster-admin}
+  verbs: [bind]
+  expect: deny
+- id: tenant-namespace-patch
+  resolves: [UX-097]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  resource: {group: "", resource: namespaces, name: "entity-{entity}"}
+  verbs: [patch, update, delete]
+  expect: deny
+- id: tenant-entities-platform
+  resolves: [UX-010]
+  principal: {groups: ["{group:*}", system:authenticated, system:authenticated:oauth]}
+  namespace: sovereign-cloud
+  resource: {group: hybridsovereign.redhat, resource: entities}
+  verbs: [get, list, create, patch, delete]
+  expect: deny
+
+# Cross-tenant: the tenant's own admins get nothing in another tenant's namespace.
+- id: cross-tenant-admin
+  resolves: [UX-010]
+  principal: {groups: ["{group:entityAdmin}", system:authenticated, system:authenticated:oauth]}
+  namespace: entity-{other_entity}
+  resource: {group: hybridsovereign.redhat, resource: "@shc-kinds"}
+  verbs: [get, list, create, patch, delete]
+  expect: deny

@@ -1,10 +1,61 @@
-# RBAC Access Matrix
+# RBAC access matrix
 
-**Scope**: Admin vs tenant user authorization across Hybrid Sovereign surfaces  
-**Identity provider**: Keycloak (RHBK central)  
-**Prerequisite**: RbacConfig + Entity `namespaceRbac` applied; test users provisioned via `keycloakTestUsers` Job
+The Kubernetes side of tenant access is checked by a runner, not by hand: `sar_matrix.py` asks the API server with
+SubjectAccessReviews whether a user or a group may do something. A SubjectAccessReview names the user and the groups
+explicitly, so no real user, no impersonation and no change on the cluster is needed; it is safe against the live
+services cluster.
 
----
+## Run
+
+```
+# live (current KUBECONFIG): the tenant's Entity is read from the cluster
+python3 -I tests/rbac-access/sar_matrix.py --entity <tenant> [--other-entity <another tenant>] \
+  [--profile generated --profile negative ...] [--users user1,user2] [--report out.json]
+
+# throwaway API server (envtest, see tests/schema-replay/README.md): the tenant's Roles and RoleBindings are created
+# by the production task file first, so the positive rows are proven without touching a cluster
+KUBEBUILDER_ASSETS=<envtest bin dir> python3 -I tests/rbac-access/sar_matrix.py --cluster envtest --render-roles \
+  --entity <name> --entity-spec <file with spec.namespaceRbac> [--automation-rules <rules.yaml>] \
+  [--scope-fixture <Team/Project/Assignment objects>]   # also renders their scope roles (render-scope-roles.yml)
+
+# the acme-corp demo, all rows
+... --entity acme-corp --entity-spec samples/demo/acme-corp.yaml --scope-fixture samples/demo/acme-corp.yaml
+
+make sar-matrix ENTITY=<tenant> [PROFILE=negative]
+```
+
+Exit status 1 = at least one unexpected allow or deny. Rows listed in `known-deviations.yaml` (`{id, finding, note}`)
+are reported as `known` while they fail and as `fixed` once they pass.
+
+## Rows
+
+| Source | What it checks |
+|---|---|
+| generated | Every access group `<entity>.<rbac>` mapped in `Entity.spec.namespaceRbac` gets exactly the verbs of its roles (`eda/rulebooks/roles/entity_provision/vars/main.yml`, `entity_named_roles`: crud = get, list, watch, create, update, patch, delete; read = get, list, watch; `<kind>/status` read) plus the tenant baseline of `eda/common/vars/scope_levels.yml` (`tenantprofiles` get, list, watch) in `entity-<entity>`, and nothing else of the `hybridsovereign.redhat` API group there. |
+| `cases/negative.yaml` | A signed-in user with no role sees no SHC object in the tenant, platform and plugins namespaces; no access group reads Secrets, creates or execs into pods, writes RoleBindings, escalates Roles, binds admin/cluster-admin, edits its namespace or reads Entities; a tenant's admins get nothing in another tenant. |
+| `cases/automation.yaml` | The platform automation account (`system:serviceaccount:open-cluster-management-agent-addon:shc-automation`) can do what the EDA jobs do on services and cannot create ClusterRoleBindings, bind cluster-admin, touch nodes, escalate Roles, exec into or attach to pods (it reaches a tenant Vault pod through the pod proxy only). |
+| `cases/tenantprofile.yaml` | Every access group sees its tenant namespace, its OpenShift project and the tenant profile, read only, and nothing of the platform or another tenant (R1-R6); the acme-corp demo grants (R16-R22, only for tenant `acme-corp`). |
+| `cases/scope-role.yaml` | The Team and Project access fields (R7-R15) against `fixtures/scope-fixture.yaml`, in envtest as tenant `sar-scope` with `--scope-fixture`. Who may change the lists is an admission check: `tests/access/test-access-fields.sh`. |
+| `cases/<other>.yaml` | Added by the streams that own those rows (security closures). |
+| `--users` | The generated rows again, for real users with the groups the cluster's OpenShift Groups give them (read-only). |
+
+Case format (YAML list):
+
+```yaml
+- id: tenant-secrets                       # unique; printed in reports and used by known-deviations.yaml
+  resolves: [I-10]                         # finding ids
+  principal: {user: optional, groups: ["{group:*}", system:authenticated]}
+  namespace: entity-{entity}               # omit for cluster-scoped resources
+  resource: {group: "", resource: secrets, subresource: optional, name: optional}
+  verbs: [get, list]
+  expect: deny                             # allow | deny
+```
+
+Placeholders: `{entity}`, `{other_entity}`, `{automation}`, `{group:<spec_key>}` (the first access group mapped to that
+key; the case is skipped when none is), `{group:*}` in the principal's groups (one case per mapped access group), and
+resource `@shc-kinds` (one case per kind of the API group).
+
+## Context: personas
 
 ## User Personas
 
@@ -21,46 +72,9 @@
 
 ---
 
-## Kubernetes API Matrix
 
-Legend: ✅ Allowed · ❌ Denied · 🔒 Scoped (resourceNames / subresource)
+## Not covered by the runner
 
-### sovereign-cloud namespace (primary operator CRs)
-
-| Resource | Platform Admin | Entity Admin | Entity Viewer |
-|----------|---------------|--------------|---------------|
-| `entities` create | ✅ | ❌ | ❌ |
-| `entities` get/list | ✅ | ✅ (own entity) | ✅ (own entity) |
-| `entities` delete | ✅ | ❌ | ❌ |
-| `rbacconfigs` | ✅ | ❌ | ❌ |
-| `aapconfigs`, `quayconfigs` | ✅ | ❌ | ❌ |
-
-### entity-acme-corp namespace (namespace operator CRs)
-
-| Resource | Entity Admin | Entity Viewer | Team Member |
-|----------|--------------|---------------|-------------|
-| `teams` create | ✅ | ❌ | ❌ |
-| `teams` get (all) | ✅ | ✅ | 🔒 own team only |
-| `teams` patch/delete | ✅ | ❌ | ❌ |
-| `projects` CRUD | ✅ | ❌ | ❌ |
-| `personas` CRUD | ✅ | ❌ | ❌ |
-| `cloudosos` create | ✅ (cloudoso-admin) | ❌ | ❌ |
-| `platformopenshifts` create | ✅ | ❌ | ❌ |
-| `assignments` create | ✅ | ❌ | ❌ |
-| `openstackmigrations` create | ✅ (migration-admin) | ❌ | ❌ |
-| `secrets` get | ❌ | ❌ | ❌ |
-| `pods/exec` | ❌ | ❌ | ❌ |
-
-### sovereign-cloud-plugins namespace
-
-| Resource | Platform Admin | Entity Admin | Vault Admin |
-|----------|---------------|--------------|-------------|
-| `rbacs` (cluster-wide config) | ✅ | ❌ | ❌ |
-| Plugin operator pods | ✅ view | ❌ | ❌ |
-
----
-
-## Console / Dashboard Matrix
 
 | Action | Admin Dashboard | Tenant Dashboard | OCP Console Plugin |
 |--------|----------------|------------------|-------------------|
@@ -83,74 +97,3 @@ Legend: ✅ Allowed · ❌ Denied · 🔒 Scoped (resourceNames / subresource)
 
 ---
 
-## Test Cases
-
-### TC-RBAC-001: Entity Admin Cannot Create Entity
-
-```bash
-oc login --token=<entity-admin-token> --server=<api>
-oc apply -f samples/entity/globex-industries.yaml -n sovereign-cloud
-# Expected: Forbidden
-```
-
-### TC-RBAC-002: Entity Viewer Read-Only
-
-```bash
-oc auth can-i create teams --namespace=entity-acme-corp --as=test-entity-viewer
-# Expected: no
-oc auth can-i get teams --namespace=entity-acme-corp --as=test-entity-viewer
-# Expected: yes
-```
-
-### TC-RBAC-003: Team Member Scoped View
-
-```bash
-oc auth can-i get teams/frontend-team --namespace=entity-acme-corp --as=test-developer
-# Expected: yes (if member)
-oc auth can-i get teams/other-team --namespace=entity-acme-corp --as=test-developer
-# Expected: no
-```
-
-### TC-RBAC-004: No Secret Access for Tenants
-
-```bash
-oc auth can-i get secrets --namespace=entity-acme-corp --as=test-entity-admin
-# Expected: no
-```
-
-### TC-RBAC-005: Platform Admin Entity CRUD
-
-```bash
-oc auth can-i create entities --namespace=sovereign-cloud --as=test-platform-admin
-# Expected: yes
-```
-
-### TC-RBAC-006: Cross-Entity Isolation
-
-```bash
-# Entity admin for acme cannot access entity-globex namespace
-oc auth can-i get teams --namespace=entity-globex-industries --as=test-entity-admin
-# Expected: no
-```
-
-### TC-RBAC-007: Dashboard OAuth Scope
-
-Log in to tenant dashboard as `test-tenant-user`; verify API calls return only `entity-acme-corp` resources.
-
-### TC-RBAC-008: Vault OIDC Login
-
-Log in to Vault UI via Keycloak OIDC as `test-vault-admin`; verify `entity-acme-corp` paths readable, `central/admin` denied.
-
----
-
-## Pass Criteria
-
-- TC-RBAC-001 through TC-RBAC-008 PASS
-- No tenant user receives `cluster-admin`, `secrets`, or `pods/exec` access
-- Cross-entity isolation verified
-
-## References
-
-- Spec 001 (Entity), Spec 002 (Team), Spec 012 (Plugin RBAC)
-- `samples/rbac/` — 38 sanitized Rbac CR samples
-- `tests/security/SECURITY_REVIEW.md` §3

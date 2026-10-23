@@ -4,7 +4,11 @@ import rateLimit from "express-rate-limit";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createK8sHandlers } from "./k8s-proxy.js";
-import { createApiK8sProxy } from "./api-k8s-proxy.js";
+import { isDryRunRequest, writeOptionsMiddleware } from "./writeOptions.js";
+import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
+import { transformBody } from "../../shared/server/tenantSafe.js";
+import { createPermissionsHandler } from "../../shared/server/permissions.js";
+import { mountSessionRoutes } from "../../shared/server/session.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -55,7 +59,18 @@ const mutationLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  // The forms' server dry runs persist nothing; they have their own budget below.
+  skip: (req) => isDryRunRequest(req),
   message: { message: "Too many write requests, please try again later" },
+});
+
+const dryRunLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 240,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !isDryRunRequest(req),
+  message: { message: "Too many checks, please try again later" },
 });
 
 app.use("/api/", apiLimiter);
@@ -78,6 +93,9 @@ app.use(
     ],
   }),
 );
+
+// Strict field validation, dry runs and Warning headers for the curated write routes.
+app.use("/api/", dryRunLimiter, writeOptionsMiddleware);
 
 function requireAuth(req, res, next) {
   const raw = req.headers["x-forwarded-access-token"];
@@ -106,10 +124,12 @@ app.get("/api/user", requireAuth, (req, res) => {
 
 const k8s = createK8sHandlers(OCP_API);
 
+mountSessionRoutes(app, { apiServer: OCP_API, requireAuth });
+
 // Namespaces & configs
 app.get("/api/entities", requireAuth, k8s.listEntities);
 app.get("/api/namespaces", requireAuth, k8s.listNamespaces);
-app.get("/api/permissions", requireAuth, k8s.getPermissions);
+app.get("/api/permissions", requireAuth, createPermissionsHandler({ apiServer: OCP_API }));
 app.get("/api/rbacconfigs", requireAuth, k8s.listRbacConfigs);
 app.get("/api/aapconfigs", requireAuth, k8s.listAAPConfigs);
 app.get("/api/quayconfigs", requireAuth, k8s.listQuayConfigs);
@@ -236,7 +256,11 @@ app.patch("/api/personas/:name/annotations", requireAuth, mutationLimiter, k8s.p
 app.post("/api/k8s/patch-annotation", requireAuth, mutationLimiter, k8s.patchAnnotation);
 
 // Transparent K8s API proxy used by PatternFly UI shared hooks (/api/k8s/apis/...)
-app.use("/api/k8s", requireAuth, createApiK8sProxy(OCP_API));
+// The raw path filters CloudOSO and PlatformOpenshift answers through the tenant status allow-list.
+app.use("/api/k8s", requireAuth, createApiK8sProxy(OCP_API, { transformBody }));
+
+// Unknown API paths answer 404 JSON instead of falling through to the SPA.
+app.all("/api/{*rest}", (_req, res) => res.status(404).json({ kind: "Status", apiVersion: "v1", status: "Failure", code: 404, reason: "NotFound", message: "Not found" }));
 
 const distPath = path.resolve(__dirname, "../dist");
 app.use(

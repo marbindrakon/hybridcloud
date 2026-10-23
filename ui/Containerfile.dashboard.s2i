@@ -23,6 +23,7 @@ USER 0
 WORKDIR /opt/app-root/src
 COPY --from=build /opt/app-root/src/packages/${APP_PACKAGE}/dist ./dist
 COPY --from=build /opt/app-root/src/packages/${APP_PACKAGE}/server ./server
+COPY --from=build /opt/app-root/src/packages/shared/server /opt/app-root/shared/server
 RUN printf '%s\n' \
   '{' \
   '  "name": "sovereign-dashboard",' \
@@ -35,8 +36,8 @@ RUN printf '%s\n' \
   '  }' \
   '}' > package.json && \
   npm install --omit=dev && \
-  chown -R 1001:0 /opt/app-root/src && \
-  chmod -R g+rwX /opt/app-root/src
+  chown -R 1001:0 /opt/app-root/src /opt/app-root/shared && \
+  chmod -R g+rwX /opt/app-root/src && chmod -R g+rX /opt/app-root/shared
 USER 1001
 ENV PORT=8080
 EXPOSE 8080

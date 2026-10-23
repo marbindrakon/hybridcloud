@@ -129,23 +129,61 @@ ops:
     labVaultAddr: ""
     minTTLDays: 7
     schedule: "15 6 * * *"
-  # Dispatch re-drive and stall detection (LAB-PLAN §11.1, design/DELIVERY-HARDENING.md): only on the
-  # cluster that holds the hybridsovereign.redhat CRs (services). Failures surface as ShcBackupJobFailed.
-  edaRedrive:
+  # Tenancy health (files/shc_tenancy.py), on the cluster that holds the hybridsovereign.redhat CRs:
+  # dispatch re-drive, the tenants' ControllerAvailable/DeliveryStalled conditions, status.phase backfill
+  # and a slow re-check of failed objects of kinds without a periodic re-run. Problems surface as
+  # ShcBackupJobFailed; the tenant controllers also have their own alerts (ShcTenantController*).
+  shcTenancy:
     enabled: false
     schedule: "*/5 * * * *"
     # python3 + kubernetes client + PyYAML
     image: quay.signal9.gg/shc/ansible-runner:latest
     config:
-      ackTimeoutMinutes: 10
-      jobTimeoutMinutes: 30
-      publishFailedMinutes: 15
-      maxRedrives: 3
-      # kinds whose EDA roles are idempotent (create-if-absent); others are only reported
-      redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment]
-      kinds:
-        PlatformOpenshift: {jobTimeoutMinutes: 150}
-        CloudOSO: {jobTimeoutMinutes: 150}
+      redrive:
+        ackTimeoutMinutes: 10
+        jobTimeoutMinutes: 30
+        publishFailedMinutes: 15
+        maxRedrives: 3
+        # kinds whose jobs are idempotent (create-if-absent); others are only reported
+        redriveKinds: [Entity, Team, Project, Persona, AAPOrg, QuayOrg, RbacConfig, AAPConfig, QuayConfig, VaultKV, Assignment]
+        # a job still JobRunning this long after its start without its final status write is reported
+        # (NoCompletion, DeliveryStalled); per kind jobFinishedMinutes, else the kind's jobTimeoutMinutes
+        jobFinishedMinutes: 10
+        kinds:
+          PlatformOpenshift: {jobTimeoutMinutes: 150}
+          CloudOSO: {jobTimeoutMinutes: 150}
+          # jobs that wait on cloud or fabric work for minutes
+          CloudAWS: {jobFinishedMinutes: 30}
+          CloudGCP: {jobFinishedMinutes: 30}
+          CloudGateway: {jobFinishedMinutes: 30}
+          HybridFabric: {jobFinishedMinutes: 30}
+          HybridNetwork: {jobFinishedMinutes: 30}
+          NetworkPlacement: {jobFinishedMinutes: 30}
+          CloudVirt: {jobFinishedMinutes: 30}
+          AttachmentCircuit: {jobFinishedMinutes: 30}
+          ProviderEdge: {jobFinishedMinutes: 30}
+          TransportLink: {jobFinishedMinutes: 30}
+      tenancy:
+        unavailableMinutes: 2
+        restartWindowMinutes: 15
+        restartThreshold: 3
+        deliveryStalledMinutes: 15
+      # write: false only reports the objects whose stored phase differs
+      phase:
+        write: false
+      failedRecheck:
+        enabled: true
+        intervalMinutes: 30
+        maxRechecks: 6
+      # a finished teardown (deletionComplete) whose finalizer is still set: wake its controller after
+      # afterMinutes, report it after problemMinutes
+      finalizerRelease:
+        enabled: true
+        afterMinutes: 2
+        problemMinutes: 30
+  # Former name of shcTenancy (its config = shcTenancy.config.redrive); read for one release.
+  edaRedrive:
+    enabled: false
   # Tenant cloud orphan check (LAB-PLAN §11.6 phase D, design/TENANT-TEARDOWN.md §3.5): report-only,
   # on the cluster that holds the CloudOSO/PlatformOpenshift CRs (services). Findings fail the job
   # (ShcBackupJobFailed). Scope: the tenant Keystone domain and the tenant DNS zone.
@@ -159,6 +197,9 @@ ops:
     secretStore: vault-backend
     config:
       domain: ""
+      # CloudInfrastructure name of the cloud the account belongs to; CloudOSOs on other clouds are
+      # not compared with its projects. Empty = every CloudOSO.
+      cloudInfrastructure: ""
       ignoreProjects: []
       dnsZoneId: ""
       dnsProjectId: ""
@@ -234,6 +275,15 @@ tenantAccess:
   # admission policy: in namespaces labelled hybridsovereign.redhat/cloudvirt, only system identities and
   # cluster admins may manage NetworkAttachmentDefinitions and UserDefinedNetworks
   networkGuard: true
+
+# ─── Project self-provisioning — layer "certs" ───────────────────────────────
+# restricted true: only the groups listed here may create projects (templates/self-provisioners.yaml replaces the
+# self-provisioners ClusterRoleBinding; an empty list leaves it to cluster admins). restricted false leaves the
+# cluster default (every signed-in user), unless tenantAccess.enabled with tenantAccess.selfProvisioners false,
+# which implies restricted with no groups.
+selfProvisioning:
+  restricted: false
+  groups: []
 
 # ─── Tenant DNS controller (TENANT-DNS D3) — layer "certs" ───────────────────
 # Tenants publish names in their CloudVirt environment's zone with DNSEndpoint objects and external-dns hostname

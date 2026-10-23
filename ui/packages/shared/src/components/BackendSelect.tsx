@@ -3,6 +3,7 @@ import { FormGroup, Select, SelectList, SelectOption, MenuToggle } from '@patter
 import type { MenuToggleElement } from '@patternfly/react-core';
 import type { K8sResource } from '../types';
 import { useTranslation } from '../i18n';
+import { kindTerm } from '../i18n/vocabulary';
 
 /** NetworkPlacement backends (spec.backend.kind). */
 export type BackendKind = 'CloudOSO' | 'CloudVirt' | 'CloudAWS' | 'CloudGCP';
@@ -12,6 +13,8 @@ export interface BackendSelectOption {
   name: string;
   label: string;
   ready?: boolean;
+  /** Shown greyed with this reason (the pair cannot be attached). */
+  disabledReason?: string;
 }
 
 export interface BackendSelectValue {
@@ -95,7 +98,7 @@ export function BackendSelect({
       style={{ width: '100%' }}
       aria-label={label}
     >
-      {selectedOption ? `${selectedOption.kind} · ${selectedOption.label}` : placeholder}
+      {selectedOption ? `${kindTerm(t, selectedOption.kind)} · ${selectedOption.label}` : placeholder}
     </MenuToggle>
   );
 
@@ -128,9 +131,10 @@ export function BackendSelect({
                 key={encode(o)}
                 value={encode(o)}
                 isSelected={encode(o) === selectedValue}
-                description={o.ready === false ? t('form.notReady') : undefined}
+                isDisabled={!!o.disabledReason}
+                description={o.disabledReason ?? (o.ready === false ? t('form.notReady') : undefined)}
               >
-                {o.kind} · {o.label}
+                {kindTerm(t, o.kind)} · {o.label}
               </SelectOption>
             ))
           )}

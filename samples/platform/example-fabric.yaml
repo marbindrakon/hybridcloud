@@ -1,0 +1,24 @@
+# Reference only: platform objects are managed in Git by the platform team, not
+# applied by hand. This shows the shape of the object.
+# A fabric (HybridFabric): the network that connects tenant networks across sites.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: HybridFabric
+metadata:
+  name: example-fabric
+  namespace: sovereign-cloud
+spec:
+  domainAsn: 64512
+  overlayMtu: 9000
+  vniPool:
+    start: 10000
+    end: 19999
+  l2vniPool:
+    start: 20000
+    end: 29999
+  borderGateway:
+    nodes:
+      - name: border-1
+        address: 198.51.100.11
+    credentialsRef:
+      vaultPath: fabric/example-fabric/border-gateway

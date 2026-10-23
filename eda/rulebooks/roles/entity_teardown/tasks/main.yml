@@ -7,7 +7,7 @@
         entity_namespace: "entity-{{ event_payload.regarding.name }}"
 
     - name: Resolve services cluster API connection from Vault
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/resolve_services_cluster_connection.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
     - name: Look up Entity CR on services cluster
       kubernetes.core.k8s_info:
@@ -27,6 +27,45 @@
         es_wanted: []
         es_purge: true
 
+    # only a namespace created for this Entity (it carries the Entity's label) is deleted with it
+    - name: Read the entity namespace on services cluster
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Namespace
+        name: "{{ entity_namespace }}"
+      register: entity_namespace_lookup
+
+    - name: Decide whether the namespace belongs to this Entity
+      ansible.builtin.set_fact:
+        entity_namespace_owned: >-
+          {{ (entity_namespace_lookup.resources | length == 0)
+             or (((entity_namespace_lookup.resources[0].metadata.labels | default({}, true))['hybridsovereign.redhat/entity']
+                  | default('')) == entity_cr_name) }}
+
+    # the tenant namespace delete guard admits the deletion only when the namespace names its Entity as deleting
+    # (the Entity's controller writes it at the delete request; written again here for a namespace marked earlier)
+    - name: Mark the entity namespace as deleted through its Entity
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: patched
+        api_version: v1
+        kind: Namespace
+        name: "{{ entity_namespace }}"
+        definition:
+          metadata:
+            annotations:
+              hybridsovereign.redhat/entity-deleting: "{{ entity_cr_name }}"
+      # the controller wrote it already; a refused patch must not stop the teardown
+      failed_when: false
+      when:
+        - entity_namespace_owned | bool
+        - entity_namespace_lookup.resources | length > 0
+
     - name: Delete entity namespace on services cluster
       kubernetes.core.k8s:
         host: "{{ services_api_host }}"
@@ -36,13 +75,14 @@
         api_version: v1
         kind: Namespace
         name: "{{ entity_namespace }}"
+      when: entity_namespace_owned | bool
 
     - name: Get current timestamp for status
       ansible.builtin.set_fact:
         entity_delete_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     - name: Mark Entity deletion complete on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: entities
@@ -54,7 +94,9 @@
           ready: false
           deletionComplete: true
           lastReconciledAt: "{{ entity_delete_transition_time }}"
-          message: Entity {{ entity_cr_name }} deleted by EDA
+          message: >-
+            Entity {{ entity_cr_name }} deleted by EDA{{ '' if entity_namespace_owned | bool else
+            ('; namespace ' ~ entity_namespace ~ ' was not created for this tenant and was left in place') }}
       when: entity_cr_lookup.resources | length > 0
 
     - name: Entity CR already removed — idempotent teardown success
@@ -66,7 +108,7 @@
 
   rescue:
     - name: Mark Entity delete as failed on services cluster
-      ansible.builtin.include_tasks: "{{ role_path }}/../../common/tasks/patch_cr_status.yml"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: entities
@@ -75,6 +117,7 @@
         patch_ignore_not_found: true
         cr_status_body:
           status: failed
+          reason: TeardownFailed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA deletion failed')) }}"

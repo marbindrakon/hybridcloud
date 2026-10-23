@@ -1,0 +1,93 @@
+# Self-test cases for scripts/check-content.py --self-test. `hits` lists the matched words the
+# rules must report for `text` on `surface` (crd, ui, docs); `tenant: true` is tenant-facing text.
+cases:
+  # everywhere
+  - {surface: crd, text: "Creates an OSOHelper on the central cluster.", hits: [OSOHelper]}
+  - {surface: docs, text: "OpenStack/Routed53 prerequisites", hits: [Routed53]}
+  - {surface: docs, text: "Route 53 zone of the environment", hits: []}
+  - {surface: crd, text: "Default: platformopenshift_defaults, else 3", hits: [platformopenshift_defaults]}
+  - {surface: docs, text: "The role defaults (cloudoso_defaults) are in Git.", hits: []}
+  - {surface: crd, text: "Central Vault path of the pull secret", hits: [Central Vault]}
+  - {surface: crd, text: "Controls access (Layer 2 RBAC)", hits: [Layer 2]}
+  - {surface: ui, text: "Hybrid VPC", hits: [Hybrid VPC]}
+  - {surface: docs, text: "the Event Forwarder relays events", hits: [Event Forwarder]}
+  - {surface: ui, text: "Cloud Virt", hits: [Cloud Virt]}
+  - {surface: docs, text: "Create a CloudVirt in the tenant namespace.", hits: []}
+  - {surface: docs, text: "Openshift Virt sites", hits: [Openshift Virt]}
+  - {surface: ui, text: "IAAS", hits: [IAAS]}
+  - {surface: docs, text: "Console plugin scaffold", hits: [scaffold]}
+  - {surface: docs, text: "the 14 named RBAC roles", hits: [14 named RBAC roles]}
+  - {surface: docs, text: "a 14-role model", hits: [14-role]}
+  - {surface: docs, text: "bind sovereign-cloud-editor to your group", hits: [sovereign-cloud-editor]}
+  - {surface: crd, text: "Deprecated: the same as auditor; use auditor.", hits: []}
+  # tenant-facing only
+  - {surface: docs, tenant: true, text: "Each Entity has a namespace.", hits: [Entity]}
+  - {surface: docs, tenant: false, text: "Each Entity has a namespace.", hits: []}
+  - {surface: docs, tenant: true, text: "Create an Rbac for your team.", hits: [Rbac]}
+  - {surface: ui, tenant: true, text: "The helper is pending", hits: [helper, pending]}
+  - {surface: docs, tenant: true, text: "The object stays Pending.", hits: [Pending]}
+  - {surface: crd, tenant: true, text: "Name of the Team CR.", hits: [CR]}
+  - {surface: crd, tenant: false, text: "Name of the Team CR.", hits: []}
+  - {surface: crd, tenant: true, text: "Access on the spoke cluster", hits: [spoke]}
+  - {surface: crd, tenant: true, text: "Networks are placed with NetworkPlacement (backend kind CloudAWS).", hits: [backend]}
+  - {surface: ui, tenant: true, text: "Sync now", hits: [Sync now]}
+  - {surface: docs, tenant: true, text: "Retry now", hits: []}
+  - {surface: docs, tenant: true, text: "the site gateway of site-vm", hits: [site gateway]}
+  - {surface: crd, tenant: true, text: "OSO project", hits: [OSO]}
+  - {surface: crd, tenant: true, text: "the CloudOSO environment", hits: []}
+  # CRD structural rules
+  - {surface: crd, text: "Added in P7.3 for the gateway.", hits: [P7.3]}
+  - {surface: crd, text: "Decided on 2026-10-14.", hits: ["2026-10-14"]}
+  - {surface: crd, text: "See design/P10-PLAN.md.", hits: [design/]}
+  - {surface: crd, text: "The owner decided this.", hits: [owner decided]}
+  - {surface: crd, text: "Allocated from the pool (RFC 4271).", hits: []}
+# Display strings the UI source scanner extracts from .ts/.tsx (JSX text, display props, display keys).
+sources:
+  - source: '<li><span className="sc-dot" /> Pending <strong>{n}</strong></li>'
+    strings: [Pending]
+  - source: '<Alert title="Unable to load topology" variant="warning" isInline>'
+    strings: [Unable to load topology]
+  - source: "const layers = [{ title: 'Entity', nodes }, { title: t('kinds.Team'), nodes }];"
+    strings: [Entity]
+  - source: "t('detail.apiKind', { kind, defaultValue: `API kind: ${kind}` })"
+    strings: ['API kind:']
+  - source: "if (a > b) { return x < y; } // Pending comment\nconst f = (p: Promise<void>) => p;"
+    strings: []
+  - source: "<Button aria-label={'Zoom in'} status=\"pending\" className=\"sc-dot--pending\">{t('x.y')}</Button>"
+    strings: [Zoom in]
+  - source: "/* label: 'Platform Openshift' */ const v = { label: 'common.name' };"
+    strings: []
+# Raw kinds in display strings of the UI sources (g): `raw` is how many the check reports.
+raw_kinds:
+  - {source: "t('pages.noMatch', { kind })", raw: 1}
+  - {source: "t('form.created', { kind: item.kind, name })", raw: 1}
+  - {source: "t('pages.noMatch', { kind: kindTermInText(t, kind, 'many') })", raw: 0}
+  - {source: "<Td>{item.kind}</Td>", raw: 1}
+  - {source: "<KindIcon kind={item.kind} /> key={`${b.kind}/${b.name}`}", raw: 0}
+# Saved page text (check-content --rendered): `hits` are the rendered words reported for `text`.
+rendered:
+  - {text: "ENTITY · UXR-CORP", hits: [ENTITY]}
+  - {text: "Environment CloudVirt / g-vmenv-1", hits: [CloudVirt]}
+  - {text: "No HybridNetwork resources match the current filters", hits: [HybridNetwork]}
+  - {text: "Network in entity-uxr-corp", hits: []}
+  - {text: "oc get rbacs uxr-admins", hits: []}
+  - {text: "=== TAB (default) | /t/acme-corp/create/cloudvirt", hits: []}
+  - {text: "Open https://console.example.com/k8s/cloudvirts", hits: []}
+  - {text: "Environment VM environment g-vmenv-1", hits: []}
+  - {text: "Waiting for the platform; was Pending", hits: [Pending]}
+# Kind words in display strings of .tsx sources (g): `hits` are the words the check reports.
+source_kinds:
+  - source: "<RefSelect id=\"cloudoso\" label=\"CloudOSO\" value={v} />"
+    hits: [CloudOSO]
+  - source: "<RefSelect label={p === 'aws' ? 'CloudAWS environment' : p === 'gcp' ? \"CloudGCP environment\" : `CloudOSO environment`} />"
+    hits: [CloudAWS, CloudGCP, CloudOSO]
+  - source: "<RefSelect label={kindTerm(t, p === 'aws' ? 'CloudAWS' : 'CloudOSO')} />"
+    hits: []
+  - source: "<SelectOption isDisabled value=\"\">No CloudVirt environments available</SelectOption>"
+    hits: [CloudVirt]
+  - source: "<FormGroup label={ok ? 'Rbac ready' : 'Entity'} fieldId=\"x\">"
+    hits: [Entity, Rbac]
+  - source: "const all = [...itemsOfKind<K8sResource>(items, 'CloudVirt'), ...itemsOfKind<K8sResource>(items, 'CloudOSO')];"
+    hits: []
+  - source: "<Tooltip content={x}>{open ? t('a.b') : t('a.c')}</Tooltip>"
+    hits: []

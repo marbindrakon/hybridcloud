@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { HybridSovereignKind, K8sResource } from '../types/crds';
+import { PHASE_SORT_ORDER, phaseOf, phaseSinceOf, reasonOf, summaryOf } from '../status/phase';
+import { kindTerm } from '../i18n/vocabulary';
 
 export type ListLinkMode = 'router' | 'anchor';
 
@@ -137,7 +139,7 @@ export function resourceSearchBlob(item: K8sResource, columns: ListColumnDef[]):
   const parts = [
     item.metadata.name,
     item.metadata.namespace ?? '',
-    item.status?.status ?? '',
+    phaseOf(item),
     item.status?.message ?? '',
     JSON.stringify(item.spec ?? {}),
   ];
@@ -886,11 +888,11 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
         const b = (specOf(i).backend ?? {}) as Record<string, unknown>;
         return `${asString(b.kind)} ${asString(b.name)}`;
       },
-      render: (i) => {
+      render: (i, ctx) => {
         const b = (specOf(i).backend ?? {}) as Record<string, unknown>;
         if (!b.kind) return '—';
         return chips([
-          { label: asString(b.kind), color: 'blue' },
+          { label: kindTerm(ctx.t, asString(b.kind), 'dense'), color: 'blue' },
           { label: asString(b.name), color: 'grey' },
         ]);
       },
@@ -961,26 +963,43 @@ function namespaceColumn(): ListColumnDef {
   };
 }
 
+/** Phase (sorted: things that need attention first); the cell is rendered by the table. */
 function statusColumn(): ListColumnDef {
   return {
     id: BASE_STATUS,
     labelKey: 'common.status',
     sortable: true,
-    getSortValue: (i) => i.status?.status ?? (i.status?.ready ? 'ready' : 'pending'),
-    getSearchText: (i) => `${i.status?.status ?? ''} ${i.status?.message ?? ''}`,
+    getSortValue: (i) => PHASE_SORT_ORDER[phaseOf(i)],
+    getSearchText: (i) => `${phaseOf(i)} ${summaryOf(i)}`,
     render: () => null,
   };
 }
 
-function updatedColumn(): ListColumnDef {
+/** The reason that decides the phase (a stable word to search and sort by). */
+function reasonColumn(): ListColumnDef {
+  return {
+    id: 'reason',
+    labelKey: 'list.reason',
+    sortable: true,
+    getSortValue: (i) => (phaseOf(i) === 'Ready' ? '' : reasonOf(i) ?? ''),
+    getSearchText: (i) => reasonOf(i) ?? '',
+    render: (i): CellMarker | string => {
+      const reason = phaseOf(i) === 'Ready' ? undefined : reasonOf(i);
+      return reason ? { __kind: 'truncate', text: reason, max: 28 } : '—';
+    },
+  };
+}
+
+/** Age since creation (the title holds the UTC time). */
+function ageColumn(): ListColumnDef {
   return {
     id: BASE_UPDATED,
-    labelKey: 'list.updated',
+    labelKey: 'list.age',
     sortable: true,
-    getSortValue: (i) => Date.parse(i.status?.lastReconciledAt ?? i.metadata.creationTimestamp ?? '') || 0,
-    getSearchText: (i) => i.status?.lastReconciledAt ?? '',
+    getSortValue: (i) => -(Date.parse(i.metadata.creationTimestamp ?? '') || 0),
+    getSearchText: () => '',
     render: (i): CellMarker => {
-      const rel = formatRelativeTime(i.status?.lastReconciledAt ?? i.metadata.creationTimestamp);
+      const rel = formatRelativeTime(i.metadata.creationTimestamp);
       return { __kind: 'relativeTime', label: rel.label, title: rel.title };
     },
   };
@@ -993,15 +1012,16 @@ export function getListColumns(
   const extras = KIND_EXTRA_COLUMNS[kind] ?? [];
   const cols: ListColumnDef[] = [nameColumn()];
   if (opts.showNamespace) cols.push(namespaceColumn());
-  cols.push(...extras, statusColumn(), updatedColumn());
+  cols.push(...extras, statusColumn(), reasonColumn(), ageColumn());
   return cols.filter((c) => !c.adminOnly || opts.showNamespace);
 }
 
 /** Expandable detail rows — key facts beyond the table. */
 export function getExpandRows(item: K8sResource): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
-  const msg = item.status?.message;
-  if (msg) rows.push({ label: 'Message', value: msg });
+  rows.push({ label: 'Summary', value: summaryOf(item) });
+  const since = phaseSinceOf(item);
+  if (since) rows.push({ label: `${phaseOf(item)} since`, value: since });
   const conds = item.status?.conditions;
   if (Array.isArray(conds) && conds.length) {
     for (const c of conds.slice(0, 4)) {

@@ -58,6 +58,32 @@
   no_log: true
   when: not (ci_ocp_local | bool)
 
+# Reachability first: a site that does not answer is SiteUnreachable, not a credentials problem.
+- name: Parse the API endpoint
+  ansible.builtin.set_fact:
+    _ci_ep_host: "{{ (ci_endpoint | trim | urlsplit('hostname')) | default('', true) }}"
+    _ci_ep_port: "{{ (ci_endpoint | trim | urlsplit('port')) | default(443, true) }}"
+  when: (ci_endpoint | default('') | trim) is match('https?://')
+
+- name: Check that the API endpoint answers
+  ansible.builtin.wait_for:
+    host: "{{ _ci_ep_host }}"
+    port: "{{ _ci_ep_port | int }}"
+    timeout: "{{ ci_reachability_timeout | default(10) | int }}"
+  register: _ci_reach
+  failed_when: false
+  when: (_ci_ep_host | default('')) | length > 0
+
+- name: Set the reachability failure reason
+  ansible.builtin.set_fact:
+    cloudinfrastructure_fail_reason: SiteUnreachable
+  when: _ci_reach.failed | default(false) | bool or (_ci_reach.msg | default('') is search('[Tt]imeout|refused|resolve'))
+
+- name: Require a reachable API endpoint
+  ansible.builtin.assert:
+    that: cloudinfrastructure_fail_reason != 'SiteUnreachable'
+    fail_msg: "The site API {{ ci_endpoint | trim }} does not answer within {{ ci_reachability_timeout | default(10) }} s."
+
 - name: Read the cluster version
   kubernetes.core.k8s_info:
     host: "{{ ci_k8s.host | default(omit) }}"
@@ -69,14 +95,20 @@
   register: _ci_cv
   failed_when: false
 
+# 401/403 = the credentials were refused; connection errors = the site does not answer; else the probe failed.
 - name: Set the API failure reason
   ansible.builtin.set_fact:
-    cloudinfrastructure_fail_reason: CredentialsInvalid
+    cloudinfrastructure_fail_reason: >-
+      {{ 'CredentialsInvalid' if (_ci_cv.msg | default('') | string) is search('401|403|[Uu]nauthori[sz]ed|[Ff]orbidden')
+         else ('SiteUnreachable' if (_ci_cv.msg | default('') | string) is search(ci_unreachable_pattern)
+         else ('ProbeFailed' if (_ci_cv.msg | default('') | string) | length > 0 else 'CredentialsInvalid')) }}
+  vars:
+    ci_unreachable_pattern: '(?i)timed? ?out|connection (refused|reset|aborted)|max retries|name or service not known|no route to host|temporary failure in name resolution|failed to establish|network is unreachable'
   when: (_ci_cv.resources | default([])) | length == 0
 
 - name: Require API access
   ansible.builtin.assert:
-    that: cloudinfrastructure_fail_reason != 'CredentialsInvalid'
+    that: cloudinfrastructure_fail_reason not in ['CredentialsInvalid', 'SiteUnreachable', 'ProbeFailed']
     fail_msg: >-
       Cannot read ClusterVersion on {{ ci_endpoint | trim }} with {{ ci_credentials_message }}
       {{ (_ci_cv.msg | default('') | string)[:300] }}
@@ -129,6 +161,28 @@
     - (ci_ocp.storageClass | default('', true)) | length > 0
     - (_ci_sc.resources | default([])) | length == 0
 
+# what a tenant may pick for VM disks (TenantProfile status.sites[].storageClasses); read only
+- name: List the site's storage classes
+  kubernetes.core.k8s_info:
+    host: "{{ ci_k8s.host | default(omit) }}"
+    api_key: "{{ ci_k8s.api_key | default(omit) }}"
+    kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+  register: _ci_scs
+  failed_when: false
+
+- name: Keep the storage class names and the default
+  ansible.builtin.set_fact:
+    ci_storage_classes: >-
+      {%- set out = [] -%}
+      {%- for c in _ci_scs.resources | default([]) | sort(attribute='metadata.name') -%}
+        {%- set a = c.metadata.annotations | default({}, true) -%}
+        {%- set _ = out.append({'name': c.metadata.name,
+                                'default': (a['storageclass.kubernetes.io/is-default-class'] | default('') | string | lower) == 'true'}) -%}
+      {%- endfor -%}
+      {{ out }}
+
 - name: Read the cluster network operator config
   kubernetes.core.k8s_info:
     host: "{{ ci_k8s.host | default(omit) }}"
@@ -179,6 +233,9 @@
     ci_notes: "{{ ci_notes + [(ci_bgp_sessions | int - ci_bgp_established | int) ~ ' of ' ~ ci_bgp_sessions ~ ' fabric BGP sessions not Established'] }}"
   when: ci_bgp_established | int < ci_bgp_sessions | int
 
+- name: Read the site's way in for tenants (console URL, sign-in button)
+  ansible.builtin.include_tasks: openshift_wayin.yml
+
 - name: Set openshift result facts
   vars:
     _evpn: "{{ (ci_cno_frr | bool) and ci_cno_ra == 'Enabled' and (ci_bgp_established | int > 0) }}"
@@ -200,6 +257,9 @@
       version: "{{ ((_ci_cv.resources | first).status | default({})).desired.version | default('') }}"
       cluster: "{{ ci_ocp.clusterRef | default('local', true) }}"
       routeAdvertisements: "{{ ci_cno_ra }}"
+      console: "{{ ci_wayin.console | default('') }}"
+      signIn: "{{ {'clientId': ci_wayin.signIn.clientId | default(''), 'idpName': ci_wayin.signIn.idpName | default('') | trim} }}"
+      storageClasses: "{{ ci_storage_classes }}"
       # one expression: nested "{{ x | int }}" values come out as strings
       underlay: "{{ {'sessions': ci_bgp_sessions | int, 'established': ci_bgp_established | int, 'peers': ci_bgp_peers} }}"
     ci_type_message: >-

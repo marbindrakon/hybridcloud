@@ -14,11 +14,9 @@ export interface NetworkOverviewCRsResult {
 /**
  * Fetch exactly the kinds NetworkOverview draws, via per-kind namespaced lists.
  *
- * Deliberately not useOverviewCRs: that hook's `dashboard` path calls
- * `/api/overview/crs`, which only the ADMIN dashboard server implements. On the
- * tenant dashboard that URL falls through to the SPA and returns index.html,
- * so the overview died with `Unexpected token '<' ... is not valid JSON`.
- * `/api/k8s` is served by every host, so per-kind lists work everywhere.
+ * Deliberately not useOverviewCRs: that hook walks every Entity namespace,
+ * which a tenant cannot list. `/api/k8s` (raw proxy) or the curated list
+ * routes are served by every host, so per-kind lists work everywhere.
  *
  * Platform kinds live in sovereign-cloud and a tenant may well be forbidden to
  * list them. That is not an error here — the fabric half simply renders empty

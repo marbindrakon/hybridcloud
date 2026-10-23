@@ -6,6 +6,9 @@ import {
   K8sResource,
 } from '../types';
 import { usePermissions } from './permissions';
+import { errorFromFetchFailure, errorFromResponse, K8sApiErrorContext, parseWarningHeaders } from './errors';
+import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs } from './fetchState';
+import { isInFlight, phaseOf } from '../status/phase';
 
 export type K8sApiStyle = 'raw' | 'dashboard';
 
@@ -19,33 +22,51 @@ export interface K8sClientConfig {
    * dashboard = curated Express routes (/api/teams?namespace=...) returning item arrays
    */
   apiStyle?: K8sApiStyle;
+  /** Dashboard permission batch endpoint (default /api/permissions); unused by the console (ssar). */
+  permissionsEndpoint?: string;
 }
 
 export interface UseK8sResourceListOptions {
   namespace?: string;
   labelSelector?: string;
   fieldSelector?: string;
+  /** Fixed refresh interval; wins over pollWhileInFlight. */
   pollIntervalMs?: number;
+  /** Refresh every 5 s while an item is in flight (Waiting, Creating, Updating, Deleting), else every 30 s. */
+  pollWhileInFlight?: boolean;
   enabled?: boolean;
 }
 
 export interface UseK8sResourceListResult<T extends K8sResource> {
+  /** The last good list for the current URL (kept when a refresh fails for a transient reason). */
   items: T[];
   loading: boolean;
+  /** The list could not be loaded and there is nothing to show (full-page state). */
   error: Error | null;
+  /** A refresh failed; `items` are from the last good answer (inline "retrying" state). */
+  refreshError: Error | null;
+  /** Epoch ms of the last good answer. */
+  loadedAt?: number;
   refresh: () => void;
 }
 
 export interface UseK8sResourceOptions {
   namespace?: string;
+  /** Fixed refresh interval; wins over pollWhileInFlight. */
   pollIntervalMs?: number;
+  /** Refresh every 5 s while the object is in flight, else every 30 s. */
+  pollWhileInFlight?: boolean;
   enabled?: boolean;
 }
 
 export interface UseK8sResourceResult<T extends K8sResource> {
+  /** The last good object for the current URL (kept when a refresh fails for a transient reason). */
   resource: T | null;
   loading: boolean;
   error: Error | null;
+  /** A refresh failed; `resource` is from the last good answer. */
+  refreshError: Error | null;
+  loadedAt?: number;
   refresh: () => void;
 }
 
@@ -173,7 +194,39 @@ const UPDATE_METHOD: Partial<Record<HybridSovereignKind, 'PUT' | 'PATCH'>> = {
 
 const RECONCILE_ANNOTATION = 'ansible.sdk.operatorframework.io/reconcileNow';
 
-/** Force reconcile by setting the operator reconcileNow annotation */
+/** Options of a create or update. */
+export interface WriteOptions {
+  /** Server dry run: the API validates and answers, nothing is persisted. */
+  dryRun?: boolean;
+  /** Called with the API's `Warning` texts of a successful answer. */
+  onWarnings?: (warnings: string[]) => void;
+}
+
+/**
+ * Query of a write: the raw API gets fieldValidation=Strict (unknown or
+ * misspelled fields are refused with their path, never dropped) and dryRun=All
+ * for a dry run; the curated dashboard routes add Strict themselves and only
+ * need dryRun=All.
+ */
+function withWriteQuery(url: string, opts: WriteOptions | undefined, raw: boolean): string {
+  const params: string[] = [];
+  if (raw) params.push('fieldValidation=Strict');
+  if (opts?.dryRun) params.push('dryRun=All');
+  if (!params.length) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}${params.join('&')}`;
+}
+
+async function write<T>(url: string, init: RequestInit, opts: WriteOptions | undefined, ctx: K8sApiErrorContext): Promise<T> {
+  const answer = await k8sFetchWithWarnings<T>(url, init, ctx);
+  if (answer.warnings.length) opts?.onWarnings?.(answer.warnings);
+  return answer.body;
+}
+
+/**
+ * Retry now: write a new value to the operator's reconcileNow annotation. The operator handles each
+ * distinct value once (status.lastHandledReconcileRequest) and keeps the annotation, so every request
+ * writes a fresh timestamp (the dashboard server substitutes its own).
+ */
 export async function forceReconcile(
   kind: HybridSovereignKind,
   name: string,
@@ -190,7 +243,7 @@ export async function forceReconcile(
         name,
         namespace,
         annotation: RECONCILE_ANNOTATION,
-        value: 'true',
+        value: new Date().toISOString(),
       }),
     });
   }
@@ -233,25 +286,65 @@ export async function updateDashboardResource(
   name: string,
   namespace: string,
   body: { spec: unknown },
+  opts?: WriteOptions,
 ): Promise<unknown> {
   const path = DASHBOARD_LIST_PATH[kind];
   const method = UPDATE_METHOD[kind] ?? 'PUT';
+  const ctx = { kind, verb: 'update', namespace, name };
   if (globalK8sConfig.apiStyle === 'dashboard' && path) {
     const url = `${path}/${encodeURIComponent(name)}?namespace=${encodeURIComponent(namespace)}`;
-    return k8sFetchJson(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    return write(
+      withWriteQuery(url, opts, false),
+      { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      opts,
+      ctx,
+    );
   }
-  return k8sFetchJson(buildResourceUrl(kind, name, namespace), {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/merge-patch+json' },
-    body: JSON.stringify(body),
+  return write(
+    withWriteQuery(buildResourceUrl(kind, name, namespace), opts, true),
+    { method: 'PATCH', headers: { 'Content-Type': 'application/merge-patch+json' }, body: JSON.stringify(body) },
+    opts,
+    ctx,
+  );
+}
+
+const forbiddenListeners = new Set<() => void>();
+
+/** Called on every 403 answer (the permission gate drops its cache then). Returns the remover. */
+export function addForbiddenListener(fn: () => void): () => void {
+  forbiddenListeners.add(fn);
+  return () => {
+    forbiddenListeners.delete(fn);
+  };
+}
+
+function notifyForbidden(): void {
+  forbiddenListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      /* listener problems never mask the API answer */
+    }
   });
 }
 
-async function k8sFetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+/** A successful answer with the Kubernetes `Warning` headers that came with it. */
+export interface K8sAnswer<T> {
+  body: T;
+  warnings: string[];
+}
+
+/**
+ * Fetch JSON from the configured API base and keep the answer's `Warning`
+ * headers. A failed answer throws `K8sApiError` (status, reason, causes,
+ * warnings), also when the configured fetch function throws it (consoleFetch);
+ * a request that never got an answer throws one with status 0.
+ */
+export async function k8sFetchWithWarnings<T>(
+  url: string,
+  init?: RequestInit,
+  ctx: K8sApiErrorContext = {},
+): Promise<K8sAnswer<T>> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(init?.headers as Record<string, string> | undefined),
@@ -260,28 +353,44 @@ async function k8sFetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     headers.Authorization = `Bearer ${globalK8sConfig.token}`;
   }
   const fetchImpl = globalK8sConfig.fetchFn ?? fetch;
-  const response = await fetchImpl(url, { ...init, headers });
-  if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = (await response.json()) as { message?: string };
-      if (body?.message) detail = body.message;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(`K8s API error ${response.status}: ${detail}`);
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { ...init, headers });
+  } catch (err) {
+    // consoleFetch throws its HttpError for every non-2xx answer: keep the status and Status body.
+    const error = errorFromFetchFailure(err, ctx);
+    if (error.status === 403) notifyForbidden();
+    throw error;
   }
+  if (!response.ok) {
+    if (response.status === 403) notifyForbidden();
+    throw await errorFromResponse(response, ctx);
+  }
+  const warnings = parseWarningHeaders(response.headers) ?? [];
   // DELETE / some PATCHes return 200 with body, 202 Accepted, or 204 No Content.
   if (response.status === 204 || response.status === 205) {
-    return undefined as T;
+    return { body: undefined as T, warnings };
   }
   const text = await response.text();
-  if (!text) return undefined as T;
+  if (!text) return { body: undefined as T, warnings };
   try {
-    return JSON.parse(text) as T;
+    return { body: JSON.parse(text) as T, warnings };
   } catch {
-    return undefined as T;
+    return { body: undefined as T, warnings };
   }
+}
+
+/**
+ * Fetch JSON from the configured API base. A failed answer throws `K8sApiError`
+ * (status, reason, causes, warnings); a request that never got an answer throws
+ * one with status 0.
+ */
+export async function k8sFetchJson<T>(
+  url: string,
+  init?: RequestInit,
+  ctx: K8sApiErrorContext = {},
+): Promise<T> {
+  return (await k8sFetchWithWarnings<T>(url, init, ctx)).body;
 }
 
 function normalizeListPayload<T>(data: unknown): T[] {
@@ -332,6 +441,7 @@ export async function createDashboardResource(
   kind: HybridSovereignKind,
   body: { name: string; namespace?: string; spec?: unknown } | unknown,
   namespace?: string,
+  opts?: WriteOptions,
 ): Promise<unknown> {
   const path = DASHBOARD_CREATE_PATH[kind];
   if (globalK8sConfig.apiStyle === 'dashboard' && path) {
@@ -346,11 +456,12 @@ export async function createDashboardResource(
     }
     const ns = payload.namespace ?? namespace;
     const url = ns && kind !== 'Entity' ? `${path}?namespace=${encodeURIComponent(ns)}` : path;
-    return k8sFetchJson(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    return write(
+      withWriteQuery(url, opts, false),
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+      opts,
+      { kind, verb: 'create', namespace: ns, name: payload.name },
+    );
   }
   const plural = KIND_PLURALS[kind];
   const base = globalK8sConfig.baseUrl ?? '/api/k8s';
@@ -382,11 +493,57 @@ export async function createDashboardResource(
       : metaNs && kind === 'Entity'
         ? `${base}/apis/${API_VERSION_FULL}/namespaces/${metaNs}/${plural}`
         : `${base}/apis/${API_VERSION_FULL}/${plural}`;
-  return k8sFetchJson(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  return write(
+    withWriteQuery(url, opts, true),
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+    opts,
+    { kind, verb: 'create', namespace: metaNs, name: metaName },
+  );
+}
+
+/** One object by name (curated route or raw API, as configured); throws K8sApiError. */
+export async function fetchResource<T extends K8sResource>(
+  kind: HybridSovereignKind,
+  name: string,
+  namespace?: string,
+): Promise<T> {
+  return k8sFetchJson<T>(buildResourceUrl(kind, name, namespace), undefined, { kind, verb: 'get', namespace, name });
+}
+
+/** One list request (curated route or raw API, as configured); throws K8sApiError. */
+export async function fetchResourceList<T extends K8sResource>(
+  kind: HybridSovereignKind,
+  options: UseK8sResourceListOptions = {},
+): Promise<T[]> {
+  const url = buildListUrl(kind, options);
+  const data = await k8sFetchJson<unknown>(url, undefined, { kind, verb: 'list', namespace: options.namespace });
+  return normalizeListPayload<T>(data);
+}
+
+const NO_ITEMS: never[] = [];
+
+/** True while the browser tab is hidden (polling pauses then). */
+function useDocumentHidden(): boolean {
+  const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden === true);
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onChange = () => setHidden(document.hidden === true);
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+  return hidden;
+}
+
+/**
+ * Schedules the next refresh once the current request has finished, so
+ * requests never overlap; a changed delay or a manual refresh reschedules.
+ */
+function useNextRefresh(delayMs: number, active: boolean, refresh: () => void): void {
+  useEffect(() => {
+    if (!active || !delayMs) return;
+    const id = setTimeout(refresh, delayMs);
+    return () => clearTimeout(id);
+  }, [delayMs, active, refresh]);
 }
 
 /** List Hybrid Sovereign CRs of a given kind */
@@ -394,16 +551,15 @@ export function useK8sResourceList<T extends K8sResource>(
   kind: HybridSovereignKind,
   options: UseK8sResourceListOptions = {},
 ): UseK8sResourceListResult<T> {
-  const { namespace, pollIntervalMs, enabled = true, labelSelector, fieldSelector } = options;
-  const [items, setItems] = useState<T[]>([]);
+  const { namespace, pollIntervalMs, pollWhileInFlight, enabled = true, labelSelector, fieldSelector } = options;
   const [loading, setLoading] = useState(enabled);
-  const [error, setError] = useState<Error | null>(null);
   const [tick, setTick] = useState(0);
 
   const url = useMemo(
     () => buildListUrl(kind, { namespace, labelSelector, fieldSelector }),
     [kind, namespace, labelSelector, fieldSelector],
   );
+  const [state, setState] = useState<FetchState<T[]>>(() => initialFetchState<T[]>(url));
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
@@ -416,15 +572,12 @@ export function useK8sResourceList<T extends K8sResource>(
     let cancelled = false;
     setLoading(true);
 
-    k8sFetchJson<unknown>(url)
+    k8sFetchJson<unknown>(url, undefined, { kind, verb: 'list', namespace })
       .then((data) => {
-        if (!cancelled) {
-          setItems(normalizeListPayload<T>(data));
-          setError(null);
-        }
+        if (!cancelled) setState((prev) => applyFetchOutcome(prev, url, { ok: true, data: normalizeListPayload<T>(data) }));
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err);
+        if (!cancelled) setState((prev) => applyFetchOutcome<T[]>(prev, url, { ok: false, error: err }));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -435,13 +588,23 @@ export function useK8sResourceList<T extends K8sResource>(
     };
   }, [url, enabled, tick]);
 
-  useEffect(() => {
-    if (!pollIntervalMs || !enabled) return;
-    const id = setInterval(refresh, pollIntervalMs);
-    return () => clearInterval(id);
-  }, [pollIntervalMs, enabled, refresh]);
+  // A new URL (other kind, namespace or selector) never shows the previous
+  // list's rows or error while it loads (UX-113).
+  const current = state.key === url ? state : initialFetchState<T[]>(url);
+  const items = (current.data ?? NO_ITEMS) as T[];
+  const hidden = useDocumentHidden();
+  const inFlight = !!pollWhileInFlight && items.some((i) => isInFlight(phaseOf(i)));
+  const delay = pollDelayMs({ pollIntervalMs, pollWhileInFlight, inFlight, hidden });
+  useNextRefresh(delay, enabled && !loading, refresh);
 
-  return { items, loading, error, refresh };
+  return {
+    items,
+    loading,
+    error: current.error,
+    refreshError: current.refreshError,
+    loadedAt: current.loadedAt,
+    refresh,
+  };
 }
 
 /** Fetch a single Hybrid Sovereign CR by name */
@@ -450,13 +613,12 @@ export function useK8sResource<T extends K8sResource>(
   name: string,
   options: UseK8sResourceOptions = {},
 ): UseK8sResourceResult<T> {
-  const { namespace, pollIntervalMs, enabled = true } = options;
-  const [resource, setResource] = useState<T | null>(null);
+  const { namespace, pollIntervalMs, pollWhileInFlight, enabled = true } = options;
   const [loading, setLoading] = useState(enabled);
-  const [error, setError] = useState<Error | null>(null);
   const [tick, setTick] = useState(0);
 
   const url = useMemo(() => buildResourceUrl(kind, name, namespace), [kind, name, namespace]);
+  const [state, setState] = useState<FetchState<T>>(() => initialFetchState<T>(url));
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
@@ -469,15 +631,12 @@ export function useK8sResource<T extends K8sResource>(
     let cancelled = false;
     setLoading(true);
 
-    k8sFetchJson<T>(url)
+    k8sFetchJson<T>(url, undefined, { kind, verb: 'get', namespace, name })
       .then((data) => {
-        if (!cancelled) {
-          setResource(data);
-          setError(null);
-        }
+        if (!cancelled) setState((prev) => applyFetchOutcome(prev, url, { ok: true, data }));
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err);
+        if (!cancelled) setState((prev) => applyFetchOutcome<T>(prev, url, { ok: false, error: err }));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -488,13 +647,21 @@ export function useK8sResource<T extends K8sResource>(
     };
   }, [url, enabled, name, tick]);
 
-  useEffect(() => {
-    if (!pollIntervalMs || !enabled) return;
-    const id = setInterval(refresh, pollIntervalMs);
-    return () => clearInterval(id);
-  }, [pollIntervalMs, enabled, refresh]);
+  const current = state.key === url ? state : initialFetchState<T>(url);
+  const resource = current.data ?? null;
+  const hidden = useDocumentHidden();
+  const inFlight = !!pollWhileInFlight && !!resource && isInFlight(phaseOf(resource));
+  const delay = pollDelayMs({ pollIntervalMs, pollWhileInFlight, inFlight, hidden });
+  useNextRefresh(delay, enabled && !!name && !loading, refresh);
 
-  return { resource, loading, error, refresh };
+  return {
+    resource,
+    loading,
+    error: current.error,
+    refreshError: current.refreshError,
+    loadedAt: current.loadedAt,
+    refresh,
+  };
 }
 
 /** Check if the current user can perform a verb on a resource */

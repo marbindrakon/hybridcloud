@@ -1,0 +1,30 @@
+admin-console-plugin:src/components/AdminNetworkOverviewPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminNetworkOverviewPage.tsx: TS2786: 'SectionErrorBoundary' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'Card' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminOverviewPage.tsx: TS2786: 'SectionErrorBoundary' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Button' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Table' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tbody' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Td' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Td' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Td' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Td' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Td' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Th' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Th' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Th' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Th' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Thead' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot be used as a JSX component.
+admin-console-plugin:src/components/AdminUIHealthPage.tsx: TS2786: 'Tr' cannot be used as a JSX component.
+admin-dashboard:src/pages/OverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.
+admin-dashboard:src/pages/OverviewPage.tsx: TS2322: Type '"alignEnd"' is not assignable to type '"alignLeft" | "alignRight" | undefined'.

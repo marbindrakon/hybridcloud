@@ -1,0 +1,72 @@
+---
+# Converge the OIDC team sync of one team (loop var qts: {team, groups}). A registry team syncs with exactly one
+# group: the first granted access group (full path /<entity>/<access group>); a team synced with a group that is no
+# longer granted is re-synced, a team with no granted group stops syncing. The result is read back.
+- name: Wanted sync group of team {{ qts.team }}
+  ansible.builtin.set_fact:
+    _qts_wanted: "{{ qts.groups | map('regex_replace', '^/*', '/') | list }}"
+
+- name: Read team {{ qts.team }}
+  ansible.builtin.uri:
+    url: "{{ quay_url }}/api/v1/organization/{{ org_name }}/team/{{ qts.team }}/members"
+    headers:
+      Authorization: "Bearer {{ quay_api_token }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _qts_team
+
+- name: Current sync of team {{ qts.team }}
+  ansible.builtin.set_fact:
+    _qts_synced: "{{ (_qts_team.json | default({})).synced is defined }}"
+    _qts_group: "{{ (((_qts_team.json | default({})).synced | default({})).config | default({}, true)).group_name | default('') }}"
+
+- name: Stop syncing team {{ qts.team }} with a group that is no longer granted
+  ansible.builtin.uri:
+    url: "{{ quay_url }}/api/v1/organization/{{ org_name }}/team/{{ qts.team }}/syncing"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ quay_api_token }}"
+    validate_certs: false
+    status_code: [200, 204, 404]
+  when: _qts_synced | bool and _qts_group | length > 0 and _qts_group not in _qts_wanted
+
+- name: Sync team {{ qts.team }} with its access group
+  ansible.builtin.uri:
+    url: "{{ quay_url }}/api/v1/organization/{{ org_name }}/team/{{ qts.team }}/syncing"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ quay_api_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      group_name: "{{ _qts_wanted[0] }}"
+    validate_certs: false
+    status_code: [200, 201]
+  when: >-
+    _qts_team.status == 200 and _qts_wanted | length > 0
+    and (not (_qts_synced | bool) or (_qts_group | length > 0 and _qts_group not in _qts_wanted))
+  ignore_errors: true
+
+- name: Read team {{ qts.team }} back
+  ansible.builtin.uri:
+    url: "{{ quay_url }}/api/v1/organization/{{ org_name }}/team/{{ qts.team }}/members"
+    headers:
+      Authorization: "Bearer {{ quay_api_token }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _qts_after
+  when: _qts_wanted | length > 0
+
+# A sync whose group is not shown (the registry shows it to superusers only) counts as in place.
+- name: Record the sync of team {{ qts.team }}
+  vars:
+    _after: "{{ (_qts_after.json | default({}, true)) if (_qts_wanted | length > 0 and _qts_after.status | default(0) == 200) else {} }}"
+    _is_synced: "{{ 'synced' in _after }}"
+    _g: "{{ ((_after.synced | default({}, true)).config | default({}, true)).group_name | default('') if 'synced' in _after else '' }}"
+  ansible.builtin.set_fact:
+    quayorg_team_sync: >-
+      {{ quayorg_team_sync | default({}) | combine({qts.team: {'groups': _qts_wanted,
+         'synced': (_g if _g | length > 0 else ('(set)' if _is_synced | bool else ''))}}) }}
+    quayorg_mapping_failed: >-
+      {{ (quayorg_mapping_failed | default(false) | bool)
+         or (_qts_wanted | length > 0 and (not (_is_synced | bool) or (_g | length > 0 and _g not in _qts_wanted))) }}

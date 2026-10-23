@@ -1,0 +1,858 @@
+project:
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/webshop admin uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: webshop
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Project
+      hybridsovereign.redhat/scope-source-name: d850c6ebd334377c
+    name: shc-scope-project-webshop-01c7049e
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - webshop
+    resources:
+    - projects
+    verbs:
+    - get
+    - list
+    - watch
+    - update
+    - patch
+    - delete
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - webshop
+    resources:
+    - projects/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/webshop admin uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: webshop
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Project
+      hybridsovereign.redhat/scope-source-name: d850c6ebd334377c
+    name: shc-scope-project-webshop-01c7049e
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-project-webshop-01c7049e
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-admins
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/webshop edit uxr-corp.uxr-devs
+      hybridsovereign.redhat/scope-source-name: webshop
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Project
+      hybridsovereign.redhat/scope-source-name: d850c6ebd334377c
+    name: shc-scope-project-webshop-fa8be11d
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - webshop
+    resources:
+    - projects
+    verbs:
+    - get
+    - list
+    - watch
+    - update
+    - patch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - webshop
+    resources:
+    - projects/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/webshop edit uxr-corp.uxr-devs
+      hybridsovereign.redhat/scope-source-name: webshop
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Project
+      hybridsovereign.redhat/scope-source-name: d850c6ebd334377c
+    name: shc-scope-project-webshop-fa8be11d
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-project-webshop-fa8be11d
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-devs
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/webshop custom uxr-corp.uxr-auditors
+      hybridsovereign.redhat/scope-source-name: webshop
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Project
+      hybridsovereign.redhat/scope-source-name: d850c6ebd334377c
+    name: shc-scope-project-webshop-1bb51e40
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - webshop
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - webshop
+    resources:
+    - projects/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/webshop custom uxr-corp.uxr-auditors
+      hybridsovereign.redhat/scope-source-name: webshop
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Project
+      hybridsovereign.redhat/scope-source-name: d850c6ebd334377c
+    name: shc-scope-project-webshop-1bb51e40
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-project-webshop-1bb51e40
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-auditors
+projectRendered:
+- group: uxr-corp.uxr-admins
+  kind: Project
+  level: admin
+  names:
+  - webshop
+  role: shc-scope-project-webshop-01c7049e
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+  - delete
+- group: uxr-corp.uxr-devs
+  kind: Project
+  level: edit
+  names:
+  - webshop
+  role: shc-scope-project-webshop-fa8be11d
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- group: uxr-corp.uxr-auditors
+  kind: Project
+  level: custom
+  names:
+  - webshop
+  role: shc-scope-project-webshop-1bb51e40
+  verbs:
+  - get
+team:
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Team/platform edit uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-c3ff0ea6
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform
+    resources:
+    - teams
+    verbs:
+    - get
+    - list
+    - watch
+    - update
+    - patch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform
+    resources:
+    - teams/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Team/platform edit uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-c3ff0ea6
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-team-platform-c3ff0ea6
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-admins
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/api,webshop edit uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-9509c911
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - api
+    - webshop
+    resources:
+    - projects
+    verbs:
+    - get
+    - list
+    - watch
+    - update
+    - patch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - api
+    - webshop
+    resources:
+    - projects/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/api,webshop edit uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-9509c911
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-team-platform-9509c911
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-admins
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Assignment/platform-dev view uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-42ee8bf0
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform-dev
+    resources:
+    - assignments
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform-dev
+    resources:
+    - assignments/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Assignment/platform-dev view uxr-corp.uxr-admins
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-42ee8bf0
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-team-platform-42ee8bf0
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-admins
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Team/platform view uxr-corp.uxr-devs
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-871d081a
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform
+    resources:
+    - teams
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform
+    resources:
+    - teams/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Team/platform view uxr-corp.uxr-devs
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-871d081a
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-team-platform-871d081a
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-devs
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/api,webshop edit uxr-corp.uxr-devs
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-2d56dd0b
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - api
+    - webshop
+    resources:
+    - projects
+    verbs:
+    - get
+    - list
+    - watch
+    - update
+    - patch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - api
+    - webshop
+    resources:
+    - projects/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Project/api,webshop edit uxr-corp.uxr-devs
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-2d56dd0b
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-team-platform-2d56dd0b
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-devs
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Team/platform view uxr-corp.uxr-auditors
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-5b5853ef
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform
+    resources:
+    - teams
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform
+    resources:
+    - teams/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Team/platform view uxr-corp.uxr-auditors
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-5b5853ef
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-team-platform-5b5853ef
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-auditors
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Assignment/platform-dev view uxr-corp.uxr-auditors
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-1c3821eb
+    namespace: entity-uxr-corp
+  rules:
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform-dev
+    resources:
+    - assignments
+    verbs:
+    - get
+    - list
+    - watch
+  - apiGroups:
+    - hybridsovereign.redhat
+    resourceNames:
+    - platform-dev
+    resources:
+    - assignments/status
+    verbs:
+    - get
+  - apiGroups:
+    - ''
+    resources:
+    - namespaces
+    verbs:
+    - get
+  - apiGroups:
+    - project.openshift.io
+    resources:
+    - projects
+    verbs:
+    - get
+  - apiGroups:
+    - hybridsovereign.redhat
+    resources:
+    - tenantprofiles
+    verbs:
+    - get
+    - list
+    - watch
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    annotations:
+      hybridsovereign.redhat/scope: Assignment/platform-dev view uxr-corp.uxr-auditors
+      hybridsovereign.redhat/scope-source-name: platform
+    labels:
+      app.kubernetes.io/managed-by: shc-access
+      hybridsovereign.redhat/entity: uxr-corp
+      hybridsovereign.redhat/scope-source-kind: Team
+      hybridsovereign.redhat/scope-source-name: d294fcce0cc88587
+    name: shc-scope-team-platform-1c3821eb
+    namespace: entity-uxr-corp
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: Role
+    name: shc-scope-team-platform-1c3821eb
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: uxr-corp.uxr-auditors
+teamRendered:
+- group: uxr-corp.uxr-admins
+  kind: Team
+  level: edit
+  names:
+  - platform
+  role: shc-scope-team-platform-c3ff0ea6
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- group: uxr-corp.uxr-admins
+  kind: Project
+  level: edit
+  names:
+  - api
+  - webshop
+  role: shc-scope-team-platform-9509c911
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- group: uxr-corp.uxr-admins
+  kind: Assignment
+  level: view
+  names:
+  - platform-dev
+  role: shc-scope-team-platform-42ee8bf0
+  verbs:
+  - get
+  - list
+  - watch
+- group: uxr-corp.uxr-devs
+  kind: Team
+  level: view
+  names:
+  - platform
+  role: shc-scope-team-platform-871d081a
+  verbs:
+  - get
+  - list
+  - watch
+- group: uxr-corp.uxr-devs
+  kind: Project
+  level: edit
+  names:
+  - api
+  - webshop
+  role: shc-scope-team-platform-2d56dd0b
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - patch
+- group: uxr-corp.uxr-auditors
+  kind: Team
+  level: view
+  names:
+  - platform
+  role: shc-scope-team-platform-5b5853ef
+  verbs:
+  - get
+  - list
+  - watch
+- group: uxr-corp.uxr-auditors
+  kind: Assignment
+  level: view
+  names:
+  - platform-dev
+  role: shc-scope-team-platform-1c3821eb
+  verbs:
+  - get
+  - list
+  - watch

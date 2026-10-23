@@ -8,24 +8,13 @@
         cloudaws_observed_generation: "{{ _hybridsovereign_redhat_cloudaws.status.observedGeneration | default(0) | int }}"
         cloudaws_status: "{{ _hybridsovereign_redhat_cloudaws.status.status | default('') }}"
         cloudaws_ready: "{{ _hybridsovereign_redhat_cloudaws.status.ready | default(false) | bool }}"
-        reconcile_now: >-
-          {{
-            (_hybridsovereign_redhat_cloudaws.metadata.annotations | default({}))
-            .get('ansible.sdk.operatorframework.io/reconcileNow', '') | string == 'true'
-          }}
 
-    - name: Clear reconcileNow annotation when forced reconcile
-      kubernetes.core.k8s:
-        state: patched
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: CloudAWS
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-        definition:
-          metadata:
-            annotations:
-              ansible.sdk.operatorframework.io/reconcileNow: null
-      when: reconcile_now | bool
+    - name: Read the Retry-now request
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: reconcile_request
+      vars:
+        reconcile_request_cr: "{{ _hybridsovereign_redhat_cloudaws }}"
 
     - name: Set event action and reason
       ansible.builtin.set_fact:
@@ -56,6 +45,19 @@
       ansible.builtin.set_fact:
         cloudaws_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # The acknowledgement carries the phase (Creating for a new CloudAWS, Updating for a change), so no status
+    # write is without a phase (_common/tasks/ack_phase.yml).
+    - name: Decide the phase of the acknowledgement
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: ack_phase
+      vars:
+        ack_phase_cr: "{{ _hybridsovereign_redhat_cloudaws }}"
+      when: not (reconcile_keeps_ready | default(false) | bool)
+
+    # A create or a spec change: Ready=False until the job reports. A re-run of a Ready object (Retry now,
+    # a wake from another job, a periodic re-check) keeps ready/conditions as they are until the job
+    # reports, and only Reconciling says that a run is queued (reconcile_keeps_ready, reconcile_request.yml).
     - name: Mark CloudAWS as reconciling
       operator_sdk.util.k8s_status:
         api_version: hybridsovereign.redhat/v1alpha1
@@ -65,6 +67,9 @@
         status:
           status: reconciling
           ready: false
+          phase: "{{ ack_phase.phase }}"
+          phaseSince: "{{ ack_phase.phaseSince }}"
+          summary: "{{ ack_phase.summary }}"
           lastReconciledAt: "{{ cloudaws_status_transition_time }}"
           conditions:
             - type: Ready
@@ -72,6 +77,22 @@
               lastTransitionTime: "{{ cloudaws_status_transition_time }}"
               reason: AwaitingEDA
               message: Awaiting EDA to complete provisioning
+      when: not (reconcile_keeps_ready | default(false) | bool)
+
+    - name: Mark CloudAWS as queued for a re-run
+      operator_sdk.util.k8s_status:
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudAWS
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          conditions:
+            - type: Reconciling
+              status: "True"
+              lastTransitionTime: "{{ cloudaws_status_transition_time }}"
+              reason: Queued
+              message: A re-run is queued.
+      when: reconcile_keeps_ready | default(false) | bool
 
     - name: Publish operator event to AMQ Streams
       ansible.builtin.include_role:
@@ -82,6 +103,8 @@
         operator_event_action: "{{ cloudaws_event_action }}"
         operator_event_note: "{{ cloudaws_spec | to_json }}"
         operator_reporting_controller: cloudaws-operator
+        operator_event_phase_recorded: >-
+          {{ '' if (reconcile_keeps_ready | default(false) | bool) else (ack_phase | default({})).phase | default('') }}
         operator_event_regarding:
           apiVersion: hybridsovereign.redhat/v1alpha1
           kind: CloudAWS

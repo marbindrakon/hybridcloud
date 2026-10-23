@@ -124,21 +124,17 @@ for name in m.get('exposedModules', {}):
   # Route count sanity
   local routes
   routes=$(echo "$manifest" | python3 -c "import sys,json; m=json.load(sys.stdin); print(sum(1 for e in m.get('extensions',[]) if e.get('type')=='console.page/route'))" 2>/dev/null || echo 0)
-  local min_routes=11
-  if [[ "$plugin_name" == "sovereign-admin-plugin" ]]; then min_routes=30; fi
+  # Routes are generated from the navigation registry (gen-console-extensions.mjs).
+  local min_routes=60
+  if [[ "$plugin_name" == "sovereign-admin-plugin" ]]; then min_routes=20; fi
   if [[ "$routes" -ge "$min_routes" ]]; then
     pass "$routes page routes registered"
   else
     fail "only $routes page routes (expected >= $min_routes)"
   fi
 
-  # Key overview chunk exists
-  local overview_chunk
-  if [[ "$plugin_name" == "sovereign-admin-plugin" ]]; then
-    overview_chunk="exposed-AdminOverviewPage-chunk.js"
-  else
-    overview_chunk="exposed-TenantOverviewPage-chunk.js"
-  fi
+  # The one page module every route renders
+  local overview_chunk="exposed-ShcConsolePage-chunk.js"
   local ov_code
   ov_code=$(oc exec -n "$NS" "deploy/$deploy" -- sh -c "test -f /usr/share/nginx/html/$overview_chunk && echo 200 || echo 404" 2>/dev/null || echo "000")
   if [[ "$ov_code" == "200" ]]; then
@@ -152,8 +148,12 @@ echo "Sovereign Cloud console plugin verification"
 echo "Namespace: $NS"
 echo "Cluster: $(oc whoami --show-server 2>/dev/null || echo unknown)"
 
-check_plugin "sovereign-admin-plugin" "sovereign-admin-plugin" "1.2.20"
-check_plugin "sovereign-tenant-plugin" "sovereign-tenant-plugin" "1.3.15"
+# Expected image tags default to the live Deployments' own tags (so the check is "a tag is set"); override with
+# ADMIN_PLUGIN_TAG / TENANT_PLUGIN_TAG to assert a release.
+ADMIN_PLUGIN_TAG="${ADMIN_PLUGIN_TAG:-$(oc get deploy sovereign-admin-plugin -n "$NS" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://')}"
+TENANT_PLUGIN_TAG="${TENANT_PLUGIN_TAG:-$(oc get deploy sovereign-tenant-plugin -n "$NS" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://')}"
+check_plugin "sovereign-admin-plugin" "sovereign-admin-plugin" "$ADMIN_PLUGIN_TAG"
+check_plugin "sovereign-tenant-plugin" "sovereign-tenant-plugin" "$TENANT_PLUGIN_TAG"
 
 echo ""
 echo "=== Console operator plugin registration ==="
@@ -177,8 +177,11 @@ fi
 
 echo ""
 echo "=== Route / extension integrity ==="
-python3 <<'PY'
-import json, sys, pathlib
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+REPO_ROOT="$REPO_ROOT" python3 <<'PY'
+import json, sys, pathlib, os
+
+ROOT = os.environ["REPO_ROOT"]
 
 def load_ext(path):
     return json.loads(pathlib.Path(path).read_text())

@@ -1,0 +1,21 @@
+# A team setup (Team): the tooling the team gets on each cluster it is assigned to. It holds no
+# people. Access on clusters is given on the cluster assignment (spec.toolRbac there); the access
+# fields below (available with this release) let access groups manage this team setup and its app
+# projects on the services cluster: teamAdmin may change them, teamMemberRbac may change the app
+# projects, teamViewerRbac may view.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: Team
+metadata:
+  name: example-team
+  namespace: entity-example-corp
+spec:
+  features:
+    argo: true
+    istio: false
+  teamAdmin:
+    - example-admins
+  teamMemberRbac:
+    - example-developers
+  teamViewerRbac:
+    - example-auditors

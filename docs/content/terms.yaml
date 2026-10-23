@@ -1,0 +1,438 @@
+# Content contract: the words Hybrid Sovereign Cloud uses for its objects, the words it does not
+# use, and the components that no longer exist. scripts/check-content.py reads this file; the
+# docs, the CRD descriptions and the UI strings follow it. How to change it: docs/content/style.md.
+#
+# Short names and categories (`oc get <alias>`, `oc get shc-tenant`) are not listed here: they
+# live in the CRDs (spec.names) and the glossary reads them from there.
+
+product:
+  first: Hybrid Sovereign Cloud
+  then: Sovereign Cloud
+
+# One entry per API kind (group hybridsovereign.redhat). check-content.py fails when a kind in
+# operator/config/crd/bases has no entry here, or an entry names a kind that does not exist.
+#   term      display term (singular), as written in running text
+#   plural    display term (plural)
+#   dense     shorter term for dense tables, when one exists
+#   audience  tenant: tenants create or read it; platform: the platform team manages it
+#   state     current | experimental | deprecated | not-implemented
+#   planned   true while the kind's CRD is not in this tree yet (the entry is written ahead of it);
+#             remove it once the CRD lands
+#   analogy   the one closest equivalent per cloud (aws, gcp, azure, openstack; openshift for
+#             app-platform kinds); omitted when none fits
+kinds:
+  Entity:
+    term: tenant
+    plural: tenants
+    audience: platform
+    state: current
+    note: Not an Entra ID tenant. All tenants share one sign-in directory.
+    analogy:
+      aws: an AWS account under an organizational unit
+      gcp: a Google Cloud project under a folder
+      azure: an Azure subscription
+      openstack: an OpenStack domain
+  TenantProfile:
+    term: tenant profile
+    plural: tenant profiles
+    audience: tenant
+    state: current
+    note: >-
+      Read-only. One object named shc in each tenant namespace, written by the platform: the
+      tenant's display name, contacts and the sites it may use.
+  CloudInfrastructure:
+    term: site
+    plural: sites
+    audience: platform
+    state: current
+    analogy:
+      aws: an AWS Region
+      gcp: a Google Cloud region
+      azure: an Azure region
+      openstack: an OpenStack region
+  CloudGateway:
+    term: site gateway
+    plural: site gateways
+    audience: platform
+    state: current
+    analogy:
+      aws: a transit gateway attachment
+  HybridFabric:
+    term: fabric
+    plural: fabrics
+    audience: platform
+    state: current
+    analogy:
+      aws: an AWS Cloud WAN core network
+  ProviderEdge:
+    term: provider edge
+    plural: provider edges
+    audience: platform
+    state: current
+    analogy:
+      aws: an AWS Direct Connect location
+      gcp: a Cloud Interconnect location
+  CloudOSO:
+    term: OpenStack environment
+    plural: OpenStack environments
+    audience: tenant
+    state: current
+    analogy:
+      aws: an AWS account in one Region
+      gcp: a Google Cloud project
+      openstack: an OpenStack project with its quota
+  CloudVirt:
+    term: OpenShift Virtualization environment
+    plural: OpenShift Virtualization environments
+    dense: VM environment
+    audience: tenant
+    state: current
+    analogy:
+      aws: an AWS account in one Region
+      gcp: a Google Cloud project
+      openstack: an OpenStack project with its quota
+  CloudAWS:
+    term: AWS environment
+    plural: AWS environments
+    audience: tenant
+    state: current
+    analogy:
+      aws: an AWS account
+  CloudGCP:
+    term: Google Cloud environment
+    plural: Google Cloud environments
+    audience: tenant
+    state: current
+    analogy:
+      gcp: a Google Cloud project
+  HybridNetwork:
+    term: network
+    plural: networks
+    first: hybrid network
+    audience: tenant
+    state: current
+    analogy:
+      aws: an Amazon VPC
+      gcp: a VPC network
+      azure: an Azure virtual network
+      openstack: a Neutron network with its router
+  NetworkPlacement:
+    term: network placement
+    plural: network placements
+    verb: Attach network
+    audience: tenant
+    state: current
+    analogy:
+      aws: a VPC of its own, attached to the network
+      gcp: a VPC of its own, attached to the network
+      azure: a subnet
+      openstack: a subnet on the network's router
+  AttachmentCircuit:
+    term: edge connection
+    plural: edge connections
+    audience: tenant
+    state: current
+    analogy:
+      aws: an AWS Direct Connect virtual interface
+      gcp: a Cloud Interconnect VLAN attachment
+      azure: an ExpressRoute private peering
+  Rbac:
+    term: access group
+    plural: access groups
+    audience: tenant
+    state: current
+    analogy:
+      aws: an IAM Identity Center group
+      gcp: a Google group
+      azure: a Microsoft Entra group
+      openstack: a Keystone group
+  PlatformOpenshift:
+    term: OpenShift cluster
+    plural: OpenShift clusters
+    audience: tenant
+    state: current
+    analogy:
+      aws: Red Hat OpenShift Service on AWS
+      gcp: Google Kubernetes Engine
+      azure: Azure Red Hat OpenShift
+  Team:
+    term: team setup
+    plural: team setups
+    audience: tenant
+    state: current
+    note: Holds no people. Access groups hold people.
+    analogy:
+      openshift: an Argo CD AppProject (approximately)
+  Project:
+    term: app project
+    plural: app projects
+    audience: tenant
+    state: current
+    note: Always qualified. Not an OpenStack project, not a Google Cloud project.
+    analogy:
+      openshift: an OpenShift project on the tenant's cluster
+  Assignment:
+    term: cluster assignment
+    plural: cluster assignments
+    audience: tenant
+    state: current
+  Vault:
+    term: Vault
+    plural: Vaults
+    audience: tenant
+    state: current
+    analogy:
+      aws: AWS Secrets Manager
+      gcp: Secret Manager
+      azure: Azure Key Vault
+      openstack: Barbican
+  VaultKV:
+    term: KV secrets engine
+    plural: KV secrets engines
+    audience: tenant
+    state: current
+    analogy:
+      aws: a set of AWS Secrets Manager secrets
+      azure: an Azure Key Vault
+  AAPOrg:
+    term: AAP organization
+    plural: AAP organizations
+    audience: tenant
+    state: current
+  QuayOrg:
+    term: Quay organization
+    plural: Quay organizations
+    audience: tenant
+    state: current
+    analogy:
+      aws: an Amazon ECR registry
+      gcp: an Artifact Registry repository
+      azure: an Azure Container Registry
+  RbacConfig:
+    term: identity provider connection
+    plural: identity provider connections
+    audience: platform
+    state: current
+    analogy:
+      aws: the identity source of AWS IAM Identity Center
+  AAPConfig:
+    term: automation connection
+    plural: automation connections
+    audience: platform
+    state: current
+  QuayConfig:
+    term: registry connection
+    plural: registry connections
+    audience: platform
+    state: current
+  DNSConfig:
+    term: tenant DNS settings
+    plural: tenant DNS settings
+    audience: platform
+    state: current
+  UIHealthChecker:
+    term: endpoint health check
+    plural: endpoint health checks
+    audience: platform
+    state: current
+  OpenStackMigration:
+    term: VM migration to OpenStack
+    plural: VM migrations to OpenStack
+    audience: tenant
+    state: experimental
+    analogy:
+      aws: AWS Application Migration Service
+      azure: Azure Migrate
+  TransportLink:
+    term: transport link
+    plural: transport links
+    audience: platform
+    state: not-implemented
+  Iaac:
+    term: Git export
+    plural: Git exports
+    audience: platform
+    state: not-implemented
+  Persona:
+    term: persona
+    plural: personas
+    audience: platform
+    state: deprecated
+
+# The roles a tenant's access groups can hold (Entity spec.namespaceRbac keys). The role table
+# in docs/platform/onboard-a-tenant.md is generated from these names and from what each role
+# allows (scripts/gen-role-table.py).
+roles:
+  entityAdmin: {name: Tenant admin}
+  auditor: {name: Auditor}
+  BobsTeam: {name: Auditor (old key), state: deprecated, use: auditor}
+  cloudOSOAdmin: {name: OpenStack environment admin}
+  cloudOSOView: {name: OpenStack environment viewer}
+  cloudVirtAdmin: {name: VM environment admin}
+  cloudVirtView: {name: VM environment viewer}
+  networkAdmin: {name: Network admin}
+  networkView: {name: Network viewer}
+  cloudAWSAdmin: {name: AWS environment admin}
+  cloudAWSView: {name: AWS environment viewer}
+  cloudGCPAdmin: {name: Google Cloud environment admin}
+  cloudGCPView: {name: Google Cloud environment viewer}
+  platformOpenshiftAdmin: {name: OpenShift cluster admin}
+  platformOpenshiftView: {name: OpenShift cluster viewer}
+  teamAdmin: {name: Team setup admin}
+  teamView: {name: Team setup viewer}
+  projectAdmin: {name: App project admin}
+  projectView: {name: App project viewer}
+  assignmentAdmin: {name: Cluster assignment admin}
+  identityAdmin: {name: Access group admin}
+
+# Object states, in the order an object passes through them.
+states: [Waiting, Creating, Updating, Ready, Degraded, Failed, Deleting]
+retry: Retry now
+
+# Words that are not used. Each entry:
+#   match     regular expression (Python), case-sensitive unless it starts with (?i)
+#   use       what to write instead
+#   where     surfaces it applies to: crd (CRD descriptions), ui (UI string catalogues),
+#             docs (README.md, docs/, samples/)
+#   audience  tenant: only tenant-facing text (tenant kinds' CRD text, docs/tenant/, UI strings);
+#             any (default): everywhere in `where`
+#   except    paths (glob) where the word is allowed, for example the retired-components table
+banned:
+  - match: '\b(OSO|AWS)Helper\b'
+    use: the platform (these helper objects no longer exist)
+    where: [crd, ui, docs]
+  - match: 'Routed53'
+    use: Route 53
+    where: [crd, ui, docs]
+  - match: '\b[a-z][a-z0-9]*(_[a-z0-9]+)*_defaults\b'
+    use: "the installation's default (no internal variable names)"
+    where: [crd, ui]
+  - match: '\bCentral Vault\b'
+    use: "the platform's secret store"
+    where: [crd, ui]
+  - match: '\bLayer [12]\b'
+    use: say what the access applies to (the services cluster, the tenant's cluster)
+    where: [crd, ui, docs]
+  - match: '(?i)\bhybrid ?vpc\b'
+    use: network
+    where: [crd, ui, docs]
+  - match: '(?i)\bplugin[ _-]sdx\b'
+    use: (retired; see the retired components)
+    where: [crd, ui, docs]
+  - match: '(?i)\bevent forwarder\b'
+    use: (retired; see the retired components)
+    where: [crd, ui, docs]
+  - match: '\bCloud Virt\b|\bCloud OSO\b|\bOpenshift Virt|\bPlatform Openshift\b'
+    use: OpenShift Virtualization environment, OpenStack environment, OpenShift cluster
+    where: [ui, docs]
+  - match: '\bIAA[SC]\b'
+    use: the display term of the object
+    where: [ui, docs]
+  - match: '(?i)\bscaffold'
+    use: say what the page or package does
+    where: [ui, docs]
+  - match: '(?i)\bk8s proxy\b'
+    use: say what it does
+    where: [ui, docs]
+  - match: '\bBobsTeam\b'
+    use: auditor
+    where: [crd, ui, docs]
+  - match: 'sovereign-cloud-editor'
+    use: ask the platform team to give your access group a role
+    where: [crd, ui, docs]
+  - match: '(?i)\b14[ -](named )?(rbac )?roles?\b|\b14-role'
+    use: no counts; link the role table
+    where: [crd, ui, docs]
+  # tenant-facing text
+  - match: '\bEntit(y|ies)\b'
+    use: tenant
+    where: [ui, docs]
+    audience: tenant
+  - match: '\b(Rbac|RBAC)s?\b'
+    use: access group, role
+    where: [ui, docs]
+    audience: tenant
+  - match: '\bPersonas?\b'
+    use: access group and role
+    where: [ui, docs]
+    audience: tenant
+  - match: '\bOSO\b'
+    use: OpenStack
+    where: [crd, ui, docs]
+    audience: tenant
+  - match: '\bEDA\b|\bAAP jobs?\b'
+    use: the platform's automation
+    where: [crd, ui, docs]
+    audience: tenant
+  - match: '(?i)\bhelpers?\b'
+    use: the platform
+    where: [crd, ui, docs]
+    audience: tenant
+  - match: '(?i)\bspokes?\b'
+    use: "the tenant's OpenShift cluster"
+    where: [crd, ui, docs]
+    audience: tenant
+  - match: '\bCRs?\b'
+    use: object
+    where: [crd, ui, docs]
+    audience: tenant
+  - match: '(?i)\bbackends?\b'
+    use: the environment type, the site
+    where: [crd, ui, docs]
+    audience: tenant
+  - match: '(?i)\b(reconciling|pending)\b'
+    use: the state words (Waiting, Creating, Updating, Ready, Degraded, Failed, Deleting)
+    where: [ui, docs]
+    audience: tenant
+  - match: '\bSync( now)?\b'
+    use: Retry now
+    where: [ui, docs]
+    audience: tenant
+  - match: '(?i)\bsite gateways?\b'
+    use: "site <name> connecting to the network"
+    where: [ui, docs]
+    audience: tenant
+  - match: '(?i)\bnotified\b'
+    use: say what happens and when
+    where: [ui, docs]
+    audience: tenant
+
+# Words a rendered tenant page must not show, matched without regard to case (a page can show a
+# label in capitals). They are checked on the labels the UI builds at runtime (kind terms, object
+# references, field labels, the catalogue templates that take a kind; check-content.py runs
+# ui/scripts/runtime-strings.mjs) and on saved page texts (check-content.py --rendered). Namespace
+# names (entity-<name>) and `oc get` command lines are not text. Every API kind name with more
+# than one word in it (CloudVirt, HybridNetwork, ...) is checked as well.
+rendered:
+  - '\bPending\b'
+  - '\bEntit(y|ies)\b'
+  - '\bRbacs?\b'
+  - '\bPersonas?\b'
+  - 'Platform Openshift'
+  - 'API kind'
+  - '\bOSO\b'
+
+# Structural rules for CRD descriptions: they describe the API, never a plan, a date or a person.
+crd_rules:
+  - match: '\bP\d+(\.\d+)+[a-z]?\b|\bOD\d+[a-z]?\b|\bUX-\d+\b|\bNC-\d+\b|§'
+    use: (no plan or review identifiers)
+  - match: '\b20\d\d-[01]\d-[0-3]\d\b'
+    use: (no dates)
+  - match: '\bdesign/|\b[A-Z0-9-]+-PLAN\b|\bPLAN\.md\b'
+    use: (no design documents)
+  - match: '(?i)\bowner (decided|decision|step|asked)'
+    use: (no decisions or people)
+
+# Components that no longer exist. Docs may name them only in a table generated from this list
+# (or in pages under architecture/docs/archive/).
+retired:
+  - name: Event Forwarder
+    replaced_by: the operators publish their events to Kafka and the automation reads them there
+  - name: Plugin SDX (Go plugin-iaac)
+    replaced_by: the namespace operator and the automation
+  - name: OSOHelper and AWSHelper (and the helper-creator ServiceAccount)
+    replaced_by: the environment objects (CloudOSO, CloudAWS) do the work themselves
+  - name: Hybrid VPC
+    replaced_by: networks (HybridNetwork) and network placements (NetworkPlacement)
+  - name: BobsTeam role key
+    replaced_by: auditor
