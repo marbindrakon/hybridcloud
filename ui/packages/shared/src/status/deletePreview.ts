@@ -435,6 +435,10 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
   if (kind === 'Assignment') {
     const cluster = (status.clusterName as string | undefined) || ((spec.openshift as string | undefined) ?? '');
     const projects = names(spec.projects).join(', ');
+    // Only an assignment that reached its cluster put anything there.
+    if (status.assignmentProvisioned !== true || !cluster) {
+      return { sections: external('assignmentNotDelivered'), realized: true };
+    }
     return { sections: external(projects ? 'assignment' : 'assignmentAccess', projects, { cluster }), realized: true };
   }
   if (kind === 'Entity') {

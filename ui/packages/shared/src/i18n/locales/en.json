@@ -1296,6 +1296,7 @@
       "cluster": "OpenShift cluster {{name}}: it is deprovisioned with everything that runs on it, with its DNS names, stored credentials and sign-in client",
       "assignment": "What it put on cluster {{cluster}}: the app projects {{name}} and the access its groups have there",
       "assignmentAccess": "What it put on cluster {{cluster}}: the access its groups have there",
+      "assignmentNotDelivered": "It never reached a cluster, so nothing was put on one and nothing on a cluster is removed",
       "tenantSignIn": "The tenant's sign-in roles",
       "networkFabric": "The network on the fabric and its address space, where they were set up",
       "placementSite": "Its subnet and routing on its site, where they were set up",
