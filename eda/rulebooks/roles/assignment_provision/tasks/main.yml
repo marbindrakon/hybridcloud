@@ -28,22 +28,22 @@
         msg: Assignment CR {{ assignment_cr_name }} not found in {{ assignment_cr_namespace }}
       when: assignment_cr_lookup.resources | length == 0
 
-    # The ACM record (assignmentProvisioned, acmPolicyName) carries forward from the stored status: only the
-    # ACM steps of this job set it and only the teardown clears it. A run that does not reach the ACM steps (the
-    # Team, a Project or the cluster is not Ready) keeps it, so a delete still removes the policy (R3A-F1).
-    - name: Carry the ACM record forward from the stored status
-      vars:
-        _asg_stored: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
-      ansible.builtin.set_fact:
-        assignment_provisioned: "{{ _asg_stored.assignmentProvisioned | default(false, true) | bool }}"
-        assignment_acm_policy_name: "{{ _asg_stored.acmPolicyName | default('', true) }}"
-
     - name: Resolve spec values
       ansible.builtin.set_fact:
         assignment_team: "{{ assignment_spec.team | default('') }}"
         assignment_projects: "{{ assignment_spec.projects | default([]) }}"
         assignment_openshift: "{{ assignment_spec.openshift | default('') }}"
         assignment_generation: "{{ assignment_cr_lookup.resources[0].metadata.generation | default(0) | int }}"
+
+    # What an earlier run put on a cluster stays recorded until the teardown removes it: a later run that finds a
+    # linked object not Ready (and so skips the ACM step) must not clear it, or the teardown would skip the ACM
+    # policy that still enforces on the cluster (R3U-F1).
+    - name: Keep what an earlier run put on a cluster
+      vars:
+        _asg_stored: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
+      ansible.builtin.set_fact:
+        assignment_stored_provisioned: "{{ _asg_stored.assignmentProvisioned | default(false, true) | bool }}"
+        assignment_stored_acm_policy_name: "{{ _asg_stored.acmPolicyName | default('', true) }}"
 
     - name: Read entity Namespace
       kubernetes.core.k8s_info:
@@ -174,8 +174,13 @@
           openshift: "{{ assignment_openshift }}"
           openshiftReady: "{{ openshift_is_ready | bool }}"
           clusterName: "{{ openshift_cluster_name }}"
-          assignmentProvisioned: "{{ assignment_provisioned | default(false) | bool }}"
-          acmPolicyName: "{{ assignment_acm_policy_name | default('') }}"
+          # this run's ACM step, or what an earlier run recorded: only the teardown clears these (R3U-F1)
+          assignmentProvisioned: >-
+            {{ (assignment_provisioned | default(false) | bool)
+               or (assignment_stored_provisioned | default(false) | bool) }}
+          acmPolicyName: >-
+            {{ assignment_acm_policy_name | default('', true)
+               or assignment_stored_acm_policy_name | default('', true) }}
           helperName: ""
           helperProvider: ""
           conditions:
@@ -221,14 +226,18 @@
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
               reason: EDAFailed
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
-        # the ACM record goes with the failure once an ACM object exists (or the stored status held it), so the
-        # teardown removes a policy this job created before it failed (R3A-F2). Not written when empty: a failure
-        # before the record was read must not erase it.
+        # the ACM record goes with the failure once an ACM object exists (this run's, or what an earlier run
+        # recorded), so the teardown removes a policy this job created before it failed (R3A-F2). Not written when
+        # empty: a failure before the stored status was read must not erase it.
+        _asg_rec_provisioned: >-
+          {{ (assignment_provisioned | default(false) | bool)
+             or (assignment_stored_provisioned | default(false) | bool) }}
+        _asg_rec_policy: >-
+          {{ assignment_acm_policy_name | default('', true)
+             or assignment_stored_acm_policy_name | default('', true) }}
         _asg_acm_record: >-
-          {{ {'assignmentProvisioned': assignment_provisioned | default(false) | bool,
-              'acmPolicyName': assignment_acm_policy_name | default('')}
-             if ((assignment_provisioned | default(false) | bool)
-                 or (assignment_acm_policy_name | default('') | length > 0)) else {} }}
+          {{ {'assignmentProvisioned': _asg_rec_provisioned | bool, 'acmPolicyName': _asg_rec_policy | trim}
+             if ((_asg_rec_provisioned | bool) or (_asg_rec_policy | trim | length > 0)) else {} }}
         cr_status_body: "{{ _asg_failed_body | combine(_asg_acm_record) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined

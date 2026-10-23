@@ -146,6 +146,18 @@ test('tool objects name what their teardown removes and ask for the name, realiz
   for (const [specArgs, st] of [[{ projects: ['webshop'] }, {}], [{ openshift: 'c1', projects: ['web'] }, { assignmentProvisioned: false }]]) {
     assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a2', specArgs, st))), [['assignmentNotDelivered', '', {}]]);
   }
+  // R3U-F1: the dialog reads the delete job's record (provisioned, or a policy name), not this run's readiness.
+  for (const st of [
+    { assignmentProvisioned: 'True', clusterName: 'c1', ready: false },
+    { assignmentProvisioned: false, acmPolicyName: 'a3', clusterName: 'c1' },
+    { acmPolicyName: 'a3', openshiftReady: false },
+  ]) {
+    assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a3', { openshift: 'c1', projects: ['web'] }, st))),
+      [['assignment', 'web', { cluster: 'c1' }]]);
+  }
+  // delivered, but no cluster is named any more: it still says something was put on a cluster
+  assert.deepEqual(ext(m.deletePreview('Assignment', obj('Assignment', 'a4', { projects: ['web'] }, { acmPolicyName: 'a4' }))),
+    [['assignmentUnnamedCluster', '', {}]]);
 });
 
 test('a cluster is deprovisioned and its delete waits for its assignments and placements', () => {
