@@ -435,10 +435,13 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
   if (kind === 'Assignment') {
     const cluster = (status.clusterName as string | undefined) || ((spec.openshift as string | undefined) ?? '');
     const projects = names(spec.projects).join(', ');
-    // Only an assignment that reached its cluster put anything there.
-    if (status.assignmentProvisioned !== true || !cluster) {
-      return { sections: external('assignmentNotDelivered'), realized: true };
-    }
+    // Only an assignment that reached its cluster put anything there: the same record the delete job reads
+    // (provisioned, or a policy name recorded), even while its cluster is not Ready now.
+    const provisioned = status.assignmentProvisioned;
+    const delivered =
+      provisioned === true || String(provisioned ?? '').toLowerCase() === 'true' || !!(status.acmPolicyName as string | undefined);
+    if (!delivered) return { sections: external('assignmentNotDelivered'), realized: true };
+    if (!cluster) return { sections: external('assignmentUnnamedCluster'), realized: true };
     return { sections: external(projects ? 'assignment' : 'assignmentAccess', projects, { cluster }), realized: true };
   }
   if (kind === 'Entity') {
