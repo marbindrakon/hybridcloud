@@ -37,11 +37,23 @@ test('a network waits for its placements, the VM environments naming it and its 
   // blockers alone do not ask for typing; a realized network does
   assert.equal(p.realized, false);
   assert.equal(m.deletePreview('HybridNetwork', obj('HybridNetwork', 'n1', {}, { realization: { l3vni: 5 } }), { objects }).realized, true);
+  // H2TG-F4: edge connections have no API path in the UI, so the network preview does not read them
+  // (no '<namespace>/undefined' request and no "could not be read" line for them).
   assert.deepEqual(m.previewReads('HybridNetwork', obj('HybridNetwork', 'n1')).map((r) => r.kind), [
     'NetworkPlacement',
     'CloudVirt',
-    'AttachmentCircuit',
   ]);
+});
+
+test('every list a preview reads is a kind the UI can list (H2TG-F4)', () => {
+  assert.equal(m.listableKind('AttachmentCircuit'), false);
+  assert.equal(m.listableKind('NetworkPlacement'), true);
+  const kinds = ['HybridNetwork', 'CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP', 'Rbac', 'Team', 'Project', 'PlatformOpenshift', 'Vault'];
+  for (const k of kinds) {
+    for (const r of m.previewReads(k, obj(k, 'x'))) assert.ok(m.listableKind(r.kind), `${k} reads ${r.kind}`);
+  }
+  const tenant = { kind: 'Entity', metadata: { name: 'x', namespace: 'sovereign-cloud' }, spec: {}, status: {} };
+  assert.ok(m.previewReads('Entity', tenant).every((r) => m.listableKind(r.kind)));
 });
 
 test('a VM environment removes its site namespaces (once empty of VMs) and DNS zone, and keeps its placements', () => {
@@ -282,7 +294,7 @@ test('a tenant lists its objects tier by tier, then its namespace; protected obj
   const tenant = { kind: 'Entity', metadata: { name: 'x', namespace: 'sovereign-cloud' }, spec: {}, status: {} };
   const reads = m.previewReads('Entity', tenant);
   assert.ok(reads.every((r) => r.namespace === 'entity-x'));
-  assert.deepEqual(reads.map((r) => r.kind), m.TENANT_TEARDOWN_TIERS.flat());
+  assert.deepEqual(reads.map((r) => r.kind), m.TENANT_TEARDOWN_TIERS.flat().filter((k) => m.listableKind(k)));
   const objects = {
     Rbac: [obj('Rbac', 'admins')],
     NetworkPlacement: [np('n1-vm', 'n1', 'CloudVirt', 'vm')],

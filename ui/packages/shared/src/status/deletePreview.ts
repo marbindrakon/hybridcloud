@@ -34,7 +34,7 @@
  * state outside the API) asks for its name to be typed; plain objects keep the
  * one-click confirm. A kind with a teardown always says what goes with it.
  */
-import type { K8sResource } from '../types';
+import { KIND_PLURALS, type K8sResource } from '../types';
 
 export type PreviewGroup = 'deleted' | 'waits' | 'kept' | 'affected' | 'access';
 
@@ -233,8 +233,21 @@ export interface PreviewRead {
   namespace: string;
 }
 
-/** The lists the preview of `item` reads (all in the object's namespace). */
+/**
+ * A kind the UI can list: it has an API path (plural). A dependant kind without one (an edge
+ * connection) is not read, so a preview never asks for `<namespace>/undefined` and never says
+ * that objects of that kind could not be read (H2TG-F4).
+ */
+export function listableKind(kind: string): boolean {
+  return Object.prototype.hasOwnProperty.call(KIND_PLURALS, kind);
+}
+
+/** The lists the preview of `item` reads (all in the object's namespace), for kinds the UI can list. */
 export function previewReads(kind: string, item: K8sResource): PreviewRead[] {
+  return previewReadsAll(kind, item).filter((r) => listableKind(r.kind));
+}
+
+function previewReadsAll(kind: string, item: K8sResource): PreviewRead[] {
   const namespace = item.metadata.namespace ?? '';
   if (!namespace) return [];
   let kinds: string[] = [];
