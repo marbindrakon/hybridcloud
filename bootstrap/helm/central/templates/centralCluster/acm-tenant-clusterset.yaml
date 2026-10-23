@@ -48,6 +48,12 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["managedclustersetbindings"]
+  # A binding that is already being deleted is left alone: the garbage collector's finalizer
+  # removal is an UPDATE too, and refusing it would keep an old binding (and its namespace)
+  # from ever going away.
+  matchConditions:
+    - name: not-being-deleted
+      expression: "!has(object.metadata.deletionTimestamp)"
   validations:
     - expression: "object.spec.clusterSet == '{{ $set }}'"
       message: {{ printf "Namespace %s may bind only the ManagedClusterSet %s (tenant clusters)." $ns $set | quote }}

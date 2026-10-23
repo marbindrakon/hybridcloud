@@ -102,6 +102,9 @@ class CentralChart(unittest.TestCase):
         self.assertEqual(bind["matchConstraints"]["namespaceSelector"]["matchLabels"],
                          {"kubernetes.io/metadata.name": "sovereign-cloud-helpers"})
         self.assertEqual(bind["validations"][0]["expression"], "object.spec.clusterSet == 't-set'")
+        # the garbage collector's finalizer removal on an old binding must pass
+        self.assertEqual([m["expression"] for m in bind["matchConditions"]],
+                         ["!has(object.metadata.deletionTimestamp)"])
         members = vaps["sovereign-tenant-clusterset-members"]["spec"]
         self.assertIn("== 't-set'", members["matchConditions"][0]["expression"])
         self.assertIn('["p1","p2"]', members["validations"][0]["expression"])
