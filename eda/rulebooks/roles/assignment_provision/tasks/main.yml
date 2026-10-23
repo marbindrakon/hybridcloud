@@ -28,6 +28,16 @@
         msg: Assignment CR {{ assignment_cr_name }} not found in {{ assignment_cr_namespace }}
       when: assignment_cr_lookup.resources | length == 0
 
+    # The ACM record (assignmentProvisioned, acmPolicyName) carries forward from the stored status: only the
+    # ACM steps of this job set it and only the teardown clears it. A run that does not reach the ACM steps (the
+    # Team, a Project or the cluster is not Ready) keeps it, so a delete still removes the policy (R3A-F1).
+    - name: Carry the ACM record forward from the stored status
+      vars:
+        _asg_stored: "{{ assignment_cr_lookup.resources[0].status | default({}, true) }}"
+      ansible.builtin.set_fact:
+        assignment_provisioned: "{{ _asg_stored.assignmentProvisioned | default(false, true) | bool }}"
+        assignment_acm_policy_name: "{{ _asg_stored.acmPolicyName | default('', true) }}"
+
     - name: Resolve spec values
       ansible.builtin.set_fact:
         assignment_team: "{{ assignment_spec.team | default('') }}"

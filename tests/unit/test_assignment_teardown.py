@@ -89,6 +89,46 @@ class Predicate(unittest.TestCase):
                                           {"acmPolicyName": "app-on-ocp1"}), "app-on-ocp1")
 
 
+PROVISION = os.path.join(ROOT, "eda", "rulebooks", "roles", "assignment_provision", "tasks", "main.yml")
+CARRY = "Carry the ACM record forward from the stored status"
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RecordCarriesForward(unittest.TestCase):
+    """R3A-F1: a provision run that does not reach the ACM steps keeps the ACM record the stored status holds."""
+
+    def rerun_status(self, stored):
+        # the provision job without its ACM steps (Team, a Project or the cluster not Ready): the record it writes
+        prov = load(PROVISION)
+        carry = by_name(prov, CARRY)
+        st = by_name(prov, "Update Assignment status on services cluster")["vars"]["cr_status_body"]
+        render = {"name": "render the record", "ansible.builtin.set_fact": {
+            "_rec": {"assignmentProvisioned": st["assignmentProvisioned"], "acmPolicyName": st["acmPolicyName"]}}}
+        cr = {"metadata": {"name": "app-on-ocp1"}, "status": stored}
+        return run_play([carry, render, write_out("_rec")], {"assignment_cr_lookup": {"resources": [cr]}})
+
+    def delete_policy_name(self, status):
+        derive = by_name(tasks(), DERIVE)
+        cr = {"metadata": {"name": "app-on-ocp1"}, "spec": {"team": "t", "openshift": "ocp1"}, "status": status}
+        return run_play([derive, write_out("delete_acm_policy_name | trim")],
+                        {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]}})
+
+    def test_not_ready_rerun_after_provisioning_keeps_the_teardown_path(self):
+        stored = {"ready": True, "clusterName": "ocp1", "assignmentProvisioned": True, "acmPolicyName": "app-on-ocp1"}
+        rec = self.rerun_status(stored)
+        self.assertEqual(str(rec["assignmentProvisioned"]).lower(), "true")
+        self.assertEqual(rec["acmPolicyName"], "app-on-ocp1")
+        after = dict(stored, ready=False, assignmentProvisioned=rec["assignmentProvisioned"],
+                     acmPolicyName=rec["acmPolicyName"])
+        self.assertEqual(self.delete_policy_name(after), "app-on-ocp1")
+
+    def test_never_provisioned_rerun_records_nothing(self):
+        for stored in ({"clusterName": "ocp1", "assignmentProvisioned": False, "acmPolicyName": ""}, None):
+            rec = self.rerun_status(stored)
+            self.assertEqual(str(rec["assignmentProvisioned"]).lower(), "false")
+            self.assertEqual(rec["acmPolicyName"], "")
+
+
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class MissingSecret(unittest.TestCase):
     def test_teardown_stops_with_credentials_missing_and_names_the_secret(self):
