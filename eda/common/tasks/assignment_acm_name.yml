@@ -8,13 +8,8 @@
 # <namespace>.<name>); a longer name keeps its start and ends in -<8 hex of sha256(<namespace>/<assignment>)>.
 # The one place the name is computed: the provision job (when nothing is recorded yet) and the teardown (when
 # nothing is recorded) both include this file; status.acmPolicyName records what was used.
-# The hyphen joining tenant and assignment is ambiguous (tenant a + assignment b-c and tenant a-b + assignment c
-# give the same name, R2A-F3). assignment_acm_name_unique is the form that is distinct per Assignment: the start of
-# the name and -<8 hex of sha256(<namespace>/<assignment>)> (the same form a capped name takes). The provision job
-# uses it when an ACM object of another Assignment already holds the plain name, and records it.
 # Inputs: aan_namespace (the Assignment's namespace), aan_assignment (its name), aan_policy_namespace (default
-# sovereign-cloud-helpers), aan_max_length (optional override of the cap).
-# Sets: assignment_acm_name, assignment_acm_name_unique.
+# sovereign-cloud-helpers), aan_max_length (optional override of the cap). Sets: assignment_acm_name.
 - name: The ACM name of the Assignment (<tenant>-<assignment>)
   vars:
     _aan_tenant: "{{ aan_namespace | string | regex_replace('^entity-', '') }}"
@@ -26,7 +21,7 @@
            | ternary(aan_max_length | default(0, true) | int,
                      62 - (aan_policy_namespace | default('sovereign-cloud-helpers', true) | length))), 20] | max }}
     _aan_hash: "{{ ((aan_namespace | string) ~ '/' ~ (aan_assignment | string)) | hash('sha256') }}"
-    _aan_unique: "{{ (_aan_full[:(_aan_max | int) - 9] | regex_replace('-+$', '')) ~ '-' ~ _aan_hash[:8] }}"
   ansible.builtin.set_fact:
-    assignment_acm_name: "{{ _aan_full if (_aan_full | length) <= (_aan_max | int) else _aan_unique }}"
-    assignment_acm_name_unique: "{{ _aan_unique }}"
+    assignment_acm_name: >-
+      {{ _aan_full if (_aan_full | length) <= (_aan_max | int)
+         else ((_aan_full[:(_aan_max | int) - 9] | regex_replace('-+$', '')) ~ '-' ~ _aan_hash[:8]) }}

@@ -4,8 +4,7 @@ eda/common/tasks/assignment_acm_name.yml computes the name; assignment_provision
 assignment_teardown (when nothing is recorded) both include it, and status.acmPolicyName records what was used. The
 name is DNS-label safe and capped so that the policy namespace and the name stay within ACM's 62 characters; a longer
 name ends in a short hash. An ACM object that already exists under the name and belongs to another Assignment (owner
-annotation) is neither taken over by the provision job nor removed by the teardown; the provision job then takes the
-per-Assignment form (start of the name + hash, R2A-F3) and the refusal never names the other Assignment.
+annotation) is neither taken over by the provision job nor removed by the teardown.
 """
 import hashlib
 import os
@@ -129,105 +128,6 @@ class Ownership(unittest.TestCase):
         self.assertIs(self.ours(None), True)
         self.assertIs(self.ours("entity-acme-x/y"), False)
         self.assertIs(self.ours(None, status=404), False)
-
-
-@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
-class CrossTenantCollision(unittest.TestCase):
-    """R2A-F3: tenant acme + Assignment corp-web and tenant acme-corp + Assignment web share the plain name."""
-
-    def names(self, namespace, assignment):
-        return run_play(load(ACM_NAME) + [write_out("[assignment_acm_name | trim, assignment_acm_name_unique | trim]")],
-                        {"aan_namespace": namespace, "aan_assignment": assignment,
-                         "aan_policy_namespace": "sovereign-cloud-helpers", "aan_max_length": ""})
-
-    def test_unique_form_differs_where_the_plain_name_collides(self):
-        a_plain, a_unique = self.names("entity-acme", "corp-web")
-        b_plain, b_unique = self.names("entity-acme-corp", "web")
-        self.assertEqual(a_plain, b_plain)
-        self.assertEqual(a_plain, "acme-corp-web")
-        self.assertNotEqual(a_unique, b_unique)
-        digest = hashlib.sha256(b"entity-acme-corp/web").hexdigest()[:8]
-        self.assertEqual(b_unique, "acme-corp-web-" + digest)
-        self.assertLessEqual(len(b_unique), 62 - len("sovereign-cloud-helpers"))
-        self.assertEqual(self.names("entity-acme-corp", "web")[1], b_unique)  # stable
-
-    def test_capped_name_is_already_the_unique_form(self):
-        plain, unique = self.names("entity-a-very-long-tenant-name", "and-an-even-longer-assignment-name")
-        self.assertEqual(plain, unique)
-
-    def refusal_message(self):
-        step = by_name(load(APPLY), "Refuse an ACM object of another Assignment — {{ acm_resource_name }}")
-        meta = {"annotations": {"hybridsovereign.redhat/assignment": "entity-acme/corp-web"}}
-        harness = [{"block": [step], "rescue": [write_out("ansible_failed_result.msg")]}]
-        return run_play(harness, {"acm_post_result": {"status": 409}, "acm_get_result": {"json": {"metadata": meta}},
-                                  "acm_resource_name": "Policy acme-corp-web", "acm_owner": "entity-acme-corp/web"})
-
-    def test_refusal_never_names_the_other_tenant(self):
-        msg = self.refusal_message()
-        self.assertIn("another assignment", msg)
-        self.assertNotIn("entity-acme/", msg)
-        self.assertNotIn("corp-web", msg.replace("acme-corp-web", ""))
-        self.assertNotIn("entity-acme-corp", msg)
-
-    def provision_name(self, probe_results, stored=""):
-        tasks = load(PROVISION_ACM)
-        build = by_name(tasks, "Build ACM Policy name (recorded, else <tenant>-<assignment>)")
-        take = by_name(tasks, "Take the per-Assignment name when the plain name is another Assignment's")
-        return run_play([build, take, write_out("acm_policy_name | trim")],
-                        {"assignment_stored_acm_policy_name": stored, "assignment_acm_name": "acme-corp-web",
-                         "assignment_acm_name_unique": "acme-corp-web-1a2b3c4d",
-                         "assignment_cr_namespace": "entity-acme-corp", "assignment_cr_name": "web",
-                         "acm_name_probe": {"results": probe_results}})
-
-    @staticmethod
-    def found(owner):
-        meta = {"annotations": {"hybridsovereign.redhat/assignment": owner}} if owner is not None else {}
-        return {"status": 200, "json": {"metadata": meta}}
-
-    def test_provision_takes_the_unique_name_when_another_assignment_holds_the_plain_one(self):
-        missing = {"status": 404}
-        self.assertEqual(self.provision_name([self.found("entity-acme/corp-web"), missing, missing]),
-                         "acme-corp-web-1a2b3c4d")
-        # a leftover Placement or Binding of the other Assignment counts too
-        self.assertEqual(self.provision_name([missing, missing, self.found("entity-acme/corp-web")]),
-                         "acme-corp-web-1a2b3c4d")
-
-    def test_provision_keeps_the_plain_name_otherwise(self):
-        missing = {"status": 404}
-        self.assertEqual(self.provision_name([missing, missing, missing]), "acme-corp-web")
-        self.assertEqual(self.provision_name([self.found("entity-acme-corp/web"), missing, missing]), "acme-corp-web")
-        self.assertEqual(self.provision_name([self.found(None), missing, missing]), "acme-corp-web")
-        self.assertEqual(self.provision_name([{"skipped": True}] * 3), "acme-corp-web")
-
-    def test_probe_runs_only_without_a_record(self):
-        probe = by_name(load(PROVISION_ACM), "Look for ACM objects of another Assignment under the name")
-        self.assertIs(probe.get("no_log"), True)
-        self.assertTrue(any("assignment_stored_acm_policy_name" in w for w in probe["when"]))
-        names = [t["name"] for t in load(PROVISION_ACM)]
-        self.assertLess(names.index("Take the per-Assignment name when the plain name is another Assignment's"),
-                        names.index("Build ACM Policy body"))
-
-    def teardown_name(self, unique_fetch):
-        use = by_name(load(TEARDOWN), "Use the per-Assignment name when its Policy is this Assignment's")
-        # what the teardown decided for the plain name (set as facts: extra vars would win over the step's set_fact)
-        before = {"name": "plain name not ours", "ansible.builtin.set_fact": {"delete_acm_policy_name": "acme-corp-web",
-                                                                             "acm_policy_ours": False}}
-        return run_play([before, use, write_out("[delete_acm_policy_name | trim, acm_policy_ours | bool]")],
-                        {"assignment_acm_name_unique": "acme-corp-web-1a2b3c4d",
-                         "assignment_cr_namespace": "entity-acme-corp", "assignment_cr_name": "web",
-                         "acm_policy_fetch_unique": unique_fetch})
-
-    def test_teardown_without_record_finds_the_unique_name(self):
-        self.assertEqual(self.teardown_name(self.found("entity-acme-corp/web")), ["acme-corp-web-1a2b3c4d", True])
-        self.assertEqual(self.teardown_name({"status": 404}), ["acme-corp-web", False])
-        self.assertEqual(self.teardown_name(self.found("entity-acme/corp-web")), ["acme-corp-web", False])
-        self.assertEqual(self.teardown_name({"skipped": True}), ["acme-corp-web", False])
-
-    def test_teardown_looks_there_only_without_a_record(self):
-        fetch = by_name(load(TEARDOWN), "Fetch the ACM Policy under the per-Assignment name")
-        self.assertIs(fetch.get("no_log"), True)
-        self.assertTrue(any("delete_acm_policy_recorded" in w for w in fetch["when"]))
-        self.assertTrue(any("acm_policy_ours" in w for w in fetch["when"]))
 
 
 if __name__ == "__main__":

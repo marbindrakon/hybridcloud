@@ -58,7 +58,6 @@
       ansible.builtin.set_fact:
         delete_acm_policy_name: >-
           {{ (_asg_recorded or (assignment_acm_name | trim)) if (_asg_provisioned | bool) else '' }}
-        delete_acm_policy_recorded: "{{ _asg_recorded | length > 0 }}"
         delete_acm_cluster_named: >-
           {{ ((_asg_spec.openshift | default('', true)) | length > 0)
              or ((_asg_status.clusterName | default('', true)) | length > 0) }}
@@ -186,39 +185,6 @@
             acm_policy_ours: >-
               {{ (acm_policy_fetch.status | default(0) | int == 200)
                  and (_acm_owner in ['', assignment_cr_namespace ~ '/' ~ assignment_cr_name]) }}
-
-        # Without a record, the provision job may have taken the per-Assignment name because another Assignment
-        # held the plain one (R2A-F3, provision_acm.yml): look there when the plain name is not this Assignment's.
-        - name: Fetch the ACM Policy under the per-Assignment name
-          ansible.builtin.uri:
-            url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/{{ acm_policy_namespace }}/policies/{{ assignment_acm_name_unique | trim }}"
-            method: GET
-            headers:
-              Authorization: "Bearer {{ acm_central_token }}"
-            validate_certs: false
-            timeout: 120
-            status_code: [200, 404]
-          register: acm_policy_fetch_unique
-          no_log: true
-          when:
-            - not (acm_policy_ours | bool)
-            - not (delete_acm_policy_recorded | default(false) | bool)
-            - (delete_acm_policy_name | trim) != (assignment_acm_name_unique | trim)
-
-        - name: Use the per-Assignment name when its Policy is this Assignment's
-          vars:
-            _acm_owner_unique: >-
-              {{ ((((acm_policy_fetch_unique.json | default({}, true)).metadata | default({}, true)).annotations
-                  | default({}, true))['hybridsovereign.redhat/assignment'] | default('', true)) | trim }}
-          ansible.builtin.set_fact:
-            delete_acm_policy_name: "{{ assignment_acm_name_unique | trim }}"
-            acm_policy_fetch: "{{ acm_policy_fetch_unique }}"
-            acm_policy_ours: true
-          no_log: true
-          when:
-            - acm_policy_fetch_unique.status is defined
-            - (acm_policy_fetch_unique.status | default(0) | int) == 200
-            - _acm_owner_unique == (assignment_cr_namespace ~ '/' ~ assignment_cr_name)
 
         - name: Patch ACM Policy — set all ConfigurationPolicy templates to mustnothave
           ansible.builtin.uri:

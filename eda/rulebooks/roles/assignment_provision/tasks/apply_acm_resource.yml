@@ -39,10 +39,7 @@
   when: acm_post_result.status | default(0) == 409
 
 # The name is <tenant>-<assignment>, capped: an object that already exists under it and says it belongs to another
-# Assignment is never taken over (nor recorded, so this Assignment's teardown never removes it). The provision job
-# checks the name before it creates anything and then takes the per-Assignment form (provision_acm.yml); this
-# refusal is left for a race with another Assignment's first job. The message lands in this tenant's status, so it
-# never names the other Assignment or its namespace (R2A-F3).
+# Assignment is never taken over (nor recorded, so this Assignment's teardown never removes it).
 - name: Refuse an ACM object of another Assignment — {{ acm_resource_name }}
   vars:
     _acm_live_owner: >-
@@ -50,8 +47,8 @@
          ['hybridsovereign.redhat/assignment'] | default('', true) }}
   ansible.builtin.fail:
     msg: >-
-      {{ acm_resource_name }} on the management cluster is used by another assignment. Retry now to deliver this
-      assignment under a name of its own, or ask the platform team.
+      {{ acm_resource_name }} on the management cluster belongs to Assignment {{ _acm_live_owner | trim }}, not to
+      {{ acm_owner }}. Rename this Assignment, or ask the platform team.
   when:
     - acm_post_result.status | default(0) == 409
     - _acm_live_owner | trim | length > 0
