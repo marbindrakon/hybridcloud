@@ -5249,7 +5249,7 @@ sovereignDashboard:
       ENTITY_NAMESPACE: sovereign-cloud
       NODE_ENV: production
       OAUTH_SYNC_VERSION: "2"
-      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/ux-h1/docs
+      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/shc-lab/docs
       SHC_CONSOLE_URL: https://console-openshift-console.apps.services.shc.signal9.gg
 
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
@@ -5284,7 +5284,7 @@ tenancyDashboard:
     env:
       NODE_ENV: production
       OAUTH_SYNC_VERSION: "2"
-      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/ux-h1/docs
+      SHC_HELP_BASE_URL: https://github.com/marbindrakon/hybridcloud/tree/shc-lab/docs
       SHC_CONSOLE_URL: https://console-openshift-console.apps.services.shc.signal9.gg
 
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
