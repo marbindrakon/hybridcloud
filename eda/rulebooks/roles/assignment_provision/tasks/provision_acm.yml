@@ -201,11 +201,6 @@
     acm_resource_body: "{{ acm_placementbinding_body }}"
     acm_resource_name: "PlacementBinding binding-{{ acm_policy_name }}"
 
-- name: Set provisioned status facts
-  ansible.builtin.set_fact:
-    assignment_acm_policy_name: "{{ acm_policy_name }}"
-    assignment_provisioned: true
-
 - name: Wait for ACM Policy to report compliance on target spoke
   ansible.builtin.uri:
     url: >-

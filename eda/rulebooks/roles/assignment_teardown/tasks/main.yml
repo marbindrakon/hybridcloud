@@ -33,7 +33,8 @@
 
     # An Assignment that never reached a cluster owns no ACM policy: nothing to tear down there, so the ACM steps
     # (which need the ACM creator credentials) are skipped. Only what the provision job records counts
-    # (status.assignmentProvisioned, status.acmPolicyName; written once the ACM policy was applied). A named cluster
+    # (status.assignmentProvisioned, status.acmPolicyName; recorded once the first ACM object exists on central,
+    # also when the job fails after that, and carried forward by later runs). A named cluster
     # (spec.openshift) or its name in status.clusterName does not: the provision job records both while it still
     # waits for the cluster (P2AC-F3).
     - name: Derive ACM policy name from Assignment CR name (unique per cluster)

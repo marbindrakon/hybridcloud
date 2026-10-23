@@ -210,7 +210,7 @@
         cr_plural: assignments
         cr_name: "{{ assignment_cr_name }}"
         cr_namespace: "{{ assignment_cr_namespace }}"
-        cr_status_body:
+        _asg_failed_body:
           status: failed
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -221,6 +221,15 @@
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
               reason: EDAFailed
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+        # the ACM record goes with the failure once an ACM object exists (or the stored status held it), so the
+        # teardown removes a policy this job created before it failed (R3A-F2). Not written when empty: a failure
+        # before the record was read must not erase it.
+        _asg_acm_record: >-
+          {{ {'assignmentProvisioned': assignment_provisioned | default(false) | bool,
+              'acmPolicyName': assignment_acm_policy_name | default('')}
+             if ((assignment_provisioned | default(false) | bool)
+                 or (assignment_acm_policy_name | default('') | length > 0)) else {} }}
+        cr_status_body: "{{ _asg_failed_body | combine(_asg_acm_record) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 

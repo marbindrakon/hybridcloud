@@ -1,10 +1,11 @@
 """Assignment teardown (eda/rulebooks/roles/assignment_teardown): the ACM steps run only for a provisioned Assignment.
 
 P2AC-F3: an Assignment that names a cluster it never reached owns no ACM policy. Only what the provision job
-records after it applied the policy (status.assignmentProvisioned, status.acmPolicyName) sends the teardown to the
-ACM steps; spec.openshift and status.clusterName (both set while the Assignment still waits for its cluster) do
-not. A provisioned Assignment whose ACM creator credential Secret is missing stops with CredentialsMissing and a
-message naming the Secret (a platform-team step), not with a generic failure. The expressions run in
+records once an ACM object of the Assignment exists (status.assignmentProvisioned, status.acmPolicyName) sends
+the teardown to the ACM steps; spec.openshift and status.clusterName (both set while the Assignment still waits
+for its cluster) do not. The record carries forward through later runs, and a job that fails after it created an
+ACM object writes it with the failure (R3A-F1, R3A-F2). A provisioned Assignment whose ACM creator credential
+Secret is missing stops with CredentialsMissing and a message naming the Secret (a platform-team step), not with a generic failure. The expressions run in
 ansible-playbook (skipped when absent); the wiring checks always run.
 """
 import os
@@ -45,9 +46,23 @@ class Wiring(unittest.TestCase):
         st = body["vars"]["cr_status_body"]
         self.assertIn("assignment_provisioned", st["assignmentProvisioned"])
         self.assertIn("assignment_acm_policy_name", st["acmPolicyName"])
-        with open(os.path.join(prov, "provision_acm.yml")) as f:
+        with open(os.path.join(prov, "apply_acm_resource.yml")) as f:
             acm = f.read()
         self.assertIn("assignment_provisioned: true", acm)
+
+    def test_record_is_set_as_soon_as_an_acm_object_exists(self):
+        # R3A-F2: right after a POST returned 201/409, before the update and verify calls of that object
+        prov = os.path.join(ROOT, "eda", "rulebooks", "roles", "assignment_provision", "tasks")
+        apply = load(os.path.join(prov, "apply_acm_resource.yml"))
+        names = [t["name"].split(" — ")[0] for t in apply]
+        rec = names.index("Record the ACM policy of this Assignment")
+        self.assertEqual(names[rec - 1], "Fail when ACM POST returned an unexpected status")
+        self.assertEqual(rec, 2)
+        acm = load(os.path.join(prov, "provision_acm.yml"))
+        acm_names = [t["name"] for t in acm]
+        self.assertLess(acm_names.index("Apply ACM Policy to central cluster"),
+                        acm_names.index("Wait for ACM Policy to report compliance on target spoke"))
+        self.assertNotIn("Set provisioned status facts", acm_names)
 
     def test_missing_secret_is_named_before_any_credential_use(self):
         block = by_name(tasks(), ACM_BLOCK)["block"]
@@ -127,6 +142,42 @@ class RecordCarriesForward(unittest.TestCase):
             rec = self.rerun_status(stored)
             self.assertEqual(str(rec["assignmentProvisioned"]).lower(), "false")
             self.assertEqual(rec["acmPolicyName"], "")
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class FailureKeepsRecord(unittest.TestCase):
+    """R3A-F2: a provision job that fails after it created an ACM object writes the record with the failure."""
+
+    def rescue_body(self, facts):
+        prov = load(PROVISION)
+        rescue = next(t for t in prov if "rescue" in t)["rescue"][0]
+        vars_ = dict(rescue["vars"])
+        body = vars_.pop("cr_status_body")
+        set_facts = [{"name": "fact", "ansible.builtin.set_fact": facts}] if facts else []
+        harness = [{"block": set_facts + [{"name": "fail late", "ansible.builtin.fail": {"msg": "compliance wait"}}],
+                    "rescue": [{"name": "render", "vars": vars_, "ansible.builtin.set_fact": {"_body": body}},
+                               write_out("_body")]}]
+        return run_play(harness, {})
+
+    def test_record_goes_with_the_failure_once_set(self):
+        got = self.rescue_body({"assignment_provisioned": True, "assignment_acm_policy_name": "app-on-ocp1"})
+        self.assertEqual(got["status"], "failed")
+        self.assertEqual(got["conditions"][0]["reason"], "EDAFailed")
+        self.assertEqual(got["message"], "compliance wait")
+        self.assertIs(got["assignmentProvisioned"], True)
+        self.assertEqual(got["acmPolicyName"], "app-on-ocp1")
+        derive = by_name(tasks(), DERIVE)
+        cr = {"metadata": {"name": "app-on-ocp1"}, "spec": {"openshift": "ocp1"},
+              "status": {"assignmentProvisioned": got["assignmentProvisioned"], "acmPolicyName": got["acmPolicyName"]}}
+        self.assertEqual(run_play([derive, write_out("delete_acm_policy_name | trim")],
+                                  {"assignment_cr_name": "app-on-ocp1", "assignment_cr_lookup": {"resources": [cr]}}),
+                         "app-on-ocp1")
+
+    def test_no_record_is_written_when_none_is_known(self):
+        got = self.rescue_body({})
+        self.assertEqual(got["status"], "failed")
+        self.assertNotIn("assignmentProvisioned", got)
+        self.assertNotIn("acmPolicyName", got)
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
