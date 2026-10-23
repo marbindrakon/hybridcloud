@@ -75,6 +75,11 @@ rendered:
   - {text: "Open https://console.example.com/k8s/cloudvirts", hits: []}
   - {text: "Environment VM environment g-vmenv-1", hits: []}
   - {text: "Waiting for the platform; was Pending", hits: [Pending]}
+  # H2TG-F2: kind names split into words, as written (prose in lower case is not a kind name)
+  - {text: "Site (Cloud Infrastructure)", hits: [Cloud Infrastructure]}
+  - {text: "The Hybrid Network to place.", hits: [Hybrid Network]}
+  - {text: "Request a Cloud Virt or a Platform OpenShift", hits: [Cloud Virt, Platform OpenShift]}
+  - {text: "Built on your own cloud infrastructure", hits: []}
 # Kind words in display strings of .tsx sources (g): `hits` are the words the check reports.
 source_kinds:
   - source: "<RefSelect id=\"cloudoso\" label=\"CloudOSO\" value={v} />"

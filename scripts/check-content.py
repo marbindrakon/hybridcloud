@@ -624,10 +624,30 @@ def check_raw_kinds(rep):
             rep.error(f"{rel}:{src.count(chr(10), 0, off) + 1}", rule, code)
 
 
+# Platform kinds whose display term in the catalogue (kindsOne) is their name split into words.
+SPLIT_KIND_TERMS = {"CloudGateway"}
+
+
+def _kind_words(kind):
+    """The words of a CamelCase kind name: CloudInfrastructure -> Cloud, Infrastructure; CloudOSO ->
+    Cloud, OSO; PlatformOpenshift -> Platform, Openshift; OpenStackMigration -> OpenStack, Migration."""
+    return re.findall(r"Open[Ss]tack|Open[Ss]hift|[A-Z]+(?![a-z])|[A-Z][a-z0-9]*", kind)
+
+
 def rendered_rules(terms):
-    pats = list(terms.get("rendered") or [])
-    pats += [rf"\b{k}s?\b" for k in sorted(terms["kinds"]) if re.match(r"^[A-Z][a-z]+[A-Z]", k)]
-    return [re.compile(p, re.I) for p in pats]
+    multi = [k for k in sorted(terms["kinds"]) if re.match(r"^[A-Z][a-z]+[A-Z]", k)]
+    rules = [re.compile(p, re.I) for p in list(terms.get("rendered") or [])]
+    rules += [re.compile(rf"\b{k}s?\b", re.I) for k in multi]
+    # H2TG-F2: the same names split into words ("Site (Cloud Infrastructure)"), matched as written
+    # so that prose such as "your cloud infrastructure" is not a hit. SPLIT_KIND_TERMS: kinds whose
+    # catalogue term is the split name itself (platform pages).
+    for k in multi:
+        if k in SPLIT_KIND_TERMS:
+            continue
+        words = [("Open[sS]hift" if w.lower() == "openshift" else re.escape(w)) for w in _kind_words(k)]
+        if len(words) > 1:
+            rules.append(re.compile(r"\b" + " ".join(words) + r"s?\b"))
+    return rules
 
 
 def rendered_hits(text, rendered):
