@@ -168,6 +168,8 @@ ops:
         restartWindowMinutes: 15
         restartThreshold: 3
         deliveryStalledMinutes: 15
+        # a new Entity's controller starts after its namespace exists: not reported for this long after creation
+        newEntityGraceMinutes: 10
       # write: false only reports the objects whose stored phase differs
       phase:
         write: false

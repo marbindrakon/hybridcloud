@@ -65,6 +65,63 @@ class Controller(unittest.TestCase):
         self.assertEqual(T.controller_condition(deploy(), [pod(4, "Error", 60)], TCFG, NOW)["status"], "True")
 
 
+class NewEntityGrace(unittest.TestCase):
+    """H2AC-O1: a new Entity whose namespace operator has not started yet is not reported (grace window)."""
+
+    @staticmethod
+    def entity(created_min, deleting=False):
+        meta = {"name": "t1", "creationTimestamp": (NOW - dt.timedelta(minutes=created_min)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        if deleting:
+            meta["deletionTimestamp"] = "2026-10-21T11:59:00Z"
+        return {"metadata": meta}
+
+    def test_new_entity_without_controller_is_quiet(self):
+        self.assertIsNone(T.entity_controller_condition(self.entity(3), None, [], TCFG, NOW))
+        self.assertIsNone(T.entity_controller_condition(self.entity(9), deploy(0, 5), [], TCFG, NOW))
+
+    def test_after_the_grace_window_it_is_reported(self):
+        cond = T.entity_controller_condition(self.entity(11), None, [], TCFG, NOW)
+        self.assertEqual((cond["status"], cond["reason"]), ("False", "ControllerUnavailable"))
+
+    def test_grace_never_hides_a_problem_of_a_running_controller_or_a_delete(self):
+        self.assertEqual(T.entity_controller_condition(self.entity(3), deploy(), [pod()], TCFG, NOW)["status"], "True")
+        self.assertEqual(T.entity_controller_condition(self.entity(3), deploy(), [pod(1, "OOMKilled", 1)], TCFG, NOW)
+                         ["reason"], "ControllerOutOfMemory")
+        self.assertEqual(T.entity_controller_condition(self.entity(3, deleting=True), None, [], TCFG, NOW)["status"],
+                         "False")
+
+    def test_default_window(self):
+        self.assertEqual(T.DEFAULTS["tenancy"]["newEntityGraceMinutes"], 10)
+
+    def test_tenancy_pass_neither_alerts_nor_writes_the_controller_condition(self):
+        class Apps:
+            def read_namespaced_deployment(self, name, ns):
+                exc = T.ApiException()
+                exc.status = 404
+                raise exc
+
+        class Api:
+            def __init__(self):
+                self.patches = []
+
+            def patch_namespaced_custom_object_status(self, group, version, ns, plural, name, body):
+                self.patches.append(body)
+
+        ent = dict(self.entity(2), status={})
+        ent["metadata"].update(namespace="sovereign-cloud", resourceVersion="1")
+        kinds = [{"kind": "Entity", "plural": "entities", "version": "v1alpha1", "items": [ent]}]
+        saved = (getattr(T.client, "AppsV1Api", None), getattr(T.client, "CoreV1Api", None))
+        T.client.AppsV1Api, T.client.CoreV1Api = Apps, lambda: None
+        try:
+            api = Api()
+            counts, problems, _ = T.run_tenancy(api, kinds, T.load_config("/nonexistent"), NOW, False)
+        finally:
+            T.client.AppsV1Api, T.client.CoreV1Api = saved
+        self.assertEqual((counts["controllerUnavailable"], problems), (0, []))
+        types_written = [c["type"] for b in api.patches for c in b["status"]["conditions"]]
+        self.assertNotIn("ControllerAvailable", types_written)
+
+
 def cr(name, ready=True, generation=1, observed=1, delivery=None, created="2026-10-21T10:00:00Z"):
     st = {"observedGeneration": observed, "delivery": delivery or {}}
     if ready:

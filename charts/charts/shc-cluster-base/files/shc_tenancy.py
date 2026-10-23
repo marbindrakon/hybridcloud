@@ -46,7 +46,7 @@ DEFAULTS = {
     "redrive": {"enabled": True},
     "tenancy": {"enabled": True, "unavailableMinutes": 2, "restartWindowMinutes": 15, "restartThreshold": 3,
                 "deliveryStalledMinutes": 15, "operatorDeployment": OPERATOR, "entityNamespace": "sovereign-cloud",
-                "tenantNamespacePrefix": "entity-"},
+                "tenantNamespacePrefix": "entity-", "newEntityGraceMinutes": 10},
     "phase": {"enabled": True, "write": False, "reportLimit": 50},
     "failedRecheck": {"enabled": True, "intervalMinutes": 30, "maxRechecks": 6,
                       "kinds": ["Rbac", "Team", "Project", "Persona", "Vault", "VaultKV", "AAPOrg", "QuayOrg"]},
@@ -118,6 +118,22 @@ def controller_condition(deploy, pods, tcfg, now):
                         "message": "The tenant controller restarted %d times (last %s)." %
                                    (cs.restart_count, term.finished_at.strftime("%Y-%m-%dT%H:%M:%SZ"))}
     return {"type": "ControllerAvailable", "status": "True", "reason": "AsExpected", "message": ""}
+
+
+def entity_controller_condition(entity, deploy, pods, tcfg, now):
+    """ControllerAvailable of one Entity, or None while a new Entity's controller is still being set up.
+
+    A tenant's namespace operator starts only after the Entity's job made its namespace: within
+    newEntityGraceMinutes of the Entity's creation a controller that is not deployed or not yet available is neither
+    reported nor written (one that restarts or runs out of memory still is).
+    """
+    ctrl = controller_condition(deploy, pods, tcfg, now)
+    meta = entity.get("metadata") or {}
+    age = minutes_since(meta.get("creationTimestamp"), now)
+    if ctrl["reason"] == "ControllerUnavailable" and not meta.get("deletionTimestamp") and age is not None \
+            and age < tcfg.get("newEntityGraceMinutes", 0):
+        return None
+    return ctrl
 
 
 # Ready reasons that report a delivery problem themselves; a Failed/Waiting phase with one of them still counts.
@@ -239,22 +255,23 @@ def run_tenancy(api, kinds, cfg, now, dry_run):
             pods = core.list_namespaced_pod(ns, label_selector=f"app.kubernetes.io/name={tcfg['operatorDeployment']}").items
         if meta.get("deletionTimestamp") and deploy is None:
             continue  # the cascade removed the controller on purpose
-        ctrl = controller_condition(deploy, pods, tcfg, now)
+        ctrl = entity_controller_condition(entity, deploy, pods, tcfg, now)
         crs = [(k["kind"], cr) for k in kinds if k["kind"] not in ("Entity", "TenantProfile")
                for cr in k["items"] if cr["metadata"].get("namespace") == ns]
         deliv, stalled = delivery_condition(crs, tcfg, now, cfg.get("redrive"))
-        if ctrl["status"] == "False":
+        if ctrl is not None and ctrl["status"] == "False":
             counts["controllerUnavailable"] += 1
             problems.append(f"Entity {name}: ControllerAvailable=False/{ctrl['reason']}: {ctrl['message']}")
         if deliv["status"] == "True":
             counts["deliveryStalled"] += 1
             problems.append(f"Entity {name}: DeliveryStalled for {', '.join(stalled[:10])}")
-        if write_conditions(api, entity_kind["version"], entity_kind["plural"], entity, [ctrl, deliv], now, dry_run, writes):
+        conds = [c for c in (ctrl, deliv) if c is not None]
+        if write_conditions(api, entity_kind["version"], entity_kind["plural"], entity, conds, now, dry_run, writes):
             counts["conditionWrites"] += 1
         if profile_kind:
             for prof in profile_kind["items"]:
                 if prof["metadata"].get("namespace") == ns and prof["metadata"]["name"] == "shc":
-                    if write_conditions(api, profile_kind["version"], profile_kind["plural"], prof, [ctrl, deliv],
+                    if write_conditions(api, profile_kind["version"], profile_kind["plural"], prof, conds,
                                         now, dry_run, writes):
                         counts["conditionWrites"] += 1
     return counts, problems, writes
