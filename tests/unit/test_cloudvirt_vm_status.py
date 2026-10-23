@@ -69,6 +69,57 @@ class Wiring(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class NoVmObjectsInLogs(unittest.TestCase):
+    """R2A-F2: VirtualMachine objects (cloud-init userData can carry a password) never reach the job events."""
+
+    def vm_lists(self):
+        for base in (os.path.join(ROOT, "eda"), os.path.join(ROOT, "operator")):
+            for d, _, files in os.walk(base):
+                for f in files:
+                    if not f.endswith((".yml", ".yaml")):
+                        continue
+                    path = os.path.join(d, f)
+                    try:
+                        tasks = load(path)
+                    except yaml.YAMLError:
+                        continue
+                    if not isinstance(tasks, list):
+                        continue
+                    for t in walk(tasks):
+                        mod = t.get("kubernetes.core.k8s_info") or t.get("k8s_info")
+                        if isinstance(mod, dict) and mod.get("kind") == "VirtualMachine":
+                            yield path, t
+
+    def test_every_vm_list_is_no_log(self):
+        found = list(self.vm_lists())
+        self.assertGreaterEqual(len(found), 3)
+        for path, t in found:
+            self.assertIs(t.get("no_log"), True, "%s: %s" % (path, t.get("name")))
+
+    def test_no_loop_over_the_raw_vm_results(self):
+        for path, t in self.vm_lists():
+            reg = t["register"]
+            tasks = load(path)
+            for other in walk(tasks):
+                self.assertNotIn(reg + ".results", str(other.get("loop", "")), "%s: %s" % (path, other.get("name")))
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_provision_removes_and_keeps_by_count(self):
+        tasks = load(CV_MAIN)
+        summarize = by_name(tasks, "Summarize the VMs in the namespaces to remove")
+        remove = by_name(tasks, "Remove the namespaces without VMs")
+        keep = by_name(tasks, "Keep the removed namespaces that still hold VMs")
+        results = {"results": [{"item": "ns-a", "resources": []},
+                               {"item": "ns-b", "resources": [vm("db"), vm("web")]}]}
+        got = run_play([summarize, keep, {"name": "removed", "ansible.builtin.set_fact": {"_removed": remove["loop"]}},
+                        write_out("{'kept': cv_kept, 'removed': _removed | map(attribute='namespace') | list,"
+                                  " 'counts': cv_stale_counts}")],
+                       {"_cv_stale_vms": results})
+        self.assertEqual(got["kept"], ["ns-b"])
+        self.assertEqual(got["removed"], ["ns-a"])
+        self.assertNotIn("resources", str(got["counts"]))
+
+
 class Summary(unittest.TestCase):
     def summarize(self, results, cap=3):
         step = load(COMMON)[1]

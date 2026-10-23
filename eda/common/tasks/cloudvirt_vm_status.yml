@@ -6,6 +6,8 @@
 # Inputs: cvs_kubeconfig (path), cvs_namespaces (list of {namespace, name}: the site namespace and the environment's
 #         name for it, '' for a namespace that left the spec but still holds VMs), cvs_names_cap (default 50).
 # Sets: cv_vm_status ({} when a namespace could not be read: the caller then keeps what was there).
+# The list is no_log (R2A-F2): the registered results are whole VirtualMachine objects, whose spec can carry
+# cloud-init userData with a password. Only the summary below (names and counts) is logged.
 - name: List the VirtualMachines in the environment's site namespaces
   kubernetes.core.k8s_info:
     kubeconfig: "{{ cvs_kubeconfig }}"
@@ -17,6 +19,7 @@
     label: "{{ item.namespace }}"
   register: _cvs_vms
   failed_when: false
+  no_log: true
 
 - name: Summarize the VirtualMachines per namespace
   vars:
