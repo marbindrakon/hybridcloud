@@ -165,6 +165,8 @@
     cluster_console_url: "{{ cb_console_url | default('') }}"
     cluster_api_url: "{{ cb_api_url | default('') }}"
     cluster_apps_url: "{{ cb_apps_url | default('') }}"
+    # the cluster's DNS domain: its OAuth callback is https://oauth-openshift.apps.<cluster_domain>/oauth2callback/<idp>
+    cluster_domain: "{{ cb_cluster_domain }}"
     cluster_namespace: "{{ ansible_operator_meta.namespace }}"
     central_token: "{{ central_bearer_token }}"
   when:
