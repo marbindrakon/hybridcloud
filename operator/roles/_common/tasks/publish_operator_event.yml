@@ -196,7 +196,10 @@
         - not (reconcile_request_legacy | default(false) | bool)
         - (reconcile_request | default('') | string) | length > 0
 
-    # A new request on a deleting CR starts the teardown attempts again.
+    # A new request on a deleting CR starts the teardown attempts again. k8s_status cannot take `retry: null`
+    # (its no-change check calls .items() on the value and fails) and `retry: {}` is a no-op in a merge patch, so
+    # each counter field the status library writes (status.retry: attempts, failingSince, lastFailureTime) is
+    # removed by a null; status.retry is left an empty mapping.
     - name: Reset the teardown retry count
       operator_sdk.util.k8s_status:
         api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -204,7 +207,10 @@
         name: "{{ operator_event_regarding.name }}"
         namespace: "{{ operator_event_regarding.namespace }}"
         status:
-          retry: null
+          retry:
+            attempts: null
+            failingSince: null
+            lastFailureTime: null
           conditions:
             - type: Stalled
               status: "False"
