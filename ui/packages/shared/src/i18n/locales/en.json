@@ -753,7 +753,7 @@
     "endpoint": "API endpoint",
     "fabricDefault": "Fabric default",
     "gatewayNodes": "Gateway per node",
-    "gatewayReady": "Gateway ready",
+    "gatewayReady": "Site connection ready",
     "l2Vni": "Layer 2 VNI",
     "l3Vni": "Layer 3 VNI",
     "lastApplied": "Last applied",
@@ -1392,6 +1392,8 @@
     "cloudoso": "OpenStack environment",
     "cloudOSO": "OpenStack environment",
     "openshift": "OpenShift cluster",
-    "openshiftReady": "cluster ready"
+    "openshiftReady": "cluster ready",
+    "acmPolicyName": "ACM policy",
+    "assignmentProvisioned": "delivered to its cluster"
   }
 }

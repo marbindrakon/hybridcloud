@@ -753,7 +753,7 @@
     "endpoint": "Point d'accès de l'API",
     "fabricDefault": "Défaut du fabric",
     "gatewayNodes": "Passerelle par nœud",
-    "gatewayReady": "Passerelle prête",
+    "gatewayReady": "Connexion du site prête",
     "l2Vni": "VNI de couche 2",
     "l3Vni": "VNI de couche 3",
     "lastApplied": "Dernière application",
@@ -1392,6 +1392,8 @@
     "cloudoso": "environnement OpenStack",
     "cloudOSO": "environnement OpenStack",
     "openshift": "cluster OpenShift",
-    "openshiftReady": "cluster prêt"
+    "openshiftReady": "cluster prêt",
+    "acmPolicyName": "stratégie ACM",
+    "assignmentProvisioned": "livrée à son cluster"
   }
 }

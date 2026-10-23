@@ -212,7 +212,7 @@ export function linkedSummary(t: VocabT, text: string): string | null {
 const ACRONYMS = new Set([
   'id', 'ids', 'mtu', 'url', 'urls', 'dns', 'vni', 'vnis', 'cidr', 'ip', 'ips', 'ipv4', 'ipv6', 'asn', 'aap', 'vm', 'vms',
   'kv', 'uid', 'api', 'bgp', 'vlan', 'tls', 'ca', 'nat', 'evpn', 'oidc', 'sso', 'ssh', 'cpu', 'gpu', 'vrf', 'ttl', 'http',
-  'https', 'vpc', 'aws', 'gcp', 'uri',
+  'https', 'vpc', 'aws', 'gcp', 'uri', 'acm',
 ]);
 
 /**
