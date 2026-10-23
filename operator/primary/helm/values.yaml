@@ -39,6 +39,17 @@ amqKafka:
   secretStoreName: vault-backend
   secretStoreKind: ClusterSecretStore
 
+# The ACM creator credential of the management cluster as the Secret the Assignment jobs read (namespace above):
+# keys token and ca.crt from the store's key vaultPath (written there by the management cluster). Needed only for
+# Assignments that name a cluster.
+assignmentAcmCreator:
+  enabled: false
+  secretName: assignment-acm-creator-sa
+  vaultPath: assignment-acm-creator
+  secretStoreName: vault-backend
+  secretStoreKind: ClusterSecretStore
+  refreshInterval: 1h
+
 metrics:
   enabled: true
 
