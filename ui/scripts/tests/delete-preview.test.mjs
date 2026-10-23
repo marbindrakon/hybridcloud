@@ -175,14 +175,21 @@ test('an app project lists the cluster assignments that list it and the team set
 
 // PGT2-F2: the VMs each site namespace holds, from the environment's status.
 test('a VM environment lists the VMs its site namespaces hold, with the count when the list is cut', () => {
+  // status.virtualMachines: per namespace the complete count and the sorted, capped names
   const vm = obj('CloudVirt', 'vm', {}, {
-    namespaces: [
-      { name: 'web', namespace: 'x-vm-web', virtualMachines: ['web-1', 'web-2'], virtualMachineCount: 5, truncated: true },
-      { name: 'db', namespace: 'x-vm-db', virtualMachines: ['db-1'], virtualMachineCount: 1 },
-      { name: 'empty', namespace: 'x-vm-empty', virtualMachines: [], virtualMachineCount: 0 },
-      { name: 'counted', namespace: 'x-vm-counted', virtualMachineCount: 3 },
-      { name: 'old', namespace: 'x-vm-old' },
-    ],
+    namespaces: [{ name: 'web', namespace: 'x-vm-web' }, { name: 'db', namespace: 'x-vm-db' }, { name: 'empty', namespace: 'x-vm-empty' }],
+    virtualMachines: {
+      observedAt: '2026-10-23T10:00:00Z',
+      total: 9,
+      truncated: true,
+      namespaces: [
+        { name: 'web', namespace: 'x-vm-web', count: 5, names: ['web-1', 'web-2'], truncated: true },
+        { name: 'db', namespace: 'x-vm-db', count: 1, names: ['db-1'], truncated: false },
+        { name: 'empty', namespace: 'x-vm-empty', count: 0, names: [], truncated: false },
+        // left the spec but still holds VMs
+        { name: '', namespace: 'x-vm-old', count: 3, names: [], truncated: true },
+      ],
+    },
   });
   const p = m.deletePreview('CloudVirt', vm);
   assert.deepEqual(keys(p), [
@@ -192,7 +199,7 @@ test('a VM environment lists the VMs its site namespaces hold, with the count wh
   assert.deepEqual(p.sections[1].entries, [
     { name: 'x-vm-web', items: ['web-1', 'web-2'], more: 3 },
     { name: 'x-vm-db', items: ['db-1'], more: 0 },
-    { name: 'x-vm-counted', items: [], more: 3 },
+    { name: 'x-vm-old', items: [], more: 3 },
   ]);
   // a status without the VM fields lists none (older releases)
   const old = m.deletePreview('CloudVirt', obj('CloudVirt', 'vm', {}, { namespaces: [{ name: 'web', namespace: 'x-vm-web' }] }));

@@ -282,13 +282,24 @@ function backendOf(o: K8sResource): Backend {
 function networkOf(o: K8sResource): string | undefined {
   return (o.spec as { network?: string } | undefined)?.network;
 }
-/** The VMs a site namespace holds, as the environment's status reports them (absent when it reports none). */
-type NamespaceVms = { name?: string; namespace?: string; virtualMachines?: unknown; virtualMachineCount?: unknown; truncated?: unknown };
-function vmsOf(n: NamespaceVms): { items: string[]; count: number; reported: boolean } {
-  const items = names(n.virtualMachines);
-  const counted = typeof n.virtualMachineCount === 'number' && Number.isFinite(n.virtualMachineCount) ? n.virtualMachineCount : undefined;
-  const reported = Array.isArray(n.virtualMachines) || counted !== undefined;
-  return { items, count: Math.max(counted ?? items.length, items.length), reported };
+/**
+ * The VMs each site namespace of a VM environment holds, from status.virtualMachines.namespaces
+ * (names sorted and capped, count complete). Namespaces without VMs, and an environment whose
+ * status does not report them, give none.
+ */
+type NamespaceVms = { name?: unknown; namespace?: unknown; count?: unknown; names?: unknown };
+export function vmsByNamespace(status: Record<string, unknown>): PreviewEntry[] {
+  const vms = status.virtualMachines as { namespaces?: unknown } | undefined;
+  const list = vms && Array.isArray(vms.namespaces) ? (vms.namespaces as NamespaceVms[]) : [];
+  return list
+    .filter((n) => n && typeof n === 'object')
+    .map((n) => {
+      const items = names(n.names);
+      const counted = typeof n.count === 'number' && Number.isFinite(n.count) ? n.count : items.length;
+      const ns = (typeof n.namespace === 'string' && n.namespace) || (typeof n.name === 'string' && n.name) || '';
+      return { name: ns, items, more: Math.max(counted, items.length) - items.length };
+    })
+    .filter((e) => e.name && (e.items.length > 0 || e.more > 0));
 }
 
 /** The Assignments of `team` (spec.team), not being deleted. */
@@ -365,13 +376,11 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
     if (kind === 'CloudVirt') {
       // No guard: the site namespaces are removed only once they hold no VMs (the delete waits while any VM
       // remains). The placements on it are not deleted: they wait for the environment and are deleted separately.
-      const statusNs = ((status.namespaces as NamespaceVms[] | undefined) ?? []).filter((n) => n && (n.namespace || n.name));
-      const nsRows: PreviewEntry[] = statusNs.map((n) => ({ name: n.namespace || n.name || '' }));
-      // PGT2-F2: the VMs each namespace holds (the status lists their names, possibly truncated, and the count).
-      const vmRows: PreviewEntry[] = statusNs
-        .map((n) => ({ ns: n.namespace || n.name || '', vms: vmsOf(n) }))
-        .filter((r) => r.vms.reported && r.vms.count > 0)
-        .map((r) => ({ name: r.ns, items: r.vms.items, more: r.vms.count - r.vms.items.length }));
+      const nsRows: PreviewEntry[] = ((status.namespaces as { name?: string; namespace?: string }[] | undefined) ?? [])
+        .map((n) => ({ name: n.namespace || n.name || '' }))
+        .filter((n) => n.name);
+      // PGT2-F2: the VMs each site namespace holds, including a namespace that left the spec but still holds VMs.
+      const vmRows = vmsByNamespace(status);
       return {
         sections: [
           ...section('namespaces', nsRows),

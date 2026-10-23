@@ -820,7 +820,10 @@ function CloudVirtDetails({ item }: { item: CloudVirt }): React.ReactElement {
                   </Td>
                   <Td dataLabel={t('fields.namespaceNetwork')}>{network || t('form.siteDefaultNetwork')}</Td>
                   <Td dataLabel={t('detail.vms')}>
-                    {typeof s?.virtualMachineCount === 'number' ? s.virtualMachineCount : s?.virtualMachines ? s.virtualMachines.length : <Dash />}
+                    {(() => {
+                      const vms = st.virtualMachines?.namespaces?.find((v) => (s?.namespace && v.namespace === s.namespace) || v.name === name);
+                      return typeof vms?.count === 'number' ? vms.count : <Dash />;
+                    })()}
                   </Td>
                   <Td dataLabel={t('detail.ready')}>
                     <ReadyLabel ready={s?.ready} />
