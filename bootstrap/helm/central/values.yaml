@@ -5445,6 +5445,8 @@ hybridsovereignPrimaryOperator:
       image:
         repository: quay.signal9.gg/shc/hybridsovereign-namespace-operator
         tag: "img-0.1.27"  # img-0.1.27: the same delete status changes on the namespace kinds; img-0.1.26: every acknowledgement write carries the phase on the twelve remaining namespace kinds incl. Rbac (P3R-F1); img-0.1.25: the acknowledgement write carries the phase (P2AC-F1), Retry now resets status.retry (P2AC-F4); img-0.1.24: shared operator library update (mark_phase, publish_operator_event), no behaviour change; img-0.1.23: phase Creating/Deleting, Stalled cleared after a successful teardown, placement wakes on network/environment Ready, Kafka protocol pin; img-0.1.22: shc_status library (stored phase, no Ready flip), per-kind reconcile caps, probes, reconcileNow with any value, optional connection references, tenantprofiles grant (canary-tested on globex-industries and acme-corp); img-0.1.21: CloudGCP watch + roles (P11.4); img-0.1.20: AttachmentCircuit watch, HybridNetwork delete waits for circuits (P9.1); img-0.1.16: reconcilePeriod + in-flight guard (P7.3.2); img-0.1.17: CloudVirt watch, fabric delete guards (P7.3.3); img-0.1.18: a waiting delete is not marked failed; img-0.1.19: CloudVirt-owned namespaces (guards)
+    assignmentAcmCreator:
+      enabled: true   # OD48: ExternalSecret assignment-acm-creator-sa in sovereign-cloud from the central Vault key the hub pushes; on after the ux-h2 EDA content is seeded and the tenant ManagedClusterSet (OD51) is live
     amqKafka:
       enabled: true
       vaultPath: amq-producer
