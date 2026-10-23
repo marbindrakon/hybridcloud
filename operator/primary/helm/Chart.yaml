@@ -2,8 +2,8 @@ apiVersion: v2
 name: hybridsovereign-primary-operator
 description: Primary operator — Entity + plugin config CRDs on services cluster
 type: application
-version: 0.1.22-shc.25
-appVersion: "0.1.37"
+version: 0.1.22-shc.26
+appVersion: "0.1.38"
 keywords:
   - openshift
   - operator
