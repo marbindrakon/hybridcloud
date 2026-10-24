@@ -28,6 +28,8 @@ import type {
   TenantProfileSite,
 } from '../types';
 import { isUnicastScope, parseNetworkPrefix, prefixListOverlaps, type NetworkPrefix } from './hybridFabricDefaults';
+import { displayText, type VocabT } from '../i18n/vocabulary';
+import { PART_REASONS, REASONS } from '../status/reasons.generated';
 
 /* ------------------------------------------------------------------ prefixes */
 
@@ -423,6 +425,32 @@ export function familyUnavailable(p: { status?: { conditions?: Array<{ type?: st
   | null {
   const c = (p?.status?.conditions ?? []).find((x) => x?.reason === 'FamilyUnavailable');
   return c ? { message: c.message } : null;
+}
+
+/**
+ * A status reason in plain words (ipv6.reason.<Reason>), with the platform's message when it adds one. The message
+ * is shown in display words (no API kind names); when it holds the reason's words (IPv6ModeInUse: the sentence and
+ * the two modes) it is shown alone.
+ */
+export function ipv6ReasonText(
+  t: VocabT,
+  reason: string | undefined,
+  rawMessage?: string,
+  scope?: 'ipv4' | 'translation',
+): string {
+  const message = rawMessage ? displayText(t, rawMessage) : rawMessage;
+  if (!reason) return message ?? '';
+  // the catalogue's words, else the status contract's summary (English) of the reason. The unscoped words describe
+  // IPv6 internet access; an IPv4 egress row or the translation row uses its own words, else the job's message.
+  const words = scope
+    ? t(`ipv6.reasonScoped.${scope}.${reason}`, { defaultValue: '' })
+    : t(`ipv6.reason.${reason}`, { defaultValue: '' }) || PART_REASONS[reason]?.summary || REASONS[reason]?.summary || '';
+  if (!words) return message || reason;
+  // the job's message often repeats the reason's words: show it only when it adds something
+  const norm = (x: string) => x.trim().replace(/[.\s]+$/, '').toLowerCase();
+  if (!message || norm(words).includes(norm(message))) return words;
+  if (norm(message).includes(norm(words))) return message;
+  return `${words} ${message}`;
 }
 
 /* ------------------------------------------------------------------ cloud-init */

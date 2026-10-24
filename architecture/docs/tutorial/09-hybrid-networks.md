@@ -211,8 +211,10 @@ spec:
 - One IPv6 source per network: IPv6 entries in `prefixes` and `platformPrefixes` with `family: 6` together are
   refused when you apply the object.
 - **The mode can't change while the network has placements** (`IPv6ModeInUse`; the network keeps working with the
-  mode it had). Without placements, change the fields as you like. Inside mode `Tenant`, adding and removing your own
-  IPv6 prefixes follows the usual rules for `prefixes`.
+  mode it had). The message reads "the network's IPv6 mode can't change while it has placements; remove them or
+  create a new network", followed by the mode the network has and the mode the spec asks for, for example "(it is
+  Tenant, the spec asks for Platform)". Without placements, change the fields as you like. Inside mode `Tenant`,
+  adding and removing your own IPv6 prefixes follows the usual rules for `prefixes`.
 
 ### Internet access per family
 

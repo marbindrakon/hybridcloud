@@ -2,9 +2,18 @@
 // capability gate of the placement IPv6 inputs and the cloud-init snippet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const m = await import(path.join(process.env.SHELL_BUNDLE_DIR, 'ipv6.mjs'));
+const load = (l) => JSON.parse(fs.readFileSync(path.join(process.env.UI_ROOT, `packages/shared/src/i18n/locales/${l}.json`), 'utf8'));
+const tOf = (cat) => (key, opts = {}) => {
+  const s = key.split('.').reduce((n, p) => (n && typeof n === 'object' ? n[p] : undefined), cat);
+  const out = typeof s === 'string' ? s : opts.defaultValue ?? key;
+  return String(out).replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (opts[k] !== undefined ? String(opts[k]) : ''));
+};
+const tEn = tOf(load('en'));
+const KIND_NAME = /\b(HybridNetwork|NetworkPlacement|CloudVirt|CloudOSO|HybridFabric)\b/;
 const codes = (errs) => errs.map((e) => e.code).sort();
 
 test('mode follows the fields: platform block, tenant IPv6 prefix, neither', () => {
@@ -221,4 +230,16 @@ test('the cloud-init snippet ships behind the site capability check (no site rep
   assert.equal(m.showsCloudInitSnippet(p, undefined), false);
   assert.equal(m.showsCloudInitSnippet(p, { ipv6: true, ipv6Only: false, sources: [], translation: false }), true);
   assert.equal(m.showsCloudInitSnippet({ ...p, status: { prefixes: ['10.0.0.0/24'] } }, { ipv6: true, ipv6Only: false, sources: [], translation: false }), false);
+});
+
+test('IPv6ModeInUse on the network page: the job message once, with the modes, in display words', () => {
+  const msg = "HybridNetwork g6-v6only: the network's IPv6 mode can't change while it has placements; remove them or create a new network (it is Tenant, the spec asks for Platform)";
+  const out = m.ipv6ReasonText(tEn, 'IPv6ModeInUse', msg);
+  assert.equal(out, "network g6-v6only: the network's IPv6 mode can't change while it has placements; remove them or create a new network (it is Tenant, the spec asks for Platform)");
+  assert.doesNotMatch(out, KIND_NAME);
+  // the words alone when there is no message; the words are the message's sentence
+  assert.equal(m.ipv6ReasonText(tEn, 'IPv6ModeInUse'), "The network's IPv6 mode can't change while it has placements; remove them or create a new network.");
+  // a message that adds something else still follows the words, in display words
+  assert.equal(m.ipv6ReasonText(tEn, 'PrefixInUse', 'HybridNetwork n: fd00::/64 overlaps fd00::/48 of network a'),
+    'A prefix overlaps one already in use. network n: fd00::/64 overlaps fd00::/48 of network a');
 });

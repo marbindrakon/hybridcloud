@@ -29,8 +29,7 @@ import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHid
 import { ToolSignInPanel } from './ToolSignInPanel';
 import { Ipv6CloudInitSnippet } from './Ipv6CloudInitSnippet';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
-import { familyUnavailable, networkIpv6Mode, placementSubnets } from '../forms/ipv6';
-import { PART_REASONS, REASONS } from '../status/reasons.generated';
+import { familyUnavailable, ipv6ReasonText, networkIpv6Mode, placementSubnets } from '../forms/ipv6';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -627,27 +626,6 @@ export function egressText(n: HybridNetwork, t: (k: string, o?: Record<string, u
 
 /** Condition reasons about a network's address space, shown on its IPv6 row. */
 const NETWORK_SPACE_REASONS = ['WaitingForAddressSpace', 'IPv6ModeInUse', 'PrefixReserved', 'PrefixInUse', 'PrefixInvalid', 'FamilyUnavailable'];
-
-/** A status reason in plain words (ipv6.reason.<Reason>), with the platform's message when it adds one. */
-export function ipv6ReasonText(
-  t: (k: string, o?: Record<string, unknown>) => string,
-  reason: string | undefined,
-  message?: string,
-  scope?: 'ipv4' | 'translation',
-): string {
-  if (!reason) return message ?? '';
-  // the catalogue's words, else the status contract's summary (English) of the reason. The unscoped words describe
-  // IPv6 internet access; an IPv4 egress row or the translation row uses its own words, else the job's message.
-  const words = scope
-    ? t(`ipv6.reasonScoped.${scope}.${reason}`, { defaultValue: '' })
-    : t(`ipv6.reason.${reason}`, { defaultValue: '' }) || PART_REASONS[reason]?.summary || REASONS[reason]?.summary || '';
-  if (!words) return message || reason;
-  // the job's message often repeats the reason's words: show it only when it adds something
-  const norm = (x: string) => x.trim().replace(/[.\s]+$/, '').toLowerCase();
-  if (!message || norm(words).includes(norm(message))) return words;
-  if (norm(message).includes(norm(words))) return message;
-  return `${words} ${message}`;
-}
 
 /** What the network asked for from the platform: "the fabric's default size", "/56", "2001:db8::/56 (pinned)". */
 function platformRequestText(spec: HybridNetwork['spec'], t: (k: string, o?: Record<string, unknown>) => string): string {

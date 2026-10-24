@@ -1490,7 +1490,7 @@
       "NotOffered": "L'accès Internet IPv6 n'est pas encore proposé sur cette fabric.",
       "Degraded": "Fonctionne avec une redondance réduite.",
       "WaitingForAddressSpace": "En attente d'espace IPv6 de la plateforme : aucun bloc libre dans le pool de la plateforme, quota du locataire atteint, ou bloc choisi utilisé ou libéré récemment.",
-      "IPv6ModeInUse": "L'espace IPv6 du réseau ne peut pas changer tant qu'il a des placements ; supprimez-les ou créez un nouveau réseau.",
+      "IPv6ModeInUse": "Le mode IPv6 du réseau ne peut pas changer tant qu'il a des placements ; supprimez-les ou créez un nouveau réseau.",
       "PrefixReserved": "Un préfixe chevauche un espace d'adresses que la plateforme garde pour elle.",
       "PrefixInUse": "Un préfixe chevauche un préfixe déjà utilisé.",
       "PrefixInvalid": "Un préfixe d'adresses ou une taille de bloc n'est pas valide ici.",

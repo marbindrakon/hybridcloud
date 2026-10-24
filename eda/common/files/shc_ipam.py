@@ -235,7 +235,10 @@ def space_change(state, prefixes):
     return refused
 
 
+# The refusal's sentence: the IPv6ModeInUse summary of the status reasons registry (lower-case start) and the UI's
+# words; the network job's message is the same sentence followed by MODE_IN_USE_MODES.
 MODE_IN_USE = "the network's IPv6 mode can't change while it has placements; remove them or create a new network"
+MODE_IN_USE_MODES = " (it is {was}, the spec asks for {want})"
 
 
 def mode_change(state, mode6, holders):
@@ -245,7 +248,7 @@ def mode_change(state, mode6, holders):
     was = stored_mode6(state)
     if was == mode6:
         return None
-    return f"{MODE_IN_USE} (it is {was}, the spec asks for {mode6})"
+    return MODE_IN_USE + MODE_IN_USE_MODES.format(was=was, want=mode6)
 
 
 def own_v6(state):

@@ -33,6 +33,33 @@ def task_file(*parts):
     return load(os.path.join(*parts))
 
 
+def ipam_module():
+    sys.path.insert(0, os.path.join(COMMON, "files"))
+    import shc_ipam
+    return shc_ipam
+
+
+class ModeInUseWordsTest(unittest.TestCase):
+    """IPv6ModeInUse reads the same in the IPAM, the status reasons registry (both copies), the UI words and the docs
+    table; the job adds the two modes after the sentence (NetworkRefusalTest)."""
+
+    def test_one_sentence(self):
+        sentence = ipam_module().MODE_IN_USE
+        summary = sentence[0].upper() + sentence[1:] + "."
+        lib = os.path.join(ROOT, "eda", "rulebooks", "collections", "ansible_collections", "hybridsovereign", "shc",
+                           "plugins", "module_utils", "shc_status_reasons.py")
+        chart = os.path.join(ROOT, "charts", "charts", "shc-cluster-base", "files", "shc_status_reasons.py")
+        for path in (lib, chart):
+            ns = {}
+            with open(path) as f:
+                exec(compile(f.read(), path, "exec"), ns)  # pure data module
+            self.assertEqual(ns["REASONS"]["IPv6ModeInUse"]["summary"], summary, path)
+        with open(os.path.join(ROOT, "ui", "packages", "shared", "src", "i18n", "locales", "en.json")) as f:
+            self.assertEqual(json.load(f)["ipv6"]["reason"]["IPv6ModeInUse"], summary)
+        with open(os.path.join(ROOT, "docs", "tenant", "status-reasons.md")) as f:
+            self.assertIn(f"| `IPv6ModeInUse` | {summary} |", f.read())
+
+
 # ---- network: the mode from the fields ---------------------------------------------------------------------------
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -83,6 +110,19 @@ class NetworkRefusalTest(unittest.TestCase):
         self.assertEqual(self.refuse("Tenant", "Platform", ["NetworkPlacement/entity-a/p1"]), "IPv6ModeInUse")
         self.assertEqual(self.refuse("None", "Tenant", ["NetworkPlacement/entity-a/p1"]), "IPv6ModeInUse")
         self.assertEqual(self.refuse("Platform", "None", ["NetworkPlacement/entity-a/p1"]), "IPv6ModeInUse")
+
+    def test_mode_change_message_is_the_registry_sentence_with_the_modes(self):
+        # one sentence everywhere: the job's message = "<Kind> <name>: " + the IPAM's refusal (MODE_IN_USE + modes);
+        # the registry's summary and the UI words are MODE_IN_USE as a sentence, so the UI shows the message alone
+        t = copy.deepcopy(by_name(task_file(HN, "main.yml"), "Refuse a change of the IPv6 mode while the network has placements"))
+        tasks = [{"ansible.builtin.set_fact": {"fab_fail_reason": ""}}, t, write_out("fab_fail_msg")]
+        msg = run_play(tasks, {"fab_name": "n1", "hn_mode6_realized": "Tenant", "hn_mode6": "Platform",
+                               "hn_holders": ["NetworkPlacement/entity-a/p1"]})
+        ipam = ipam_module()
+        self.assertEqual(msg, "HybridNetwork n1: " + ipam.mode_change({"prefixes": ["fd12::/48"], "mode6": "Tenant"},
+                                                                       "Platform", ["NetworkPlacement/entity-a/p1"]))
+        self.assertEqual(msg, "HybridNetwork n1: the network's IPv6 mode can't change while it has placements; "
+                              "remove them or create a new network (it is Tenant, the spec asks for Platform)")
 
     def test_mode_change_allowed(self):
         self.assertEqual(self.refuse("Tenant", "Platform", []), "")          # no placements: a re-create

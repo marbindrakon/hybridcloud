@@ -88,7 +88,7 @@ REASONS = {
     "PrefixInUse": _r("T", FAILED, "The address prefix overlaps one already in use: a placement's subnet or another network of this tenant."),
     "PrefixReserved": _r("T", FAILED, "The address prefix overlaps address space the platform keeps for itself. Choose another prefix."),
     "FamilyUnavailable": _r("T", FAILED, "This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it."),
-    "IPv6ModeInUse": _r("T", FAILED, "The network's IPv6 mode can't change while it has placements. Remove them first, or create a new network."),
+    "IPv6ModeInUse": _r("T", FAILED, "The network's IPv6 mode can't change while it has placements; remove them or create a new network."),
     "AttachmentNotSupported": _r("T", FAILED, "This attachment is not supported on the chosen site."),
     "TransportNotSupported": _r("T", FAILED, "This transport is not supported."),
     "AsnConflict": _r("T", FAILED, "The AS number conflicts with one already in use."),

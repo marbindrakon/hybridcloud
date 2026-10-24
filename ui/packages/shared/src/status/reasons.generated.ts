@@ -47,7 +47,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "FamilyUnavailable": { actor: "T", class: "failed", summary: "This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it." },
   "Granted": { actor: "A", class: "ready", summary: "Access granted to the named access groups." },
   "GroupClaimVerified": { actor: "A", class: "ready", summary: "Sign-in verified for a member of a granted access group." },
-  "IPv6ModeInUse": { actor: "T", class: "failed", summary: "The network's IPv6 mode can't change while it has placements. Remove them first, or create a new network." },
+  "IPv6ModeInUse": { actor: "T", class: "failed", summary: "The network's IPv6 mode can't change while it has placements; remove them or create a new network." },
   "InProgress": { actor: "A", class: "progress", summary: "Applying the change." },
   "InvalidSecret": { actor: "P", class: "failed", summary: "A required credential is not valid. The platform team is looking at it." },
   "InvalidSpec": { actor: "T", class: "failed", summary: "The request is not valid; correct the fields named in the message." },

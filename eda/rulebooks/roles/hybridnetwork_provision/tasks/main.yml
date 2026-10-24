@@ -230,12 +230,14 @@
       vars:
         hn_held: "{{ fab_ipam_result }}"
 
+    # the sentence is shc_ipam.MODE_IN_USE (and the reason's summary in the status reasons registry, the UI words),
+    # followed by the two modes; tests/unit/test_ipv6_api.py compares them
     - name: Refuse a change of the IPv6 mode while the network has placements
       ansible.builtin.set_fact:
         fab_fail_reason: IPv6ModeInUse
         fab_fail_msg: >-
-          HybridNetwork {{ fab_name }}: the network's IPv6 mode can't change while it has placements
-          ({{ hn_mode6_realized }} to {{ hn_mode6 }}); remove them or create a new network
+          HybridNetwork {{ fab_name }}: the network's IPv6 mode can't change while it has placements;
+          remove them or create a new network (it is {{ hn_mode6_realized }}, the spec asks for {{ hn_mode6 }})
       when:
         - hn_mode6_realized | length > 0
         - hn_mode6_realized != hn_mode6

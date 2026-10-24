@@ -161,7 +161,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `FabricMismatch` | The network and the site belong to different fabrics. | You (the tenant) |
 | `Failed` | Could not be completed; see the reason. | The platform team |
 | `FamilyUnavailable` | This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it. | You (the tenant) |
-| `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements. Remove them first, or create a new network. | You (the tenant) |
+| `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
