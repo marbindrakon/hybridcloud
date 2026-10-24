@@ -23,6 +23,8 @@ groups need the matching role (see [Onboard a tenant](../docs/platform/onboard-a
 |---|---|---|
 | [rbac/example-admins.yaml](rbac/example-admins.yaml) and the other three in `rbac/` | Rbac | An access group. The platform team adds people to it. |
 | [hybridnetwork/example-net.yaml](hybridnetwork/example-net.yaml) | HybridNetwork | A network with one IPv4 address space. |
+| [hybridnetwork/example-net-own-ipv6.yaml](hybridnetwork/example-net-own-ipv6.yaml) | HybridNetwork | A dual-stack network with the tenant's own IPv6 prefix (carried between sites, no IPv6 internet). |
+| [hybridnetwork/example-net-platform-ipv6.yaml](hybridnetwork/example-net-platform-ipv6.yaml) | HybridNetwork | A dual-stack network whose IPv6 block the platform assigns, with internet access. |
 | [cloudvirt/example-vms.yaml](cloudvirt/example-vms.yaml) | CloudVirt | A VM environment on the site `site-vm`, its namespace bound to the network. |
 | [cloudoso/example-osp.yaml](cloudoso/example-osp.yaml) | CloudOSO | An OpenStack environment on the site `site-osp`. |
 | [cloudaws/example-aws.yaml](cloudaws/example-aws.yaml) | CloudAWS | An AWS environment (billable). |
