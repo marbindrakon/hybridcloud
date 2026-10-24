@@ -2,7 +2,8 @@
 # The status body of the tenant's TenantProfile "shc": display name, contacts and the sites the tenant may use
 # (CloudInfrastructures in the platform namespace that are not being deleted, whose spec.entityRefs is empty or
 # names the tenant, and that Entity spec.allowedSites lists when it is set), in tenant words
-# (common/tasks/site_tenant_summary.yml), sorted by name. Read only.
+# (common/tasks/site_tenant_summary.yml), sorted by name, and the platform IPv6 offer of the tenant's fabric. Read
+# only.
 #
 # Input:  entity_cr_name, entity_cr_namespace (the platform namespace), entity_spec (live), entity_generation,
 #         services_api_host/services_bearer_token (or services_kubeconfig, for the read-only render test)
@@ -43,6 +44,43 @@
   vars:
     sts_sites: "{{ _tp_site_objs }}"
 
+# The platform IPv6 offer (status.ipv6Platform): the fabrics in the platform namespace this tenant may use (not being
+# deleted, spec.entityRefs empty or naming the tenant). With exactly one, its family-6 pool's block sizes and default
+# (ipv6_platform_offer.yml); with none, several or a fabric that reports no IPv6 pool, the key is removed (the form
+# then cannot tell, and the network job stays the authority). When the fabrics cannot be read, the key is left out of
+# the patch, so the profile keeps what it had.
+- name: List the platform's fabrics
+  kubernetes.core.k8s_info:
+    host: "{{ omit if services_kubeconfig is defined else services_api_host }}"
+    api_key: "{{ omit if services_kubeconfig is defined else services_bearer_token }}"
+    kubeconfig: "{{ services_kubeconfig | default(omit) }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridFabric
+    namespace: "{{ entity_cr_namespace }}"
+  register: _tp_fabrics
+  failed_when: false
+
+- name: The fabrics this tenant may use
+  ansible.builtin.set_fact:
+    _tp_fabrics_read: "{{ not (_tp_fabrics.failed | default(false) | bool) and _tp_fabrics.resources is defined }}"
+    _tp_fabric_objs: >-
+      {%- set out = [] -%}
+      {%- for o in _tp_fabrics.resources | default([], true) -%}
+        {%- set refs = (o.spec | default({}, true)).entityRefs | default([], true) | map(attribute='name') | list -%}
+        {%- if o.metadata.deletionTimestamp is not defined and (refs | length == 0 or entity_cr_name in refs) -%}
+          {%- set _ = out.append(o) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: The platform IPv6 offer of the tenant's fabric
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/ipv6_platform_offer.yml"
+  vars:
+    ipo_pools: >-
+      {{ (((_tp_fabric_objs[0].status | default({}, true)).realization | default({}, true)).ipam
+           | default({}, true)).pools | default([], true) if _tp_fabric_objs | length == 1 else [] }}
+
 - name: The profile's status body
   ansible.builtin.set_fact:
     tenant_profile_status: >-
@@ -50,4 +88,6 @@
           'contacts': (entity_spec.contacts | default([], true)) or none,
           'sites': site_tenant_summaries,
           'observedEntityGeneration': entity_generation | int,
-          'lastUpdatedTime': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')} }}
+          'lastUpdatedTime': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
+         | combine({'ipv6Platform': (ipv6_platform_offer if ipv6_platform_offer | length > 0 else none)}
+                   if _tp_fabrics_read | bool else {}) }}

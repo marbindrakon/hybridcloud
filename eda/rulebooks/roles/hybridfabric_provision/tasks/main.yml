@@ -345,6 +345,30 @@
                               'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
                               'ipam': hf_ipam}} }}
 
+    # what tenants see of the fabric changed (its IPv6 block sizes, or its spec: who may use it): wake the Entities,
+    # whose job rewrites TenantProfile status.ipv6Platform
+    - name: The tenants' platform IPv6 offer before this run
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/ipv6_platform_offer.yml"
+      vars:
+        ipo_pools: "{{ (((fab_st.realization | default({}, true)).ipam | default({}, true)).pools | default([], true)) }}"
+
+    - name: Keep it
+      ansible.builtin.set_fact:
+        hf_offer_before: "{{ ipv6_platform_offer }}"
+
+    - name: The tenants' platform IPv6 offer after this run
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/ipv6_platform_offer.yml"
+      vars:
+        ipo_pools: "{{ hf_ipam.pools | default([], true) }}"
+
+    - name: Wake the Entities when the tenants' view of the fabric changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_entities.yml"
+      vars:
+        we_namespace: "{{ fab_namespace }}"
+      when: >-
+        (hf_offer_before != ipv6_platform_offer)
+        or (fab_generation | int != (fab_st.observedGeneration | default(0, true) | int))
+
     # the networks this run added to or removed from the egress wait for it: wake them
     - name: Wake the networks whose egress changed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"

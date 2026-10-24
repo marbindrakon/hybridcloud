@@ -78,6 +78,12 @@ ipam:
   status without rows (a fabric that has not run yet) makes the form preselect **None** without that line. A pool
   change on a fabric run (more blocks, a larger allowance, a shorter hold-down) wakes the networks waiting for
   platform address space.
+  Tenants cannot read the HybridFabric: the Entity job copies the offered sizes and the default of the family-6 row
+  into the tenant's `TenantProfile` `status.ipv6Platform`, and the form preselects **From the platform** from
+  there. It does so when exactly one fabric is open to the tenant (its `entityRefs` empty or naming the tenant);
+  with none or several, or a fabric without a family-6 row, the field is absent and the form preselects **None**.
+  A fabric run that changes the sizes or the default, a change to the fabric's spec, and a fabric teardown wake the
+  Entities, so the profiles follow.
 - **Several fabrics:** give each fabric's ledger a disjoint slice of the address space.
 - **Ownership records:** the ledger keeps each block's owner (and, for a released block, its former owner and the
   release time) and each provider-assigned placement subnet under `external` in the network's IPAM state, so a block

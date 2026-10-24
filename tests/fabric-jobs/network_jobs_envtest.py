@@ -130,6 +130,32 @@ class Lab:
             print(p.stdout[-4000:])
         return p
 
+    def profile(self, entity, ns):
+        """The Entity job's tenant profile steps (compute + write) for one tenant; returns the TenantProfile."""
+        role = ROOT / "eda" / "rulebooks" / "roles" / "entity_provision"
+        steps = [{"name": f"profile {t}", "ansible.builtin.include_role": {"name": str(role), "tasks_from": f"tenant_profile_{t}.yml"}}
+                 for t in ("compute", "write")]
+        play = [{"hosts": "localhost", "connection": "local", "gather_facts": False, "tasks": steps}]
+        (self.tmp / "profile.yml").write_text(yaml.safe_dump(play))
+        v = {"services_api_host": self.server, "services_bearer_token": self.token, "services_validate_certs": False,
+             "entity_cr_name": entity, "entity_cr_namespace": PNS, "entity_namespace": ns, "entity_spec": {},
+             "entity_generation": 1}
+        (self.tmp / "pvars.json").write_text(json.dumps(v))
+        self.job_env_play("profile.yml", "pvars.json")
+        return self.get("tenantprofiles", "shc", ns)
+
+    def job_env_play(self, play, varfile):
+        env = dict(os.environ, ANSIBLE_CONFIG=str(self.tmp / "ansible.cfg"), ANSIBLE_LOCALHOST_WARNING="false",
+                   ANSIBLE_INVENTORY_UNPARSED_WARNING="false", ANSIBLE_REMOTE_TMP=str(self.tmp / "rt"),
+                   ANSIBLE_LOCAL_TEMP=str(self.tmp / "lt"))
+        p = subprocess.run(["ansible-playbook", "-i", "localhost,", play, "-e", "@" + varfile], cwd=self.tmp,
+                           env=env, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+        if self.verbose:
+            print(p.stdout[-4000:])
+        if p.returncode != 0:
+            raise RuntimeError(p.stdout[-1500:])
+        return p
+
     def network(self, name, ns="entity-a"):
         self.job("hybridnetwork_provision", "HybridNetwork", name, ns)
         return self.get("hybridnetworks", name, ns)
@@ -321,8 +347,37 @@ def c_leave_platform(lab):
     assert ready_reason(o) == "Ready", o["status"].get("message")
 
 
+def c_profile_offer(lab):
+    """the tenant profile carries the fabric's IPv6 block sizes (status.ipv6Platform); removed when the fabric is not the tenant's"""
+    fab = lab.get("hybridfabrics", FABRIC, PNS)
+    keep = fab["status"]
+    rows = [{"name": "test-v6", "family": 6, "prefixes": [POOL], "blockLengths": [56, 60], "defaultBlock": 56, "blocksUsed": 1}]
+    lab.status("hybridfabrics", FABRIC, PNS, dict(keep, realization=dict(keep.get("realization") or {}, ipam={"pools": rows})))
+    try:
+        tp = lab.profile("a", "entity-a")
+        assert tp["status"].get("ipv6Platform") == {"blockLengths": [56, 60], "defaultBlockLength": 56}, tp["status"]
+        # a fabric limited to another tenant: the offer goes away (merge patch with null)
+        fab = lab.get("hybridfabrics", FABRIC, PNS)
+        fab["spec"]["entityRefs"] = [{"name": "b"}]
+        lab.kube.run(["replace", "-f", "-"], body=fab, check=True)
+        tp = lab.profile("a", "entity-a")
+        assert "ipv6Platform" not in tp["status"], tp["status"]
+        tp = lab.profile("b", "entity-b")
+        assert tp["status"].get("ipv6Platform", {}).get("blockLengths") == [56, 60], tp["status"]
+        # a fabric without an IPv6 pool row: no offer
+        lab.status("hybridfabrics", FABRIC, PNS, dict(keep, realization=dict(keep.get("realization") or {}, ipam={"pools": []})))
+        tp = lab.profile("b", "entity-b")
+        assert "ipv6Platform" not in tp["status"], tp["status"]
+    finally:
+        fab = lab.get("hybridfabrics", FABRIC, PNS)
+        fab["spec"].pop("entityRefs", None)
+        lab.kube.run(["replace", "-f", "-"], body=fab, check=True)
+        lab.status("hybridfabrics", FABRIC, PNS, keep)
+
+
 CASES = [c_tenant_core, c_platform_dual, c_pinned, c_allowance, c_exhausted, c_size_not_offered, c_reserved,
-         c_overlap_tenant, c_v6only_tenant, c_placement_mode_none, c_mode_in_use, c_release_wakes, c_leave_platform]
+         c_overlap_tenant, c_v6only_tenant, c_placement_mode_none, c_mode_in_use, c_release_wakes, c_leave_platform,
+         c_profile_offer]
 
 
 def main():

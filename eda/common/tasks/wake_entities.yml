@@ -1,0 +1,25 @@
+---
+# Wake every Entity of the platform namespace (not being deleted), so the Entity job rewrites the tenant profiles
+# after something tenants see there changed (for a fabric: TenantProfile status.ipv6Platform). Missing CRs and a
+# failed list are ignored: the profiles then follow on the Entities' own period.
+# Input: we_namespace (the platform namespace)
+- name: List the Entities
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Entity
+    namespace: "{{ we_namespace }}"
+  register: _we_entities
+  failed_when: false
+
+- name: Wake them
+  ansible.builtin.include_tasks: nudge_cr.yml
+  vars:
+    nudge_crs: >-
+      {%- set out = [] -%}
+      {%- for o in _we_entities.resources | default([], true) if o.metadata.deletionTimestamp is not defined -%}
+        {%- set _ = out.append({'kind': 'Entity', 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+      {%- endfor -%}
+      {{ out }}
