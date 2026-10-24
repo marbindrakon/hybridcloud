@@ -4,7 +4,8 @@
 The registry (one entry per condition reason: who acts, its class, a tenant-safe summary) is
 eda/rulebooks/collections/ansible_collections/hybridsovereign/shc/plugins/module_utils/
 shc_status_reasons.py. The table lists every reason that is not a plain "ready" reason, between
-<!-- reasons:begin --> and <!-- reasons:end -->, grouped by what the object is doing.
+<!-- reasons:begin --> and <!-- reasons:end -->, grouped by what the object is doing, then the reasons
+written on a part of an object's status (PART_REASONS: an egress family, a placement's IPv6 internet access).
 
 usage:
   python3 -I scripts/gen-reason-table.py           write the table
@@ -24,15 +25,28 @@ ACTORS = {"A": "Nobody: it continues by itself", "T": "You (the tenant)",
           "P": "The platform team"}
 
 
+PART_TITLE = ("On a part of an object (an egress family of a network, its translation to IPv4, a placement's IPv6 "
+              "internet access)")
+
+
 def load():
     # The registry is pure data without imports (its header says so); run it in an empty namespace.
     ns = {"__name__": "shc_status_reasons"}
     exec(compile(SOURCE.read_text(encoding="utf-8"), str(SOURCE), "exec"), ns)  # noqa: S102
-    return ns["REASONS"]
+    return ns["REASONS"], ns.get("PART_REASONS", {})
+
+
+def rows(reasons, names):
+    out = ["| Reason | What it means | Who acts |", "|---|---|---|"]
+    for n in names:
+        e = reasons[n]
+        summary = e["summary"].replace("|", "\\|")
+        out.append(f"| `{n}` | {summary} | {ACTORS.get(e['actor'], e['actor'])} |")
+    return out
 
 
 def table():
-    reasons = load()
+    reasons, parts = load()
     lines = []
     for klass, title in CLASSES:
         names = sorted(n for n, e in reasons.items() if e["class"] == klass)
@@ -40,11 +54,11 @@ def table():
             continue
         if lines:
             lines.append("")
-        lines += [f"**{title}**", "", "| Reason | What it means | Who acts |", "|---|---|---|"]
-        for n in names:
-            e = reasons[n]
-            summary = e["summary"].replace("|", "\\|")
-            lines.append(f"| `{n}` | {summary} | {ACTORS.get(e['actor'], e['actor'])} |")
+        lines += [f"**{title}**", ""] + rows(reasons, names)
+    if parts:
+        if lines:
+            lines.append("")
+        lines += [f"**{PART_TITLE}**", ""] + rows(parts, sorted(parts))
     return "\n".join(lines)
 
 
