@@ -638,7 +638,11 @@ export function ipv6ReasonText(
   // the catalogue's words, else the status contract's summary (English) of the reason
   const words = t(`ipv6.reason.${reason}`, { defaultValue: '' }) || PART_REASONS[reason]?.summary || REASONS[reason]?.summary || '';
   if (!words) return message || reason;
-  return message && message !== words ? `${words} ${message}` : words;
+  // the job's message often repeats the reason's words: show it only when it adds something
+  const norm = (x: string) => x.trim().replace(/[.\s]+$/, '').toLowerCase();
+  if (!message || norm(words).includes(norm(message))) return words;
+  if (norm(message).includes(norm(words))) return message;
+  return `${words} ${message}`;
 }
 
 /** What the network asked for from the platform: "the fabric's default size", "/56", "2001:db8::/56 (pinned)". */
@@ -722,7 +726,7 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
           )}
           {st.ipv6?.holdDownUntil && (
             <Fact label={t('ipv6.holdDown')}>
-              {t('ipv6.holdDownUntil', { time: st.ipv6.holdDownUntil })} (<RelativeTime iso={st.ipv6.holdDownUntil} />)
+              {t('ipv6.holdDownUntil', { time: st.ipv6.holdDownUntil })}
             </Fact>
           )}
           {spaceCondition && <Fact label={t('ipv6.why')}>{ipv6ReasonText(t, spaceCondition.reason, spaceCondition.message)}</Fact>}
