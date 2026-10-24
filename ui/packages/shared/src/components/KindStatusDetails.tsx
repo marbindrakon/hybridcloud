@@ -633,10 +633,14 @@ export function ipv6ReasonText(
   t: (k: string, o?: Record<string, unknown>) => string,
   reason: string | undefined,
   message?: string,
+  scope?: 'ipv4' | 'translation',
 ): string {
   if (!reason) return message ?? '';
-  // the catalogue's words, else the status contract's summary (English) of the reason
-  const words = t(`ipv6.reason.${reason}`, { defaultValue: '' }) || PART_REASONS[reason]?.summary || REASONS[reason]?.summary || '';
+  // the catalogue's words, else the status contract's summary (English) of the reason. The unscoped words describe
+  // IPv6 internet access; an IPv4 egress row or the translation row uses its own words, else the job's message.
+  const words = scope
+    ? t(`ipv6.reasonScoped.${scope}.${reason}`, { defaultValue: '' })
+    : t(`ipv6.reason.${reason}`, { defaultValue: '' }) || PART_REASONS[reason]?.summary || REASONS[reason]?.summary || '';
   if (!words) return message || reason;
   // the job's message often repeats the reason's words: show it only when it adds something
   const norm = (x: string) => x.trim().replace(/[.\s]+$/, '').toLowerCase();
@@ -766,7 +770,7 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
           </Fact>
           {translation?.state && (
             <Fact label={t('ipv6.translation')}>
-              <EgressStateLabel state={translation.state} /> {ipv6ReasonText(t, translation.reason, translation.message)}
+              <EgressStateLabel state={translation.state} /> {ipv6ReasonText(t, translation.reason, translation.message, 'translation')}
             </Fact>
           )}
         </Facts>
@@ -788,7 +792,7 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
                     <EgressStateLabel state={f.state} />
                   </Td>
                   <Td dataLabel={t('ipv6.egressMode')}>{f.mode ? t(`ipv6.egressMode_${f.mode}`, { defaultValue: f.mode }) : <Dash />}</Td>
-                  <Td dataLabel={t('ipv6.why')}>{f.reason || f.message ? ipv6ReasonText(t, f.reason, f.message) : <Dash />}</Td>
+                  <Td dataLabel={t('ipv6.why')}>{f.reason || f.message ? ipv6ReasonText(t, f.reason, f.message, Number(f.family) === 6 ? undefined : 'ipv4') : <Dash />}</Td>
                 </Tr>
               ))}
             </Tbody>

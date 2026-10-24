@@ -1496,6 +1496,15 @@
       "PrefixInvalid": "Un préfixe d'adresses ou une taille de bloc n'est pas valide ici.",
       "FamilyUnavailable": "Cette famille d'adresses n'est pas disponible ici."
     },
+    "reasonScoped": {
+      "ipv4": {
+        "NotOffered": "L'accès Internet n'est pas proposé sur cette fabric."
+      },
+      "translation": {
+        "NotOffered": "La traduction vers IPv4 n'est pas encore proposée sur cette fabric.",
+        "AddressChoice": "La traduction vers IPv4 nécessite un espace IPv6 fourni par la plateforme."
+      }
+    },
     "subnetOfFamily": "Sous-réseau IPv{{family}}",
     "gatewayIs": "passerelle {{gateway}}",
     "subnetSource_Network": "issu du réseau",

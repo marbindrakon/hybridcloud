@@ -115,9 +115,9 @@ export const REASONS: Record<string, ReasonEntry> = {
 /** Reasons written on a part of a status (an egress family, a placement's IPv6 internet access), never
  *  as the Ready condition reason; they do not change the phase. */
 export const PART_REASONS: Record<string, ReasonEntry> = {
-  "AddressChoice": { actor: "T", class: "ready", summary: "IPv6 internet: not offered for tenant-provided prefixes." },
+  "AddressChoice": { actor: "T", class: "ready", summary: "Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4." },
   "Degraded": { actor: "A", class: "ready", summary: "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path." },
-  "NotOffered": { actor: "A", class: "ready", summary: "Not offered on this fabric yet: IPv6 internet access, or translation to IPv4 for a network without IPv4." },
+  "NotOffered": { actor: "A", class: "ready", summary: "Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4." },
 };
 
 export const DELETE_REQUESTED_SUFFIX = "DeleteRequested";

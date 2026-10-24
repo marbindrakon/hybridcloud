@@ -1496,6 +1496,15 @@
       "PrefixInvalid": "An address prefix or block size is not valid here.",
       "FamilyUnavailable": "This address family is not available here."
     },
+    "reasonScoped": {
+      "ipv4": {
+        "NotOffered": "Internet access is not offered on this fabric."
+      },
+      "translation": {
+        "NotOffered": "Translation to IPv4 is not offered on this fabric yet.",
+        "AddressChoice": "Translation to IPv4 needs IPv6 address space from the platform."
+      }
+    },
     "subnetOfFamily": "IPv{{family}} subnet",
     "gatewayIs": "gateway {{gateway}}",
     "subnetSource_Network": "from the network",

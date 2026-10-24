@@ -200,7 +200,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 
 | Reason | What it means | Who acts |
 |---|---|---|
-| `AddressChoice` | IPv6 internet: not offered for tenant-provided prefixes. | You (the tenant) |
+| `AddressChoice` | Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4. | You (the tenant) |
 | `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
-| `NotOffered` | Not offered on this fabric yet: IPv6 internet access, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
+| `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 <!-- reasons:end -->
