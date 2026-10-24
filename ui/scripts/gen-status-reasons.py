@@ -46,12 +46,23 @@ def render():
         "",
         "export const REASONS: Record<string, ReasonEntry> = {",
     ]
-    for name in sorted(reasons):
-        e = reasons[name]
-        lines.append(
-            f"  {json.dumps(name)}: {{ actor: {json.dumps(e['actor'])}, class: {json.dumps(e['class'])}, "
-            f"summary: {json.dumps(e['summary'], ensure_ascii=False)} }},"
-        )
+    def entries(table):
+        for name in sorted(table):
+            e = table[name]
+            lines.append(
+                f"  {json.dumps(name)}: {{ actor: {json.dumps(e['actor'])}, class: {json.dumps(e['class'])}, "
+                f"summary: {json.dumps(e['summary'], ensure_ascii=False)} }},"
+            )
+
+    entries(reasons)
+    lines += [
+        "};",
+        "",
+        "/** Reasons written on a part of a status (an egress family, a placement's IPv6 internet access), never",
+        " *  as the Ready condition reason; they do not change the phase. */",
+        "export const PART_REASONS: Record<string, ReasonEntry> = {",
+    ]
+    entries(ns.get("PART_REASONS", {}))
     lines += [
         "};",
         "",

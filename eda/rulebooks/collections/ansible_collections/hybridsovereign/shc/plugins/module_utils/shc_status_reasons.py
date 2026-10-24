@@ -59,7 +59,7 @@ REASONS = {
     "WaitingForSecret": _r("A", WAITING, "Waiting for a required credential to be available."),
     "WaitingForGateway": _r("A", WAITING, "Waiting for the site connection to be ready."),
     "WaitingForFabric": _r("A", WAITING, "Waiting for the network fabric to be ready."),
-    "WaitingForAddressSpace": _r("A", WAITING, "Waiting for address space to be assigned."),
+    "WaitingForAddressSpace": _r("T", WAITING, "Waiting for free address space. The message says what is full; adding a prefix or freeing a block lets it continue."),
     "WaitingForAccessGroup": _r("T", WAITING, "Waiting for the named access groups to be ready."),
     "WaitingForCluster": _r("T", WAITING, "Waiting for a cluster: name the OpenShift cluster to deploy onto."),
     "LinkedNotReady": _r("A", WAITING, "Waiting for its team setup, app projects and OpenShift cluster to be ready."),
@@ -85,11 +85,14 @@ REASONS = {
     "EnvironmentNameTaken": _r("T", FAILED, "This environment name is already in use. Choose another name."),
     "NameInUse": _r("T", FAILED, "This name is already used by an OpenStack environment of another tenant. Create it with another name."),
     "PrefixInvalid": _r("T", FAILED, "The address prefix is not valid."),
-    "PrefixInUse": _r("T", FAILED, "The address prefix overlaps one already in use."),
-    "FamilyUnavailable": _r("T", FAILED, "This address family is not available on the network."),
+    "PrefixInUse": _r("T", FAILED, "The address prefix overlaps one already in use: a placement's subnet or another network of this tenant."),
+    "PrefixReserved": _r("T", FAILED, "The address prefix overlaps address space the platform keeps for itself. Choose another prefix."),
+    "FamilyUnavailable": _r("T", FAILED, "This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it."),
+    "IPv6ModeInUse": _r("T", FAILED, "The network's IPv6 mode can't change while it has placements. Remove them first, or create a new network."),
     "AttachmentNotSupported": _r("T", FAILED, "This attachment is not supported on the chosen site."),
     "TransportNotSupported": _r("T", FAILED, "This transport is not supported."),
     "AsnConflict": _r("T", FAILED, "The AS number conflicts with one already in use."),
+    "PeerAsnReserved": _r("T", FAILED, "This AS number is reserved by the platform. Configure your router with another AS number."),
     "NoAccount": _r("T", FAILED, "No cloud account is set up for this environment."),
     "NoProject": _r("T", FAILED, "No cloud project is set up for this environment."),
     "ConfigNotFound": _r("T", FAILED, "The named connection does not exist."),
@@ -126,6 +129,15 @@ REASONS = {
     "ControllerUnavailable": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
     "ControllerRestarting": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
     "ControllerOutOfMemory": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
+}
+
+# Reasons written on a part of an object's status (an egress family of a network, its translation to IPv4, the IPv6
+# internet access of a placement), never as the reason of its Ready condition: they do not change the object's
+# phase. Same entry shape.
+PART_REASONS = {
+    "NotOffered": _r("A", READY, "Not offered on this fabric yet: IPv6 internet access, or translation to IPv4 for a network without IPv4."),
+    "AddressChoice": _r("T", READY, "IPv6 internet: not offered for tenant-provided prefixes."),
+    "Degraded": _r("A", READY, "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path."),
 }
 
 # Deletion requests written by the operator are named <Kind>DeleteRequested.
