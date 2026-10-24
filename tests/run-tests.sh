@@ -283,6 +283,24 @@ run_tenantprofile_checks() {
 }
 # --- end be-tenantprofile-catalogue ---
 
+# --- ipv6-v3 ---
+# ─── Phase 8: CEL rules of the address fields (envtest) ──────────────────────
+run_cel_ipam_checks() {
+  log_info "CEL address rules — HybridNetwork, NetworkPlacement, TenantProfile (envtest)"
+  if [[ -z "${KUBEBUILDER_ASSETS:-}" ]]; then
+    log_skip "CEL address rules (needs KUBEBUILDER_ASSETS: etcd, kube-apiserver, kubectl)"
+    return
+  fi
+  if (cd "${REPO_ROOT}" && python3 -I tests/cel-ipam/cel_cases.py --crds operator/primary/helm/templates/crds.yaml \
+        --expect candidate) >/tmp/shc-cel-ipam.log 2>&1; then
+    log_pass "CEL address rules ($(tail -1 /tmp/shc-cel-ipam.log))"
+  else
+    log_fail "CEL address rules (tests/cel-ipam/cel_cases.py)"
+    grep -E '^FAIL|^     ' /tmp/shc-cel-ipam.log | head -20 || true
+  fi
+}
+# --- end ipv6-v3 ---
+
 main() {
   echo "Hybrid Sovereign Test Runner"
   echo "Repository: ${REPO_ROOT}"
@@ -302,6 +320,8 @@ main() {
   run_repo_checks
   echo ""
   run_tenantprofile_checks
+  echo ""
+  run_cel_ipam_checks
   echo ""
   print_manual_gates
   echo ""

@@ -33,9 +33,10 @@ spec:
             network with its router. It is one isolated routing domain (VRF) on the platform's
             HybridFabric. NetworkPlacements put it on environments (CloudOSO, CloudVirt, CloudAWS,
             CloudGCP); every placement's subnets can reach every other placement's subnets of the
-            same network, and nothing else. The network's address space (spec.prefixes) is the
-            tenant's: the platform allocates each placement's subnets from it. Networks may use the
-            same addresses as other networks.
+            same network, and nothing else. The network's address space is the tenant's own prefixes
+            (spec.prefixes), IPv6 space the platform assigns (spec.platformPrefixes), or both; the
+            platform allocates each placement's subnets from it. Networks may use the same addresses
+            as other networks.
           type: object
           required:
             - spec
@@ -96,27 +97,32 @@ spec:
                       type: boolean
                       default: false
                       description: >-
-                        Outbound internet access through the platform, like attaching a NAT gateway: the platform
-                        advertises a default route into the network and translates its traffic to platform source
-                        addresses (status.egress.sourceAddresses). Connections can only be opened from inside the
-                        network, and the platform's private address ranges are not reachable this way. Leave it off
-                        when the network's default route comes from your own edge router. Can be changed at any time.
+                        Outbound internet access through the platform: the platform advertises a default route into
+                        the network. IPv4 leaves through source address translation to platform source addresses
+                        (status.egress.sourceAddresses). IPv6 leaves unchanged from addresses the platform assigned
+                        (platformPrefixes), through a filter that admits only replies to connections opened from
+                        inside. IPv6 from the tenant's own prefixes has no internet access in either direction. A
+                        network without IPv4 reaches IPv4-only destinations by translation where the platform offers
+                        it. The platform's private address ranges are not reachable this way. Leave it off when the
+                        network's default route comes from your own edge router. Can be changed at any time.
                 prefixes:
                   type: array
                   description: >-
-                    The network's address space, IPv4 and IPv6 prefixes the platform allocates the placements'
-                    subnets from (NetworkPlacement spec.ipv4 and spec.ipv6). At least one IPv4 prefix. Prefixes
-                    are in canonical form (host bits zero, e.g. 10.60.0.0/16 or fd12:3456:789a::/48) and must not
-                    overlap each other. The platform's own ranges inside a prefix are never allocated; a prefix
-                    wholly inside one is refused. Prefixes can be added at any time; a change that would leave a
-                    placement's subnet outside the space is refused, as is a prefix holding a route an
-                    AttachmentCircuit of the network accepts from its CE.
-                  minItems: 1
+                    The tenant's own address space, IPv4 and IPv6 prefixes the platform allocates the placements'
+                    subnets from (NetworkPlacement spec.ipv4 and spec.ipv6). May be empty when platformPrefixes
+                    gives the network its address space. Prefixes are in canonical form (host bits zero, e.g.
+                    10.60.0.0/16 or fd12:3456:789a::/48) and must not overlap each other. An IPv6 prefix is global
+                    unicast (2000::/3) or unique local (fc00::/7) space the tenant holds; the platform carries it
+                    between the network's placements but offers no internet access to or from it. IPv6 prefixes
+                    here and an IPv6 entry in platformPrefixes exclude each other. The platform's own ranges inside
+                    a prefix are never allocated; a prefix wholly inside one, or overlapping address space the
+                    platform keeps for itself, is refused.
+                    Prefixes can be added at any time; a change that would leave a placement's subnet outside the
+                    space is refused, as is a prefix holding a route an AttachmentCircuit of the network accepts
+                    from its CE, and a change of the network's IPv6 source while it has placements.
                   maxItems: 8
                   x-kubernetes-list-type: set
                   x-kubernetes-validations:
-                    - rule: self.exists(p, isCIDR(p) && cidr(p).ip().family() == 4)
-                      message: at least one prefix must be IPv4
                     - rule: >-
                         self.all(a, self.all(b, a == b || !isCIDR(a) || !isCIDR(b)
                         || cidr(a).ip().family() != cidr(b).ip().family()
@@ -133,10 +139,72 @@ spec:
                           ? cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 29
                           : cidr(self).prefixLength() >= 32 && cidr(self).prefixLength() <= 64)
                         message: prefix length must be /8 to /29 for IPv4 and /32 to /64 for IPv6
-              required: [prefixes]
+                      - rule: >-
+                          !isCIDR(self) || cidr(self).ip().family() == 4
+                          || cidr('2000::/3').containsCIDR(cidr(self)) || cidr('fc00::/7').containsCIDR(cidr(self))
+                        message: an IPv6 prefix must be global unicast (2000::/3) or unique local (fc00::/7)
+                platformPrefixes:
+                  type: array
+                  description: >-
+                    Address space the platform assigns to the network from its own globally routed space, one
+                    entry per address family (IPv6 only). The platform allocates a block of the requested size, or
+                    the pinned block, and the placements' subnets of that family from it; status.addressSpace
+                    shows the block. Traffic from these addresses can reach the internet when egress.internet is
+                    on. An entry cannot be changed; it can be removed while no placement holds a subnet in its
+                    block, and the family's source cannot change while the network has placements.
+                  maxItems: 2
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [family]
+                  items:
+                    type: object
+                    required: [family]
+                    x-kubernetes-validations:
+                      - rule: self == oldSelf
+                        message: a platformPrefixes entry cannot be changed; remove it and add another
+                      - rule: >-
+                          !has(self.prefix) || !has(self.prefixLength) || !isCIDR(self.prefix)
+                          || cidr(self.prefix).prefixLength() == self.prefixLength
+                        message: platformPrefixes prefix must be as long as prefixLength
+                    properties:
+                      family:
+                        description: Address family of the block, 6.
+                        type: integer
+                        enum: [6]
+                      prefixLength:
+                        description: >-
+                          Size of the block, 48 to 64 in steps of 4 (for example 56 for a /56). The platform offers
+                          some of these sizes; when omitted, the platform's default size applies. status.addressSpace
+                          reports the block it assigned.
+                        type: integer
+                        minimum: 48
+                        maximum: 64
+                        x-kubernetes-validations:
+                          - rule: self % 4 == 0
+                            message: platformPrefixes prefixLength must be a multiple of 4
+                      prefix:
+                        description: >-
+                          A specific free block of the platform's space, in canonical form (host bits zero). Optional;
+                          a block outside the platform's space is refused, and one in use waits until it is free.
+                        type: string
+                        maxLength: 43
+                        x-kubernetes-validations:
+                          - rule: isCIDR(self) && cidr(self).ip().family() == 6 && string(cidr(self).masked()) == self
+                            message: platformPrefixes prefix must be an IPv6 network prefix in canonical form (host bits zero)
+                          - rule: >-
+                              !isCIDR(self) || (cidr(self).prefixLength() >= 48 && cidr(self).prefixLength() <= 64
+                              && cidr(self).prefixLength() % 4 == 0)
+                            message: platformPrefixes prefix must be /48 to /64 in steps of 4
               x-kubernetes-validations:
                 - rule: has(self.fabricRef) || !has(oldSelf.fabricRef)
                   message: spec.fabricRef cannot be removed
+                - rule: >-
+                    (has(self.prefixes) && size(self.prefixes) > 0)
+                    || (has(self.platformPrefixes) && size(self.platformPrefixes) > 0)
+                  message: the network needs address space (prefixes, platformPrefixes or both)
+                - rule: >-
+                    !has(self.platformPrefixes) || !self.platformPrefixes.exists(q, q.family == 6)
+                    || !has(self.prefixes) || !self.prefixes.exists(p, isCIDR(p) && cidr(p).ip().family() == 6)
+                  message: IPv6 address space comes either from prefixes or from platformPrefixes, not both
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -157,13 +225,90 @@ spec:
                     internet:
                       type: string
                       description: >-
-                        Internet egress: pending (being added), ready, removing, or unavailable (the fabric offers
-                        none).
+                        Internet egress of the network: pending (being added), ready, removing, or unavailable. For a
+                        network with IPv4 address space it is the state of its IPv4 egress; for a network without IPv4
+                        the state of its IPv6 egress. families gives the state and the reason per family.
                     sourceAddresses:
                       type: array
-                      description: The source addresses the network's internet traffic leaves with.
+                      description: The IPv4 source addresses the network's internet traffic leaves with.
                       items:
                         type: string
+                    families:
+                      type: array
+                      description: Internet egress per address family.
+                      items:
+                        type: object
+                        properties:
+                          family:
+                            type: integer
+                            description: 4 or 6.
+                          state:
+                            type: string
+                            description: ready, pending, removing or unavailable.
+                          mode:
+                            type: string
+                            description: >-
+                              How the family leaves: SourceNAT (translated to platform source addresses) or Routed
+                              (unchanged, through a filter that admits only replies).
+                          reason:
+                            type: string
+                            description: >-
+                              One-word reason, for example AddressChoice (tenant-provided IPv6 has no internet
+                              access), NotOffered (the platform offers none for the family) or Degraded.
+                          message:
+                            type: string
+                            description: What the reason means for this network, in plain words.
+                    ipv4Translation:
+                      type: object
+                      description: >-
+                        For a network without IPv4: whether its IPv6 workloads reach IPv4-only destinations by
+                        translation.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending or unavailable.
+                        reason:
+                          type: string
+                          description: One-word reason when not ready.
+                        message:
+                          type: string
+                          description: What the reason means for this network, in plain words.
+                ipv6:
+                  type: object
+                  description: The network's IPv6 as the platform derived it from the spec.
+                  properties:
+                    mode:
+                      type: string
+                      description: >-
+                        Where the network's IPv6 comes from: Tenant (IPv6 prefixes in spec.prefixes), Platform
+                        (spec.platformPrefixes) or None. It is the mode in effect: a refused change of the mode
+                        leaves it as it was.
+                    prefixes:
+                      type: array
+                      description: The network's IPv6 address space in effect (the tenant's prefixes or the assigned block).
+                      items:
+                        type: string
+                    block:
+                      type: object
+                      description: The block the platform assigned to the network (mode Platform).
+                      properties:
+                        prefix:
+                          type: string
+                          description: The block.
+                        prefixLength:
+                          type: integer
+                          description: Its length.
+                        source:
+                          type: string
+                          description: >-
+                            Pinned (the block named in spec.platformPrefixes) or Allocated (the first free block of
+                            the requested size).
+                    holdDownUntil:
+                      type: string
+                      description: >-
+                        While the network waits for a block that was released recently: when that block can be
+                        assigned again (RFC 3339). Released blocks are held back for a while before another network
+                        gets them.
                 mtu:
                   type: integer
                   description: Effective MTU.
@@ -184,6 +329,11 @@ spec:
                       family:
                         type: integer
                         description: 4 or 6.
+                      source:
+                        type: string
+                        description: >-
+                          Tenant (from spec.prefixes) or Platform (a block assigned from spec.platformPrefixes).
+                          Absent means Tenant.
                       allocations:
                         type: integer
                         description: Placement subnets inside the prefix.

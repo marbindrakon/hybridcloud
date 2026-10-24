@@ -267,7 +267,11 @@ spec:
                     HybridFabric: openstack = Neutron's evpn extension is loaded; openshift = CNO FRR provider,
                     routeAdvertisements Enabled and fabric BGP sessions Established), api (the credential
                     authenticates), virtualization (OpenShift Virtualization Available), dns (environment zones can be created
-                    on this site).
+                    on this site), ipv6 (placements on the site can have an IPv6 subnet), ipv6Only (placements without
+                    IPv4 are offered), ipv6NetworkSource (IPv6 subnets can come from the network's address space),
+                    ipv6ProviderSource (IPv6 subnets can come from the cloud provider), ipv6Translation (placements
+                    without IPv4 reach IPv4-only destinations by translation). A key that is absent or false is not
+                    offered.
                   additionalProperties:
                     type: boolean
                 site:
