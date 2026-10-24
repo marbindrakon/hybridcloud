@@ -38,6 +38,23 @@ export interface ListColumnDef {
   render: (item: K8sResource, ctx: ListColumnContext) => ListCellValue;
 }
 
+/** IPv6 blocks the platform assigned to a network (status.addressSpace, source Platform). */
+function platformBlocks(item: K8sResource): string[] {
+  const rows = ((item.status ?? {}) as { addressSpace?: Array<{ prefix?: unknown; source?: unknown }> }).addressSpace;
+  return Array.isArray(rows) ? rows.filter((r) => r?.source === 'Platform' && typeof r.prefix === 'string').map((r) => r.prefix as string) : [];
+}
+
+/** Whether a network asks the platform for IPv6 space (spec.platformPrefixes). */
+function platformAsk(item: K8sResource): boolean {
+  const q = ((item.spec ?? {}) as { platformPrefixes?: unknown }).platformPrefixes;
+  return Array.isArray(q) && q.length > 0;
+}
+
+/** A network's address space for the list: its own prefixes, then the platform-assigned blocks. */
+function networkSpaceList(item: K8sResource): string[] {
+  return [...asStringArray(((item.spec ?? {}) as { prefixes?: unknown }).prefixes), ...platformBlocks(item)];
+}
+
 function specOf(item: K8sResource): Record<string, unknown> {
   return (item.spec ?? {}) as Record<string, unknown>;
 }
@@ -807,10 +824,15 @@ const KIND_EXTRA_COLUMNS: Partial<Record<HybridSovereignKind, ListColumnDef[]>> 
       id: 'prefixes',
       labelKey: 'list.addressSpace',
       sortable: true,
-      getSortValue: (i) => asStringArray(specOf(i).prefixes).join(' '),
-      getSearchText: (i) => asStringArray(specOf(i).prefixes).join(' '),
-      render: (i) =>
-        asStringArray(specOf(i).prefixes).length ? truncate(asStringArray(specOf(i).prefixes).join(', ')) : '—',
+      getSortValue: (i) => networkSpaceList(i).join(' '),
+      getSearchText: (i) => networkSpaceList(i).join(' '),
+      render: (i, { t }) => {
+        const own = networkSpaceList(i);
+        // a platform IPv6 block not assigned yet: say what was asked for
+        const asked = platformAsk(i) && !platformBlocks(i).length ? [t('ipv6.listPlatformAsked')] : [];
+        const all = [...own, ...asked];
+        return all.length ? truncate(all.join(', ')) : '—';
+      },
     },
     {
       id: 'description',

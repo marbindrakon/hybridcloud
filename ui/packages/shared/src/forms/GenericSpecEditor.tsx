@@ -277,9 +277,17 @@ export function GenericSpecEditor({
     return <p className="sc-text-muted">{t('form.noEditableFields')}</p>;
   }
 
+  // A field fixed while a status count is above zero (e.g. a network's IPv6 source while it has placements).
+  const statusLocked = (field: SpecFieldMeta): boolean => {
+    if (!field.lockedWhileStatus) return false;
+    const st = ((item as { status?: unknown }).status ?? {}) as Record<string, unknown>;
+    const n = Number(getAtPath(st, field.lockedWhileStatus.path));
+    return Number.isFinite(n) && n > 0;
+  };
   const isLocked = (field: SpecFieldMeta): boolean => {
     if (readOnly || field.immutable) return true;
     if (accessLocked(field)) return true;
+    if (statusLocked(field)) return true;
     if (field.immutableWhenSet) {
       const before = getAtPath(original, field.path);
       return before != null && before !== '';
@@ -371,7 +379,9 @@ export function GenericSpecEditor({
         const locked = isLocked(field);
         const base = field.helpKey ? t(field.helpKey) : undefined;
         const help =
-          field.immutable && !readOnly
+          field.lockedWhileStatus && !readOnly && statusLocked(field)
+            ? t(field.lockedWhileStatus.hintKey)
+            : field.immutable && !readOnly
             ? t('form.immutableHint')
             : field.immutableWhenSet && locked && !readOnly
               ? t('form.immutableOnceSetHint')
