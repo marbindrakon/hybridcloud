@@ -189,13 +189,26 @@ export function prefixListOverlaps(list: string[]): boolean {
   return false;
 }
 
-/** A HybridNetwork's address space as the CRD accepts it: 1–8 distinct, disjoint prefixes, at least one IPv4. */
-export function isAddressSpace(list: string[]): boolean {
+/** Whether an IPv6 prefix lies in global unicast (2000::/3) or unique local (fc00::/7) space; IPv4: true. */
+export function isUnicastScope(text: string): boolean {
+  const p = parseNetworkPrefix(text);
+  if (!p) return false;
+  if (p.family === 4) return true;
+  const top = Number(p.start >> BigInt(112));
+  // 2000::/3 = first 16 bits 0x2000..0x3fff; fc00::/7 = 0xfc00..0xfdff (a prefix shorter than /16 is never valid here)
+  return (top >= 0x2000 && top <= 0x3fff) || (top >= 0xfc00 && top <= 0xfdff);
+}
+
+/**
+ * A HybridNetwork's own prefixes as the CRD accepts them: up to 8 distinct, disjoint prefixes, IPv6 in
+ * 2000::/3 or fc00::/7. The list may be empty when the platform assigns the network's space
+ * (platformPrefixes); forms/ipv6.ts checkNetworkAddressing checks the whole addressing.
+ */
+export function isAddressSpace(list: string[], opts: { allowEmpty?: boolean } = {}): boolean {
   return (
-    list.length >= 1 &&
+    (opts.allowEmpty || list.length >= 1) &&
     list.length <= 8 &&
-    list.every(isSpacePrefix) &&
-    list.some((p) => parseNetworkPrefix(p)?.family === 4) &&
+    list.every((p) => isSpacePrefix(p) && isUnicastScope(p)) &&
     new Set(list).size === list.length &&
     !prefixListOverlaps(list)
   );
