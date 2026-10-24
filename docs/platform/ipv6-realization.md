@@ -84,7 +84,9 @@ ipam:
   with none or several, or a fabric without a family-6 row, the field is absent and the form preselects **None**.
   The fabric keeps the offer it last announced to the tenants in `status.realization.ipam.tenantOffer` (in words,
   for example `/48 /56 default /56`, or `none`); a fabric run whose offer differs from it (also the first run that
-  writes it), a change to the fabric's spec, and a fabric teardown wake the Entities, so the profiles follow.
+  writes it), a change to the fabric's spec, and a fabric teardown wake the Entities, so the profiles follow. The
+  fabric stores the offer as told only when it could list the Entities for the wake; otherwise its next run wakes
+  them again (a tenant's profile is rewritten only by a woken or changed Entity).
 - **Several fabrics:** give each fabric's ledger a disjoint slice of the address space.
 - **Ownership records:** the ledger keeps each block's owner (and, for a released block, its former owner and the
   release time) and each provider-assigned placement subnet under `external` in the network's IPAM state, so a block

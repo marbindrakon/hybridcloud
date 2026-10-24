@@ -48,7 +48,8 @@
 # deleted, spec.entityRefs empty or naming the tenant). With exactly one, its family-6 pool's block sizes and default
 # (ipv6_platform_offer.yml); with none, several or a fabric that reports no IPv6 pool, the key is removed (the form
 # then cannot tell, and the network job stays the authority). When the fabrics cannot be read, the key is left out of
-# the patch, so the profile keeps what it had.
+# the patch: the profile keeps what it had until the Entity job runs again (a ready Entity runs when a fabric job
+# wakes it or its spec changes, not on a period).
 - name: List the platform's fabrics
   kubernetes.core.k8s_info:
     host: "{{ omit if services_kubeconfig is defined else services_api_host }}"

@@ -113,14 +113,10 @@
 
     # the platform address pools (realization ipam.publicPools) and the offer tenants see of them, on every fabric run
     # (pools.yml: a realization change reaches the ledger and status.realization.ipam without a network run; a
-    # malformed or refused pool realization never fails the fabric). The offer is kept in
-    # status.realization.ipam.tenantOffer in words so a later run can tell whether the Entities need a wake.
+    # malformed or refused pool realization never fails the fabric). The offer the Entities were told is stored in
+    # status.realization.ipam.tenantOffer before the status write below.
     - name: The platform address pools and the tenants' offer
       ansible.builtin.include_tasks: pools.yml
-
-    - name: Add the offer to the status rows
-      ansible.builtin.set_fact:
-        hf_ipam: "{{ hf_ipam | combine({'tenantOffer': hf_tenant_offer}) }}"
 
     - name: The root's provider-edge addresses (index 1)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
@@ -313,6 +309,32 @@
           {%- endfor -%}
           {{ out }}
 
+    # what tenants see of the fabric changed since the Entities were last told (status.realization.ipam.tenantOffer,
+    # stored below; absent before the first run that stores it): its IPv6 offer, or its spec (who may use it). The
+    # wake comes before the status write: the pool rows the Entity job reads are published already (the ensure
+    # publishes them whenever the ledger changed, and the offer only changes with the ledger). A ready Entity runs
+    # only when woken or changed, so the offer counts as told only when the Entities could be listed; otherwise the
+    # stored offer is dropped and the next fabric run wakes them again
+    - name: Tell whether the tenants' view of the fabric changed
+      ansible.builtin.set_fact:
+        hf_wake_entities: >-
+          {{ (hf_tenant_offer != (((fab_st.realization | default({}, true)).ipam | default({}, true)).tenantOffer
+                                   | default('', true)))
+             or (fab_generation | int != (fab_st.observedGeneration | default(0, true) | int)) }}
+
+    - name: Wake the Entities when the tenants' view of the fabric changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_entities.yml"
+      vars:
+        we_namespace: "{{ fab_namespace }}"
+      when: hf_wake_entities | bool
+
+    - name: Keep the offer the Entities were told
+      ansible.builtin.set_fact:
+        hf_ipam: >-
+          {{ hf_ipam | combine({'tenantOffer': hf_tenant_offer
+                                 if (not hf_wake_entities | bool) or (we_entities_listed | default(false) | bool)
+                                 else none}) }}
+
     - name: Report the fabric ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -337,18 +359,6 @@
                                          'networks': hf_egress_status},
                               'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
                               'ipam': hf_ipam}} }}
-
-    # what tenants see of the fabric changed (its IPv6 offer, or its spec: who may use it) since the Entities were
-    # last woken for it (status.realization.ipam.tenantOffer, written above; absent before the first such run): wake
-    # them, their job rewrites TenantProfile status.ipv6Platform
-    - name: Wake the Entities when the tenants' view of the fabric changed
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_entities.yml"
-      vars:
-        we_namespace: "{{ fab_namespace }}"
-      when: >-
-        (hf_tenant_offer != (((fab_st.realization | default({}, true)).ipam | default({}, true)).tenantOffer
-                             | default('', true)))
-        or (fab_generation | int != (fab_st.observedGeneration | default(0, true) | int))
 
     # the networks this run added to or removed from the egress wait for it: wake them
     - name: Wake the networks whose egress changed
