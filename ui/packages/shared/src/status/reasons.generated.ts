@@ -44,9 +44,10 @@ export const REASONS: Record<string, ReasonEntry> = {
   "FabricMismatch": { actor: "T", class: "failed", summary: "The network and the site belong to different fabrics." },
   "FabricUnderlayEstablished": { actor: "A", class: "ready", summary: "Ready." },
   "Failed": { actor: "P", class: "failed", summary: "Could not be completed; see the reason." },
-  "FamilyUnavailable": { actor: "T", class: "failed", summary: "This address family is not available on the network." },
+  "FamilyUnavailable": { actor: "T", class: "failed", summary: "This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it." },
   "Granted": { actor: "A", class: "ready", summary: "Access granted to the named access groups." },
   "GroupClaimVerified": { actor: "A", class: "ready", summary: "Sign-in verified for a member of a granted access group." },
+  "IPv6ModeInUse": { actor: "T", class: "failed", summary: "The network's IPv6 mode can't change while it has placements. Remove them first, or create a new network." },
   "InProgress": { actor: "A", class: "progress", summary: "Applying the change." },
   "InvalidSecret": { actor: "P", class: "failed", summary: "A required credential is not valid. The platform team is looking at it." },
   "InvalidSpec": { actor: "T", class: "failed", summary: "The request is not valid; correct the fields named in the message." },
@@ -67,10 +68,12 @@ export const REASONS: Record<string, ReasonEntry> = {
   "NotReady": { actor: "A", class: "progress", summary: "Not ready yet." },
   "NotRealizable": { actor: "T", class: "failed", summary: "The request cannot be realized on the chosen site." },
   "OperatorFailed": { actor: "P", class: "failed", summary: "The request could not be queued. The platform team is looking at it." },
+  "PeerAsnReserved": { actor: "T", class: "failed", summary: "This AS number is reserved by the platform. Configure your router with another AS number." },
   "PlatformEdge": { actor: "A", class: "ready", summary: "Ready." },
   "PolicyRefused": { actor: "T", class: "failed", summary: "The request was refused by a platform policy." },
-  "PrefixInUse": { actor: "T", class: "failed", summary: "The address prefix overlaps one already in use." },
+  "PrefixInUse": { actor: "T", class: "failed", summary: "The address prefix overlaps one already in use: a placement's subnet or another network of this tenant." },
   "PrefixInvalid": { actor: "T", class: "failed", summary: "The address prefix is not valid." },
+  "PrefixReserved": { actor: "T", class: "failed", summary: "The address prefix overlaps address space the platform keeps for itself. Choose another prefix." },
   "ProbeFailed": { actor: "P", class: "failed", summary: "The site check failed. The platform team is looking at it." },
   "ProjectDomainNotFound": { actor: "T", class: "failed", summary: "The referenced project or domain does not exist." },
   "ProtectedChildren": { actor: "T", class: "blocked", summary: "Deletion waits: some objects have deletion protection turned on." },
@@ -98,7 +101,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "Verified": { actor: "A", class: "ready", summary: "Verified." },
   "Waiting": { actor: "A", class: "waiting", summary: "Waiting for a prerequisite." },
   "WaitingForAccessGroup": { actor: "T", class: "waiting", summary: "Waiting for the named access groups to be ready." },
-  "WaitingForAddressSpace": { actor: "A", class: "waiting", summary: "Waiting for address space to be assigned." },
+  "WaitingForAddressSpace": { actor: "T", class: "waiting", summary: "Waiting for free address space. The message says what is full; adding a prefix or freeing a block lets it continue." },
   "WaitingForCluster": { actor: "T", class: "waiting", summary: "Waiting for a cluster: name the OpenShift cluster to deploy onto." },
   "WaitingForDependencies": { actor: "A", class: "waiting", summary: "Waiting for the objects this one depends on." },
   "WaitingForDependents": { actor: "A", class: "waiting", summary: "Waiting for the objects that depend on this one to be deleted." },
@@ -107,6 +110,14 @@ export const REASONS: Record<string, ReasonEntry> = {
   "WaitingForSecret": { actor: "A", class: "waiting", summary: "Waiting for a required credential to be available." },
   "WaitingForSiteEdge": { actor: "A", class: "waiting", summary: "Waiting for the site connection to be ready." },
   "ZoneMismatch": { actor: "T", class: "failed", summary: "The zone does not match the site." },
+};
+
+/** Reasons written on a part of a status (an egress family, a placement's IPv6 internet access), never
+ *  as the Ready condition reason; they do not change the phase. */
+export const PART_REASONS: Record<string, ReasonEntry> = {
+  "AddressChoice": { actor: "T", class: "ready", summary: "IPv6 internet: not offered for tenant-provided prefixes." },
+  "Degraded": { actor: "A", class: "ready", summary: "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path." },
+  "NotOffered": { actor: "A", class: "ready", summary: "IPv6 internet access is not offered on this fabric yet." },
 };
 
 export const DELETE_REQUESTED_SUFFIX = "DeleteRequested";
