@@ -92,6 +92,14 @@
             msg: "Deletion waits for the placements' subnets: {{ fab_ipam_result.refused | join('; ') }}"
           when: fab_ipam_result.refused | default([]) | length > 0
 
+        # the pools as realization has them now, so the release below uses the current hold-down; a refused pool
+        # realization does not stop the delete (the release then uses the ledger's hold-down; the fabric reports it)
+        - name: The fabric's platform address pools
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+          vars:
+            fab_ipam_pools_fabric: "{{ fab_st.fabric }}"
+            fab_ipam_pools_tolerant: true
+
         # a platform IPv6 block goes back to the fabric's public pool (held down there before another network gets it)
         - name: Give the platform block back
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"

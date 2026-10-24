@@ -396,6 +396,30 @@ class WiringTest(unittest.TestCase):
         t = self.text(ROLES, "hybridnetwork_teardown", "tasks", "main.yml")
         self.assertLess(t.index("ipam-drop"), t.index("ipam-pool-release"))
         self.assertIn("wake_waiting_networks.yml", t)
+        # the release uses the hold-down realization has now; a refused pool realization doesn't stop the delete
+        self.assertLess(t.index("ipam-drop"), t.index("fabric_ipam_pools.yml"))
+        self.assertLess(t.index("fabric_ipam_pools.yml"), t.index("ipam-pool-release"))
+        self.assertIn("fab_ipam_pools_tolerant: true", t)
+
+    def test_leaving_platform_ensures_before_the_release(self):
+        t = self.text(HN, "main.yml")
+        # (the give-back of a block taken for a refused space follows platform_block.yml, which ensured the pools)
+        i = t.index("The fabric's platform address pools before a release")
+        j = t.index("- name: Give a platform block back")
+        self.assertLess(i, j)
+        self.assertIn("fab_ipam_pools_tolerant: true", t[i:j])
+        self.assertIn("action: ipam-pool-release", t[j:j + 300])
+
+    def test_fabric_job_keeps_the_pools(self):
+        t = self.text(ROLES, "hybridfabric_provision", "tasks", "main.yml")
+        # after the ledger exists, before the status; never fails the fabric
+        self.assertLess(t.index("action: ledger-ensure"), t.index("fabric_ipam_pools.yml"))
+        i = t.index("fabric_ipam_pools.yml")
+        self.assertIn("fab_ipam_pools_tolerant: true", t[i:i + 200])
+        self.assertIn("'ipam': hf_ipam", t)
+        self.assertIn("'pools': fab_ipam_pools_usage", t)
+        self.assertLess(t.index("Report the fabric ready"), t.index("wake_waiting_networks.yml"))
+        self.assertIn("when: hf_ipam_changed | bool", t)
 
     def test_placement_job(self):
         t = self.text(NP, "main.yml")

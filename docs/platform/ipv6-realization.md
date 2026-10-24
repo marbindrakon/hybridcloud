@@ -42,8 +42,14 @@ ipam:
   #     perTenantBlocks: 4        # blocks one tenant may hold at once; absent = no limit
   #     perTenantOverrides: {}    # <tenant name>: <blocks>
 ```
-- **Level 1, pool to network block:** the network job runs `ipam-pool-ensure` for every pool (idempotent, so a
-  realization change needs no fabric run), then `ipam-pool-allocate` for the network's `platformPrefixes` entry:
+- **Level 1, pool to network block:** `ipam-pool-ensure` writes every pool of the realization into the fabric's
+  ledger. It is idempotent and runs on every HybridFabric run, before every pool allocation of a network, and before
+  every release of a block (network teardown, a network leaving mode `Platform`). A realization change (prefixes,
+  sizes, hold-down, allowance) therefore reaches the ledger at the fabric's next run (Retry now on the HybridFabric
+  starts one) or at the next network that allocates or releases a block, whichever comes first. A
+  malformed or refused pool realization fails the network job that asks for a block; the fabric job and the
+  releases go on with the pools as the ledger holds them, and the fabric reports why under
+  `status.realization.ipam.refused`. Then the network job runs `ipam-pool-allocate` for its `platformPrefixes` entry:
   first fit at the lowest aligned address, or the pinned block. The block is recorded in the ledger section
   `ipamPools` under the owner `HybridNetwork/<namespace>/<name>`.
 - **Level 2, block to placement subnet:** unchanged from IPv4: the network's address space is its `prefixes` plus its
@@ -62,7 +68,10 @@ ipam:
 - **Teardown order:** placement releases, then the network's address space (`ipam-drop`), then the block
   (`ipam-pool-release`).
 - **Pool use** is reported in `HybridFabric.status.realization.ipam.pools` (per pool: family, offered sizes, default
-  size, blocks used, free and held back, largest free block). The UI reads the offered sizes from there.
+  size, blocks used, free and held back, largest free block), written by every fabric run and after every pool
+  change. The UI reads the offered sizes from there. A fabric whose realization has no pool reports an empty list. A
+  pool change on a fabric run (more blocks, a larger allowance, a shorter hold-down) wakes the networks waiting for
+  platform address space.
 - **Several fabrics:** give each fabric's ledger a disjoint slice of the address space.
 - **Ownership records:** the ledger keeps each block's owner (and, for a released block, its former owner and the
   release time) and each provider-assigned placement subnet under `external` in the network's IPAM state, so a block

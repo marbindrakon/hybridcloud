@@ -306,7 +306,17 @@
                        if hn_block | length > 0 else none,
               'holdDownUntil': none} }}
 
-    # not mode Platform (any more): a block the network still holds goes back to the pool (held down there)
+    # not mode Platform (any more): a block the network still holds goes back to the pool (held down there, with the
+    # hold-down realization has now)
+    - name: The fabric's platform address pools before a release
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+      vars:
+        fab_ipam_pools_fabric: "{{ hn_fabric_name }}"
+        fab_ipam_pools_tolerant: true
+      when:
+        - hn_mode6 != 'Platform'
+        - (fab_real.ipam | default({}, true)).publicPools | default({}, true) | length > 0
+
     - name: Give a platform block back
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
       vars:

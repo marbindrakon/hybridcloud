@@ -1,16 +1,23 @@
 ---
 # shc (design/IPV6-PLAN.md §2.7, §2.8): the fabric's platform address pools (realization ipam.publicPools) in its
 # ledger, in one compare-and-swap, then the pool of one family. Included from a role (paths are role_path-relative)
-# after fabric_realization.yml; idempotent and cheap, so a job may run it before every pool allocation and a
-# realization change needs no fabric run. Input: fab_ipam_pools_fabric (the fabric's name), fab_ipam_pools_family
-# (default 6). Sets fab_ipam_pool (the name of the pool of that family; '' when the realization has none: the fabric
-# offers no platform address space of the family) and fab_ipam_pools_usage (rows for status.realization.ipam.pools).
-# Fails when the realization's pools are malformed or would drop allocated blocks.
+# after fabric_realization.yml; idempotent and cheap. The HybridFabric job runs it on every run (and publishes the
+# rows in status.realization.ipam.pools), the network job before every pool allocation and before every pool release
+# (network teardown, leaving mode Platform), so a release always uses the current hold-down.
+# Input: fab_ipam_pools_fabric (the fabric's name), fab_ipam_pools_family (default 6), fab_ipam_pools_tolerant
+# (default false: a malformed or refused realization fails the job; true: the job goes on with the pools as the
+# ledger holds them and fab_ipam_pools_refused says why).
+# Sets fab_ipam_pool (the name of the pool of that family; '' when the realization has none: the fabric offers no
+# platform address space of the family), fab_ipam_pools_usage (rows for status.realization.ipam.pools: the
+# realization's pools, [] when it has none), fab_ipam_pools_changed (the ensure changed the ledger) and
+# fab_ipam_pools_refused ('' unless tolerant and the realization's pools were not taken).
 - name: The fabric's platform address pools
   ansible.builtin.set_fact:
     _fab_pools: "{{ (fab_real.ipam | default({}, true)).publicPools | default({}, true) }}"
     fab_ipam_pool: ""
     fab_ipam_pools_usage: []
+    fab_ipam_pools_changed: false
+    fab_ipam_pools_refused: ""
 
 - name: Keep the platform address pools in the ledger
   when: _fab_pools | length > 0
@@ -39,6 +46,7 @@
       ansible.builtin.set_fact:
         fab_ipam_pool: "{{ _match | first | default('') }}"
         fab_ipam_pools_usage: "{{ fab_ipam_result.pools | default([]) }}"
+        fab_ipam_pools_changed: "{{ fab_ipam_result.changed | default(false) | bool }}"
         _fab_pools_ambiguous: "{{ _match | length > 1 }}"
 
     - name: Stop on two pools of one family
@@ -47,3 +55,25 @@
           realization ipam.publicPools has more than one IPv{{ fab_ipam_pools_family | default(6) }} pool for fabric
           {{ fab_ipam_pools_fabric }}; give each fabric one (fabrics.<name>.ipam.publicPools)
       when: _fab_pools_ambiguous | bool
+
+  rescue:
+    - name: Stop on pools the realization can't give
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg | default('realization ipam.publicPools: ipam-pool-ensure failed', true) }}"
+      when: not (fab_ipam_pools_tolerant | default(false) | bool)
+
+    - name: Go on with the pools as the ledger holds them
+      ansible.builtin.set_fact:
+        fab_ipam_pool: ""
+        fab_ipam_pools_changed: false
+        fab_ipam_pools_refused: >-
+          {{ ansible_failed_result.msg | default('realization ipam.publicPools: ipam-pool-ensure failed', true) }}
+
+    - name: Read the ledger's pools
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam: {action: ipam-pool-get, fabric: "{{ fab_ipam_pools_fabric }}"}
+
+    - name: The ledger's pool rows
+      ansible.builtin.set_fact:
+        fab_ipam_pools_usage: "{{ fab_ipam_result.pools | default([]) }}"

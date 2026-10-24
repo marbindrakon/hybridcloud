@@ -1,7 +1,8 @@
 """The pool wrapper (eda/common/tasks/fabric_ipam_pools.yml) and the IPAM pool actions through fabric_ipam.yml, in
 ansible-playbook against an in-memory API: generic defaults carry no pool, a pool from realization is ensured and
 chosen, a hold-down of 0 arrives as 0, the allowance, release and re-allocation, and a realization that would drop an
-allocated block fails the job. Skipped without ansible-playbook."""
+allocated block fails the job, a tolerant caller goes on with the ledger's pools and a realization change of the
+hold-down reaches the ledger before a release. Skipped without ansible-playbook."""
 import json
 import os
 import shutil
@@ -196,6 +197,94 @@ ROLE = r'''---
     that:
       - _not_refused is not defined
       - "'would lie outside the pool' in _refused_msg"
+
+- name: Tolerant (the fabric job, a release) goes on with the ledger's pools
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+  vars:
+    fab_ipam_pools_fabric: lab
+    fab_ipam_pools_tolerant: true
+
+- name: The refusal is reported, the rows are the ledger's
+  ansible.builtin.assert:
+    that:
+      - "'would lie outside the pool' in fab_ipam_pools_refused"
+      - fab_ipam_pool == ''
+      - not fab_ipam_pools_changed
+      - fab_ipam_pools_usage | length == 1
+      - fab_ipam_pools_usage[0].prefixes == ['2001:db8:4000::/55']
+      - fab_ipam_pools_usage[0].blocksUsed == 1
+
+- name: A malformed realization (default size not offered)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+  vars:
+    fab_real_fabric: lab
+    fabric_realization:
+      fabrics:
+        lab:
+          ipam:
+            publicPools:
+              test-v6: {family: 6, prefixes: ["2001:db8:4000::/55"], blockLengths: [60], defaultBlock: 56}
+
+- name: Tolerant with a malformed realization
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+  vars:
+    fab_ipam_pools_fabric: lab
+    fab_ipam_pools_tolerant: true
+
+- name: The error is reported, the ledger's pool stays
+  ansible.builtin.assert:
+    that:
+      - fab_ipam_pools_refused | length > 0
+      - fab_ipam_pools_usage[0].defaultBlock == 56
+
+- name: A realization change of the hold-down only
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+  vars:
+    fab_real_fabric: lab
+    fabric_realization:
+      fabrics:
+        lab:
+          ipam:
+            publicPools:
+              test-v6: {family: 6, prefixes: ["2001:db8:4000::/55"], blockLengths: [56, 60], defaultBlock: 56,
+                        holdDownDays: 3, perTenantBlocks: 1}
+
+- name: Ensured before the release (as the teardown does)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+  vars:
+    fab_ipam_pools_fabric: lab
+    fab_ipam_pools_tolerant: true
+
+- name: Taken, changed, refusal cleared
+  ansible.builtin.assert:
+    that:
+      - fab_ipam_pools_refused == ''
+      - fab_ipam_pools_changed | bool
+      - fab_ipam_pools_usage[0].holdDownDays == 3
+
+- name: Release with the new hold-down
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+  vars:
+    fab_ipam: {action: ipam-pool-release, fabric: lab, owner: HybridNetwork/entity-acme/b}
+
+- name: Held down for 3 days, not freed at once
+  ansible.builtin.assert:
+    that:
+      - fab_ipam_result.released == ['2001:db8:4000::/56']
+      - fab_ipam_result.holdDownUntil | default('', true) | length > 0
+      - fab_ipam_result.holdDownUntil[:10] > now(utc=true).strftime('%Y-%m-%d')
+
+- name: The same ensure again changes nothing
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+  vars:
+    fab_ipam_pools_fabric: lab
+    fab_ipam_pools_tolerant: true
+
+- name: Unchanged
+  ansible.builtin.assert:
+    that:
+      - not (fab_ipam_pools_changed | bool)
+      - fab_ipam_pools_usage[0].blocksHeldDown == 1
 '''
 
 PLAY = """- name: IPAM pools wrapper test
@@ -235,9 +324,14 @@ class PoolsWrapper(unittest.TestCase):
             proc = subprocess.run(["ansible-playbook", "-i", "localhost,", "play.yml"], cwd=tmp, env=env,
                                   capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
             self.assertEqual(proc.returncode, 0, proc.stdout[-3000:] + proc.stderr[-2000:])
-            self.assertIn("rescued=1", proc.stdout)
+            # the strict refusal (the pool task's own rescue re-raises, the role's rescue catches it) and the two
+            # tolerant refusals
+            self.assertIn("rescued=4", proc.stdout)
             led = json.loads(STATE["cm"]["data"]["ledger.json"])
-            self.assertEqual(led["ipamPools"]["test-v6"]["alloc"], {"HybridNetwork/entity-acme/b": ["2001:db8:4000::/56"]})
+            pool = led["ipamPools"]["test-v6"]
+            self.assertEqual(pool["alloc"], {})
+            self.assertEqual(pool["holdDownDays"], 3)
+            self.assertEqual(list(pool["released"]), ["2001:db8:4000::/56"])
         finally:
             srv.shutdown()
             shutil.rmtree(tmp, ignore_errors=True)
