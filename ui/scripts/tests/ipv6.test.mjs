@@ -252,3 +252,21 @@ test('the network page names the IPv6 mode with the create form\'s words (en, fr
     assert.equal(cat.mode_None, cat.choiceNone, l);
   }
 });
+
+test('Address family not available: the catalogue words with the job message in display words, no kind name', () => {
+  const p = { status: { conditions: [{ type: 'Ready', status: 'False', reason: 'FamilyUnavailable',
+    message: "NetworkPlacement g6-v6only-vms: IPv6 is not available on this environment's site (iaas1)" }] } };
+  const out = m.familyUnavailableText(tEn, p);
+  assert.equal(out, [
+    load('en').ipv6.familyUnavailableBody,
+    "Network placement g6-v6only-vms: IPv6 is not available on this environment's site (iaas1).",
+    load('en').ipv6.familyUnavailableFix,
+  ].join(' '));
+  assert.doesNotMatch(out, KIND_NAME);
+  const net = { status: { conditions: [{ reason: 'FamilyUnavailable', message: 'NetworkPlacement p: the network has no IPv6 address space' }] } };
+  assert.match(m.familyUnavailableText(tEn, net), /Network placement p: the network has no IPv6 address space\./);
+  // without a message: what happened and the fix only
+  assert.equal(m.familyUnavailableText(tEn, { status: { conditions: [{ reason: 'FamilyUnavailable' }] } }),
+    `${load('en').ipv6.familyUnavailableBody} ${load('en').ipv6.familyUnavailableFix}`);
+  assert.equal(m.familyUnavailableText(tEn, { status: { conditions: [{ reason: 'Ready' }] } }), null);
+});

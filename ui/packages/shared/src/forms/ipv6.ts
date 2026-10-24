@@ -427,6 +427,27 @@ export function familyUnavailable(p: { status?: { conditions?: Array<{ type?: st
   return c ? { message: c.message } : null;
 }
 
+/** A job's message as page text: kind words in display terms ("network placement p1: ..."), sentence case, a stop. */
+function messageSentence(t: VocabT, message: string | undefined | null): string {
+  const text = displayText(t, message).trim();
+  if (!text) return '';
+  const first = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?]$/.test(first) ? first : `${first}.`;
+}
+
+/**
+ * The "Address family not available" alert of a placement refused with FamilyUnavailable, or null: what happened
+ * and the fix in the catalogue's words, with the job's message between them in display words only (the message
+ * names the object by its API kind).
+ */
+export function familyUnavailableText(t: VocabT, p: Parameters<typeof familyUnavailable>[0]): string | null {
+  const refused = familyUnavailable(p);
+  if (!refused) return null;
+  return [t('ipv6.familyUnavailableBody'), messageSentence(t, refused.message), t('ipv6.familyUnavailableFix')]
+    .filter(Boolean)
+    .join(' ');
+}
+
 /**
  * A status reason in plain words (ipv6.reason.<Reason>), with the platform's message when it adds one. The message
  * is shown in display words (no API kind names); when it holds the reason's words (IPv6ModeInUse: the sentence and

@@ -29,7 +29,7 @@ import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHid
 import { ToolSignInPanel } from './ToolSignInPanel';
 import { Ipv6CloudInitSnippet } from './Ipv6CloudInitSnippet';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
-import { familyUnavailable, ipv6ReasonText, networkIpv6Mode, placementSubnets } from '../forms/ipv6';
+import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, placementSubnets } from '../forms/ipv6';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -832,14 +832,14 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
   const st = item.status ?? {};
   const vnis = placementVnis(item);
   const subnets = placementSubnets(item);
-  const refused = familyUnavailable(item);
+  const refused = familyUnavailableText(t, item);
   const v6 = st.ipv6;
   const siteCaps = useSiteIpv6Caps(item.metadata?.namespace, { enabled: subnets.some((x) => Number(x.family) === 6) });
   return (
     <>
       {refused && (
         <Alert variant="warning" isInline title={t('ipv6.familyUnavailableTitle')} className="sc-mb">
-          {[t('ipv6.familyUnavailableBody'), refused.message, t('ipv6.familyUnavailableFix')].filter(Boolean).join(' ')}
+          {refused}
         </Alert>
       )}
       <Facts>
