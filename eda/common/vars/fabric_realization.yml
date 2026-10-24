@@ -47,6 +47,13 @@ fabric_realization_defaults:
   # subnets are kept; ledger = the fabric's ledger (the only provider so far)
   ipam:
     provider: ledger
+    # platform address pools (HybridNetwork spec.platformPrefixes): <pool>: {family, prefixes, reserved (never
+    # given out), blockLengths (the block sizes offered), defaultBlock (when a network names no size), holdDownDays
+    # (a released block is not given out again for this long; default below), perTenantBlocks (blocks per Entity;
+    # absent = no limit), perTenantOverrides ({entity: blocks})}. None by default: a network asking for platform
+    # address space is then refused (FamilyUnavailable). One pool per family per fabric (fabrics.<name>.ipam).
+    publicPools: {}
+    holdDownDays: 7
   placement:
     # how long a placement job waits for the gateways to hold the site's routes for its prefixes (s)
     routeWait: 180
