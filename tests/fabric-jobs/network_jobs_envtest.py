@@ -3,9 +3,11 @@
 
 Starts etcd + kube-apiserver (tests/schema-replay/replay.py backend), installs the chart's CRDs, creates a fabric
 (HybridFabric with a ready status and its ledger), tenants, a site with its gateway and environment, then runs the
-real roles (eda/rulebooks/roles/hybridnetwork_provision, hybridnetwork_teardown, networkplacement_provision) with
-ansible-playbook against it and checks status and ledger after each step. Nothing outside the throwaway server is
-touched (no Vault, no site, no border gateway: every step stops before the realization).
+real roles (eda/rulebooks/roles/hybridnetwork_provision, hybridnetwork_teardown, networkplacement_provision, the
+Entity job's tenant profile steps, and hybridfabric_provision up to its node work) with ansible-playbook against it
+and checks status and ledger after each step. Nothing outside the throwaway server is touched (no site, no border
+gateway: every step stops before the realization; the fabric job reads its SSH key from a mock KV endpoint of this
+harness and stops at an unreachable documentation address).
 
   python3 -I tests/fabric-jobs/network_jobs_envtest.py [--only CASE] [--keep] [--verbose]
 
@@ -21,7 +23,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import yaml
@@ -111,7 +115,7 @@ class Lab:
         self.status("cloudvirts", "vms", "entity-a", {"status": "ready", "ready": True, "realized": True})
 
     # ---- jobs ----
-    def job(self, role, kind, name, ns):
+    def job(self, role, kind, name, ns, extra_env=None):
         play = [{"hosts": "localhost", "connection": "local", "gather_facts": False, "roles": [role]}]
         (self.tmp / "play.yml").write_text(yaml.safe_dump(play))
         (self.tmp / "ansible.cfg").write_text("[defaults]\nroles_path = %s\ncollections_path = %s:%s\n" % (
@@ -123,7 +127,7 @@ class Lab:
         (self.tmp / "vars.json").write_text(json.dumps(v))
         env = dict(os.environ, ANSIBLE_CONFIG=str(self.tmp / "ansible.cfg"), ANSIBLE_LOCALHOST_WARNING="false",
                    ANSIBLE_INVENTORY_UNPARSED_WARNING="false", ANSIBLE_REMOTE_TMP=str(self.tmp / "rt"),
-                   ANSIBLE_LOCAL_TEMP=str(self.tmp / "lt"))
+                   ANSIBLE_LOCAL_TEMP=str(self.tmp / "lt"), **(extra_env or {}))
         p = subprocess.run(["ansible-playbook", "-i", "localhost,", "play.yml", "-e", "@vars.json"], cwd=self.tmp,
                            env=env, capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
         if self.verbose:
@@ -356,6 +360,14 @@ def c_profile_offer(lab):
     try:
         tp = lab.profile("a", "entity-a")
         assert tp["status"].get("ipv6Platform") == {"blockLengths": [56, 60], "defaultBlockLength": 56}, tp["status"]
+        # written through the status subresource only (the tenant roles grant tenantprofiles get/list/watch and
+        # nothing on tenantprofiles/status: tests/rbac-access/cases/tenantprofile.yaml R3); the main resource never
+        # carried a status field (kubectl hides managed fields unless asked)
+        shown, _, _ = lab.kube.json(["get", "tenantprofiles", "shc", "-n", "entity-a", "--show-managed-fields"])
+        mf = shown["metadata"].get("managedFields") or []
+        fields = lambda m: json.dumps(m.get("fieldsV1") or {})  # noqa: E731
+        assert any(m.get("subresource") == "status" and "f:ipv6Platform" in fields(m) for m in mf), mf
+        assert not any("f:status" in fields(m) for m in mf if m.get("subresource") != "status"), mf
         # a fabric limited to another tenant: the offer goes away (merge patch with null)
         fab = lab.get("hybridfabrics", FABRIC, PNS)
         fab["spec"]["entityRefs"] = [{"name": "b"}]
@@ -375,9 +387,71 @@ def c_profile_offer(lab):
         lab.status("hybridfabrics", FABRIC, PNS, keep)
 
 
+class MockKv:
+    """A KV v2 read endpoint for bgw_connect.yml (env VAULT_ADDR / VAULT_TOKEN of the job): every path answers with a
+    placeholder that is not a key. It is never used: the node the job then reaches for is a documentation address."""
+
+    def __init__(self):
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps({"data": {"data": {"ssh_private_key": "placeholder-not-a-key"}}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        self.srv = HTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_port}"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.srv.shutdown()
+
+
+def c_fabric_pools(lab):
+    """the HybridFabric job (its role defaults, no playbook variable) keeps the realization's pool in a new fabric's ledger before any node work"""
+    name = "fab2"
+    # a second fabric, so this case touches neither the first fabric's ledger nor the tenant profiles of the cases
+    # above (the Entity job reads the fabrics of the platform namespace); its node is a documentation address
+    lab.create(obj("HybridFabric", name, PNS, {
+        "domainAsn": 64501, "overlayMtu": 9000, "vniPool": {"start": 52000, "end": 52999},
+        "l2vniPool": {"start": 152000, "end": 152999},
+        "borderGateway": {"credentialsRef": {"vaultPath": "fabric/bgw2"},
+                          "nodes": [{"name": "n2", "address": "192.0.2.2"}]}}))
+    kv = MockKv()
+    try:
+        p = lab.job("hybridfabric_provision", "HybridFabric", name, PNS,
+                    extra_env={"VAULT_ADDR": kv.url, "VAULT_TOKEN": "harness"})
+        out = p.stdout
+        # the job got past the pool step (it fails later, at the node: unreachable, not rescued)
+        assert "is undefined" not in out, out[-1500:]
+        assert p.returncode != 0 and "n2" in out and "unreachable=1" in out, out[-1500:]
+        # the lease is held: every planning step after the pools ran
+        lease, _, _ = lab.kube.json(["get", "lease", f"fabric-config-{name}", "-n", PNS])
+        assert (lease or {}).get("spec", {}).get("holderIdentity", "").startswith(f"HybridFabric/{name} job"), lease
+        # the ledger the job created carries the realization's pool, untouched (no block given out)
+        cm, _, _ = lab.kube.json(["get", "configmap", f"fabric-ledger-{name}", "-n", PNS])
+        led = json.loads(cm["data"]["ledger.json"])
+        pool = led["ipamPools"]["test-v6"]
+        assert pool["family"] == 6 and pool["prefixes"] == [POOL], pool
+        assert pool["blockLengths"] == [56, 60] and pool["defaultBlock"] == 56, pool
+        assert pool["alloc"] == {} and pool["tenants"] == {}, pool
+        # the first fabric's ledger is not the one written
+        assert "ipamPools" in lab.ledger() and lab.ledger()["fabric"] == FABRIC
+    finally:
+        kv.stop()
+        for args in (["delete", "hybridfabric", name, "-n", PNS], ["delete", "configmap", f"fabric-ledger-{name}", "-n", PNS],
+                     ["delete", "lease", f"fabric-config-{name}", "-n", PNS]):
+            lab.kube.run(args + ["--ignore-not-found"])
+
+
 CASES = [c_tenant_core, c_platform_dual, c_pinned, c_allowance, c_exhausted, c_size_not_offered, c_reserved,
          c_overlap_tenant, c_v6only_tenant, c_placement_mode_none, c_mode_in_use, c_release_wakes, c_leave_platform,
-         c_profile_offer]
+         c_profile_offer, c_fabric_pools]
 
 
 def main():
