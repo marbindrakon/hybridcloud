@@ -412,21 +412,26 @@ class WiringTest(unittest.TestCase):
 
     def test_fabric_job_keeps_the_pools(self):
         t = self.text(ROLES, "hybridfabric_provision", "tasks", "main.yml")
-        # after the ledger exists, before the status; never fails the fabric
-        self.assertLess(t.index("action: ledger-ensure"), t.index("fabric_ipam_pools.yml"))
-        i = t.index("fabric_ipam_pools.yml")
-        self.assertIn("fab_ipam_pools_tolerant: true", t[i:i + 200])
+        p = self.text(ROLES, "hybridfabric_provision", "tasks", "pools.yml")
+        # the step (pools.yml, runnable on its own: it loads the realization when it has none) runs after the ledger
+        # exists and before the status; it never fails the fabric
+        self.assertLess(t.index("action: ledger-ensure"), t.index("include_tasks: pools.yml"))
+        self.assertLess(t.index("include_tasks: pools.yml"), t.index("Report the fabric ready"))
+        self.assertIn("when: fab_real is not defined", p)
+        i = p.index('tasks/fabric_ipam_pools.yml"')
+        self.assertIn("fab_ipam_pools_tolerant: true", p[i:i + 200])
+        self.assertIn("'pools': fab_ipam_pools_usage", p)
         self.assertIn("'ipam': hf_ipam", t)
-        self.assertIn("'pools': fab_ipam_pools_usage", t)
         self.assertLess(t.index("Report the fabric ready"), t.index("wake_waiting_networks.yml"))
         self.assertIn("when: hf_ipam_changed | bool", t)
 
     def test_fabric_jobs_wake_the_entities_for_the_tenant_offer(self):
         t = self.text(ROLES, "hybridfabric_provision", "tasks", "main.yml")
-        # the offer is computed from the rows this run writes, kept in the status, and compared with the stored one
-        # after the status write (TenantProfile status.ipv6Platform follows on the Entity job)
-        self.assertLess(t.index("'pools': fab_ipam_pools_usage"), t.index("ipv6_platform_offer.yml"))
-        self.assertLess(t.index("ipv6_platform_offer.yml"), t.index("Report the fabric ready"))
+        p = self.text(ROLES, "hybridfabric_provision", "tasks", "pools.yml")
+        # the offer is computed from the rows this run writes (pools.yml), kept in the status, and compared with the
+        # stored one (TenantProfile status.ipv6Platform follows on the Entity job)
+        self.assertLess(p.index("'pools': fab_ipam_pools_usage"), p.index('tasks/ipv6_platform_offer.yml"'))
+        self.assertLess(t.index("include_tasks: pools.yml"), t.index("Report the fabric ready"))
         self.assertIn("combine({'tenantOffer': hf_tenant_offer})", t)
         self.assertLess(t.index("Report the fabric ready"), t.index("wake_entities.yml"))
         i = t.index("wake_entities.yml")

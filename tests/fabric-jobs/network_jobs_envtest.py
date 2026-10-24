@@ -412,6 +412,30 @@ class MockKv:
         self.srv.shutdown()
 
 
+def c_fabric_pools_step(lab):
+    """the fabric job's pool step on its own (include_role pools.yml, role defaults): the ledger's pool rows and the tenants' offer"""
+    role = ROOT / "eda" / "rulebooks" / "roles" / "hybridfabric_provision"
+    out = lab.tmp / "pools.json"
+    play = [{"hosts": "localhost", "connection": "local", "gather_facts": False, "tasks": [
+        {"name": "pool step", "ansible.builtin.include_role": {"name": str(role), "tasks_from": "pools.yml"}},
+        {"name": "keep the facts", "ansible.builtin.copy": {
+            "dest": str(out), "content": "{{ {'ipam': hf_ipam, 'changed': hf_ipam_changed, 'offer': hf_tenant_offer} | to_json }}"}}]}]
+    (lab.tmp / "pools.yml").write_text(yaml.safe_dump(play))
+    v = {"services_api_host": lab.server, "services_bearer_token": lab.token, "services_validate_certs": False,
+         "fabric_realization": REALIZATION, "fab_name": FABRIC}
+    (lab.tmp / "poolvars.json").write_text(json.dumps(v))
+    lab.job_env_play("pools.yml", "poolvars.json")
+    r = json.loads(out.read_text())
+    led = lab.ledger()["ipamPools"]["test-v6"]
+    assert led["prefixes"] == [POOL] and led["blockLengths"] == [56, 60], led
+    rows = r["ipam"]["pools"]
+    assert len(rows) == 1 and rows[0]["name"] == "test-v6" and rows[0]["family"] == 6, rows
+    assert rows[0]["blockLengths"] == [56, 60] and rows[0]["defaultBlock"] == 56, rows
+    assert rows[0]["blocksUsed"] == len(led["alloc"]), (rows, led["alloc"])
+    assert r["ipam"]["refused"] is None and r["changed"] is False, r      # the ledger held the pool already
+    assert r["offer"] == "/56 /60 default /56", r["offer"]
+
+
 def c_fabric_pools(lab):
     """the HybridFabric job (its role defaults, no playbook variable) keeps the realization's pool in a new fabric's ledger before any node work"""
     name = "fab2"
@@ -451,7 +475,7 @@ def c_fabric_pools(lab):
 
 CASES = [c_tenant_core, c_platform_dual, c_pinned, c_allowance, c_exhausted, c_size_not_offered, c_reserved,
          c_overlap_tenant, c_v6only_tenant, c_placement_mode_none, c_mode_in_use, c_release_wakes, c_leave_platform,
-         c_profile_offer, c_fabric_pools]
+         c_profile_offer, c_fabric_pools_step, c_fabric_pools]
 
 
 def main():

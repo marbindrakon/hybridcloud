@@ -111,41 +111,14 @@
       ansible.builtin.set_fact:
         hf_ledger: "{{ fab_ledger_result }}"
 
-    # the platform address pools (realization ipam.publicPools) on every fabric run, so a realization change reaches
-    # the ledger (hold-down, allowance, prefixes, sizes) and status.realization.ipam.pools without a network run. A
-    # malformed or refused pool realization never fails the fabric (its networks would wait for it): the ledger keeps
-    # its pools and the status says why
-    - name: The platform address pools
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
-      vars:
-        fab_ipam_pools_fabric: "{{ fab_name }}"
-        fab_ipam_pools_tolerant: true
+    # the platform address pools (realization ipam.publicPools) and the offer tenants see of them, on every fabric run
+    # (pools.yml: a realization change reaches the ledger and status.realization.ipam without a network run; a
+    # malformed or refused pool realization never fails the fabric). The offer is kept in
+    # status.realization.ipam.tenantOffer in words so a later run can tell whether the Entities need a wake.
+    - name: The platform address pools and the tenants' offer
+      ansible.builtin.include_tasks: pools.yml
 
-    - name: Keep the pool rows
-      ansible.builtin.set_fact:
-        # (merge-patched: refused is null, so cleared, once the realization's pools are taken)
-        hf_ipam: >-
-          {{ {'pools': fab_ipam_pools_usage,
-              'refused': fab_ipam_pools_refused if fab_ipam_pools_refused | length > 0 else none} }}
-        hf_ipam_changed: "{{ fab_ipam_pools_changed | bool }}"
-
-    # the offer tenants see in TenantProfile status.ipv6Platform (the Entity job writes it from the same rows), kept in
-    # status.realization.ipam.tenantOffer in words ("/48 /56 default /56", or "none") so a later run can tell whether
-    # the Entities need a wake
-    - name: The tenants' platform IPv6 offer
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/ipv6_platform_offer.yml"
-      vars:
-        ipo_pools: "{{ hf_ipam.pools | default([], true) }}"
-
-    - name: Keep it with the pool rows
-      vars:
-        _o: "{{ ipv6_platform_offer }}"
-      ansible.builtin.set_fact:
-        hf_tenant_offer: >-
-          {{ ('/' ~ (_o.blockLengths | join(' /')) ~ ((' default /' ~ _o.defaultBlockLength)
-              if _o.defaultBlockLength is defined else '')) if _o | length > 0 else 'none' }}
-
-    - name: Add it to the status rows
+    - name: Add the offer to the status rows
       ansible.builtin.set_fact:
         hf_ipam: "{{ hf_ipam | combine({'tenantOffer': hf_tenant_offer}) }}"
 
