@@ -222,5 +222,6 @@ is off); it does not stop you from deleting the object itself. Details:
 - [Status reasons](status-reasons.md): states, reasons, Retry now and deletion.
 
 - [Hybrid networks tutorial](../../architecture/docs/tutorial/09-hybrid-networks.md): networks
-  across several sites, OpenStack placements, internet egress.
+  across several sites, OpenStack placements, internet egress, and
+  [IPv6](../../architecture/docs/tutorial/09-hybrid-networks.md#ipv6-for-a-hybrid-network).
 - [Samples](../../samples/README.md): one example per kind of object.
