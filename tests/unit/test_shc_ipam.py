@@ -567,7 +567,7 @@ class Ledger(unittest.TestCase):
 
     def test_pool_unavailable_and_errors(self):
         out = self.call(action="ipam-pool-allocate", owner=hn("a"), tenant="acme", want={"family": 6})
-        self.assertEqual(out, {"unavailable": "the fabric has no platform IPv6 address pool"})
+        self.assertEqual(out, {"unavailable": "this fabric offers no platform IPv6 address space"})
         with self.assertRaises(RuntimeError):
             self.call(action="ipam-pool-allocate", owner=hn("a"), want={"family": 6})  # no tenant
         with self.assertRaises(RuntimeError):

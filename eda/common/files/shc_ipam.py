@@ -521,7 +521,7 @@ def plan_pool_allocation(pool, owner, tenant, want, at):
     fam = int(want.get("family") or pool.get("family"))
     fname = family_name(fam)
     if fam != int(pool.get("family")):
-        return {"unavailable": f"the fabric has no platform {fname} address pool"}
+        return {"unavailable": f"this fabric offers no platform {fname} address space"}
     pool_space = [net(p) for p in pool.get("prefixes") or []]
     pin = net(want["prefix"]) if want.get("prefix") else None
     if pin is not None and pin.version != fam:
@@ -864,7 +864,7 @@ class LedgerProvider:
             fam = int(want.get("family") or 6)
             pname, pool = choose_pool(self._pools(led), name, fam)
             if pool is None:
-                return {"unavailable": f"the fabric has no platform {family_name(fam)} address pool", "unchanged": True}
+                return {"unavailable": f"this fabric offers no platform {family_name(fam)} address space", "unchanged": True}
             out = plan_pool_allocation(pool, owner, tenant, want, at)
             out["pool"] = pname
             if out.get("new"):
