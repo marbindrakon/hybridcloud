@@ -148,7 +148,7 @@ The network reports what it derived in `status.ipv6.mode` and on its page.
 
 | Your choice (network form) | Fields | `status.ipv6.mode` | Between your sites | IPv6 internet |
 |---|---|---|---|---|
-| **My own prefix** | IPv6 entries in `prefixes`: global unicast (GUA) or unique local (ULA) prefixes you own | `Tenant` | carried, like your IPv4 | none, in either direction |
+| **My own prefixes** | IPv6 entries in `prefixes`: global unicast (GUA) or unique local (ULA) prefixes you own | `Tenant` | carried, like your IPv4 | none, in either direction |
 | **From the platform** | `platformPrefixes` with `family: 6`; the platform assigns a block of its own globally routed space | `Platform` | carried | outbound through the platform, when the platform offers it |
 | **None** | neither | `None` | no IPv6 | no IPv6 |
 
@@ -156,7 +156,7 @@ A network without any IPv6 field is `None`, so every IPv4-only network keeps its
 
 ### Choosing a network's IPv6
 
-**My own prefix** (mode `Tenant`):
+**My own prefixes** (mode `Tenant`):
 ```yaml
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: HybridNetwork
@@ -390,8 +390,8 @@ Tenants:
   (state and prefixes); each network shows its MTU and internet egress (state and source addresses).
 - **Networks → Networks:** create and edit (address space, description, MTU, internet egress, viewers). The form's
   IPv6 choice has three options: **From the platform** (a block size from the sizes the fabric offers, or a
-  specific block), **My own prefix** (your GUA or ULA prefixes) and **None**. **From the platform** is preselected
-  when the fabric offers platform IPv6, otherwise **None**; no prefix is filled in for you. Once the network has
+  specific block), **My own prefixes** (your GUA or ULA prefixes) and **None**. **From the platform** is preselected
+  when the form can tell that the fabric offers platform IPv6, otherwise **None**; no prefix is filled in for you. Once the network has
   placements the choice is locked, with the reason. The detail page shows the IPv6 mode, the address space in use
   with a source column (yours or the platform's), the effective MTU, placements ready, internet egress per family
   with its reason (for example "IPv6 internet: not offered for tenant-provided prefixes") and, collapsed, the
