@@ -17,6 +17,9 @@ SCOPE = [
     "aap-config/**/*.yml",
     # §11.6 phase C: tenant cloud roles (the OpenStack path of PlatformOpenshift provision)
     "eda/common/files/*.py",
+    # IPv6 V3: the generic realization defaults ship no lab value (lab values live in the installation's
+    # FABRIC_REALIZATION)
+    "eda/common/vars/*.yml",
     "eda/rulebooks/roles/cloudoso_*/**/*.yml",
     # P7.1: CloudInfrastructure
     "eda/rulebooks/roles/cloudinfrastructure_*/**/*.yml",
@@ -40,6 +43,8 @@ PATTERNS = {
     "lab domain": re.compile(r"signal9\.(gg|lab)|\.lab\.signal9"),
     "old cluster": re.compile(r"shc-cental5|shc-central5"),
     "lab address": re.compile(r"\b172\.18\.\d{1,3}\.\d{1,3}\b|\b75\.8\.222\.\d{1,3}\b"),
+    # the lab's IPv6 space (the owner's /44 and the platform /48 in it)
+    "lab IPv6 prefix": re.compile(r"\b2602:0{0,3}81f:", re.I),
 }
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parents[1])
