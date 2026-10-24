@@ -69,8 +69,14 @@ ipam:
   (`ipam-pool-release`).
 - **Pool use** is reported in `HybridFabric.status.realization.ipam.pools` (per pool: family, offered sizes, default
   size, blocks used, free and held back, largest free block), written by every fabric run and after every pool
-  change. The UI reads the offered sizes from there. A fabric whose realization has no pool reports an empty list. A
-  pool change on a fabric run (more blocks, a larger allowance, a shorter hold-down) wakes the networks waiting for
+  change. A fabric whose realization has no pool reports an empty list. The console's network form reads the
+  offered sizes and the default from there and, for users who can read the HybridFabric, preselects **From the
+  platform** when a family-6 row is present.
+  The rows are those of the fabric's last run or last pool change, so after adding a pool to the realization run
+  Retry now on the HybridFabric: until its next run the form keeps preselecting **None** and says the fabric reports
+  no platform IPv6 space (a network that asks for a block still gets one: its own job takes the new pool). A fabric
+  status without rows (a fabric that has not run yet) makes the form preselect **None** without that line. A pool
+  change on a fabric run (more blocks, a larger allowance, a shorter hold-down) wakes the networks waiting for
   platform address space.
 - **Several fabrics:** give each fabric's ledger a disjoint slice of the address space.
 - **Ownership records:** the ledger keeps each block's owner (and, for a released block, its former owner and the
