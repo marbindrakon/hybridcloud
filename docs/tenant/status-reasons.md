@@ -88,6 +88,10 @@ Who acts: **You** can fix it (the summary says how), **the platform team** has t
 alerted or you tell them), or **nobody**: the platform continues by itself. Reasons that only mean
 "ready" are not listed.
 
+The last group lists reasons shown on a part of an object, such as one address family's internet
+access on a network page (`status.egress.families`). They explain that part and never change the
+object's state: a network whose IPv6 internet access is not offered is still Ready.
+
 <!-- reasons:begin -->
 **Working on it**
 
@@ -192,11 +196,11 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | `TypeNotSupported` | This type is not supported here. | You (the tenant) |
 | `ZoneMismatch` | The zone does not match the site. | You (the tenant) |
 
-**On a part of an object (an egress family of a network, a placement's IPv6 internet access)**
+**On a part of an object (an egress family of a network, its translation to IPv4, a placement's IPv6 internet access)**
 
 | Reason | What it means | Who acts |
 |---|---|---|
 | `AddressChoice` | IPv6 internet: not offered for tenant-provided prefixes. | You (the tenant) |
 | `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
-| `NotOffered` | IPv6 internet access is not offered on this fabric yet. | Nobody: it continues by itself |
+| `NotOffered` | Not offered on this fabric yet: IPv6 internet access, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 <!-- reasons:end -->

@@ -25,7 +25,8 @@ ACTORS = {"A": "Nobody: it continues by itself", "T": "You (the tenant)",
           "P": "The platform team"}
 
 
-PART_TITLE = "On a part of an object (an egress family of a network, a placement's IPv6 internet access)"
+PART_TITLE = ("On a part of an object (an egress family of a network, its translation to IPv4, a placement's IPv6 "
+              "internet access)")
 
 
 def load():

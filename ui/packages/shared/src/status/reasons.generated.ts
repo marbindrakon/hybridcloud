@@ -117,7 +117,7 @@ export const REASONS: Record<string, ReasonEntry> = {
 export const PART_REASONS: Record<string, ReasonEntry> = {
   "AddressChoice": { actor: "T", class: "ready", summary: "IPv6 internet: not offered for tenant-provided prefixes." },
   "Degraded": { actor: "A", class: "ready", summary: "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path." },
-  "NotOffered": { actor: "A", class: "ready", summary: "IPv6 internet access is not offered on this fabric yet." },
+  "NotOffered": { actor: "A", class: "ready", summary: "Not offered on this fabric yet: IPv6 internet access, or translation to IPv4 for a network without IPv4." },
 };
 
 export const DELETE_REQUESTED_SUFFIX = "DeleteRequested";

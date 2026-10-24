@@ -1,0 +1,14 @@
+# A dual-stack network with its own IPv6 prefix (IPv6 mode Tenant): the IPv6 entry in prefixes is a global unicast
+# or unique local prefix the tenant owns. The platform carries it between the network's placements; it has no
+# internet access in either direction (status.egress.families reports IPv6 internet as AddressChoice).
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: HybridNetwork
+metadata:
+  name: example-net-own-ipv6
+  namespace: entity-example-corp
+spec:
+  description: Network of the example application, with the tenant's own IPv6 prefix.
+  prefixes:
+    - 10.21.0.0/16
+    - fd12:3456:789a::/48

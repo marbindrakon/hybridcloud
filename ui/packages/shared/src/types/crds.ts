@@ -671,8 +671,10 @@ export type TransportLink = K8sResource<TransportLinkSpec>;
 /** HybridNetwork — a tenant's routed private network across cloud sites */
 export interface HybridNetworkSpec {
   description?: string;
-  /** The network's address space (IPv4 and IPv6); the platform allocates the placements' subnets from it */
-  prefixes: string[];
+  /** The tenant's own address space (IPv4 and IPv6); may be empty when platformPrefixes gives the network its space */
+  prefixes?: string[];
+  /** Address space the platform assigns (IPv6 only): a block of the size asked for (or the fabric's default), or a pinned block */
+  platformPrefixes?: PlatformPrefixRequest[];
   /** Default: the platform's only fabric. Immutable once set; cannot be removed. */
   fabricRef?: NameRef;
   /** Default and maximum: the fabric's overlayMtu */
@@ -683,6 +685,35 @@ export interface HybridNetworkSpec {
 
 export type EgressState = 'pending' | 'ready' | 'removing' | 'unavailable';
 
+/** Where a network's IPv6 comes from: its own prefixes (Tenant), the platform (Platform) or nowhere (None). Derived from the spec. */
+export type Ipv6Mode = 'Tenant' | 'Platform' | 'None';
+
+/** One entry of HybridNetwork spec.platformPrefixes (one per family; IPv6 only). Each entry cannot be changed. */
+export interface PlatformPrefixRequest {
+  family: 6;
+  /** 48 to 64 in steps of 4; omitted = the fabric's default size */
+  prefixLength?: number;
+  /** A specific free block of the platform's space */
+  prefix?: string;
+}
+
+/** Internet egress of one address family of a network */
+export interface EgressFamilyStatus {
+  family?: number;
+  state?: EgressState | string;
+  /** SourceNAT (IPv4) or Routed (IPv6) */
+  mode?: string;
+  /** e.g. AddressChoice, NotOffered, Degraded */
+  reason?: string;
+  message?: string;
+}
+
+export interface Ipv4TranslationStatus {
+  state?: string;
+  reason?: string;
+  message?: string;
+}
+
 /** One prefix of a network's address space as the platform holds it */
 export interface AddressSpaceEntry {
   prefix: string;
@@ -691,6 +722,8 @@ export interface AddressSpaceEntry {
   allocations?: number;
   /** Prefix length of the largest free block; absent when the prefix is full */
   largestFree?: number;
+  /** Tenant (spec.prefixes) or Platform (a block assigned from spec.platformPrefixes); absent = Tenant */
+  source?: 'Tenant' | 'Platform' | string;
 }
 
 export interface HybridNetworkStatus extends OperatorStatus {
@@ -699,7 +732,23 @@ export interface HybridNetworkStatus extends OperatorStatus {
   placementCount?: number;
   placementsReady?: number;
   addressSpace?: AddressSpaceEntry[];
-  egress?: { internet?: EgressState | string; sourceAddresses?: string[] | null };
+  egress?: {
+    internet?: EgressState | string;
+    /** IPv4 source addresses */
+    sourceAddresses?: string[] | null;
+    families?: EgressFamilyStatus[];
+    ipv4Translation?: Ipv4TranslationStatus;
+  };
+  ipv6?: {
+    /** The mode in effect (a refused mode change leaves it as it was) */
+    mode?: Ipv6Mode | string;
+    /** The IPv6 address space in effect: the tenant's prefixes or the assigned block */
+    prefixes?: string[];
+    /** The block the platform assigned (mode Platform) */
+    block?: { prefix?: string; prefixLength?: number; source?: 'Pinned' | 'Allocated' | string };
+    /** While waiting for a recently released block: when it can be assigned again (RFC 3339) */
+    holdDownUntil?: string;
+  };
   /** Informational; depends on the platform */
   realization?: Record<string, unknown>;
 }
@@ -715,12 +764,36 @@ export interface PlacementSubnetRequest {
   prefix?: string;
 }
 
+/** Where a placement's IPv6 subnet comes from on a public-cloud site; omitted = the site's default */
+export type PlacementIpv6Source = 'Network' | 'Provider';
+
+export interface PlacementIpv6Request extends PlacementSubnetRequest {
+  source?: PlacementIpv6Source;
+}
+
+/** One realized subnet of a placement */
+export interface PlacementSubnetStatus {
+  family?: number;
+  prefix?: string;
+  gateway?: string;
+  /** Network (from the network's space) or Provider (assigned by the cloud provider) */
+  source?: PlacementIpv6Source | string;
+}
+
+export interface PlacementIpv6Status {
+  /** DHCPv6 or SLAAC (informational) */
+  addressing?: string;
+  internet?: { state?: string; path?: 'Fabric' | 'Provider' | string; reason?: string; message?: string };
+  translation?: { pref64?: string; resolvers?: string[] };
+}
+
 /** NetworkPlacement — puts a HybridNetwork on one cloud environment (all of spec is immutable) */
 export interface NetworkPlacementSpec {
   network: string;
   backend: { kind: NetworkPlacementBackendKind; name: string };
-  ipv4: PlacementSubnetRequest;
-  ipv6?: PlacementSubnetRequest;
+  /** At least one of ipv4 and ipv6 */
+  ipv4?: PlacementSubnetRequest;
+  ipv6?: PlacementIpv6Request;
 }
 
 export interface NetworkPlacementStatus extends OperatorStatus {
@@ -732,6 +805,9 @@ export interface NetworkPlacementStatus extends OperatorStatus {
   mtu?: number;
   /** The subnets allocated to the placement, IPv4 first */
   prefixes?: string[];
+  /** One row per family, with where each subnet comes from */
+  subnets?: PlacementSubnetStatus[];
+  ipv6?: PlacementIpv6Status;
   /** CloudVirt site namespaces the network serves */
   namespaces?: string[];
   backendReady?: boolean;

@@ -1,0 +1,49 @@
+---
+# shc (design/IPV6-PLAN.md §2.7, §2.8): the fabric's platform address pools (realization ipam.publicPools) in its
+# ledger, in one compare-and-swap, then the pool of one family. Included from a role (paths are role_path-relative)
+# after fabric_realization.yml; idempotent and cheap, so a job may run it before every pool allocation and a
+# realization change needs no fabric run. Input: fab_ipam_pools_fabric (the fabric's name), fab_ipam_pools_family
+# (default 6). Sets fab_ipam_pool (the name of the pool of that family; '' when the realization has none: the fabric
+# offers no platform address space of the family) and fab_ipam_pools_usage (rows for status.realization.ipam.pools).
+# Fails when the realization's pools are malformed or would drop allocated blocks.
+- name: The fabric's platform address pools
+  ansible.builtin.set_fact:
+    _fab_pools: "{{ (fab_real.ipam | default({}, true)).publicPools | default({}, true) }}"
+    fab_ipam_pool: ""
+    fab_ipam_pools_usage: []
+
+- name: Keep the platform address pools in the ledger
+  when: _fab_pools | length > 0
+  block:
+    - name: Ensure the pools
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam:
+          action: ipam-pool-ensure
+          fabric: "{{ fab_ipam_pools_fabric }}"
+          pools: "{{ _fab_pools }}"
+          # 0 is a valid hold-down: no `default(..., true)` here
+          defaultHoldDownDays: "{{ (fab_real.ipam | default({}, true)).holdDownDays | default(none) }}"
+
+    - name: Stop on a refused pool change
+      ansible.builtin.fail:
+        msg: "realization ipam.publicPools refused: {{ fab_ipam_result.refused | join('; ') }}"
+      when: fab_ipam_result.refused | default([]) | length > 0
+
+    - name: The pool of the family
+      vars:
+        _fam: "{{ fab_ipam_pools_family | default(6) | int }}"
+        _match: >-
+          {{ _fab_pools | dict2items | selectattr('value.family', 'defined')
+             | selectattr('value.family', 'equalto', _fam | int) | map(attribute='key') | list | sort }}
+      ansible.builtin.set_fact:
+        fab_ipam_pool: "{{ _match | first | default('') }}"
+        fab_ipam_pools_usage: "{{ fab_ipam_result.pools | default([]) }}"
+        _fab_pools_ambiguous: "{{ _match | length > 1 }}"
+
+    - name: Stop on two pools of one family
+      ansible.builtin.fail:
+        msg: >-
+          realization ipam.publicPools has more than one IPv{{ fab_ipam_pools_family | default(6) }} pool for fabric
+          {{ fab_ipam_pools_fabric }}; give each fabric one (fabrics.<name>.ipam.publicPools)
+      when: _fab_pools_ambiguous | bool

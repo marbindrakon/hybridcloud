@@ -36,6 +36,23 @@ import {
 } from '../forms/hybridFabricDefaults';
 import type { HybridNetwork, K8sResource, NetworkPlacement, NetworkPlacementBackendKind } from '../types';
 import { kindTerm } from '../i18n/vocabulary';
+import { useSiteIpv6Caps } from '../hooks/ipv6';
+import {
+  buildPlacementIpv6,
+  environmentSiteName,
+  isPinnedIpv6Prefix,
+  networkHasIpv4,
+  networkIpv6Mode,
+  placementFamilies,
+  placementIpv6Offer,
+} from '../forms/ipv6';
+import {
+  INITIAL_PLACEMENT_IPV6,
+  PlacementIpv6Fields,
+  effectiveIpv6Length,
+  placementIpv6NoteKey,
+  type PlacementIpv6State,
+} from '../forms/PlacementIpv6Fields';
 
 export interface AttachEnvironmentRef {
   kind: NetworkPlacementBackendKind;
@@ -113,14 +130,17 @@ export function AttachNetworkDialog({
     namespace,
     enabled: enabled && (!fixedEnv || fixedEnv.kind === 'CloudVirt'),
   });
-  const cloudosos = useK8sResourceList<K8sResource>('CloudOSO', { namespace, enabled: enabled && !fixedEnv });
-  const cloudawss = useK8sResourceList<K8sResource>('CloudAWS', { namespace, enabled: enabled && !fixedEnv });
-  const cloudgcps = useK8sResourceList<K8sResource>('CloudGCP', { namespace, enabled: enabled && !fixedEnv });
+  // The other environment kinds: listed to choose from, or for the fixed environment's site (IPv6 offer).
+  const cloudosos = useK8sResourceList<K8sResource>('CloudOSO', { namespace, enabled: enabled && (!fixedEnv || fixedEnv.kind === 'CloudOSO') });
+  const cloudawss = useK8sResourceList<K8sResource>('CloudAWS', { namespace, enabled: enabled && (!fixedEnv || fixedEnv.kind === 'CloudAWS') });
+  const cloudgcps = useK8sResourceList<K8sResource>('CloudGCP', { namespace, enabled: enabled && (!fixedEnv || fixedEnv.kind === 'CloudGCP') });
+  const siteCaps = useSiteIpv6Caps(namespace, { enabled });
 
   const [networkName, setNetworkName] = useState(fixedNetwork ?? '');
   const [env, setEnv] = useState<AttachEnvironmentRef | undefined>(fixedEnv);
   const [prefixLength, setPrefixLength] = useState(String(PLACEMENT_IPV4_DEFAULT));
   const [pinned, setPinned] = useState('');
+  const [v6, setV6] = useState<PlacementIpv6State>(INITIAL_PLACEMENT_IPV6);
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -137,6 +157,7 @@ export function AttachNetworkDialog({
     setEnv(fixedEnv);
     setPrefixLength(String(PLACEMENT_IPV4_DEFAULT));
     setPinned('');
+    setV6(INITIAL_PLACEMENT_IPV6);
     setName('');
     setNameTouched(false);
     setCheckedKey(null);
@@ -183,6 +204,38 @@ export function AttachNetworkDialog({
   const chosenNetwork = (fixedNetwork ? fixedNetworkObj.items : networks.items).find((n) => n.metadata.name === networkName);
   const space = (chosenNetwork?.status?.addressSpace ?? []).filter((a) => a.family === 4);
   const spacePrefixes = space.length ? space.map((a) => a.prefix) : (chosenNetwork?.spec?.prefixes ?? []).filter((p) => !p.includes(':'));
+  const space6 = [
+    ...(chosenNetwork?.status?.addressSpace ?? []).filter((a) => Number(a.family) === 6).map((a) => a.prefix),
+    ...(chosenNetwork?.spec?.prefixes ?? []).filter((p) => p.includes(':')),
+  ];
+
+  // IPv6: only where the environment's site reports it and the network has IPv6 (the API stays the authority).
+  const envItems: Record<NetworkPlacementBackendKind, K8sResource[]> = {
+    CloudVirt: cloudvirts.items,
+    CloudOSO: cloudosos.items,
+    CloudAWS: cloudawss.items,
+    CloudGCP: cloudgcps.items,
+  };
+  const envResource = env ? envItems[env.kind].find((i) => i.metadata.name === env.name) : undefined;
+  const v6Offer = placementIpv6Offer({
+    kind: env?.kind ?? 'CloudVirt',
+    caps: siteCaps.capsFor(environmentSiteName(envResource)),
+    networkMode: networkIpv6Mode(chosenNetwork).mode,
+  });
+  const hasIpv4Space = !chosenNetwork || networkHasIpv4(chosenNetwork);
+  const families = placementFamilies({
+    offer: v6Offer,
+    networkHasIpv4: hasIpv4Space,
+    includeIpv4: v6.includeIpv4,
+    includeIpv6: v6.includeIpv6,
+  });
+  const v6Pinned = v6.pinned.trim();
+  const v6PinnedOk = !v6Pinned || isPinnedIpv6Prefix(v6Pinned, v6Offer.lengths, space6);
+  const v6Spec = families.ipv6
+    ? buildPlacementIpv6({ kind: env?.kind ?? 'CloudVirt', source: v6.source, prefixLength: effectiveIpv6Length(v6Offer, v6), pinned: v6Pinned })
+    : null;
+  // The blockers list names a family problem; otherwise one line says why there is no IPv6 input.
+  const v6Note = env && chosenNetwork && !families.block ? placementIpv6NoteKey(v6Offer, undefined) : null;
   const maxLength = env?.kind === 'CloudAWS' ? PLACEMENT_IPV4_MAX_AWS : PLACEMENT_IPV4_MAX;
   const lengths = Array.from({ length: maxLength - PLACEMENT_IPV4_MIN + 1 }, (_v, i) => PLACEMENT_IPV4_MIN + i);
   useEffect(() => {
@@ -191,7 +244,8 @@ export function AttachNetworkDialog({
 
   const effectiveName = nameTouched ? name.trim() : networkName && env ? defaultPlacementName(networkName, env.name) : '';
   const pinnedText = pinned.trim();
-  const pinnedOk = !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
+  const pinnedOk =
+    !families.ipv4 || !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
   const nameOk = !!effectiveName && effectiveName.length <= 63 && NAME_RE.test(effectiveName);
   const existing = placements.items.find(
     (p) => p.spec?.network === networkName && p.spec?.backend?.kind === env?.kind && p.spec?.backend?.name === env?.name,
@@ -205,19 +259,23 @@ export function AttachNetworkDialog({
   if (envUnknown) blockers.push(t('form.checking'));
   if (!pinnedOk) blockers.push(t('attach.pinnedInvalid', { max: maxLength }));
   if (networkName && env && !nameOk) blockers.push(t('attach.nameInvalid'));
+  if (env && chosenNetwork && families.block) blockers.push(t(placementIpv6NoteKey(v6Offer, families.block) ?? 'attach.needFamily'));
+  if (families.ipv6 && !v6PinnedOk) blockers.push(t('attach.ipv6PinnedInvalid', { lengths: v6Offer.lengths.map((l) => `/${l}`).join(', ') }));
 
   const body = useMemo(() => {
     if (!networkName || !env || !nameOk || !pinnedOk || existing || pairBlock || envUnknown) return null;
+    if (families.block || (families.ipv6 && (!v6Spec || !v6PinnedOk))) return null;
     return {
       name: effectiveName,
       namespace,
       spec: {
         network: networkName,
         backend: { kind: env.kind, name: env.name },
-        ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) },
+        ...(families.ipv4 ? { ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) } } : {}),
+        ...(families.ipv6 && v6Spec ? { ipv6: v6Spec } : {}),
       },
     };
-  }, [networkName, env, nameOk, pinnedOk, existing, pairBlock, envUnknown, effectiveName, namespace, pinnedText, prefixLength]);
+  }, [networkName, env, nameOk, pinnedOk, existing, pairBlock, envUnknown, effectiveName, namespace, pinnedText, prefixLength, families.block, families.ipv4, families.ipv6, v6Spec, v6PinnedOk]); // eslint-disable-line react-hooks/exhaustive-deps
   const bodyKey = body ? JSON.stringify(body) : null;
 
   // Server dry run of the exact object (debounced); Create is offered only after it passed.
@@ -362,51 +420,63 @@ export function AttachNetworkDialog({
             </FormHelperText>
           </FormGroup>
 
-          <FormGroup label={t('attach.size')} fieldId="attach-size" isRequired>
-            <FormSelect id="attach-size" value={prefixLength} onChange={(_e, v) => setPrefixLength(v)} isDisabled={!!pinnedText}>
-              {lengths.map((l) => (
-                <FormSelectOption key={l} value={String(l)} label={t('attach.sizeOption', { length: l, addresses: 2 ** (32 - l) })} />
-              ))}
-            </FormSelect>
-            <FormHelperText>
-              <HelperText>
-                {fieldErrors.byField.size ? <HelperTextItem variant="error">{fieldErrors.byField.size}</HelperTextItem> : null}
-                <HelperTextItem>
-                  {env?.kind === 'CloudAWS'
-                    ? t('attach.sizeLimitsAws', { min: PLACEMENT_IPV4_MIN, max: PLACEMENT_IPV4_MAX_AWS })
-                    : t('attach.sizeLimits', { min: PLACEMENT_IPV4_MIN, max: PLACEMENT_IPV4_MAX })}
-                  {space.length
-                    ? ` ${space
-                        .map((a) =>
-                          a.largestFree != null
-                            ? t('fields.placementSpaceFree', { prefix: a.prefix, free: a.largestFree })
-                            : t('fields.placementSpaceFull', { prefix: a.prefix }),
-                        )
-                        .join(', ')}`
-                    : ''}
-                </HelperTextItem>
-              </HelperText>
-            </FormHelperText>
-          </FormGroup>
+          {families.ipv4 && (
+            <>
+              <FormGroup label={t('attach.size')} fieldId="attach-size" isRequired>
+                <FormSelect id="attach-size" value={prefixLength} onChange={(_e, v) => setPrefixLength(v)} isDisabled={!!pinnedText}>
+                  {lengths.map((l) => (
+                    <FormSelectOption key={l} value={String(l)} label={t('attach.sizeOption', { length: l, addresses: 2 ** (32 - l) })} />
+                  ))}
+                </FormSelect>
+                <FormHelperText>
+                  <HelperText>
+                    {fieldErrors.byField.size ? <HelperTextItem variant="error">{fieldErrors.byField.size}</HelperTextItem> : null}
+                    <HelperTextItem>
+                      {env?.kind === 'CloudAWS'
+                        ? t('attach.sizeLimitsAws', { min: PLACEMENT_IPV4_MIN, max: PLACEMENT_IPV4_MAX_AWS })
+                        : t('attach.sizeLimits', { min: PLACEMENT_IPV4_MIN, max: PLACEMENT_IPV4_MAX })}
+                      {space.length
+                        ? ` ${space
+                            .map((a) =>
+                              a.largestFree != null
+                                ? t('fields.placementSpaceFree', { prefix: a.prefix, free: a.largestFree })
+                                : t('fields.placementSpaceFull', { prefix: a.prefix }),
+                            )
+                            .join(', ')}`
+                        : ''}
+                    </HelperTextItem>
+                  </HelperText>
+                </FormHelperText>
+              </FormGroup>
 
-          <FormGroup label={t('attach.pinned')} fieldId="attach-pinned">
-            <TextInput
-              id="attach-pinned"
-              value={pinned}
-              onChange={(_e, v) => setPinned(v)}
-              placeholder={spacePrefixes[0] ?? ''}
-              validated={pinnedOk && !fieldErrors.byField.pinned ? 'default' : 'error'}
-              aria-describedby="attach-pinned-help"
-            />
-            <FormHelperText>
-              <HelperText id="attach-pinned-help">
-                {fieldErrors.byField.pinned ? <HelperTextItem variant="error">{fieldErrors.byField.pinned}</HelperTextItem> : null}
-                <HelperTextItem>{t('attach.pinnedHelp')}</HelperTextItem>
-              </HelperText>
-            </FormHelperText>
-          </FormGroup>
+              <FormGroup label={t('attach.pinned')} fieldId="attach-pinned">
+                <TextInput
+                  id="attach-pinned"
+                  value={pinned}
+                  onChange={(_e, v) => setPinned(v)}
+                  placeholder={spacePrefixes[0] ?? ''}
+                  validated={pinnedOk && !fieldErrors.byField.pinned ? 'default' : 'error'}
+                  aria-describedby="attach-pinned-help"
+                />
+                <FormHelperText>
+                  <HelperText id="attach-pinned-help">
+                    {fieldErrors.byField.pinned ? <HelperTextItem variant="error">{fieldErrors.byField.pinned}</HelperTextItem> : null}
+                    <HelperTextItem>{t('attach.pinnedHelp')}</HelperTextItem>
+                  </HelperText>
+                </FormHelperText>
+              </FormGroup>
+            </>
+          )}
 
-          <p className="sc-text-muted">{t('attach.ipv6Later')}</p>
+          <PlacementIpv6Fields
+            idPrefix="attach"
+            offer={v6Offer}
+            networkHasIpv4={hasIpv4Space}
+            value={v6}
+            onChange={setV6}
+            pinnedOk={v6PinnedOk}
+          />
+          {v6Note && <p className="sc-text-muted">{t(v6Note)}</p>}
 
           <ExpandableSection toggleText={t('form.advanced')}>
             <FormGroup label={t('attach.name')} fieldId="attach-name">

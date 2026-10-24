@@ -60,7 +60,6 @@ import {
   isIntInRange,
   isIpv4,
   isIpv4Cidr,
-  isAddressSpace,
   isPinnedIpv4Prefix,
   prefixWithin,
   PLACEMENT_IPV4_DEFAULT,
@@ -69,6 +68,27 @@ import {
   PLACEMENT_IPV4_MIN,
 } from './hybridFabricDefaults';
 import { kindTerm } from '../i18n/vocabulary';
+import { usePlatformIpv6Offer, useSiteIpv6Caps } from '../hooks/ipv6';
+import {
+  buildPlacementIpv6,
+  checkNetworkAddressing,
+  environmentSiteName,
+  familyOf,
+  isPinnedIpv6Prefix,
+  networkAddressingHints,
+  networkHasIpv4,
+  networkIpv6Mode,
+  placementFamilies,
+  placementIpv6Offer,
+} from './ipv6';
+import {
+  INITIAL_PLACEMENT_IPV6,
+  PlacementIpv6Fields,
+  effectiveIpv6Length,
+  placementIpv6NoteKey,
+  type PlacementIpv6State,
+} from './PlacementIpv6Fields';
+import { Ipv6NetworkChoice, addressingErrorText, initialIpv6Choice, ipv6ChoiceSpec, type Ipv6ChoiceState } from './Ipv6NetworkChoice';
 
 export const PLATFORM_NAMESPACE = 'sovereign-cloud';
 
@@ -840,11 +860,14 @@ export function HybridNetworkCreateFields({
 }): React.ReactElement {
   const { t } = useTranslation();
   const fabrics = useK8sResourceList<HybridFabric>('HybridFabric', { namespace: PLATFORM_NAMESPACE });
+  const others = useK8sResourceList<HybridNetwork>('HybridNetwork', { namespace, enabled: !!namespace });
   const [description, setDescription] = useState('');
   const [fabricRef, setFabricRef] = useState('');
   const [mtu, setMtu] = useState('');
   const [egress, setEgress] = useState(false);
-  const [prefixes, setPrefixes] = useState<string[]>([]);
+  const [ipv4Prefixes, setIpv4Prefixes] = useState<string[]>([]);
+  const [ipv6, setIpv6] = useState<Ipv6ChoiceState>(() => initialIpv6Choice(undefined));
+  const [ipv6Touched, setIpv6Touched] = useState(false);
 
   const fabricsReadable = !fabrics.error;
   const eligible = (f: HybridFabric) => {
@@ -868,11 +891,36 @@ export function HybridNetworkCreateFields({
   const mtuMax = typeof fabricMtu === 'number' ? Math.min(fabricMtu, MTU_MAX) : MTU_MAX;
   const mtuOk = optionalInt(mtu, MTU_MIN, mtuMax);
 
-  const prefixesOk = isAddressSpace(prefixes);
-  const valid = mtuOk && prefixesOk && (!fabricRequired || !!fabricRef);
+  // OD65: "From the platform" is preselected when the fabric reports platform IPv6 space, else "None".
+  const { offer } = usePlatformIpv6Offer(namespace, effectiveFabric, { fabricsReadable: fabricsReadable && !fabrics.loading });
+  useEffect(() => {
+    if (!ipv6Touched) setIpv6((prev) => ({ ...prev, mode: initialIpv6Choice(offer).mode }));
+  }, [offer, ipv6Touched]);
+
+  const ipv6InIpv4 = ipv4Prefixes.filter((p) => familyOf(p) === 6 || p.includes(':'));
+  const { platformPrefixes, ipv6Prefixes } = ipv6ChoiceSpec(ipv6);
+  const prefixes = [...ipv4Prefixes, ...ipv6Prefixes];
+  const addressingErrors = checkNetworkAddressing(prefixes, platformPrefixes);
+  // Shown per input; the whole addressing (addressingErrors) decides whether the spec is complete.
+  const notEmpty = (e: { code: string }) => e.code !== 'noSpace';
+  const ipv4Errors = checkNetworkAddressing(ipv4Prefixes).filter(notEmpty);
+  const ipv6Errors = [
+    ...(ipv6.mode === 'Tenant' ? checkNetworkAddressing(ipv6.tenantPrefixes) : []),
+    ...checkNetworkAddressing([], platformPrefixes),
+  ].filter(notEmpty);
+  const tenantIpv6Missing = ipv6.mode === 'Tenant' && ipv6.tenantPrefixes.length === 0;
+  const hints = networkAddressingHints({
+    prefixes,
+    platform: platformPrefixes,
+    others: others.items,
+    offer,
+    egressInternet: egress,
+  });
+  const valid = mtuOk && addressingErrors.length === 0 && ipv6InIpv4.length === 0 && !tenantIpv6Missing && (!fabricRequired || !!fabricRef);
   const spec = valid
     ? {
-        prefixes,
+        ...(prefixes.length ? { prefixes } : {}),
+        ...(platformPrefixes.length ? { platformPrefixes } : {}),
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(fabricRef.trim() ? { fabricRef: { name: fabricRef.trim() } } : {}),
         ...(mtu.trim() ? { mtu: Number(mtu) } : {}),
@@ -881,17 +929,38 @@ export function HybridNetworkCreateFields({
     : null;
   useReportSpec(spec, onChange);
 
+  const ipv4Message = ipv6InIpv4.length
+    ? t('ipv6.ipv6InIpv4List')
+    : ipv4Prefixes.length && ipv4Errors.length
+      ? ipv4Errors.map((e) => addressingErrorText(t, e)).join(' ')
+      : '';
+  const tooMany = addressingErrors.some((e) => e.code === 'tooMany') && !ipv4Errors.some((e) => e.code === 'tooMany');
+  const noSpace = addressingErrors.some((e) => e.code === 'noSpace') && ipv6.mode === 'None';
+
   return (
     <>
-      <FormGroup label={t('fields.networkPrefixes')} fieldId="hn-prefixes" isRequired>
+      <FormGroup label={t('fields.networkIpv4Prefixes')} fieldId="hn-prefixes">
         <ListTextArea
           id="hn-prefixes"
-          value={prefixes}
-          onChange={setPrefixes}
-          validated={prefixes.length === 0 || prefixesOk ? 'default' : 'error'}
+          value={ipv4Prefixes}
+          onChange={setIpv4Prefixes}
+          validated={ipv4Message ? 'error' : 'default'}
+          aria-label={t('fields.networkIpv4Prefixes')}
         />
-        <Help>{t('fields.networkPrefixesHelp')}</Help>
+        <Help>
+          {ipv4Message || (noSpace ? t('ipv6.err.noSpace') : tooMany ? t('ipv6.err.tooMany') : t('fields.networkIpv4PrefixesHelp'))}
+        </Help>
       </FormGroup>
+      <Ipv6NetworkChoice
+        value={ipv6}
+        onChange={(next) => {
+          setIpv6Touched(true);
+          setIpv6(next);
+        }}
+        offer={offer}
+        errors={ipv6Errors}
+        hints={hints}
+      />
       <FormGroup label={t('fields.description')} fieldId="hn-desc">
         <TextArea id="hn-desc" value={description} onChange={(_e, v) => setDescription(v)} rows={2} />
       </FormGroup>
@@ -965,6 +1034,8 @@ export function NetworkPlacementCreateFields({
   const [backendName, setBackendName] = useState('');
   const [prefixLength, setPrefixLength] = useState(String(PLACEMENT_IPV4_DEFAULT));
   const [pinned, setPinned] = useState('');
+  const [v6, setV6] = useState<PlacementIpv6State>(INITIAL_PLACEMENT_IPV6);
+  const siteCaps = useSiteIpv6Caps(namespace, { enabled });
 
   // GT-F3: an environment none of whose namespaces names the chosen network is offered greyed.
   const envItem = (kind: string, name: string) =>
@@ -991,14 +1062,43 @@ export function NetworkPlacementCreateFields({
   const maxLength = (backendKind as string) === 'CloudAWS' ? PLACEMENT_IPV4_MAX_AWS : PLACEMENT_IPV4_MAX;
   const lengths = Array.from({ length: maxLength - PLACEMENT_IPV4_MIN + 1 }, (_v, i) => PLACEMENT_IPV4_MIN + i);
   const pinnedText = pinned.trim();
+
+  // IPv6 only where the environment's site reports it and the network has IPv6 (the API stays the authority).
+  const envLists: Record<string, K8sResource[]> = {
+    CloudVirt: cloudvirts.items,
+    CloudOSO: cloudosos.items,
+    CloudAWS: cloudawss.items,
+    CloudGCP: cloudgcps.items,
+  };
+  const envResource = backendName ? (envLists[backendKind] ?? []).find((i) => i.metadata.name === backendName) : undefined;
+  const v6Offer = placementIpv6Offer({
+    kind: backendKind,
+    caps: siteCaps.capsFor(environmentSiteName(envResource)),
+    networkMode: networkIpv6Mode(chosen).mode,
+  });
+  const hasIpv4Space = !chosen || networkHasIpv4(chosen);
+  const families = placementFamilies({ offer: v6Offer, networkHasIpv4: hasIpv4Space, includeIpv4: v6.includeIpv4, includeIpv6: v6.includeIpv6 });
+  const space6 = [
+    ...(chosen?.status?.addressSpace ?? []).filter((a) => Number(a.family) === 6).map((a) => a.prefix),
+    ...(chosen?.spec?.prefixes ?? []).filter((p) => p.includes(':')),
+  ];
+  const v6Pinned = v6.pinned.trim();
+  const v6PinnedOk = !v6Pinned || isPinnedIpv6Prefix(v6Pinned, v6Offer.lengths, space6);
+  const v6Spec = families.ipv6
+    ? buildPlacementIpv6({ kind: backendKind, source: v6.source, prefixLength: effectiveIpv6Length(v6Offer, v6), pinned: v6Pinned })
+    : null;
+  const v6Note = network && backendName ? placementIpv6NoteKey(v6Offer, families.block) : null;
+
   const pinnedOk =
-    !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
-  const valid = !!network && !!backendName && pinnedOk && !pairBlock;
+    !families.ipv4 || !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
+  const valid =
+    !!network && !!backendName && pinnedOk && !pairBlock && !families.block && (!families.ipv6 || (!!v6Spec && v6PinnedOk));
   const spec = valid
     ? {
         network,
         backend: { kind: backendKind, name: backendName },
-        ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) },
+        ...(families.ipv4 ? { ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) } } : {}),
+        ...(families.ipv6 && v6Spec ? { ipv6: v6Spec } : {}),
       }
     : null;
   useReportSpec(spec, onChange);
@@ -1043,42 +1143,55 @@ export function NetworkPlacementCreateFields({
           ? t('attach.notAttachable', { network, environment: `${kindTerm(t, backendKind)} ${backendName}` })
           : t('fields.placementBackendHelp')}
       </Help>
-      <FormGroup label={t('fields.placementIpv4Size')} fieldId="np-ipv4-length" isRequired>
-        <FormSelect
-          id="np-ipv4-length"
-          value={prefixLength}
-          onChange={(_e, v) => setPrefixLength(v)}
-          aria-label={t('fields.placementIpv4Size')}
-          isDisabled={!!pinnedText}
-        >
-          {lengths.map((l) => (
-            <FormSelectOption key={l} value={String(l)} label={`/${l}`} />
-          ))}
-        </FormSelect>
-        <Help>
-          {space.length
-            ? t('fields.placementSpaceHint', {
-                space: space
-                  .map((a) =>
-                    a.largestFree != null
-                      ? t('fields.placementSpaceFree', { prefix: a.prefix, free: a.largestFree })
-                      : t('fields.placementSpaceFull', { prefix: a.prefix }),
-                  )
-                  .join(', '),
-              })
-            : t('fields.placementIpv4SizeHelp')}
-        </Help>
-      </FormGroup>
-      <FormGroup label={t('fields.placementIpv4Pinned')} fieldId="np-ipv4-prefix">
-        <TextInput
-          id="np-ipv4-prefix"
-          value={pinned}
-          onChange={(_e, v) => setPinned(v)}
-          placeholder={spacePrefixes[0] ?? ''}
-          validated={pinnedOk ? 'default' : 'error'}
-        />
-        <Help>{t('fields.placementIpv4PinnedHelp')}</Help>
-      </FormGroup>
+      {families.ipv4 && (
+        <>
+          <FormGroup label={t('fields.placementIpv4Size')} fieldId="np-ipv4-length" isRequired>
+            <FormSelect
+              id="np-ipv4-length"
+              value={prefixLength}
+              onChange={(_e, v) => setPrefixLength(v)}
+              aria-label={t('fields.placementIpv4Size')}
+              isDisabled={!!pinnedText}
+            >
+              {lengths.map((l) => (
+                <FormSelectOption key={l} value={String(l)} label={`/${l}`} />
+              ))}
+            </FormSelect>
+            <Help>
+              {space.length
+                ? t('fields.placementSpaceHint', {
+                    space: space
+                      .map((a) =>
+                        a.largestFree != null
+                          ? t('fields.placementSpaceFree', { prefix: a.prefix, free: a.largestFree })
+                          : t('fields.placementSpaceFull', { prefix: a.prefix }),
+                      )
+                      .join(', '),
+                  })
+                : t('fields.placementIpv4SizeHelp')}
+            </Help>
+          </FormGroup>
+          <FormGroup label={t('fields.placementIpv4Pinned')} fieldId="np-ipv4-prefix">
+            <TextInput
+              id="np-ipv4-prefix"
+              value={pinned}
+              onChange={(_e, v) => setPinned(v)}
+              placeholder={spacePrefixes[0] ?? ''}
+              validated={pinnedOk ? 'default' : 'error'}
+            />
+            <Help>{t('fields.placementIpv4PinnedHelp')}</Help>
+          </FormGroup>
+        </>
+      )}
+      <PlacementIpv6Fields
+        idPrefix="np"
+        offer={v6Offer}
+        networkHasIpv4={hasIpv4Space}
+        value={v6}
+        onChange={setV6}
+        pinnedOk={v6PinnedOk}
+      />
+      {v6Note && <Help>{t(v6Note)}</Help>}
       <Help>{t('form.placementImmutable')}</Help>
     </>
   );

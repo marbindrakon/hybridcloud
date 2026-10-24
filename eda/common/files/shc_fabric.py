@@ -745,6 +745,22 @@ def orphan_report(req):
                 if owner not in owners:
                     findings.append(f"ledger {fab}: IPAM {', '.join(cidrs)} of {network} held by {owner}, "
                                     "which no longer exists")
+            for owner, cidrs in ((state or {}).get("external") or {}).items():
+                if owner not in owners:
+                    findings.append(f"ledger {fab}: IPAM provider-assigned {', '.join(cidrs)} of {network} recorded "
+                                    f"for {owner}, which no longer exists")
+        # platform pools: a block's owner must exist and its space must list the block as a platform block
+        for pool, ps in ((led or {}).get("ipamPools") or {}).items():
+            for owner, blocks in ((ps or {}).get("alloc") or {}).items():
+                if owner not in owners:
+                    findings.append(f"ledger {fab}: pool {pool} block {', '.join(blocks)} held by {owner}, "
+                                    "which no longer exists")
+                    continue
+                plat = (((led or {}).get("ipam") or {}).get(owner) or {}).get("platform") or []
+                missing = [b for b in blocks if b not in plat]
+                if missing and owner in ((led or {}).get("ipam") or {}):
+                    findings.append(f"ledger {fab}: pool {pool} block {', '.join(missing)} of {owner} is not in "
+                                    "its address space")
         vnis = {int(v): o for o, v in (alloc.get("vni") or {}).items()}
         for v, p in by_vni.items():
             if vnis.get(v) != key(p) and ((p.get("status") or {}).get("cloudGateway")):
@@ -760,7 +776,8 @@ def orphan_report(req):
         led = (req.get("ledgers") or {}).get(net_fabric.get(network) or "")
         if not mine or led is None:
             continue
-        held = (((led.get("ipam") or {}).get(network) or {}).get("alloc") or {}).get(key(p)) or []
+        nstate = (led.get("ipam") or {}).get(network) or {}
+        held = ((nstate.get("alloc") or {}).get(key(p)) or []) + ((nstate.get("external") or {}).get(key(p)) or [])
         if sorted(held) != sorted(mine):
             findings.append(f"{key(p)} claims {', '.join(mine)}, which the IPAM of {net_fabric[network]} holds as "
                             f"{', '.join(held) or 'nothing'} for it")

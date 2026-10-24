@@ -8,7 +8,15 @@ export interface TenantContact {
 }
 
 export type TenantSiteType = 'openstack' | 'openshift' | 'aws' | 'gcp' | 'external';
-export type TenantSiteCapability = 'Virtualization' | 'HybridNetworking' | 'DNS';
+export type TenantSiteCapability =
+  | 'Virtualization'
+  | 'HybridNetworking'
+  | 'DNS'
+  | 'IPv6'
+  | 'IPv6Only'
+  | 'IPv6NetworkSource'
+  | 'IPv6ProviderSource'
+  | 'IPv6Translation';
 
 export interface TenantSiteStorageClass {
   name: string;
@@ -40,6 +48,8 @@ export interface TenantProfileStatus {
   displayName?: string;
   contacts?: TenantContact[];
   sites?: TenantProfileSite[];
+  /** The platform IPv6 blocks the tenant's fabric offers; absent when it offers none (or does not say) */
+  ipv6Platform?: { blockLengths?: number[]; defaultBlockLength?: number };
   observedEntityGeneration?: number;
   lastUpdatedTime?: string;
   conditions?: TenantProfileCondition[];

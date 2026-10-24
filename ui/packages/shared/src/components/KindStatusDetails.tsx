@@ -27,13 +27,17 @@ import { formatRelativeTime } from '../list/listColumns';
 import { deletionBlockers } from '../status/phase';
 import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHiddenPaths';
 import { ToolSignInPanel } from './ToolSignInPanel';
+import { Ipv6CloudInitSnippet } from './Ipv6CloudInitSnippet';
+import { useSiteIpv6Caps } from '../hooks/ipv6';
+import { familyUnavailable, networkIpv6Mode, placementSubnets } from '../forms/ipv6';
+import { PART_REASONS, REASONS } from '../status/reasons.generated';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
   HybridFabric: ['nodes', 'allocated', 'available', 'ledger'],
   CloudGateway: ['nodes', 'wireguard', 'site'],
   CloudInfrastructure: ['capabilities', 'site'],
-  HybridNetwork: ['addressSpace', 'egress', 'fabric', 'mtu', 'placementCount', 'placementsReady'],
+  HybridNetwork: ['addressSpace', 'egress', 'fabric', 'mtu', 'placementCount', 'placementsReady', 'ipv6'],
   NetworkPlacement: [
     'site',
     'cloudGateway',
@@ -41,6 +45,8 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
     'l2Vni',
     'mtu',
     'prefixes',
+    'subnets',
+    'ipv6',
     'namespaces',
     'backendReady',
     'gatewayReady',
@@ -619,6 +625,34 @@ export function egressText(n: HybridNetwork, t: (k: string, o?: Record<string, u
     : t('networkOverview.egressState', { state: label });
 }
 
+/** Condition reasons about a network's address space, shown on its IPv6 row. */
+const NETWORK_SPACE_REASONS = ['WaitingForAddressSpace', 'IPv6ModeInUse', 'PrefixReserved', 'PrefixInUse', 'PrefixInvalid', 'FamilyUnavailable'];
+
+/** A status reason in plain words (ipv6.reason.<Reason>), with the platform's message when it adds one. */
+export function ipv6ReasonText(
+  t: (k: string, o?: Record<string, unknown>) => string,
+  reason: string | undefined,
+  message?: string,
+): string {
+  if (!reason) return message ?? '';
+  // the catalogue's words, else the status contract's summary (English) of the reason
+  const words = t(`ipv6.reason.${reason}`, { defaultValue: '' }) || PART_REASONS[reason]?.summary || REASONS[reason]?.summary || '';
+  if (!words) return message || reason;
+  // the job's message often repeats the reason's words: show it only when it adds something
+  const norm = (x: string) => x.trim().replace(/[.\s]+$/, '').toLowerCase();
+  if (!message || norm(words).includes(norm(message))) return words;
+  if (norm(message).includes(norm(words))) return message;
+  return `${words} ${message}`;
+}
+
+/** What the network asked for from the platform: "the fabric's default size", "/56", "2001:db8::/56 (pinned)". */
+function platformRequestText(spec: HybridNetwork['spec'], t: (k: string, o?: Record<string, unknown>) => string): string {
+  const q = (spec?.platformPrefixes ?? []).find((x) => Number(x?.family) === 6);
+  if (!q) return '';
+  if (q.prefix) return t('ipv6.requestPinned', { prefix: q.prefix });
+  return q.prefixLength ? `/${q.prefixLength}` : t('ipv6.requestDefault');
+}
+
 function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactElement {
   const { t } = useTranslation();
   const spec = item.spec ?? {};
@@ -628,6 +662,13 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
   const space = Array.isArray(st.addressSpace) ? st.addressSpace : [];
   const held = new Set(space.map((a) => a.prefix));
   const asked = (spec.prefixes ?? []).filter((p) => !held.has(p));
+  const { mode, reported } = networkIpv6Mode(item);
+  const platformBlocks = space.filter((a) => a.source === 'Platform' && Number(a.family) === 6);
+  const platformAsk = platformRequestText(spec, t);
+  const spaceCondition = (st.conditions ?? []).find((c) => c?.reason && NETWORK_SPACE_REASONS.includes(c.reason) && c.status !== 'True');
+  const families = Array.isArray(st.egress?.families) ? st.egress?.families ?? [] : [];
+  const translation = st.egress?.ipv4Translation;
+  const modeLabel = t(`ipv6.mode_${mode}`);
   return (
     <>
       <Section title={t('detail.addressSpace')}>
@@ -639,6 +680,7 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
               <Tr>
                 <Th modifier="wrap">{t('detail.prefix')}</Th>
                 <Th modifier="wrap">{t('detail.family')}</Th>
+                <Th modifier="wrap">{t('ipv6.source')}</Th>
                 <Th modifier="wrap">{t('detail.allocations')}</Th>
                 <Th modifier="wrap">{t('detail.largestFree')}</Th>
               </Tr>
@@ -650,6 +692,7 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
                     <Mono>{a.prefix}</Mono>
                   </Td>
                   <Td dataLabel={t('detail.family')}>{`IPv${a.family}`}</Td>
+                  <Td dataLabel={t('ipv6.source')}>{t(`ipv6.source_${a.source === 'Platform' ? 'Platform' : 'Tenant'}`)}</Td>
                   <Td dataLabel={t('detail.allocations')}>{a.allocations ?? 0}</Td>
                   <Td dataLabel={t('detail.largestFree')}>
                     {a.largestFree != null ? `/${a.largestFree}` : t('detail.spaceFull')}
@@ -662,6 +705,45 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
         {space.length > 0 && asked.length > 0 && (
           <p className="sc-text-muted">{t('detail.addressSpacePending', { prefixes: asked.join(', ') })}</p>
         )}
+      </Section>
+      <Section title={t('ipv6.title')}>
+        <Facts>
+          <Fact label={t('ipv6.choiceLabel')}>{reported ? modeLabel : t('ipv6.modeFromSpec', { mode: modeLabel })}</Fact>
+          {mode === 'Platform' && <Fact label={t('ipv6.platformRequested')}>{platformAsk}</Fact>}
+          {mode === 'Platform' && (
+            <Fact label={t('ipv6.platformBlock')}>
+              {st.ipv6?.block?.prefix ? (
+                <>
+                  <Mono>{st.ipv6.block.prefix}</Mono>
+                  {st.ipv6.block.source ? ` (${t(`ipv6.blockSource_${st.ipv6.block.source}`, { defaultValue: st.ipv6.block.source })})` : ''}
+                </>
+              ) : platformBlocks.length ? (
+                <List items={platformBlocks.map((a) => a.prefix)} />
+              ) : (
+                t('ipv6.blockNotAssigned')
+              )}
+            </Fact>
+          )}
+          {st.ipv6?.holdDownUntil && (
+            <Fact label={t('ipv6.holdDown')}>
+              {t('ipv6.holdDownUntil', { time: st.ipv6.holdDownUntil })}
+            </Fact>
+          )}
+          {spaceCondition && <Fact label={t('ipv6.why')}>{ipv6ReasonText(t, spaceCondition.reason, spaceCondition.message)}</Fact>}
+          {mode !== 'None' && (
+            <Fact label={t('ipv6.internet')}>
+              {(() => {
+                const f6 = families.find((f) => Number(f.family) === 6);
+                if (!f6) return requested ? undefined : t('ipv6.internetOff');
+                return (
+                  <>
+                    <EgressStateLabel state={f6.state} /> {ipv6ReasonText(t, f6.reason, f6.message)}
+                  </>
+                );
+              })()}
+            </Fact>
+          )}
+        </Facts>
       </Section>
       <Facts>
         <Fact label={t('fields.fabricRef')}>{st.fabric || spec.fabricRef?.name}</Fact>
@@ -682,7 +764,36 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
           <Fact label={t('detail.sourceAddresses')}>
             <List items={sources} />
           </Fact>
+          {translation?.state && (
+            <Fact label={t('ipv6.translation')}>
+              <EgressStateLabel state={translation.state} /> {ipv6ReasonText(t, translation.reason, translation.message)}
+            </Fact>
+          )}
         </Facts>
+        {families.length > 0 && (
+          <Table aria-label={t('ipv6.egressFamilies')} variant="compact" className="sc-mb">
+            <Thead>
+              <Tr>
+                <Th modifier="wrap">{t('detail.family')}</Th>
+                <Th modifier="wrap">{t('detail.state')}</Th>
+                <Th modifier="wrap">{t('ipv6.egressMode')}</Th>
+                <Th modifier="wrap">{t('ipv6.why')}</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {families.map((f, i) => (
+                <Tr key={`${f.family}-${i}`}>
+                  <Td dataLabel={t('detail.family')}>{`IPv${f.family}`}</Td>
+                  <Td dataLabel={t('detail.state')}>
+                    <EgressStateLabel state={f.state} />
+                  </Td>
+                  <Td dataLabel={t('ipv6.egressMode')}>{f.mode ? t(`ipv6.egressMode_${f.mode}`, { defaultValue: f.mode }) : <Dash />}</Td>
+                  <Td dataLabel={t('ipv6.why')}>{f.reason || f.message ? ipv6ReasonText(t, f.reason, f.message) : <Dash />}</Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        )}
       </Section>
     </>
   );
@@ -699,10 +810,15 @@ export function placementRequestText(
     [6, spec?.ipv6],
   ] as const) {
     if (!req) continue;
+    const source = (req as { source?: string }).source;
     parts.push(
-      req.prefix
-        ? t('detail.requestPinned', { family, prefix: req.prefix })
-        : t('detail.requestSize', { family, length: req.prefixLength }),
+      source === 'Provider'
+        ? t('ipv6.requestProvider')
+        : req.prefix
+          ? t('detail.requestPinned', { family, prefix: req.prefix })
+          : req.prefixLength
+            ? t('detail.requestSize', { family, length: req.prefixLength })
+            : t('ipv6.requestSiteDefault', { family }),
     );
   }
   return parts.join(', ');
@@ -716,42 +832,91 @@ export function placementVnis(item: NetworkPlacement | undefined): { l3?: number
   return { l3: pick(real.l3Vni, item?.status?.l3Vni), l2: pick(real.l2Vni, item?.status?.l2Vni) };
 }
 
+/** One subnet row: "10.60.1.0/24 (gateway 10.60.1.1, from the network)". */
+function subnetText(
+  s: { prefix?: string; gateway?: string; source?: string },
+  t: (k: string, o?: Record<string, unknown>) => string,
+): string {
+  const parts = [
+    s.gateway ? t('ipv6.gatewayIs', { gateway: s.gateway }) : '',
+    s.source ? t(`ipv6.subnetSource_${s.source}`, { defaultValue: s.source }) : '',
+  ].filter(Boolean);
+  return parts.length ? `${s.prefix} (${parts.join(', ')})` : s.prefix ?? '';
+}
+
 function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.ReactElement {
   const { t } = useTranslation();
   const spec = item.spec ?? ({} as NetworkPlacement['spec']);
   const st = item.status ?? {};
   const vnis = placementVnis(item);
+  const subnets = placementSubnets(item);
+  const refused = familyUnavailable(item);
+  const v6 = st.ipv6;
+  const siteCaps = useSiteIpv6Caps(item.metadata?.namespace, { enabled: subnets.some((x) => Number(x.family) === 6) });
   return (
-    <Facts>
-      <Fact label={t('fields.network')}>{spec.network}</Fact>
-      <Fact label={t('fields.backendName')}>
-        {spec.backend ? objectLabel(t, { kind: spec.backend.kind, name: spec.backend.name }, { dense: true }) : undefined}
-      </Fact>
-      <Fact label={t('detail.placementRequest')}>{placementRequestText(spec, t)}</Fact>
-      <Fact label={t('detail.allocatedPrefixes')}>
-        <List items={st.prefixes} />
-      </Fact>
-      <Fact label={t('fields.site')}>{st.site}</Fact>
-      <Fact label={t('detail.cloudGateway')}>{st.cloudGateway}</Fact>
-      <Fact label={t('detail.l3Vni')}>{vnis.l3}</Fact>
-      <Fact label={t('detail.l2Vni')}>{vnis.l2}</Fact>
-      <Fact label={t('detail.effectiveMtu')}>{st.mtu}</Fact>
-      <Fact label={t('detail.siteNamespaces')}>
-        <List items={st.namespaces} />
-      </Fact>
-      <Fact label={t('detail.backendReady')}>
-        <ReadyLabel ready={st.backendReady} />
-      </Fact>
-      <Fact label={t('detail.gatewayReady')}>
-        <ReadyLabel ready={st.gatewayReady} />
-      </Fact>
-      <Fact label={t('detail.validated')}>
-        <YesNo value={st.validated} />
-      </Fact>
-      <Fact label={t('detail.lastValidated')}>
-        <RelativeTime iso={st.lastValidatedAt} />
-      </Fact>
-    </Facts>
+    <>
+      {refused && (
+        <Alert variant="warning" isInline title={t('ipv6.familyUnavailableTitle')} className="sc-mb">
+          {[t('ipv6.familyUnavailableBody'), refused.message, t('ipv6.familyUnavailableFix')].filter(Boolean).join(' ')}
+        </Alert>
+      )}
+      <Facts>
+        <Fact label={t('fields.network')}>{spec.network}</Fact>
+        <Fact label={t('fields.backendName')}>
+          {spec.backend ? objectLabel(t, { kind: spec.backend.kind, name: spec.backend.name }, { dense: true }) : undefined}
+        </Fact>
+        <Fact label={t('detail.placementRequest')}>{placementRequestText(spec, t)}</Fact>
+        {[4, 6].map((family) => {
+          const rows = subnets.filter((x) => Number(x.family) === family && x.prefix);
+          const askedFor = family === 4 ? !!spec.ipv4 : !!spec.ipv6;
+          if (!rows.length && !askedFor) return null;
+          return (
+            <Fact key={family} label={t('ipv6.subnetOfFamily', { family })}>
+              {rows.length ? <List items={rows.map((r) => subnetText(r, t))} /> : undefined}
+            </Fact>
+          );
+        })}
+        {v6?.addressing && <Fact label={t('ipv6.addressing')}>{v6.addressing}</Fact>}
+        {v6?.internet && (
+          <Fact label={t('ipv6.internet')}>
+            <EgressStateLabel state={v6.internet.state} />{' '}
+            {v6.internet.path ? t(`ipv6.path_${v6.internet.path}`, { defaultValue: v6.internet.path }) : ''}{' '}
+            {ipv6ReasonText(t, v6.internet.reason, v6.internet.message)}
+          </Fact>
+        )}
+        {v6?.translation?.pref64 && (
+          <Fact label={t('ipv6.translationPrefix')}>
+            <Mono>{v6.translation.pref64}</Mono>
+          </Fact>
+        )}
+        {v6?.translation?.resolvers?.length ? (
+          <Fact label={t('ipv6.resolvers')}>
+            <List items={v6.translation.resolvers} />
+          </Fact>
+        ) : null}
+        <Fact label={t('fields.site')}>{st.site}</Fact>
+        <Fact label={t('detail.cloudGateway')}>{st.cloudGateway}</Fact>
+        <Fact label={t('detail.l3Vni')}>{vnis.l3}</Fact>
+        <Fact label={t('detail.l2Vni')}>{vnis.l2}</Fact>
+        <Fact label={t('detail.effectiveMtu')}>{st.mtu}</Fact>
+        <Fact label={t('detail.siteNamespaces')}>
+          <List items={st.namespaces} />
+        </Fact>
+        <Fact label={t('detail.backendReady')}>
+          <ReadyLabel ready={st.backendReady} />
+        </Fact>
+        <Fact label={t('detail.gatewayReady')}>
+          <ReadyLabel ready={st.gatewayReady} />
+        </Fact>
+        <Fact label={t('detail.validated')}>
+          <YesNo value={st.validated} />
+        </Fact>
+        <Fact label={t('detail.lastValidated')}>
+          <RelativeTime iso={st.lastValidatedAt} />
+        </Fact>
+      </Facts>
+      <Ipv6CloudInitSnippet item={item} caps={siteCaps.capsFor(st.site)} />
+    </>
   );
 }
 
