@@ -64,8 +64,9 @@ ipam:
 - **Pool use** is reported in `HybridFabric.status.realization.ipam.pools` (per pool: family, offered sizes, default
   size, blocks used, free and held back, largest free block). The UI reads the offered sizes from there.
 - **Several fabrics:** give each fabric's ledger a disjoint slice of the address space.
-- **`fabric-orphan-check`** also reports pool blocks without an owning network, and provider-assigned subnets
-  (recorded under `external` in a network's IPAM state) without a placement.
+- **Ownership records:** the ledger keeps each block's owner (and, for a released block, its former owner and the
+  release time) and each provider-assigned placement subnet under `external` in the network's IPAM state, so a block
+  or subnet without a live owner can be traced to it.
 
 ## Exclusive ranges (`network.exclusiveRanges`)
 
