@@ -131,10 +131,11 @@ REASONS = {
     "ControllerOutOfMemory": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
 }
 
-# Reasons written on a part of an object's status (an egress family of a network, the IPv6 internet access of a
-# placement), never as the reason of its Ready condition: they do not change the object's phase. Same entry shape.
+# Reasons written on a part of an object's status (an egress family of a network, its translation to IPv4, the IPv6
+# internet access of a placement), never as the reason of its Ready condition: they do not change the object's
+# phase. Same entry shape.
 PART_REASONS = {
-    "NotOffered": _r("A", READY, "IPv6 internet access is not offered on this fabric yet."),
+    "NotOffered": _r("A", READY, "Not offered on this fabric yet: IPv6 internet access, or translation to IPv4 for a network without IPv4."),
     "AddressChoice": _r("T", READY, "IPv6 internet: not offered for tenant-provided prefixes."),
     "Degraded": _r("A", READY, "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path."),
 }
