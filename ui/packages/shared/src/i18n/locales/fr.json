@@ -1463,7 +1463,7 @@
       "blockNotOffered": "Cette fabric propose des blocs de {{lengths}} ; une autre taille est refusée.",
       "pinnedBlock": "{{prefix}} doit se trouver dans l'espace IPv6 de la plateforme (sinon le réseau est refusé) et être libre ; un bloc utilisé ou libéré récemment fait attendre le réseau."
     },
-    "mode_Tenant": "Vos propres préfixes",
+    "mode_Tenant": "Mes propres préfixes",
     "mode_Platform": "Fourni par la plateforme",
     "mode_None": "Aucun",
     "modeFromSpec": "{{mode}} (tel que demandé ; pas encore confirmé par la plateforme)",

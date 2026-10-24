@@ -1463,7 +1463,7 @@
       "blockNotOffered": "This fabric offers blocks of {{lengths}}; another size is refused.",
       "pinnedBlock": "{{prefix}} must lie in the platform's IPv6 space (else the network is refused) and be free; a block in use or recently released makes the network wait."
     },
-    "mode_Tenant": "Your own prefixes",
+    "mode_Tenant": "My own prefixes",
     "mode_Platform": "From the platform",
     "mode_None": "None",
     "modeFromSpec": "{{mode}} (as asked; not confirmed by the platform yet)",

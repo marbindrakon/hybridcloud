@@ -394,8 +394,8 @@ Tenants:
   IPv6 choice has three options: **From the platform** (a block size from the sizes the fabric offers, or a
   specific block), **My own prefixes** (your GUA or ULA prefixes) and **None**. **From the platform** is preselected
   when the form can tell that the fabric offers platform IPv6, otherwise **None**; no prefix is filled in for you. Once the network has
-  placements the choice is locked, with the reason. The detail page shows the IPv6 mode, the address space in use
-  with a source column (yours or the platform's), the effective MTU, placements ready, internet egress per family
+  placements the choice is locked, with the reason. The detail page shows the IPv6 mode in the form's words
+  (**From the platform**, **My own prefixes** or **None**), the address space in use with a source column (yours or the platform's), the effective MTU, placements ready, internet egress per family
   with its reason (for example "IPv6 internet: not offered for tenant-provided prefixes") and, collapsed, the
   realization (platform detail).
 - **Networks → Network placements**, or **Attach network** on an environment or network page: create (network,

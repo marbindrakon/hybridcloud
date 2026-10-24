@@ -243,3 +243,12 @@ test('IPv6ModeInUse on the network page: the job message once, with the modes, i
   assert.equal(m.ipv6ReasonText(tEn, 'PrefixInUse', 'HybridNetwork n: fd00::/64 overlaps fd00::/48 of network a'),
     'A prefix overlaps one already in use. network n: fd00::/64 overlaps fd00::/48 of network a');
 });
+
+test('the network page names the IPv6 mode with the create form\'s words (en, fr)', () => {
+  for (const l of ['en', 'fr']) {
+    const cat = load(l).ipv6;
+    assert.equal(cat.mode_Tenant, cat.choiceTenant, l);
+    assert.equal(cat.mode_Platform, cat.choicePlatform, l);
+    assert.equal(cat.mode_None, cat.choiceNone, l);
+  }
+});
