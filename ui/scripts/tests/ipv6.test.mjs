@@ -75,7 +75,13 @@ test('job-only rules are hints: reserved ranges, overlap with the tenant\'s othe
 });
 
 test('the fabric offer is read from status.realization.ipam.pools (list or map); none without an IPv6 pool', () => {
-  assert.equal(m.fabricIpv6Offer({ status: {} }), null);
+  // no pool rows reported (yet): the form cannot tell
+  assert.equal(m.fabricIpv6Offer({ status: {} }), undefined);
+  assert.equal(m.fabricIpv6Offer({ status: { realization: { model: 'x' } } }), undefined);
+  assert.equal(m.fabricIpv6Offer({ status: { realization: { ipam: {} } } }), undefined);
+  assert.equal(m.fabricIpv6Offer(undefined), undefined);
+  // rows reported and none of them IPv6: the fabric offers no platform IPv6 space
+  assert.equal(m.fabricIpv6Offer({ status: { realization: { ipam: { pools: [] } } } }), null);
   assert.equal(m.fabricIpv6Offer({ status: { realization: { ipam: { pools: [{ family: 4, blockLengths: [24] }] } } } }), null);
   assert.deepEqual(
     m.fabricIpv6Offer({ status: { realization: { ipam: { pools: [{ name: 'p', family: 6, blockLengths: [60, 56], defaultBlock: 56 }] } } } }),

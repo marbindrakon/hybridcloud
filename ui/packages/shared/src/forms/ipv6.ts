@@ -227,16 +227,18 @@ function offerOf(blockLengths: unknown, defaultBlock: unknown): PlatformIpv6Offe
 
 /**
  * The platform IPv6 offer of a fabric, from its informational status.realization.ipam.pools (a list or a
- * map of pools with family 6, blockLengths and defaultBlock). Null when the fabric reports no IPv6 pool.
+ * map of pools with family 6, blockLengths and defaultBlock). Undefined when the fabric reports no pools at all
+ * (the caller cannot tell); null when it reports pools and none of them is IPv6.
  */
-export function fabricIpv6Offer(fabric: { status?: { realization?: Record<string, unknown> } } | undefined | null): PlatformIpv6Offer | null {
+export function fabricIpv6Offer(
+  fabric: { status?: { realization?: Record<string, unknown> } } | undefined | null,
+): PlatformIpv6Offer | null | undefined {
   const ipam = (fabric?.status?.realization as { ipam?: { pools?: unknown } } | undefined)?.ipam;
   const pools = ipam?.pools;
+  if (!pools || typeof pools !== 'object') return undefined;
   const list: Array<Record<string, unknown>> = Array.isArray(pools)
     ? (pools as Array<Record<string, unknown>>)
-    : pools && typeof pools === 'object'
-      ? Object.values(pools as Record<string, Record<string, unknown>>)
-      : [];
+    : Object.values(pools as Record<string, Record<string, unknown>>);
   const v6 = list.filter((p) => p && typeof p === 'object' && Number(p.family) === 6);
   if (!v6.length) return null;
   const merged = v6.map((p) => offerOf(p.blockLengths, p.defaultBlock ?? p.defaultBlockLength)).filter((o): o is PlatformIpv6Offer => !!o);
