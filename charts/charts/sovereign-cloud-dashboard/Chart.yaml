@@ -2,8 +2,8 @@ apiVersion: v2
 name: sovereign-cloud-dashboard
 description: Sovereign Cloud Dashboard - entity management UI for OpenShift
 type: application
-version: 0.9.18-shc.10
-appVersion: "2.3.5"
+version: 0.9.18-shc.11
+appVersion: "2.3.6"
 keywords:
   - openshift
   - dashboard
