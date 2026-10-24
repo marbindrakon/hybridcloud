@@ -369,6 +369,17 @@ CASES += [
                                                              "IPv6NetworkSource", "IPv6ProviderSource", "IPv6Translation"]))),
     C("V3-04", V, "TenantProfile unknown site capability refused", [("create", tprofile(), "ok"),
         ("status", ("tenantprofiles", "shc", tp_site(["IPv7"])), "deny:Unsupported value")]),
+    C("V3-05", V, "TenantProfile platform IPv6 offer survives", [("create", tprofile(), "ok")]
+        + status_roundtrip("tenantprofiles", "shc", {"ipv6Platform": {"blockLengths": [48, 56, 64], "defaultBlockLength": 56}})),
+    C("V3-06", V, "TenantProfile platform IPv6 offer without a default survives", [("create", tprofile(), "ok")]
+        + status_roundtrip("tenantprofiles", "shc", {"ipv6Platform": {"blockLengths": [56]}})),
+    C("V3-07", V, "TenantProfile platform IPv6 default outside the block sizes refused", [("create", tprofile(), "ok"),
+        ("status", ("tenantprofiles", "shc", {"ipv6Platform": {"blockLengths": [48, 56], "defaultBlockLength": 64}}),
+         "deny:defaultBlockLength is one of blockLengths")]),
+    C("V3-08", V, "TenantProfile platform IPv6 offer without block sizes refused", [("create", tprofile(), "ok"),
+        ("status", ("tenantprofiles", "shc", {"ipv6Platform": {"blockLengths": []}}), "deny:should have at least 1 items")]),
+    C("V3-09", V, "TenantProfile platform IPv6 block size above /128 refused", [("create", tprofile(), "ok"),
+        ("status", ("tenantprofiles", "shc", {"ipv6Platform": {"blockLengths": [129]}}), "deny:should be less than or equal to 128")]),
 ]
 
 

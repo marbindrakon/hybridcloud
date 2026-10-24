@@ -8359,8 +8359,8 @@ spec:
         openAPIV3Schema:
           description: >-
             A tenant profile: the read-only summary of a tenant for the tenant's own users, with its
-            display name, the contacts its users ask about access, and the sites its environments may
-            use. The platform writes it; one object named shc exists in each tenant namespace and goes
+            display name, the contacts its users ask about access, the sites its environments may use
+            and the platform IPv6 address space its networks can ask for. The platform writes it; one object named shc exists in each tenant namespace and goes
             away with it.
           type: object
           x-kubernetes-validations:
@@ -8489,6 +8489,34 @@ spec:
                             default:
                               description: True for the site's default.
                               type: boolean
+                ipv6Platform:
+                  description: >-
+                    The platform IPv6 address space this tenant's networks can ask for (spec.platformPrefixes
+                    with family 6): the block sizes a request may name and the size given when it names none.
+                    Absent when the platform offers this tenant none, or when the offer depends on the fabric a
+                    network names. A network's own status remains the authority on what it was given.
+                  type: object
+                  required:
+                    - blockLengths
+                  x-kubernetes-validations:
+                    - rule: "!has(self.defaultBlockLength) || self.defaultBlockLength in self.blockLengths"
+                      message: defaultBlockLength is one of blockLengths.
+                  properties:
+                    blockLengths:
+                      description: Prefix lengths a request may name, in ascending order.
+                      type: array
+                      minItems: 1
+                      maxItems: 16
+                      x-kubernetes-list-type: set
+                      items:
+                        type: integer
+                        minimum: 1
+                        maximum: 128
+                    defaultBlockLength:
+                      description: The prefix length given when a request names none; one of blockLengths.
+                      type: integer
+                      minimum: 1
+                      maximum: 128
                 observedEntityGeneration:
                   description: The metadata.generation of the tenant that this profile describes.
                   type: integer
