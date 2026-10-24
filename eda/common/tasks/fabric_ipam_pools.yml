@@ -23,7 +23,7 @@
           fabric: "{{ fab_ipam_pools_fabric }}"
           pools: "{{ _fab_pools }}"
           # 0 is a valid hold-down: no `default(..., true)` here
-          defaultHoldDownDays: "{{ (fab_real.ipam | default({}, true)).holdDownDays | default(omit) }}"
+          defaultHoldDownDays: "{{ (fab_real.ipam | default({}, true)).holdDownDays | default(none) }}"
 
     - name: Stop on a refused pool change
       ansible.builtin.fail:
