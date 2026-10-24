@@ -67,6 +67,8 @@ ipam:
 - **Ownership records:** the ledger keeps each block's owner (and, for a released block, its former owner and the
   release time) and each provider-assigned placement subnet under `external` in the network's IPAM state, so a block
   or subnet without a live owner can be traced to it.
+- **`fabric-orphan-check`** reads the pool section too: it reports pool blocks whose network is gone, a block
+  missing from its network's address space, and provider-assigned subnets whose placement is gone.
 
 ## Exclusive ranges (`network.exclusiveRanges`)
 
