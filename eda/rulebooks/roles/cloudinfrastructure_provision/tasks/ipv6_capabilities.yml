@@ -1,0 +1,59 @@
+---
+# The site's IPv6 capabilities (design/IPV6-PLAN.md §2.4): what the probe found, ANDed with the realization's
+# switches, so a site reports IPv6 only once the platform realizes it there. Keys of status.capabilities:
+#   ipv6                placements on the site can have an IPv6 subnet
+#   ipv6Only            placements without IPv4
+#   ipv6NetworkSource   IPv6 subnets from the network's address space
+#   ipv6ProviderSource  IPv6 subnets from the cloud provider
+#   ipv6Translation     placements without IPv4 reach IPv4-only destinations by translation
+# Probe per site type: openshift = the cluster network is dual-stack (an IPv4 and an IPv6 cluster network; IPv6-only
+# user-defined networks on it); openstack = the site has EVPN (Neutron's IPv6 subnets ride the same path); aws, gcp =
+# what the provider offers (gcp: provider-assigned only); external = nothing.
+# Switches (installation realization, fabric_realization): placement.ipFamiliesBySite[site], else
+# placement.ipFamilies[kind] (default [4]); placement.ipv6OnlyBySite[site]; placement.ipv6SourcesBySite[site], else
+# placement.ipv6.sources[kind]; translation[site]. All off by default, so every key reads false.
+# Inputs: ci_cr_type, cloudinfrastructure_cr_name, ci_capabilities_out (the type probe's), _ci_cno (openshift).
+# Updates ci_capabilities_out.
+- name: Load the realization defaults (placement switches)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: The site's IPv6 capabilities
+  vars:
+    _real: "{{ fabric_realization_defaults | default({}) | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _pl: "{{ _real.placement | default({}, true) }}"
+    _kind: "{{ {'openshift': 'CloudVirt', 'openstack': 'CloudOSO', 'aws': 'CloudAWS', 'gcp': 'CloudGCP'}.get(ci_cr_type, '') }}"
+    _probe: >-
+      {%- if ci_cr_type == 'openshift' -%}
+        {%- set nets = (((_ci_cno | default({}, true)).resources | default([], true) + [{}]) | first).spec | default({}, true) -%}
+        {%- set cidrs = nets.clusterNetwork | default([], true) | map(attribute='cidr') | list -%}
+        {%- set dual = (cidrs | select('search', ':') | list | length > 0) and (cidrs | reject('search', ':') | list | length > 0) -%}
+        {{ {'ipv6': dual, 'ipv6Only': dual, 'network': dual, 'provider': false, 'translation': dual} }}
+      {%- elif ci_cr_type == 'openstack' -%}
+        {%- set e = ci_capabilities_out.evpn | default(false) | bool -%}
+        {{ {'ipv6': e, 'ipv6Only': e, 'network': e, 'provider': false, 'translation': e} }}
+      {%- elif ci_cr_type == 'aws' -%}
+        {{ {'ipv6': true, 'ipv6Only': true, 'network': true, 'provider': true, 'translation': true} }}
+      {%- elif ci_cr_type == 'gcp' -%}
+        {{ {'ipv6': true, 'ipv6Only': true, 'network': false, 'provider': true, 'translation': true} }}
+      {%- else -%}
+        {{ {'ipv6': false, 'ipv6Only': false, 'network': false, 'provider': false, 'translation': false} }}
+      {%- endif -%}
+    _fams: >-
+      {{ ((_pl.ipFamiliesBySite | default({}, true))[cloudinfrastructure_cr_name] | default(none, true)
+          or (_pl.ipFamilies | default({}, true))[_kind] | default([4], true)) | map('int') | list }}
+    _sources: >-
+      {{ (_pl.ipv6SourcesBySite | default({}, true))[cloudinfrastructure_cr_name]
+         | default(((_pl.ipv6 | default({}, true)).sources | default({}, true))[_kind] | default([], true)) }}
+    _v6: "{{ (_probe.ipv6 | bool) and (6 in _fams) and (_kind | length > 0) }}"
+  ansible.builtin.set_fact:
+    ci_capabilities_out: >-
+      {{ ci_capabilities_out | combine({
+           'ipv6': _v6 | bool,
+           'ipv6Only': (_v6 | bool) and (_probe.ipv6Only | bool)
+                       and ((_pl.ipv6OnlyBySite | default({}, true))[cloudinfrastructure_cr_name] | default(false) | bool),
+           'ipv6NetworkSource': (_v6 | bool) and (_probe.network | bool) and ('Network' in _sources),
+           'ipv6ProviderSource': (_v6 | bool) and (_probe.provider | bool) and ('Provider' in _sources),
+           'ipv6Translation': (_v6 | bool) and (_probe.translation | bool)
+                              and (_real.translation | default({}, true))[cloudinfrastructure_cr_name] is defined}) }}
+    ci_ipv6_probe: "{{ _probe }}"
