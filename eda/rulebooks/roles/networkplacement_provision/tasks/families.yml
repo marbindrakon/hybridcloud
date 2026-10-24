@@ -1,0 +1,87 @@
+---
+# The families the placement asks for (np_want: only the ones in the spec) and whether its site and network can
+# give them (design/IPV6-PLAN.md §2.3; OD61, OD63, OD68, OD69). Checked before the IPAM, so a refused placement holds
+# nothing. IPv6, in this order:
+#   1. the network has no IPv6 address space (mode None)                      FamilyUnavailable
+#   2. a tenant-provided IPv6 prefix (mode Tenant) on a kind that can't carry it (realization
+#      placement.ipv6.tenantPrefixes)                                        FamilyUnavailable
+#   3. source Provider named on mode Tenant                                   PrefixInvalid
+#   4. the source (spec.ipv6.source; mode Tenant: Network; else the kind's placement.ipv6.defaultSource, Network
+#      when not listed) is not a product source of the kind (placement.ipv6.sources)   FamilyUnavailable
+#   5. the site doesn't offer IPv6: realization placement.ipFamiliesBySite[site], else ipFamilies[kind], AND the
+#      site's probe (CloudInfrastructure status.capabilities.ipv6)            FamilyUnavailable
+#   6. no ipv4 and the site doesn't offer IPv6-only (placement.ipv6OnlyBySite AND capabilities.ipv6Only)
+#   7. the site doesn't offer the source (placement.ipv6SourcesBySite[site], else the kind's sources, AND
+#      capabilities.ipv6NetworkSource / ipv6ProviderSource)                   FamilyUnavailable
+# IPv4: the site's families (5.) must hold 4.
+# A size the spec leaves out (CloudAWS/CloudGCP, source Network) is the kind's placement.ipv6.defaultPrefixLength.
+# Inputs: fab_spec, fab_name, np_backend_kind, np_site, np_network, ci_capabilities, fab_real.
+# Sets np_want, np_families, np_ipv6_source ('' without spec.ipv6), np_ipv6_mode, np_refuse ({} or {reason, msg}).
+- name: The families asked for and what the site and the network offer
+  vars:
+    _pl: "{{ fab_real.placement | default({}, true) }}"
+    _p6: "{{ _pl.ipv6 | default({}, true) }}"
+    _caps: "{{ ci_capabilities | default({}, true) }}"
+    _nspec: "{{ np_network.spec | default({}, true) }}"
+    _nmode: >-
+      {{ ((np_network.status | default({}, true)).ipv6 | default({}, true)).mode | default('', true)
+         or ('Platform' if _nspec.platformPrefixes | default([], true) | selectattr('family', 'defined')
+                              | selectattr('family', 'equalto', 6) | list | length > 0
+             else ('Tenant' if _nspec.prefixes | default([], true) | select('search', ':') | list | length > 0
+                   else 'None')) }}
+    _site_fams: >-
+      {{ ((_pl.ipFamiliesBySite | default({}, true))[np_site] | default(none, true)
+          or (_pl.ipFamilies | default({}, true))[np_backend_kind] | default([4], true)) | map('int') | list }}
+    _fams: >-
+      {{ _site_fams | select('equalto', 4) | list
+         + (_site_fams | select('equalto', 6) | list if (_caps.ipv6 | default(false) | bool) else []) }}
+    _kind_sources: "{{ (_p6.sources | default({}, true))[np_backend_kind] | default(['Network'], true) }}"
+    _site_sources: >-
+      {{ (_pl.ipv6SourcesBySite | default({}, true))[np_site] | default(_kind_sources) }}
+    _src: >-
+      {{ '' if fab_spec.ipv6 is not defined
+         else (fab_spec.ipv6.source | default('', true)
+               or ('Network' if _nmode | trim == 'Tenant'
+                   else (_p6.defaultSource | default({}, true))[np_backend_kind] | default('Network', true))) }}
+    _tenant_ok: "{{ (_p6.tenantPrefixes | default({}, true))[np_backend_kind] | default(true) | bool }}"
+    _src_cap: "{{ {'Network': 'ipv6NetworkSource', 'Provider': 'ipv6ProviderSource'}.get(_src | trim, '') }}"
+    _only_ok: >-
+      {{ ((_pl.ipv6OnlyBySite | default({}, true))[np_site] | default(false) | bool)
+         and (_caps.ipv6Only | default(false) | bool) }}
+    _refuse6: >-
+      {%- if fab_spec.ipv6 is not defined -%}{{ {} }}
+      {%- elif _nmode | trim == 'None' -%}
+        {{ {'reason': 'FamilyUnavailable', 'msg': 'the network has no IPv6 address space'} }}
+      {%- elif _nmode | trim == 'Tenant' and not _tenant_ok | bool -%}
+        {{ {'reason': 'FamilyUnavailable', 'msg': "this site can't carry tenant-provided IPv6 prefixes"} }}
+      {%- elif _nmode | trim == 'Tenant' and fab_spec.ipv6.source | default('') == 'Provider' -%}
+        {{ {'reason': 'PrefixInvalid', 'msg': 'provider IPv6 needs a network with IPv6 from the platform'} }}
+      {%- elif _src | trim not in _kind_sources and _kind_sources == ['Provider'] -%}
+        {{ {'reason': 'FamilyUnavailable', 'msg': 'this site offers IPv6 only from the cloud provider; use source Provider'} }}
+      {%- elif _src | trim not in _kind_sources -%}
+        {{ {'reason': 'FamilyUnavailable', 'msg': 'IPv6 source ' ~ (_src | trim) ~ ' is not offered for ' ~ np_backend_kind ~ ' placements'} }}
+      {%- elif 6 not in _fams -%}
+        {{ {'reason': 'FamilyUnavailable', 'msg': "IPv6 is not available on this environment's site (" ~ np_site ~ ')'} }}
+      {%- elif fab_spec.ipv4 is not defined and not _only_ok | bool -%}
+        {{ {'reason': 'FamilyUnavailable', 'msg': 'IPv6-only placements are not offered on this site (' ~ np_site ~ ')'} }}
+      {%- elif _src | trim not in _site_sources or not (_caps[_src_cap | trim] | default(false) | bool) -%}
+        {{ {'reason': 'FamilyUnavailable', 'msg': 'IPv6 source ' ~ (_src | trim) ~ ' is not offered on this site (' ~ np_site ~ ')'} }}
+      {%- else -%}{{ {} }}
+      {%- endif -%}
+    _refuse4: >-
+      {{ {'reason': 'FamilyUnavailable', 'msg': 'IPv4 is not offered for ' ~ np_backend_kind ~ ' placements on this site (' ~ np_site ~ ')'}
+         if (fab_spec.ipv4 is defined and 4 not in _fams) else {} }}
+    _len6: >-
+      {{ (fab_spec.ipv6 | default({}, true)).prefixLength
+         | default((_p6.defaultPrefixLength | default({}, true))[np_backend_kind] | default(64, true), true) }}
+  ansible.builtin.set_fact:
+    np_ipv6_mode: "{{ _nmode | trim }}"
+    np_families: "{{ _fams }}"
+    np_ipv6_source: "{{ _src | trim }}"
+    np_refuse: "{{ _refuse4 if _refuse4 | length > 0 else _refuse6 }}"
+    np_want: >-
+      {{ ([fab_spec.ipv4 | combine({'family': 4})] if fab_spec.ipv4 is defined else [])
+         + ([{'family': 6, 'source': _src | trim}
+             | combine({'prefix': fab_spec.ipv6.prefix} if fab_spec.ipv6.prefix is defined else {})
+             | combine({'prefixLength': _len6 | int} if (_src | trim) == 'Network' else {})]
+            if fab_spec.ipv6 is defined else []) }}
