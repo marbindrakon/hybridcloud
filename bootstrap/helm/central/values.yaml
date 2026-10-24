@@ -3452,7 +3452,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.20"  # 0.3.20: shc-tenancy refreshes the environments VM lists about every 10 minutes (H2AC-F2) and gives a new tenant controller a grace window (H2AC-O1); 0.3.19: redrive and tenancy verdicts per event (review m7); 0.3.18: LinkedNotReady reason and 30-minute job-finished windows per kind in shc-tenancy (GF2-F2); 0.3.17: shc-tenancy flags objects whose job ended without a status write, clears Stalled after a successful teardown; 0.3.16: shc-tenancy CronJob (redrive + ControllerAvailable/DeliveryStalled + stored phase; former eda-redrive), tenant-orphan-check in sync wave 10 and scoped to the account's cloud, restricted self-provisioning; 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
+  chartVersion: "0.3.21"  # 0.3.21: status reasons registry with the IPv6 reasons and part reasons (IPv6 V3); 0.3.20: shc-tenancy refreshes the environments VM lists about every 10 minutes (H2AC-F2) and gives a new tenant controller a grace window (H2AC-O1); 0.3.19: redrive and tenancy verdicts per event (review m7); 0.3.18: LinkedNotReady reason and 30-minute job-finished windows per kind in shc-tenancy (GF2-F2); 0.3.17: shc-tenancy flags objects whose job ended without a status write, clears Stalled after a successful teardown; 0.3.16: shc-tenancy CronJob (redrive + ControllerAvailable/DeliveryStalled + stored phase; former eda-redrive), tenant-orphan-check in sync wave 10 and scoped to the account's cloud, restricted self-provisioning; 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
   # BF-15: on services the ACM observability addon (endpoint-monitoring-operator) owns
   # openshift-monitoring/cluster-monitoring-config data and rewrites it in its own normalized form, so Argo's copy
   # never stays applied (permanent OutOfSync). Ignored, and with RespectIgnoreDifferences not re-applied, while the
@@ -5227,7 +5227,7 @@ cloudAWSOperator:
 # ─── Sovereign Cloud Dashboard (services cluster) ──────────────────────────
 sovereignDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.9.18-shc.9"  # shc.9: delete previews read only listable kinds, VM counts and read time in the environment dialog, no split kind names, tool memberships note; shc.8: oauth-proxy sign-in and denial pages in the product words (OD46), delete dialogs for team setups and app projects (OD47), VM list (PGT2-F2); shc.7: form labels and Conditions tab through the display vocabulary, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: delete preview with dependants and type-to-confirm, forbidden pages name role and contacts, display vocabulary; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
+  chartVersion: "0.9.18-shc.10"  # shc.10: three-way IPv6 network choice, per-family status, placement IPv6 behind the site capability (IPv6 V3); shc.9: delete previews read only listable kinds, VM counts and read time in the environment dialog, no split kind names, tool memberships note; shc.8: oauth-proxy sign-in and denial pages in the product words (OD46), delete dialogs for team setups and app projects (OD47), VM list (PGT2-F2); shc.7: form labels and Conditions tab through the display vocabulary, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: delete preview with dependants and type-to-confirm, forbidden pages name role and contacts, display vocabulary; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: admin dashboard closed to non-platform users (oauth-proxy SAR + delegate URLs on hybridfabrics list, server re-check per request, no impersonation), masthead, help/console/logout values; shc.2: vendored into charts/charts, ESO v1
   syncWave: "40"
   destinationNamespace: sovereign-cloud
   values:
@@ -5235,7 +5235,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.3.4"
+      tag: "img-2.3.5"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5267,7 +5267,7 @@ sovereignDashboard:
 # ─── Tenancy Dashboard (services cluster) ────────────────────────────────
 tenancyDashboard:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "1.1.13-shc.9"  # shc.9: delete previews read only listable kinds, VM counts and read time in the environment dialog, no split kind names, tool memberships note; shc.8: delete dialogs for team setups and app projects (OD47), VM list in the environment delete dialog (PGT2-F2), plain words for the cluster assignment record; shc.7: form labels, cluster assignment and placement pages and the Conditions tab in plain words, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: Attach dialog offers only attachable networks, Shared-with-you Home and nav for per-object users, delete preview, forbidden pages name role and contacts; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
+  chartVersion: "1.1.13-shc.10"  # shc.10: same shared UI changes, tenant sanitizers for the IPv6 fields (IPv6 V3); shc.9: delete previews read only listable kinds, VM counts and read time in the environment dialog, no split kind names, tool memberships note; shc.8: delete dialogs for team setups and app projects (OD47), VM list in the environment delete dialog (PGT2-F2), plain words for the cluster assignment record; shc.7: form labels, cluster assignment and placement pages and the Conditions tab in plain words, assignment delete dialog names cluster objects only when it reached one; shc.6: runtime labels through the display vocabulary, scope denials name the granting role and whom to ask, LinkedNotReady; shc.5: Attach dialog offers only attachable networks, Shared-with-you Home and nav for per-object users, delete preview, forbidden pages name role and contacts; shc.4: oauth-proxy passes bearer tokens to the app; shc.3: masthead + identity scope (/t/<tenant>), help/console/logout values, caller-token proxy with the tenant status allow-list; shc.2: vendored into charts/charts, ESO v1
   syncWave: "41"
   destinationNamespace: sovereign-cloud
   values:
@@ -5275,7 +5275,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.3.4"
+      tag: "img-5.3.5"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5302,14 +5302,14 @@ tenancyDashboard:
 # ─── Sovereign Admin Console Plugin (services cluster) ───────────────────────
 sovereignAdminPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.34"  # 0.1.34: delete previews read only listable kinds, VM counts, no split kind names; 0.1.33: delete dialogs for team setups and app projects, VM list; 0.1.32: form labels and Conditions tab through the display vocabulary; 0.1.31: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.30: display vocabulary and Status column on phase; 0.1.29: admin perspective on the navigation registry, real HTTP status mapping (forbidden / not found states), display names
+  chartVersion: "0.1.35"  # 0.1.35: same shared UI changes (IPv6 V3); 0.1.34: delete previews read only listable kinds, VM counts, no split kind names; 0.1.33: delete dialogs for team setups and app projects, VM list; 0.1.32: form labels and Conditions tab through the display vocabulary; 0.1.31: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.30: display vocabulary and Status column on phase; 0.1.29: admin perspective on the navigation registry, real HTTP status mapping (forbidden / not found states), display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.4.5"
+      tag: "img-1.4.6"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5327,14 +5327,14 @@ sovereignAdminPlugin:
 # ─── Sovereign Tenant Console Plugin (services cluster) ──────────────────────
 sovereignTenantPlugin:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.29"  # 0.1.29: delete previews read only listable kinds, VM counts, no split kind names; 0.1.28: delete dialogs for team setups and app projects, VM list; 0.1.27: form labels, cluster assignment and placement pages in plain words; 0.1.26: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.25: Attach dialog filter, delete preview, forbidden state, Status column on phase; 0.1.24: tenant scope from identity (no default tenant), navigation registry, forms matching the API, status phase, Attach dialog, display names
+  chartVersion: "0.1.30"  # 0.1.30: same shared UI changes (IPv6 V3); 0.1.29: delete previews read only listable kinds, VM counts, no split kind names; 0.1.28: delete dialogs for team setups and app projects, VM list; 0.1.27: form labels, cluster assignment and placement pages in plain words; 0.1.26: runtime labels through the display vocabulary, scope denials name the granting role; 0.1.25: Attach dialog filter, delete preview, forbidden state, Status column on phase; 0.1.24: tenant scope from identity (no default tenant), navigation registry, forms matching the API, status phase, Attach dialog, display names
   syncWave: "42"
   destinationNamespace: sovereign-cloud
   values:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.5.5"
+      tag: "img-1.5.6"
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
