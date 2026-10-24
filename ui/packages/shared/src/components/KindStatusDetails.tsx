@@ -30,6 +30,7 @@ import { ToolSignInPanel } from './ToolSignInPanel';
 import { Ipv6CloudInitSnippet } from './Ipv6CloudInitSnippet';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
 import { familyUnavailable, networkIpv6Mode, placementSubnets } from '../forms/ipv6';
+import { PART_REASONS, REASONS } from '../status/reasons.generated';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -634,7 +635,8 @@ export function ipv6ReasonText(
   message?: string,
 ): string {
   if (!reason) return message ?? '';
-  const words = t(`ipv6.reason.${reason}`, { defaultValue: '' });
+  // the catalogue's words, else the status contract's summary (English) of the reason
+  const words = t(`ipv6.reason.${reason}`, { defaultValue: '' }) || PART_REASONS[reason]?.summary || REASONS[reason]?.summary || '';
   if (!words) return message || reason;
   return message && message !== words ? `${words} ${message}` : words;
 }
