@@ -1,0 +1,13 @@
+---
+# The IPv6 mode the IPAM last realized for the network (status.ipv6.mode of the space in effect): the stored mode6,
+# or for a space stored before modes existed, derived from it (a platform block = Platform, an IPv6 prefix = Tenant,
+# else None); empty when the IPAM holds no space for the network yet.
+# Input: hn_held (the ipam-get result). Sets hn_mode6_realized.
+- name: The IPv6 mode the IPAM holds
+  ansible.builtin.set_fact:
+    hn_mode6_realized: >-
+      {{ '' if not (hn_held.exists | default(false) | bool)
+         else (hn_held.mode6 | default('', true)
+               or ('Platform' if hn_held.platform | default([], true) | length > 0
+                   else ('Tenant' if hn_held.prefixes | default([], true) | select('search', ':') | list | length > 0
+                         else 'None'))) }}

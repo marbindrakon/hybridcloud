@@ -47,18 +47,47 @@ fabric_realization_defaults:
   # subnets are kept; ledger = the fabric's ledger (the only provider so far)
   ipam:
     provider: ledger
+  # HybridNetwork address space: a tenant prefix (spec.prefixes) overlapping one of these ranges, in either
+  # direction, is refused (PrefixReserved). Every ipam.publicPools prefix is added to the list automatically.
+  # An installation lists the platform's own globally routed space and its translation prefixes here.
+  network:
+    exclusiveRanges: []
   placement:
     # how long a placement job waits for the gateways to hold the site's routes for its prefixes (s)
     routeWait: 180
-    # address families a placement may ask for, per backend kind (spec.ipv6 elsewhere fails FamilyUnavailable)
-    ipFamilies: {CloudVirt: [4], CloudOSO: [4], CloudAWS: [4]}
+    # address families a placement may ask for, per backend kind; per site (CloudInfrastructure name)
+    # ipFamiliesBySite overrides it. A family is offered at a site only when the site's probe also reports it
+    # (CloudInfrastructure status.capabilities); spec.ipv6 elsewhere fails FamilyUnavailable.
+    ipFamilies: {CloudVirt: [4], CloudOSO: [4], CloudAWS: [4], CloudGCP: [4]}
+    ipFamiliesBySite: {}
+    # sites (CloudInfrastructure name: true) that offer placements without IPv4 (IPv6-only)
+    ipv6OnlyBySite: {}
+    # per site: the IPv6 subnet sources it offers (Network, Provider); default ipv6.sources of the backend kind
+    ipv6SourcesBySite: {}
+    ipv6:
+      # IPv6 subnet sources the product supports per backend kind (spec.ipv6.source)
+      sources: {CloudVirt: [Network], CloudOSO: [Network], CloudAWS: [Network, Provider], CloudGCP: [Provider]}
+      # the source of a placement that names none, per backend kind (Network when the kind is not listed)
+      defaultSource: {CloudAWS: Network, CloudGCP: Provider}
+      # the IPv6 subnet size of a placement that names none, per backend kind
+      defaultPrefixLength: {CloudAWS: 60}
+      # backend kinds that cannot carry IPv6 prefixes the tenant provides (spec.prefixes)
+      tenantPrefixes: {CloudGCP: false}
+      # how workloads get their IPv6 addresses, per backend kind (informational in the placement's status)
+      addressMode: {CloudOSO: dhcpv6-stateful}
     # ranges of a site the allocator steps around, per backend kind, besides the site underlay and (OpenShift) the
     # cluster's cluster and service networks: OVN-Kubernetes' join (100.64.0.0/16), Layer2 user-defined network
-    # join (100.65.0.0/16), transit switch (100.88.0.0/16) and masquerade (169.254.0.0/17) subnets
+    # join (100.65.0.0/16), transit switch (100.88.0.0/16) and masquerade (169.254.0.0/17) subnets and their IPv6
+    # counterparts; on AWS the ranges Amazon keeps for itself in a VPC's IPv6 space
     siteReserved:
-      CloudVirt: [100.64.0.0/16, 100.65.0.0/16, 100.88.0.0/16, 169.254.0.0/17]
+      CloudVirt: [100.64.0.0/16, 100.65.0.0/16, 100.88.0.0/16, 169.254.0.0/17, fd69::/112, fd97::/64, fd98::/64,
+                  fd99::/64]
       CloudOSO: []
-      CloudAWS: []
+      CloudAWS: [fd00::/16, 2001:db8::/32]
+      CloudGCP: []
+  # translation for placements without IPv4, per site (CloudInfrastructure name): {pref64, dns64Resolvers}; a site
+  # not listed offers none (capabilities.ipv6Translation false)
+  translation: {}
   # CloudGateways over transport wireguard (remote sites): each node's tunnel listens on listenPort (unless the
   # gateway sets one); the tunnel's MTU is the site leg's MTU unless siteUnderlay.mtu says otherwise (1420 = a 1500
   # path minus WireGuard over IPv4); keepalives keep NAT state open
@@ -81,6 +110,8 @@ fabric_realization_defaults:
     # stays down until the circuit changes
     maxPrefixRestart: 2
     providerEdges: {}
+    # AS numbers the platform keeps for its own sessions; a circuit's CE may not use one (PeerAsnReserved)
+    reservedAsns: []
   # provider internet egress for HybridNetworks with spec.egress.internet: each node's root holds a VRF that hands
   # traffic to a network with internet access (a macvlan on parentInterface, default route via gateway); per network
   # a VRF e<vpnTarget> imports the network's routes, exports a default route into its VPN and source-NATs its traffic
@@ -102,3 +133,5 @@ fabric_realization_defaults:
     denyDestinations: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12,
                        192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3]
     allowDestinations: []
+    # IPv6 internet egress (routed, platform-assigned space only); off: the networks' IPv6 egress reads NotOffered
+    ipv6: {enabled: false}

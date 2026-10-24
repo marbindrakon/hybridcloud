@@ -12,10 +12,11 @@ actions:
                   VLAN outside the attachment circuits' pool,
                   site subnet clear of the core prefixes; transport wireguard: the peers' addresses inside the
                   site subnet and clear of the nodes' tunnel addresses
-  check-network   {prefixes, reserved: [cidr], circuits: [{name, accept}]}   a HybridNetwork's address space: no
-                  prefix wholly inside a platform range (reserved; the IPAM steps around the ones inside a prefix),
-                  none holding an accept entry of the network's attachment circuits; reserved / circuits: the errors
-                  of each kind
+  check-network   {prefixes, reserved: [cidr], exclusive: [cidr], circuits: [{name, accept}]}   a HybridNetwork's
+                  address space: no prefix wholly inside a platform range (reserved; the IPAM steps around the ones
+                  inside a prefix), none overlapping an exclusive range in either direction (address space the
+                  platform keeps for itself, e.g. its own globally routed space), none holding an accept entry of the
+                  network's attachment circuits; reserved (also the exclusive ones) / circuits: the errors of each kind
   pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
                   (index 1 is the border gateway root; the same addresses on every node)
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
@@ -335,6 +336,19 @@ def check_network(req):
         for a in mine:
             if a.version == rn.version and a.subnet_of(rn):
                 reserved.append(f"prefix {a} lies inside the platform range {rn}")
+    # address space the platform keeps for itself: no tenant prefix may overlap it, in either direction
+    seen = []
+    for r in req.get("exclusive") or []:
+        try:
+            rn = ipaddress.ip_network(str(r), strict=False)
+        except ValueError:
+            continue
+        if rn in seen:
+            continue
+        seen.append(rn)
+        for a in mine:
+            if a.version == rn.version and a.overlaps(rn):
+                reserved.append(f"prefix {a} overlaps address space the platform keeps for itself ({rn})")
     # the circuits accept routes from their CE; the network's space never holds one (as check-circuit refuses)
     for c in req.get("circuits") or []:
         for e in c.get("accept") or []:

@@ -1,0 +1,19 @@
+---
+# The network's IPv6 mode, from the fields the tenant filled in (no mode field): an IPv6 entry in
+# spec.platformPrefixes = Platform (the platform assigns a block of its globally routed space), IPv6 prefixes in
+# spec.prefixes = Tenant (the tenant's own GUA or ULA), neither = None. The CRD keeps the two sources apart.
+# Input: fab_spec. Sets hn_v4 (IPv4 prefixes), hn_tenant6 (IPv6 prefixes of spec.prefixes), hn_platform6 (the
+# spec.platformPrefixes entry of family 6, or {}), hn_mode6.
+- name: Derive the network's IPv6 mode
+  vars:
+    _prefixes: "{{ fab_spec.prefixes | default([], true) }}"
+    _platform6: >-
+      {{ (fab_spec.platformPrefixes | default([], true) | selectattr('family', 'defined')
+          | selectattr('family', 'equalto', 6) | list + [{}]) | first }}
+  ansible.builtin.set_fact:
+    hn_v4: "{{ _prefixes | reject('search', ':') | list }}"
+    hn_tenant6: "{{ _prefixes | select('search', ':') | list }}"
+    hn_platform6: "{{ _platform6 }}"
+    hn_mode6: >-
+      {{ 'Platform' if _platform6 | length > 0
+         else ('Tenant' if _prefixes | select('search', ':') | list | length > 0 else 'None') }}

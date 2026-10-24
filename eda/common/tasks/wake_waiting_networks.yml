@@ -1,0 +1,34 @@
+---
+# A platform address block went back to its pool (a network gave it up or was deleted): wake the HybridNetworks of
+# every tenant that wait for platform address space (pending, Ready reason WaitingForAddressSpace) on the same
+# fabric, so they do not wait for their reconcilePeriod. A block in hold-down is picked up on that period.
+# inputs: wn_fabric (HybridFabric name); optional wn_except ({namespace, name} of the network that released it)
+- name: List the networks that may wait for platform address space
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridNetwork
+  register: _wn_networks
+  failed_when: false
+
+- name: Wake the networks waiting for platform address space
+  ansible.builtin.include_tasks: nudge_cr.yml
+  vars:
+    nudge_crs: >-
+      {%- set out = [] -%}
+      {%- set skip = wn_except | default({}, true) -%}
+      {%- for n in _wn_networks.resources | default([]) -%}
+        {%- set st = n.status | default({}, true) -%}
+        {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
+        {%- if ready.reason | default('') == 'WaitingForAddressSpace'
+              and st.status | default('') == 'pending'
+              and st.fabric | default(wn_fabric, true) == wn_fabric
+              and n.metadata.deletionTimestamp is not defined
+              and not (n.metadata.namespace == skip.namespace | default('') and n.metadata.name == skip.name | default('')) -%}
+          {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': n.metadata.namespace, 'name': n.metadata.name}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  when: _wn_networks.resources | default([]) | length > 0

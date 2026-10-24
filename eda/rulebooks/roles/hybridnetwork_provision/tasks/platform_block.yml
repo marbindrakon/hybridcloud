@@ -1,0 +1,67 @@
+---
+# Mode Platform: the network's block of the fabric's public IPv6 pool (realization ipam.publicPools, kept in the
+# fabric's ledger by fabric_ipam_pools.yml), of the size spec.platformPrefixes asks for (else the pool's default)
+# or the pinned block. First fit, idempotent per network; the tenant's allowance and the hold-down of released
+# blocks apply. Refused: FamilyUnavailable (the fabric has no pool), PrefixInvalid (a size the pool doesn't offer, a
+# pinned block outside it). Pending WaitingForAddressSpace while no block can be given (the job ends; a release
+# wakes the network, a hold-down ends on its reconcile period).
+# Inputs: hn_platform6, hn_fabric_name, hn_status, fab_entity. Sets hn_block, hn_pool.
+- name: The fabric's public pools
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+  vars:
+    fab_ipam_pools_fabric: "{{ hn_fabric_name }}"
+    fab_ipam_pools_family: 6
+
+- name: Refuse platform IPv6 on a fabric without a pool
+  ansible.builtin.set_fact:
+    fab_fail_reason: FamilyUnavailable
+    fab_fail_msg: "HybridNetwork {{ fab_name }}: this fabric offers no platform IPv6 address space"
+  when: fab_ipam_pool | default('', true) | length == 0
+
+- name: Stop without a pool
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: fab_ipam_pool | default('', true) | length == 0
+
+- name: A block from the pool
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+  vars:
+    fab_ipam:
+      action: ipam-pool-allocate
+      fabric: "{{ hn_fabric_name }}"
+      pool: "{{ fab_ipam_pool }}"
+      owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+      tenant: "{{ fab_entity }}"
+      want: "{{ [hn_platform6] }}"
+
+- name: Refuse a block the pool can't give
+  ansible.builtin.set_fact:
+    fab_fail_reason: "{{ 'FamilyUnavailable' if fab_ipam_result.unavailable is defined else 'PrefixInvalid' }}"
+    fab_fail_msg: "HybridNetwork {{ fab_name }}: {{ fab_ipam_result.unavailable | default(fab_ipam_result.invalid) }}"
+  when: fab_ipam_result.unavailable is defined or fab_ipam_result.invalid is defined
+
+- name: Stop on a refused block
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: fab_ipam_result.unavailable is defined or fab_ipam_result.invalid is defined
+
+- name: Report the network waiting for platform address space
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+  vars:
+    fab_outcome: pending
+    fab_reason: WaitingForAddressSpace
+    fab_message: "Waiting for platform IPv6 address space: {{ fab_ipam_result.waiting }}"
+    fab_waiting_for: ["platform IPv6 address space ({{ fab_ipam_result.waiting }})"]
+    fab_status: >-
+      {{ hn_status | combine({'ipv6': {'mode': 'Platform', 'prefixes': [], 'block': none,
+                                       'holdDownUntil': fab_ipam_result.holdDownUntil | default(none, true)}}) }}
+  when: fab_ipam_result.waiting is defined
+
+- name: End the job while waiting for platform address space
+  ansible.builtin.meta: end_play
+  when: fab_ipam_result.waiting is defined
+
+- name: Keep the block
+  ansible.builtin.set_fact:
+    hn_block: "{{ fab_ipam_result.prefixes | first }}"
+    hn_pool: "{{ fab_ipam_pool }}"
