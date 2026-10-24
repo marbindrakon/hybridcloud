@@ -456,6 +456,63 @@ class WiringTest(unittest.TestCase):
             self.assertNotIn("status.prefixes[0]", t)
             self.assertIn("status.subnets", t)
 
+    def test_platform_namespace_defined_where_used(self):
+        # a role that reaches fabric_ipam.yml (directly, through fabric_ipam_pools.yml or another common file) or
+        # wake_waiting_networks.yml, or that reads fabric_platform_namespace without a default, defines it in its
+        # defaults (or vars): an undefined variable there fails the job only once a pool is realized
+        import re
+        tasks = os.path.join(COMMON, "tasks")
+        inc = re.compile(r"(?:include|import)_tasks:.*?([A-Za-z0-9_.-]+\.yml)")
+        bare = re.compile(r"fabric_platform_namespace(?!\s*\|\s*default)")
+
+        def code(path, name):
+            # (comment lines name the variable without reading it)
+            return "\n".join(ln for ln in self.text(path, name).splitlines() if not ln.lstrip().startswith("#"))
+
+        def common_refs(text):
+            return {m.group(1) for m in inc.finditer(text) if os.path.exists(os.path.join(tasks, m.group(1)))}
+
+        graph, needs = {}, set()
+        for f in os.listdir(tasks):
+            if f.endswith(".yml"):
+                t = code(tasks, f)
+                graph[f] = common_refs(t)
+                if bare.search(t):
+                    needs.add(f)
+        needs |= {"fabric_ipam.yml", "fabric_ipam_pools.yml", "wake_waiting_networks.yml"}
+        changed = True
+        while changed:
+            changed = False
+            for f, refs in graph.items():
+                if f not in needs and refs & needs:
+                    needs.add(f)
+                    changed = True
+        missing = []
+        for role in sorted(os.listdir(ROLES)):
+            tdir = os.path.join(ROLES, role, "tasks")
+            if not os.path.isdir(tdir):
+                continue
+            uses = False
+            for dp, _, fs in os.walk(tdir):
+                for f in fs:
+                    if f.endswith(".yml"):
+                        t = code(dp, f)
+                        if common_refs(t) & needs or bare.search(t):
+                            uses = True
+            if not uses:
+                continue
+            defined = False
+            for d in ("defaults", "vars"):
+                mf = os.path.join(ROLES, role, d, "main.yml")
+                if os.path.exists(mf) and "fabric_platform_namespace" in (load(mf) or {}):
+                    defined = True
+            if not defined:
+                missing.append(role)
+        self.assertEqual(missing, [])
+        # the fabric job is one of them (fabric_ipam_pools.yml on every run)
+        self.assertIn("fabric_platform_namespace", load(os.path.join(ROLES, "hybridfabric_provision", "defaults",
+                                                                     "main.yml")))
+
     def test_realization_defaults_off(self):
         pl = REAL["placement"]
         self.assertEqual({k: v for k, v in pl["ipFamilies"].items()}, {"CloudVirt": [4], "CloudOSO": [4], "CloudAWS": [4], "CloudGCP": [4]})
