@@ -286,7 +286,7 @@ run_tenantprofile_checks() {
 # --- ipv6-v3 ---
 # ─── Phase 8: CEL rules of the address fields (envtest) ──────────────────────
 run_cel_ipam_checks() {
-  log_info "CEL address rules — HybridNetwork, NetworkPlacement, TenantProfile (envtest)"
+  log_info "IPv6 API — CEL address rules and the network/placement jobs (envtest)"
   if [[ -z "${KUBEBUILDER_ASSETS:-}" ]]; then
     log_skip "CEL address rules (needs KUBEBUILDER_ASSETS: etcd, kube-apiserver, kubectl)"
     return
@@ -297,6 +297,23 @@ run_cel_ipam_checks() {
   else
     log_fail "CEL address rules (tests/cel-ipam/cel_cases.py)"
     grep -E '^FAIL|^     ' /tmp/shc-cel-ipam.log | head -20 || true
+  fi
+  # the network and placement jobs against envtest, in the automation runner image (RUNNER_IMAGE) or with a local
+  # ansible-core older than 2.19 (the runner's templating; newer versions render empty values differently)
+  local jobs_cmd=()
+  if [[ -n "${RUNNER_IMAGE:-}" ]] && command -v podman &>/dev/null; then
+    jobs_cmd=(bash tests/fabric-jobs/run-in-runner.sh)
+  elif command -v ansible-playbook &>/dev/null \
+       && ansible --version 2>/dev/null | head -1 | grep -Eq 'core 2\.(1[0-8])\.'; then
+    jobs_cmd=(python3 -I tests/fabric-jobs/network_jobs_envtest.py)
+  fi
+  if [[ ${#jobs_cmd[@]} -eq 0 ]]; then
+    log_skip "network/placement jobs on envtest (needs RUNNER_IMAGE + podman, or ansible-core < 2.19)"
+  elif (cd "${REPO_ROOT}" && "${jobs_cmd[@]}") >/tmp/shc-fabric-jobs.log 2>&1; then
+    log_pass "network/placement jobs on envtest ($(tail -1 /tmp/shc-fabric-jobs.log))"
+  else
+    log_fail "network/placement jobs on envtest (tests/fabric-jobs/network_jobs_envtest.py)"
+    grep -E '^FAIL|^     ' /tmp/shc-fabric-jobs.log | head -20 || true
   fi
 }
 # --- end ipv6-v3 ---

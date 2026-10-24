@@ -250,6 +250,7 @@
       ansible.builtin.set_fact:
         hn_block: ""
         hn_pool: ""
+        hn_block_new: false
 
     - name: The network's platform IPv6 block
       ansible.builtin.include_tasks: platform_block.yml
@@ -271,16 +272,26 @@
 
     - name: Refuse an edit that leaves placements' subnets outside the space
       ansible.builtin.set_fact:
+        hn_space_refused: "{{ fab_ipam_result.refused | default([]) | length > 0 }}"
         fab_fail_reason: "{{ fab_ipam_result.reason | default('PrefixInUse', true) }}"
         fab_fail_msg: >-
           HybridNetwork {{ fab_name }}: the address space stays {{ fab_ipam_result.addressSpace | map(attribute='prefix') | join(', ') }}:
           {{ fab_ipam_result.refused | join('; ') }}
       when: fab_ipam_result.refused | default([]) | length > 0
 
+    # a block taken in this run for a space that is refused goes back (one held before stays)
+    - name: Give back a block taken for a refused space
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam: {action: ipam-pool-release, fabric: "{{ hn_fabric_name }}", owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"}
+      when:
+        - hn_space_refused | default(false) | bool
+        - hn_block_new | bool
+
     - name: Stop on a refused edit
       ansible.builtin.fail:
         msg: "{{ fab_fail_msg }}"
-      when: fab_ipam_result.refused | default([]) | length > 0
+      when: hn_space_refused | default(false) | bool
 
     - name: Keep the address space
       ansible.builtin.set_fact:

@@ -5,7 +5,7 @@
 # blocks apply. Refused: FamilyUnavailable (the fabric has no pool), PrefixInvalid (a size the pool doesn't offer, a
 # pinned block outside it). Pending WaitingForAddressSpace while no block can be given (the job ends; a release
 # wakes the network, a hold-down ends on its reconcile period).
-# Inputs: hn_platform6, hn_fabric_name, hn_status, fab_entity. Sets hn_block, hn_pool.
+# Inputs: hn_platform6, hn_fabric_name, hn_status, fab_entity. Sets hn_block, hn_pool, hn_block_new.
 - name: The fabric's public pools
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
   vars:
@@ -65,3 +65,5 @@
   ansible.builtin.set_fact:
     hn_block: "{{ fab_ipam_result.prefixes | first }}"
     hn_pool: "{{ fab_ipam_pool }}"
+    # taken in this run (the network held none before): given back if the address space is refused below
+    hn_block_new: "{{ fab_ipam_result.new | default(false) | bool }}"
