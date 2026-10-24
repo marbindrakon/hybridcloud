@@ -447,10 +447,32 @@ export function sanitizeCloudVirtSpec(raw) {
 export function sanitizeHybridNetworkSpec(raw) {
   if (!isObject(raw)) return { error: "spec must be an object" };
   const spec = pickStrings(raw, ["description"]);
-  // the address space; the API checks the prefixes themselves
+  // the address space: the tenant's own prefixes and/or IPv6 space the platform assigns; the API checks both
   const prefixes = stringList(raw.prefixes);
-  if (!prefixes) return { error: "spec.prefixes must be a non-empty list of IPv4/IPv6 prefixes" };
-  spec.prefixes = prefixes;
+  if (prefixes === false) return { error: "spec.prefixes must be a list of IPv4/IPv6 prefixes" };
+  if (prefixes) spec.prefixes = prefixes;
+  if (raw.platformPrefixes != null) {
+    if (!Array.isArray(raw.platformPrefixes)) return { error: "spec.platformPrefixes must be a list" };
+    const platform = [];
+    for (const q of raw.platformPrefixes) {
+      if (!isObject(q)) return { error: "spec.platformPrefixes entries must be objects" };
+      const family = intIn(q.family, 6, 6);
+      if (family === undefined || family === false) return { error: "spec.platformPrefixes[].family must be 6" };
+      const entry = { family };
+      const length = intIn(q.prefixLength, 48, 64);
+      if (length === false) return { error: "spec.platformPrefixes[].prefixLength must be an integer from 48 to 64" };
+      if (length !== undefined) entry.prefixLength = length;
+      if (q.prefix != null) {
+        if (typeof q.prefix !== "string" || !q.prefix.trim()) return { error: "spec.platformPrefixes[].prefix must be a prefix" };
+        entry.prefix = q.prefix.trim();
+      }
+      platform.push(entry);
+    }
+    if (platform.length) spec.platformPrefixes = platform;
+  }
+  if (!spec.prefixes && !spec.platformPrefixes) {
+    return { error: "the network needs address space: spec.prefixes, spec.platformPrefixes or both" };
+  }
   const dpErr = deletionProtection(raw, spec);
   if (dpErr) return { error: dpErr };
   const fabricRef = sanitizeNameRef(raw.fabricRef);
@@ -474,6 +496,8 @@ export function sanitizeHybridNetworkSpec(raw) {
 
 /** The environment kinds a network can be placed on (the CRD's spec.backend.kind enum). */
 export const PLACEMENT_BACKEND_KINDS = ["CloudOSO", "CloudVirt", "CloudAWS", "CloudGCP"];
+/** NetworkPlacement spec.ipv6.source (the CRD's enum). */
+export const PLACEMENT_IPV6_SOURCES = ["Network", "Provider"];
 
 export function sanitizeNetworkPlacementSpec(raw) {
   if (!isObject(raw)) return { error: "spec must be an object" };
@@ -486,7 +510,7 @@ export function sanitizeNetworkPlacementSpec(raw) {
   const backendName = typeof backend.name === "string" ? backend.name.trim() : "";
   if (!backendName || !NAME_PATTERN.test(backendName)) return { error: "spec.backend.name is required" };
   const spec = { network, backend: { kind: backend.kind, name: backendName } };
-  // a placement's subnet per family: a size and/or a pinned prefix (the API checks both)
+  // a placement's subnet per family: a size and/or a pinned prefix; IPv6 also a source (the API checks all)
   for (const family of ["ipv4", "ipv6"]) {
     const req = raw[family];
     if (req == null) continue;
@@ -499,10 +523,17 @@ export function sanitizeNetworkPlacementSpec(raw) {
       if (typeof req.prefix !== "string" || !req.prefix.trim()) return { error: `spec.${family}.prefix must be a prefix` };
       out.prefix = req.prefix.trim();
     }
-    if (!Object.keys(out).length) return { error: `spec.${family} needs prefixLength or prefix` };
+    if (family === "ipv6" && req.source != null) {
+      if (!PLACEMENT_IPV6_SOURCES.includes(req.source)) {
+        return { error: `spec.ipv6.source must be one of ${PLACEMENT_IPV6_SOURCES.join(", ")}` };
+      }
+      out.source = req.source;
+    }
+    // ipv4 always needs a size or a pin; ipv6 may be empty on a public-cloud site (the site's default applies)
+    if (family === "ipv4" && !Object.keys(out).length) return { error: "spec.ipv4 needs prefixLength or prefix" };
     spec[family] = out;
   }
-  if (!spec.ipv4) return { error: "spec.ipv4 (a prefixLength or a pinned prefix) is required" };
+  if (!spec.ipv4 && !spec.ipv6) return { error: "the placement needs spec.ipv4, spec.ipv6 or both" };
   return { spec };
 }
 

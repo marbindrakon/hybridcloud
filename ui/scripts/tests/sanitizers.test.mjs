@@ -121,6 +121,27 @@ test('network placements accept every environment kind of the CRD', () => {
   assert.ok(san.sanitizeNetworkPlacementSpec({ network: 'core', backend: { kind: 'Entity', name: 'x' }, ipv4: { prefixLength: 24 } }).error);
 });
 
+test('per-family addressing: platform IPv6 space, IPv6-only networks and placements, the IPv6 source', () => {
+  // a network may have only platform-assigned IPv6, only its own prefixes, or both
+  assert.deepEqual(san.sanitizeHybridNetworkSpec({ platformPrefixes: [{ family: 6 }] }).spec, { platformPrefixes: [{ family: 6 }] });
+  assert.deepEqual(
+    san.sanitizeHybridNetworkSpec({ prefixes: ['10.60.0.0/16'], platformPrefixes: [{ family: 6, prefixLength: 56, prefix: '2001:db8::/56' }] }).spec,
+    { prefixes: ['10.60.0.0/16'], platformPrefixes: [{ family: 6, prefixLength: 56, prefix: '2001:db8::/56' }] },
+  );
+  assert.deepEqual(san.sanitizeHybridNetworkSpec({ prefixes: ['fd12::/48'] }).spec, { prefixes: ['fd12::/48'] });
+  assert.ok(san.sanitizeHybridNetworkSpec({ prefixes: [] }).error);
+  assert.ok(san.sanitizeHybridNetworkSpec({}).error);
+  assert.ok(san.sanitizeHybridNetworkSpec({ platformPrefixes: [{ family: 4 }] }).error);
+  assert.ok(san.sanitizeHybridNetworkSpec({ platformPrefixes: [{ family: 6, prefixLength: 40 }] }).error);
+  const np = (spec) => san.sanitizeNetworkPlacementSpec({ network: 'core', backend: { kind: 'CloudAWS', name: 'env1' }, ...spec });
+  assert.deepEqual(np({ ipv6: { source: 'Provider' } }).spec.ipv6, { source: 'Provider' });
+  assert.deepEqual(np({ ipv6: {} }).spec.ipv6, {});
+  assert.equal(np({ ipv6: { prefixLength: 60 } }).spec.ipv4, undefined);
+  assert.ok(np({ ipv6: { source: 'Elsewhere' } }).error);
+  assert.ok(np({}).error);
+  assert.ok(np({ ipv4: {} }).error);
+});
+
 test('service role lists: all of them on create; an update keeps an empty list (clears it)', () => {
   const kv = san.sanitizeVaultKVSpec({
     vault: 'v1',
