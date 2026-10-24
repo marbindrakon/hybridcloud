@@ -164,15 +164,15 @@ metadata: {name: example-net-own-ipv6, namespace: entity-example-corp}
 spec:
   prefixes: [10.30.0.0/16, "2001:db8:1000::/48"]   # or a ULA such as fd12:3456:789a::/48
 ```
-- Any prefix you own: a GUA inside `2000::/3` or a ULA inside `fc00::/7`, in canonical form, /32–/64. Link-local,
+- Any prefix you own (the example's `2001:db8::/32` is the documentation range): a GUA inside `2000::/3` or a ULA inside `fc00::/7`, in canonical form, /32–/64. Link-local,
   multicast, IPv4-mapped and other special ranges are refused when you apply the object.
 - The platform carries the prefix between your placements and nowhere else. It does not reach the internet and the
   internet does not reach it, whatever `egress.internet` says (the network shows `AddressChoice` for IPv6
   internet).
 - The platform can't check that you own a GUA. A prefix that covers real internet addresses hides them inside your
   network only; nothing outside it changes.
-- Your networks' own IPv6 prefixes may not overlap each other: a prefix that overlaps one of another of your
-  networks is refused (`PrefixInUse`, which names the other network). Other tenants may use the same prefixes;
+- Your networks' own IPv6 prefixes may not overlap each other: a prefix that overlaps an IPv6 prefix of another
+  of your networks is refused (`PrefixInUse`, which names the other network). Other tenants may use the same prefixes;
   networks never see each other.
 - A prefix that overlaps address space the platform keeps for itself (its own blocks, its translation prefixes) is
   refused (`PrefixReserved`).
