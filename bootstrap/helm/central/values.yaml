@@ -5547,7 +5547,7 @@ hybridsovereignPrimaryOperator:
             - name: bgw-trunk
               ceKinds: [customer]
               description: Border gateway trunk; one VLAN per circuit
-          entityRefs: [{name: acme-corp}, {name: waynetech}]
+          entityRefs: [{name: acme-corp}, {name: waynetech}, {name: uxr-corp}]  # gate tenant uxr-corp for the reserved-AS case (IPv6 V3 gate, OD102); reverted by the gate teardown
     cloudGateways:
       iaas1:
         spec:
