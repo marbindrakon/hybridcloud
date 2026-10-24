@@ -129,6 +129,26 @@
               'refused': fab_ipam_pools_refused if fab_ipam_pools_refused | length > 0 else none} }}
         hf_ipam_changed: "{{ fab_ipam_pools_changed | bool }}"
 
+    # the offer tenants see in TenantProfile status.ipv6Platform (the Entity job writes it from the same rows), kept in
+    # status.realization.ipam.tenantOffer in words ("/48 /56 default /56", or "none") so a later run can tell whether
+    # the Entities need a wake
+    - name: The tenants' platform IPv6 offer
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/ipv6_platform_offer.yml"
+      vars:
+        ipo_pools: "{{ hf_ipam.pools | default([], true) }}"
+
+    - name: Keep it with the pool rows
+      vars:
+        _o: "{{ ipv6_platform_offer }}"
+      ansible.builtin.set_fact:
+        hf_tenant_offer: >-
+          {{ ('/' ~ (_o.blockLengths | join(' /')) ~ ((' default /' ~ _o.defaultBlockLength)
+              if _o.defaultBlockLength is defined else '')) if _o | length > 0 else 'none' }}
+
+    - name: Add it to the status rows
+      ansible.builtin.set_fact:
+        hf_ipam: "{{ hf_ipam | combine({'tenantOffer': hf_tenant_offer}) }}"
+
     - name: The root's provider-edge addresses (index 1)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
@@ -345,28 +365,16 @@
                               'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
                               'ipam': hf_ipam}} }}
 
-    # what tenants see of the fabric changed (its IPv6 block sizes, or its spec: who may use it): wake the Entities,
-    # whose job rewrites TenantProfile status.ipv6Platform
-    - name: The tenants' platform IPv6 offer before this run
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/ipv6_platform_offer.yml"
-      vars:
-        ipo_pools: "{{ (((fab_st.realization | default({}, true)).ipam | default({}, true)).pools | default([], true)) }}"
-
-    - name: Keep it
-      ansible.builtin.set_fact:
-        hf_offer_before: "{{ ipv6_platform_offer }}"
-
-    - name: The tenants' platform IPv6 offer after this run
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/ipv6_platform_offer.yml"
-      vars:
-        ipo_pools: "{{ hf_ipam.pools | default([], true) }}"
-
+    # what tenants see of the fabric changed (its IPv6 offer, or its spec: who may use it) since the Entities were
+    # last woken for it (status.realization.ipam.tenantOffer, written above; absent before the first such run): wake
+    # them, their job rewrites TenantProfile status.ipv6Platform
     - name: Wake the Entities when the tenants' view of the fabric changed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_entities.yml"
       vars:
         we_namespace: "{{ fab_namespace }}"
       when: >-
-        (hf_offer_before != ipv6_platform_offer)
+        (hf_tenant_offer != (((fab_st.realization | default({}, true)).ipam | default({}, true)).tenantOffer
+                             | default('', true)))
         or (fab_generation | int != (fab_st.observedGeneration | default(0, true) | int))
 
     # the networks this run added to or removed from the egress wait for it: wake them

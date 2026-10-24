@@ -421,6 +421,25 @@ class WiringTest(unittest.TestCase):
         self.assertLess(t.index("Report the fabric ready"), t.index("wake_waiting_networks.yml"))
         self.assertIn("when: hf_ipam_changed | bool", t)
 
+    def test_fabric_jobs_wake_the_entities_for_the_tenant_offer(self):
+        t = self.text(ROLES, "hybridfabric_provision", "tasks", "main.yml")
+        # the offer is computed from the rows this run writes, kept in the status, and compared with the stored one
+        # after the status write (TenantProfile status.ipv6Platform follows on the Entity job)
+        self.assertLess(t.index("'pools': fab_ipam_pools_usage"), t.index("ipv6_platform_offer.yml"))
+        self.assertLess(t.index("ipv6_platform_offer.yml"), t.index("Report the fabric ready"))
+        self.assertIn("combine({'tenantOffer': hf_tenant_offer})", t)
+        self.assertLess(t.index("Report the fabric ready"), t.index("wake_entities.yml"))
+        i = t.index("wake_entities.yml")
+        self.assertIn(".tenantOffer", t[i:i + 500])
+        self.assertIn("observedGeneration", t[i:i + 500])
+        td = self.text(ROLES, "hybridfabric_teardown", "tasks", "main.yml")
+        self.assertLess(td.index("Mark deletion complete"), td.index("wake_entities.yml"))
+        self.assertLess(td.index("wake_entities.yml"), td.index("rescue:"))
+        c = self.text(ROLES, "entity_provision", "tasks", "tenant_profile_compute.yml")
+        self.assertIn("kind: HybridFabric", c)
+        self.assertIn("ipv6_platform_offer.yml", c)
+        self.assertIn("'ipv6Platform'", c)
+
     def test_placement_job(self):
         t = self.text(NP, "main.yml")
         self.assertIn("families.yml", t)
