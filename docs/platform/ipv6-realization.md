@@ -247,14 +247,20 @@ which FRR 9 and later need), and `FROM-SITE` carries the IPv6 entries of the sit
 - both: an `unreachable` IPv6 default route in every VRF table (a miss fails inside the VRF instead of falling
   through to the node's main table), and the `icmpSource6` address on every VRF device when that is set.
 
-**Rollout.** A new BGP address family resets the sessions it rides on once. Set the `core` keys in
-`FABRIC_REALIZATION`, then run the HybridFabric (Retry now) first, so the route reflector offers the IPv6 VPN family,
-then each CloudGateway. Every job configures one node at a time and waits for IS-IS, the VPN sessions and the VPN
-labels on it before the next, so the other node carries the sites while one node's sessions come back. Do it while no
-placement uses IPv6. Each root and each gateway resets once per node, and later runs change nothing.
+**Rollout.** A new BGP address family resets the sessions it rides on. Set the `core` keys in `FABRIC_REALIZATION`,
+then run the HybridFabric (Retry now) first, so the route reflector offers the IPv6 VPN family, then each
+CloudGateway. A gateway takes the IPv6 core only once the HybridFabric reports `status.realization.ipv6Core`
+(written after the root passed on every node): a CloudGateway run before that, or after a HybridFabric run that
+failed between the nodes, keeps the gateway as on an IPv4-only core. Every job configures one node at a time and
+waits for IS-IS, the VPN sessions and the VPN labels on it before the next, so the other node carries the sites
+meanwhile. Per node, the root job resets its VPN sessions once (every gateway's session to the root on that node),
+and each gateway's session to the root resets once more when that gateway itself is re-rendered by its own job:
+two resets per gateway session, one job at a time. Later runs change nothing. Do it while no placement uses IPv6.
 
-**Rollback.** Empty `loopbackPool6` and run the same jobs in the same order: the IPv6 families go away, which resets
-the sessions once more. The IPv6 sysctls and `unreachable` defaults stay; they don't affect IPv4.
+**Rollback.** Empty `loopbackPool6` and `icmpSource6` and run the same jobs in the same order: the IPv6 families go
+away, which resets the sessions as many times again. Emptying the pools removes the IPv6 loopback and ICMP source
+addresses (each node remembers the pools of its last run until a run without them removed their addresses); the
+IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
 
 ## Attachment circuits
 
