@@ -39,23 +39,108 @@
 #   The node's private key is generated here once (/etc/shc-fabric/<instance>.wgkey) and never leaves the node;
 #   peers not listed are removed. down also deletes the key.
 #   shc-fabric-apply <instance> post   (gateway, after FRR started: see post_start below)
+# IPv6 core (both types; optional keys, absent or "" = IPv4 only, nothing IPv6 is read or set): loopback6 (the
+#   namespace's IPv6 loopback, /128 on lo), icmp6 (its ICMP source, /128 on every VRF device), loopbackPool6 and
+#   icmpSource6 (their pools: other addresses from them are removed, also when loopback6 is empty). With loopback6
+#   the namespace is an IPv6 router: forwarding, no router advertisements or SLAAC anywhere; the core leg (gateway
+#   core0, root core bridge) carries IPv6 link-local only, the gateway's site leg no IPv6 at all (the underlay stays
+#   IPv4); every VRF table gets an IPv6 unreachable default; the root's egress0 never takes RAs or SLAAC. The root
+#   stops before any change when a host interface outside the VRFs holds routes from router advertisements. The
+#   management interface is never touched.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
 CONF=/etc/shc-fabric/$I.json
 [ -r "$CONF" ] || { echo "no $CONF" >&2; exit 2; }
 q() { jq -er "$1" "$CONF"; }
+opt() { jq -r "$1 // empty" "$CONF"; }  # an optional key ("" when absent)
 TYPE=$(q .type)
 
-# addresses on <dev> inside <cidr> other than <keep> (NSX: optional "ip netns exec <ns>" prefix)
-stray() { $NSX ip -j -4 addr show dev "$1" | python3 -c '
+# an address in the form "ip addr show" prints (IPv6 compressed, lower case), so the checks below find it
+canon() { [ -z "$1" ] || python3 -c 'import ipaddress, sys; print(ipaddress.ip_interface(sys.argv[1]))' "$1"; }
+LO6=$(canon "$(opt .loopback6)"); ICMP6=$(canon "$(opt .icmp6)")
+LOPOOL6=$(opt .loopbackPool6); ICMPPOOL6=$(opt .icmpSource6)
+# IPv6 is set up only with an IPv6 loopback (a dual-stack core); with the pools alone their addresses are removed
+V6=$LO6; V6KNOWN=$LO6$ICMP6$LOPOOL6$ICMPPOOL6
+
+# addresses of family 4 (default) or 6 on <dev> inside <cidr> other than <keep> (NSX: optional "ip netns exec <ns>"
+# prefix); 6 never lists link-local addresses (fe80::/10): the kernel's own, IS-IS and neighbour discovery use them
+stray() { $NSX ip -j "-${4:-4}" addr show dev "$1" | python3 -c '
 import ipaddress, json, sys
 net, keep = ipaddress.ip_network(sys.argv[1]), sys.argv[2]
+ll = ipaddress.ip_network("fe80::/10")
 for i in json.load(sys.stdin):
     for a in i.get("addr_info", []):
         s = "%s/%s" % (a["local"], a["prefixlen"])
-        if ipaddress.ip_address(a["local"]) in net and s != keep:
+        ip = ipaddress.ip_address(a["local"])
+        if ip.version == net.version and ip in net and s != keep and not (ip.version == 6 and ip in ll):
             print(s)' "$2" "$3"; }
+
+# <dev> <cidr> [nodad]: add the address unless the device holds it (<cidr> as "ip addr show" prints it: see canon)
+addr_ensure() { $NSX ip addr show dev "$1" | grep -q " ${2} " || $NSX ip addr add "$2" dev "$1" ${3:+"$3"}; }
+
+# key=value... ("/" form: a device name may hold a dot): write only the values that differ, so a re-run writes
+# nothing - writing net.ipv6.conf.all.disable_ipv6 or .forwarding also rewrites every device's own value
+sysctl_ensure() {
+  local kv
+  for kv in "$@"; do
+    [ "$($NSX sysctl -n "${kv%%=*}" 2>/dev/null)" = "${kv#*=}" ] || $NSX sysctl -qw "$kv"
+  done
+}
+
+# a namespace that routes IPv6: forwarding, never router advertisements or SLAAC (default: devices created later)
+router6() {
+  local k
+  for k in all default; do
+    sysctl_ensure "net/ipv6/conf/$k/disable_ipv6=0" "net/ipv6/conf/$k/forwarding=1" \
+      "net/ipv6/conf/$k/accept_ra=0" "net/ipv6/conf/$k/autoconf=0"
+  done
+}
+
+# a core leg (gateway core0, root core bridge): IPv6 link-local only (IS-IS's IPv6 next hops), no RA or SLAAC; set
+# before the device comes up, so a new one never autoconfigures
+core6() {
+  local a
+  sysctl_ensure "net/ipv6/conf/$1/disable_ipv6=0" "net/ipv6/conf/$1/accept_ra=0" "net/ipv6/conf/$1/autoconf=0"
+  for a in $(stray "$1" ::/0 none 6); do $NSX ip addr del "$a" dev "$1"; done
+}
+
+# the IPv6 loopback on lo; others from loopbackPool6 removed (all of them when the core is IPv4 only)
+lo6() {
+  local a
+  if [ -n "$LOPOOL6" ]; then
+    for a in $(stray lo "$LOPOOL6" "${LO6:-none}" 6); do $NSX ip addr del "$a" dev lo; done
+  fi
+  [ -z "$LO6" ] || addr_ensure lo "$LO6" nodad
+}
+
+# <vrf> <table>: the IPv6 side of a VRF. The unreachable default at the highest metric (any FRR route wins): a lookup
+# that misses fails in the VRF instead of falling through to the main table. The ICMP source /128 (nodad: never
+# announced, DAD would only delay it): the kernel sources Time Exceeded, Unreachable and Packet Too Big inside the VRF
+# from it, the core loopback is not in the VRF. Others from icmpSource6 removed.
+vrf6() {
+  local a
+  if [ -n "$ICMPPOOL6" ]; then
+    for a in $(stray "$1" "$ICMPPOOL6" "${V6:+$ICMP6}" 6); do $NSX ip addr del "$a" dev "$1"; done
+  fi
+  [ -n "$V6" ] || return 0
+  $NSX ip -6 route show table "$2" | grep -qE '^unreachable default .*metric 4278198272( |$)' ||
+    $NSX ip -6 route replace unreachable default metric 4278198272 table "$2"
+  [ -z "$ICMP6" ] || addr_ensure "$1" "$ICMP6" nodad
+}
+
+# root namespace, before any IPv6 change: the namespace routes IPv6 (forwarding on: the kernel then ignores router
+# advertisements unless accept_ra=2) and gains IS-IS's IPv6 routes, so a host interface that still takes routes from
+# RAs must be configured statically first. Interfaces in a VRF are the fabric's own and don't count.
+ra_precheck() {
+  local d m
+  for d in $(ip -j -6 route show proto ra | jq -r '.[] | (.dev // empty), (.nexthops // [] | .[].dev)' | sort -u); do
+    m=$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty')
+    if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then continue; fi
+    echo "error: interface $d relies on router advertisements" >&2
+    exit 1
+  done
+}
 
 snapshot() {
   { ip -br -4 addr show dev lo; ip -br -4 addr show dev "$BR" 2>/dev/null || true
@@ -63,7 +148,13 @@ snapshot() {
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
-    egress_state; attach_state; } | sha1sum
+    egress_state; attach_state
+    if [ -n "$V6KNOWN" ]; then  # the devices this sets up (never the management interface)
+      ip -br -6 addr show | grep -E "^(lo|$BR|egress0|e[0-9]+${EV:+|$EV})[@ ]" || true
+      sysctl -n "net/ipv6/conf/$BR/disable_ipv6" "net/ipv6/conf/$BR/accept_ra" "net/ipv6/conf/$BR/autoconf" \
+        net/ipv6/conf/egress0/accept_ra net/ipv6/conf/egress0/autoconf 2>/dev/null || true
+      ip -6 route show table all | grep '^unreachable default' || true
+    fi; } | sha1sum
 }
 
 # an interface another service creates (NetworkManager's trunk and its VLAN devices): at boot this runs alongside
@@ -179,6 +270,8 @@ egress_up() {
   ip link show "$ev" >/dev/null 2>&1 || ip link add "$ev" type vrf table "$et"
   ip link set "$ev" up
   ip link show egress0 >/dev/null 2>&1 || ip link add egress0 link "$par" type macvlan mode bridge
+  # the hand-off network's routers never configure the egress (its addresses come from the realization)
+  [ -z "$V6" ] || sysctl_ensure net/ipv6/conf/egress0/accept_ra=0 net/ipv6/conf/egress0/autoconf=0
   ip link set egress0 master "$ev" mtu "$emtu" up
   for a in $(stray egress0 0.0.0.0/0 "$eaddr"); do ip addr del "$a" dev egress0; done
   ip addr show dev egress0 | grep -q " ${eaddr} " || ip addr add "$eaddr" dev egress0
@@ -328,28 +421,39 @@ post_start() {
 case "$TYPE" in
 root)
   BR=$(q .bridge); MTU=$(q .mtu); LO=$(q .loopback); LOPOOL=$(q .loopbackPool); LINK=$(q .link)
+  EV=$(opt .egress.vrf)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
+    [ -z "$V6" ] || ra_precheck
     modprobe mpls_router; modprobe mpls_iptunnel
     sysctl -qw net.mpls.platform_labels=1048575
     MAC=$(printf '02:fa:%02x:%02x:%02x:%02x' $(echo "${LINK%/*}" | tr . ' '))
     ip link show "$BR" >/dev/null 2>&1 || ip link add "$BR" address "$MAC" type bridge
     if [ "$(cat "/sys/class/net/$BR/address")" != "$MAC" ]; then ip link set "$BR" address "$MAC"; echo "bridge-mac=changed"; fi
+    [ -z "$V6" ] || core6 "$BR"
     ip link set "$BR" mtu "$MTU" up
     for a in $(stray "$BR" 0.0.0.0/0 "$LINK"); do ip addr del "$a" dev "$BR"; done
     ip addr show dev "$BR" | grep -q " ${LINK} " || ip addr add "$LINK" dev "$BR"
     for a in $(stray lo "$LOPOOL" "$LO"); do ip addr del "$a" dev lo; done
     ip addr show dev lo | grep -q " ${LO} " || ip addr add "$LO" dev lo
+    lo6
     sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
     root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf] | unique | .[]' "$CONF")"
+    if [ -n "$V6KNOWN" ]; then  # the egress VRF and the networks' VRFs, as created above
+      for v in $(jq -r '[(.egress // {} | select(.vrf) | [.vrf, .table]), ((.egress.networks // []) + (.attachments.circuits // []) | .[] | [.vrf, .table])]
+          | map(map(tostring) | join(":")) | unique | .[]' "$CONF"); do
+        vrf6 "${v%%:*}" "${v#*:}"
+      done
+    fi
   else
     egress_down
     attach_down
     root_vrfs_prune ""
     ip link show "$BR" >/dev/null 2>&1 && ip link del "$BR"
     for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
+    LO6=""; lo6
   fi
   ;;
 gateway)
@@ -368,12 +472,24 @@ gateway)
         $X ip -br -4 addr show; $X ip -o link show | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|state [A-Z]*' || true
         $X sysctl -n net.ipv4.ip_forward net.mpls.platform_labels net.mpls.conf.lo.input 2>/dev/null || true
         $X sysctl -n net.mpls.conf.core0.input 2>/dev/null || true
+        if [ -n "$V6KNOWN" ]; then
+          $X ip -br -6 addr show
+          $X sysctl -n net.ipv6.conf.all.forwarding net.ipv6.conf.default.forwarding net.ipv6.conf.all.disable_ipv6 \
+            net.ipv6.conf.default.disable_ipv6 net.ipv6.conf.all.accept_ra net.ipv6.conf.default.accept_ra \
+            net.ipv6.conf.all.autoconf net.ipv6.conf.default.autoconf 2>/dev/null || true
+          $X sysctl -n net/ipv6/conf/core0/disable_ipv6 net/ipv6/conf/core0/accept_ra net/ipv6/conf/core0/autoconf \
+            "net/ipv6/conf/$VDEV/disable_ipv6" 2>/dev/null || true
+          $X ip -6 route show table all | grep '^unreachable default' || true
+        fi
         if [ -n "$WG" ] && $X ip link show "$VDEV" >/dev/null 2>&1; then
           $X wg show "$VDEV" public-key; $X wg show "$VDEV" listen-port
           $X wg show "$VDEV" allowed-ips | sort; $X wg show "$VDEV" persistent-keepalive | sort
         fi
       fi; } | sha1sum
   }
+  # the site leg stays IPv4 (the site's underlay): no link-local, DAD or MLD on the site's network. Set once the device
+  # is in the namespace (a move re-creates its IPv6 settings from the namespace's defaults), before it comes up.
+  site6() { [ -z "$V6" ] || sysctl_ensure "net/ipv6/conf/$VDEV/disable_ipv6=1"; }
   # the site leg over WireGuard (transport wireguard)
   wg_leg() {
     local port keep want peer p ep
@@ -383,6 +499,7 @@ gateway)
       ip link show "$VDEV" >/dev/null 2>&1 || ip link add "$VDEV" type wireguard
       ip link set "$VDEV" netns "$NS"
     fi
+    site6
     $X wg set "$VDEV" private-key "$WGKEY" listen-port "$port"
     want=$(jq -r '.wireguard.peers[].publicKey' "$CONF")
     for peer in $($X wg show "$VDEV" peers); do
@@ -405,8 +522,10 @@ gateway)
       net.mpls.platform_labels=1048575
     $X ip link set lo up
     NSX=$X
+    [ -z "$V6" ] || router6
     for a in $(stray lo "$LOPOOL" "$LO"); do $X ip addr del "$a" dev lo; done
     $X ip addr show dev lo | grep -q " ${LO} " || $X ip addr add "$LO" dev lo
+    lo6
     if [ -n "$WG" ]; then
       wg_leg
     else
@@ -414,6 +533,7 @@ gateway)
         ip link show "$VDEV" >/dev/null 2>&1 || ip link add link "$TRUNK" name "$VDEV" type vlan id "$VLAN"
         ip link set "$VDEV" netns "$NS"
       fi
+      site6
       [ -n "$MTU" ] || MTU=$(cat "/sys/class/net/$TRUNK/mtu")
       $X ip link set "$VDEV" mtu "$MTU" up
     fi
@@ -424,6 +544,7 @@ gateway)
       ip link add "$CV" mtu "$CMTU" type veth peer name core0 netns "$NS"
     fi
     ip link set "$CV" master "$BR" mtu "$CMTU" up
+    [ -z "$V6" ] || core6 core0
     $X ip link set core0 mtu "$CMTU" up
     for a in $(stray core0 0.0.0.0/0 "$LINK"); do $X ip addr del "$a" dev core0; done
     $X ip addr show dev core0 | grep -q " ${LINK} " || $X ip addr add "$LINK" dev core0
@@ -435,6 +556,7 @@ gateway)
       IFS=: read -r VRF VNI VMTU <<<"$v"
       $X ip link show "$VRF" >/dev/null 2>&1 || $X ip link add "$VRF" type vrf table "$VNI"
       $X ip link set "$VRF" up
+      vrf6 "$VRF" "$VNI"
       if ! $X ip link show "br$VNI" >/dev/null 2>&1; then
         $X ip link add "br$VNI" type bridge
         $X ip link set "br$VNI" addrgenmode none
