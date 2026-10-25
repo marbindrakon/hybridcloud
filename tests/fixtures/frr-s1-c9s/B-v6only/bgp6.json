@@ -1,0 +1,9 @@
+{
+ "vrfId": 7,
+ "vrfName": "t51002",
+ "tableVersion": 1,
+ "routerId": "10.255.0.2",
+ "defaultLocPrf": 100,
+ "localAS": 65010,
+ "routes": { "2602:81f:4005:1101::/64": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"internal","prefix":"2602:81f:4005:1101::","prefixLen":64,"network":"2602:81f:4005:1101::/64","version":1,"metric":0,"locPrf":100,"weight":0,"peerId":"10.65.0.11","path":"","origin":"IGP","announceNexthopSelf":true,"nexthops":[{"ip":"::ffff:10.65.0.11","hostname":"s6-spike","afi":"ipv6","scope":"global","used":true}]}]
+ }  } 

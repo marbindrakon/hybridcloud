@@ -1,9 +1,18 @@
 ---
-# shc (design/P7-PLAN.md P7.3.8): does the site's gateway hold the placement's routes on every border gateway node?
-# Read-only (vtysh over SSH, no lease). For each node: the VRF's routes inside the placement's IPv4 prefixes that the
-# site advertised (next hop in the site underlay), and the routes of the network's other placements (VPN); waits up
-# to np_route_wait seconds (default 0) for the site's. Sets
-# np_route_nodes [{name, siteRoutes, vpnRoutes, missing: [prefix]}] and np_routes_missing (bool).
+# shc (design/P7-PLAN.md P7.3.8, design/IPV6-PLAN.md §3.1 "Readiness"): does the site's gateway hold the placement's
+# routes on every border gateway node? Read-only (vtysh and ip over SSH, no lease). Per family the placement holds
+# (np_prefixes_v4; np_prefixes_v6 when non-empty), for each node: the VRF's routes inside the placement's prefixes that
+# the site advertised, and the routes of the network's other placements (VPN); waits up to np_route_wait seconds
+# (default 0) for the site's.
+#   IPv4 (unchanged): the first valid path of each route; a site route has a next hop inside the site underlay.
+#   IPv6: the best path of each route; a site route has an IPv4 next hop inside the site underlay, plain (a.b.c.d) or
+#     IPv4-mapped (::ffff:a.b.c.d: an EVPN Type-5 IPv6 route over the IPv4 site VTEP); every other next hop (the
+#     core's IPv6 loopbacks, link-local) counts as VPN. A prefix also needs a unicast route in the kernel VRF table
+#     (not unreachable/blackhole/prohibit/throw, nor the local/anycast/multicast entries the kernel adds for addresses
+#     on the VRF's devices): FRR can hold a valid IPv6 route that zebra never installed.
+# A family with prefixes never passes on an empty table (an IPv6-only placement included). Sets
+# np_route_nodes [{name, siteRoutes, vpnRoutes, missing: [prefix], byFamily: {"4"|"6": {siteRoutes, vpnRoutes,
+# missing[, notInKernel]}}}] (siteRoutes, vpnRoutes, missing: summed over the families) and np_routes_missing (bool).
 - name: Connect to the border gateway nodes
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
   vars:
@@ -12,32 +21,107 @@
 
 - name: Read the VRF on each node
   block:
+    # the check: python3 -c '<code>' <site underlay> <prefix,prefix,...> <vtysh pathspace> <netns> <vrf>; prints one
+    # JSON object, exits 0 when nothing is missing (tests/unit/test_gateway_readiness.py runs the same code)
     - name: Read the gateway VRF's routes (waiting up to np_route_wait s for the site's)
       ansible.builtin.shell: |
+        {% set _prefixes = (np_prefixes_v4 + (np_prefixes_v6 | default([]))) | join(',') %}
         check() {
-        vtysh -N gw-{{ np_gateway.metadata.name }} -c 'show bgp vrf {{ np_names.vrf }} ipv4 unicast json' | python3 -c '
-        import ipaddress, json, sys
-        mine = [ipaddress.ip_network(p) for p in sys.argv[2].split(",")]
-        site = ipaddress.ip_network(sys.argv[1])
-        routes = json.load(sys.stdin).get("routes", {})
-        found, vpn = set(), 0
-        for pfx, paths in routes.items():
-            net = ipaddress.ip_network(pfx)
-            best = [p for p in (paths if isinstance(paths, list) else [paths]) if p.get("valid")][:1]
-            for p in best:
-                nhs = [n.get("ip") for n in p.get("nexthops", []) if n.get("ip")]
-                if any(ipaddress.ip_address(h) in site for h in nhs):
-                    found.update(str(m) for m in mine if net.subnet_of(m))
+        python3 -c '
+        import ipaddress, json, subprocess, sys
+
+        def run(cmd):
+            return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+        def hop(h, fam):
+            """A next hop as an address; IPv6: IPv4-mapped reduced to IPv4, link-local unusable (None)."""
+            try:
+                a = ipaddress.ip_address(str(h).split("%")[0])
+            except ValueError:
+                return None
+            if fam == 4:
+                return a
+            if a.version == 6 and a.ipv4_mapped is not None:
+                return a.ipv4_mapped
+            return None if a.is_link_local else a
+
+
+        def chosen(paths, fam):
+            paths = paths if isinstance(paths, list) else [paths]
+            valid = [p for p in paths if p.get("valid")]
+            if fam == 4:
+                return valid[:1]
+            # table JSON: "bestpath": true; per-prefix JSON: "bestpath": {"overall": true}
+            best = [p for p in valid if p.get("bestpath") is True
+                    or (isinstance(p.get("bestpath"), dict) and p["bestpath"].get("overall"))]
+            return (best or valid)[:1]
+
+
+        def bgp_check(routes, site, mine, fam):
+            found, vpn = set(), 0
+            for pfx, paths in routes.items():
+                try:
+                    net = ipaddress.ip_network(pfx)
+                except ValueError:
+                    continue
+                for p in chosen(paths, fam):
+                    hops = [hop(n.get("ip"), fam) for n in p.get("nexthops", []) if n.get("ip")]
+                    if any(a is not None and a in site for a in hops):
+                        found.update(str(m) for m in mine if net.version == m.version and net.subnet_of(m))
+                    else:
+                        vpn += 1
+            return found, vpn
+
+
+        def kernel_check(entries, mine):
+            found = set()
+            for r in entries:
+                # ip -j prints "type" only for routes that are not unicast
+                if r.get("type", "unicast") != "unicast" or r.get("dst") in (None, "default"):
+                    continue
+                try:
+                    net = ipaddress.ip_network(r["dst"], strict=False)
+                except ValueError:
+                    continue
+                found.update(str(m) for m in mine if net.version == m.version and net.subnet_of(m))
+            return found
+
+
+        def main(argv, run):
+            site = ipaddress.ip_network(argv[0], strict=False)
+            want = [ipaddress.ip_network(x.strip()) for x in argv[1].split(",") if x.strip()]
+            pathspace, netns, vrf = argv[2], argv[3], argv[4]
+            out = {"siteRoutes": 0, "vpnRoutes": 0, "missing": [], "byFamily": {}}
+            for fam in (4, 6):
+                mine = [m for m in want if m.version == fam]
+                if not mine:
+                    continue
+                show = "show bgp vrf %s ipv%d unicast json" % (vrf, fam)
+                routes = json.loads(run(["vtysh", "-N", pathspace, "-c", show]) or "{}").get("routes", {})
+                found, vpn = bgp_check(routes, site, mine, fam)
+                row = {"siteRoutes": len(found), "vpnRoutes": vpn}
+                if fam == 6:
+                    kern = kernel_check(json.loads(run(["ip", "-n", netns, "-j", "-6", "route", "show", "vrf", vrf]) or "[]"), mine)
+                    row["missing"] = [str(m) for m in mine if str(m) not in found or str(m) not in kern]
+                    row["notInKernel"] = [str(m) for m in mine if str(m) not in kern]
                 else:
-                    vpn += 1
-        print(json.dumps({"siteRoutes": len(found), "vpnRoutes": vpn,
-                          "missing": [str(m) for m in mine if str(m) not in found]}))' \
-          {{ np_gateway.spec.siteUnderlay.cidr }} {{ np_prefixes_v4 | join(',') }}
+                    row["missing"] = [str(m) for m in mine if str(m) not in found]
+                out["byFamily"][str(fam)] = row
+                out["siteRoutes"] += row["siteRoutes"]
+                out["vpnRoutes"] += row["vpnRoutes"]
+                out["missing"] += row["missing"]
+            print(json.dumps(out))
+            return 0 if want and not out["missing"] else 1
+
+
+        if __name__ == "__main__":
+            sys.exit(main(sys.argv[1:], run))
+        ' {{ np_gateway.spec.siteUnderlay.cidr }} "{{ _prefixes }}" gw-{{ np_gateway.metadata.name }} gw-{{ np_gateway.metadata.name }} {{ np_names.vrf }}
         }
         end=$((SECONDS + {{ np_route_wait | default(0) | int }}))
         while :; do
-          out=$(check)
-          case "$out" in *'"missing": []'*) break ;; esac
+          out=$(check) && break
           [ $SECONDS -ge $end ] && break
           sleep 10
         done

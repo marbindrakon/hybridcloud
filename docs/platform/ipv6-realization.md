@@ -11,7 +11,8 @@ installation's `FABRIC_REALIZATION` (the aap-config environment, JSON; per fabri
 
 With the defaults nothing changes for IPv4, every IPv6 placement fails with `FamilyUnavailable`, a network asking
 for platform IPv6 fails with `FamilyUnavailable` (no pool), and IPv6 internet access reads `NotOffered` (platform
-IPv6) or `AddressChoice` (tenant prefixes).
+IPv6) or `AddressChoice` (tenant prefixes). The border gateways' core stays IPv4-only, and the gateways refuse every
+IPv6 route a site announces (no placement holds IPv6 yet; see [Transport](#transport-dual-stack-core)).
 
 ## The three network modes and what the platform does for each
 
@@ -179,13 +180,87 @@ switch. Dual-stack networks never get DNS64 resolvers. With no entry for a site,
 
 ```yaml
 egress:
-  ipv6: {enabled: false}   # routed IPv6 egress for platform-assigned space; off: IPv6 internet reads NotOffered
+  ipv6:
+    enabled: false         # routed IPv6 egress for platform-assigned space; off: IPv6 internet reads NotOffered
+    standbyCommunity: 998  # the standby node's default route carries <domainAsn>:998 ...
+    standbyLocalPref: 50   # ... and reaches the sites with this local preference (they prefer the primary node)
 ```
 IPv6 egress is routed, not translated: a network's platform block leaves unchanged through a stateful filter on the
 border gateway nodes that admits only replies to connections opened from inside. Tenant-provided prefixes never get
 an internet path. While `enabled` is false every network in mode `Platform` reports
 `{family: 6, state: unavailable, reason: NotOffered}` in `status.egress.families`, and `status.egress.internet`
 keeps reporting the IPv4 state of networks with IPv4.
+
+## Transport (dual-stack core)
+
+IPv6 between the sites rides the border gateway core as IPv6 VPN routes next to the IPv4 ones. The core is
+dual-stack: every root and gateway namespace on a border gateway node gets an IPv6 loopback in the same IS-IS
+(single topology, one prefix SID per loopback), the core legs carry IPv6 link-local addresses only, and a VRF's IPv6
+VPN routes use the namespace's IPv6 loopback as next hop. FRR installs no labelled IPv6 route over an IPv4 next hop,
+so an IPv4-only core can't carry IPv6 between sites. The BGP sessions stay on the IPv4 loopbacks.
+
+```yaml
+core:
+  loopbackPool6: ""   # the namespaces' IPv6 loopbacks; empty = IPv4-only core (nothing IPv6 is rendered or applied)
+  sidOffset6: 1000    # SR index of an IPv6 loopback = the namespace's IPv4 index + this offset
+  icmpSource6: ""     # source of the ICMPv6 errors the VRFs send; one /128 per namespace per node
+gateway:
+  siteImportFilter:   # per address family: only the placements' prefixes enter a VRF from the site
+    ipv4: false
+    ipv6: true
+```
+- **`core.loopbackPool6`:** an IPv6 network of at least a /120, never advertised outside the core (the egress
+  filter and the upstream routers should drop it). Provider edge `i` (the root is 1, the gateways 2 and up) gets
+  address `i` of it, the same on every node: each node is its own core. Example with documentation prefixes:
+  `2001:db8:4005:ffff::/64` gives the root `2001:db8:4005:ffff::1` and the gateway with index 2
+  `2001:db8:4005:ffff::2`.
+- **`core.sidOffset6`:** an IPv6 loopback's SR index is its IPv4 index plus this offset, so it must be larger than
+  the highest provider-edge index, and offset plus that index must stay inside `core.srgb`. The HybridFabric job
+  refuses the fabric (`InvalidSpec`) otherwise.
+- **`core.icmpSource6`:** an IPv6 network of at least a /96, apart from `loopbackPool6`. Every VRF device of a
+  namespace gets `network + (node position << 16) + provider-edge index` as a /128 (the node position is 1-based in
+  `borderGateway.nodes`), so the kernel can send Packet Too Big, Time Exceeded and Unreachable from inside a VRF.
+  Example: `2001:db8:4005:1::/64` gives the root on the first node `2001:db8:4005:1::1:1` and the gateway with index 2
+  on the second node `2001:db8:4005:1::2:2`. These addresses are never announced. Take them from a range the
+  platform routes (an ICMP error with an unroutable source never reaches the sender).
+- **`gateway.siteImportFilter`:** the gateways' import filter on the routes a site announces (`FROM-SITE`). For a
+  family that is on, a route of that family enters only when its prefix lies inside one of the prefixes of the
+  site's placements on that gateway (host routes inside them included); every other prefix of that family is
+  refused, so a site router can't put another prefix into a tenant's network. Routes without an IP prefix
+  (inclusive multicast, MAC-only routes) and the other family pass. The gateway is also the route reflector of the
+  site's own nodes, so a refused route doesn't reach the site's other nodes through the gateway either. IPv4 is off
+  by default: the gateways then refuse only their own routes coming back, as before.
+
+**What a run applies.** With `loopbackPool6` empty the jobs render the core as before. Two things change for every
+core: each network's VPN export map is its own (`TO-VPN-<route target>`, it sets the network's route target again,
+which FRR 9 and later need), and `FROM-SITE` carries the IPv6 entries of the site-import filter. With
+`loopbackPool6` set:
+- the HybridFabric job, per node: the root's IPv6 loopback, IPv6 on the core bridge (link-local only, router
+  advertisements ignored), IS-IS for IPv6 with the loopback's prefix SID, and the IPv6 VPN family on the route
+  reflector. `status.realization.routeReflector6` names the root's IPv6 loopback, `status.realization.ipv6Core` is
+  true.
+- the CloudGateway job, per node: IPv6 forwarding in the gateway namespace with router advertisements ignored, IPv6
+  on the core leg (link-local only), none on the site leg, the IPv6 loopback in IS-IS, and the IPv6 VPN family on
+  the session to the route reflector, also while no placement holds IPv6. A VRF whose placement holds IPv6
+  (`status.realization.vrfs[].families` shows `6`) gets the IPv6 unicast family with the IPv6 loopback as VPN next
+  hop and announces its IPv6 routes to the site. `status.realization.loopback6` names the gateway's IPv6 loopback.
+- both: an `unreachable` IPv6 default route in every VRF table (a miss fails inside the VRF instead of falling
+  through to the node's main table), and the `icmpSource6` address on every VRF device when that is set.
+
+**Rollout.** A new BGP address family resets the sessions it rides on. Set the `core` keys in `FABRIC_REALIZATION`,
+then run the HybridFabric (Retry now) first, so the route reflector offers the IPv6 VPN family, then each
+CloudGateway. A gateway takes the IPv6 core only once the HybridFabric reports `status.realization.ipv6Core`
+(written after the root passed on every node): a CloudGateway run before that, or after a HybridFabric run that
+failed between the nodes, keeps the gateway as on an IPv4-only core. Every job configures one node at a time and
+waits for IS-IS, the VPN sessions and the VPN labels on it before the next, so the other node carries the sites
+meanwhile. Per node, the root job resets its VPN sessions once (every gateway's session to the root on that node),
+and each gateway's session to the root resets once more when that gateway itself is re-rendered by its own job:
+two resets per gateway session, one job at a time. Later runs change nothing. Do it while no placement uses IPv6.
+
+**Rollback.** Empty `loopbackPool6` and `icmpSource6` and run the same jobs in the same order: the IPv6 families go
+away, which resets the sessions as many times again. Emptying the pools removes the IPv6 loopback and ICMP source
+addresses (each node remembers the pools of its last run until a run without them removed their addresses); the
+IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
 
 ## Attachment circuits
 

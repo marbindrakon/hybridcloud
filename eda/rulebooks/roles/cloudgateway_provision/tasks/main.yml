@@ -203,6 +203,24 @@
         cg_changed_nodes: []
         cg_bgp_password: ""
 
+    # the core's IPv6 side only once the fabric reports it (status.realization.ipv6Core: the fabric job writes it
+    # after the root on every node passed with VPNv6 and IPv6 IS-IS): the route reflector must offer the family
+    # first. Until then (a gateway run before the fabric job, or after a fabric job that failed between the nodes)
+    # the gateway stays as on an IPv4-only core: no IPv6 loopback, SID, VPNv6 or ICMP source rendered or applied,
+    # so it neither resets its session to the root for a family the root does not carry yet nor fails waiting for
+    # VPNv6. The pools stay in the apply configuration, so addresses left inside them are still removed.
+    - name: Take the IPv6 core only once the fabric offers it
+      vars:
+        _cg_on: >-
+          {{ (cg_pe.loopback6 | default('') | length > 0)
+             and ((((cg_fabric.status | default({}, true)).realization | default({}, true)).ipv6Core
+                   | default(false)) | bool) }}
+      ansible.builtin.set_fact:
+        cg_ipv6_core: "{{ _cg_on | bool }}"
+        cg_pe: "{{ cg_pe if _cg_on | bool else cg_pe | combine({'loopback6': '', 'loopbackIp6': '', 'sid6': 0}) }}"
+        cg_root_pe: >-
+          {{ cg_root_pe if _cg_on | bool else cg_root_pe | combine({'loopback6': '', 'loopbackIp6': '', 'sid6': 0}) }}
+
     # the networks placed at this site: every NetworkPlacement that names this gateway (status.cloudGateway) and
     # holds its numbers (status.realization), unless its teardown released the gateway; the gateway carries one
     # VRF per placement and is the only writer of the instance's configuration
@@ -218,7 +236,9 @@
     - name: Set the gateway's VRFs
       ansible.builtin.set_fact:
         # a site behind a tunnel carries less than the fabric: its VRFs' bridge/VXLAN run at the site leg's MTU minus
-        # VXLAN, so the gateway knows the real limit for traffic towards the site
+        # VXLAN, so the gateway knows the real limit for traffic towards the site. Per VRF the placement's address
+        # families and prefixes (status.subnets; a status from before per-family subnets: status.prefixes; none yet:
+        # IPv4): the families its FRR VRF carries and the prefixes the site may announce into it
         cg_vrfs: >-
           {%- set out = [] -%}
           {%- set vmtu = ([cg_fabric.spec.overlayMtu | int, (cg_instance.mtu | int) - 50] | min)
@@ -229,9 +249,21 @@
             {%- set r = st.realization | default({}, true) -%}
             {%- if st.cloudGateway | default('') == fab_name and r.l3Vni is defined and r.vpnTarget is defined
                   and not (r.gatewayRelease | default(false) | bool) -%}
+              {%- set subs = st.subnets | default([], true) -%}
+              {%- set p4 = [] -%}
+              {%- set p6 = [] -%}
+              {%- for x in subs -%}
+                {%- set _ = (p6 if x.family | int == 6 else p4).append(x.prefix) -%}
+              {%- endfor -%}
+              {%- if subs | length == 0 -%}
+                {%- for x in st.prefixes | default([], true) -%}
+                  {%- set _ = (p6 if ':' in x else p4).append(x) -%}
+                {%- endfor -%}
+              {%- endif -%}
+              {%- set fams = ([4] if p4 else []) + ([6] if p6 else []) -%}
               {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name,
                                       'vrf': 't' ~ r.l3Vni, 'vni': r.l3Vni | int, 'vpnTarget': r.vpnTarget | int,
-                                      'mtu': vmtu}) -%}
+                                      'mtu': vmtu, 'families': fams or [4], 'prefixes4': p4, 'prefixes6': p6}) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out | sort(attribute='vni') }}
@@ -321,9 +353,11 @@
              | combine({'site': cg_status.site | combine(cg_site_extra),
                                    'nodes': cg_node_results,
                                    'realization': {'model': fab_real.model, 'peIndex': cg_pe.index, 'loopback': cg_pe.loopbackIp,
+                                                   'loopback6': cg_pe.loopbackIp6 | default(''),
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name,
-                                                   'vrfs': cg_vrfs | map('dict2items') | map('rejectattr', 'key', 'equalto', 'mtu')
+                                                   'vrfs': cg_vrfs | map('dict2items')
+                                                           | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6'])
                                                            | map('items2dict') | list}}) }}
 
     # an aws site's routers got new keys: look again once they applied them, so the status shows their sessions

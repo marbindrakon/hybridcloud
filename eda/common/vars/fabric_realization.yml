@@ -16,12 +16,32 @@ fabric_realization_defaults:
   vpnTargetPool: {start: 10000, end: 10999}
   # standard community <domainAsn>:<value> on the routes gateways originate into a site; never taken back
   gatewayCommunity: 999
+  gateway:
+    # per address family: only the placements' prefixes (and the host routes inside them) enter a VRF from the
+    # site, so a site router can't put another prefix into a tenant's network. Off for a family: the site's routes
+    # of that family pass unfiltered (only the gateways' own routes, gatewayCommunity, are refused)
+    siteImportFilter:
+      ipv4: false
+      ipv6: true
   core:
     bridge: br-core
     loopbackPool: 10.255.0.0/24
     linkSubnet: 10.255.1.0/24
     isisArea: "49.0001"
     srgb: {start: 16000, end: 23999}
+    # IPv6 transport of the core (dual-stack core): each root and gateway namespace gets an IPv6 /128 loopback in
+    # the same IS-IS (with its own prefix SID), the core legs carry IPv6 link-local only, and the IPv6 VPN routes
+    # use that loopback as next hop (FRR installs no labelled IPv6 route over an IPv4 next hop). The BGP sessions
+    # stay on the IPv4 loopbacks. Empty = IPv4-only core: nothing IPv6 is rendered or applied. Take a range that
+    # is never advertised outside the core (at least a /120; provider-edge index i gets address i).
+    loopbackPool6: ""
+    # SR index of a provider edge's IPv6 loopback = its IPv4 index + this offset; offset + highest index must stay
+    # inside the SRGB
+    sidOffset6: 1000
+    # source of the ICMPv6 errors a VRF sends (Packet Too Big, Time Exceeded, Unreachable): a /128 per namespace
+    # per node on every VRF device (network address + (node position << 16) + provider-edge index); never
+    # announced. At least a /96, clear of loopbackPool6. Empty = none
+    icmpSource6: ""
   nodes:
     trunkInterface: bond1
     sshUser: root
@@ -141,4 +161,9 @@ fabric_realization_defaults:
                        192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3]
     allowDestinations: []
     # IPv6 internet egress (routed, platform-assigned space only); off: the networks' IPv6 egress reads NotOffered
-    ipv6: {enabled: false}
+    ipv6:
+      enabled: false
+      # the standby node marks its IPv6 default route with <domainAsn>:<standbyCommunity>; the gateways announce
+      # it to the sites with this local preference, so the sites prefer the primary node for IPv6 internet traffic
+      standbyCommunity: 998
+      standbyLocalPref: 50

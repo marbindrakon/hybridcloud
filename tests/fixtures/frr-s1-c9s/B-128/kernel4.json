@@ -1,0 +1,1 @@
+[{"type":"unreachable","dst":"default","metric":4278198272,"flags":[]},{"dst":"10.60.1.0/24","nhid":26,"gateway":"10.65.0.11","dev":"br51000","protocol":"bgp","metric":20,"flags":["onlink"]},{"dst":"10.60.2.0/24","nhid":47,"encap":{"encap_type":"mpls","dst":"16"},"gateway":"10.255.1.3","dev":"core0","protocol":"bgp","metric":20,"flags":[]}]

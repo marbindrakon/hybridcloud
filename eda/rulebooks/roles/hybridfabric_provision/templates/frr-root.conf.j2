@@ -1,3 +1,4 @@
+{% set _v6 = hf_pe.loopback6 | default('') | length > 0 %}
 ! Managed by the platform: HybridFabric {{ fab_name }}, border gateway root instance. Changes here are overwritten.
 frr version 8.5
 frr defaults traditional
@@ -12,12 +13,18 @@ service integrated-vtysh-config
 ! root restarted.
 interface {{ hf_root.bridge }}
  ip router isis CORE
+{% if _v6 %}
+ ipv6 router isis CORE
+{% endif %}
  isis priority 127
  mpls enable
 exit
 !
 interface lo
  ip router isis CORE
+{% if _v6 %}
+ ipv6 router isis CORE
+{% endif %}
  isis passive
  mpls enable
 exit
@@ -38,6 +45,14 @@ router bgp {{ fab_spec.domainAsn }}
   neighbor PE activate
   neighbor PE route-reflector-client
  exit-address-family
+{% if _v6 %}
+ !
+{# the IPv6 VPN routes ride the same sessions (IPv4 loopbacks), with the provider edges' IPv6 loopbacks as next hops #}
+ address-family ipv6 vpn
+  neighbor PE activate
+  neighbor PE route-reflector-client
+ exit-address-family
+{% endif %}
 exit
 !
 {% if hf_node_egress.networks is defined %}
@@ -112,6 +127,7 @@ exit
 {% endfor %}
 {% endfor %}
 {% for n in hf_node_vrfs %}
+{% set _fam = n.families | default([4]) | map('int') | list %}
 ! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ' platform reach ' ~ n.platform | default([]) | join(',') if n.platform | default([]) else '' }}{{ ((' ' if n.egress else '') ~ 'attachment circuits ' ~ n.circuits | map(attribute='id') | join(',')) if n.circuits else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
 router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  bgp router-id {{ hf_pe.loopbackIp }}
@@ -127,6 +143,7 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  neighbor {{ c.ce }} bfd
 {% endif %}
 {% endfor %}
+{% if 4 in _fam %}
  !
  address-family ipv4 unicast
 {% if n.egress %}
@@ -151,6 +168,7 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   export vpn
   import vpn
  exit-address-family
+{% endif %}
 exit
 !
 {% endfor %}
@@ -160,5 +178,8 @@ router isis CORE
  segment-routing on
  segment-routing global-block {{ fab_real.core.srgb.start }} {{ fab_real.core.srgb.end }}
  segment-routing prefix {{ hf_pe.loopback }} index {{ hf_pe.index }}
+{% if _v6 %}
+ segment-routing prefix {{ hf_pe.loopback6 }} index {{ hf_pe.index | int + fab_real.core.sidOffset6 | default(1000) | int }}
+{% endif %}
 exit
 !

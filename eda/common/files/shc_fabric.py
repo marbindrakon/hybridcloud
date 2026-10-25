@@ -5,7 +5,10 @@ Reads one JSON request on stdin, prints one JSON result: {"errors": [...]} plus 
 unless the request itself is malformed. Pure computation: no API calls, nothing secret in or out.
 
 actions:
-  check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names
+  check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names;
+                  the core's IPv6 transport when set: loopbackPool6 an IPv6 network of at least /120, icmpSource6 one of
+                  at least /96, the two apart, sidOffset6 above the highest provider-edge index and offset + index
+                  inside the SRGB
   check-gateway   {fabric: spec, core: realization core, attachments: realization attachments, gateway: spec,
                   others: [CloudGateway objects or {name, spec}]}
                   nodes match the fabric's, one gateway per site, VLAN and site subnet unique on the fabric and the
@@ -17,8 +20,12 @@ actions:
                   inside a prefix), none overlapping an exclusive range in either direction (address space the
                   platform keeps for itself, e.g. its own globally routed space), none holding an accept entry of the
                   network's attachment circuits; reserved (also the exclusive ones) / circuits: the errors of each kind
-  pe-addresses    {core, index}   a provider edge's loopback (/32), core link address, IS-IS NET and node SID label
-                  (index 1 is the border gateway root; the same addresses on every node)
+  pe-addresses    {core, index, nodeOrdinal?}   a provider edge's loopback (/32), core link address, IS-IS NET and
+                  node SID label (index 1 is the border gateway root; the same addresses on every node); with
+                  core.loopbackPool6 also its IPv6 loopback (loopback6 /128, loopbackIp6) and the IPv6 loopback's SID
+                  label (sid6 = SRGB start + sidOffset6 + index), else "" / 0; with core.icmpSource6 and nodeOrdinal
+                  (the node's 1-based position in borderGateway.nodes) icmp6, the namespace's ICMPv6 source on that
+                  node (network address + (nodeOrdinal << 16) + index, /128), else ""
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
                   the site namespace of each CloudVirt namespace: <entity>-<cloudvirt>-<name>, cut to 54 characters
                   plus a hash when longer than 63 (namespace names are global on the site's cluster), with its
@@ -113,6 +120,7 @@ def check_fabric(req):
         pe_max = max(0, min(lo_size - 2, link_size - 2, srgb["end"] - srgb["start"]))
     except ValueError:
         pass
+    errors += core6_check(core, srgb, pe_max, len((spec.get("borderGateway") or {}).get("nodes") or []))
     eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []])
     errors += eg["errors"]
     size["egressPool"] = eg["poolSize"]
@@ -120,6 +128,54 @@ def check_fabric(req):
     errors += at["errors"]
     size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
     return {"errors": errors, "poolSize": size, "peIndexMax": pe_max}
+
+
+def core6(core, key, min_len):
+    """The IPv6 network of core.<key>, None when empty; ValueError when it isn't an IPv6 network of at least /min_len."""
+    v = core.get(key) or ""
+    if not str(v).strip():
+        return None
+    n = ipaddress.ip_network(str(v), strict=True)
+    if n.version != 6:
+        raise ValueError(f"realization core.{key} {n} is not an IPv6 network")
+    if n.prefixlen > min_len:
+        raise ValueError(f"realization core.{key} {n} is too small (at least a /{min_len})")
+    return n
+
+
+def core6_check(core, srgb, pe_max, node_count):
+    """The core's IPv6 transport (loopbackPool6, sidOffset6, icmpSource6): sizes, the SR indexes inside the SRGB and
+    clear of the IPv4 ones, the two ranges apart."""
+    errors, lo6, icmp6 = [], None, None
+    try:
+        lo6 = core6(core, "loopbackPool6", 120)
+    except ValueError as e:
+        errors.append(str(e))
+    try:
+        icmp6 = core6(core, "icmpSource6", 96)
+    except ValueError as e:
+        errors.append(str(e))
+    if lo6 is not None:
+        try:
+            off = int(core.get("sidOffset6", 1000))
+        except (TypeError, ValueError):
+            off = -1
+        span = srgb["end"] - srgb["start"]
+        if off < 1:
+            errors.append(f"realization core.sidOffset6 {core.get('sidOffset6')!r} is not a positive number")
+        elif off + pe_max > span:
+            errors.append(f"realization core.sidOffset6 {off} + the highest provider-edge index {pe_max} is outside "
+                          f"core.srgb {srgb['start']}-{srgb['end']}")
+        elif off <= pe_max:
+            # an IPv6 loopback's index would equal another provider edge's IPv4 index
+            errors.append(f"realization core.sidOffset6 {off} is not above the highest provider-edge index {pe_max}")
+        if lo6.num_addresses <= pe_max:
+            errors.append(f"realization core.loopbackPool6 {lo6} is smaller than the provider-edge indexes (1-{pe_max})")
+    if icmp6 is not None and (node_count << 16) + pe_max >= icmp6.num_addresses:
+        errors.append(f"realization core.icmpSource6 {icmp6} has no room for {node_count} node(s)")
+    if lo6 is not None and icmp6 is not None and lo6.overlaps(icmp6):
+        errors.append(f"realization core.loopbackPool6 {lo6} overlaps core.icmpSource6 {icmp6}")
+    return errors
 
 
 EGRESS_RESERVED_TABLES = {253, 254, 255}
@@ -241,9 +297,30 @@ def pe_addresses(req):
     if not 1 <= i <= min(lo.num_addresses - 2, link.num_addresses - 2, srgb["end"] - srgb["start"]):
         return {"errors": [f"provider-edge index {i} does not fit the core prefixes or the SRGB"]}
     area = core.get("isisArea") or "49.0001"
-    return {"errors": [], "index": i, "loopback": f"{lo.network_address + i}/32", "loopbackIp": str(lo.network_address + i),
-            "link": f"{link.network_address + i}/{link.prefixlen}", "linkIp": str(link.network_address + i),
-            "net": f"{area}.0000.0000.{i:04x}.00", "sid": srgb["start"] + i}
+    out = {"errors": [], "index": i, "loopback": f"{lo.network_address + i}/32", "loopbackIp": str(lo.network_address + i),
+           "link": f"{link.network_address + i}/{link.prefixlen}", "linkIp": str(link.network_address + i),
+           "net": f"{area}.0000.0000.{i:04x}.00", "sid": srgb["start"] + i,
+           "loopback6": "", "loopbackIp6": "", "sid6": 0, "icmp6": ""}
+    try:
+        lo6, icmp6 = core6(core, "loopbackPool6", 120), core6(core, "icmpSource6", 96)
+    except ValueError as e:
+        return {"errors": [str(e)]}
+    if lo6 is not None:
+        sid6 = srgb["start"] + int(core.get("sidOffset6", 1000)) + i
+        if i >= lo6.num_addresses or sid6 > srgb["end"]:
+            return {"errors": [f"provider-edge index {i} does not fit core.loopbackPool6 or the SRGB (sidOffset6)"]}
+        # str() of an ip_address is the canonical compressed form the kernel and FRR print, so the apply and the
+        # readiness checks can compare addresses as text
+        a6 = lo6.network_address + i
+        out.update({"loopback6": f"{a6}/128", "loopbackIp6": str(a6), "sid6": sid6})
+    o = req.get("nodeOrdinal")
+    if icmp6 is not None and o not in (None, ""):
+        o = int(o)
+        a = int(icmp6.network_address) + (o << 16) + i
+        if o < 1 or a > int(icmp6.broadcast_address):
+            return {"errors": [f"node position {o} does not fit core.icmpSource6 {icmp6}"]}
+        out["icmp6"] = f"{ipaddress.IPv6Address(a)}/128"
+    return out
 
 
 def check_gateway(req):
