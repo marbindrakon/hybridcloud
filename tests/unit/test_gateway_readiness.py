@@ -387,7 +387,9 @@ MPLS = """16 dev t51000 proto bgp
 17 dev t51001 proto bgp
 16005 as to 16005 via inet 10.255.1.5 dev core0 proto isis
 """
-GW_PE = {"loopbackIp": "10.255.0.2"}
+# the gateway on the IPv6 core (its FRR VRFs carry IPv6 where the placement has it); GW_PE4: an IPv4-only core
+GW_PE = {"loopbackIp": "10.255.0.2", "loopback6": "2602:81f:4005:ffff::2/128"}
+GW_PE4 = {"loopbackIp": "10.255.0.2", "loopback6": ""}
 LABEL_GW = {"bgw_node": {"name": "bgw-1"}, "fab_name": "iaas1", "cg_fabric": {"spec": {"domainAsn": 65010}}, "cg_pe": GW_PE}
 LABEL_RT = {"bgw_node": {"name": "bgw-1"}, "fab_spec": {"domainAsn": 65010}}
 DUAL = [{"vrf": "t51000", "vni": 51000, "families": [4, 6]}]
@@ -411,10 +413,28 @@ class LabelCheckTest(unittest.TestCase):
     def code(self, path, name, variables):
         return snippet(render(shell_of(path, name), **variables))
 
-    def gw(self, vrfs, asn=65010):
+    def gw(self, vrfs, asn=65010, pe=GW_PE):
         v = copy.deepcopy(LABEL_GW)
         v["cg_fabric"]["spec"]["domainAsn"] = asn
-        return self.code(GW, T_GW_LABEL, dict(v, cg_vrfs=vrfs))
+        return self.code(GW, T_GW_LABEL, dict(v, cg_vrfs=vrfs, cg_pe=pe))
+
+    def test_ipv4_only_core_checks_what_the_file_carries(self):
+        """On a core without IPv6 the template renders no IPv6 address family, whatever the placement holds: the
+        check passes IPv4 only (no FRR read, the IPv4 rule), and a VRF with IPv6 alone has no label to check."""
+        code, args = self.gw([{"vrf": "t51000", "vni": 51000, "families": [4, 6]},
+                              {"vrf": "t51001", "vni": 51001, "families": [4]},
+                              {"vrf": "t51002", "vni": 51002, "families": [6]}], pe=GW_PE4)
+        self.assertEqual(args[3:], ["t51000:4:65010:51000", "t51001:4:65010:51001"])
+        rc, out, calls = execute(code, args, {"-f mpls route": MPLS})
+        self.assertEqual((rc, out), (0, ""))
+        self.assertEqual(calls, [["ip", "-n", "gw-iaas1", "-f", "mpls", "route"]])
+        # the IPv4 rule: no MPLS route into the VRF at all
+        rc, out, _ = execute(code, args, {"-f mpls route": "17 dev t51001 proto bgp\n"})
+        self.assertEqual(out, "t51000 4\n")
+        # the same VRFs on the IPv6 core: IPv6 is checked too
+        _, args6 = self.gw([{"vrf": "t51000", "vni": 51000, "families": [4, 6]},
+                            {"vrf": "t51002", "vni": 51002, "families": [6]}])
+        self.assertEqual(args6[3:], ["t51000:4,6:65010:51000", "t51002:6:65010:51002"])
 
     def test_same_code_on_gateway_and_root(self):
         g, gargs = self.gw([{"vrf": "t51000", "vni": 51000}, {"vrf": "t51001", "vni": 51001, "families": [4, 6]}])
@@ -510,8 +530,10 @@ class AnsibleRenderTest(unittest.TestCase):
         for lo6 in ("", "2602:81f:4005:ffff::2/128"):
             self.same(GW, T_GW_WAIT, dict(copy.deepcopy(GW_VARS), cg_pe={"loopback6": lo6}))
             self.same(RT, T_RT_WAIT, dict(copy.deepcopy(ROOT_VARS), hf_pe={"loopback6": lo6}))
-        self.same(GW, T_GW_LABEL, dict(LABEL_GW, cg_vrfs=[{"vrf": "t51000", "vni": 51000},
-                                                          {"vrf": "t51001", "vni": 51001, "families": [4, 6]}]))
+        for pe in (GW_PE, GW_PE4):
+            self.same(GW, T_GW_LABEL, dict(LABEL_GW, cg_pe=pe, cg_vrfs=[
+                {"vrf": "t51000", "vni": 51000}, {"vrf": "t51001", "vni": 51001, "families": [4, 6]},
+                {"vrf": "t51002", "vni": 51002, "families": [6]}]))
         self.same(RT, T_RT_LABEL, dict(LABEL_RT, hf_node_vrfs=[{"vrf": "e100", "families": []}]))
 
 

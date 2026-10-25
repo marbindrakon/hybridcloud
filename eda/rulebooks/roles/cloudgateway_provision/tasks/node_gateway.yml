@@ -229,14 +229,20 @@
 # from this gateway's loopback under the VRF's RD). Only the family whose label has no route is bound again, under
 # that family; a family with no exported route yet needs one more MPLS route into the VRF. A VRF without the IPv6
 # family is checked as before (any MPLS route into it, IPv4 bound again). Same check code as the root's
-# (python3 -c '<code>' <pathspace> <netns> <loopback> <vrf>:<families>:<rd> ...).
+# (python3 -c '<code>' <pathspace> <netns> <loopback> <vrf>:<families>:<rd> ...). The families are the ones the
+# FRR configuration carries (frr-gateway.conf.j2: IPv6 only with the IPv6 core), so a check never binds a label under
+# an address family the file does not have; a VRF that carries none (IPv6 only, IPv4-only core) has no label.
 - name: "{{ bgw_node.name }}: every VRF's VPN label leads into it"
   ansible.builtin.shell: |
     {% set _vrfs = [] %}
+    {% set _rendered = [4] + ([6] if cg_pe.loopback6 | default('') | length > 0 else []) %}
     {% for v in cg_vrfs %}
-    {% set _ = _vrfs.append(v.vrf ~ ':' ~ (v.families | default([4], true) | join(',')) ~ ':'
+    {% set _fams = v.families | default([4], true) | map('int') | select('in', _rendered) | list %}
+    {% if _fams %}
+    {% set _ = _vrfs.append(v.vrf ~ ':' ~ (_fams | join(',')) ~ ':'
        ~ ((cg_fabric.spec.domainAsn ~ ':' ~ v.vni) if cg_fabric.spec.domainAsn | int <= 65535
           else (cg_pe.loopbackIp ~ ':' ~ (v.vni | int % 65536)))) %}
+    {% endif %}
     {% endfor %}
     bad() {
     python3 -c '
