@@ -39,7 +39,7 @@
 #   The node's private key is generated here once (/etc/shc-fabric/<instance>.wgkey) and never leaves the node;
 #   peers not listed are removed. down also deletes the key.
 #   shc-fabric-apply <instance> post   (gateway, after FRR started: see post_start below)
-# IPv6 core (both types; optional keys, absent or "" = IPv4 only, nothing IPv6 is read or set): loopback6 (the
+# IPv6 core (both types; optional keys, absent or "" = IPv4 only, none of this is read or set): loopback6 (the
 #   namespace's IPv6 loopback, /128 on lo), icmp6 (its ICMP source, /128 on every VRF device), loopbackPool6 and
 #   icmpSource6 (their pools: other addresses from them are removed, also when loopback6 is empty). With loopback6
 #   the namespace is an IPv6 router: forwarding, no router advertisements or SLAAC anywhere; the core leg (gateway
@@ -442,8 +442,8 @@ root)
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
     root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf] | unique | .[]' "$CONF")"
     if [ -n "$V6KNOWN" ]; then  # the egress VRF and the networks' VRFs, as created above
-      for v in $(jq -r '[(.egress // {} | select(.vrf) | [.vrf, .table]), ((.egress.networks // []) + (.attachments.circuits // []) | .[] | [.vrf, .table])]
-          | map(map(tostring) | join(":")) | unique | .[]' "$CONF"); do
+      for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
+          | map("\(.vrf):\(.table)") | unique | .[]' "$CONF"); do
         vrf6 "${v%%:*}" "${v#*:}"
       done
     fi
