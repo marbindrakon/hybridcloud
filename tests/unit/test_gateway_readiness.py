@@ -361,90 +361,134 @@ class RootWaitTest(unittest.TestCase):
 
 # ---- the VPN label per family ---------------------------------------------------------------------------------------
 
-def vpn_detail(rd, entries):
-    """`show bgp ipv4|ipv6 vpn json detail`: {routes: {routeDistinguishers: {rd: {prefix: [path]}}}}; a path leaked
-    from a VRF carries nhVrfName and remoteLabel; a path from a peer carries no nhVrfName."""
-    paths = {}
-    for prefix, vrf, label in entries:
-        p = {"aspath": {"string": "Local"}, "origin": "IGP", "valid": True, "bestpath": {"overall": True},
-             "remoteLabel": label, "nexthops": [{"ip": "0.0.0.0", "afi": "ipv4", "used": True}]}
-        if vrf:
-            p.update({"nhVrfName": vrf, "nhVrfId": 4, "sourced": True, "local": True})
-        paths.setdefault(prefix, []).append(p)
-    return json.dumps({"routes": {"routeDistinguishers": {rd: paths}}})
+def vpn_detail(rds):
+    """`show bgp ipv4|ipv6 vpn json detail` as FRR 8.5.3 prints it: {routes: {routeDistinguishers: {<rd>: {<prefix>:
+    [path]}}}}. rds: {rd: [(prefix, kind, label, who)]}; kind "leak": a path leaked from VRF who (nhVrfName,
+    remoteLabel); "evpn": the same for a route that came from EVPN (FRR prints no remoteLabel for it); "peer": a path
+    received from peer who (peer.peerId, remoteLabel)."""
+    out = {}
+    for rd, entries in rds.items():
+        table = out.setdefault(rd, {})
+        for prefix, kind, label, who in entries:
+            p = {"aspath": {"string": "Local"}, "origin": "IGP", "valid": True, "bestpath": {"overall": True},
+                 "nexthops": [{"ip": "10.255.0.2", "afi": "ipv4", "used": True}]}
+            if kind in ("leak", "evpn"):
+                p.update({"nhVrfName": who, "nhVrfId": 4, "sourced": True, "local": True,
+                          "peer": {"peerId": "0.0.0.0", "routerId": "10.255.0.2"}})
+            else:
+                p["peer"] = {"peerId": who, "routerId": who, "type": "internal"}
+            if kind != "evpn":
+                p["remoteLabel"] = label
+            table.setdefault(prefix, []).append(p)
+    return json.dumps({"vrfId": 0, "vrfName": "default", "routes": {"routeDistinguishers": out}})
 
 
 MPLS = """16 dev t51000 proto bgp
 17 dev t51001 proto bgp
 16005 as to 16005 via inet 10.255.1.5 dev core0 proto isis
 """
+GW_PE = {"loopbackIp": "10.255.0.2"}
+LABEL_GW = {"bgw_node": {"name": "bgw-1"}, "fab_name": "iaas1", "cg_fabric": {"spec": {"domainAsn": 65010}}, "cg_pe": GW_PE}
+LABEL_RT = {"bgw_node": {"name": "bgw-1"}, "fab_spec": {"domainAsn": 65010}}
+DUAL = [{"vrf": "t51000", "vni": 51000, "families": [4, 6]}]
+# the gateway's own tables: the site's routes came from EVPN, so no remoteLabel on them
+OWN4 = vpn_detail({"65010:51000": [("10.60.0.0/24", "evpn", 0, "t51000")]})
+OWN6 = vpn_detail({"65010:51000": [("2602:81f:4005:1001::/64", "evpn", 0, "t51000")]})
+# the route reflector's: this gateway's paths (10.255.0.2), another gateway's under the same RD, another VRF's RD
+RR4 = vpn_detail({"65010:51000": [("10.60.0.0/24", "peer", 16, "10.255.0.2"), ("10.60.1.0/24", "peer", 30, "10.255.0.3")],
+                  "65010:51001": [("10.60.5.0/24", "peer", 17, "10.255.0.2")]})
+RR6 = vpn_detail({"65010:51000": [("2602:81f:4005:1001::/64", "peer", 18, "10.255.0.2"),
+                                  ("2602:81f:4005:1002::/64", "peer", 31, "10.255.0.3")]})
+
+
+def label_answers(mpls, own4=OWN4, own6=OWN6, rr4=RR4, rr6=RR6):
+    return {"-f mpls route": mpls, "-N gw-iaas1 -c show bgp ipv4 vpn json detail": own4,
+            "-N gw-iaas1 -c show bgp ipv6 vpn json detail": own6,
+            "vtysh -c show bgp ipv4 vpn json detail": rr4, "vtysh -c show bgp ipv6 vpn json detail": rr6}
 
 
 class LabelCheckTest(unittest.TestCase):
     def code(self, path, name, variables):
         return snippet(render(shell_of(path, name), **variables))
 
-    def gw(self, vrfs):
-        return self.code(GW, T_GW_LABEL, {"bgw_node": {"name": "bgw-1"}, "fab_name": "iaas1", "cg_vrfs": vrfs,
-                                          "cg_fabric": {"spec": {"domainAsn": 65010}}})
+    def gw(self, vrfs, asn=65010):
+        v = copy.deepcopy(LABEL_GW)
+        v["cg_fabric"]["spec"]["domainAsn"] = asn
+        return self.code(GW, T_GW_LABEL, dict(v, cg_vrfs=vrfs))
 
     def test_same_code_on_gateway_and_root(self):
-        g, gargs = self.gw([{"vrf": "t51000"}, {"vrf": "t51001", "families": [4, 6]}])
-        r, rargs = self.code(RT, T_RT_LABEL, {"bgw_node": {"name": "bgw-1"}, "fab_spec": {"domainAsn": 65010},
-                                             "hf_node_vrfs": [{"vrf": "e100"}]})
+        g, gargs = self.gw([{"vrf": "t51000", "vni": 51000}, {"vrf": "t51001", "vni": 51001, "families": [4, 6]}])
+        r, rargs = self.code(RT, T_RT_LABEL, dict(LABEL_RT, hf_node_vrfs=[{"vrf": "e100"}]))
         self.assertEqual(g, r)
-        self.assertEqual(gargs, ["gw-iaas1", "gw-iaas1", "t51000:4", "t51001:4,6"])
-        self.assertEqual(rargs, ["", "", "e100:4"])
+        # <vrf>:<families>:<rd> with the template's RD (type 0 when the AS fits 16 bits)
+        self.assertEqual(gargs, ["gw-iaas1", "gw-iaas1", "10.255.0.2", "t51000:4:65010:51000", "t51001:4,6:65010:51001"])
+        self.assertEqual(rargs, ["", "", "", "e100:4"])
         self.assertNotIn("'", g)
+        # a 4-byte AS: RD type 1, the loopback and the VNI's low 16 bits
+        _, gargs = self.gw([{"vrf": "t70000", "vni": 70000}], asn=4200000001)
+        self.assertEqual(gargs[3], "t70000:4:10.255.0.2:4464")
 
     def test_ipv4_only_as_today(self):
-        code, args = self.gw([{"vrf": "t51000"}, {"vrf": "t51001"}, {"vrf": "t51002", "families": [4]}])
+        code, args = self.gw([{"vrf": "t51000", "vni": 51000}, {"vrf": "t51001", "vni": 51001},
+                              {"vrf": "t51002", "vni": 51002, "families": [4]}])
         rc, out, calls = execute(code, args, {"-f mpls route": MPLS})
         self.assertEqual((rc, out.split("\n")), (0, ["t51002 4", ""]))
         # IPv4 only: the MPLS table and nothing else
         self.assertEqual(calls, [["ip", "-n", "gw-iaas1", "-f", "mpls", "route"]])
 
-    def test_per_family_labels(self):
-        code, args = self.gw([{"vrf": "t51000", "families": [4, 6]}])
-        v4 = vpn_detail("65010:51000", [("10.60.0.0/24", "t51000", 16), ("10.60.1.0/24", None, 16)])
-        v6 = vpn_detail("65010:51000", [("2602:81f:4005:1001::/64", "t51000", 18)])
+    def test_labels_from_the_route_reflector(self):
+        code, args = self.gw(DUAL)
         # IPv4's 16 is routed into the VRF, IPv6's 18 is not: only IPv6 is bound again
-        rc, out, calls = execute(code, args, {"-f mpls route": MPLS, "ipv4 vpn json detail": v4,
-                                              "ipv6 vpn json detail": v6})
+        rc, out, calls = execute(code, args, label_answers(MPLS))
         self.assertEqual(out, "t51000 6\n")
+        self.assertIn(["vtysh", "-c", "show bgp ipv6 vpn json detail"], calls)
         self.assertIn(["vtysh", "-N", "gw-iaas1", "-c", "show bgp ipv6 vpn json detail"], calls)
-        rc, out, _ = execute(code, args, {"-f mpls route": MPLS + "18 dev t51000 proto bgp\n",
-                                          "ipv4 vpn json detail": v4, "ipv6 vpn json detail": v6})
+        rc, out, _ = execute(code, args, label_answers(MPLS + "18 dev t51000 proto bgp\n"))
         self.assertEqual(out, "")
         # the other way round: IPv4's label went stale
-        rc, out, _ = execute(code, args, {"-f mpls route": "18 dev t51000 proto bgp\n",
-                                          "ipv4 vpn json detail": v4, "ipv6 vpn json detail": v6})
+        rc, out, _ = execute(code, args, label_answers("18 dev t51000 proto bgp\n17 dev t51000 proto bgp\n"))
         self.assertEqual(out, "t51000 4\n")
+
+    def test_own_leaked_labels(self):
+        # routes that did not come from EVPN show their label in the gateway's own table
+        code, args = self.gw(DUAL)
+        own4 = vpn_detail({"65010:51000": [("10.60.0.0/24", "leak", 16, "t51000")]})
+        own6 = vpn_detail({"65010:51000": [("2602:81f:4005:1001::/64", "leak", 18, "t51000")]})
+        empty = json.dumps({"routes": {"routeDistinguishers": {}}})
+        rc, out, _ = execute(code, args, label_answers(MPLS, own4, own6, empty, empty))
+        self.assertEqual(out, "t51000 6\n")
+
+    def test_route_reflector_unreadable(self):
+        code, args = self.gw(DUAL)
+        answers = label_answers(MPLS + "18 dev t51000 proto bgp\n", rr4="not json", rr6="not json")
+        # no label seen: the VRF needs one route per family, it has two
+        rc, out, _ = execute(code, args, answers)
+        self.assertEqual((rc, out), (0, ""))
 
     def test_family_without_exported_routes(self):
         # no IPv6 route exported yet: no label to read, the VRF needs a second label routed into it
-        code, args = self.gw([{"vrf": "t51000", "families": [4, 6]}])
-        v4 = vpn_detail("65010:51000", [("10.60.0.0/24", "t51000", 16)])
-        v6 = json.dumps({"routes": {"routeDistinguishers": {}}})
-        rc, out, _ = execute(code, args, {"-f mpls route": MPLS, "ipv4 vpn json detail": v4, "ipv6 vpn json detail": v6})
+        code, args = self.gw(DUAL)
+        empty = json.dumps({"routes": {"routeDistinguishers": {}}})
+        rc, out, _ = execute(code, args, label_answers(MPLS, rr6=empty, own6=empty))
         self.assertEqual(out, "t51000 6\n")
-        rc, out, _ = execute(code, args, {"-f mpls route": MPLS + "18 dev t51000 proto bgp\n",
-                                          "ipv4 vpn json detail": v4, "ipv6 vpn json detail": v6})
+        rc, out, _ = execute(code, args, label_answers(MPLS + "18 dev t51000 proto bgp\n", rr6=empty, own6=empty))
         self.assertEqual(out, "")
         # neither family exported anything: two labels needed
-        rc, out, _ = execute(code, args, {"-f mpls route": MPLS, "ipv4 vpn json detail": v6, "ipv6 vpn json detail": v6})
+        rc, out, _ = execute(code, args, label_answers(MPLS, empty, empty, empty, empty))
         self.assertEqual(out, "t51000 4\nt51000 6\n")
 
     def test_root_form(self):
-        code, args = self.code(RT, T_RT_LABEL, {"bgw_node": {"name": "bgw-1"}, "fab_spec": {"domainAsn": 65010},
-                                                "hf_node_vrfs": [{"vrf": "e100", "families": [4, 6]}]})
-        v4 = vpn_detail("10.255.0.1:100", [("0.0.0.0/0", "e100", 20)])
-        v6 = vpn_detail("10.255.0.1:100", [("::/0", "e100", 21)])
+        code, args = self.code(RT, T_RT_LABEL, dict(LABEL_RT, hf_node_vrfs=[{"vrf": "e100", "families": [4, 6]}]))
+        v4 = vpn_detail({"10.255.0.1:100": [("0.0.0.0/0", "leak", 20, "e100"), ("10.60.0.0/24", "peer", 16, "10.255.0.2")]})
+        v6 = vpn_detail({"10.255.0.1:100": [("::/0", "leak", 21, "e100")]})
         rc, out, calls = execute(code, args, {"-f mpls route": "20 dev e100 proto bgp\n21 dev e100 proto bgp\n",
-                                              "ipv4 vpn json detail": v4, "ipv6 vpn json detail": v6})
+                                              "show bgp ipv4 vpn json detail": v4, "show bgp ipv6 vpn json detail": v6})
         self.assertEqual((rc, out), (0, ""))
         self.assertEqual(calls[0], ["ip", "-f", "mpls", "route"])
-        self.assertEqual(calls[1][:2], ["vtysh", "-c"])
+        self.assertEqual([c[:2] for c in calls[1:]], [["vtysh", "-c"], ["vtysh", "-c"]])
+        rc, out, _ = execute(code, args, {"-f mpls route": "20 dev e100 proto bgp\n",
+                                          "show bgp ipv4 vpn json detail": v4, "show bgp ipv6 vpn json detail": v6})
+        self.assertEqual(out, "e100 6\n")
 
     def test_rebind_under_the_family(self):
         for path, name in ((GW, T_GW_LABEL), (RT, T_RT_LABEL)):
@@ -466,11 +510,9 @@ class AnsibleRenderTest(unittest.TestCase):
         for lo6 in ("", "2602:81f:4005:ffff::2/128"):
             self.same(GW, T_GW_WAIT, dict(copy.deepcopy(GW_VARS), cg_pe={"loopback6": lo6}))
             self.same(RT, T_RT_WAIT, dict(copy.deepcopy(ROOT_VARS), hf_pe={"loopback6": lo6}))
-        self.same(GW, T_GW_LABEL, {"bgw_node": {"name": "bgw-1"}, "fab_name": "iaas1",
-                                   "cg_fabric": {"spec": {"domainAsn": 65010}},
-                                   "cg_vrfs": [{"vrf": "t51000"}, {"vrf": "t51001", "families": [4, 6]}]})
-        self.same(RT, T_RT_LABEL, {"bgw_node": {"name": "bgw-1"}, "fab_spec": {"domainAsn": 65010},
-                                   "hf_node_vrfs": [{"vrf": "e100", "families": []}]})
+        self.same(GW, T_GW_LABEL, dict(LABEL_GW, cg_vrfs=[{"vrf": "t51000", "vni": 51000},
+                                                          {"vrf": "t51001", "vni": 51001, "families": [4, 6]}]))
+        self.same(RT, T_RT_LABEL, dict(LABEL_RT, hf_node_vrfs=[{"vrf": "e100", "families": []}]))
 
 
 class ShellSyntaxTest(unittest.TestCase):
@@ -484,15 +526,13 @@ class ShellSyntaxTest(unittest.TestCase):
 
     def test_scripts(self):
         self.parse(os.path.join(NP, "gateway_routes.yml"), T_ROUTES, route_vars(["10.60.1.0/24"], ["2001:db8::/64"]))
-        label_gw = {"bgw_node": {"name": "bgw-1"}, "fab_name": "iaas1", "cg_fabric": {"spec": {"domainAsn": 65010}}}
-        label_rt = {"bgw_node": {"name": "bgw-1"}, "fab_spec": {"domainAsn": 65010}}
         for lo6 in ("", "2602:81f:4005:ffff::2/128"):
             self.parse(GW, T_GW_WAIT, dict(copy.deepcopy(GW_VARS), cg_pe={"loopback6": lo6}))
             self.parse(GW, T_GW_READ, dict(copy.deepcopy(GW_VARS), cg_pe={"loopback6": lo6}))
             self.parse(RT, T_RT_WAIT, dict(copy.deepcopy(ROOT_VARS), hf_pe={"loopback6": lo6}))
-        for vrfs in ([], [{"vrf": "t51000"}, {"vrf": "t51001", "families": [4, 6]}]):
-            self.parse(GW, T_GW_LABEL, dict(label_gw, cg_vrfs=vrfs))
-            self.parse(RT, T_RT_LABEL, dict(label_rt, hf_node_vrfs=[dict(v, vrf="e10%d" % i) for i, v in enumerate(vrfs)]))
+        for vrfs in ([], [{"vrf": "t51000", "vni": 51000}, {"vrf": "t51001", "vni": 51001, "families": [4, 6]}]):
+            self.parse(GW, T_GW_LABEL, dict(LABEL_GW, cg_vrfs=vrfs))
+            self.parse(RT, T_RT_LABEL, dict(LABEL_RT, hf_node_vrfs=[dict(v, vrf="e10%d" % i) for i, v in enumerate(vrfs)]))
 
 
 class LabelScriptTest(unittest.TestCase):
@@ -503,8 +543,10 @@ class LabelScriptTest(unittest.TestCase):
     SHIM_VTYSH = """#!/bin/bash
     case "$*" in
       *"configure terminal"*) echo "$*" >> "$SHIM/config"; [ -f "$SHIM/fix" ] && cat "$SHIM/fix" >> "$SHIM/mpls"; exit 0 ;;
-      *"ipv4 vpn json detail"*) cat "$SHIM/v4" ;;
-      *"ipv6 vpn json detail"*) cat "$SHIM/v6" ;;
+      "-N gw-iaas1 -c show bgp ipv4 vpn json detail") cat "$SHIM/own4" ;;
+      "-N gw-iaas1 -c show bgp ipv6 vpn json detail") cat "$SHIM/own6" ;;
+      "-c show bgp ipv4 vpn json detail") cat "$SHIM/rr4" ;;
+      "-c show bgp ipv6 vpn json detail") cat "$SHIM/rr6" ;;
       *) exit 1 ;;
     esac
     """
@@ -519,15 +561,13 @@ class LabelScriptTest(unittest.TestCase):
                 with open(os.path.join(d, name), "w") as f:
                     f.write(body)
                 os.chmod(os.path.join(d, name), 0o755)
-            files = {"mpls": mpls, "v4": vpn_detail("65010:51000", [("10.60.0.0/24", "t51000", 16)]),
-                     "v6": vpn_detail("65010:51000", [("2602:81f:4005:1001::/64", "t51000", 18)])}
+            files = {"mpls": mpls, "own4": OWN4, "own6": OWN6, "rr4": RR4, "rr6": RR6}
             if fix is not None:
                 files["fix"] = fix
             for name, body in files.items():
                 with open(os.path.join(d, name), "w") as f:
                     f.write(body)
-            sh = render(shell_of(GW, T_GW_LABEL), bgw_node={"name": "bgw-1"}, fab_name="iaas1",
-                        cg_fabric={"spec": {"domainAsn": 65010}}, cg_vrfs=[{"vrf": "t51000", "families": [4, 6]}])
+            sh = render(shell_of(GW, T_GW_LABEL), **dict(LABEL_GW, cg_vrfs=DUAL))
             env = dict(os.environ, SHIM=d, PATH=d + os.pathsep + os.environ.get("PATH", ""))
             proc = subprocess.run(["bash", "-s"], input=sh, capture_output=True, text=True, env=env, timeout=60)
             config = ""
@@ -538,7 +578,7 @@ class LabelScriptTest(unittest.TestCase):
 
     def test_nothing_to_do(self):
         proc, config = self.run_task(MPLS + "18 dev t51000 proto bgp\n")
-        self.assertEqual((proc.returncode, proc.stdout.strip(), config), (0, "rebound=", ""))
+        self.assertEqual((proc.returncode, proc.stdout.strip(), config), (0, "rebound=", ""), proc.stderr)
 
     def test_rebind_only_ipv6(self):
         proc, config = self.run_task(MPLS, fix="18 dev t51000 proto bgp\n")
