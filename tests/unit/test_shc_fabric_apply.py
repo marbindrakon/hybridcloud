@@ -141,20 +141,24 @@ class Harness:
         with open(os.path.join(self.etc, instance + ".json"), "w") as f:
             json.dump(data, f, indent=1)
 
-    def run(self, instance, act="up", script="new"):
+    def run(self, instance, act="up", script="new", fail=None):
+        """fail: a regular expression; the fake kernel refuses the calls it matches (FAKE_FAIL)"""
         with open(self.log) as f:
             start = len(f.readlines())
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get("PATH", ""), FAKE_STATE=self.state,
                    FAKE_LOG=self.log)
         env.pop("FAKE_NS", None)
+        env.pop("FAKE_FAIL", None)
+        if fail:
+            env["FAKE_FAIL"] = fail
         p = subprocess.run(["bash", self.scripts[script], instance, act], env=env, capture_output=True, text=True,
                            timeout=120)
         with open(self.log) as f:
             log = [l.rstrip("\n") for l in f.readlines()[start:]]
         return p.returncode, p.stdout, p.stderr, log
 
-    def ok(self, case, instance, act="up", script="new"):
-        rc, out, err, log = self.run(instance, act, script)
+    def ok(self, case, instance, act="up", script="new", fail=None):
+        rc, out, err, log = self.run(instance, act, script, fail)
         case.assertEqual(rc, 0, "%s %s failed: %s\n%s" % (instance, act, err, "\n".join(log[-15:])))
         return out, log
 
@@ -526,6 +530,121 @@ class RootIPv6Test(ApplyCase):
                                         "proto": "ra", "metric": "1024", "table": "main"})
         h.set_state(st)
         h.ok(self, "root")
+
+
+
+def v4_writes(log):
+    """the writes of a run that are not IPv6 ones (the attachment circuit's disable_ipv6=1 is IPv4-era: kept)"""
+    return [l for l in writes(log) if not is_v6(l) or "bond1.3001/disable_ipv6" in l]
+
+
+class IPv6StepFailureTest(ApplyCase):
+    """An IPv6 command the host refuses never stops the IPv4 setup: the marker line on stdout, the IPv6 steps after it
+    left out, every IPv4 write as in a run without the IPv6 keys, exit 0 (a boot keeps the gateways; the jobs fail
+    on the marker)."""
+
+    def root_conf(self, v6=True):
+        c = copy.deepcopy(ROOT_CONF)
+        c["attachments"]["circuits"] = [CIRCUIT]
+        return dict(c, **ROOT6) if v6 else c
+
+    def keyless_root(self):
+        self.h.set_state(blade())
+        self.h.conf("root", self.root_conf(False))
+        return self.h.ok(self, "root")
+
+    def failed_root(self, fail, name):
+        h = self.h
+        h.set_state(blade())
+        h.conf("root", self.root_conf())
+        rc, out, err, log = h.run("root", fail=fail)
+        self.keep(name, log, out + " | stderr: " + err)
+        self.assertEqual(rc, 0, err)
+        return out, log
+
+    def test_root_first_ipv6_step_refused(self):
+        h = self.h
+        out, log = self.failed_root(r"^\[root\] sysctl -qw net/ipv6/conf/br-core/accept_ra=0$", "root-v6-step-refused")
+        self.assertIn("warning: IPv6 settings of the core bridge br-core failed; IPv6 core not applied\n", out)
+        self.assertTrue(out.strip().endswith("changed=yes"), out)
+        self.assertEqual([l for l in writes(log) if is_v6(l) and "bond1.3001/disable_ipv6" not in l], [])
+        self.assertEqual(h.addrs6("", "lo"), ["::1/128"])
+        self.assertEqual(h.unreachable6(""), [])
+        # IPv4 brought up as always: core bridge up with its address, loopback, egress, circuit
+        self.assertTrue(h.link("", "br-core")["up"])
+        self.assertIn("egress0", h.get_state()["ns"][""]["links"])
+        state = h.get_state()
+        _, log4 = self.keyless_root()
+        self.assertEqual(v4_writes(log), v4_writes(log4))
+        self.assertEqual(writes(log), writes(log4))
+        # IPv4 state equal to the keyless run's (the IPv6 settings the step did not reach untouched too)
+        self.assertEqual(state, h.get_state())
+
+    def test_root_later_ipv6_step_refused(self):
+        h = self.h
+        refuse = r"^\[root\] ip -6 route replace unreachable default .* table 110000$"
+        out, log = self.failed_root(refuse, "root-v6-vrf-step-refused")
+        self.assertIn("warning: IPv6 in VRF e10000 failed; IPv6 core not applied\n", out)
+        # the steps before stay done (core bridge, loopback); none after it runs (e10000's ICMP source, the other
+        # VRFs: e10001 and egress come after e10000)
+        self.assertEqual(h.addrs6("", "lo"), ["2001:db8:4005:ffff::1/128", "::1/128"])
+        self.assertEqual(h.sysctl("", "net/ipv6/conf/br-core/accept_ra"), "0")
+        self.assertEqual(h.unreachable6(""), [])
+        for vrf in ("e10000", "e10001", "egress"):
+            self.assertEqual(h.addrs6("", vrf), [], vrf)
+        self.assertEqual([l for l in log if ("e10001" in l or "table 9000" in l) and is_v6(l)], [])
+        # a second run with the same refusal: the same marker, nothing changes
+        rc, out2, err, _ = h.run("root", fail=refuse)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("warning: IPv6 in VRF e10000 failed; IPv6 core not applied\n", out2)
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        _, log4 = self.keyless_root()
+        self.assertEqual(v4_writes(log), v4_writes(log4))
+
+    def gateway(self, gw, fail=None):
+        """the root as with the keys, then the gateway (gw: its JSON), from a fresh blade"""
+        h = self.h
+        h.set_state(blade())
+        h.conf("root", dict(ROOT_CONF, **ROOT6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw)
+        rc, out, err, log = h.run("gw-iaas1", fail=fail)
+        self.assertEqual(rc, 0, err)
+        return out, log
+
+    def test_gateway_first_ipv6_step_refused(self):
+        h = self.h
+        out, log = self.gateway(dict(GW_CONF, **GW6), r"^\[gw-iaas1\] sysctl -qw net/ipv6/conf/all/forwarding=1$")
+        self.keep("gw-iaas1-v6-step-refused", log, out)
+        self.assertIn("warning: the namespace's IPv6 settings failed; IPv6 core not applied\n", out)
+        self.assertTrue(out.strip().endswith("changed=yes"), out)
+        self.assertEqual([l for l in writes(log) if is_v6(l)], [])
+        ns = "gw-iaas1"
+        self.assertEqual(h.addrs6(ns, "lo"), ["::1/128"])
+        self.assertEqual(h.unreachable6(ns), [])
+        # the gateway's IPv4 side is complete: site leg, core leg, VRFs
+        self.assertTrue(h.link(ns, "bond1.236")["up"])
+        self.assertTrue(h.link(ns, "core0")["up"])
+        self.assertIn("vx51002", h.get_state()["ns"][ns]["links"])
+        state = h.get_state()["ns"][ns]
+        _, log4 = self.gateway(GW_CONF)
+        self.assertEqual(writes(log), writes(log4))
+        self.assertEqual(state, h.get_state()["ns"][ns])
+
+    def test_gateway_vrf_step_refused(self):
+        h = self.h
+        out, log = self.gateway(dict(GW_CONF, **GW6), r"^\[gw-iaas1\] ip addr add \S+ dev t51000 nodad$")
+        self.keep("gw-iaas1-v6-vrf-step-refused", log, out)
+        self.assertIn("warning: IPv6 in VRF t51000 failed; IPv6 core not applied\n", out)
+        ns = "gw-iaas1"
+        # done before: the namespace settings, the loopback, the site leg off, core0, t51000's unreachable default;
+        # t51002 gets nothing IPv6 but all of its IPv4 devices
+        self.assertEqual(h.addrs6(ns, "lo"), ["2001:db8:4005:ffff::2/128", "::1/128"])
+        self.assertEqual(h.unreachable6(ns), ["51000"])
+        self.assertEqual(h.addrs6(ns, "t51002"), [])
+        self.assertIn("vx51002", h.get_state()["ns"][ns]["links"])
+        _, log4 = self.gateway(GW_CONF)
+        self.assertEqual(v4_writes(log), v4_writes(log4))
 
 
 if __name__ == "__main__":

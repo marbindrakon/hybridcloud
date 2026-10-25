@@ -66,10 +66,13 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf
 
+# an IPv6 step that fails leaves IPv6 out and the IPv4 side as always (exit 0, so a boot keeps the gateway), and
+# prints the marker the job fails on
 - name: "{{ bgw_node.name }}: apply the gateway instance (namespace, site leg, core leg)"
   ansible.builtin.command: "/usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up"
   register: _cg_apply
   changed_when: "'changed=yes' in _cg_apply.stdout"
+  failed_when: _cg_apply.rc != 0 or 'IPv6 core not applied' in _cg_apply.stdout
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: FRR instance directory"

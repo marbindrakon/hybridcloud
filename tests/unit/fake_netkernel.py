@@ -4,7 +4,9 @@ sysctl, nft, wg, modprobe, vtysh, and cat for /sys and /proc), for test_shc_fabr
 Every tool is a wrapper script `exec python3 fake_netkernel.py <tool> "$@"`. The kernel state (namespaces, links,
 addresses, IPv6 routes, sysctls, nftables tables, WireGuard devices) is a JSON file ($FAKE_STATE); every call is
 appended to $FAKE_LOG as one line "<W|R> [<namespace>] <tool> <args>" (W = it changes the state). `ip netns exec
-<ns> <cmd>` runs <cmd> with $FAKE_NS=<ns>, so the wrapped tools act inside that namespace.
+<ns> <cmd>` runs <cmd> with $FAKE_NS=<ns>, so the wrapped tools act inside that namespace. $FAKE_FAIL (a regular
+expression, optional) makes every call whose "[<namespace>] <tool> <args>" matches it fail (rc 2, no change), as a
+host would refuse it (a missing sysctl, IPv6 disabled).
 
 Modelled kernel behaviour the script depends on: a device takes its IPv6 settings from the namespace's
 net.ipv6.conf.default when it is created or moved into a namespace; writing net.ipv6.conf.all.disable_ipv6 or
@@ -16,6 +18,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import re
 import sys
 
 V6_ATTRS = ("disable_ipv6", "forwarding", "accept_ra", "autoconf")
@@ -614,6 +617,9 @@ def main():
         try:
             if nsname not in st["ns"]:
                 raise Fail('Cannot open network namespace "%s": No such file or directory' % nsname)
+            if os.environ.get("FAKE_FAIL") and re.search(os.environ["FAKE_FAIL"], "[%s] %s %s" % (
+                    nsname or "root", tool, " ".join(args))):
+                raise Fail("%s: Operation not permitted (refused by the test)" % tool, 2)
             if tool == "ip":
                 wrote = ip_main(k, nsname, list(args), out)
             elif tool == "sysctl":

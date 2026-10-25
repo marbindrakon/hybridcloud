@@ -112,6 +112,17 @@ class GatewayConfig(unittest.TestCase):
                          ("2001:db8:4005:ffff::3/128", "2001:db8:4005:1::2:3/128", "2001:db8:4005:ffff::/64",
                           "2001:db8:4005:1::/64"))
 
+    def test_apply_fails_on_the_marker(self):
+        """the apply exits 0 when an IPv6 step failed (a boot keeps the gateway); the job fails on its marker"""
+        t = by_name(self.tasks(), "{{ bgw_node.name }}: apply the gateway instance (namespace, site leg, core leg)")
+        cases = [(0, "changed=yes\n", False), (3, "", True),
+                 (0, "warning: IPv6 in VRF t51000 failed; IPv6 core not applied\nchanged=yes\n", True)]
+        expr = "{{ [%s] }}" % ", ".join("(%s)" % t["failed_when"].replace("_cg_apply", "_a%d" % i)
+                                        for i in range(len(cases)))
+        out = run_play([{"ansible.builtin.set_fact": {"_f": expr}}, write_out("_f")],
+                       {"_a%d" % i: {"rc": rc, "stdout": so} for i, (rc, so, _) in enumerate(cases)})
+        self.assertEqual(out, [c[2] for c in cases])
+
     def test_node_ordinal(self):
         t = by_name(self.tasks(), "{{ bgw_node.name }}: the gateway's ICMPv6 source on this node")
         expr = t["vars"]["fab_check"]["nodeOrdinal"]
