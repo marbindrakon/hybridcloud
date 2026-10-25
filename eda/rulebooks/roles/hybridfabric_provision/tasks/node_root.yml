@@ -101,10 +101,13 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_unit
 
+# A host interface that still learns from router advertisements makes the apply skip the root's IPv6 side (a boot keeps
+# the IPv4 service); here that is a failure the operator has to look at
 - name: "{{ bgw_node.name }}: apply the root instance"
   ansible.builtin.command: /usr/local/sbin/shc-fabric-apply root up
   register: _hf_apply
   changed_when: "'changed=yes' in _hf_apply.stdout"
+  failed_when: _hf_apply.rc != 0 or 'IPv6 core not applied' in _hf_apply.stdout
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: FRR daemons"
