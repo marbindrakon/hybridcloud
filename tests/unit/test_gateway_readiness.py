@@ -193,6 +193,31 @@ class RouteCheckTest(unittest.TestCase):
         self.assertEqual(out["byFamily"]["6"]["siteRoutes"], 1)
         self.assertEqual(out["byFamily"]["6"]["notInKernel"], ["2602:81f:4005:1001::/64"])
 
+    def test_kernel_counts_unicast_routes_only(self):
+        """an address on a VRF device inside the prefix makes the kernel add local (and anycast) entries: they are no
+        route to the placement"""
+        kernel = [r for r in json.loads(fixture("B-64", "kernel6.json")) if r.get("dst") != "2602:81f:4005:1001::/64"]
+        for t in ("local", "anycast", "multicast", "blackhole", "throw"):
+            with self.subTest(type=t):
+                k = kernel + [{"type": t, "dst": "2602:81f:4005:1001::1", "dev": "br51000", "protocol": "kernel",
+                               "metric": 0, "flags": [], "pref": "medium"}]
+                rc, out, _, _ = self.check(route_vars([], ["2602:81f:4005:1001::/64"]),
+                                           bgp6=fixture("B-64", "bgp6.json"), kernel6=json.dumps(k))
+                self.assertEqual((rc, out["byFamily"]["6"]["notInKernel"]), (1, ["2602:81f:4005:1001::/64"]))
+        # an explicit unicast type counts
+        k = kernel + [{"type": "unicast", "dst": "2602:81f:4005:1001::/64", "dev": "br51000"}]
+        rc, out, _, _ = self.check(route_vars([], ["2602:81f:4005:1001::/64"]), bgp6=fixture("B-64", "bgp6.json"),
+                                   kernel6=json.dumps(k))
+        self.assertEqual(rc, 0, out)
+
+    def test_empty_prefixes_keep_the_arguments(self):
+        """no prefix at all: the prefixes argument is an empty string, the others keep their places"""
+        rc, out, calls, args = self.check(route_vars([], []))
+        self.assertEqual(args, ["10.65.0.0/24", "", "gw-iaas1", "gw-iaas1", "t51000"])
+        self.assertEqual((rc, out["missing"], calls), (1, [], []))
+        sh = shell_of(os.path.join(NP, "gateway_routes.yml"), T_ROUTES)
+        self.assertIn('"{{ _prefixes }}"', sh)
+
     def test_ipv6_plain_ipv4_next_hop_and_outside_the_underlay(self):
         bgp = json.loads(fixture("B-64", "bgp6.json"))
         path = bgp["routes"]["2602:81f:4005:1001::/64"][0]

@@ -7,8 +7,9 @@
 #   IPv4 (unchanged): the first valid path of each route; a site route has a next hop inside the site underlay.
 #   IPv6: the best path of each route; a site route has an IPv4 next hop inside the site underlay, plain (a.b.c.d) or
 #     IPv4-mapped (::ffff:a.b.c.d: an EVPN Type-5 IPv6 route over the IPv4 site VTEP); every other next hop (the
-#     core's IPv6 loopbacks, link-local) counts as VPN. A prefix also needs a usable route in the kernel VRF table (not
-#     unreachable/blackhole/prohibit): FRR can hold a valid IPv6 route that zebra never installed.
+#     core's IPv6 loopbacks, link-local) counts as VPN. A prefix also needs a unicast route in the kernel VRF table
+#     (not unreachable/blackhole/prohibit/throw, nor the local/anycast/multicast entries the kernel adds for addresses
+#     on the VRF's devices): FRR can hold a valid IPv6 route that zebra never installed.
 # A family with prefixes never passes on an empty table (an IPv6-only placement included). Sets
 # np_route_nodes [{name, siteRoutes, vpnRoutes, missing: [prefix], byFamily: {"4"|"6": {siteRoutes, vpnRoutes,
 # missing[, notInKernel]}}}] (siteRoutes, vpnRoutes, missing: summed over the families) and np_routes_missing (bool).
@@ -28,9 +29,6 @@
         check() {
         python3 -c '
         import ipaddress, json, subprocess, sys
-
-        BAD = ("unreachable", "blackhole", "prohibit", "throw")
-
 
         def run(cmd):
             return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
@@ -79,7 +77,8 @@
         def kernel_check(entries, mine):
             found = set()
             for r in entries:
-                if r.get("type") in BAD or r.get("dst") in (None, "default"):
+                # ip -j prints "type" only for routes that are not unicast
+                if r.get("type", "unicast") != "unicast" or r.get("dst") in (None, "default"):
                     continue
                 try:
                     net = ipaddress.ip_network(r["dst"], strict=False)
@@ -118,7 +117,7 @@
 
         if __name__ == "__main__":
             sys.exit(main(sys.argv[1:], run))
-        ' {{ np_gateway.spec.siteUnderlay.cidr }} {{ _prefixes }} gw-{{ np_gateway.metadata.name }} gw-{{ np_gateway.metadata.name }} {{ np_names.vrf }}
+        ' {{ np_gateway.spec.siteUnderlay.cidr }} "{{ _prefixes }}" gw-{{ np_gateway.metadata.name }} gw-{{ np_gateway.metadata.name }} {{ np_names.vrf }}
         }
         end=$((SECONDS + {{ np_route_wait | default(0) | int }}))
         while :; do
