@@ -1,0 +1,13 @@
+{
+ "vrfId": 4,
+ "vrfName": "t51000",
+ "tableVersion": 7,
+ "routerId": "10.255.0.2",
+ "defaultLocPrf": 100,
+ "localAS": 65010,
+ "routes": { "::/0": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"external","prefix":"::","prefixLen":0,"network":"::/0","version":2,"locPrf":100,"weight":0,"peerId":"(unspec)","path":"65011 65002","origin":"IGP","announceNexthopSelf":true,"nhVrfName":"default","nhVrfId":0,"nexthops":[{"ip":"2001:db8:6c0::1","hostname":"s6-spike","afi":"ipv6","scope":"global","used":true}]}]
+,"2001:db8:c0::/48": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"external","prefix":"2001:db8:c0::","prefixLen":48,"network":"2001:db8:c0::/48","version":3,"metric":0,"locPrf":100,"weight":0,"peerId":"(unspec)","path":"65012","origin":"IGP","announceNexthopSelf":true,"nhVrfName":"default","nhVrfId":0,"nexthops":[{"ip":"2001:db8:6c0::1","hostname":"s6-spike","afi":"ipv6","scope":"global","used":true}]}]
+,"2602:81f:4005:1001::10/128": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"internal","prefix":"2602:81f:4005:1001::10","prefixLen":128,"network":"2602:81f:4005:1001::10/128","version":6,"metric":0,"locPrf":100,"weight":0,"peerId":"10.65.0.11","path":"","origin":"IGP","announceNexthopSelf":true,"nexthops":[{"ip":"::ffff:10.65.0.11","hostname":"s6-spike","afi":"ipv6","scope":"global","used":true}]}]
+,"2602:81f:4005:1001::11/128": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"internal","prefix":"2602:81f:4005:1001::11","prefixLen":128,"network":"2602:81f:4005:1001::11/128","version":7,"metric":0,"locPrf":100,"weight":0,"peerId":"10.65.0.11","path":"","origin":"IGP","announceNexthopSelf":true,"nexthops":[{"ip":"::ffff:10.65.0.11","hostname":"s6-spike","afi":"ipv6","scope":"global","used":true}]}]
+,"2602:81f:4005:1002::/64": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"external","prefix":"2602:81f:4005:1002::","prefixLen":64,"network":"2602:81f:4005:1002::/64","version":4,"metric":256,"locPrf":100,"weight":0,"peerId":"(unspec)","path":"","origin":"incomplete","announceNexthopSelf":true,"nhVrfName":"default","nhVrfId":0,"nexthops":[{"ip":"2001:db8:6c0::3","hostname":"s6-spike","afi":"ipv6","scope":"global","used":true}]}]
+ }  } 

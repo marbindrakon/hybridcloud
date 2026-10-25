@@ -201,6 +201,59 @@
       {% endif %}
       {% endfor %}
       {% endfor %}
+      {% if hf_pe.loopback6 | default('') | length > 0 %}
+      # IPv6 core: every PE session Established for VPNv4 is listed Established for VPNv6 (the PE group has the
+      # family), and every gateway whose session negotiated VPNv6 has its IPv6 loopback installed from IS-IS; a gateway
+      # not yet rendered with the IPv6 core (the root is rolled out first) negotiates no VPNv6 and is not waited for.
+      # Prints ipv6Vpn=<state> for the node record.
+      python3 -c '
+      import ipaddress, json, subprocess, sys
+
+
+      def run(cmd):
+          return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+      def peers(text, established=False):
+          p = json.loads(text or "{}").get("peers", {})
+          return {k for k, v in p.items() if established or v.get("state") == "Established"}
+
+
+      def main(argv, run):
+          """argv: <IPv4 loopback pool> <IPv6 loopback pool>. Prints ipv6Vpn=<state>; exits 1 while the IPv6 core is not
+          ready on the route reflector."""
+          pool4 = ipaddress.ip_network(argv[0])
+          pool6 = ipaddress.ip_network(argv[1])
+          show = lambda c: run(["vtysh", "-c", c])
+          # "summary established" lists only the sessions that are up AND negotiated the address family; the plain summary
+          # says Established for every session that is up, negotiated or not
+          pe4 = peers(show("show bgp ipv4 vpn summary established json"), True)
+          up6 = peers(show("show bgp ipv6 vpn summary json"))
+          neg6 = peers(show("show bgp ipv6 vpn summary established json"), True)
+          isis6 = json.loads(show("show ipv6 route isis json") or "{}")
+          errors = ["%s: Established for VPNv4 but not listed Established for VPNv6" % p for p in sorted(pe4 - up6)]
+          # a gateway that is not rendered with the IPv6 core yet negotiates no VPNv6: its IPv6 loopback is required only
+          # once its session carries VPNv6
+          for p in sorted(neg6 & pe4):
+              a = ipaddress.ip_address(p)
+              if a not in pool4:
+                  continue
+              lo6 = str(pool6.network_address + (int(a) - int(pool4.network_address))) + "/128"
+              if not any(r.get("protocol") == "isis" and r.get("selected") and r.get("installed")
+                         for r in isis6.get(lo6, [])):
+                  errors.append("%s: VPNv6 negotiated but its IPv6 loopback %s is not an installed IS-IS route" % (p, lo6))
+          for e in errors:
+              print(e, file=sys.stderr)
+          state = ("NoPeers" if not pe4 else "Established" if pe4 <= neg6
+                   else "NoNeg" if not pe4 & neg6 else "Partial")
+          print("ipv6Vpn=" + state)
+          return 1 if errors else 0
+
+
+      if __name__ == "__main__":
+          sys.exit(main(sys.argv[1:], run))
+      ' {{ fab_real.core.loopbackPool }} "{{ fab_real.core.loopbackPool6 | default('') }}"
+      {% endif %}
   register: _hf_verify
   retries: 12
   delay: 5
@@ -211,20 +264,148 @@
 # FRR 8.5: a VRF deleted and created again under the same name (a network's VPN target used again) can keep zebra's old binding of
 # its VPN label: bgpd exports the label, but zebra never installs it into the kernel, so traffic from the core for the
 # VRF is dropped. Every VRF must have an MPLS route into it; a VRF without one gets its label bound again (label vpn
-# export off and on, so the running configuration ends unchanged).
+# export off and on, so the running configuration ends unchanged). Per address family: each family of a VRF has its
+# own label, read from the VPN table (`show bgp ipv4|ipv6 vpn json detail`: the VRF's paths carry nhVrfName and
+# remoteLabel), and only the family whose label has no route is bound again, under that family; a family with no
+# exported route yet needs one more MPLS route into the VRF. A VRF without the IPv6 family is checked as before (any
+# MPLS route into it, IPv4 bound again). Same check code as the gateway's.
 - name: "{{ bgw_node.name }}: every root VRF's VPN label leads into it"
   ansible.builtin.shell: |
-    has() { ip -f mpls route | grep -qE " dev $1( |$)"; }
+    {% set _vrfs = [] %}
+    {% for v in hf_node_vrfs %}
+    {% set _ = _vrfs.append(v.vrf ~ ':' ~ (v.families | default([4], true) | join(','))) %}
+    {% endfor %}
+    bad() {
+    python3 -c '
+    import json, re, subprocess, sys
+
+
+    def run(cmd):
+        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+    def kernel(text):
+        """The MPLS table (ip -f mpls route): every device a line names, and per device the labels routed into it."""
+        devs, into = set(), {}
+        for line in text.splitlines():
+            names = re.findall(r" dev (\S+)", line)
+            devs.update(names)
+            m = re.match(r"(\d+) ", line)
+            if m:
+                for d in names:
+                    into.setdefault(d, set()).add(int(m.group(1)))
+        return devs, into
+
+
+    def paths(o):
+        """Every path object (a dict with remoteLabel) below o."""
+        if isinstance(o, dict):
+            if "remoteLabel" in o:
+                yield o
+            for x in o.values():
+                yield from paths(x)
+        elif isinstance(o, list):
+            for x in o:
+                yield from paths(x)
+
+
+    def own_labels(text):
+        """VRF -> labels, from the own VPN table (show bgp ipv4|ipv6 vpn json detail): a path leaked from a VRF names it
+        in nhVrfName and carries its label vpn export as remoteLabel. FRR 8.5 prints no remoteLabel on a path whose
+        origin is an EVPN route (a gateway site route): those labels come from the route reflector."""
+        found = {}
+        for p in paths(json.loads(text or "{}")):
+            if "nhVrfName" in p:
+                found.setdefault(str(p["nhVrfName"]), set()).add(int(p["remoteLabel"]))
+        return found
+
+
+    def peer_labels(text, peer):
+        """RD -> labels of the paths the route reflector holds from peer (its VPN table, json detail: routes,
+        routeDistinguishers, <rd>, <prefix>, paths with peer.peerId and remoteLabel)."""
+        found = {}
+        rds = json.loads(text or "{}").get("routes", {}).get("routeDistinguishers", {})
+        for rd, sub in rds.items():
+            for p in paths(sub):
+                if str((p.get("peer") or {}).get("peerId", "")) == peer:
+                    found.setdefault(rd, set()).add(int(p["remoteLabel"]))
+        return found
+
+
+    def main(argv, run):
+        """argv: <vtysh pathspace or ""> <netns or ""> <own loopback, the peer address the route reflector sees, or ""> then
+        <vrf>:<families>[:<rd>] per VRF. Prints "<vrf> <family>" per address family whose label has no MPLS route into
+        the VRF."""
+        pathspace, netns, peer = argv[0], argv[1], argv[2]
+        vrfs = []
+        for spec in argv[3:]:
+            name, fams, rd = (spec.split(":", 2) + ["", ""])[:3]
+            vrfs.append((name, sorted({int(f) for f in (fams or "4").split(",") if f}), rd))
+        if not vrfs:
+            return 0
+        ip = ["ip"] + (["-n", netns] if netns else [])
+        vtysh = ["vtysh"] + (["-N", pathspace] if pathspace else [])
+        devs, into = kernel(run(ip + ["-f", "mpls", "route"]))
+        own, rr = {}, {}
+        if any(6 in f for _, f, _ in vrfs):
+            for fam in (4, 6):
+                show = "show bgp ipv%d vpn json detail" % fam
+                own[fam] = own_labels(run(vtysh + ["-c", show]))
+                rr[fam] = {}
+                if peer and pathspace:
+                    # the route reflector (the root FRR on this node): unreadable means unseen, not an error
+                    try:
+                        rr[fam] = peer_labels(run(["vtysh", "-c", show]), peer)
+                    except (OSError, ValueError, subprocess.CalledProcessError):
+                        pass
+        for name, fams, rd in vrfs:
+            if 6 not in fams:
+                # IPv4 only: any MPLS route into the VRF (unchanged)
+                if name not in devs:
+                    print(name, 4)
+                continue
+            have = into.get(name, set())
+            known = {}
+            for f in fams:
+                labels = own[f].get(name, set()) | rr[f].get(rd, set())
+                if labels:
+                    known[f] = labels
+            for f in sorted(known):
+                if not known[f] <= have:
+                    print(name, f)
+            # a family that exports no route yet shows no label: it needs a route into the VRF that the other family
+            # label does not account for (each family has its own label)
+            unseen = [f for f in fams if f not in known]
+            claimed = set().union(*known.values()) if known else set()
+            if unseen and len(have - claimed) < len(unseen):
+                for f in unseen:
+                    print(name, f)
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main(sys.argv[1:], run))
+    ' "" "" "" {{ _vrfs | join(' ') }}
+    }
+    # the families still without their MPLS route after up to <tries> checks 5 s apart (in $b)
+    settle() {
+      for i in $(seq "$1"); do b=$(bad) || return 1; [ -z "$b" ] && return 0; sleep 5; done
+      b=$(bad)
+    }
+    settle 3 || { echo "the VPN label check could not read FRR or the MPLS table" >&2; exit 1; }
     rebound=""
-    for v in {{ hf_node_vrfs | map(attribute='vrf') | join(' ') }}; do
-      for i in 1 2 3; do has "$v" && break; sleep 5; done
-      has "$v" && continue
-      vtysh -c 'configure terminal' -c "router bgp {{ fab_spec.domainAsn }} vrf $v" -c 'address-family ipv4 unicast' \
-        -c 'no label vpn export auto' -c 'label vpn export auto' -c 'end' >/dev/null
-      for i in 1 2 3 4 5 6; do has "$v" && break; sleep 5; done
-      has "$v" || { echo "VRF $v: its VPN label has no MPLS route into it, even after binding it again" >&2; exit 1; }
-      rebound="$rebound $v"
-    done
+    if [ -n "$b" ]; then
+      while read -r v f; do
+        vtysh -c 'configure terminal' -c "router bgp {{ fab_spec.domainAsn }} vrf $v" -c "address-family ipv$f unicast" \
+          -c 'no label vpn export auto' -c 'label vpn export auto' -c 'end' >/dev/null
+        rebound="$rebound $v/ipv$f"
+      done <<< "$b"
+      settle 6 || { echo "the VPN label check could not read FRR or the MPLS table" >&2; exit 1; }
+      if [ -n "$b" ]; then
+        while read -r v f; do echo "VRF $v: its IPv$f VPN label has no MPLS route into it, even after binding it again" >&2; done <<< "$b"
+        exit 1
+      fi
+    fi
     echo "rebound=$rebound"
   args:
     executable: /bin/bash
@@ -232,14 +413,23 @@
   changed_when: _hf_labels.stdout is search('rebound=.')
   delegate_to: "{{ bgw_node.name }}"
 
+# ipv6Vpn: "" without the IPv6 core; else Established (every VPNv4 PE peer negotiated VPNv6), Partial, NoNeg (none
+# did yet) or NoPeers
 - name: "{{ bgw_node.name }}: record the node"
+  vars:
+    _v6: "{{ hf_pe.loopback6 | default('') | length > 0 }}"
+    _ipv6vpn: >-
+      {{ ((_hf_verify.stdout_lines | default([]) | select('match', '^ipv6Vpn=') | list | last | default('='))
+          .split('=', 1) | last) if _v6 | bool else '' }}
   ansible.builtin.set_fact:
     hf_node_results: >-
       {{ hf_node_results | default([]) + [{
            'name': bgw_node.name,
            'ready': true,
-           'message': 'root instance: VPNv4 route reflector, IS-IS SR (SID ' ~ hf_pe.sid ~ '), ' ~ hf_root.bridge ~ ' '
-                      ~ hf_root.link ~ ', loopback ' ~ hf_pe.loopbackIp
+           'ipv6Vpn': _ipv6vpn | trim,
+           'message': 'root instance: VPNv4' ~ (' and VPNv6' if _v6 | bool else '') ~ ' route reflector, IS-IS SR (SID '
+                      ~ hf_pe.sid ~ '), ' ~ hf_root.bridge ~ ' ' ~ hf_root.link ~ ', loopback ' ~ hf_pe.loopbackIp
+                      ~ ((' ' ~ hf_pe.loopbackIp6 | default('')) if _v6 | bool else '')
                       ~ ((', internet egress via ' ~ hf_node_egress.address ~ ' for ' ~ hf_node_egress.networks | length
                           ~ ' network(s)') if hf_node_egress | length > 0 else '')
                       ~ ((', ' ~ hf_node_attach.circuits | length ~ ' attachment circuit(s)')

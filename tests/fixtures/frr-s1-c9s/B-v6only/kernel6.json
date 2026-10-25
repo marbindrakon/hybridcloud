@@ -1,0 +1,1 @@
+[{"dst":"2602:81f:4005:1101::/64","nhid":24,"gateway":"::ffff:10.65.0.11","dev":"br51002","protocol":"bgp","metric":20,"flags":["onlink"],"pref":"medium"},{"type":"multicast","dst":"ff00::/8","dev":"br51002","protocol":"kernel","metric":256,"flags":[],"pref":"medium"},{"type":"unreachable","dst":"default","dev":"lo","metric":4278198272,"flags":[],"pref":"medium"}]

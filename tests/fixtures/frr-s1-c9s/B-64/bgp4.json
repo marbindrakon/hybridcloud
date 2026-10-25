@@ -1,0 +1,10 @@
+{
+ "vrfId": 4,
+ "vrfName": "t51000",
+ "tableVersion": 2,
+ "routerId": "10.255.0.2",
+ "defaultLocPrf": 100,
+ "localAS": 65010,
+ "routes": { "10.60.1.0/24": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"internal","prefix":"10.60.1.0","prefixLen":24,"network":"10.60.1.0/24","version":1,"metric":0,"locPrf":100,"weight":0,"peerId":"10.65.0.11","path":"","origin":"incomplete","announceNexthopSelf":true,"nexthops":[{"ip":"10.65.0.11","hostname":"s6-spike","afi":"ipv4","used":true}]}]
+,"10.60.2.0/24": [{"valid":true,"bestpath":true,"selectionReason":"First path received","pathFrom":"external","prefix":"10.60.2.0","prefixLen":24,"network":"10.60.2.0/24","version":2,"metric":0,"locPrf":100,"weight":0,"peerId":"(unspec)","path":"","origin":"incomplete","announceNexthopSelf":true,"nhVrfName":"default","nhVrfId":0,"nexthops":[{"ip":"10.255.0.3","hostname":"s6-spike","afi":"ipv4","used":true}]}]
+ }  } 
