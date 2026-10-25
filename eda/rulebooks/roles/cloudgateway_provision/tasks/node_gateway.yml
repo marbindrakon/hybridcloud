@@ -48,6 +48,14 @@
     - cg_ipv6_core | default(false) | bool
     - fab_real.core.icmpSource6 | default('', true) | length > 0
 
+- name: "{{ bgw_node.name }}: stop on an ICMPv6 source that does not fit"
+  ansible.builtin.fail:
+    msg: "CloudGateway {{ fab_name }} on {{ bgw_node.name }}: {{ fab_check_result.errors | join('; ') }}"
+  when:
+    - cg_ipv6_core | default(false) | bool
+    - fab_real.core.icmpSource6 | default('', true) | length > 0
+    - fab_check_result.errors | default([]) | length > 0
+
 # the core's IPv6 keys are empty strings on an IPv4-only core and until the fabric offers the IPv6 core;
 # loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges
 - name: "{{ bgw_node.name }}: gateway instance config"

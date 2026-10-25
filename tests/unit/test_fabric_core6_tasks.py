@@ -245,5 +245,40 @@ class RootConfig(unittest.TestCase):
             self.assertEqual((out["realization"]["routeReflector6"], out["realization"]["ipv6Core"]), (rr6, on))
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class IcmpSourceErrors(unittest.TestCase):
+    """The per-node ICMPv6 lookup fails the job with the planner's message (a node position that does not fit
+    icmpSource6), not later on an undefined icmp6."""
+
+    def run_fail(self, path, name, variables):
+        t = by_name(load(path), name)
+        try:
+            run_play([t, write_out("'passed'")], variables)
+        except AssertionError as e:
+            return str(e)
+        return None
+
+    def test_gateway_and_root(self):
+        # a /96 holds 2^16 - 1 node positions
+        small = dict(CORE6, icmpSource6="2001:db8:4005:1::/96")
+        bad = F.pe_addresses({"core": small, "index": 3, "nodeOrdinal": 65536})
+        self.assertEqual(bad, {"errors": ["node position 65536 does not fit core.icmpSource6 2001:db8:4005:1::/96"]})
+        good = F.pe_addresses({"core": CORE6, "index": 3, "nodeOrdinal": 2})
+        common = {"bgw_node": {"name": "bgw-2"}, "fab_name": "site1"}
+        for path, name, extra in (
+                (os.path.join(CG, "node_gateway.yml"), "{{ bgw_node.name }}: stop on an ICMPv6 source that does not fit",
+                 {"cg_ipv6_core": True}),
+                (os.path.join(HF, "node_root.yml"), "{{ bgw_node.name }}: stop on an ICMPv6 source that does not fit", {})):
+            with self.subTest(path=os.path.basename(path)):
+                msg = self.run_fail(path, name, dict(common, fab_real={"core": small}, fab_check_result=bad, **extra))
+                self.assertIn("node position 65536 does not fit core.icmpSource6", msg or "")
+                self.assertIsNone(self.run_fail(path, name, dict(common, fab_real={"core": CORE6},
+                                                                 fab_check_result=good, **extra)))
+        # the gateway before the fabric offers the IPv6 core: no lookup, nothing to check
+        self.assertIsNone(self.run_fail(os.path.join(CG, "node_gateway.yml"),
+                                        "{{ bgw_node.name }}: stop on an ICMPv6 source that does not fit",
+                                        dict(common, fab_real={"core": small}, fab_check_result=bad, cg_ipv6_core=False)))
+
+
 if __name__ == "__main__":
     unittest.main()

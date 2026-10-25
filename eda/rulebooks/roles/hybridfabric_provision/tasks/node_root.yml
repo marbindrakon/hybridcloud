@@ -56,6 +56,13 @@
       nodeOrdinal: "{{ (fab_spec.borderGateway.nodes | map(attribute='name') | list).index(bgw_node.name) + 1 }}"
   when: fab_real.core.icmpSource6 | default('', true) | length > 0
 
+- name: "{{ bgw_node.name }}: stop on an ICMPv6 source that does not fit"
+  ansible.builtin.fail:
+    msg: "HybridFabric {{ fab_name }} on {{ bgw_node.name }}: {{ fab_check_result.errors | join('; ') }}"
+  when:
+    - fab_real.core.icmpSource6 | default('', true) | length > 0
+    - fab_check_result.errors | default([]) | length > 0
+
 # the core's IPv6 keys are empty strings on an IPv4-only core; loopbackPool6 and icmpSource6 let the apply remove
 # addresses an earlier configuration left inside those ranges
 - name: "{{ bgw_node.name }}: root instance config"
