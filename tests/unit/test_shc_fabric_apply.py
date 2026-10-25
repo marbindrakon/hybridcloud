@@ -533,6 +533,91 @@ class RootIPv6Test(ApplyCase):
 
 
 
+class RollbackTest(ApplyCase):
+    """The IPv6 core rolled back: the jobs write the IPv6 keys as "" (pools included). The apply still removes the
+    loopback and ICMP addresses from the pools of its last run (kept in <instance>.pools6), then forgets them; the
+    sysctls and the unreachable defaults stay."""
+
+    EMPTY6 = {"loopback6": "", "icmp6": "", "loopbackPool6": "", "icmpSource6": ""}
+
+    def pools_file(self, instance):
+        return os.path.join(self.h.etc, instance + ".pools6")
+
+    def test_ipv4_only_writes_no_pools_file(self):
+        h = self.h
+        h.conf("root", ROOT_CONF)
+        h.conf("gw-iaas1", dict(GW_CONF, **self.EMPTY6))
+        h.ok(self, "root")
+        h.ok(self, "gw-iaas1")
+        self.assertFalse(os.path.exists(self.pools_file("root")))
+        self.assertFalse(os.path.exists(self.pools_file("gw-iaas1")))
+
+    def test_gateway_rollback(self):
+        h = self.h
+        h.conf("root", dict(ROOT_CONF, **ROOT6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", dict(GW_CONF, **GW6))
+        h.ok(self, "gw-iaas1")
+        with open(self.pools_file("gw-iaas1")) as f:
+            self.assertEqual(f.read(), "2001:db8:4005:ffff::/64\n2001:db8:4005:1::/64\n")
+        ns = "gw-iaas1"
+        h.conf(ns, dict(GW_CONF, **self.EMPTY6))
+        out, log = h.ok(self, ns)
+        self.keep("gw-iaas1-v6-rollback-run1", log, out)
+        self.assertTrue(out.strip().endswith("changed=yes"), out)
+        self.assertEqual(h.addrs6(ns, "lo"), ["::1/128"])
+        self.assertEqual(h.addrs6(ns, "t51000"), [])
+        self.assertEqual(h.addrs6(ns, "t51002"), [])
+        self.assertEqual(sorted(l.split("] ", 1)[1] for l in writes(log) if is_v6(l)), sorted([
+            "ip addr del 2001:db8:4005:ffff::2/128 dev lo",
+            "ip addr del 2001:db8:4005:1::1:2/128 dev t51000",
+            "ip addr del 2001:db8:4005:1::1:2/128 dev t51002"]))
+        # inert leftovers
+        self.assertEqual(h.unreachable6(ns), ["51000", "51002"])
+        self.assertEqual(h.sysctl(ns, "net/ipv6/conf/all/forwarding"), "1")
+        self.assertFalse(os.path.exists(self.pools_file(ns)))
+        # then a run as on an IPv4-only core: no IPv6 call at all
+        out2, log2 = h.ok(self, ns)
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        self.assertEqual([l for l in log2 if is_v6(l)], [])
+
+    def test_root_rollback_and_down(self):
+        h = self.h
+        c = copy.deepcopy(ROOT_CONF)
+        h.conf("root", dict(c, **ROOT6))
+        h.ok(self, "root")
+        h.conf("root", dict(c, **self.EMPTY6))
+        out, log = h.ok(self, "root")
+        self.keep("root-v6-rollback-run1", log, out)
+        self.assertEqual(h.addrs6("", "lo"), ["::1/128"])
+        for vrf in ("egress", "e10000"):
+            self.assertEqual(h.addrs6("", vrf), [], vrf)
+        self.assertEqual(h.unreachable6(""), ["110000", "9000"])
+        self.assertFalse(os.path.exists(self.pools_file("root")))
+        out2, log2 = h.ok(self, "root")
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        self.assertEqual([l for l in log2 if is_v6(l)], [])
+        # down forgets the pools too
+        h.conf("root", dict(c, **ROOT6))
+        h.ok(self, "root")
+        self.assertTrue(os.path.exists(self.pools_file("root")))
+        h.ok(self, "root", "down")
+        self.assertFalse(os.path.exists(self.pools_file("root")))
+
+    def test_pools_file_rewritten_only_on_change(self):
+        h = self.h
+        h.conf("root", dict(ROOT_CONF, **ROOT6))
+        h.ok(self, "root")
+        st = os.stat(self.pools_file("root"))
+        os.utime(self.pools_file("root"), ns=(st.st_atime_ns, 1))
+        h.ok(self, "root")
+        self.assertEqual(os.stat(self.pools_file("root")).st_mtime_ns, 1)
+        h.conf("root", dict(ROOT_CONF, **dict(ROOT6, icmp6="", icmpSource6="")))
+        h.ok(self, "root")
+        with open(self.pools_file("root")) as f:
+            self.assertEqual(f.read(), "2001:db8:4005:ffff::/64\n")
+
+
 def v4_writes(log):
     """the writes of a run that are not IPv6 ones (the attachment circuit's disable_ipv6=1 is IPv4-era: kept)"""
     return [l for l in writes(log) if not is_v6(l) or "bond1.3001/disable_ipv6" in l]

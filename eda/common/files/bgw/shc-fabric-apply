@@ -48,7 +48,9 @@
 #   leaves IPv6 out (prints "warning: ... IPv6 core not applied", IPv4 as always, exit 0) when a host interface
 #   outside the VRFs holds routes from router advertisements, and the same when an IPv6 step fails (a sysctl the
 #   host lacks, an address refused): the rest of IPv6 is left out, IPv4 goes on as without the keys. The
-#   management interface is never touched.
+#   management interface is never touched. The pools of the last run that had them are kept in <instance>.pools6
+#   next to the JSON: a run whose pools are empty (the IPv6 core rolled back) still removes the addresses taken from
+#   them, then forgets them; the IPv6 sysctls and unreachable defaults stay (they don't affect IPv4).
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
@@ -62,6 +64,12 @@ TYPE=$(q .type)
 canon() { [ -z "$1" ] || python3 -c 'import ipaddress, sys; print(ipaddress.ip_interface(sys.argv[1]))' "$1"; }
 LO6=$(canon "$(opt .loopback6)"); ICMP6=$(canon "$(opt .icmp6)")
 LOPOOL6=$(opt .loopbackPool6); ICMPPOOL6=$(opt .icmpSource6)
+# the pools a run without them still cleans up (line 1 loopbackPool6, line 2 icmpSource6)
+POOLS6=/etc/shc-fabric/$I.pools6; POOLS6_USED=""
+if [ -z "$LOPOOL6$ICMPPOOL6" ] && [ -r "$POOLS6" ]; then
+  { read -r LOPOOL6 || true; read -r ICMPPOOL6 || true; } < "$POOLS6"
+  POOLS6_USED=1
+fi
 # IPv6 is set up only with an IPv6 loopback (a dual-stack core); with the pools alone their addresses are removed
 V6=$LO6; V6KNOWN=$LO6$ICMP6$LOPOOL6$ICMPPOOL6
 
@@ -627,4 +635,12 @@ gateway)
   ;;
 *) echo "unknown instance type $TYPE" >&2; exit 2 ;;
 esac
+# remember the pools this run had (rewritten only when they differ); forget them after down, or once a run without
+# pools removed their addresses (kept when an IPv6 step failed: the next run tries again)
+P6=$(printf '%s\n%s' "$(opt .loopbackPool6)" "$(opt .icmpSource6)")
+if [ "$ACT" = up ] && [ -n "$P6" ]; then
+  { [ -r "$POOLS6" ] && [ "$(<"$POOLS6")" = "$P6" ]; } || printf '%s\n' "$P6" > "$POOLS6"
+elif [ "$ACT" = down ] || [ -n "$POOLS6_USED" ]; then
+  [ -n "$V6FAILED" ] || rm -f "$POOLS6"
+fi
 [ "$before" = "$(snapshot)" ] && echo "changed=no" || echo "changed=yes"
