@@ -40,7 +40,11 @@
     _site: "{{ cb_placement.status.realization.site }}"
   ansible.builtin.set_fact:
     cb_placement_ref: "{{ cb_placement.metadata.namespace }}/{{ cb_placement.metadata.name }}"
-    cb_machine_cidr: "{{ cb_placement.status.prefixes[0] }}"
+    # the placement's IPv4 subnet (status.subnets, else the IPv4 entry of status.prefixes): the cluster's machine network
+    cb_machine_cidr: >-
+      {{ ((cb_placement.status.subnets | default([], true) | selectattr('family', 'defined')
+           | selectattr('family', 'equalto', 4) | map(attribute='prefix') | list)
+          + (cb_placement.status.prefixes | default([], true) | reject('search', ':') | list) + ['']) | first }}
     cb_vpc_id: "{{ _site.vpc }}"
     cb_subnet_ids: "{{ _site.subnets | map(attribute='id') | list }}"
     cb_tenant_cfg:
@@ -50,6 +54,13 @@
       entry: automation
       azs: "{{ _site.subnets | map(attribute='az') | list }}"
       tags: {shc-entity: "{{ aws_entity }}", shc-network: "{{ aws_network }}"}
+
+- name: Refuse a placement without IPv4
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: NetworkPlacement {{ cb_placement_ref }} has no IPv4 subnet;
+      the platform reaches clusters over IPv4, so the network needs IPv4 space
+  when: cb_machine_cidr | trim | length == 0
 
 - name: Record the network on the status (teardown undoes what it asks for)
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

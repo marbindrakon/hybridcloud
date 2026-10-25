@@ -176,6 +176,20 @@
       vars:
         fab_real_fabric: "{{ ac_fabric.metadata.name }}"
 
+    # the platform's own BGP sessions (e.g. its internet hand-off) use these AS numbers; a CE on one would collide
+    - name: Refuse an AS number the platform keeps for itself
+      ansible.builtin.set_fact:
+        fab_fail_reason: PeerAsnReserved
+        fab_fail_msg: >-
+          AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }}: this AS is reserved by the
+          platform; the CE needs a different one
+      when: ac_bgp.peerAsn | int in ((fab_real.attachments | default({}, true)).reservedAsns | default([], true) | map('int') | list)
+
+    - name: Stop on a reserved AS number
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_reason | default('') == 'PeerAsnReserved'
+
     # the network's address space (as asked for and as the IPAM holds it) is the tenant's own: no CE route in it
     - name: Check the accept list
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"

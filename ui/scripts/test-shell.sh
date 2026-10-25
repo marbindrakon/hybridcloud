@@ -28,6 +28,7 @@ entries=(
   "hooks/k8s.ts:k8s"
   "hooks/overviewCrs.ts:overviewCrs"
   "forms/attachable.ts:attachable"
+  "forms/ipv6.ts:ipv6"
   "access/sharedWithYou.ts:sharedWithYou"
   "status/deletePreview.ts:deletePreview"
   "i18n/vocabulary.ts:vocabulary"

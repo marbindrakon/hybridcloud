@@ -1,0 +1,32 @@
+---
+# The placement's subnets from the ipam-allocate result: status.prefixes (IPv4 first, unchanged meaning) and
+# status.subnets, one row per family {family, prefix, gateway (IPv4: the first host), source} — the IPAM's own rows
+# when it returns them, else built from the prefixes (source Network).
+# Inputs: fab_ipam_result, np_status. Sets np_prefixes, np_prefixes_v4, np_subnets, np_status.
+- name: Keep the subnets
+  vars:
+    _rows: >-
+      {%- set out = [] -%}
+      {%- set given = fab_ipam_result.subnets | default([], true) -%}
+      {%- if given | length > 0 -%}
+        {%- for r in given -%}{%- set _ = out.append(r) -%}{%- endfor -%}
+      {%- else -%}
+        {%- for p in fab_ipam_result.prefixes | default([], true) -%}
+          {%- set _ = out.append({'family': 6 if ':' in p else 4, 'prefix': p, 'source': 'Network'}) -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- set rows = [] -%}
+      {%- for r in out | sort(attribute='family') -%}
+        {%- if r.family | int == 4 -%}
+          {%- set a = r.prefix.split('/')[0].split('.') -%}
+          {%- set _ = rows.append(r | combine({'gateway': a[:3] | join('.') ~ '.' ~ (a[3] | int + 1)})) -%}
+        {%- else -%}
+          {%- set _ = rows.append(r) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ rows }}
+  ansible.builtin.set_fact:
+    np_prefixes: "{{ fab_ipam_result.prefixes }}"
+    np_prefixes_v4: "{{ fab_ipam_result.prefixes | reject('search', ':') | list }}"
+    np_subnets: "{{ _rows }}"
+    np_status: "{{ np_status | combine({'prefixes': fab_ipam_result.prefixes, 'subnets': _rows}) }}"

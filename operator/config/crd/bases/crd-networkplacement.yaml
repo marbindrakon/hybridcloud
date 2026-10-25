@@ -52,14 +52,35 @@ spec:
             spec:
               description: The network and the environment it is placed on.
               type: object
-              required: [network, backend, ipv4]
+              required: [network, backend]
               x-kubernetes-validations:
-                - rule: >-
-                    self.backend.kind != 'CloudAWS' || (has(self.ipv4.prefixLength) ? self.ipv4.prefixLength <= 24
-                    : (!isCIDR(self.ipv4.prefix) || cidr(self.ipv4.prefix).prefixLength() <= 24))
-                  message: the IPv4 subnet of a CloudAWS placement must be /16 to /24
+                - rule: has(self.ipv4) || has(self.ipv6)
+                  message: the placement needs spec.ipv4, spec.ipv6 or both
+                - rule: has(self.ipv4) == has(oldSelf.ipv4)
+                  message: spec.ipv4 cannot be added or removed
                 - rule: has(self.ipv6) == has(oldSelf.ipv6)
                   message: spec.ipv6 cannot be added or removed
+                - rule: >-
+                    self.backend.kind != 'CloudAWS' || !has(self.ipv4)
+                    || (has(self.ipv4.prefixLength) ? self.ipv4.prefixLength <= 24
+                    : (!has(self.ipv4.prefix) || !isCIDR(self.ipv4.prefix) || cidr(self.ipv4.prefix).prefixLength() <= 24))
+                  message: the IPv4 subnet of a CloudAWS placement must be /16 to /24
+                - rule: >-
+                    !has(self.ipv6) || !has(self.ipv6.source) || self.ipv6.source != 'Provider'
+                    || self.backend.kind == 'CloudAWS' || self.backend.kind == 'CloudGCP'
+                  message: spec.ipv6.source Provider is offered only on CloudAWS and CloudGCP
+                - rule: >-
+                    !has(self.ipv6) || has(self.ipv6.prefixLength) || has(self.ipv6.prefix)
+                    || (has(self.ipv6.source) && self.ipv6.source == 'Provider')
+                    || self.backend.kind == 'CloudAWS' || self.backend.kind == 'CloudGCP'
+                  message: spec.ipv6 needs prefixLength or prefix
+                - rule: >-
+                    !has(self.ipv6) || (self.backend.kind == 'CloudAWS'
+                    ? (!has(self.ipv6.prefixLength) || self.ipv6.prefixLength != 64)
+                      && (!has(self.ipv6.prefix) || !isCIDR(self.ipv6.prefix) || cidr(self.ipv6.prefix).prefixLength() != 64)
+                    : (!has(self.ipv6.prefixLength) || self.ipv6.prefixLength == 64)
+                      && (!has(self.ipv6.prefix) || !isCIDR(self.ipv6.prefix) || cidr(self.ipv6.prefix).prefixLength() == 64))
+                  message: the IPv6 subnet must be a /64 (a /56 or /60 on CloudAWS)
               properties:
                 network:
                   type: string
@@ -90,12 +111,12 @@ spec:
                 ipv4:
                   type: object
                   description: >-
-                    The placement's IPv4 subnet: a size (prefixLength) the platform allocates from the network's
-                    IPv4 prefixes, or a pinned prefix inside them (prefix), or both when they agree. A pinned prefix
-                    is never replaced by another: one outside the network's space or clashing with the site's own
-                    networks is refused, and one held by another placement waits until it is free. Without room the
-                    placement waits until the network grows or a placement goes away. The first usable address is
-                    the gateway. Immutable.
+                    The placement's IPv4 subnet (optional when spec.ipv6 is given): a size (prefixLength) the
+                    platform allocates from the network's IPv4 prefixes, or a pinned prefix inside them (prefix), or
+                    both when they agree. A pinned prefix is never replaced by another: one outside the network's
+                    space or clashing with the site's own networks is refused, and one held by another placement
+                    waits until it is free. Without room the placement waits until the network grows or a placement
+                    goes away. The first usable address is the gateway. Cannot be added, removed or changed.
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.ipv4 is immutable
@@ -127,31 +148,47 @@ spec:
                 ipv6:
                   type: object
                   description: >-
-                    The placement's IPv6 subnet (optional), from the network's IPv6 prefixes, by
-                    size or pinned as for ipv4. Refused (FamilyUnavailable) where the platform does
-                    not offer IPv6 for the environment type. Immutable.
+                    The placement's IPv6 subnet (optional when spec.ipv4 is given), from the network's IPv6 address
+                    space, by size or pinned as for ipv4, or on a public-cloud environment from the cloud provider
+                    (source). The network must have IPv6 address space, and the environment's site must offer IPv6;
+                    otherwise the placement is refused (FamilyUnavailable). Cannot be added, removed or changed.
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.ipv6 is immutable
-                    - rule: has(self.prefixLength) || has(self.prefix)
-                      message: spec.ipv6 needs prefixLength or prefix
+                    - rule: >-
+                        !has(self.prefix) || !has(self.prefixLength) || !isCIDR(self.prefix)
+                        || cidr(self.prefix).prefixLength() == self.prefixLength
+                      message: spec.ipv6.prefix must be as long as spec.ipv6.prefixLength
+                    - rule: "!has(self.source) || self.source != 'Provider' || (!has(self.prefixLength) && !has(self.prefix))"
+                      message: spec.ipv6 with source Provider takes no prefixLength or prefix (the cloud provider assigns the range)
                   properties:
                     prefixLength:
-                      description: Size of the subnet the platform allocates. Only 64 is accepted.
+                      description: >-
+                        Size of the subnet the platform allocates: 64, or 56 or 60 on CloudAWS (for example 64 for
+                        a /64). Not used with source Provider. On CloudAWS and CloudGCP it may be omitted; the
+                        site's default size then applies.
                       type: integer
-                      minimum: 64
-                      maximum: 64
+                      enum: [56, 60, 64]
                     prefix:
                       description: >-
-                        A pinned IPv6 /64 in canonical form, inside one of the network's IPv6
-                        prefixes.
+                        A pinned IPv6 subnet in canonical form (host bits zero), inside the network's IPv6 address
+                        space: a /64, or a /56 or /60 on CloudAWS. Not used with source Provider.
                       type: string
                       maxLength: 43
                       x-kubernetes-validations:
                         - rule: isCIDR(self) && cidr(self).ip().family() == 6 && string(cidr(self).masked()) == self
                           message: spec.ipv6.prefix must be an IPv6 network prefix in canonical form (host bits zero)
-                        - rule: "!isCIDR(self) || cidr(self).prefixLength() == 64"
-                          message: spec.ipv6.prefix must be a /64
+                        - rule: "!isCIDR(self) || cidr(self).prefixLength() == 56 || cidr(self).prefixLength() == 60 || cidr(self).prefixLength() == 64"
+                          message: spec.ipv6.prefix must be a /56, /60 or /64
+                    source:
+                      description: >-
+                        Where this placement's IPv6 subnet comes from on a public-cloud site. Network takes it from
+                        the network's platform-assigned IPv6 space; its internet traffic leaves through the platform.
+                        Provider takes an IPv6 range from the cloud provider; its internet traffic uses the
+                        provider's path. Provider needs a network whose IPv6 the platform assigns. When omitted, the
+                        site's default applies; status reports the result.
+                      type: string
+                      enum: [Network, Provider]
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -182,6 +219,61 @@ spec:
                   description: The subnets allocated to the placement, IPv4 first. Fixed for the placement's life.
                   items:
                     type: string
+                subnets:
+                  type: array
+                  description: The placement's subnets, one per address family, with where each comes from.
+                  items:
+                    type: object
+                    properties:
+                      family:
+                        type: integer
+                        description: 4 or 6.
+                      prefix:
+                        type: string
+                        description: The subnet.
+                      gateway:
+                        type: string
+                        description: The subnet's gateway address, where the platform assigns one.
+                      source:
+                        type: string
+                        description: Network (from the network's address space) or Provider (assigned by the cloud provider).
+                ipv6:
+                  type: object
+                  description: How the placement's IPv6 is realized.
+                  properties:
+                    addressing:
+                      type: string
+                      description: How workloads get IPv6 addresses, DHCPv6 or SLAAC (informational).
+                    internet:
+                      type: object
+                      description: IPv6 internet access of the placement.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending or unavailable.
+                        path:
+                          type: string
+                          description: Fabric (through the platform) or Provider (the cloud provider's own path).
+                        reason:
+                          type: string
+                          description: One-word reason when not ready.
+                        message:
+                          type: string
+                          description: What the reason means for this placement, in plain words.
+                    translation:
+                      type: object
+                      description: >-
+                        For an IPv6-only placement: the translation prefix and resolvers its workloads use to reach
+                        IPv4-only destinations.
+                      properties:
+                        pref64:
+                          type: string
+                          description: The IPv6 prefix that IPv4 destinations are translated into.
+                        resolvers:
+                          type: array
+                          description: DNS resolvers that synthesize IPv6 answers for IPv4-only names.
+                          items:
+                            type: string
                 namespaces:
                   type: array
                   description: CloudVirt site namespaces the network serves (the environment's namespaces that name it).

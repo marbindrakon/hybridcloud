@@ -1,0 +1,31 @@
+---
+# Wake every Entity of the platform namespace (not being deleted), so the Entity job rewrites the tenant profiles
+# after something tenants see there changed (for a fabric: TenantProfile status.ipv6Platform). A ready Entity has no
+# periodic reconcile, so a wake that is not sent is not made up for from here: missing CRs are ignored, and a failed
+# list is reported in we_entities_listed for the caller, which then records nothing as told and wakes again on its
+# next run (the fabric job stores tenantOffer only when the Entities were listed).
+# Input: we_namespace (the platform namespace). Sets we_entities_listed.
+- name: List the Entities
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Entity
+    namespace: "{{ we_namespace }}"
+  register: _we_entities
+  failed_when: false
+
+- name: Keep whether the Entities were listed
+  ansible.builtin.set_fact:
+    we_entities_listed: "{{ not (_we_entities.failed | default(false) | bool) and _we_entities.resources is defined }}"
+
+- name: Wake them
+  ansible.builtin.include_tasks: nudge_cr.yml
+  vars:
+    nudge_crs: >-
+      {%- set out = [] -%}
+      {%- for o in _we_entities.resources | default([], true) if o.metadata.deletionTimestamp is not defined -%}
+        {%- set _ = out.append({'kind': 'Entity', 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+      {%- endfor -%}
+      {{ out }}

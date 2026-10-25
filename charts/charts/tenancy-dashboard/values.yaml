@@ -4,7 +4,7 @@ clusterDomain: apps.shcservices.lab.signal9.gg
 
 image:
   repository: quay.signal9.gg/hybrid-sovereign/tenancy-dashboard
-  tag: "img-5.3.4"
+  tag: "img-5.3.6"
   pullPolicy: Always
 
 imagePullSecrets:

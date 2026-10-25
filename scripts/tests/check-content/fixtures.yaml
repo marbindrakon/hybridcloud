@@ -97,6 +97,15 @@ rendered_pages:
     hits: []
   - lines: ["Tenant", "oso", "OpenStack environment oso"]
     hits: [oso]
+  # v3-gate 8: the placement page's "Address family not available" alert printed the job's message verbatim;
+  # it now shows it in display words
+  - lines: ["Name", "g6-v6only-vms", "Address family not available", "The platform did not create this placement's subnets: the environment's site or the network does not offer an address family the placement asks for. NetworkPlacement g6-v6only-vms: IPv6 is not available on this environment's site (iaas1) Delete the placement and attach the network again with the families the site offers."]
+    hits: [NetworkPlacement]
+  - lines: ["Name", "g6-v6only-vms", "Address family not available", "The platform did not create this placement's subnets: the environment's site or the network does not offer an address family the placement asks for. Network placement g6-v6only-vms: IPv6 is not available on this environment's site (iaas1). Delete the placement and attach the network again with the families the site offers."]
+    hits: []
+  # the network page's IPv6ModeInUse row, in display words
+  - lines: ["Name", "g6-v6only", "Reason", "network g6-v6only: the network's IPv6 mode can't change while it has placements; remove them or create a new network (it is Tenant, the spec asks for Platform)"]
+    hits: []
 # Kind words in display strings of .tsx sources (g): `hits` are the words the check reports.
 source_kinds:
   - source: "<RefSelect id=\"cloudoso\" label=\"CloudOSO\" value={v} />"

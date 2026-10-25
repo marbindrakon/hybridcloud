@@ -1,0 +1,33 @@
+---
+# The platform IPv6 offer of a fabric, as tenants see it in TenantProfile status.ipv6Platform: the block sizes of its
+# family-6 platform address pool and the size given when a request names none, from the pool rows the HybridFabric
+# job publishes in status.realization.ipam.pools (fabric_ipam_pools.yml; a list of rows, a map is accepted too).
+# Pure (no API call); included by the Entity job (tenant profile) and the HybridFabric job (to tell whether what
+# tenants see changed).
+# Input:  ipo_pools  the fabric's status.realization.ipam.pools (may be undefined or None)
+# Output: ipv6_platform_offer  {blockLengths: [ascending ints], defaultBlockLength?: int}, or {} when the fabric
+#         reports no family-6 pool with block sizes (or no pool rows at all)
+- name: The fabric's platform IPv6 offer
+  ansible.builtin.set_fact:
+    ipv6_platform_offer: >-
+      {%- set _p = ipo_pools | default([], true) -%}
+      {%- set _rows = (_p.values() | list) if _p is mapping else (_p if _p is iterable and _p is not string else []) -%}
+      {%- set _v6 = [] -%}
+      {%- for r in _rows if r is mapping and (r.family | default(0) | int) == 6 -%}
+        {%- set _ = _v6.append(r) -%}
+      {%- endfor -%}
+      {#- one pool per family and fabric (fabric_ipam_pools.yml refuses two) -#}
+      {%- set _row = (_v6 | first) if _v6 | length > 0 else {} -%}
+      {%- set _lengths = [] -%}
+      {%- for n in _row.blockLengths | default([], true) if (n | int) >= 1 and (n | int) <= 128 -%}
+        {%- set _ = _lengths.append(n | int) -%}
+      {%- endfor -%}
+      {%- set _lengths = _lengths | unique | sort -%}
+      {%- set _def = (_row.defaultBlock | default(_row.defaultBlockLength | default(0, true), true)) | int -%}
+      {%- if _lengths | length == 0 -%}
+        {{ {} }}
+      {%- elif _def in _lengths -%}
+        {{ {'blockLengths': _lengths, 'defaultBlockLength': _def} }}
+      {%- else -%}
+        {{ {'blockLengths': _lengths} }}
+      {%- endif -%}

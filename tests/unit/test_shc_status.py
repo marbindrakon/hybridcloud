@@ -263,13 +263,15 @@ class Registry(unittest.TestCase):
 
     def test_reasons_used_in_code_are_registered(self):
         import re
-        pat = re.compile(r"reason['\"]?:\s*['\"]?([A-Z][A-Za-z]+)")
+        # reason names may hold digits (IPv6ModeInUse); a part reason (status.egress.families[].reason) is registered
+        # in PART_REASONS
+        pat = re.compile(r"reason['\"]?:\s*['\"]?([A-Z][A-Za-z0-9]+)")
         missing = set()
         for base in ("eda", "operator"):
             for path in glob.glob(os.path.join(ROOT, base, "**", "*.yml"), recursive=True):
                 with open(path, encoding="utf-8", errors="replace") as fh:
                     for m in pat.finditer(fh.read()):
-                        if R.lookup(m.group(1)) is None:
+                        if R.lookup(m.group(1)) is None and m.group(1) not in getattr(R, "PART_REASONS", {}):
                             missing.add(m.group(1))
         self.assertEqual(sorted(missing), [])
 

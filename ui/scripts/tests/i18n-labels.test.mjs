@@ -38,7 +38,7 @@ test('kinds.<Kind> and kindsOne.<Kind> are strings for every kind', () => {
 });
 
 test('en and fr have the same keys under the stream-owned prefixes', () => {
-  const owned = ['kinds', 'kindsOne', 'status', 'phase', 'form', 'fields', 'detail', 'list', 'attach', 'callout', 'toasts', 'wayin', 'sites', 'review', 'durations'];
+  const owned = ['kinds', 'kindsOne', 'status', 'phase', 'form', 'fields', 'detail', 'list', 'attach', 'callout', 'toasts', 'wayin', 'sites', 'review', 'durations', 'ipv6'];
   for (const p of owned) {
     if (!en[p]) continue;
     const a = new Set(leaves(en[p]));

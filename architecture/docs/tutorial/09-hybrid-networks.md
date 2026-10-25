@@ -37,8 +37,11 @@ touch it.
      description: shared services network
      prefixes: [10.110.0.0/16, "fd12:3456:789a::/48"]
    ```
-   - `prefixes` is the network's address space: 1–8 prefixes in canonical form (host bits zero), at least one
-     IPv4, not overlapping each other. IPv4 /8–/29, IPv6 /32–/64.
+   - `prefixes` is the network's address space: up to 8 prefixes in canonical form (host bits zero), not
+     overlapping each other. IPv4 /8–/29, IPv6 /32–/64 (global unicast or unique local). The ULA above makes this
+     a network with its own IPv6 prefix; a network can instead take its IPv6 from the platform, or have none
+     ([IPv6 for a hybrid network](#ipv6-for-a-hybrid-network)). A network needs address space from `prefixes`,
+     `platformPrefixes` or both.
    - The platform never allocates its own ranges inside the space (they are not free in `addressSpace`). A prefix
      lying wholly inside one of them is refused (`PrefixReserved`).
    - Prefixes can be added at any time. A change that would leave a placement's subnet outside the space is refused
@@ -101,8 +104,10 @@ touch it.
      until a prefix is added or a placement goes away.
    - A pinned prefix is never replaced: outside the space, or on one of the platform's or the site's ranges, it is
      refused (`PrefixInvalid`); held by another placement, the placement waits until it is free.
-   - `ipv6` (optional, /64) is accepted, but where the platform doesn't offer IPv6 for the environment type the placement
-     fails with `FamilyUnavailable`, before anything is allocated.
+   - `ipv4` and `ipv6` are each optional; a placement needs at least one. `ipv6` is a /64 on VM and OpenStack
+     environments (sizes per environment type and the cloud `source` in
+     [A placement's IPv6 subnet](#a-placements-ipv6-subnet)). Where the site doesn't offer IPv6 the placement fails
+     with `FamilyUnavailable`, before anything is allocated.
    - `network`, `backend` (the environment), `ipv4` and `ipv6` are immutable. To resize, create a new placement.
    - On OpenStack the placement's network appears in the environment's project as a **shared network**. Attach VMs to
      it; its router and subnets belong to the platform.
@@ -135,6 +140,218 @@ A network has no route to the internet unless it asks for one. Two ways:
     another path, e.g. after a failure.
 - **Your own edge**: leave `egress.internet` off and bring the default route through your own edge router (for
   example one that backhauls to your premises). Then the platform never adds a default route of its own.
+
+## IPv6 for a hybrid network
+
+A network carries IPv6 in one of three ways. You choose by the fields you fill in; there is no separate switch.
+The network reports what it derived in `status.ipv6.mode` and on its page.
+
+| Your choice (network form) | Fields | `status.ipv6.mode` | Between your sites | IPv6 internet |
+|---|---|---|---|---|
+| **My own prefixes** | IPv6 entries in `prefixes`: global unicast (GUA) or unique local (ULA) prefixes you own | `Tenant` | carried, like your IPv4 | none, in either direction |
+| **From the platform** | `platformPrefixes` with `family: 6`; the platform assigns a block of its own globally routed space | `Platform` | carried | outbound through the platform, when the platform offers it |
+| **None** | neither | `None` | no IPv6 | no IPv6 |
+
+A network without any IPv6 field is `None`, so every IPv4-only network keeps its meaning.
+
+### Choosing a network's IPv6
+
+**My own prefixes** (mode `Tenant`):
+```yaml
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: HybridNetwork
+metadata: {name: example-net-own-ipv6, namespace: entity-example-corp}
+spec:
+  prefixes: [10.30.0.0/16, "2001:db8:1000::/48"]   # or a ULA such as fd12:3456:789a::/48
+```
+- Any prefix you own (the example's `2001:db8::/32` is the documentation range): a GUA inside `2000::/3` or a ULA inside `fc00::/7`, in canonical form, /32–/64. Link-local,
+  multicast, IPv4-mapped and other special ranges are refused when you apply the object.
+- The platform carries the prefix between your placements and nowhere else. It does not reach the internet and the
+  internet does not reach it, whatever `egress.internet` says (the network shows `AddressChoice` for IPv6
+  internet).
+- The platform can't check that you own a GUA. A prefix that covers real internet addresses hides them inside your
+  network only; nothing outside it changes.
+- Your networks' own IPv6 prefixes may not overlap each other: a prefix that overlaps an IPv6 prefix of another
+  of your networks is refused (`PrefixInUse`, which names the other network). Other tenants may use the same prefixes;
+  networks never see each other.
+- A prefix that overlaps address space the platform keeps for itself (its own blocks, its translation prefixes) is
+  refused (`PrefixReserved`).
+
+**From the platform** (mode `Platform`):
+```yaml
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: HybridNetwork
+metadata: {name: example-net-platform-ipv6, namespace: entity-example-corp}
+spec:
+  prefixes: [10.31.0.0/16]          # optional: leave it out for an IPv6-only network
+  platformPrefixes:
+    - family: 6                     # the fabric's default block size
+      # prefixLength: 60            # or a size the fabric offers
+      # prefix: <a free block>      # or a specific block of the platform's space
+  egress: {internet: true}
+```
+- The platform assigns the network one block of its globally routed IPv6 space and gives every placement a /64 (or,
+  on AWS, a /60 or /56) from it. `status.addressSpace` shows the block with `source: Platform`, and `status.ipv6`
+  shows the block, its length and whether it was pinned or allocated.
+- Which block sizes a fabric offers, and the default when you name none, is the platform's choice: a size the
+  fabric doesn't offer is refused (`PrefixInvalid`, the message lists the sizes). A fabric that has no platform IPv6
+  space refuses the request (`FamilyUnavailable`).
+- Each tenant may hold a limited number of platform blocks. The network waits (`WaitingForAddressSpace`) while the
+  platform has no free block, while your tenant's allowance is used, or while the block you pinned belongs to
+  another network; the message says which, and the network continues by itself once a block is free.
+- When a network is deleted (or stops asking for a block), its block is held back for some days before another
+  network gets it, so a new owner never inherits old DNS records or allow-lists. While a network waits for a block
+  that is held back, `status.ipv6.holdDownUntil` shows until when.
+- A `platformPrefixes` entry can't be edited: remove it and add another. Removing it is refused while a placement
+  uses the block (`PrefixInUse`).
+
+**Rules for every network:**
+- A network needs address space: `prefixes`, `platformPrefixes` or both. It may be IPv6-only (no IPv4 prefix),
+  IPv4-only, or dual-stack.
+- One IPv6 source per network: IPv6 entries in `prefixes` and `platformPrefixes` with `family: 6` together are
+  refused when you apply the object.
+- **The mode can't change while the network has placements** (`IPv6ModeInUse`; the network keeps working with the
+  mode it had). The message reads "the network's IPv6 mode can't change while it has placements; remove them or
+  create a new network", followed by the mode the network has and the mode the spec asks for, for example "(it is
+  Tenant, the spec asks for Platform)". Without placements, change the fields as you like. Inside mode `Tenant`,
+  adding and removing your own IPv6 prefixes follows the usual rules for `prefixes`.
+
+### Internet access per family
+
+`egress.internet: true` asks for internet access for every family the network has. What each family gets is in
+`status.egress.families`:
+
+| Network | Row | What it means |
+|---|---|---|
+| has IPv4 | `{family: 4, state: ready, mode: SourceNAT}` | IPv4 leaves through source address translation ([Internet egress](#internet-egress)). |
+| mode `Platform` | `{family: 6, state: ready, mode: Routed}` | IPv6 leaves unchanged from your platform addresses through a filter that admits only replies to connections opened from inside. |
+| mode `Platform`, where the platform doesn't offer IPv6 internet | `{family: 6, state: unavailable, reason: NotOffered}` | The network is Ready; IPv6 stays inside the network until the platform offers IPv6 internet. |
+| mode `Tenant` | `{family: 6, state: unavailable, reason: AddressChoice}` | Your own prefixes have no internet access. Use a network with IPv6 from the platform for that. |
+| mode `None` | no IPv6 row | |
+
+- `status.egress.internet` keeps its meaning: the IPv4 state on a network with IPv4, the IPv6 state on an IPv6-only
+  network.
+- Nothing unsolicited reaches your IPv6 addresses from the internet; inbound IPv6 is not offered.
+- When the platform moves IPv6 traffic to another path after a failure, the row may read `ready` with reason
+  `Degraded`; connections in progress may reset.
+- **Translation to IPv4.** A network with IPv6 from the platform, no IPv4 and internet access on reaches IPv4-only
+  destinations by translation where the platform offers it (`status.egress.ipv4Translation`; on each placement
+  `status.ipv6.translation` gives the translation prefix and the resolvers to use). Dual-stack networks never get
+  translation: they use their own IPv4. There is no switch for it.
+- Your own edge: edge connections carry IPv4 only; they don't accept IPv6 routes from your router yet.
+
+### A placement's IPv6 subnet
+
+```yaml
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: NetworkPlacement
+metadata: {name: example-net-platform-ipv6-vms, namespace: entity-example-corp}
+spec:
+  network: example-net-platform-ipv6
+  backend: {kind: CloudVirt, name: example-vms}
+  ipv4: {prefixLength: 24}
+  ipv6: {prefixLength: 64}
+```
+- `ipv4` and `ipv6` are both optional; a placement needs at least one. Neither can be added or removed later.
+- `ipv6` is a size (`prefixLength`) or a pinned `prefix` inside the network's IPv6 space, or both when they agree:
+
+  | Environment | IPv6 subnet | Source |
+  |---|---|---|
+  | VM environment, OpenStack environment | /64 | the network's space |
+  | AWS environment | /60 or /56 (an AWS VPC takes IPv6 blocks of /44 to /60); without a size the site's default | `Network` (the network's space) or `Provider` (Amazon assigns a /56) |
+  | Google Cloud environment | assigned by Google (a /64 per subnet) | `Provider` only |
+
+- **`source`** (cloud environments only): `Network` takes the subnet from the network's IPv6 space, and its
+  internet traffic leaves through the platform (extra latency and data transfer, the platform's filter). `Provider`
+  takes a range from the cloud provider, with the provider's own internet path; give no `prefixLength` or `prefix`
+  then. `Provider` needs a network with IPv6 from the platform. When you leave `source` out, the site's default
+  applies; the placement reports the result. A Google Cloud site can't carry your own IPv6 prefixes.
+- The placement reports one row per family in `status.subnets` (`family`, `prefix`, `source`, and the IPv4
+  `gateway`); `status.prefixes` keeps listing the prefixes, IPv4 first. `status.ipv6` shows how guests get their
+  address (`addressing`: `DHCPv6` or `SLAAC`), the internet path (`internet.path`: `Fabric` or `Provider`) and, for
+  IPv6-only placements with translation, `translation`.
+- **Where IPv6 is offered:** a site offers IPv6 placements only once the platform team has turned IPv6 on for it,
+  and some sites offer IPv6-only placements or only some sources. Elsewhere the placement fails with
+  `FamilyUnavailable` before anything is allocated, and the message names what is missing:
+  - "IPv6 is not available on this environment's site";
+  - "IPv6-only placements are not offered on this site";
+  - "the network has no IPv6 address space" (an `ipv6` placement of a network in mode `None`);
+  - "this site can't carry tenant-provided IPv6 prefixes", or "this site offers IPv6 only from the cloud provider;
+    use source Provider".
+
+  `source: Provider` on a network with your own prefixes is refused with `PrefixInvalid` ("provider IPv6 needs a
+  network with IPv6 from the platform").
+- OpenShift clusters need IPv4: they can't be built on an IPv6-only network.
+- The router's addresses in the subnet belong to the platform. Guests learn the IPv6 default route from router
+  advertisements or the config drive; don't hard-code it.
+
+### Guests on IPv6
+
+**OpenShift Virtualization environments**
+- VMs get their IPv6 address by stateful DHCPv6 (the router advertisement sets the M flag and gives the default
+  route); the address stays across restarts and live migration.
+- **The guest's IPv6 link-local address must be the EUI-64 one** (derived from the MAC address). The network drops
+  DHCPv6 and neighbour discovery from any other link-local address, so a guest that uses stable-privacy or random
+  interface identifiers gets no IPv6 address. Some images do that by default (RHEL with NetworkManager, Windows).
+- Always give cloud-init `networkData` with `dhcp6: true` (without it, cloud-init may leave IPv6 off). Match the
+  interface by its MAC address or its exact name: a name pattern such as `en*` is ignored by some renderers. On
+  images whose NetworkManager defaults to stable privacy, switch the profile to EUI-64 at first boot:
+  ```yaml
+  #cloud-config
+  runcmd:
+    - |
+      for c in $(nmcli -g UUID,TYPE connection show --active | awk -F: '$2 == "802-3-ethernet" {print $1}'); do
+        nmcli connection modify "$c" ipv6.addr-gen-mode eui64 ipv6.method auto && nmcli connection up "$c"
+      done
+  ```
+- DHCPv6 gives no DNS search domain; set it in cloud-init.
+
+**OpenStack environments**
+- Subnets are DHCPv6-stateful: the address, the default route and the resolvers reach the guest by DHCPv6 and in
+  the config drive.
+- **Boot VMs with a config drive** (`openstack server create --config-drive true ...`) when they use IPv6, and
+  always when the placement is IPv6-only. The config drive carries the IPv6 address, route and resolvers, so the
+  guest needs neither the link-local metadata service (stock cloud-init can't reach it over IPv6) nor DHCPv4.
+  cloud-init then sets a static IPv6 address and ignores router advertisements.
+- The site sends no DNS servers in router advertisements. A guest that configures IPv6 from router advertisements
+  alone (SLAAC) gets no IPv6 resolver; some images (Debian with netplan) then have no resolver at all on an IPv6-only
+  placement. Use the config drive, or set the resolvers yourself.
+- **Router advertisements from other VMs:** on OpenStack a VM can send router advertisements that reach the other VMs
+  of the placement. Guests configured from the config drive ignore them; a guest that accepts router advertisements
+  can be misled by a neighbour of the same network. Keep guests on the config drive's settings, or filter router
+  advertisements in the guest.
+
+**IPv6-only guests and translation**
+- Translation needs a CLAT in the guest: **clatd** (2.1 or later) with its default `clat-v6-addr=shared`, which needs
+  no second address on the port (the network drops traffic from addresses it did not assign). Some distributions
+  package it (Fedora, Debian); on others build it yourself. Windows guests are not covered.
+- clatd finds the translation prefix by the standard DNS query (RFC 7050) through the resolvers in
+  `status.ipv6.translation`; the sites put no translation prefix in router advertisements.
+- **Keep clatd's IPv4 route MTU of 1260.** The translator fragments translated replies larger than 1280 bytes, and
+  those fragments are lost on the way into the CLAT: with a larger MTU, IPv4 datagrams that must not be fragmented
+  are lost above 1232 bytes of payload. TCP is not affected.
+- On OpenShift Virtualization the resolvers come from the placement's status: the placement page offers a cloud-init
+  `networkData` and clatd snippet built from it, to copy into the VM.
+- A guest that validates DNSSEC itself gets no translated addresses for signed IPv4-only names. Reach those by an
+  IPv4 address through the CLAT, or let the resolver validate.
+
+**Every guest**
+- **DNS on dual-stack guests:** they keep the IPv4 resolvers they get by DHCP first and never use translation, so
+  IPv4-only names are reached over native IPv4; for names with both kinds of address they prefer IPv6. The platform
+  hands out IPv6 resolvers only to IPv6-only placements.
+- Keep ICMPv6 open in guest firewalls and security groups: neighbour discovery and Packet Too Big are required. The
+  path to the IPv6 internet can be smaller than the network's MTU, and the platform reports that with Packet Too Big.
+
+### Adding IPv6 later
+
+- **A network without placements:** add `platformPrefixes` or your own IPv6 prefixes and apply.
+- **A network with placements:** its mode can't change (`IPv6ModeInUse`). Create a new network with the IPv6 you
+  want, place it, and move the workloads: on a VM environment add a namespace for the new network, move the VMs and
+  remove the old namespace; on an OpenStack environment attach the VMs to the new shared network, then detach them
+  from the old one. Then delete the old placements and network.
+- **A placement without `ipv6`:** `ipv6` can't be added in place. Once the network has IPv6, create the placement
+  again with `ipv6` (on a VM environment, the placement's delete waits for the namespaces naming the network), or
+  move to a new network as above.
 
 ## DNS names in the environment zone
 
@@ -173,11 +390,23 @@ groups hold on the tenant decide what they may do in the tenant namespace.
 Tenants:
 - **Networks → Network map:** the tenant's networks against its environments. A cell is one network placement
   (state and prefixes); each network shows its MTU and internet egress (state and source addresses).
-- **Networks → Networks:** create and edit (address space, description, MTU, internet egress, viewers); the detail
-  page shows the address space in use, the effective MTU, placements ready, egress and, collapsed, the realization
-  (platform detail).
+- **Networks → Networks:** create and edit (address space, description, MTU, internet egress, viewers). The form's
+  IPv6 choice has three options: **From the platform** (a block size from the sizes the fabric offers, or a
+  specific block), **My own prefixes** (your GUA or ULA prefixes) and **None**. **From the platform** is preselected
+  when the form can tell that the fabric offers platform IPv6, otherwise **None**; no prefix is filled in for you. Once the network has
+  placements the choice is locked, with the reason. The detail page shows the IPv6 mode in the form's words
+  (**From the platform**, **My own prefixes** or **None**), the address space in use with a source column (yours or the platform's), the effective MTU, placements ready, internet egress per family
+  with its reason (for example "IPv6 internet: not offered for tenant-provided prefixes") and, collapsed, the
+  realization (platform detail).
 - **Networks → Network placements**, or **Attach network** on an environment or network page: create (network,
-  environment, subnet size or pinned prefix); read-only afterwards, since those fields are immutable.
+  environment, subnet size or pinned prefix, per family); read-only afterwards, since those fields are immutable.
+  The dialog has an IPv4 and an IPv6 section, each optional, at least one. The IPv6 section appears only when the
+  network has IPv6 and the environment's site offers IPv6; on cloud sites it also offers the IPv6 source (from the
+  network, or from the cloud provider) with the site's default preselected. Options a site lacks are greyed out
+  with the reason.
+- **A placement's page** shows each family's subnet and source, how guests get their IPv6 address, the internet
+  path and, on IPv6-only placements with translation, the translation prefix and resolvers with a cloud-init
+  snippet to copy.
 - **Environments → OpenShift Virtualization:** environments with their site, VM namespaces (network, ready), quota,
   DNS zone and API endpoint. The site picker offers the sites of the tenant profile.
 - Platform objects aren't shown to tenants.
@@ -198,9 +427,9 @@ who acts on it. The reasons you meet most with networks:
 
 | State | Common reasons |
 |---|---|
-| Waiting | `WaitingForDependencies` (network, environment or site connection not usable yet), `WaitingForAddressSpace` (no room in the network's space, or a pinned prefix held by another placement), `WaitingForGateway` (the site is adding the network) |
+| Waiting | `WaitingForDependencies` (network, environment or site connection not usable yet), `WaitingForAddressSpace` (no room in the network's space, a pinned prefix held by another placement, or no platform IPv6 block free for the network yet), `WaitingForGateway` (the site is adding the network) |
 | Ready | realized; `status.realization` shows how (platform detail) |
-| Failed | the spec can't be realized as written: `PrefixReserved`, `PrefixInUse`, `PrefixInvalid`, `FamilyUnavailable`, `FabricMismatch`, `EntityNotAllowed`, `SiteNotEvpnCapable` (the site cannot join networks), `NamespaceTaken`, `EnvironmentNameTaken`, ...; or the platform team has to act: `RoutesMissing` (the site hasn't advertised the placement's prefixes) |
+| Failed | the spec can't be realized as written: `PrefixReserved`, `PrefixInUse`, `PrefixInvalid`, `FamilyUnavailable`, `IPv6ModeInUse`, `FabricMismatch`, `EntityNotAllowed`, `SiteNotEvpnCapable` (the site cannot join networks), `NamespaceTaken`, `EnvironmentNameTaken`, ...; or the platform team has to act: `RoutesMissing` (the site hasn't advertised the placement's prefixes) |
 
 A dependency counts as usable when it is ready, or realized before (`status.realized`) and not failed. A
 network or gateway that is re-running doesn't stop its placements.
@@ -226,7 +455,9 @@ For the platform team; tenants can skip the rest of this page. Onboarding a tena
   `common/vars/fabric_realization.yml` and the installation's `FABRIC_REALIZATION`, not in the CRs. Among them:
   `ipam.provider` (where address spaces and placement subnets are kept; `ledger`, the fabric's ledger, is the only
   one so far), `placement.ipFamilies` (families offered per backend kind) and `placement.siteReserved` (site ranges
-  the allocator steps around, per backend kind).
+  the allocator steps around, per backend kind). The IPv6 keys (platform pools, block sizes, the tenant allowance,
+  hold-down, exclusive ranges, per-site switches and sources) are in
+  [IPv6 realization](../../../docs/platform/ipv6-realization.md).
 - **`fabric-orphan-check`** (AAP job template, report only) compares what the fabric jobs realized with the CRs:
   - ledger entries without owners, including address spaces and placement subnets (the IPAM), and placements
     whose subnets the IPAM doesn't hold for them;

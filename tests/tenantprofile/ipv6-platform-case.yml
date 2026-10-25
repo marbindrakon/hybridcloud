@@ -1,0 +1,12 @@
+---
+# One case of ipv6-platform.yml.
+- name: "Offer: {{ ipo_case.name }}"
+  ansible.builtin.include_tasks: ../../eda/common/tasks/ipv6_platform_offer.yml
+  vars:
+    ipo_pools: "{{ ipo_case.pools | default(none) }}"
+
+- name: "Compare: {{ ipo_case.name }}"
+  ansible.builtin.assert:
+    that: ipv6_platform_offer == ipo_case.expected
+    fail_msg: "{{ ipo_case.name }}: got {{ ipv6_platform_offer | to_json }}, expected {{ ipo_case.expected | to_json }}"
+    quiet: true

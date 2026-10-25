@@ -1,0 +1,4 @@
+---
+# namespace of the platform objects (HybridFabric, CloudGateway, CloudInfrastructure); the fabric IPAM tasks
+# (fabric_ipam.yml, through fabric_ipam_pools.yml) pass it to the ledger
+fabric_platform_namespace: sovereign-cloud

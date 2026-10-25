@@ -83,6 +83,8 @@ export interface SpecFieldMeta {
   max?: number;
   /** refName: the kind whose names are offered */
   refKind?: HybridSovereignKind;
+  /** Read-only while this status path (a count) is above zero; the hint says why */
+  lockedWhileStatus?: { path: string; hintKey: string };
   /** objectList */
   columns?: SpecFieldColumn[];
   keyField?: string;
@@ -448,7 +450,22 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
   },
   HybridNetwork: {
     fields: [
-      { path: 'prefixes', labelKey: 'fields.networkPrefixes', widget: 'cidrList', helpKey: 'fields.networkPrefixesHelp' },
+      { path: 'prefixes', labelKey: 'fields.networkPrefixes', widget: 'cidrList', helpKey: 'fields.networkPrefixesHelp', omitWhenEmpty: true },
+      {
+        path: 'platformPrefixes',
+        labelKey: 'ipv6.platformPrefixesField',
+        widget: 'objectList',
+        keyField: 'family',
+        maxItems: 1,
+        omitWhenEmpty: true,
+        helpKey: 'ipv6.platformPrefixesFieldHelp',
+        lockedWhileStatus: { path: 'placementCount', hintKey: 'ipv6.reason.IPv6ModeInUse' },
+        columns: [
+          { key: 'family', labelKey: 'detail.family', type: 'number', lockedOnExisting: true, required: true, pattern: '^6$' },
+          { key: 'prefixLength', labelKey: 'ipv6.blockSize', type: 'number', lockedOnExisting: true, pattern: '^(48|52|56|60|64)$' },
+          { key: 'prefix', labelKey: 'ipv6.pinnedBlock', lockedOnExisting: true },
+        ],
+      },
       { path: 'description', labelKey: 'fields.description', widget: 'textarea', omitWhenEmpty: true },
       {
         path: 'fabricRef',
@@ -479,6 +496,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'ipv4.prefix', labelKey: 'fields.placementIpv4Pinned', widget: 'text', immutable: true },
       { path: 'ipv6.prefixLength', labelKey: 'fields.placementIpv6Size', widget: 'number', immutable: true },
       { path: 'ipv6.prefix', labelKey: 'fields.placementIpv6Pinned', widget: 'text', immutable: true },
+      { path: 'ipv6.source', labelKey: 'attach.ipv6Source', widget: 'text', immutable: true },
     ],
   },
   HybridFabric: {

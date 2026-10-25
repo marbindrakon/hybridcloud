@@ -1,0 +1,42 @@
+---
+# Unit test (no cluster) of eda/common/tasks/ipv6_platform_offer.yml: a fabric's pool rows in, the tenant's
+# TenantProfile status.ipv6Platform out ({} = the key is removed).
+#   ansible-playbook -i localhost, -c local tests/tenantprofile/ipv6-platform.yml
+- name: Platform IPv6 offer for tenants
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cases:
+      - name: rows as the fabric job writes them (IPv4 and IPv6 pools)
+        pools:
+          - {name: v4, family: 4, prefixes: [198.51.100.0/24], blockLengths: [28], defaultBlock: 28, blocksUsed: 1}
+          - {name: v6, family: 6, prefixes: ["2001:db8::/40"], blockLengths: [64, 48, 56], defaultBlock: 56,
+             blocksUsed: 2, blocksFree: 100}
+        expected: {blockLengths: [48, 56, 64], defaultBlockLength: 56}
+      - name: a map of pools
+        pools: {v6: {family: 6, blockLengths: [56], defaultBlock: 56}}
+        expected: {blockLengths: [56], defaultBlockLength: 56}
+      - name: a default outside the block sizes is dropped
+        pools: [{name: v6, family: "6", blockLengths: ["56", 64], defaultBlock: 48}]
+        expected: {blockLengths: [56, 64]}
+      - name: no IPv6 pool
+        pools: [{name: v4, family: 4, blockLengths: [28], defaultBlock: 28}]
+        expected: {}
+      - name: no pool rows (the realization has none)
+        pools: []
+        expected: {}
+      - name: no pool rows yet (before the first fabric run)
+        expected: {}
+      - name: an IPv6 pool without block sizes
+        pools: [{name: v6, family: 6, blockLengths: []}]
+        expected: {}
+      - name: block sizes outside 1..128 are ignored
+        pools: [{name: v6, family: 6, blockLengths: [0, 56, 129], defaultBlock: 56}]
+        expected: {blockLengths: [56], defaultBlockLength: 56}
+  tasks:
+    - name: Each case
+      ansible.builtin.include_tasks: ipv6-platform-case.yml
+      loop: "{{ cases }}"
+      loop_control:
+        loop_var: ipo_case
+        label: "{{ ipo_case.name }}"

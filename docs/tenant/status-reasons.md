@@ -88,6 +88,10 @@ Who acts: **You** can fix it (the summary says how), **the platform team** has t
 alerted or you tell them), or **nobody**: the platform continues by itself. Reasons that only mean
 "ready" are not listed.
 
+The last group lists reasons shown on a part of an object, such as one address family's internet
+access on a network page (`status.egress.families`). They explain that part and never change the
+object's state: a network whose IPv6 internet access is not offered is still Ready.
+
 <!-- reasons:begin -->
 **Working on it**
 
@@ -116,7 +120,7 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | `ReferenceDeleting` | An object this one refers to is being deleted. | You (the tenant) |
 | `Waiting` | Waiting for a prerequisite. | Nobody: it continues by itself |
 | `WaitingForAccessGroup` | Waiting for the named access groups to be ready. | You (the tenant) |
-| `WaitingForAddressSpace` | Waiting for address space to be assigned. | Nobody: it continues by itself |
+| `WaitingForAddressSpace` | Waiting for free address space. The message says what is full; adding a prefix or freeing a block lets it continue. | You (the tenant) |
 | `WaitingForCluster` | Waiting for a cluster: name the OpenShift cluster to deploy onto. | You (the tenant) |
 | `WaitingForDependencies` | Waiting for the objects this one depends on. | Nobody: it continues by itself |
 | `WaitingForDependents` | Waiting for the objects that depend on this one to be deleted. | Nobody: it continues by itself |
@@ -156,7 +160,8 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | `FabricAmbiguous` | More than one fabric could serve this request. The platform team must resolve it. | The platform team |
 | `FabricMismatch` | The network and the site belong to different fabrics. | You (the tenant) |
 | `Failed` | Could not be completed; see the reason. | The platform team |
-| `FamilyUnavailable` | This address family is not available on the network. | You (the tenant) |
+| `FamilyUnavailable` | This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it. | You (the tenant) |
+| `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
@@ -170,9 +175,11 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | `NoProject` | No cloud project is set up for this environment. | You (the tenant) |
 | `NotRealizable` | The request cannot be realized on the chosen site. | You (the tenant) |
 | `OperatorFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
+| `PeerAsnReserved` | This AS number is reserved by the platform. Configure your router with another AS number. | You (the tenant) |
 | `PolicyRefused` | The request was refused by a platform policy. | You (the tenant) |
-| `PrefixInUse` | The address prefix overlaps one already in use. | You (the tenant) |
+| `PrefixInUse` | The address prefix overlaps one already in use: a placement's subnet or another network of this tenant. | You (the tenant) |
 | `PrefixInvalid` | The address prefix is not valid. | You (the tenant) |
+| `PrefixReserved` | The address prefix overlaps address space the platform keeps for itself. Choose another prefix. | You (the tenant) |
 | `ProbeFailed` | The site check failed. The platform team is looking at it. | The platform team |
 | `ProjectDomainNotFound` | The referenced project or domain does not exist. | You (the tenant) |
 | `ProvisionFailed` | Creating or updating did not complete. The platform team is looking at it. | The platform team |
@@ -188,4 +195,12 @@ alerted or you tell them), or **nobody**: the platform continues by itself. Reas
 | `TransportNotSupported` | This transport is not supported. | You (the tenant) |
 | `TypeNotSupported` | This type is not supported here. | You (the tenant) |
 | `ZoneMismatch` | The zone does not match the site. | You (the tenant) |
+
+**On a part of an object (an egress family of a network, its translation to IPv4, a placement's IPv6 internet access)**
+
+| Reason | What it means | Who acts |
+|---|---|---|
+| `AddressChoice` | Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4. | You (the tenant) |
+| `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
+| `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 <!-- reasons:end -->

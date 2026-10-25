@@ -4,7 +4,7 @@ clusterDomain: apps.shcstack-3.lab.signal9.gg
 
 image:
   repository: quay.signal9.gg/hybrid-sovereign/sovereign-cloud-dashboard
-  tag: "img-2.3.4"
+  tag: "img-2.3.6"
   pullPolicy: Always
 
 imagePullSecrets:

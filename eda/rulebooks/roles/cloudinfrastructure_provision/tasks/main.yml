@@ -11,6 +11,8 @@
 #   type aws       : ensures the hub's network in the region (design/P8-PLAN.md §11); evpn through the platform's edge.
 #   type gcp       : ensures the hub project's edge network in the region (design/P11-GCP-PLAN.md §3.3); same shape.
 #   type external  : nothing to probe (the platform doesn't manage the site); capabilities.evpn = spec.external.evpn.
+#   every type     : capabilities.ipv6* (ipv6_capabilities.yml) = the probe ANDed with the realization's placement
+#                    switches; false until the platform realizes IPv6 on the site.
 - block:
     - name: Parse event payload
       ansible.builtin.set_fact:
@@ -90,6 +92,9 @@
     - name: Realize a gcp site
       ansible.builtin.include_tasks: gcp.yml
       when: ci_cr_type == 'gcp'
+
+    - name: The site's IPv6 capabilities
+      ansible.builtin.include_tasks: ipv6_capabilities.yml
 
     - name: Get timestamp
       ansible.builtin.set_fact:

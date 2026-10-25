@@ -65,6 +65,12 @@
           message: Deleted; root instance removed from {{ fab_spec.borderGateway.nodes | map(attribute='name') | join(', ') }}
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
+    # the fabric no longer counts for the tenants' profiles (TenantProfile status.ipv6Platform): wake the Entities
+    - name: Wake the Entities
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_entities.yml"
+      vars:
+        we_namespace: "{{ fab_namespace }}"
+
   rescue:
     - name: Release the lease
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"

@@ -1,0 +1,18 @@
+# A dual-stack network whose IPv6 comes from the platform (IPv6 mode Platform): the platform assigns the network a
+# block of its globally routed IPv6 space (the fabric's default size, as no prefixLength is given) and each
+# placement a subnet from it. With internet access on, IPv4 leaves through source address translation and IPv6
+# leaves unchanged, replies only, where the platform offers IPv6 internet access (status.egress.families).
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: HybridNetwork
+metadata:
+  name: example-net-platform-ipv6
+  namespace: entity-example-corp
+spec:
+  description: Network of the example application, with IPv6 from the platform.
+  prefixes:
+    - 10.22.0.0/16
+  platformPrefixes:
+    - family: 6
+  egress:
+    internet: true

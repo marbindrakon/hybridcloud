@@ -890,7 +890,9 @@ spec:
                           format: int64
                           minimum: 1
                           maximum: 4294967295
-                          description: The CE's autonomous system number. It must differ from the fabric's.
+                          description: >-
+                            The CE's autonomous system number. It must differ from the fabric's and from the AS numbers
+                            the platform keeps for its own sessions (refused with PeerAsnReserved).
                         authentication:
                           type: object
                           description: >-
@@ -2412,7 +2414,11 @@ spec:
                     HybridFabric: openstack = Neutron's evpn extension is loaded; openshift = CNO FRR provider,
                     routeAdvertisements Enabled and fabric BGP sessions Established), api (the credential
                     authenticates), virtualization (OpenShift Virtualization Available), dns (environment zones can be created
-                    on this site).
+                    on this site), ipv6 (placements on the site can have an IPv6 subnet), ipv6Only (placements without
+                    IPv4 are offered), ipv6NetworkSource (IPv6 subnets can come from the network's address space),
+                    ipv6ProviderSource (IPv6 subnets can come from the cloud provider), ipv6Translation (placements
+                    without IPv4 reach IPv4-only destinations by translation). A key that is absent or false is not
+                    offered.
                   additionalProperties:
                     type: boolean
                 site:
@@ -4385,9 +4391,10 @@ spec:
             network with its router. It is one isolated routing domain (VRF) on the platform's
             HybridFabric. NetworkPlacements put it on environments (CloudOSO, CloudVirt, CloudAWS,
             CloudGCP); every placement's subnets can reach every other placement's subnets of the
-            same network, and nothing else. The network's address space (spec.prefixes) is the
-            tenant's: the platform allocates each placement's subnets from it. Networks may use the
-            same addresses as other networks.
+            same network, and nothing else. The network's address space is the tenant's own prefixes
+            (spec.prefixes), IPv6 space the platform assigns (spec.platformPrefixes), or both; the
+            platform allocates each placement's subnets from it. Networks may use the same addresses
+            as other networks.
           type: object
           required:
             - spec
@@ -4448,27 +4455,32 @@ spec:
                       type: boolean
                       default: false
                       description: >-
-                        Outbound internet access through the platform, like attaching a NAT gateway: the platform
-                        advertises a default route into the network and translates its traffic to platform source
-                        addresses (status.egress.sourceAddresses). Connections can only be opened from inside the
-                        network, and the platform's private address ranges are not reachable this way. Leave it off
-                        when the network's default route comes from your own edge router. Can be changed at any time.
+                        Outbound internet access through the platform: the platform advertises a default route into
+                        the network. IPv4 leaves through source address translation to platform source addresses
+                        (status.egress.sourceAddresses). IPv6 leaves unchanged from addresses the platform assigned
+                        (platformPrefixes), through a filter that admits only replies to connections opened from
+                        inside. IPv6 from the tenant's own prefixes has no internet access in either direction. A
+                        network without IPv4 reaches IPv4-only destinations by translation where the platform offers
+                        it. The platform's private address ranges are not reachable this way. Leave it off when the
+                        network's default route comes from your own edge router. Can be changed at any time.
                 prefixes:
                   type: array
                   description: >-
-                    The network's address space, IPv4 and IPv6 prefixes the platform allocates the placements'
-                    subnets from (NetworkPlacement spec.ipv4 and spec.ipv6). At least one IPv4 prefix. Prefixes
-                    are in canonical form (host bits zero, e.g. 10.60.0.0/16 or fd12:3456:789a::/48) and must not
-                    overlap each other. The platform's own ranges inside a prefix are never allocated; a prefix
-                    wholly inside one is refused. Prefixes can be added at any time; a change that would leave a
-                    placement's subnet outside the space is refused, as is a prefix holding a route an
-                    AttachmentCircuit of the network accepts from its CE.
-                  minItems: 1
+                    The tenant's own address space, IPv4 and IPv6 prefixes the platform allocates the placements'
+                    subnets from (NetworkPlacement spec.ipv4 and spec.ipv6). May be empty when platformPrefixes
+                    gives the network its address space. Prefixes are in canonical form (host bits zero, e.g.
+                    10.60.0.0/16 or fd12:3456:789a::/48) and must not overlap each other. An IPv6 prefix is global
+                    unicast (2000::/3) or unique local (fc00::/7) space the tenant holds; the platform carries it
+                    between the network's placements but offers no internet access to or from it. IPv6 prefixes
+                    here and an IPv6 entry in platformPrefixes exclude each other. The platform's own ranges inside
+                    a prefix are never allocated; a prefix wholly inside one, or overlapping address space the
+                    platform keeps for itself, is refused.
+                    Prefixes can be added at any time; a change that would leave a placement's subnet outside the
+                    space is refused, as is a prefix holding a route an AttachmentCircuit of the network accepts
+                    from its CE, and a change of the network's IPv6 source while it has placements.
                   maxItems: 8
                   x-kubernetes-list-type: set
                   x-kubernetes-validations:
-                    - rule: self.exists(p, isCIDR(p) && cidr(p).ip().family() == 4)
-                      message: at least one prefix must be IPv4
                     - rule: >-
                         self.all(a, self.all(b, a == b || !isCIDR(a) || !isCIDR(b)
                         || cidr(a).ip().family() != cidr(b).ip().family()
@@ -4485,10 +4497,72 @@ spec:
                           ? cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 29
                           : cidr(self).prefixLength() >= 32 && cidr(self).prefixLength() <= 64)
                         message: prefix length must be /8 to /29 for IPv4 and /32 to /64 for IPv6
-              required: [prefixes]
+                      - rule: >-
+                          !isCIDR(self) || cidr(self).ip().family() == 4
+                          || cidr('2000::/3').containsCIDR(cidr(self)) || cidr('fc00::/7').containsCIDR(cidr(self))
+                        message: an IPv6 prefix must be global unicast (2000::/3) or unique local (fc00::/7)
+                platformPrefixes:
+                  type: array
+                  description: >-
+                    Address space the platform assigns to the network from its own globally routed space, one
+                    entry per address family (IPv6 only). The platform allocates a block of the requested size, or
+                    the pinned block, and the placements' subnets of that family from it; status.addressSpace
+                    shows the block. Traffic from these addresses can reach the internet when egress.internet is
+                    on. An entry cannot be changed; it can be removed while no placement holds a subnet in its
+                    block, and the family's source cannot change while the network has placements.
+                  maxItems: 2
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [family]
+                  items:
+                    type: object
+                    required: [family]
+                    x-kubernetes-validations:
+                      - rule: self == oldSelf
+                        message: a platformPrefixes entry cannot be changed; remove it and add another
+                      - rule: >-
+                          !has(self.prefix) || !has(self.prefixLength) || !isCIDR(self.prefix)
+                          || cidr(self.prefix).prefixLength() == self.prefixLength
+                        message: platformPrefixes prefix must be as long as prefixLength
+                    properties:
+                      family:
+                        description: Address family of the block, 6.
+                        type: integer
+                        enum: [6]
+                      prefixLength:
+                        description: >-
+                          Size of the block, 48 to 64 in steps of 4 (for example 56 for a /56). The platform offers
+                          some of these sizes; when omitted, the platform's default size applies. status.addressSpace
+                          reports the block it assigned.
+                        type: integer
+                        minimum: 48
+                        maximum: 64
+                        x-kubernetes-validations:
+                          - rule: self % 4 == 0
+                            message: platformPrefixes prefixLength must be a multiple of 4
+                      prefix:
+                        description: >-
+                          A specific free block of the platform's space, in canonical form (host bits zero). Optional;
+                          a block outside the platform's space is refused, and one in use waits until it is free.
+                        type: string
+                        maxLength: 43
+                        x-kubernetes-validations:
+                          - rule: isCIDR(self) && cidr(self).ip().family() == 6 && string(cidr(self).masked()) == self
+                            message: platformPrefixes prefix must be an IPv6 network prefix in canonical form (host bits zero)
+                          - rule: >-
+                              !isCIDR(self) || (cidr(self).prefixLength() >= 48 && cidr(self).prefixLength() <= 64
+                              && cidr(self).prefixLength() % 4 == 0)
+                            message: platformPrefixes prefix must be /48 to /64 in steps of 4
               x-kubernetes-validations:
                 - rule: has(self.fabricRef) || !has(oldSelf.fabricRef)
                   message: spec.fabricRef cannot be removed
+                - rule: >-
+                    (has(self.prefixes) && size(self.prefixes) > 0)
+                    || (has(self.platformPrefixes) && size(self.platformPrefixes) > 0)
+                  message: the network needs address space (prefixes, platformPrefixes or both)
+                - rule: >-
+                    !has(self.platformPrefixes) || !self.platformPrefixes.exists(q, q.family == 6)
+                    || !has(self.prefixes) || !self.prefixes.exists(p, isCIDR(p) && cidr(p).ip().family() == 6)
+                  message: IPv6 address space comes either from prefixes or from platformPrefixes, not both
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -4509,13 +4583,90 @@ spec:
                     internet:
                       type: string
                       description: >-
-                        Internet egress: pending (being added), ready, removing, or unavailable (the fabric offers
-                        none).
+                        Internet egress of the network: pending (being added), ready, removing, or unavailable. For a
+                        network with IPv4 address space it is the state of its IPv4 egress; for a network without IPv4
+                        the state of its IPv6 egress. families gives the state and the reason per family.
                     sourceAddresses:
                       type: array
-                      description: The source addresses the network's internet traffic leaves with.
+                      description: The IPv4 source addresses the network's internet traffic leaves with.
                       items:
                         type: string
+                    families:
+                      type: array
+                      description: Internet egress per address family.
+                      items:
+                        type: object
+                        properties:
+                          family:
+                            type: integer
+                            description: 4 or 6.
+                          state:
+                            type: string
+                            description: ready, pending, removing or unavailable.
+                          mode:
+                            type: string
+                            description: >-
+                              How the family leaves: SourceNAT (translated to platform source addresses) or Routed
+                              (unchanged, through a filter that admits only replies).
+                          reason:
+                            type: string
+                            description: >-
+                              One-word reason, for example AddressChoice (tenant-provided IPv6 has no internet
+                              access), NotOffered (the platform offers none for the family) or Degraded.
+                          message:
+                            type: string
+                            description: What the reason means for this network, in plain words.
+                    ipv4Translation:
+                      type: object
+                      description: >-
+                        For a network without IPv4: whether its IPv6 workloads reach IPv4-only destinations by
+                        translation.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending or unavailable.
+                        reason:
+                          type: string
+                          description: One-word reason when not ready.
+                        message:
+                          type: string
+                          description: What the reason means for this network, in plain words.
+                ipv6:
+                  type: object
+                  description: The network's IPv6 as the platform derived it from the spec.
+                  properties:
+                    mode:
+                      type: string
+                      description: >-
+                        Where the network's IPv6 comes from: Tenant (IPv6 prefixes in spec.prefixes), Platform
+                        (spec.platformPrefixes) or None. It is the mode in effect: a refused change of the mode
+                        leaves it as it was.
+                    prefixes:
+                      type: array
+                      description: The network's IPv6 address space in effect (the tenant's prefixes or the assigned block).
+                      items:
+                        type: string
+                    block:
+                      type: object
+                      description: The block the platform assigned to the network (mode Platform).
+                      properties:
+                        prefix:
+                          type: string
+                          description: The block.
+                        prefixLength:
+                          type: integer
+                          description: Its length.
+                        source:
+                          type: string
+                          description: >-
+                            Pinned (the block named in spec.platformPrefixes) or Allocated (the first free block of
+                            the requested size).
+                    holdDownUntil:
+                      type: string
+                      description: >-
+                        While the network waits for a block that was released recently: when that block can be
+                        assigned again (RFC 3339). Released blocks are held back for a while before another network
+                        gets them.
                 mtu:
                   type: integer
                   description: Effective MTU.
@@ -4536,6 +4687,11 @@ spec:
                       family:
                         type: integer
                         description: 4 or 6.
+                      source:
+                        type: string
+                        description: >-
+                          Tenant (from spec.prefixes) or Platform (a block assigned from spec.platformPrefixes).
+                          Absent means Tenant.
                       allocations:
                         type: integer
                         description: Placement subnets inside the prefix.
@@ -4956,14 +5112,35 @@ spec:
             spec:
               description: The network and the environment it is placed on.
               type: object
-              required: [network, backend, ipv4]
+              required: [network, backend]
               x-kubernetes-validations:
-                - rule: >-
-                    self.backend.kind != 'CloudAWS' || (has(self.ipv4.prefixLength) ? self.ipv4.prefixLength <= 24
-                    : (!isCIDR(self.ipv4.prefix) || cidr(self.ipv4.prefix).prefixLength() <= 24))
-                  message: the IPv4 subnet of a CloudAWS placement must be /16 to /24
+                - rule: has(self.ipv4) || has(self.ipv6)
+                  message: the placement needs spec.ipv4, spec.ipv6 or both
+                - rule: has(self.ipv4) == has(oldSelf.ipv4)
+                  message: spec.ipv4 cannot be added or removed
                 - rule: has(self.ipv6) == has(oldSelf.ipv6)
                   message: spec.ipv6 cannot be added or removed
+                - rule: >-
+                    self.backend.kind != 'CloudAWS' || !has(self.ipv4)
+                    || (has(self.ipv4.prefixLength) ? self.ipv4.prefixLength <= 24
+                    : (!has(self.ipv4.prefix) || !isCIDR(self.ipv4.prefix) || cidr(self.ipv4.prefix).prefixLength() <= 24))
+                  message: the IPv4 subnet of a CloudAWS placement must be /16 to /24
+                - rule: >-
+                    !has(self.ipv6) || !has(self.ipv6.source) || self.ipv6.source != 'Provider'
+                    || self.backend.kind == 'CloudAWS' || self.backend.kind == 'CloudGCP'
+                  message: spec.ipv6.source Provider is offered only on CloudAWS and CloudGCP
+                - rule: >-
+                    !has(self.ipv6) || has(self.ipv6.prefixLength) || has(self.ipv6.prefix)
+                    || (has(self.ipv6.source) && self.ipv6.source == 'Provider')
+                    || self.backend.kind == 'CloudAWS' || self.backend.kind == 'CloudGCP'
+                  message: spec.ipv6 needs prefixLength or prefix
+                - rule: >-
+                    !has(self.ipv6) || (self.backend.kind == 'CloudAWS'
+                    ? (!has(self.ipv6.prefixLength) || self.ipv6.prefixLength != 64)
+                      && (!has(self.ipv6.prefix) || !isCIDR(self.ipv6.prefix) || cidr(self.ipv6.prefix).prefixLength() != 64)
+                    : (!has(self.ipv6.prefixLength) || self.ipv6.prefixLength == 64)
+                      && (!has(self.ipv6.prefix) || !isCIDR(self.ipv6.prefix) || cidr(self.ipv6.prefix).prefixLength() == 64))
+                  message: the IPv6 subnet must be a /64 (a /56 or /60 on CloudAWS)
               properties:
                 network:
                   type: string
@@ -4994,12 +5171,12 @@ spec:
                 ipv4:
                   type: object
                   description: >-
-                    The placement's IPv4 subnet: a size (prefixLength) the platform allocates from the network's
-                    IPv4 prefixes, or a pinned prefix inside them (prefix), or both when they agree. A pinned prefix
-                    is never replaced by another: one outside the network's space or clashing with the site's own
-                    networks is refused, and one held by another placement waits until it is free. Without room the
-                    placement waits until the network grows or a placement goes away. The first usable address is
-                    the gateway. Immutable.
+                    The placement's IPv4 subnet (optional when spec.ipv6 is given): a size (prefixLength) the
+                    platform allocates from the network's IPv4 prefixes, or a pinned prefix inside them (prefix), or
+                    both when they agree. A pinned prefix is never replaced by another: one outside the network's
+                    space or clashing with the site's own networks is refused, and one held by another placement
+                    waits until it is free. Without room the placement waits until the network grows or a placement
+                    goes away. The first usable address is the gateway. Cannot be added, removed or changed.
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.ipv4 is immutable
@@ -5031,31 +5208,47 @@ spec:
                 ipv6:
                   type: object
                   description: >-
-                    The placement's IPv6 subnet (optional), from the network's IPv6 prefixes, by
-                    size or pinned as for ipv4. Refused (FamilyUnavailable) where the platform does
-                    not offer IPv6 for the environment type. Immutable.
+                    The placement's IPv6 subnet (optional when spec.ipv4 is given), from the network's IPv6 address
+                    space, by size or pinned as for ipv4, or on a public-cloud environment from the cloud provider
+                    (source). The network must have IPv6 address space, and the environment's site must offer IPv6;
+                    otherwise the placement is refused (FamilyUnavailable). Cannot be added, removed or changed.
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.ipv6 is immutable
-                    - rule: has(self.prefixLength) || has(self.prefix)
-                      message: spec.ipv6 needs prefixLength or prefix
+                    - rule: >-
+                        !has(self.prefix) || !has(self.prefixLength) || !isCIDR(self.prefix)
+                        || cidr(self.prefix).prefixLength() == self.prefixLength
+                      message: spec.ipv6.prefix must be as long as spec.ipv6.prefixLength
+                    - rule: "!has(self.source) || self.source != 'Provider' || (!has(self.prefixLength) && !has(self.prefix))"
+                      message: spec.ipv6 with source Provider takes no prefixLength or prefix (the cloud provider assigns the range)
                   properties:
                     prefixLength:
-                      description: Size of the subnet the platform allocates. Only 64 is accepted.
+                      description: >-
+                        Size of the subnet the platform allocates: 64, or 56 or 60 on CloudAWS (for example 64 for
+                        a /64). Not used with source Provider. On CloudAWS and CloudGCP it may be omitted; the
+                        site's default size then applies.
                       type: integer
-                      minimum: 64
-                      maximum: 64
+                      enum: [56, 60, 64]
                     prefix:
                       description: >-
-                        A pinned IPv6 /64 in canonical form, inside one of the network's IPv6
-                        prefixes.
+                        A pinned IPv6 subnet in canonical form (host bits zero), inside the network's IPv6 address
+                        space: a /64, or a /56 or /60 on CloudAWS. Not used with source Provider.
                       type: string
                       maxLength: 43
                       x-kubernetes-validations:
                         - rule: isCIDR(self) && cidr(self).ip().family() == 6 && string(cidr(self).masked()) == self
                           message: spec.ipv6.prefix must be an IPv6 network prefix in canonical form (host bits zero)
-                        - rule: "!isCIDR(self) || cidr(self).prefixLength() == 64"
-                          message: spec.ipv6.prefix must be a /64
+                        - rule: "!isCIDR(self) || cidr(self).prefixLength() == 56 || cidr(self).prefixLength() == 60 || cidr(self).prefixLength() == 64"
+                          message: spec.ipv6.prefix must be a /56, /60 or /64
+                    source:
+                      description: >-
+                        Where this placement's IPv6 subnet comes from on a public-cloud site. Network takes it from
+                        the network's platform-assigned IPv6 space; its internet traffic leaves through the platform.
+                        Provider takes an IPv6 range from the cloud provider; its internet traffic uses the
+                        provider's path. Provider needs a network whose IPv6 the platform assigns. When omitted, the
+                        site's default applies; status reports the result.
+                      type: string
+                      enum: [Network, Provider]
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -5086,6 +5279,61 @@ spec:
                   description: The subnets allocated to the placement, IPv4 first. Fixed for the placement's life.
                   items:
                     type: string
+                subnets:
+                  type: array
+                  description: The placement's subnets, one per address family, with where each comes from.
+                  items:
+                    type: object
+                    properties:
+                      family:
+                        type: integer
+                        description: 4 or 6.
+                      prefix:
+                        type: string
+                        description: The subnet.
+                      gateway:
+                        type: string
+                        description: The subnet's gateway address, where the platform assigns one.
+                      source:
+                        type: string
+                        description: Network (from the network's address space) or Provider (assigned by the cloud provider).
+                ipv6:
+                  type: object
+                  description: How the placement's IPv6 is realized.
+                  properties:
+                    addressing:
+                      type: string
+                      description: How workloads get IPv6 addresses, DHCPv6 or SLAAC (informational).
+                    internet:
+                      type: object
+                      description: IPv6 internet access of the placement.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending or unavailable.
+                        path:
+                          type: string
+                          description: Fabric (through the platform) or Provider (the cloud provider's own path).
+                        reason:
+                          type: string
+                          description: One-word reason when not ready.
+                        message:
+                          type: string
+                          description: What the reason means for this placement, in plain words.
+                    translation:
+                      type: object
+                      description: >-
+                        For an IPv6-only placement: the translation prefix and resolvers its workloads use to reach
+                        IPv4-only destinations.
+                      properties:
+                        pref64:
+                          type: string
+                          description: The IPv6 prefix that IPv4 destinations are translated into.
+                        resolvers:
+                          type: array
+                          description: DNS resolvers that synthesize IPv6 answers for IPv4-only names.
+                          items:
+                            type: string
                 namespaces:
                   type: array
                   description: CloudVirt site namespaces the network serves (the environment's namespaces that name it).
@@ -8111,8 +8359,8 @@ spec:
         openAPIV3Schema:
           description: >-
             A tenant profile: the read-only summary of a tenant for the tenant's own users, with its
-            display name, the contacts its users ask about access, and the sites its environments may
-            use. The platform writes it; one object named shc exists in each tenant namespace and goes
+            display name, the contacts its users ask about access, the sites its environments may use
+            and the platform IPv6 address space its networks can ask for. The platform writes it; one object named shc exists in each tenant namespace and goes
             away with it.
           type: object
           x-kubernetes-validations:
@@ -8210,13 +8458,17 @@ spec:
                       capabilities:
                         description: >-
                           What the site offers: Virtualization (VM environments), HybridNetworking
-                          (networks that span sites), DNS (names for environments).
+                          (networks that span sites), DNS (names for environments), IPv6 (placements can have an
+                          IPv6 subnet), IPv6Only (placements without IPv4), IPv6NetworkSource (IPv6 subnets from the
+                          network's address space), IPv6ProviderSource (IPv6 subnets from the cloud provider),
+                          IPv6Translation (placements without IPv4 reach IPv4-only destinations by translation).
                         type: array
-                        maxItems: 8
+                        maxItems: 16
                         x-kubernetes-list-type: set
                         items:
                           type: string
-                          enum: [Virtualization, HybridNetworking, DNS]
+                          enum: [Virtualization, HybridNetworking, DNS, IPv6, IPv6Only, IPv6NetworkSource,
+                                 IPv6ProviderSource, IPv6Translation]
                       storageClasses:
                         description: >-
                           Storage classes (OpenShift) or volume types (OpenStack) an environment on the
@@ -8237,6 +8489,34 @@ spec:
                             default:
                               description: True for the site's default.
                               type: boolean
+                ipv6Platform:
+                  description: >-
+                    The platform IPv6 address space this tenant's networks can ask for (spec.platformPrefixes
+                    with family 6): the block sizes a request may name and the size given when it names none.
+                    Absent when the platform offers this tenant none, or when the offer depends on the fabric a
+                    network names. A network's own status remains the authority on what it was given.
+                  type: object
+                  required:
+                    - blockLengths
+                  x-kubernetes-validations:
+                    - rule: "!has(self.defaultBlockLength) || self.defaultBlockLength in self.blockLengths"
+                      message: defaultBlockLength is one of blockLengths.
+                  properties:
+                    blockLengths:
+                      description: Prefix lengths a request may name, in ascending order.
+                      type: array
+                      minItems: 1
+                      maxItems: 16
+                      x-kubernetes-list-type: set
+                      items:
+                        type: integer
+                        minimum: 1
+                        maximum: 128
+                    defaultBlockLength:
+                      description: The prefix length given when a request names none; one of blockLengths.
+                      type: integer
+                      minimum: 1
+                      maximum: 128
                 observedEntityGeneration:
                   description: The metadata.generation of the tenant that this profile describes.
                   type: integer

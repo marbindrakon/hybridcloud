@@ -12,6 +12,13 @@
 # the network's attachment circuits (PrefixInUse); the IPAM refuses an edit that would leave a placement's subnet
 # outside (PrefixInUse, the space unchanged); status.addressSpace. A change wakes the network's placements waiting
 # for address space.
+# IPv6 (design/IPV6-PLAN.md §2.1, §2.2; OD63, OD65, OD66, OD73): the mode comes from the fields (ipv6_mode.yml) and
+# can't change while the network has placements (IPv6ModeInUse); a tenant prefix overlapping the platform's own
+# space (realization network.exclusiveRanges and the public pools) is refused (PrefixReserved); a mode-Tenant IPv6
+# prefix may not overlap another network of the same tenant (PrefixInUse, in the IPAM); mode Platform takes a block
+# from the fabric's public pool (pending WaitingForAddressSpace while none is free, the tenant's allowance is used
+# or the pinned block is held back), given back when the mode changes or the network goes (hold-down); status.ipv6
+# and the per-family status.egress (egress_status.yml).
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -125,6 +132,8 @@
       vars:
         _mine: "{{ _hn_placements.resources | default([]) | selectattr('spec.network', 'equalto', fab_name) | list }}"
       ansible.builtin.set_fact:
+        # every placement of the network that still exists holds (or may hold) a subnet
+        hn_holders: "{{ _mine | map(attribute='metadata.name') | map('regex_replace', '^', 'NetworkPlacement/' ~ fab_namespace ~ '/') | list }}"
         hn_status: >-
           {{ {'entity': fab_entity,
               'placementCount': _mine | length,
@@ -170,13 +179,26 @@
               fab_real.egress.linkPool | default('169.254.0.0/16')]
              + (fab_real.egress.platformSources | default([], true)) }}
 
+    - name: The network's IPv6 mode
+      ansible.builtin.include_tasks: ipv6_mode.yml
+
+    # address space the platform keeps for itself (its own globally routed space, translation prefixes) and every
+    # public pool: no tenant prefix may overlap it
+    - name: The platform's exclusive ranges
+      ansible.builtin.set_fact:
+        hn_exclusive: >-
+          {{ (fab_real.network | default({}, true)).exclusiveRanges | default([], true)
+             + ((fab_real.ipam | default({}, true)).publicPools | default({}, true) | dict2items
+                | map(attribute='value') | map(attribute='prefixes', default=[]) | flatten) }}
+
     - name: Check the address space against the platform's ranges and the circuits
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
         fab_check:
           action: check-network
-          prefixes: "{{ fab_spec.prefixes }}"
+          prefixes: "{{ fab_spec.prefixes | default([], true) }}"
           reserved: "{{ hn_platform_ranges }}"
+          exclusive: "{{ hn_exclusive }}"
           circuits: >-
             {%- set out = [] -%}
             {%- for c in _hn_circuits.resources | default([]) -%}
@@ -197,28 +219,123 @@
         msg: "{{ fab_fail_msg }}"
       when: fab_check_result.errors | length > 0
 
+    # ---- IPv6 mode and the platform block ----
+    - name: The address space the IPAM holds
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam: {action: ipam-get, fabric: "{{ hn_fabric_name }}", network: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"}
+
+    - name: The IPv6 mode in effect
+      ansible.builtin.include_tasks: ipv6_realized.yml
+      vars:
+        hn_held: "{{ fab_ipam_result }}"
+
+    # the sentence is shc_ipam.MODE_IN_USE (and the reason's summary in the status reasons registry, the UI words),
+    # followed by the two modes; tests/unit/test_ipv6_api.py compares them
+    - name: Refuse a change of the IPv6 mode while the network has placements
+      ansible.builtin.set_fact:
+        fab_fail_reason: IPv6ModeInUse
+        fab_fail_msg: >-
+          HybridNetwork {{ fab_name }}: the network's IPv6 mode can't change while it has placements;
+          remove them or create a new network (it is {{ hn_mode6_realized }}, the spec asks for {{ hn_mode6 }})
+      when:
+        - hn_mode6_realized | length > 0
+        - hn_mode6_realized != hn_mode6
+        - hn_holders | length > 0
+
+    - name: Stop on a refused mode change
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_reason | default('') == 'IPv6ModeInUse'
+
+    - name: Start without a platform block
+      ansible.builtin.set_fact:
+        hn_block: ""
+        hn_pool: ""
+        hn_block_new: false
+
+    - name: The network's platform IPv6 block
+      ansible.builtin.include_tasks: platform_block.yml
+      when: hn_mode6 == 'Platform'
+
     - name: The address space in the IPAM
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
       vars:
-        fab_ipam: {action: ipam-space, fabric: "{{ hn_fabric_name }}", network: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}",
-                   prefixes: "{{ fab_spec.prefixes }}", reserved: "{{ hn_platform_ranges }}"}
+        fab_ipam:
+          action: ipam-space
+          fabric: "{{ hn_fabric_name }}"
+          network: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
+          prefixes: "{{ fab_spec.prefixes | default([], true) + ([hn_block] if hn_block | length > 0 else []) }}"
+          platform: "{{ [hn_block] if hn_block | length > 0 else [] }}"
+          mode6: "{{ hn_mode6 }}"
+          holders: "{{ hn_holders }}"
+          tenant: "{{ fab_entity }}"
+          reserved: "{{ hn_platform_ranges }}"
 
     - name: Refuse an edit that leaves placements' subnets outside the space
       ansible.builtin.set_fact:
-        fab_fail_reason: PrefixInUse
+        hn_space_refused: "{{ fab_ipam_result.refused | default([]) | length > 0 }}"
+        fab_fail_reason: "{{ fab_ipam_result.reason | default('PrefixInUse', true) }}"
         fab_fail_msg: >-
           HybridNetwork {{ fab_name }}: the address space stays {{ fab_ipam_result.addressSpace | map(attribute='prefix') | join(', ') }}:
           {{ fab_ipam_result.refused | join('; ') }}
       when: fab_ipam_result.refused | default([]) | length > 0
 
+    # a block taken in this run for a space that is refused goes back (one held before stays)
+    - name: Give back a block taken for a refused space
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam: {action: ipam-pool-release, fabric: "{{ hn_fabric_name }}", owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"}
+      when:
+        - hn_space_refused | default(false) | bool
+        - hn_block_new | bool
+
     - name: Stop on a refused edit
       ansible.builtin.fail:
         msg: "{{ fab_fail_msg }}"
-      when: fab_ipam_result.refused | default([]) | length > 0
+      when: hn_space_refused | default(false) | bool
 
     - name: Keep the address space
       ansible.builtin.set_fact:
         hn_space: "{{ fab_ipam_result.addressSpace }}"
+        hn_space_changed: "{{ fab_ipam_result.changed | default(false) | bool }}"
+        # (merge-patched: block and holdDownUntil are written as null when they don't apply)
+        hn_ipv6_status: >-
+          {{ {'mode': hn_mode6,
+              'prefixes': [hn_block] if hn_block | length > 0 else hn_tenant6,
+              'block': {'prefix': hn_block, 'prefixLength': hn_block.split('/')[1] | int,
+                        'source': 'Pinned' if hn_platform6.prefix | default('', true) | length > 0 else 'Allocated'}
+                       if hn_block | length > 0 else none,
+              'holdDownUntil': none} }}
+
+    # not mode Platform (any more): a block the network still holds goes back to the pool (held down there, with the
+    # hold-down realization has now)
+    - name: The fabric's platform address pools before a release
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
+      vars:
+        fab_ipam_pools_fabric: "{{ hn_fabric_name }}"
+        fab_ipam_pools_tolerant: true
+      when:
+        - hn_mode6 != 'Platform'
+        - (fab_real.ipam | default({}, true)).publicPools | default({}, true) | length > 0
+
+    - name: Give a platform block back
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam: {action: ipam-pool-release, fabric: "{{ hn_fabric_name }}", owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"}
+      when:
+        - hn_mode6 != 'Platform'
+        - (fab_real.ipam | default({}, true)).publicPools | default({}, true) | length > 0
+
+    - name: Wake the networks waiting for platform address space
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_waiting_networks.yml"
+      vars:
+        wn_fabric: "{{ hn_fabric_name }}"
+        wn_except: {namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}
+      when:
+        - hn_mode6 != 'Platform'
+        - (fab_real.ipam | default({}, true)).publicPools | default({}, true) | length > 0
+        - fab_ipam_result.released | default(none, true) is not none
 
     # a placement without room waits; the space changed, so it may fit now
     - name: Wake the placements waiting for address space
@@ -235,7 +352,7 @@
             {%- endif -%}
           {%- endfor -%}
           {{ out }}
-      when: fab_ipam_result.changed | default(false) | bool
+      when: hn_space_changed | bool
 
     # the network's VPN route target: the gateways of every site it is placed on import and export it
     - name: The network's VPN route target
@@ -258,6 +375,8 @@
         _eg: "{{ ((hn_fabric.status | default({}, true)).realization | default({}, true)).egress | default({}, true) }}"
       ansible.builtin.set_fact:
         hn_egress_want: "{{ (fab_spec.egress | default({})).internet | default(false) | bool }}"
+        # IPv4 egress (source NAT) needs IPv4 space; IPv6 egress is not realized by the fabric yet
+        hn_egress_want4: "{{ ((fab_spec.egress | default({})).internet | default(false) | bool) and hn_v4 | length > 0 }}"
         # platform reach (annotation written by the platform's automation) needs the same root VRF and veth
         hn_platform_reach: >-
           {{ (fab_obj.metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach'] | default('[]', true) | from_json
@@ -276,7 +395,7 @@
           fabric: "{{ hn_fabric_name }}"
           kind: egress
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
-      when: (hn_egress_want | bool or hn_platform_reach | bool) and hn_egress_offered | bool
+      when: (hn_egress_want4 | bool or hn_platform_reach | bool) and hn_egress_offered | bool
 
     # off, and the fabric no longer carries it: the index goes back
     - name: Give the egress index back
@@ -288,33 +407,10 @@
           fabric: "{{ hn_fabric_name }}"
           kind: egress
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
-      when: not ((hn_egress_want | bool or hn_platform_reach | bool) and hn_egress_offered | bool) and hn_egress_carried | length == 0
+      when: not ((hn_egress_want4 | bool or hn_platform_reach | bool) and hn_egress_offered | bool) and hn_egress_carried | length == 0
 
     - name: Set the egress state
-      ansible.builtin.set_fact:
-        hn_egress: >-
-          {%- if hn_egress_want | bool and not hn_egress_offered | bool -%}
-            {{ {'internet': 'unavailable', 'sourceAddresses': none} }}
-          {%- elif hn_egress_want | bool and hn_egress_carried | length > 0 -%}
-            {{ {'internet': 'ready', 'sourceAddresses': hn_egress_carried.sourceAddresses} }}
-          {%- elif hn_egress_want | bool -%}
-            {{ {'internet': 'pending', 'sourceAddresses': none} }}
-          {%- elif hn_egress_carried | length > 0 -%}
-            {{ {'internet': 'removing', 'sourceAddresses': none} }}
-          {%- else -%}
-            {{ {} }}
-          {%- endif -%}
-        # (status is merge-patched: a field left out keeps its old value, so non-ready states clear the addresses)
-        hn_egress_note: >-
-          {{ {'unavailable': '; internet egress unavailable (HybridFabric ' ~ hn_fabric_name ~ ' offers none)',
-              'ready': '; internet egress',
-              'pending': '; internet egress being added',
-              'removing': '; internet egress being removed'}.get(hn_egress_state | default(''), '') }}
-      vars:
-        hn_egress_state: >-
-          {{ 'unavailable' if (hn_egress_want | bool and not hn_egress_offered | bool)
-             else ('ready' if (hn_egress_want | bool and hn_egress_carried | length > 0)
-             else ('pending' if hn_egress_want | bool else ('removing' if hn_egress_carried | length > 0 else ''))) }}
+      ansible.builtin.include_tasks: egress_status.yml
 
     # the fabric adds or removes the network's egress and wakes it again when it did
     - name: Wake the fabric
@@ -334,7 +430,7 @@
           {{ hn_space | map(attribute='prefix') | join(', ') }} on HybridFabric {{ hn_fabric_name }}, MTU {{ hn_status.mtu }};
           {{ hn_status.placementsReady }}/{{ hn_status.placementCount }} placements ready{{ hn_egress_note }}
         fab_status: >-
-          {{ hn_status | combine({'addressSpace': hn_space,
+          {{ hn_status | combine({'addressSpace': hn_space, 'ipv6': hn_ipv6_status,
                                   'realization': {'vpnTarget': hn_vpn_target | int,
                                                   'routeTarget': hn_fabric.spec.domainAsn ~ ':' ~ hn_vpn_target}})
              | combine({'egress': hn_egress if hn_egress | length > 0 else none}) }}

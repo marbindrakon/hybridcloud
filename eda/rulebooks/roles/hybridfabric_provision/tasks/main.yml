@@ -2,6 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.4, §12.3 + H2): HybridFabric provision.
 # 1. Validate the fabric and its credentials (SSH key for the border gateway nodes, BGP password).
 # 2. Ledger: ConfigMap fabric-ledger-<fabric> (pools; provider-edge index 1 = the border gateway root).
+#    The platform address pools (realization ipam.publicPools) are kept in the ledger on every run and their use is
+#    reported in status.realization.ipam.pools; a pool change wakes the networks waiting for platform address space.
 # 3. Under the lease fabric-config-<fabric>, one node at a time: the root instance (shc-fabric-apply root: MPLS,
 #    the node-local core bridge, the loopback; FRR: VPNv4 route reflector for the core's loopback range, IS-IS
 #    with segment routing). A failure stops before the next node.
@@ -108,6 +110,13 @@
     - name: Keep the ledger counts
       ansible.builtin.set_fact:
         hf_ledger: "{{ fab_ledger_result }}"
+
+    # the platform address pools (realization ipam.publicPools) and the offer tenants see of them, on every fabric run
+    # (pools.yml: a realization change reaches the ledger and status.realization.ipam without a network run; a
+    # malformed or refused pool realization never fails the fabric). The offer the Entities were told is stored in
+    # status.realization.ipam.tenantOffer before the status write below.
+    - name: The platform address pools and the tenants' offer
+      ansible.builtin.include_tasks: pools.yml
 
     - name: The root's provider-edge addresses (index 1)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
@@ -300,6 +309,32 @@
           {%- endfor -%}
           {{ out }}
 
+    # what tenants see of the fabric changed since the Entities were last told (status.realization.ipam.tenantOffer,
+    # stored below; absent before the first run that stores it): its IPv6 offer, or its spec (who may use it). The
+    # wake comes before the status write: the pool rows the Entity job reads are published already (the ensure
+    # publishes them whenever the ledger changed, and the offer only changes with the ledger). A ready Entity runs
+    # only when woken or changed, so the offer counts as told only when the Entities could be listed; otherwise the
+    # stored offer is dropped and the next fabric run wakes them again
+    - name: Tell whether the tenants' view of the fabric changed
+      ansible.builtin.set_fact:
+        hf_wake_entities: >-
+          {{ (hf_tenant_offer != (((fab_st.realization | default({}, true)).ipam | default({}, true)).tenantOffer
+                                   | default('', true)))
+             or (fab_generation | int != (fab_st.observedGeneration | default(0, true) | int)) }}
+
+    - name: Wake the Entities when the tenants' view of the fabric changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_entities.yml"
+      vars:
+        we_namespace: "{{ fab_namespace }}"
+      when: hf_wake_entities | bool
+
+    - name: Keep the offer the Entities were told
+      ansible.builtin.set_fact:
+        hf_ipam: >-
+          {{ hf_ipam | combine({'tenantOffer': hf_tenant_offer
+                                 if (not hf_wake_entities | bool) or (we_entities_listed | default(false) | bool)
+                                 else none}) }}
+
     - name: Report the fabric ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -311,7 +346,8 @@
           ('; internet egress for ' ~ hf_egress.networks | length ~ ' network(s)') if fab_real.egress.enabled | default(false) | bool else '' }}{{
           ('; ' ~ hf_attach.status | length ~ ' attachment circuit(s)' ~ ((', not realized: ' ~ hf_attach.skipped
              | map(attribute='circuit') | join(', ')) if hf_attach.skipped else ''))
-          if fab_real.attachments.enabled | default(false) | bool else '' }}
+          if fab_real.attachments.enabled | default(false) | bool else '' }}{{
+          ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}
         fab_status: >-
           {{ {'ledger': 'fabric-ledger-' ~ fab_name,
               'allocated': hf_ledger.allocated,
@@ -321,7 +357,8 @@
                               'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet,
                               'egress': {'enabled': fab_real.egress.enabled | default(false) | bool,
                                          'networks': hf_egress_status},
-                              'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped}} }}
+                              'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
+                              'ipam': hf_ipam}} }}
 
     # the networks this run added to or removed from the egress wait for it: wake them
     - name: Wake the networks whose egress changed
@@ -333,6 +370,13 @@
             {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
           {%- endfor -%}
           {{ out }}
+
+    # a pool change (more blocks, a larger allowance, a shorter hold-down) may give a waiting network its block
+    - name: Wake the networks waiting for platform address space
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_waiting_networks.yml"
+      vars:
+        wn_fabric: "{{ fab_name }}"
+      when: hf_ipam_changed | bool
 
     # a circuit added, changed (its realization or its policy) or removed: the circuit job reads the sessions, or
     # continues the circuit's deletion
