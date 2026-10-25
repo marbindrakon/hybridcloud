@@ -1,3 +1,7 @@
+{% set _asn = cg_fabric.spec.domainAsn %}
+{% set _v6 = cg_pe.loopback6 | default('') | length > 0 %}
+{% set _sif = (fab_real.gateway | default({})).siteImportFilter | default({}) %}
+{% set _egress6 = ((fab_real.egress | default({})).ipv6 | default({})) %}
 ! Managed by the platform: CloudGateway {{ fab_name }} (site {{ cg_site_name }}) on {{ bgw_node.name }}. Changes here are overwritten.
 frr version 8.5
 frr defaults datacenter
@@ -19,12 +23,18 @@ ip route {{ rr }}/32 {{ fab_spec.siteUnderlay.gateway }}
 ! without it here a configuration reload would turn MPLS input off (labelled packets from the core then drop)
 interface lo
  ip router isis CORE
+{% if _v6 %}
+ ipv6 router isis CORE
+{% endif %}
  isis passive
  mpls enable
 exit
 !
 interface core0
  ip router isis CORE
+{% if _v6 %}
+ ipv6 router isis CORE
+{% endif %}
  mpls enable
 exit
 !
@@ -35,31 +45,94 @@ exit
 !
 {% endfor %}
 ! routes the gateways originate into the site carry this community; a gateway never takes them back from the site
-bgp community-list standard GW-ORIG seq 5 permit {{ cg_fabric.spec.domainAsn }}:{{ fab_real.gatewayCommunity }}
+bgp community-list standard GW-ORIG seq 5 permit {{ _asn }}:{{ fab_real.gatewayCommunity }}
 !
+{% if _sif.ipv4 | default(false) | bool or _sif.ipv6 | default(true) | bool %}
+! site-import filter: per address family only the placements' prefixes, and the host routes inside them, enter from
+! the site; any other prefix of that family is refused. Prefix lists only: FRR 8.5 never matches `match evpn
+! route-type prefix` on routes it receives, and a prefix-list match skips routes that carry no IP prefix of its
+! family, so the final permit keeps the site's other routes (inclusive multicast, MAC-only MAC/IP routes, the other
+! family) flowing through the gateway's route reflection
+{% endif %}
+{% if _sif.ipv4 | default(false) | bool %}
+{% set _p4 = cg_vrfs | map(attribute='prefixes4') | map('default', []) | sum(start=[]) | unique | list %}
+{% for p in _p4 %}
+ip prefix-list SITE-V4 seq {{ loop.index * 5 }} permit {{ p }} le 32
+{% else %}
+ip prefix-list SITE-V4 seq 5 deny 0.0.0.0/0 le 32
+{% endfor %}
+ip prefix-list ANY-V4 seq 5 permit 0.0.0.0/0 le 32
+!
+{% endif %}
+{% if _sif.ipv6 | default(true) | bool %}
+{% set _p6 = cg_vrfs | map(attribute='prefixes6') | map('default', []) | sum(start=[]) | unique | list %}
+{% for p in _p6 %}
+ipv6 prefix-list SITE-V6 seq {{ loop.index * 5 }} permit {{ p }} le 128
+{% else %}
+ipv6 prefix-list SITE-V6 seq 5 deny ::/0 le 128
+{% endfor %}
+ipv6 prefix-list ANY-V6 seq 5 permit ::/0 le 128
+!
+{% endif %}
 route-map FROM-SITE deny 10
  match community GW-ORIG
 exit
+{% if _sif.ipv6 | default(true) | bool %}
 route-map FROM-SITE permit 20
+ match ipv6 address prefix-list SITE-V6
+exit
+{% endif %}
+{% if _sif.ipv4 | default(false) | bool %}
+route-map FROM-SITE permit 22
+ match ip address prefix-list SITE-V4
+exit
+{% endif %}
+{% if _sif.ipv6 | default(true) | bool %}
+route-map FROM-SITE deny 30
+ match ipv6 address prefix-list ANY-V6
+exit
+{% endif %}
+{% if _sif.ipv4 | default(false) | bool %}
+route-map FROM-SITE deny 32
+ match ip address prefix-list ANY-V4
+exit
+{% endif %}
+route-map FROM-SITE permit 40
 exit
 !
+{% if _egress6.enabled | default(false) | bool %}
+! IPv6 internet egress leaves through one primary node per network: the standby node marks its default route with
+! this community, and the sites get it with a lower local preference, so their IPv6 internet traffic and the
+! replies take the same node (its filter is stateful)
+bgp community-list standard EGRESS-STANDBY seq 5 permit {{ _asn }}:{{ _egress6.standbyCommunity | default(998) }}
+route-map GW-T5 permit 5
+ match community EGRESS-STANDBY
+ set local-preference {{ _egress6.standbyLocalPref | default(50) }}
+ set community {{ _asn }}:{{ fab_real.gatewayCommunity }} additive
+exit
+{% endif %}
 route-map GW-T5 permit 10
- set community {{ cg_fabric.spec.domainAsn }}:{{ fab_real.gatewayCommunity }} additive
+ set community {{ _asn }}:{{ fab_real.gatewayCommunity }} additive
 exit
 !
-! the site's route targets and router MAC stay out of the core
-route-map TO-VPN permit 10
+! the site's route targets and router MAC stay out of the core. One map per network: FRR 9 and later attach the
+! export route target before this map runs, so the map sets it again (`set extcommunity none` alone would strip it
+! and nothing would reach the VPN); FRR 8.5 adds the same route target after the map
+{% for rt in cg_vrfs | map(attribute='vpnTarget') | unique | sort %}
+route-map TO-VPN-{{ rt }} permit 10
  set extcommunity none
+ set extcommunity rt {{ _asn }}:{{ rt }}
 exit
+{% endfor %}
 !
 ! no graceful restart: a removed listen-range peer (a site node, a gateway) left FRR 8.5 a restart timer that
 ! crashed bgpd when it fired (design/P7-PLAN.md §12.22)
-router bgp {{ cg_fabric.spec.domainAsn }}
+router bgp {{ _asn }}
  bgp router-id {{ cg_node_addr }}
  no bgp default ipv4-unicast
  bgp graceful-restart-disable
  neighbor SITE peer-group
- neighbor SITE remote-as {{ cg_fabric.spec.domainAsn }}
+ neighbor SITE remote-as {{ _asn }}
 {% if cg_bgp_password %}
  neighbor SITE password {{ cg_bgp_password }}
 {% endif %}
@@ -69,7 +142,7 @@ router bgp {{ cg_fabric.spec.domainAsn }}
  bgp listen range {{ fab_spec.siteUnderlay.cidr }} peer-group SITE
 {% if fab_spec.siteUnderlay.upstreamRouteReflectors | default([]) %}
  neighbor UPSTREAM peer-group
- neighbor UPSTREAM remote-as {{ cg_fabric.spec.domainAsn }}
+ neighbor UPSTREAM remote-as {{ _asn }}
  neighbor UPSTREAM update-source {{ cg_node_addr }}
 {% if cg_bgp_password %}
  neighbor UPSTREAM password {{ cg_bgp_password }}
@@ -78,7 +151,7 @@ router bgp {{ cg_fabric.spec.domainAsn }}
  neighbor {{ rr }} peer-group UPSTREAM
 {% endfor %}
 {% endif %}
- neighbor {{ cg_root_pe.loopbackIp }} remote-as {{ cg_fabric.spec.domainAsn }}
+ neighbor {{ cg_root_pe.loopbackIp }} remote-as {{ _asn }}
  neighbor {{ cg_root_pe.loopbackIp }} description border gateway route reflector
  neighbor {{ cg_root_pe.loopbackIp }} update-source lo
  !
@@ -96,29 +169,60 @@ router bgp {{ cg_fabric.spec.domainAsn }}
  address-family ipv4 vpn
   neighbor {{ cg_root_pe.loopbackIp }} activate
  exit-address-family
+{% if _v6 %}
+ !
+{# on whenever the core carries IPv6, also without IPv6 VRFs: a new address family resets the session once, so that
+   happens when the core gains IPv6, not when a tenant first places IPv6 #}
+ address-family ipv6 vpn
+  neighbor {{ cg_root_pe.loopbackIp }} activate
+ exit-address-family
+{% endif %}
 exit
 !
 {% for v in cg_vrfs %}
-! NetworkPlacement {{ v.placement }}: the site's routes (layer 3 VNI {{ v.vni }}) <-> the network's VPN ({{ cg_fabric.spec.domainAsn }}:{{ v.vpnTarget }})
-router bgp {{ cg_fabric.spec.domainAsn }} vrf {{ v.vrf }}
+{% set _fam = v.families | default([4]) | map('int') | list %}
+{# RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback with the VNI's low 16 bits #}
+{% set _rd = (_asn ~ ':' ~ v.vni) if _asn | int <= 65535 else (cg_pe.loopbackIp ~ ':' ~ (v.vni | int % 65536)) %}
+! NetworkPlacement {{ v.placement }}: the site's routes (layer 3 VNI {{ v.vni }}) <-> the network's VPN ({{ _asn }}:{{ v.vpnTarget }})
+router bgp {{ _asn }} vrf {{ v.vrf }}
  bgp router-id {{ cg_node_addr }}
  no bgp default ipv4-unicast
+{% if 4 in _fam %}
  !
  address-family ipv4 unicast
   label vpn export auto
-{# RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback with the VNI's low 16 bits #}
-  rd vpn export {{ (cg_fabric.spec.domainAsn ~ ':' ~ v.vni) if cg_fabric.spec.domainAsn | int <= 65535 else (cg_pe.loopbackIp ~ ':' ~ (v.vni | int % 65536)) }}
-  rt vpn both {{ cg_fabric.spec.domainAsn }}:{{ v.vpnTarget }}
+  rd vpn export {{ _rd }}
+  rt vpn both {{ _asn }}:{{ v.vpnTarget }}
   nexthop vpn export {{ cg_pe.loopbackIp }}
-  route-map vpn export TO-VPN
+  route-map vpn export TO-VPN-{{ v.vpnTarget }}
   export vpn
   import vpn
  exit-address-family
+{% endif %}
+{% if _v6 and 6 in _fam %}
+ !
+{# the IPv6 loopback is the next hop: FRR installs no labelled IPv6 route over an IPv4 next hop. The address family
+   gets its own label, the same RD and the same route target as IPv4 #}
+ address-family ipv6 unicast
+  label vpn export auto
+  rd vpn export {{ _rd }}
+  rt vpn both {{ _asn }}:{{ v.vpnTarget }}
+  nexthop vpn export {{ cg_pe.loopbackIp6 }}
+  route-map vpn export TO-VPN-{{ v.vpnTarget }}
+  export vpn
+  import vpn
+ exit-address-family
+{% endif %}
  !
  address-family l2vpn evpn
+{% if 4 in _fam %}
   advertise ipv4 unicast route-map GW-T5
-  route-target import {{ cg_fabric.spec.domainAsn }}:{{ v.vni }}
-  route-target export {{ cg_fabric.spec.domainAsn }}:{{ v.vni }}
+{% endif %}
+{% if _v6 and 6 in _fam %}
+  advertise ipv6 unicast route-map GW-T5
+{% endif %}
+  route-target import {{ _asn }}:{{ v.vni }}
+  route-target export {{ _asn }}:{{ v.vni }}
  exit-address-family
 exit
 !
@@ -129,5 +233,8 @@ router isis CORE
  segment-routing on
  segment-routing global-block {{ fab_real.core.srgb.start }} {{ fab_real.core.srgb.end }}
  segment-routing prefix {{ cg_pe.loopback }} index {{ cg_pe.index }}
+{% if _v6 %}
+ segment-routing prefix {{ cg_pe.loopback6 }} index {{ cg_pe.index | int + fab_real.core.sidOffset6 | default(1000) | int }}
+{% endif %}
 exit
 !
