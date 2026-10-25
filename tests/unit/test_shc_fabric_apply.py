@@ -618,6 +618,62 @@ class RollbackTest(ApplyCase):
             self.assertEqual(f.read(), "2001:db8:4005:ffff::/64\n")
 
 
+class VrfRemovalTest(ApplyCase):
+    """A VRF that goes takes its IPv6 unreachable default with it (the route is on lo and would outlive the device)."""
+
+    def test_gateway_vrf_removed(self):
+        h = self.h
+        h.conf("root", dict(ROOT_CONF, **ROOT6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", dict(GW_CONF, **GW6))
+        h.ok(self, "gw-iaas1")
+        self.assertEqual(h.unreachable6("gw-iaas1"), ["51000", "51002"])
+        h.conf("gw-iaas1", dict(GW_CONF, vrfs=GW_CONF["vrfs"][:1], **GW6))
+        out, log = h.ok(self, "gw-iaas1")
+        self.keep("gw-iaas1-v6-vrf-removed", log, out)
+        self.assertNotIn("t51002", h.get_state()["ns"]["gw-iaas1"]["links"])
+        self.assertEqual(h.unreachable6("gw-iaas1"), ["51000"])
+        gone = index(log, r"^W \[gw-iaas1\] ip link del t51002$")
+        route = index(log, r"^W \[gw-iaas1\] ip -6 route del unreachable default metric %s table 51002$" % METRIC)
+        self.assertLess(gone, route)
+        out2, _ = h.ok(self, "gw-iaas1")
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+
+    def test_root_vrfs_removed(self):
+        h = self.h
+        c = dict(copy.deepcopy(ROOT_CONF), **ROOT6)
+        c["attachments"]["circuits"] = [CIRCUIT]
+        h.conf("root", c)
+        h.ok(self, "root")
+        self.assertEqual(h.unreachable6(""), ["110000", "110001", "9000"])
+        # the circuit's VRF goes
+        c["attachments"]["circuits"] = []
+        h.conf("root", c)
+        _, log = h.ok(self, "root")
+        self.assertNotIn("e10001", h.get_state()["ns"][""]["links"])
+        self.assertEqual(h.unreachable6(""), ["110000", "9000"])
+        index(log, r"^W \[root\] ip -6 route del unreachable default metric %s table 110001$" % METRIC)
+        # the egress goes (its VRF and the network's)
+        c.pop("egress")
+        h.conf("root", c)
+        _, log = h.ok(self, "root")
+        self.assertEqual(h.unreachable6(""), [])
+        index(log, r"^W \[root\] ip -6 route del unreachable default metric %s table 9000$" % METRIC)
+        index(log, r"^W \[root\] ip -6 route del unreachable default metric %s table 110000$" % METRIC)
+
+    def test_ipv4_only_vrf_removed(self):
+        """without the IPv6 keys a VRF removal issues no IPv6 command (nor the table read for it)"""
+        h = self.h
+        h.conf("root", ROOT_CONF)
+        h.ok(self, "root")
+        h.conf("gw-iaas1", GW_CONF)
+        h.ok(self, "gw-iaas1")
+        h.conf("gw-iaas1", dict(GW_CONF, vrfs=[]))
+        out, log = h.ok(self, "gw-iaas1")
+        self.assertNotIn("t51000", h.get_state()["ns"]["gw-iaas1"]["links"])
+        self.assertEqual([l for l in log if is_v6(l) or " -d link show" in l], [])
+
+
 def v4_writes(log):
     """the writes of a run that are not IPv6 ones (the attachment circuit's disable_ipv6=1 is IPv4-era: kept)"""
     return [l for l in writes(log) if not is_v6(l) or "bond1.3001/disable_ipv6" in l]

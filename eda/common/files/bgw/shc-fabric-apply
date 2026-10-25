@@ -50,7 +50,8 @@
 #   host lacks, an address refused): the rest of IPv6 is left out, IPv4 goes on as without the keys. The
 #   management interface is never touched. The pools of the last run that had them are kept in <instance>.pools6
 #   next to the JSON: a run whose pools are empty (the IPv6 core rolled back) still removes the addresses taken from
-#   them, then forgets them; the IPv6 sysctls and unreachable defaults stay (they don't affect IPv4).
+#   them, then forgets them; the IPv6 sysctls and unreachable defaults stay (they don't affect IPv4). A VRF removed
+#   while the keys or pools are known takes its table's IPv6 unreachable default with it.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
@@ -162,6 +163,20 @@ vrf6() {
   [ -z "$ICMP6" ] || addr_ensure "$1" "$ICMP6" nodad
 }
 
+# <table>: a deleted VRF's IPv6 unreachable default (vrf6). The route is on lo, not on the VRF device, so it outlives
+# the device; a VRF created later on the same table would find it there. Only with the IPv6 keys (or remembered
+# pools): without them no IPv6 command runs at all, and the defaults a rollback leaves are inert.
+vrf6_gone() {
+  [ -n "$V6KNOWN" ] && [ -n "$1" ] || return 0
+  $NSX ip -6 route del unreachable default metric 4278198272 table "$1" 2>/dev/null || true
+}
+
+# a VRF's table (ip -d link), "" when the device is no VRF
+vrf_table() {
+  [ -n "$V6KNOWN" ] || return 0
+  $NSX ip -j -d link show "$1" 2>/dev/null | jq -r '.[0].linkinfo.info_data.table // empty' 2>/dev/null || true
+}
+
 # root namespace, before any IPv6 change: the namespace routes IPv6 (forwarding on: the kernel then ignores router
 # advertisements unless accept_ra=2) and gains IS-IS's IPv6 routes, so a host interface that still takes routes from
 # RAs must be configured statically first. Interfaces in a VRF are the fabric's own and don't count. Fails (status 1)
@@ -224,22 +239,26 @@ root_vrf() {  # <vrf> <table>
 
 # the root VRFs no network wants any more go with their veth and circuit devices (wanted: one VRF per line)
 root_vrfs_prune() {
-  local want="$1" v d
+  local want="$1" v d t
   for v in $(root_vrfs); do
     echo "$want" | grep -qx "$v" && continue
     ip link del "xe${v#e}" 2>/dev/null || true
     for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname'); do ip link del "$d"; done
+    t=$(vrf_table "$v")
     ip link del "$v"
+    vrf6_gone "$t"
   done
 }
 
 egress_down() {
-  local m x
+  local m x t
   nft delete table ip shc_egress 2>/dev/null || true
   for x in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
   m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty')
   ip link del egress0 2>/dev/null || true
-  if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then ip link del "$m"; fi
+  if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then
+    t=$(vrf_table "$m"); ip link del "$m"; vrf6_gone "$t"
+  fi
 }
 
 # the nftables table for the listed networks (replaced as a whole)
@@ -625,6 +644,7 @@ gateway)
       $X ip link del "vx$VNI" 2>/dev/null || true
       $X ip link del "br$VNI" 2>/dev/null || true
       $X ip link del "$VRF"
+      vrf6_gone "$VNI"
     done
     NSX=""
   else

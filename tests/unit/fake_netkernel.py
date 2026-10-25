@@ -346,6 +346,16 @@ def ip_main(k, nsname, args, out):
                                                                and x["metric"] == r["metric"])]
             ns["routes6"].append(r)
             return True
+        if verb in ("del", "delete"):
+            if rest[:2] != ["unreachable", "default"]:
+                raise Fail("only unreachable defaults are modelled")
+            sel = dict(zip(rest[2::2], rest[3::2]))
+            match = [x for x in ns["routes6"] if x["type"] == "unreachable" and x["dst"] == "default"
+                     and x["table"] == sel.get("table", "main") and ("metric" not in sel or x["metric"] == sel["metric"])]
+            if not match:
+                raise Fail("RTNETLINK answers: No such process", 2)
+            ns["routes6"].remove(match[0])
+            return True
         raise Fail("route verb " + verb)
 
     if obj == "neigh":
