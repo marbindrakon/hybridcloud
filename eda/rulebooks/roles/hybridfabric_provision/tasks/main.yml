@@ -269,9 +269,16 @@
                else [] }}
           platformSources: "{{ fab_real.egress.platformSources | default([], true) }}"
 
+    # the address families of each root VRF (its FRR VRF's unicast families): IPv4 only so far, the root VRFs carry
+    # no IPv6 routes until IPv6 egress and circuits exist
     - name: Keep the attachment plan
       ansible.builtin.set_fact:
-        hf_attach: "{{ fab_check_result }}"
+        hf_attach: >-
+          {%- set vrfs = {} -%}
+          {%- for node, vs in (fab_check_result.vrfs | default({})).items() -%}
+            {%- set _ = vrfs.update({node: vs | map('combine', {'families': [4]}) | list}) -%}
+          {%- endfor -%}
+          {{ fab_check_result | combine({'vrfs': vrfs}) }}
         hf_attach_restart: "{{ fab_real.attachments.maxPrefixRestart | default(2) }}"
         hf_attach_before: >-
           {{ ((fab_st.realization | default({}, true)).attachments | default([], true)) }}
@@ -354,6 +361,8 @@
               'available': hf_ledger.available,
               'nodes': hf_node_results,
               'realization': {'model': fab_real.model, 'routeReflector': hf_pe.loopbackIp, 'nodeSid': hf_pe.sid,
+                              'routeReflector6': hf_pe.loopbackIp6 | default(''),
+                              'ipv6Core': hf_pe.loopbackIp6 | default('') | length > 0,
                               'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet,
                               'egress': {'enabled': fab_real.egress.enabled | default(false) | bool,
                                          'networks': hf_egress_status},

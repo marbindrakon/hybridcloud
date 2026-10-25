@@ -218,7 +218,9 @@
     - name: Set the gateway's VRFs
       ansible.builtin.set_fact:
         # a site behind a tunnel carries less than the fabric: its VRFs' bridge/VXLAN run at the site leg's MTU minus
-        # VXLAN, so the gateway knows the real limit for traffic towards the site
+        # VXLAN, so the gateway knows the real limit for traffic towards the site. Per VRF the placement's address
+        # families and prefixes (status.subnets; a status from before per-family subnets: status.prefixes; none yet:
+        # IPv4): the families its FRR VRF carries and the prefixes the site may announce into it
         cg_vrfs: >-
           {%- set out = [] -%}
           {%- set vmtu = ([cg_fabric.spec.overlayMtu | int, (cg_instance.mtu | int) - 50] | min)
@@ -229,9 +231,21 @@
             {%- set r = st.realization | default({}, true) -%}
             {%- if st.cloudGateway | default('') == fab_name and r.l3Vni is defined and r.vpnTarget is defined
                   and not (r.gatewayRelease | default(false) | bool) -%}
+              {%- set subs = st.subnets | default([], true) -%}
+              {%- set p4 = [] -%}
+              {%- set p6 = [] -%}
+              {%- for x in subs -%}
+                {%- set _ = (p6 if x.family | int == 6 else p4).append(x.prefix) -%}
+              {%- endfor -%}
+              {%- if subs | length == 0 -%}
+                {%- for x in st.prefixes | default([], true) -%}
+                  {%- set _ = (p6 if ':' in x else p4).append(x) -%}
+                {%- endfor -%}
+              {%- endif -%}
+              {%- set fams = ([4] if p4 else []) + ([6] if p6 else []) -%}
               {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name,
                                       'vrf': 't' ~ r.l3Vni, 'vni': r.l3Vni | int, 'vpnTarget': r.vpnTarget | int,
-                                      'mtu': vmtu}) -%}
+                                      'mtu': vmtu, 'families': fams or [4], 'prefixes4': p4, 'prefixes6': p6}) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out | sort(attribute='vni') }}
@@ -321,9 +335,11 @@
              | combine({'site': cg_status.site | combine(cg_site_extra),
                                    'nodes': cg_node_results,
                                    'realization': {'model': fab_real.model, 'peIndex': cg_pe.index, 'loopback': cg_pe.loopbackIp,
+                                                   'loopback6': cg_pe.loopbackIp6 | default(''),
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name,
-                                                   'vrfs': cg_vrfs | map('dict2items') | map('rejectattr', 'key', 'equalto', 'mtu')
+                                                   'vrfs': cg_vrfs | map('dict2items')
+                                                           | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6'])
                                                            | map('items2dict') | list}}) }}
 
     # an aws site's routers got new keys: look again once they applied them, so the status shows their sessions

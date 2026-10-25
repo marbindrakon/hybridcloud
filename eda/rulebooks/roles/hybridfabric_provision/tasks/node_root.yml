@@ -45,10 +45,30 @@
     mode: "0755"
   delegate_to: "{{ bgw_node.name }}"
 
+# the ICMPv6 source of the root's VRFs differs per node (the node's position in borderGateway.nodes)
+- name: "{{ bgw_node.name }}: the root's ICMPv6 source on this node"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+  vars:
+    fab_check:
+      action: pe-addresses
+      core: "{{ fab_real.core }}"
+      index: 1
+      nodeOrdinal: "{{ (fab_spec.borderGateway.nodes | map(attribute='name') | list).index(bgw_node.name) + 1 }}"
+  when: fab_real.core.icmpSource6 | default('', true) | length > 0
+
+# the core's IPv6 keys are empty strings on an IPv4-only core; loopbackPool6 and icmpSource6 let the apply remove
+# addresses an earlier configuration left inside those ranges
 - name: "{{ bgw_node.name }}: root instance config"
+  vars:
+    _hf_icmp6: "{{ fab_check_result.icmp6 if fab_real.core.icmpSource6 | default('', true) | length > 0 else '' }}"
   ansible.builtin.copy:
     dest: /etc/shc-fabric/root.json
-    content: "{{ hf_root | combine({'egress': hf_node_egress} if hf_node_egress | length > 0 else {}) | combine({'attachments': hf_node_attach} if hf_node_attach | length > 0 else {}) | to_nice_json }}\n"
+    content: >
+      {{ hf_root | combine({'egress': hf_node_egress} if hf_node_egress | length > 0 else {})
+         | combine({'attachments': hf_node_attach} if hf_node_attach | length > 0 else {})
+         | combine({'loopback6': hf_pe.loopback6 | default(''), 'icmp6': _hf_icmp6,
+                    'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
+                    'icmpSource6': fab_real.core.icmpSource6 | default('', true)}) | to_nice_json }}
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_rootconf
