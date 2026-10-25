@@ -476,22 +476,46 @@ class RootIPv6Test(ApplyCase):
         self.assertEqual(h.addrs6("", "lo"), ["::1/128"])
         index(log, r"^W \[root\] ip addr del 2001:db8:4005:ffff::1/128 dev lo$")
 
-    def test_ra_precheck_stops_before_any_change(self):
+    def test_ra_precheck_leaves_ipv6_out(self):
+        """an RA route on a host interface: IPv6 left out with the marker line, IPv4 exactly as without the keys,
+        exit 0 (a boot keeps the gateways; the fabric job fails on the marker)"""
         h = self.h
-        st = h.get_state()
-        st["ns"][""]["routes6"].append({"type": "unicast", "dst": "default", "via": "fe80::1", "dev": "bond0.10",
-                                        "proto": "ra", "metric": "1024", "table": "main"})
-        h.set_state(st)
+        ra = {"type": "unicast", "dst": "default", "via": "fe80::1", "dev": "bond0.10", "proto": "ra",
+              "metric": "1024", "table": "main"}
+
+        def blade_with_ra():
+            st = blade()
+            st["ns"][""]["routes6"].append(dict(ra))
+            return st
+
+        h.set_state(blade_with_ra())
         h.conf("root", self.root_conf())
         rc, out, err, log = h.run("root")
         self.keep("root-v6-ra-precheck", log, out + " | stderr: " + err)
-        self.assertEqual(rc, 1)
-        self.assertIn("error: interface bond0.10 relies on router advertisements", err)
-        self.assertEqual(writes(log), [])
-        self.assertNotIn("changed=", out)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("warning: interface bond0.10 relies on router advertisements; IPv6 core not applied\n", out)
+        self.assertTrue(out.strip().endswith("changed=yes"), out)
+        self.assertEqual([l for l in writes(log) if is_v6(l) and "bond1.3001/disable_ipv6" not in l], [])
+        self.assertEqual(h.addrs6("", "lo"), ["::1/128"])
+        self.assertEqual(h.unreachable6(""), [])
+        # IPv4: the same writes as a run without the IPv6 keys
+        v4_only = copy.deepcopy(self.root_conf())
+        for k in ROOT6:
+            v4_only.pop(k)
+        h.set_state(blade_with_ra())
+        h.conf("root", v4_only)
+        _, log4 = h.ok(self, "root")
+        self.assertEqual(writes(log), writes(log4))
+        # a re-run with the keys: still nothing IPv6, nothing changed
+        h.conf("root", self.root_conf())
+        out2, log2 = h.ok(self, "root")
+        self.assertIn("IPv6 core not applied", out2)
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        self.assertEqual([l for l in writes(log2) if is_v6(l) and "bond1.3001/disable_ipv6" not in l], [])
         # without loopback6 the precheck never runs
         h.conf("root", dict(ROOT_CONF, **POOLS6))
-        h.ok(self, "root")
+        out3, _ = h.ok(self, "root")
+        self.assertNotIn("IPv6 core not applied", out3)
 
     def test_ra_route_in_a_vrf_does_not_count(self):
         h = self.h

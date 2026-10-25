@@ -45,8 +45,8 @@
 #   the namespace is an IPv6 router: forwarding, no router advertisements or SLAAC anywhere; the core leg (gateway
 #   core0, root core bridge) carries IPv6 link-local only, the gateway's site leg no IPv6 at all (the underlay stays
 #   IPv4); every VRF table gets an IPv6 unreachable default; the root's egress0 never takes RAs or SLAAC. The root
-#   stops before any change when a host interface outside the VRFs holds routes from router advertisements. The
-#   management interface is never touched.
+#   leaves IPv6 out (prints "warning: ... IPv6 core not applied", IPv4 as always, exit 0) when a host interface
+#   outside the VRFs holds routes from router advertisements. The management interface is never touched.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
@@ -131,14 +131,16 @@ vrf6() {
 
 # root namespace, before any IPv6 change: the namespace routes IPv6 (forwarding on: the kernel then ignores router
 # advertisements unless accept_ra=2) and gains IS-IS's IPv6 routes, so a host interface that still takes routes from
-# RAs must be configured statically first. Interfaces in a VRF are the fabric's own and don't count.
+# RAs must be configured statically first. Interfaces in a VRF are the fabric's own and don't count. Fails (status 1)
+# with a warning on stdout: the caller then leaves out all of IPv6 and keeps IPv4 as always - a boot must never lose
+# the gateways (they require this instance) over it, while the fabric job fails on the marker "IPv6 core not applied".
 ra_precheck() {
   local d m
   for d in $(ip -j -6 route show proto ra | jq -r '.[] | (.dev // empty), (.nexthops // [] | .[].dev)' | sort -u); do
     m=$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty')
     if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then continue; fi
-    echo "error: interface $d relies on router advertisements" >&2
-    exit 1
+    echo "warning: interface $d relies on router advertisements; IPv6 core not applied"
+    return 1
   done
 }
 
@@ -424,7 +426,7 @@ root)
   EV=$(opt .egress.vrf)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
-    [ -z "$V6" ] || ra_precheck
+    if [ -n "$V6" ] && ! ra_precheck; then V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""; fi
     modprobe mpls_router; modprobe mpls_iptunnel
     sysctl -qw net.mpls.platform_labels=1048575
     MAC=$(printf '02:fa:%02x:%02x:%02x:%02x' $(echo "${LINK%/*}" | tr . ' '))
