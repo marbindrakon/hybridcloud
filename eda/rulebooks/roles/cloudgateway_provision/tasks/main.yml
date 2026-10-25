@@ -203,6 +203,24 @@
         cg_changed_nodes: []
         cg_bgp_password: ""
 
+    # the core's IPv6 side only once the fabric reports it (status.realization.ipv6Core: the fabric job writes it
+    # after the root on every node passed with VPNv6 and IPv6 IS-IS): the route reflector must offer the family
+    # first. Until then (a gateway run before the fabric job, or after a fabric job that failed between the nodes)
+    # the gateway stays as on an IPv4-only core: no IPv6 loopback, SID, VPNv6 or ICMP source rendered or applied,
+    # so it neither resets its session to the root for a family the root does not carry yet nor fails waiting for
+    # VPNv6. The pools stay in the apply configuration, so addresses left inside them are still removed.
+    - name: Take the IPv6 core only once the fabric offers it
+      vars:
+        _cg_on: >-
+          {{ (cg_pe.loopback6 | default('') | length > 0)
+             and ((((cg_fabric.status | default({}, true)).realization | default({}, true)).ipv6Core
+                   | default(false)) | bool) }}
+      ansible.builtin.set_fact:
+        cg_ipv6_core: "{{ _cg_on | bool }}"
+        cg_pe: "{{ cg_pe if _cg_on | bool else cg_pe | combine({'loopback6': '', 'loopbackIp6': '', 'sid6': 0}) }}"
+        cg_root_pe: >-
+          {{ cg_root_pe if _cg_on | bool else cg_root_pe | combine({'loopback6': '', 'loopbackIp6': '', 'sid6': 0}) }}
+
     # the networks placed at this site: every NetworkPlacement that names this gateway (status.cloudGateway) and
     # holds its numbers (status.realization), unless its teardown released the gateway; the gateway carries one
     # VRF per placement and is the only writer of the instance's configuration

@@ -34,7 +34,8 @@
       {{ _cg_files.results | selectattr('changed') | map(attribute='item.dest') | select('search', 'shc-gw@')
          | list | length > 0 }}
 
-# the ICMPv6 source of the namespace's VRFs differs per node (the node's position in borderGateway.nodes)
+# the ICMPv6 source of the namespace's VRFs differs per node (the node's position in borderGateway.nodes); only with
+# the IPv6 core the fabric offers (cg_ipv6_core, main.yml)
 - name: "{{ bgw_node.name }}: the gateway's ICMPv6 source on this node"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
   vars:
@@ -43,13 +44,17 @@
       core: "{{ fab_real.core }}"
       index: "{{ cg_pe.index }}"
       nodeOrdinal: "{{ (cg_fabric.spec.borderGateway.nodes | map(attribute='name') | list).index(bgw_node.name) + 1 }}"
-  when: fab_real.core.icmpSource6 | default('', true) | length > 0
+  when:
+    - cg_ipv6_core | default(false) | bool
+    - fab_real.core.icmpSource6 | default('', true) | length > 0
 
-# the core's IPv6 keys are empty strings on an IPv4-only core; loopbackPool6 and icmpSource6 let the apply remove
-# addresses an earlier configuration left inside those ranges
+# the core's IPv6 keys are empty strings on an IPv4-only core and until the fabric offers the IPv6 core;
+# loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges
 - name: "{{ bgw_node.name }}: gateway instance config"
   vars:
-    _cg_icmp6: "{{ fab_check_result.icmp6 if fab_real.core.icmpSource6 | default('', true) | length > 0 else '' }}"
+    _cg_icmp6: >-
+      {{ fab_check_result.icmp6 if (cg_ipv6_core | default(false) | bool
+                                    and fab_real.core.icmpSource6 | default('', true) | length > 0) else '' }}
   ansible.builtin.copy:
     dest: "/etc/shc-fabric/gw-{{ fab_name }}.json"
     content: >

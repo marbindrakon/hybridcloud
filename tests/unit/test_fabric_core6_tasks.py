@@ -90,7 +90,7 @@ class GatewayConfig(unittest.TestCase):
     def tasks(self):
         return load(os.path.join(CG, "node_gateway.yml"))
 
-    def config(self, core, node):
+    def config(self, core, node, ipv6_core=True):
         pe = F.pe_addresses({"core": core, "index": 3})
         ordinal = [n["name"] for n in NODES].index(node) + 1
         check = F.pe_addresses({"core": core, "index": 3, "nodeOrdinal": ordinal})
@@ -98,7 +98,8 @@ class GatewayConfig(unittest.TestCase):
         return json.loads(run_play([t, write_out("_c")],
                                    {"bgw_node": {"name": node}, "fab_name": "site1", "cg_instance": {"type": "gateway"},
                                     "cg_node_addr": "192.0.2.4", "fab_spec": {"siteUnderlay": {"cidr": "192.0.2.0/24"}},
-                                    "cg_pe": pe, "fab_real": {"core": core}, "fab_check_result": check}))
+                                    "cg_pe": pe, "fab_real": {"core": core}, "fab_check_result": check,
+                                    "cg_ipv6_core": ipv6_core and core.get("loopbackPool6", "") != ""}))
 
     def test_ipv4_core(self):
         c = self.config(REAL["core"], "bgw-1")
@@ -117,6 +118,74 @@ class GatewayConfig(unittest.TestCase):
         out = run_play([{"ansible.builtin.set_fact": {"_o": expr}}, write_out("_o")],
                        {"cg_fabric": {"spec": {"borderGateway": {"nodes": NODES}}}, "bgw_node": {"name": "bgw-2"}})
         self.assertEqual(int(out), 2)
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class GatewayIPv6Gate(unittest.TestCase):
+    """The gateway takes the IPv6 core only once the fabric reports it (HybridFabric status.realization.ipv6Core):
+    before that, on a core with the IPv6 pools, it renders and applies what an IPv4-only core gets (the pools stay in
+    the apply configuration for the stray removal)."""
+
+    def run_gate(self, fabric, core=CORE6, node="bgw-2"):
+        main = load(os.path.join(CG, "main.yml"))
+        gate = copy.deepcopy(by_name(main, "Take the IPv6 core only once the fabric offers it"))
+        tasks = load(os.path.join(CG, "node_gateway.yml"))
+        icmp = by_name(tasks, "{{ bgw_node.name }}: the gateway's ICMPv6 source on this node")
+        conf = copy_as_fact(by_name(tasks, "{{ bgw_node.name }}: gateway instance config"), "_c")
+        status = by_name(main, "Report the gateway ready")["vars"]["fab_status"]
+        ordinal = [n["name"] for n in NODES].index(node) + 1
+        result = ("{'on': cg_ipv6_core, 'pe': cg_pe, 'root': cg_root_pe, 'icmpTask': _icmp_task, "
+                  "'conf': _c | from_json, 'status': _s}")
+        # cg_pe / cg_root_pe are facts in the job (extra vars would win over the gate's set_fact)
+        facts = {"ansible.builtin.set_fact": {"cg_pe": "{{ _pe }}", "cg_root_pe": "{{ _root }}"}}
+        return run_play([facts, gate,
+                         {"ansible.builtin.set_fact": {"_icmp_task": "{{ (%s) }}" % ") and (".join(icmp["when"])}},
+                         conf, {"ansible.builtin.set_fact": {"_s": status}}, write_out(result)],
+                        {"cg_fabric": fabric, "fab_real": {"core": core, "model": "linux-pe"},
+                         "_pe": F.pe_addresses({"core": core, "index": 3}),
+                         "_root": F.pe_addresses({"core": core, "index": 1}),
+                         # what the per-node ICMPv6 lookup returns when it runs
+                         "fab_check_result": F.pe_addresses({"core": core, "index": 3, "nodeOrdinal": ordinal}),
+                         "bgw_node": {"name": node}, "fab_name": "site1", "cg_instance": {"type": "gateway"},
+                         "cg_node_addr": "192.0.2.4", "fab_spec": {"siteUnderlay": {"cidr": "192.0.2.0/24"}},
+                         "cg_status": {"site": {}}, "cg_site_extra": {}, "cg_node_results": [], "cg_vrfs": []})
+
+    def assert_ipv4_only(self, out):
+        self.assertFalse(out["on"])
+        for pe in (out["pe"], out["root"]):
+            self.assertEqual((pe["loopback6"], pe["loopbackIp6"], pe["sid6"]), ("", "", 0))
+        self.assertFalse(out["icmpTask"])
+        c = out["conf"]
+        self.assertEqual((c["loopback6"], c["icmp6"]), ("", ""))
+        # the pools stay: an earlier configuration's addresses inside them are still removed
+        self.assertEqual((c["loopbackPool6"], c["icmpSource6"]), ("2001:db8:4005:ffff::/64", "2001:db8:4005:1::/64"))
+        self.assertEqual(out["status"]["realization"]["loopback6"], "")
+        # the IPv4 side is untouched
+        self.assertEqual((out["pe"]["loopbackIp"], out["pe"]["sid"]), ("10.255.0.3", 16003))
+
+    def test_fabric_without_ipv6_core(self):
+        for st in (None, {}, {"realization": {"routeReflector": "10.255.0.1"}},
+                   {"realization": {"routeReflector6": "", "ipv6Core": False}}):
+            with self.subTest(status=st):
+                fabric = {"spec": {}} if st is None else {"spec": {}, "status": st}
+                self.assert_ipv4_only(self.run_gate(fabric))
+
+    def test_fabric_with_ipv6_core(self):
+        out = self.run_gate({"spec": {}, "status": {"ready": True, "realization": {
+            "routeReflector6": "2001:db8:4005:ffff::1", "ipv6Core": True}}})
+        self.assertTrue(out["on"])
+        self.assertEqual((out["pe"]["loopback6"], out["pe"]["sid6"]), ("2001:db8:4005:ffff::3/128", 17003))
+        self.assertEqual(out["root"]["loopbackIp6"], "2001:db8:4005:ffff::1")
+        self.assertTrue(out["icmpTask"])
+        self.assertEqual((out["conf"]["loopback6"], out["conf"]["icmp6"]),
+                         ("2001:db8:4005:ffff::3/128", "2001:db8:4005:1::2:3/128"))
+        self.assertEqual(out["status"]["realization"]["loopback6"], "2001:db8:4005:ffff::3")
+
+    def test_ipv4_only_core_ignores_the_fabric_flag(self):
+        out = self.run_gate({"spec": {}, "status": {"realization": {"ipv6Core": True}}}, core=REAL["core"])
+        self.assertFalse(out["on"])
+        self.assertFalse(out["icmpTask"])
+        self.assertEqual((out["conf"]["loopback6"], out["conf"]["loopbackPool6"]), ("", ""))
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
