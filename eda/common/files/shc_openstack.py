@@ -523,8 +523,10 @@ def placement_network(req):
             if rp.target_project_id == req["shareProjectId"]:
                 rbac = rp
         if rbac is None:
+            # owned by the platform project like the network itself (Neutron would otherwise own it by the account's
+            # own project and count it against that project's rbac_policy quota)
             rbac = conn.network.create_rbac_policy(object_type="network", object_id=net.id, action="access_as_shared",
-                                                   target_project_id=req["shareProjectId"])
+                                                   target_project_id=req["shareProjectId"], project_id=proj.id)
             created.append("share")
         for rp in conn.network.rbac_policies(object_id=net.id, action="access_as_shared"):
             if rp.target_project_id != req["shareProjectId"]:

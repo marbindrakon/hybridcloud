@@ -439,6 +439,11 @@ class ReviewFixes(unittest.TestCase):
         self.assertEqual(out["changed"], [])
         self.assertEqual([op for op, _ in conn.calls[n:] if op == "update_subnet"], [])
 
+    def test_share_is_owned_by_the_platform_project(self):
+        conn = FakeConn()
+        out = run(conn)
+        self.assertEqual([r.project_id for r in conn.network.rbacs], [out["projectId"]])
+
     def test_gateway_port_is_not_an_interface(self):
         conn = FakeConn()
         run(conn, prefixes=[V4])
