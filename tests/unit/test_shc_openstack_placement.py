@@ -1,11 +1,12 @@
 """placement-network of eda/common/files/shc_openstack.py against a fake connection that records every call: a
 dual-stack placement (one subnet per prefix with ip_version from the prefix, the RA and address mode on IPv6 subnets
 only, resolvers per family, advertise_host on the first router interface only), a re-run that creates nothing, the
-attach fallbacks (409 conflict, refused plain attach), the resolver update of an existing subnet and the teardown
+attach fallback (409 conflict; a refused plain attach raises), the resolver update of an existing subnet and the teardown
 order. Prefixes are documentation space only."""
 import os
 import sys
 import types
+import ipaddress
 import unittest
 from unittest import mock
 
@@ -318,7 +319,8 @@ class AttachFallback(unittest.TestCase):
         self.assertEqual(out["created"][-3:], [f"interface {V4}", f"interface {V6}", "share"])
         self.assertEqual(sum(1 for p in conn.network.plist if p.advertise_host), 0)
 
-    def test_refused_plain_attach_retries_advertised(self):
+    def test_refused_plain_attach_raises(self):
+        # a plain attach only happens on a router that already holds the advertised interface: nothing to retry
         conn = FakeConn()
 
         def attach(body, router):
@@ -326,9 +328,10 @@ class AttachFallback(unittest.TestCase):
                 return Resp(400, text="advertise_host is required on this router")
             return None
         conn.network.attach = attach
-        out = run(conn)
-        self.assertEqual([b.get("advertise_host", False) for b in attaches(conn)], [True, False, True])
-        self.assertIn(f"interface {V6}", out["created"])
+        with self.assertRaises(RuntimeError) as cm:
+            run(conn)
+        self.assertIn("HTTP 400", str(cm.exception))
+        self.assertEqual([b.get("advertise_host", False) for b in attaches(conn)], [True, False])
 
     def test_other_errors_raise(self):
         conn = FakeConn()
@@ -425,6 +428,29 @@ class Teardown(unittest.TestCase):
         out = run(conn, state="absent")
         self.assertEqual(out, {"name": "hn51001-site", "found": False, "deleted": []})
 
+
+
+class ReviewFixes(unittest.TestCase):
+    def test_long_hand_resolver_is_not_a_change(self):
+        conn = FakeConn()
+        run(conn)
+        n = len(conn.calls)
+        out = run(conn, resolvers=[R4, ipaddress.ip_address(R6).exploded])
+        self.assertEqual(out["changed"], [])
+        self.assertEqual([op for op, _ in conn.calls[n:] if op == "update_subnet"], [])
+
+    def test_gateway_port_is_not_an_interface(self):
+        conn = FakeConn()
+        run(conn, prefixes=[V4])
+        router = conn.network.rtrs[0]
+        conn.network.plist = [p for p in conn.network.plist if p.device_id != router.id]
+        conn.network.plist.append(Obj(id="port-gw", device_id=router.id, device_owner="network:router_gateway",
+                                      network_id="ext-net", name="gw", fixed_ips=[{"subnet_id": "ext-subnet"}],
+                                      advertise_host=False))
+        n = len(conn.calls)
+        run(conn)
+        new = [d for op, d in conn.calls[n:] if op == "add_router_interface"]
+        self.assertEqual([b.get("advertise_host", False) for b in new], [True, False])
 
 if __name__ == "__main__":
     unittest.main()

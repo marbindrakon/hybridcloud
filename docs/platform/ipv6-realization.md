@@ -158,8 +158,9 @@ placement:
 - **`resolversBySite`:** per site, the resolver addresses its placement subnets hand to the workloads. On OpenStack
   sites they become each subnet's `dns_nameservers`, by family (IPv4 addresses on the IPv4 subnet, IPv6 on the
   IPv6 subnet); a subnet whose list differs is updated on the next run, so a change reaches existing placements. A
-  site not listed leaves the subnets on the site's default, usually the site's own resolver, which a placement's
-  workloads may not reach through the fabric; list resolvers the network's egress can reach. OpenShift sites take
+  site not listed gets an empty list (enforced on existing subnets too), so its workloads fall back to the site's
+  default, usually the site's own resolver, which a placement's workloads may not reach through the fabric; list
+  resolvers the network's egress can reach. OpenShift sites take
   no resolvers from here (the cluster's DNS serves the VMs).
 - **OpenStack placements** (CloudOSO): the placement's network holds one subnet per allocated prefix, IPv4 first,
   on one EVPN router whose VNI is the placement's. The first subnet attached to the router carries the site's host
@@ -180,7 +181,7 @@ switches are off:
 |---|---|---|---|
 | `ipv6` | IPv6 placement subnets can be carried | see below | `placement.ipFamiliesBySite.<site>` holds 6 (else `placement.ipFamilies.<environment type>`) |
 | `ipv6Only` | IPv6-only placements are offered | as `ipv6` | `placement.ipv6OnlyBySite.<site>: true` |
-| `ipv6NetworkSource` | subnets can come from the network's IPv6 space | the site type carries fabric prefixes | `Network` in `placement.ipv6SourcesBySite.<site>` (else `placement.ipv6.sources.<environment type>`) |
+| `ipv6NetworkSource` | subnets can come from the network's IPv6 space | as `ipv6`; never on Google Cloud | `Network` in `placement.ipv6SourcesBySite.<site>` (else `placement.ipv6.sources.<environment type>`) |
 | `ipv6ProviderSource` | the cloud provider can assign subnets | a cloud site | `Provider` in the same list |
 | `ipv6Translation` | IPv6-only placements reach IPv4 by translation | as `ipv6` | a `translation.<site>` entry |
 

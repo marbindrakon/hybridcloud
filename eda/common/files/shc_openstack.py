@@ -36,6 +36,7 @@ Actions (request["action"]):
   platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
                 owners in the platform project, for the fabric orphan check.
 """
+import ipaddress
 import json
 import sys
 
@@ -389,35 +390,41 @@ def platform_project(req):
     return {"name": proj.name, "id": proj.id, "domain_id": dom.id, "created": created, "member_granted": granted}
 
 
+_IFACE_OWNERS = ("network:router_interface", "network:router_interface_distributed",
+                 "network:ha_router_replicated_interface")
+
+
 def _router_ports(conn, router_id):
-    return list(conn.network.ports(device_id=router_id))
+    """The router's interface ports (not a gateway port)."""
+    return [p for p in conn.network.ports(device_id=router_id) if p.device_owner in _IFACE_OWNERS]
 
 
 def _delete_router(conn, router):
     """Every interface off the router (a port carries one IPv4 subnet or all the IPv6 subnets), then the router."""
     for p in _router_ports(conn, router.id):
-        if p.device_owner in ("network:router_interface", "network:router_interface_distributed",
-                              "network:ha_router_replicated_interface"):
-            for ip in p.fixed_ips:
-                conn.network.remove_interface_from_router(router, subnet_id=ip["subnet_id"])
+        for ip in p.fixed_ips:
+            conn.network.remove_interface_from_router(router, subnet_id=ip["subnet_id"])
     conn.network.delete_router(router)
 
 
 def _add_router_interface(conn, router, cidr, sid, advertise):
     """Attach a subnet to the EVPN router. The evpn plugin allows one advertised interface per network, so an
-    advertised attach that conflicts (409) is retried plainly and a plain attach the plugin refuses (4xx) is
-    retried advertised; anything else raises."""
+    advertised attach that conflicts (409) is retried plainly; anything else raises (a plain attach is only ever
+    asked of a router that already holds the advertised interface, so there is nothing to retry)."""
     def put(adv):
         body = {"subnet_id": sid, **({"advertise_host": True} if adv else {})}
         return conn.network.put(f"/routers/{router.id}/add_router_interface", json=body)
 
     r = put(advertise)
-    if r.status_code >= 300:
-        conflict = r.status_code == 409 and "RouterInterfaceAttachmentConflict" in r.text
-        if (advertise and conflict) or (not advertise and 400 <= r.status_code < 500):
-            r = put(not advertise)
+    if advertise and r.status_code == 409 and "RouterInterfaceAttachmentConflict" in r.text:
+        r = put(False)
     if r.status_code >= 300:
         raise RuntimeError(f"router interface {cidr}: HTTP {r.status_code} {r.text[:300]}")
+
+
+def _canon(addrs):
+    """Addresses in their compressed form, sorted (a resolver written long-hand is not a change)."""
+    return sorted(ipaddress.ip_address(a).compressed for a in addrs)
 
 
 def _family_resolvers(resolvers, family):
@@ -481,7 +488,7 @@ def placement_network(req):
             sn = conn.network.create_subnet(name=f"{name}-{i}", network_id=net.id, project_id=proj.id,
                                             ip_version=family, cidr=cidr, enable_dhcp=True, dns_nameservers=dns, **v6)
             created.append(f"subnet {cidr}")
-        elif sorted(sn.dns_nameservers or []) != sorted(dns):
+        elif _canon(sn.dns_nameservers or []) != _canon(dns):
             sn = conn.network.update_subnet(sn, dns_nameservers=dns)
             changed.append(f"subnet {cidr} resolvers")
         if family == 6:

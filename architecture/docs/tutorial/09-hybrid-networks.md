@@ -305,8 +305,8 @@ spec:
   Name the interface by its MAC address or its exact name, never by a pattern such as `en*`: on RHEL images
   cloud-init writes sysconfig profiles, and a profile matched by a pattern binds to no device, so NetworkManager's
   own default profile takes the interface with a stable-privacy link-local address and the guest gets no IPv6
-  address (Fedora's NetworkManager renderer takes the pattern). The placement page builds this snippet from the
-  placement's status.
+  address (Fedora's NetworkManager renderer takes the pattern). The placement page offers a snippet of this form,
+  built from the placement's status.
 - **RHEL images:** also switch the interface's profile to EUI-64 at first boot. NetworkManager's default profile
   may take the interface whatever `networkData` says, and a `NetworkManager.conf` default for `ipv6.addr-gen-mode`
   is not enough on these images; the profile itself has to change. The DHCPv6 lease arrives as soon as the profile
