@@ -25,10 +25,13 @@ Actions (request["action"]):
                 `member` for the account: state present ensures it; state absent deletes it only when it holds
                 no networks, routers, ports or RBAC policies (refused otherwise).
   placement-network  a NetworkPlacement's objects in the platform project (design/P7-PLAN.md §12.3.2), cloud
-                admin scope: network <name> (MTU, tag), a subnet per prefix, router <name> with evpn_vni (the
-                site advertises the subnets as EVPN type-5 routes under that VNI), the subnets on the router with
-                advertise_host, and the network shared to the tenant project (RBAC access_as_shared). state
-                absent removes them, refused while other ports (the tenant's VMs) use the network.
+                admin scope: network <name> (MTU, tag), a subnet per prefix of either family (IPv6 subnets with
+                addressMode as RA and address mode, resolvers of the subnet's family as dns_nameservers), router
+                <name> with evpn_vni (the site advertises the subnets as EVPN type-5 routes under that VNI), the
+                subnets on the router (the first interface with advertise_host; the plugin takes one advertised
+                interface per network), and the network shared to the tenant project (RBAC access_as_shared).
+                state absent removes them in order (interfaces, router, subnets, network), refused while other
+                ports (the tenant's VMs) use the network.
                 recreateRouter: delete and recreate the router (the site fills its gateway chassis at creation).
   platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
                 owners in the platform project, for the fabric orphan check.
@@ -391,6 +394,7 @@ def _router_ports(conn, router_id):
 
 
 def _delete_router(conn, router):
+    """Every interface off the router (a port carries one IPv4 subnet or all the IPv6 subnets), then the router."""
     for p in _router_ports(conn, router.id):
         if p.device_owner in ("network:router_interface", "network:router_interface_distributed",
                               "network:ha_router_replicated_interface"):
@@ -399,8 +403,31 @@ def _delete_router(conn, router):
     conn.network.delete_router(router)
 
 
+def _add_router_interface(conn, router, cidr, sid, advertise):
+    """Attach a subnet to the EVPN router. The evpn plugin allows one advertised interface per network, so an
+    advertised attach that conflicts (409) is retried plainly and a plain attach the plugin refuses (4xx) is
+    retried advertised; anything else raises."""
+    def put(adv):
+        body = {"subnet_id": sid, **({"advertise_host": True} if adv else {})}
+        return conn.network.put(f"/routers/{router.id}/add_router_interface", json=body)
+
+    r = put(advertise)
+    if r.status_code >= 300:
+        conflict = r.status_code == 409 and "RouterInterfaceAttachmentConflict" in r.text
+        if (advertise and conflict) or (not advertise and 400 <= r.status_code < 500):
+            r = put(not advertise)
+    if r.status_code >= 300:
+        raise RuntimeError(f"router interface {cidr}: HTTP {r.status_code} {r.text[:300]}")
+
+
+def _family_resolvers(resolvers, family):
+    return [a for a in resolvers if (":" in a) == (family == 6)]
+
+
 def placement_network(req):
-    """The cloud admin's own scope: a placement's network, subnets, EVPN router and share, in the platform project."""
+    """The cloud admin's own scope: a placement's network, subnets, EVPN router and share, in the platform project.
+    prefixes carries both families (one subnet each); addressMode ("" = the site's default) is the IPv6 subnets' RA
+    and address mode; resolvers (addresses of either family) become each subnet's dns_nameservers by family."""
     acct = Account(req)
     conn = acct.own_scope()
     dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
@@ -442,13 +469,23 @@ def placement_network(req):
     if tag not in (net.tags or []):
         conn.network.set_tags(net, sorted(set((net.tags or []) + [tag])))
     have = {sn.cidr: sn for sn in conn.network.subnets(network_id=net.id)}
-    subnets = {}
+    mode, resolvers = req.get("addressMode") or "", req.get("resolvers") or []
+    subnets, applied_mode = {}, ""
     for i, cidr in enumerate(req["prefixes"]):
+        family = 6 if ":" in cidr else 4
+        dns = _family_resolvers(resolvers, family)
         sn = have.get(cidr)
         if sn is None:
+            # the RA and address modes are fixed at creation (Neutron can't change them on a subnet)
+            v6 = {"ipv6_ra_mode": mode, "ipv6_address_mode": mode} if family == 6 and mode else {}
             sn = conn.network.create_subnet(name=f"{name}-{i}", network_id=net.id, project_id=proj.id,
-                                            ip_version=4, cidr=cidr, enable_dhcp=True)
+                                            ip_version=family, cidr=cidr, enable_dhcp=True, dns_nameservers=dns, **v6)
             created.append(f"subnet {cidr}")
+        elif sorted(sn.dns_nameservers or []) != sorted(dns):
+            sn = conn.network.update_subnet(sn, dns_nameservers=dns)
+            changed.append(f"subnet {cidr} resolvers")
+        if family == 6:
+            applied_mode = getattr(sn, "ipv6_address_mode", None) or ""
         subnets[cidr] = sn.id
     if router is not None and str(req.get("recreateRouter", "")).lower() in ("true", "1", "yes"):
         _delete_router(conn, router)
@@ -468,10 +505,10 @@ def placement_network(req):
     attached = {ip["subnet_id"] for p in _router_ports(conn, router.id) for ip in p.fixed_ips}
     for cidr, sid in subnets.items():
         if sid not in attached:
-            r = conn.network.put(f"/routers/{router.id}/add_router_interface",
-                                 json={"subnet_id": sid, "advertise_host": True})
-            if r.status_code >= 300:
-                raise RuntimeError(f"router interface {cidr}: HTTP {r.status_code} {r.text[:300]}")
+            # the first interface on the router carries advertise_host (a per-network setting on the plugin side:
+            # the host routes of every subnet are advertised); the others attach plainly
+            _add_router_interface(conn, router, cidr, sid, advertise=not attached)
+            attached.add(sid)
             created.append(f"interface {cidr}")
     rbac = None
     if req.get("shareProjectId"):
@@ -488,8 +525,8 @@ def placement_network(req):
                 changed.append(f"share to {rp.target_project_id} removed")
     evpn = conn.network.get(f"/routers/{router.id}").json()["router"].get("evpn_vni")
     return {"name": name, "projectId": proj.id, "networkId": net.id, "routerId": router.id, "subnets": subnets,
-            "evpnVni": evpn, "shareId": rbac.id if rbac else "", "mtu": net.mtu, "created": created,
-            "changed": changed}
+            "addressMode": applied_mode, "evpnVni": evpn, "shareId": rbac.id if rbac else "", "mtu": net.mtu,
+            "created": created, "changed": changed}
 
 
 def platform_inventory(req):

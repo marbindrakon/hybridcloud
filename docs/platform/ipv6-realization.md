@@ -123,7 +123,8 @@ placement:
     defaultSource: {CloudAWS: Network, CloudGCP: Provider}   # applied when a placement names no source
     defaultPrefixLength: {CloudAWS: 60}                      # applied when a cloud placement names no size
     tenantPrefixes: {CloudGCP: false}                        # environment types that can't carry tenant IPv6
-    addressMode: {CloudOSO: dhcpv6-stateful}                 # how OpenStack subnets hand out addresses
+    addressMode: {CloudOSO: dhcpv6-stateful, CloudVirt: dhcpv6-stateful}   # how placement subnets hand out addresses
+  resolversBySite: {}       # <site>: [addresses]; resolvers handed to the site's placement subnets, per family
   siteReserved:             # per environment type; the defaults hold the product's own ranges
     CloudVirt: [100.64.0.0/16, 100.65.0.0/16, 100.88.0.0/16, 169.254.0.0/17,   # OVN-Kubernetes internal subnets
                 fd69::/112, fd97::/64, fd98::/64, fd99::/64]                   # and their IPv6 counterparts
@@ -147,8 +148,26 @@ placement:
   the cluster and service networks) and refuses a pinned prefix on them (`PrefixInvalid`). A tenant network whose
   IPv6 space lies wholly inside one of them can't be placed on that environment type (`PrefixInvalid`). Override
   the list only when a site's product version uses other internal ranges.
-- **`addressMode`:** `dhcpv6-stateful` is the only OpenStack mode in which resolvers reach a guest by protocol; the
-  config drive carries them in every mode.
+- **`addressMode`:** per environment type, how the workloads of a placement get their IPv6 addresses. On OpenStack
+  sites it is applied: every IPv6 placement subnet is created with it as RA mode and address mode (empty = the
+  site's own default), and it can't change on an existing subnet (Neutron fixes both at creation; a changed value
+  reaches new subnets only). On OpenShift sites it is informational: the cluster network hands out addresses by
+  stateful DHCPv6. `dhcpv6-stateful` is the only OpenStack mode in which resolvers reach a guest by protocol; the
+  config drive carries them in every mode. The placement's status reports the resulting addressing
+  (`status.ipv6.addressing`: `DHCPv6` or `SLAAC`).
+- **`resolversBySite`:** per site, the resolver addresses its placement subnets hand to the workloads. On OpenStack
+  sites they become each subnet's `dns_nameservers`, by family (IPv4 addresses on the IPv4 subnet, IPv6 on the
+  IPv6 subnet); a subnet whose list differs is updated on the next run, so a change reaches existing placements. A
+  site not listed leaves the subnets on the site's default, usually the site's own resolver, which a placement's
+  workloads may not reach through the fabric; list resolvers the network's egress can reach. OpenShift sites take
+  no resolvers from here (the cluster's DNS serves the VMs).
+- **OpenStack placements** (CloudOSO): the placement's network holds one subnet per allocated prefix, IPv4 first,
+  on one EVPN router whose VNI is the placement's. The first subnet attached to the router carries the site's host
+  advertisement flag and the others attach plainly: the site's EVPN plugin accepts one advertised interface per
+  network and advertises the host routes of every subnet regardless. The site therefore sends /128 host routes for
+  the IPv6 subnet (never the /64), which the gateway's site-import filter accepts inside the placement prefix. A
+  re-run creates nothing; deletion removes every router interface, then the router, the subnets and the network,
+  and waits while tenant ports remain on the network (`deletionBlockedBy`).
 
 ## Site capabilities
 
