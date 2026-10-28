@@ -171,20 +171,57 @@ placement:
 
 ## Site capabilities
 
-The site job writes these booleans into `CloudInfrastructure.status.capabilities`, each the site's probe ANDed with
-the switches above; they are `false` while the switches are off:
+A site offers IPv6 placements when two things agree: what the site's probe found it can carry, and the switch the
+realization sets for that site. The site job (`cloudinfrastructure-provision`) writes the result into
+`CloudInfrastructure.status.capabilities`, each key the probe ANDed with its switch; all are `false` while the
+switches are off:
 
-| Key | Meaning |
-|---|---|
-| `ipv6` | IPv6 placement subnets can be carried |
-| `ipv6Only` | IPv6-only placements are offered |
-| `ipv6NetworkSource` | subnets can come from the network's IPv6 space |
-| `ipv6ProviderSource` | the cloud provider can assign subnets |
-| `ipv6Translation` | IPv6-only placements reach IPv4 by translation |
+| Key | Meaning | Probe | Switch |
+|---|---|---|---|
+| `ipv6` | IPv6 placement subnets can be carried | see below | `placement.ipFamiliesBySite.<site>` holds 6 (else `placement.ipFamilies.<environment type>`) |
+| `ipv6Only` | IPv6-only placements are offered | as `ipv6` | `placement.ipv6OnlyBySite.<site>: true` |
+| `ipv6NetworkSource` | subnets can come from the network's IPv6 space | the site type carries fabric prefixes | `Network` in `placement.ipv6SourcesBySite.<site>` (else `placement.ipv6.sources.<environment type>`) |
+| `ipv6ProviderSource` | the cloud provider can assign subnets | a cloud site | `Provider` in the same list |
+| `ipv6Translation` | IPv6-only placements reach IPv4 by translation | as `ipv6` | a `translation.<site>` entry |
 
-They reach tenants through the tenant profile's site list (`IPv6`, `IPv6Only`, `IPv6NetworkSource`,
-`IPv6ProviderSource`, `IPv6Translation`), so the forms show the IPv6 inputs only where a site offers them. The job's
-`FamilyUnavailable` stays the authority.
+The probe, per site type: an OpenShift site is dual-stack (its `network.config.openshift.io/cluster`
+`spec.clusterNetwork` has an IPv4 and an IPv6 entry); an OpenStack site has EVPN (its IPv6 subnets ride the same
+path as IPv4); AWS and Google Cloud offer IPv6 (Google Cloud from the provider only); an external site offers
+nothing. The probe is read on every run of the site job; a cluster converted to dual-stack shows it at the next run.
+
+**Where the switches live.** The site job reads the `placement` and `translation` switches from the **top level** of
+`FABRIC_REALIZATION` only: a site belongs to no single fabric, so the job never merges a `fabrics.<fabric name>`
+section (the fabric, gateway, network and placement jobs do merge it on top of the top level). Keep these switches
+at the top level. A switch written only under `fabrics.<name>` would let the placement job's own check pass while
+the site still reports `ipv6: false`, so the placement is refused all the same (`FamilyUnavailable`) and the site
+status does not say why.
+
+**Switching a site on.** The site's IPv6 data path comes first: the dual-stack core and its gateways
+([Transport](#transport-dual-stack-core)), and the site's own IPv6 (a dual-stack cluster, or an OpenStack site with
+EVPN). A switch turned on before that makes placements that cannot carry traffic. Then:
+
+1. Add the site to `placement.ipFamiliesBySite` at the top level of `FABRIC_REALIZATION`, for example
+   `{"placement": {"ipFamiliesBySite": {"<site>": [4, 6]}}}` merged into the installation's value (the other
+   switches the same way, only when the site is meant to offer them).
+2. Let the value reach the automation: `FABRIC_REALIZATION` is an environment value of the automation's inventory
+   (`fabric_realization`), so the aap-config and the activations that carry it have to pick the new value up.
+3. Run the site job: Retry now on the `CloudInfrastructure` (the `reconcileNow` annotation,
+   [Status reasons](../tenant/status-reasons.md#retry-now)), or wait for its next periodic run. Check
+   `status.capabilities.ipv6: true`. The job also wakes the tenants whose site view changed, so their profiles
+   follow.
+
+**What tenants see.** The capabilities reach the tenant profile's site list (`IPv6`, `IPv6Only`, `IPv6NetworkSource`,
+`IPv6ProviderSource`, `IPv6Translation`), so the forms show the IPv6 inputs only where a site offers them; the
+command line is not gated, the job's `FamilyUnavailable` stays the authority. On a switched site a placement with
+`ipv6` is realized with a family-6 row in `status.subnets` and a `status.ipv6` block: `addressing` (how workloads get
+their addresses, `DHCPv6` or `SLAAC`, from `placement.ipv6.addressMode` of the environment type) and `internet`
+(`{state: unavailable, reason: NotOffered}` while `egress.ipv6.enabled` is off; the egress realization fills the
+ready case). On a site not switched, or for a request the site does not offer (IPv6-only, a source), the placement
+fails with `FamilyUnavailable` and a message naming the site and the missing piece, before anything is allocated.
+
+**Switching a site off.** Take the site out of `placement.ipFamiliesBySite` (or set it to `[4]`) and run the site
+job again: new IPv6 placements are refused. Existing placements keep their IPv6 subnet (a placement's families are
+fixed at creation) until they are deleted; a converted cluster stays dual-stack.
 
 ## Translation (`translation`)
 

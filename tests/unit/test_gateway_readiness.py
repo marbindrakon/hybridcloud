@@ -455,7 +455,7 @@ class LabelCheckTest(unittest.TestCase):
         self.assertEqual(calls, [["ip", "-n", "gw-iaas1", "-f", "mpls", "route"]])
         # the IPv4 rule: no MPLS route into the VRF at all
         rc, out, _ = execute(code, args, {"-f mpls route": "17 dev t51001 proto bgp\n"})
-        self.assertEqual(out, "t51000 4\n")
+        self.assertEqual(out, "t51000 4 unseen\n")
         # the same VRFs on the IPv6 core: IPv6 is checked too
         _, args6 = self.gw([{"vrf": "t51000", "vni": 51000, "families": [4, 6]},
                             {"vrf": "t51002", "vni": 51002, "families": [6]}])
@@ -477,7 +477,7 @@ class LabelCheckTest(unittest.TestCase):
         code, args = self.gw([{"vrf": "t51000", "vni": 51000}, {"vrf": "t51001", "vni": 51001},
                               {"vrf": "t51002", "vni": 51002, "families": [4]}])
         rc, out, calls = execute(code, args, {"-f mpls route": MPLS})
-        self.assertEqual((rc, out.split("\n")), (0, ["t51002 4", ""]))
+        self.assertEqual((rc, out.split("\n")), (0, ["t51002 4 unseen", ""]))
         # IPv4 only: the MPLS table and nothing else
         self.assertEqual(calls, [["ip", "-n", "gw-iaas1", "-f", "mpls", "route"]])
 
@@ -485,14 +485,21 @@ class LabelCheckTest(unittest.TestCase):
         code, args = self.gw(DUAL)
         # IPv4's 16 is routed into the VRF, IPv6's 18 is not: only IPv6 is bound again
         rc, out, calls = execute(code, args, label_answers(MPLS))
-        self.assertEqual(out, "t51000 6\n")
+        self.assertEqual(out, "t51000 6 unseen\n")
         self.assertIn(["vtysh", "-c", "show bgp ipv6 vpn json detail"], calls)
         self.assertIn(["vtysh", "-N", "gw-iaas1", "-c", "show bgp ipv6 vpn json detail"], calls)
         rc, out, _ = execute(code, args, label_answers(MPLS + "18 dev t51000 proto bgp\n"))
         self.assertEqual(out, "")
-        # the other way round: IPv4's label went stale
+        # the other way round: IPv4's label is nowhere in the kernel
         rc, out, _ = execute(code, args, label_answers("18 dev t51000 proto bgp\n17 dev t51000 proto bgp\n"))
-        self.assertEqual(out, "t51000 4\n")
+        self.assertEqual(out, "t51000 4 unseen\n")
+        # stale: the kernel routes the IPv4 label into another device (and the IPv6 label is where it belongs)
+        rc, out, _ = execute(code, args, label_answers("16 dev t51001 proto bgp\n18 dev t51000 proto bgp\n"))
+        self.assertEqual(out, "t51000 4 stale\n")
+        # one label of a family where it belongs, another elsewhere: stale, not unseen
+        rr4 = vpn_detail({"65010:51000": [("10.60.0.0/24", "peer", 16, "10.255.0.2"), ("10.60.9.0/24", "peer", 26, "10.255.0.2")]})
+        rc, out, _ = execute(code, args, label_answers("16 dev t51000 proto bgp\n26 dev t51001 proto bgp\n18 dev t51000 proto bgp\n", rr4=rr4))
+        self.assertEqual(out, "t51000 4 stale\n")
 
     def test_own_leaked_labels(self):
         # routes that did not come from EVPN show their label in the gateway's own table
@@ -501,7 +508,7 @@ class LabelCheckTest(unittest.TestCase):
         own6 = vpn_detail({"65010:51000": [("2602:81f:4005:1001::/64", "leak", 18, "t51000")]})
         empty = json.dumps({"routes": {"routeDistinguishers": {}}})
         rc, out, _ = execute(code, args, label_answers(MPLS, own4, own6, empty, empty))
-        self.assertEqual(out, "t51000 6\n")
+        self.assertEqual(out, "t51000 6 unseen\n")
 
     def test_route_reflector_unreadable(self):
         code, args = self.gw(DUAL)
@@ -515,12 +522,12 @@ class LabelCheckTest(unittest.TestCase):
         code, args = self.gw(DUAL)
         empty = json.dumps({"routes": {"routeDistinguishers": {}}})
         rc, out, _ = execute(code, args, label_answers(MPLS, rr6=empty, own6=empty))
-        self.assertEqual(out, "t51000 6\n")
+        self.assertEqual(out, "t51000 6 unseen\n")
         rc, out, _ = execute(code, args, label_answers(MPLS + "18 dev t51000 proto bgp\n", rr6=empty, own6=empty))
         self.assertEqual(out, "")
         # neither family exported anything: two labels needed
         rc, out, _ = execute(code, args, label_answers(MPLS, empty, empty, empty, empty))
-        self.assertEqual(out, "t51000 4\nt51000 6\n")
+        self.assertEqual(out, "t51000 4 unseen\nt51000 6 unseen\n")
 
     def test_root_form(self):
         code, args = self.code(RT, T_RT_LABEL, dict(LABEL_RT, hf_node_vrfs=[{"vrf": "e100", "families": [4, 6]}]))
@@ -533,7 +540,7 @@ class LabelCheckTest(unittest.TestCase):
         self.assertEqual([c[:2] for c in calls[1:]], [["vtysh", "-c"], ["vtysh", "-c"]])
         rc, out, _ = execute(code, args, {"-f mpls route": "20 dev e100 proto bgp\n",
                                           "show bgp ipv4 vpn json detail": v4, "show bgp ipv6 vpn json detail": v6})
-        self.assertEqual(out, "e100 6\n")
+        self.assertEqual(out, "e100 6 unseen\n")
 
     def test_rebind_under_the_family(self):
         for path, name in ((GW, T_GW_LABEL), (RT, T_RT_LABEL)):
@@ -632,11 +639,25 @@ class LabelScriptTest(unittest.TestCase):
         self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "rebound= t51000/ipv6"), proc.stderr)
         self.assertEqual(config.split("\n")[0], "-N gw-iaas1 -c configure terminal -c router bgp 65010 vrf t51000 "
                          "-c address-family ipv6 unicast -c no label vpn export auto -c label vpn export auto -c end")
+        # the job output says why the label was bound again
+        self.assertIn("VRF t51000: its IPv6 VPN label is not seen in the kernel (no MPLS route into the VRF); binding it again",
+                      proc.stderr)
 
     def test_still_missing(self):
         proc, _ = self.run_task(MPLS)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("VRF t51000: its IPv6 VPN label has no MPLS route into it, even after binding it again", proc.stderr)
+        self.assertIn("VRF t51000: its IPv6 VPN label is not seen in the kernel (no MPLS route into the VRF), even after "
+                      "binding it again", proc.stderr)
+        self.assertNotIn("stale", proc.stderr)
+
+    def test_still_stale(self):
+        # the kernel routes the IPv6 label into another VRF: told apart from a label it does not know
+        proc, config = self.run_task(MPLS + "18 dev t51001 proto bgp\n")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("VRF t51000: the kernel routes its IPv6 VPN label into another device (stale); binding it again", proc.stderr)
+        self.assertIn("VRF t51000: the kernel routes its IPv6 VPN label into another device (stale), even after binding it again",
+                      proc.stderr)
+        self.assertIn("-c address-family ipv6 unicast -c no label vpn export auto", config)
 
 
 # ---- the node records -----------------------------------------------------------------------------------------------
