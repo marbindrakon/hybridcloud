@@ -23,10 +23,12 @@ fabric_realization_defaults:
     siteImportFilter:
       ipv4: false
       ipv6: true
-    # milliseconds between ICMPv6 error messages a gateway namespace sends to one destination (the kernel default is
-    # 1000, after a burst of six): a site's IPv6 traffic to destinations the fabric does not offer is answered with
-    # "unreachable" by the gateway, and a guest opening several connections at once must get every answer promptly
-    icmp6RateLimitMs: 20
+    # milliseconds between ICMPv6 error messages a gateway namespace sends to one destination; 0 = no per-destination
+    # limit (the kernel's global limit of 1000 messages a second still applies); "" = the kernel default (1000, after
+    # a burst of six). A site's IPv6 traffic to destinations the fabric does not offer is answered with "unreachable"
+    # by the gateway, and a guest connecting to a name with many addresses sends its attempts milliseconds apart:
+    # every one must get its answer, or the guest waits a full retransmit
+    icmp6RateLimitMs: 0
   core:
     bridge: br-core
     loopbackPool: 10.255.0.0/24
