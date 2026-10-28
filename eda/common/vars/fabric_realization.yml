@@ -100,8 +100,14 @@ fabric_realization_defaults:
       defaultPrefixLength: {CloudAWS: 60}
       # backend kinds that cannot carry IPv6 prefixes the tenant provides (spec.prefixes)
       tenantPrefixes: {CloudGCP: false}
-      # how workloads get their IPv6 addresses, per backend kind (informational in the placement's status)
-      addressMode: {CloudOSO: dhcpv6-stateful}
+      # how workloads get their IPv6 addresses, per backend kind: on OpenStack sites the IPv6 subnets' RA and
+      # address mode (fixed when the subnet is created; empty = the site's default); on OpenShift sites
+      # informational (the cluster network hands out addresses by stateful DHCPv6); shown in the placement's status
+      addressMode: {CloudOSO: dhcpv6-stateful, CloudVirt: dhcpv6-stateful}
+    # per site (CloudInfrastructure name): resolver addresses of either family handed to the site's placement
+    # subnets (OpenStack dns_nameservers, each subnet taking the addresses of its own family); a site not listed
+    # leaves the subnets on the site's default
+    resolversBySite: {}
     # ranges of a site the allocator steps around, per backend kind, besides the site underlay and (OpenShift) the
     # cluster's cluster and service networks: OVN-Kubernetes' join (100.64.0.0/16), Layer2 user-defined network
     # join (100.65.0.0/16), transit switch (100.88.0.0/16) and masquerade (169.254.0.0/17) subnets and their IPv6
