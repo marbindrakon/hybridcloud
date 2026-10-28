@@ -190,7 +190,7 @@ dual-stack cluster is harmless for IPv4-only tenants, so there is rarely a reaso
 
 ## Known product issues (OpenShift 4.22, OVN-Kubernetes with EVPN)
 
-Both were met during the conversion, both are independent of IPv6, and both are reported to the vendor.
+Both were met during the conversion, both are independent of IPv6, and both are to be reported to the vendor (platform operator step).
 
 1. **Two namespaces on one EVPN network break the node's VTEP at the next restart.** A Layer2 EVPN primary network
    whose namespace selector matches two or more namespaces is listed once per namespace by the EVPN node
