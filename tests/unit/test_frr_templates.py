@@ -15,6 +15,7 @@ compare with is read from Git (BASE below); without it those comparisons are ski
 the rendered files there. Documentation and private ranges only."""
 import copy
 import difflib
+import hashlib
 import os
 import re
 import subprocess
@@ -32,6 +33,8 @@ GW = os.path.join(ROLES, "cloudgateway_provision", "templates", "frr-gateway.con
 RT = os.path.join(ROLES, "hybridfabric_provision", "templates", "frr-root.conf.j2")
 # the release before the core's IPv6 transport
 BASE = "fd6432b"
+# the release before the site-import filter's per-prefix sequence numbers
+BASE_SEQ = "7c23801"
 OUT = os.environ.get("SHC_RENDER_OUT", "")
 
 
@@ -42,9 +45,20 @@ def to_bool(v):
     return str(v).strip().lower() in ("yes", "on", "1", "true", "y")
 
 
+def to_hash(data, hashtype="sha1"):
+    """Ansible's hash filter."""
+    return hashlib.new(hashtype, str(data).encode()).hexdigest()
+
+
+def seq_of(prefix):
+    """The site-import filter's sequence number of a prefix (the template's rule, no collision)."""
+    return int(to_hash(prefix, "sha256")[:8], 16) % 3999999991 + 10
+
+
 def env():
     e = jinja2.Environment(trim_blocks=True, keep_trailing_newline=True, undefined=jinja2.StrictUndefined)
     e.filters["bool"] = to_bool
+    e.filters["hash"] = to_hash
     return e
 
 
@@ -191,7 +205,7 @@ class GatewayIPv4Core(unittest.TestCase):
         self.assertNotIn("address-family ipv6 unicast", new)
         self.assertNotIn("advertise ipv6", new)
         # the placement's IPv6 prefix is still admitted from the site (the filter does not depend on the core)
-        self.assertIn("ipv6 prefix-list SITE-V6 seq 5 permit 2001:db8:100:1::/64 le 128", new)
+        self.assertIn(f"ipv6 prefix-list SITE-V6 seq {seq_of('2001:db8:100:1::/64')} permit 2001:db8:100:1::/64 le 128", new)
 
     def test_policy_section(self):
         new = render(GW, gw_vars())
@@ -218,7 +232,8 @@ class GatewayIPv4Core(unittest.TestCase):
 
     def test_ipv4_filter(self):
         new = render(GW, gw_vars(v4filter=True))
-        self.assertIn("ip prefix-list SITE-V4 seq 5 permit 10.60.1.0/24 le 32\nip prefix-list SITE-V4 seq 10 permit 10.61.1.0/24 le 32\n", new)
+        self.assertIn(f"ip prefix-list SITE-V4 seq {seq_of('10.60.1.0/24')} permit 10.60.1.0/24 le 32\n"
+                      f"ip prefix-list SITE-V4 seq {seq_of('10.61.1.0/24')} permit 10.61.1.0/24 le 32\n", new)
         self.assertIn("ip prefix-list ANY-V4 seq 5 permit 0.0.0.0/0 le 32\n", new)
         self.assertEqual([ln for ln in section(new, "route-map FROM-SITE") if ln.startswith("route-map")],
                          ["route-map FROM-SITE deny 10", "route-map FROM-SITE permit 20", "route-map FROM-SITE permit 22",
@@ -266,7 +281,7 @@ class GatewayDualStackCore(unittest.TestCase):
         self.assertNotIn("ipv6", t51003)
 
     def test_site_v6_list(self):
-        self.assertIn("ipv6 prefix-list SITE-V6 seq 5 permit 2001:db8:100:1::/64 le 128\n"
+        self.assertIn(f"ipv6 prefix-list SITE-V6 seq {seq_of('2001:db8:100:1::/64')} permit 2001:db8:100:1::/64 le 128\n"
                       "ipv6 prefix-list ANY-V6 seq 5 permit ::/0 le 128\n", self.out)
         self.assertNotIn("deny ::/0", self.out)
 
@@ -291,6 +306,103 @@ class GatewayDualStackCore(unittest.TestCase):
                  variables)
         with open(dest) as f:
             self.assertEqual(f.read(), self.out)
+
+
+class SiteFilterSequences(unittest.TestCase):
+    """SITE-V6 / SITE-V4 entries carry a sequence number derived from their prefix: another placement's prefix coming
+    or going never renumbers an entry (a reload would delete and re-add it and could flap that tenant's routes)."""
+
+    P1, P2, P3 = "2001:db8:100:1::/64", "2001:db8:100:2::/64", "2001:db8:200::/64"
+
+    @staticmethod
+    def lines(text, name):
+        return [ln for ln in text.splitlines() if ln.startswith(f"ip{'v6' if name.endswith('V6') else ''} prefix-list {name} ")]
+
+    def with_prefixes(self, p6, p4=("10.60.1.0/24",)):
+        v = gw_vars(v6=True, families=(4, 6), v4filter=True)
+        v["cg_vrfs"] = [{"placement": f"entity-acme/p{i}", "vrf": f"t{51000 + i}", "vni": 51000 + i, "vpnTarget": 10000,
+                         "mtu": 9000, "families": [4, 6], "prefixes4": list(p4[i:i + 1]), "prefixes6": [q]}
+                        for i, q in enumerate(p6)]
+        return render(GW, v)
+
+    def test_seq_is_the_prefix_hash(self):
+        out = self.with_prefixes([self.P1])
+        self.assertEqual(self.lines(out, "SITE-V6"), [f"ipv6 prefix-list SITE-V6 seq {seq_of(self.P1)} permit {self.P1} le 128"])
+        self.assertEqual(seq_of(self.P1), int(hashlib.sha256(self.P1.encode()).hexdigest()[:8], 16) % 3999999991 + 10)
+        self.assertTrue(10 <= seq_of(self.P1) <= 4000000000)
+        # the catch-all entries keep their numbers
+        self.assertIn("ipv6 prefix-list ANY-V6 seq 5 permit ::/0 le 128\n", out)
+        self.assertIn("ip prefix-list ANY-V4 seq 5 permit 0.0.0.0/0 le 32\n", out)
+
+    def test_seq_unchanged_when_another_prefix_comes_or_goes(self):
+        one = self.lines(self.with_prefixes([self.P2]), "SITE-V6")
+        two = self.lines(self.with_prefixes([self.P2, self.P1]), "SITE-V6")
+        three = self.lines(self.with_prefixes([self.P3, self.P2, self.P1]), "SITE-V6")
+        self.assertEqual(len(one), 1)
+        self.assertEqual(set(one) < set(two) < set(three), True, (one, two, three))
+        # the same entries whatever the order of the VRFs, and after a removal
+        self.assertEqual(three, self.lines(self.with_prefixes([self.P1, self.P2, self.P3]), "SITE-V6"))
+        self.assertEqual(two, self.lines(self.with_prefixes([self.P1, self.P2]), "SITE-V6"))
+        # IPv4 the same way
+        v4a = self.lines(self.with_prefixes([self.P1], p4=["10.60.1.0/24"]), "SITE-V4")
+        v4b = self.lines(self.with_prefixes([self.P1, self.P2], p4=["10.60.1.0/24", "10.60.2.0/24"]), "SITE-V4")
+        self.assertTrue(set(v4a) < set(v4b), (v4a, v4b))
+
+    def test_sequences_are_distinct(self):
+        out = self.with_prefixes([self.P1, self.P2, self.P3], p4=["10.60.1.0/24", "10.60.2.0/24", "10.60.3.0/24"])
+        for name in ("SITE-V6", "SITE-V4"):
+            seqs = [int(ln.split()[4]) for ln in self.lines(out, name)]
+            self.assertEqual(len(seqs), 3)
+            self.assertEqual(len(set(seqs)), 3, seqs)
+
+    def test_collision_takes_the_next_free_number(self):
+        # every prefix hashing alike (a hash filter that answers 0x64 = 100): the next free numbers, in prefix order
+        e = env()
+        e.filters["hash"] = lambda data, hashtype="sha1": "00000064" + "0" * 56
+        with open(GW) as f:
+            text = f.read()
+        v = gw_vars(v6=True, families=(4, 6), v4filter=True)
+        v["cg_vrfs"][0]["prefixes6"] = [self.P2, self.P1]
+        v["cg_vrfs"][1]["prefixes6"] = [self.P3]
+        out = e.from_string(text).render(**v)
+        self.assertEqual(self.lines(out, "SITE-V6"),
+                         [f"ipv6 prefix-list SITE-V6 seq 110 permit {self.P1} le 128",
+                          f"ipv6 prefix-list SITE-V6 seq 111 permit {self.P2} le 128",
+                          f"ipv6 prefix-list SITE-V6 seq 112 permit {self.P3} le 128"])
+        self.assertEqual(self.lines(out, "SITE-V4"),
+                         ["ip prefix-list SITE-V4 seq 110 permit 10.60.1.0/24 le 32",
+                          "ip prefix-list SITE-V4 seq 111 permit 10.61.1.0/24 le 32"])
+
+    def test_otherwise_identical_to_the_release_before(self):
+        """With the release's inputs only the SITE-V4/SITE-V6 permit lines (and comments) differ from what it rendered."""
+        try:
+            p = subprocess.run(["git", "-C", ROOT, "show", f"{BASE_SEQ}:{os.path.relpath(GW, ROOT)}"],
+                               capture_output=True, text=True, timeout=30)
+            old = p.stdout if p.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            old = None
+        if old is None:
+            self.skipTest(f"{BASE_SEQ} not in this checkout")
+        allowed = [r"^!", r"^ipv6 prefix-list SITE-V6 seq \d+ permit ", r"^ip prefix-list SITE-V4 seq \d+ permit "]
+        for variables in (gw_vars(), gw_vars(v4filter=True), gw_vars(v6=True, families=(4, 6)),
+                          gw_vars(v6=True, families=(4, 6), v4filter=True, egress6=True),
+                          gw_vars(v6=True, families=(4, 6), upstream=("192.0.2.30", "203.0.113.30"))):
+            new, before = render(GW, variables), render_text(old, variables)
+            bad = [ln for ln in changed_lines(before, new) if not any(re.search(p, ln) for p in allowed)]
+            self.assertEqual(bad, [], "lines changed outside the site-import filter entries")
+            # the same entries, sequence numbers apart
+            strip = lambda t: sorted(re.sub(r" seq \d+ ", " seq N ", ln) for ln in t.splitlines() if " prefix-list SITE-V" in ln)
+            self.assertEqual(strip(new), strip(before))
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_ansible_template_module_agrees_on_both_lists(self):
+        tmp = tempfile.mkdtemp(prefix="shc-frr-render-")
+        dest = os.path.join(tmp, "frr.conf")
+        variables = gw_vars(v6=True, families=(4, 6), v4filter=True)
+        run_play([{"name": "render", "ansible.builtin.template": {"src": GW, "dest": dest}}, write_out("'ok'")],
+                 variables)
+        with open(dest) as f:
+            self.assertEqual(f.read(), render(GW, variables))
 
 
 class GatewayEgressStandby(unittest.TestCase):
