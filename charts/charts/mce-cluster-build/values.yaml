@@ -16,6 +16,10 @@ cluster:
   infraCount: 0
   apiVIP: ""
   ingressVIP: ""
+  # Dual-stack Agent clusters: one API and one ingress VIP per address family (IPv4 first), rendered as
+  # apiVIPs/ingressVIPs in place of the single VIPs above when the lists are not empty.
+  apiVIPs: []
+  ingressVIPs: []
   # Vault paths (relative to ClusterSecretStore backend — vault-backend)
   # Vault path (property pullSecretVaultProperty, default pull_secret) for <cluster>-pull-secret
   pullSecretVault: ""
@@ -89,6 +93,19 @@ provider:
     platformType: null
     useExternalLB: true
     machineCIDR: ""
+    # Per-family cluster networking (optional). Left empty, the AgentClusterInstall gets the defaults:
+    # cluster network 10.128.0.0/14 (hostPrefix 23), service network 172.30.0.0/16, machineCIDR as the machine
+    # network. Set the three lists to build a dual-stack cluster (IPv4 entries first; a list left out keeps its
+    # default). A single-stack cluster converted to dual-stack later is not reflected here.
+    networking: {}
+    # networking:
+    #   clusterNetwork:
+    #     - {cidr: 10.128.0.0/14, hostPrefix: 23}
+    #     - {cidr: "fd01::/48", hostPrefix: 64}
+    #   serviceNetwork: [172.30.0.0/16, "fd02::/112"]
+    #   machineNetwork:
+    #     - {cidr: 198.51.100.0/24}
+    #     - {cidr: "2001:db8:1:238::/64"}
 
 # ClusterSecretStore name (sovereign cloud uses vault-backend, not vault)
 secretStoreName: vault-backend

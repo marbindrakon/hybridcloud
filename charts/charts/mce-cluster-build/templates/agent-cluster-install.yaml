@@ -27,17 +27,53 @@ spec:
     - name: {{ .Values.cluster.name }}-manifests
 {{ end }}
 {{ if not (eq .Values.provider.agent.useExternalLB true) }}
+{{- /* dual-stack clusters give one VIP per family (apiVIPs/ingressVIPs); otherwise the single VIPs */}}
+{{- if .Values.cluster.apiVIPs }}
+  apiVIPs:
+{{- range .Values.cluster.apiVIPs }}
+    - {{ . }}
+{{- end }}
+{{- else }}
   apiVIP: {{ .Values.cluster.apiVIP }}
+{{- end }}
+{{- if .Values.cluster.ingressVIPs }}
+  ingressVIPs:
+{{- range .Values.cluster.ingressVIPs }}
+    - {{ . }}
+{{- end }}
+{{- else }}
   ingressVIP: {{ .Values.cluster.ingressVIP }}
+{{- end }}
 {{ end }}
+{{- /* per-family networks from provider.agent.networking; each list left out keeps the single-stack default */}}
+{{- $net := .Values.provider.agent.networking | default dict }}
   networking:
     clusterNetwork:
+{{- if $net.clusterNetwork }}
+{{- range $net.clusterNetwork }}
+      - cidr: {{ .cidr }}
+        hostPrefix: {{ .hostPrefix }}
+{{- end }}
+{{- else }}
       - cidr: 10.128.0.0/14
         hostPrefix: 23
+{{- end }}
     machineNetwork:
+{{- if $net.machineNetwork }}
+{{- range $net.machineNetwork }}
+      - cidr: {{ .cidr }}
+{{- end }}
+{{- else }}
       - cidr: {{ .Values.provider.agent.machineCIDR }}
+{{- end }}
     serviceNetwork:
+{{- if $net.serviceNetwork }}
+{{- range $net.serviceNetwork }}
+      - {{ . }}
+{{- end }}
+{{- else }}
       - 172.30.0.0/16
+{{- end }}
     userManagedNetworking: {{ .Values.provider.agent.useExternalLB }}
   provisionRequirements:
     controlPlaneAgents: {{ .Values.cluster.controlPlaneCount }}
