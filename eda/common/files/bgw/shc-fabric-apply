@@ -40,7 +40,8 @@
 #   peers not listed are removed. down also deletes the key.
 #   shc-fabric-apply <instance> post   (gateway, after FRR started: see post_start below)
 # IPv6 core (both types; optional keys, absent or "" = IPv4 only, none of this is read or set): loopback6 (the
-#   namespace's IPv6 loopback, /128 on lo), icmp6 (its ICMP source, /128 on every VRF device), loopbackPool6 and
+#   namespace's IPv6 loopback, /128 on lo), icmp6 (its ICMP source, /128 on every VRF device), icmp6RateLimitMs
+#   (optional: the namespace's ICMPv6 error rate per destination, ms), loopbackPool6 and
 #   icmpSource6 (their pools: other addresses from them are removed, also when loopback6 is empty). With loopback6
 #   the namespace is an IPv6 router: forwarding, no router advertisements or SLAAC anywhere; the core leg (gateway
 #   core0, root core bridge) carries IPv6 link-local only, the gateway's site leg no IPv6 at all (the underlay stays
@@ -65,6 +66,9 @@ TYPE=$(q .type)
 canon() { [ -z "$1" ] || python3 -c 'import ipaddress, sys; print(ipaddress.ip_interface(sys.argv[1]))' "$1"; }
 LO6=$(canon "$(opt .loopback6)"); ICMP6=$(canon "$(opt .icmp6)")
 LOPOOL6=$(opt .loopbackPool6); ICMPPOOL6=$(opt .icmpSource6)
+# the namespace's ICMPv6 error rate per destination (ms between messages; "" = the kernel default): a gateway
+# answers a whole site's unreachable IPv6 traffic, so a guest's connection attempts must each get their error
+ICMP6RATE=$(opt .icmp6RateLimitMs)
 # the pools a run without them still cleans up (line 1 loopbackPool6, line 2 icmpSource6)
 POOLS6=/etc/shc-fabric/$I.pools6; POOLS6_USED=""
 if [ -z "$LOPOOL6$ICMPPOOL6" ] && [ -r "$POOLS6" ]; then
@@ -125,6 +129,7 @@ router6() {
     sysctl_ensure "net/ipv6/conf/$k/disable_ipv6=0" "net/ipv6/conf/$k/forwarding=1" \
       "net/ipv6/conf/$k/accept_ra=0" "net/ipv6/conf/$k/autoconf=0"
   done
+  [ -z "$ICMP6RATE" ] || sysctl_ensure "net/ipv6/icmp/ratelimit=$ICMP6RATE"
 }
 
 # a core leg (gateway core0, root core bridge): IPv6 link-local only (IS-IS's IPv6 next hops), no RA or SLAAC; set
@@ -535,6 +540,7 @@ gateway)
           $X sysctl -n net/ipv6/conf/core0/disable_ipv6 net/ipv6/conf/core0/accept_ra net/ipv6/conf/core0/autoconf \
             "net/ipv6/conf/$VDEV/disable_ipv6" 2>/dev/null || true
           $X ip -6 route show table all | grep '^unreachable default' || true
+          $X sysctl -n net.ipv6.icmp.ratelimit 2>/dev/null || true
         fi
         if [ -n "$WG" ] && $X ip link show "$VDEV" >/dev/null 2>&1; then
           $X wg show "$VDEV" public-key; $X wg show "$VDEV" listen-port

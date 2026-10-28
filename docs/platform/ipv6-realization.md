@@ -319,6 +319,12 @@ away, which resets the sessions as many times again. Emptying the pools removes 
 addresses (each node remembers the pools of its last run until a run without them removed their addresses); the
 IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
 
+- **`gateway.icmp6RateLimitMs`** (default 20): milliseconds between the ICMPv6 error messages a gateway namespace
+  sends to one destination. While the fabric offers no IPv6 internet access, a site's off-network IPv6 traffic ends
+  at the gateway VRF's unreachable default and is answered with "destination unreachable"; the kernel's default of
+  one message per second per destination would make a guest that opens several connections at once wait for its
+  answers. Empty keeps the kernel default.
+
 ## Attachment circuits
 
 ```yaml

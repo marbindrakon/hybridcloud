@@ -103,7 +103,7 @@ class GatewayConfig(unittest.TestCase):
 
     def test_ipv4_core(self):
         c = self.config(REAL["core"], "bgw-1")
-        self.assertEqual(c, {"type": "gateway", "address": "192.0.2.4/24", "loopback6": "", "icmp6": "",
+        self.assertEqual(c, {"type": "gateway", "address": "192.0.2.4/24", "loopback6": "", "icmp6": "", "icmp6RateLimitMs": "",
                              "loopbackPool6": "", "icmpSource6": ""})
 
     def test_dual_stack_core(self):

@@ -69,7 +69,8 @@
       {{ cg_instance | combine({'address': cg_node_addr ~ '/' ~ (fab_spec.siteUnderlay.cidr | split('/') | last),
                                 'loopback6': cg_pe.loopback6 | default(''), 'icmp6': _cg_icmp6,
                                 'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
-                                'icmpSource6': fab_real.core.icmpSource6 | default('', true)}) | to_nice_json }}
+                                'icmpSource6': fab_real.core.icmpSource6 | default('', true),
+                                'icmp6RateLimitMs': fab_real.gateway.icmp6RateLimitMs | default('', true) | string}) | to_nice_json }}
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf

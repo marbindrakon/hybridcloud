@@ -308,6 +308,17 @@ class GatewayIPv6Test(ApplyCase):
         h.conf(instance, dict(gw_conf, **gw6))
         return h.ok(self, instance)
 
+    def test_icmp6_rate_limit_only_with_the_key(self):
+        h = self.h
+        out, log = self.bring_up()
+        self.assertFalse([l for l in log if "icmp/ratelimit" in l], "no ICMPv6 rate limit without the key")
+        out, log = self.bring_up(gw6=dict(GW6, icmp6RateLimitMs="20"))
+        self.assertEqual([l for l in log if "icmp/ratelimit" in l and l.startswith("W ")],
+                         ["W [gw-iaas1] sysctl -qw net/ipv6/icmp/ratelimit=20"])
+        self.assertEqual(h.sysctl("gw-iaas1", "net/ipv6/icmp/ratelimit"), "20")
+        out, log = self.bring_up(gw6=dict(GW6, icmp6RateLimitMs="20"))
+        self.assertFalse([l for l in log if "icmp/ratelimit" in l and l.startswith("W ")], "a re-run writes nothing")
+
     def test_fresh_namespace_order(self):
         h = self.h
         out, log = self.bring_up()
