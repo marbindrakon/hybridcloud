@@ -216,6 +216,13 @@ router bgp {{ _asn }} vrf {{ v.vrf }}
 {# the IPv6 loopback is the next hop: FRR installs no labelled IPv6 route over an IPv4 next hop. The address family
    gets its own label, the same RD and the same route target as IPv4 #}
  address-family ipv6 unicast
+{% if not (_egress6.enabled | default(false) | bool) %}
+{#- while the fabric offers no IPv6 internet, the gateway itself announces ::/0 to the site (Type-5, GW-T5), backed by
+    the kernel's unreachable default in the VRF table: the site forwards off-network IPv6 here and gets an ICMPv6
+    unreachable at once instead of dropping it silently. With egress.ipv6.enabled the egress VRF's ::/0 arrives over
+    the VPN and this local route must not shadow it #}
+  network ::/0
+{% endif %}
   label vpn export auto
   rd vpn export {{ _rd }}
   rt vpn both {{ _asn }}:{{ v.vpnTarget }}
