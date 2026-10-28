@@ -90,7 +90,7 @@ class GatewayConfig(unittest.TestCase):
     def tasks(self):
         return load(os.path.join(CG, "node_gateway.yml"))
 
-    def config(self, core, node, ipv6_core=True):
+    def config(self, core, node, ipv6_core=True, gateway=None):
         pe = F.pe_addresses({"core": core, "index": 3})
         ordinal = [n["name"] for n in NODES].index(node) + 1
         check = F.pe_addresses({"core": core, "index": 3, "nodeOrdinal": ordinal})
@@ -98,13 +98,19 @@ class GatewayConfig(unittest.TestCase):
         return json.loads(run_play([t, write_out("_c")],
                                    {"bgw_node": {"name": node}, "fab_name": "site1", "cg_instance": {"type": "gateway"},
                                     "cg_node_addr": "192.0.2.4", "fab_spec": {"siteUnderlay": {"cidr": "192.0.2.0/24"}},
-                                    "cg_pe": pe, "fab_real": {"core": core}, "fab_check_result": check,
+                                    "cg_pe": pe, "fab_real": dict({"core": core}, **({"gateway": gateway} if gateway is not None else {})),
+                                    "fab_check_result": check,
                                     "cg_ipv6_core": ipv6_core and core.get("loopbackPool6", "") != ""}))
 
     def test_ipv4_core(self):
         c = self.config(REAL["core"], "bgw-1")
         self.assertEqual(c, {"type": "gateway", "address": "192.0.2.4/24", "loopback6": "", "icmp6": "", "icmp6RateLimitMs": "",
                              "loopbackPool6": "", "icmpSource6": ""})
+
+    def test_icmp6_rate_limit_is_written_as_given_including_zero(self):
+        self.assertEqual(self.config(REAL["core"], "bgw-1", gateway={"icmp6RateLimitMs": 0})["icmp6RateLimitMs"], "0")
+        self.assertEqual(self.config(REAL["core"], "bgw-1", gateway={"icmp6RateLimitMs": 20})["icmp6RateLimitMs"], "20")
+        self.assertEqual(self.config(REAL["core"], "bgw-1", gateway={"icmp6RateLimitMs": ""})["icmp6RateLimitMs"], "")
 
     def test_dual_stack_core(self):
         c = self.config(CORE6, "bgw-2")

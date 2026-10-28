@@ -70,7 +70,8 @@
                                 'loopback6': cg_pe.loopback6 | default(''), 'icmp6': _cg_icmp6,
                                 'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
                                 'icmpSource6': fab_real.core.icmpSource6 | default('', true),
-                                'icmp6RateLimitMs': fab_real.gateway.icmp6RateLimitMs | default('', true) | string}) | to_nice_json }}
+                                'icmp6RateLimitMs': ('' if (fab_real.gateway | default({}, true)).icmp6RateLimitMs | default(none) is none
+                                                     else (fab_real.gateway.icmp6RateLimitMs | string))}) | to_nice_json }}
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf
