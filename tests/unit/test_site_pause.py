@@ -148,6 +148,15 @@ class Dependants(unittest.TestCase):
             if t.get("name", "").endswith("(OpenShift)\"") or "(OpenShift)" in t.get("name", "") or "(OpenStack)" in t.get("name", ""):
                 self.assertIn("ci_paused", t["when"], t["name"])
 
+    def test_gitops_lets_the_switch_be_flipped_live(self):
+        vap = open(os.path.join(ROOT, "operator/primary/helm/templates/gitops-policies.yaml")).read()
+        self.assertIn("name: pauseOnly", vap)
+        self.assertIn("oldObject.kind == 'CloudInfrastructure'", vap)
+        self.assertIn("object.spec.filter(k, k != 'paused').all(k, k in oldObject.spec && object.spec[k] == oldObject.spec[k])", vap)
+        self.assertIn("variables.override || variables.pauseOnly", vap)
+        app = open(os.path.join(ROOT, "bootstrap/helm/central/templates/hybridSovereignOperators/primary-operator-application.yaml")).read()
+        self.assertIn("kind: CloudInfrastructure\n      jsonPointers:\n        - /spec/paused", app)
+
     def test_tenant_summary_unavailable_when_paused(self):
         text = open(os.path.join(COMMON, "site_tenant_summary.yml")).read()
         self.assertIn("and not (spec.paused | default(false) | bool)", text)

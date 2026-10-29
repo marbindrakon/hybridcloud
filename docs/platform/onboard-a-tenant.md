@@ -26,7 +26,9 @@ before powering the site off. The platform then neither probes nor changes anyth
 **Paused**, tenants see it as unavailable for new environments, and the environments and placements already on
 it keep their last state and read **Paused** (reason `SitePaused`) instead of failing. Deletions on a paused site
 wait (the object names the paused site as its blocker) and finish once the site is resumed. Clear the field to
-resume; the next probe runs within the reconcile period, or at once with a reconcile request.
+resume; the next probe runs within the reconcile period, or at once with a reconcile request. The switch is meant
+to be flipped live, also on a site whose record is managed in Git: the GitOps admission rule allows a change
+that touches nothing but `spec.paused`, and the sync leaves the field alone.
 
 ## 2. Create the tenant
 

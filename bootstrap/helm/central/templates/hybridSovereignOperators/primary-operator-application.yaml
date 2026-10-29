@@ -26,6 +26,11 @@ spec:
     namespace: {{ .Values.hybridsovereignPrimaryOperator.destinationNamespace }}
   ignoreDifferences:
     {{- include "sovereign-central.esoIgnoreDifferences" . | nindent 4 }}
+    # a site's spec.paused is set live (an operational switch; the admission policy allows that change alone)
+    - group: hybridsovereign.redhat
+      kind: CloudInfrastructure
+      jsonPointers:
+        - /spec/paused
   syncPolicy:
     automated:
       prune: true
