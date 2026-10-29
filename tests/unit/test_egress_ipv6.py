@@ -157,7 +157,7 @@ class RootTemplate(unittest.TestCase):
                       " neighbor 2001:db8:237::2 timers 10 30\n neighbor 2001:db8:237::2 timers connect 5\n", out)
         self.assertNotIn("bfd", out.split("router bgp 65011")[1])
         self.assertNotRegex(out, r"neighbor \S+ password")
-        self.assertIn(" neighbor xo10000 interface remote-as external\n", out)
+        self.assertIn(" neighbor xo10000 interface v6only remote-as external\n", out)
         self.assertIn("  neighbor xo10000 route-map SHC-EGRESS-FROM-NET6 in\n  neighbor xo10000 route-map SHC-EGRESS-TO-NET6 out\n"
                       "  neighbor xo10000 maximum-prefix 1000\n", out)
         self.assertIn("  neighbor 2001:db8:237::3 route-map SHC-EGRESS-FROM-UP6 in\n  neighbor 2001:db8:237::3 route-map SHC-EGRESS-TO-UP6 out\n"
@@ -170,7 +170,7 @@ class RootTemplate(unittest.TestCase):
                       " match ipv6 address prefix-list SHC-ROUTED6\nexit\n", out)
         self.assertIn("route-map SHC-EGRESS-FROM-UP6 permit 20\n match ipv6 address prefix-list SHC-EXTERNAL6\n", out)
         # the network VRF: veth session, aggregates, VPN export of the default only, marked on the standby
-        self.assertIn(" neighbor xe10000 interface remote-as external\n", out)
+        self.assertIn(" neighbor xe10000 interface v6only remote-as external\n", out)
         self.assertIn("  aggregate-address 2001:db8:4005:4200::/64\n  aggregate-address 2001:db8:4005:4201::/64\n"
                       "  neighbor xe10000 activate\n  neighbor xe10000 route-map E10000-FROM-EG6 in\n"
                       "  neighbor xe10000 route-map E10000-TO-EG6 out\n  neighbor xe10000 maximum-prefix 10\n"

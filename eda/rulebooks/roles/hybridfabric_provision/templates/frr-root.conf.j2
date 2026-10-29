@@ -217,7 +217,9 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  bgp router-id {{ hf_pe.loopbackIp }}
  no bgp default ipv4-unicast
 {% if _e6 and n.ipv6 is defined %}
- neighbor {{ n.xe }} interface remote-as external
+{# v6only: the veth also carries the IPv4 /31 of the IPv4 egress, and FRR would peer over it (the IPv4 filter drops
+   that); the session stays on the link-local addresses the router advertisements exchange #}
+ neighbor {{ n.xe }} interface v6only remote-as external
  neighbor {{ n.xe }} description IPv6 egress of {{ n.network }}
 {% endif %}
 {% for c in n.circuits %}
@@ -291,7 +293,7 @@ router bgp {{ _e6.asn }} vrf {{ hf_node_egress.vrf }}
  no bgp default ipv4-unicast
  bgp graceful-restart-disable
 {% for n in _n6 %}
- neighbor {{ n.xo }} interface remote-as external
+ neighbor {{ n.xo }} interface v6only remote-as external
  neighbor {{ n.xo }} description IPv6 egress of {{ n.network }}
 {% endfor %}
 {% for u in _e6.upstream %}

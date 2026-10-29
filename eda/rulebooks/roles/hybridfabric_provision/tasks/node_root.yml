@@ -285,10 +285,13 @@
               if p is None:
                   errors.append("upstream %s is not configured in the egress VRF's BGP instance" % u["address"])
               sessions.append({"address": u["address"], "asn": u["asn"], "state": (p or {}).get("state", "Missing")})
-          default = bool(json.loads(run(["vtysh", "-c", "show ipv6 route vrf %s ::/0 json" % ev]) or "{}").get("::/0"))
+          def bgp_default(vrf):  # a BGP default (every VRF table also holds the kernel's unreachable default)
+              routes = json.loads(run(["vtysh", "-c", "show ipv6 route vrf %s ::/0 json" % vrf]) or "{}").get("::/0") or []
+              return any(r.get("protocol") == "bgp" for r in routes)
+          default = bgp_default(ev)
           if default:
               for v in nets:
-                  if not json.loads(run(["vtysh", "-c", "show ipv6 route vrf %s ::/0 json" % v]) or "{}").get("::/0"):
+                  if not bgp_default(v):
                       errors.append("network VRF %s lacks the default route from the egress VRF" % v)
           up = [s for s in sessions if s["state"] == "Established"]
           healthy = bool(table and default and up and not errors)
