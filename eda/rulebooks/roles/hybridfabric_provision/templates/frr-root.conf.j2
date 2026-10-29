@@ -45,18 +45,23 @@ router bgp {{ fab_spec.domainAsn }}
   neighbor PE activate
   neighbor PE route-reflector-client
  exit-address-family
+{% set _e6 = hf_node_egress.ipv6 if (_v6 and hf_node_egress.ipv6 is defined) else none %}
+{% set _n6 = (hf_node_egress.networks | selectattr('ipv6', 'defined') | list) if _e6 else [] %}
 {% if _v6 %}
  !
-{# the IPv6 VPN routes ride the same sessions (IPv4 loopbacks), with the provider edges' IPv6 loopbacks as next hops #}
+{# the IPv6 VPN routes ride the same sessions (IPv4 loopbacks), with the provider edges' IPv6 loopbacks as next hops.
+   With IPv6 egress the reflector drops a default route a gateway sends (a gateway's own unreachable default, meant for
+   its site only, has an empty AS path and would beat the egress default everywhere) #}
  address-family ipv6 vpn
   neighbor PE activate
   neighbor PE route-reflector-client
+{% if _e6 %}
+  neighbor PE route-map SHC-RR-IN6 in
+{% endif %}
  exit-address-family
 {% endif %}
 exit
 !
-{% set _e6 = hf_node_egress.ipv6 if (_v6 and hf_node_egress.ipv6 is defined) else none %}
-{% set _n6 = (hf_node_egress.networks | selectattr('ipv6', 'defined') | list) if _e6 else [] %}
 {% if hf_node_egress.networks is defined %}
 ! provider internet egress: the hand-off's default route, and each network's NAT address back to its VRF;
 ! platform reach: each network's platform prefixes towards its VRF, and the platform's sources back to the hand-off
@@ -133,6 +138,11 @@ ipv6 prefix-list E{{ n.vpnTarget }}-PL6 seq 5 deny ::/0 le 128
 {% endfor %}
 {% endfor %}
 !
+route-map SHC-RR-IN6 deny 10
+ match ipv6 address prefix-list SHC-DEFAULT6
+exit
+route-map SHC-RR-IN6 permit 20
+exit
 route-map SHC-EGRESS-FROM-UP6 permit 10
  match ipv6 address prefix-list SHC-DEFAULT6
 exit
@@ -173,6 +183,11 @@ route-map E{{ n.vpnTarget }}-VPN6 permit 10
 {% endif %}
 exit
 route-map E{{ n.vpnTarget }}-VPN6 permit 20
+exit
+route-map E{{ n.vpnTarget }}-IMPORT6 deny 5
+ match ipv6 address prefix-list SHC-DEFAULT6
+exit
+route-map E{{ n.vpnTarget }}-IMPORT6 permit 10
 exit
 {% endfor %}
 !
@@ -277,6 +292,7 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
   nexthop vpn export {{ hf_pe.loopbackIp6 }}
   route-map vpn export E{{ n.vpnTarget }}-VPN6
+  route-map vpn import E{{ n.vpnTarget }}-IMPORT6
   export vpn
   import vpn
  exit-address-family

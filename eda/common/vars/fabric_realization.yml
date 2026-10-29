@@ -16,6 +16,10 @@ fabric_realization_defaults:
   vpnTargetPool: {start: 10000, end: 10999}
   # standard community <domainAsn>:<value> on the routes gateways originate into a site; never taken back
   gatewayCommunity: 999
+  # standard community <domainAsn>:<value> on the routes a gateway originates for its own site only (its unreachable
+  # IPv6 default while the network has no IPv6 egress, the covering routes): never exported into the network's VPN,
+  # where an unreachable default of one site would compete with the egress default
+  gatewayLocalCommunity: 997
   gateway:
     # per address family: only the placements' prefixes (and the host routes inside them) enter a VRF from the
     # site, so a site router can't put another prefix into a tenant's network. Off for a family: the site's routes

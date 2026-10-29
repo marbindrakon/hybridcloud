@@ -181,6 +181,11 @@ class RootTemplate(unittest.TestCase):
                       " set community 65010:998 additive\nexit\nroute-map E10000-VPN6 permit 20\nexit\n", out)
         # the discard routes in both VRFs
         self.assertEqual(out.count(" ipv6 route 2001:db8:4005::/48 reject 254\n"), 2)
+        # the reflector drops a default a gateway sends; the network VRF refuses an imported default
+        self.assertIn("  neighbor PE route-reflector-client\n  neighbor PE route-map SHC-RR-IN6 in\n", out)
+        self.assertIn("route-map SHC-RR-IN6 deny 10\n match ipv6 address prefix-list SHC-DEFAULT6\nexit\nroute-map SHC-RR-IN6 permit 20\nexit\n", out)
+        self.assertIn("  route-map vpn export E10000-VPN6\n  route-map vpn import E10000-IMPORT6\n", out)
+        self.assertIn("route-map E10000-IMPORT6 deny 5\n match ipv6 address prefix-list SHC-DEFAULT6\nexit\nroute-map E10000-IMPORT6 permit 10\nexit\n", out)
         self.assertIn("IPv6 internet egress (standby node)", out)
 
     def test_primary_node(self):
@@ -199,7 +204,7 @@ class RootTemplate(unittest.TestCase):
         del v["hf_node_vrfs"][0]["ipv6"]
         v["hf_node_vrfs"][0]["families"] = [4]
         out = T.render(T.RT, v)
-        for s in ("router bgp 65011", "SHC-ROUTED6", " reject 254", "xe10000", "address-family ipv6 unicast"):
+        for s in ("router bgp 65011", "SHC-ROUTED6", " reject 254", "xe10000", "address-family ipv6 unicast", "SHC-RR-IN6"):
             self.assertNotIn(s, out)
 
     def test_a_network_without_placement_prefixes_announces_nothing(self):

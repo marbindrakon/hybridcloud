@@ -274,7 +274,7 @@ class GatewayDualStackCore(unittest.TestCase):
         t51000 = self.out.split("router bgp 65010 vrf t51000\n")[1].split("\nexit\n")[0]
         self.assertIn(" address-family ipv4 unicast\n  label vpn export auto\n  rd vpn export 65010:51000\n"
                       "  rt vpn both 65010:10000\n  nexthop vpn export 10.255.0.2\n  route-map vpn export TO-VPN-10000\n", t51000)
-        self.assertIn(" address-family ipv6 unicast\n  network ::/0\n  label vpn export auto\n  rd vpn export 65010:51000\n"
+        self.assertIn(" address-family ipv6 unicast\n  network ::/0 route-map GW-LOCAL\n  label vpn export auto\n  rd vpn export 65010:51000\n"
                       "  rt vpn both 65010:10000\n  nexthop vpn export 2001:db8:4005:ffff::2\n"
                       "  route-map vpn export TO-VPN-10000\n  export vpn\n  import vpn\n exit-address-family\n", t51000)
         self.assertIn("  advertise ipv4 unicast route-map GW-T5\n  advertise ipv6 unicast route-map GW-T5\n", t51000)
@@ -384,9 +384,11 @@ class SiteFilterSequences(unittest.TestCase):
             old = None
         if old is None:
             self.skipTest(f"{BASE_SEQ} not in this checkout")
-        # network ::/0: an IPv6 VRF announces the unreachable default to its site while the fabric has no IPv6 egress
+        # network ::/0: an IPv6 VRF announces the unreachable default to its site while the network has no IPv6 egress;
+        # GW-LOCAL: the routes a gateway originates for its site stay out of the VPN (IPv6 egress)
         allowed = [r"^!", r"^ipv6 prefix-list SITE-V6 seq \d+ permit ", r"^ip prefix-list SITE-V4 seq \d+ permit ",
-                   r"^  network ::/0$"]
+                   r"^  network ::/0 route-map GW-LOCAL$", r"^bgp community-list standard GW-LOCAL ", r"^route-map GW-LOCAL permit 10$",
+                   r"^ set community \d+:997 additive$", r"^route-map TO-VPN-\d+ deny 5$", r"^ match community GW-LOCAL$", r"^exit$"]
         for variables in (gw_vars(), gw_vars(v4filter=True), gw_vars(v6=True, families=(4, 6)),
                           gw_vars(v6=True, families=(4, 6), v4filter=True, egress6=True),
                           gw_vars(v6=True, families=(4, 6), upstream=("192.0.2.30", "203.0.113.30"))):
@@ -465,8 +467,11 @@ class Root(unittest.TestCase):
 class SiteDefaultWithoutEgress(unittest.TestCase):
     def test_ipv6_vrf_announces_the_unreachable_default_while_no_egress(self):
         new = render(GW, gw_vars(v6=True, families=(4, 6)))
-        self.assertIn(" address-family ipv6 unicast\n  network ::/0\n", new)
+        self.assertIn(" address-family ipv6 unicast\n  network ::/0 route-map GW-LOCAL\n", new)
         self.assertNotIn("network 0.0.0.0/0", new)
+        # the gateway-local community keeps the default (and the covering routes) out of the VPN
+        self.assertIn("bgp community-list standard GW-LOCAL seq 5 permit 65010:997\n", new)
+        self.assertIn("route-map TO-VPN-10000 deny 5\n match community GW-LOCAL\nexit\n", new)
 
     def test_no_local_default_once_the_egress_offers_ipv6(self):
         v = gw_vars(v6=True, families=(4, 6), egress6=True)
@@ -474,14 +479,14 @@ class SiteDefaultWithoutEgress(unittest.TestCase):
         new = render(GW, v)
         self.assertNotIn("network ::/0", new)
         # the covering routes (the network's own space, the platform's routed space) in the VRF's IPv6 family
-        self.assertIn(" address-family ipv6 unicast\n  network 2001:db8:100::/56\n  network 2001:db8:4005::/48\n", new)
+        self.assertIn(" address-family ipv6 unicast\n  network 2001:db8:100::/56 route-map GW-LOCAL\n  network 2001:db8:4005::/48 route-map GW-LOCAL\n", new)
 
     def test_local_default_stays_for_a_network_without_ipv6_egress(self):
         # the fabric offers IPv6 egress, but this network has none (its VRF entry says so): the local ::/0 stays
         v = gw_vars(v6=True, families=(4, 6), egress6=True)
         v["cg_vrfs"][0].update({"egress6": False, "covering6": ["2001:db8:100::/56"]})
         new = render(GW, v)
-        self.assertIn(" address-family ipv6 unicast\n  network ::/0\n  network 2001:db8:100::/56\n", new)
+        self.assertIn(" address-family ipv6 unicast\n  network ::/0 route-map GW-LOCAL\n  network 2001:db8:100::/56 route-map GW-LOCAL\n", new)
 
     def test_no_local_default_in_an_ipv4_only_vrf(self):
         new = render(GW, gw_vars(v6=True, families=(4,)))
