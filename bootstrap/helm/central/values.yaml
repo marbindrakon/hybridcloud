@@ -5262,7 +5262,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.3.6"
+      tag: "img-2.3.7"  # img-2.3.7: site pause (phase Paused badge, the site form paused switch, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5302,7 +5302,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.3.6"
+      tag: "img-5.3.7"  # img-5.3.7: site pause (phase Paused badge, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5336,7 +5336,7 @@ sovereignAdminPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.4.7"
+      tag: "img-1.4.8"  # img-1.4.8: site pause (phase Paused badge, the site form paused switch, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5361,7 +5361,7 @@ sovereignTenantPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.5.7"
+      tag: "img-1.5.8"  # img-1.5.8: site pause (phase Paused badge, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
