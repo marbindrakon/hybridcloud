@@ -1,7 +1,9 @@
 ---
 # one fabric's border gateway nodes, read only (no lease): the gw-* network namespaces and the VRFs in each, the
-# root's VRFs (key "root": the networks' VRFs e<vpnTarget>) and the root's attachment circuit devices (VLAN devices in
-# a root VRF, or on a bearer interface with a VLAN in the attachment pool)
+# root's VRFs (key "root": the networks' VRFs e<vpnTarget>), the root's attachment circuit devices (VLAN devices in
+# a root VRF, or on a bearer interface with a VLAN in the attachment pool), and the IPv6 pieces shc-fabric-apply gives
+# every VRF (the unreachable default of its table, the ICMPv6 source /128 on its device) that belong to no VRF device
+# of their namespace any more (ipv6Orphans: a VRF removed behind the apply script's back, or a table reused)
 - name: The platform's realization parameters
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
   vars:
@@ -30,37 +32,74 @@
         bgw_fabric_spec: "{{ foc_fabric.spec }}"
         bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
+    # the script: python3 - <<PY ... PY with the realization values templated in (tests/unit/test_fabric_orphan_nodes.py
+    # runs the same code with ip and vtysh replaced). No quote marks in its comments: the shell module splits its
+    # free-form arguments and an odd quote fails the task
     - name: List the gateway namespaces and their VRFs
       ansible.builtin.shell: |
         python3 - <<'PY'
-        import json, re, subprocess
-        out = {}
-        for line in subprocess.run(["ip", "netns", "list"], capture_output=True, text=True).stdout.splitlines():
-            ns = line.split()[0] if line.split() else ""
-            if not ns.startswith("gw-"):
-                continue
-            links = json.loads(subprocess.run(["ip", "netns", "exec", ns, "ip", "-j", "link", "show", "type", "vrf"],
-                                              capture_output=True, text=True).stdout or "[]")
-            out[ns] = sorted(l["ifname"] for l in links)
-        root = json.loads(subprocess.run(["ip", "-j", "link", "show", "type", "vrf"], capture_output=True, text=True).stdout or "[]")
-        out["root"] = sorted(l["ifname"] for l in root)
-        parents, lo, hi = {{ foc_parents | to_json }}, {{ foc_pool[0] | int }}, {{ foc_pool[1] | int }}
-        vlans = json.loads(subprocess.run(["ip", "-j", "-d", "link", "show", "type", "vlan"], capture_output=True, text=True).stdout or "[]")
-        devices = []
-        for l in vlans:
-            vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
-            if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
-                devices.append({"name": l["ifname"], "master": l.get("master") or ""})
-        # the root bfdd sessions: one whose VRF no longer exists outlived a circuit teardown (no quote marks in this
-        # block: the shell module splits its free-form arguments and an odd quote fails the task)
-        r = subprocess.run(["vtysh", "-c", "show bfd peers json"], capture_output=True, text=True)
-        try:
-            peers = json.loads(r.stdout or "[]") if r.returncode == 0 else []
-        except ValueError:
-            peers = []
-        bfd = [{"peer": p.get("peer"), "vrf": p.get("vrf") or "default", "interface": p.get("interface") or "",
-                "status": p.get("status") or ""} for p in peers if isinstance(p, dict)]
-        print(json.dumps({"netns": out, "rootDevices": devices, "rootBfd": bfd}))
+        import ipaddress, json, re, subprocess
+
+
+        def run(cmd):
+            return subprocess.run(cmd, capture_output=True, text=True).stdout
+
+
+        def loads(text):
+            try:
+                return json.loads(text or "[]")
+            except ValueError:
+                return []
+
+
+        def vrfs_and_ipv6(ns, run, icmp_pool):
+            """The VRF devices of a namespace (root: the node itself) and the IPv6 pieces the apply script gives a VRF
+            that belong to none of them: an unreachable default (its metric, 4278198272) in a table no VRF device uses,
+            an address from the ICMPv6 source pool on a device that is no VRF. Both are the leftovers of a VRF that
+            went away behind the apply script, which removes them only with the VRF."""
+            x = [] if ns == "root" else ["ip", "netns", "exec", ns]
+            links = loads(run(x + ["ip", "-j", "-d", "link", "show", "type", "vrf"]))
+            names = {l["ifname"] for l in links}
+            tables = {str(((l.get("linkinfo") or {}).get("info_data") or {}).get("table")) for l in links}
+            gone = []
+            for r in loads(run(x + ["ip", "-j", "-6", "route", "show", "table", "all", "type", "unreachable"])):
+                table = str(r.get("table", "main"))
+                if r.get("dst") == "default" and r.get("metric") == 4278198272 and table not in tables:
+                    gone.append("IPv6 unreachable default in table %s (%s) belongs to no VRF" % (table, ns))
+            if icmp_pool:
+                pool = ipaddress.ip_network(icmp_pool, strict=False)
+                for l in loads(run(x + ["ip", "-j", "-6", "addr", "show"])):
+                    for a in l.get("addr_info") or []:
+                        try:
+                            addr = ipaddress.ip_address(a.get("local") or "")
+                        except ValueError:
+                            continue
+                        if addr in pool and l.get("ifname") not in names:
+                            gone.append("ICMPv6 source %s on %s (%s) belongs to no VRF" % (addr, l.get("ifname"), ns))
+            return sorted(names), gone
+
+
+        def main(run, parents, lo, hi, icmp_pool):
+            out, left = {}, []
+            spaces = [line.split()[0] for line in run(["ip", "netns", "list"]).splitlines() if line.split()]
+            for ns in [s for s in spaces if s.startswith("gw-")] + ["root"]:
+                out[ns], gone = vrfs_and_ipv6(ns, run, icmp_pool)
+                left += gone
+            devices = []
+            for l in loads(run(["ip", "-j", "-d", "link", "show", "type", "vlan"])):
+                vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
+                if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
+                    devices.append({"name": l["ifname"], "master": l.get("master") or ""})
+            # the root bfdd sessions: one whose VRF no longer exists outlived a circuit teardown
+            peers = loads(run(["vtysh", "-c", "show bfd peers json"]))
+            bfd = [{"peer": p.get("peer"), "vrf": p.get("vrf") or "default", "interface": p.get("interface") or "",
+                    "status": p.get("status") or ""} for p in peers if isinstance(p, dict)]
+            return {"netns": out, "rootDevices": devices, "rootBfd": bfd, "ipv6Orphans": left}
+
+
+        if __name__ == "__main__":
+            print(json.dumps(main(run, {{ foc_parents | to_json }}, {{ foc_pool[0] | int }}, {{ foc_pool[1] | int }},
+                                  {{ fab_real.core.icmpSource6 | default('', true) | to_json }})))
         PY
       args:
         executable: /bin/bash
@@ -81,6 +120,7 @@
       {%- for r in _foc_node.results -%}
         {%- set n = r.stdout | from_json -%}
         {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': n.netns,
-                                'rootDevices': n.rootDevices, 'rootBfd': n.rootBfd | default([])}) -%}
+                                'rootDevices': n.rootDevices, 'rootBfd': n.rootBfd | default([]),
+                                'ipv6Orphans': n.ipv6Orphans | default([]) | map('regex_replace', '^', 'node ' ~ r.item.name ~ ': ') | list}) -%}
       {%- endfor -%}
       {{ foc_nodes + out }}

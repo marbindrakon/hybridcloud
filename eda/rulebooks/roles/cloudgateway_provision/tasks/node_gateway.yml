@@ -69,7 +69,9 @@
       {{ cg_instance | combine({'address': cg_node_addr ~ '/' ~ (fab_spec.siteUnderlay.cidr | split('/') | last),
                                 'loopback6': cg_pe.loopback6 | default(''), 'icmp6': _cg_icmp6,
                                 'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
-                                'icmpSource6': fab_real.core.icmpSource6 | default('', true)}) | to_nice_json }}
+                                'icmpSource6': fab_real.core.icmpSource6 | default('', true),
+                                'icmp6RateLimitMs': ('' if (fab_real.gateway | default({}, true)).icmp6RateLimitMs | default(none) is none
+                                                     else (fab_real.gateway.icmp6RateLimitMs | string))}) | to_nice_json }}
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf
@@ -243,6 +245,10 @@
 # (python3 -c '<code>' <pathspace> <netns> <loopback> <vrf>:<families>:<rd> ...). The families are the ones the
 # FRR configuration carries (frr-gateway.conf.j2: IPv6 only with the IPv6 core), so a check never binds a label under
 # an address family the file does not have; a VRF that carries none (IPv6 only, IPv4-only core) has no label.
+# The check tells two cases apart in what it reports: the label is not seen in the kernel at all (zebra has not
+# installed it yet, or kept the old binding and never will), or the kernel routes it into another device (a stale
+# route left from an earlier owner of the label). Both wait the settle time first (a reload moves labels between
+# VRFs for a moment), both are bound again when they remain.
 - name: "{{ bgw_node.name }}: every VRF's VPN label leads into it"
   ansible.builtin.shell: |
     {% set _vrfs = [] %}
@@ -314,8 +320,8 @@
 
     def main(argv, run):
         """argv: <vtysh pathspace or ""> <netns or ""> <own loopback, the peer address the route reflector sees, or ""> then
-        <vrf>:<families>[:<rd>] per VRF. Prints "<vrf> <family>" per address family whose label has no MPLS route into
-        the VRF."""
+        <vrf>:<families>[:<rd>] per VRF. Prints "<vrf> <family> <case>" per address family whose label has no MPLS
+        route into the VRF: unseen = the kernel routes the label nowhere, stale = it routes it into another device."""
         pathspace, netns, peer = argv[0], argv[1], argv[2]
         vrfs = []
         for spec in argv[3:]:
@@ -326,6 +332,7 @@
         ip = ["ip"] + (["-n", netns] if netns else [])
         vtysh = ["vtysh"] + (["-N", pathspace] if pathspace else [])
         devs, into = kernel(run(ip + ["-f", "mpls", "route"]))
+        routed = set().union(*into.values()) if into else set()
         own, rr = {}, {}
         if any(6 in f for _, f, _ in vrfs):
             for fam in (4, 6):
@@ -342,7 +349,7 @@
             if 6 not in fams:
                 # IPv4 only: any MPLS route into the VRF (unchanged)
                 if name not in devs:
-                    print(name, 4)
+                    print(name, 4, "unseen")
                 continue
             have = into.get(name, set())
             known = {}
@@ -351,15 +358,16 @@
                 if labels:
                     known[f] = labels
             for f in sorted(known):
-                if not known[f] <= have:
-                    print(name, f)
+                missing = known[f] - have
+                if missing:
+                    print(name, f, "stale" if missing & routed else "unseen")
             # a family that exports no route yet shows no label: it needs a route into the VRF that the other family
             # label does not account for (each family has its own label)
             unseen = [f for f in fams if f not in known]
             claimed = set().union(*known.values()) if known else set()
             if unseen and len(have - claimed) < len(unseen):
                 for f in unseen:
-                    print(name, f)
+                    print(name, f, "unseen")
         return 0
 
 
@@ -373,16 +381,24 @@
       b=$(bad)
     }
     settle 3 || { echo "the VPN label check could not read FRR or the MPLS table" >&2; exit 1; }
+    # what each case means, for the job output (<vrf> <family> <unseen|stale>, then "" or " even after binding it again")
+    why() {
+      case "$3" in
+        stale) echo "VRF $1: the kernel routes its IPv$2 VPN label into another device (stale)$4" >&2 ;;
+        *) echo "VRF $1: its IPv$2 VPN label is not seen in the kernel (no MPLS route into the VRF)$4" >&2 ;;
+      esac
+    }
     rebound=""
     if [ -n "$b" ]; then
-      while read -r v f; do
+      while read -r v f c; do
+        why "$v" "$f" "$c" "; binding it again"
         vtysh -N gw-{{ fab_name }} -c 'configure terminal' -c "router bgp {{ cg_fabric.spec.domainAsn }} vrf $v" -c "address-family ipv$f unicast" \
           -c 'no label vpn export auto' -c 'label vpn export auto' -c 'end' >/dev/null
         rebound="$rebound $v/ipv$f"
       done <<< "$b"
       settle 6 || { echo "the VPN label check could not read FRR or the MPLS table" >&2; exit 1; }
       if [ -n "$b" ]; then
-        while read -r v f; do echo "VRF $v: its IPv$f VPN label has no MPLS route into it, even after binding it again" >&2; done <<< "$b"
+        while read -r v f c; do why "$v" "$f" "$c" ", even after binding it again"; done <<< "$b"
         exit 1
       fi
     fi

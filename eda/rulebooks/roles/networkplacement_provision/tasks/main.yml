@@ -299,6 +299,21 @@
     - name: Keep the subnets
       ansible.builtin.include_tasks: subnets.yml
 
+    # the placement's IPv6 in plain words (status.ipv6, design/IPV6-PLAN.md §2.3): how workloads get their addresses
+    # (the kind's placement.ipv6.addressMode: SLAAC for slaac or dhcpv6-stateless, else DHCPv6) and its internet
+    # access, which the fabric offers only with IPv6 egress (egress.ipv6.enabled: the egress realization then
+    # reports the state; until then unavailable, NotOffered)
+    - name: Describe the placement's IPv6
+      vars:
+        _mode: "{{ ((fab_real.placement.ipv6 | default({}, true)).addressMode | default({}, true))[np_backend_kind] | default('', true) }}"
+      ansible.builtin.set_fact:
+        np_status: >-
+          {{ np_status | combine({'ipv6': {'addressing': ('SLAAC' if (_mode | trim) in ['slaac', 'dhcpv6-stateless'] else 'DHCPv6')}
+             | combine({'internet': {'state': 'unavailable', 'reason': 'NotOffered',
+                                     'message': 'IPv6 internet access is not offered on this fabric yet'}}
+                       if not (fab_real.egress.ipv6.enabled | default(false) | bool) else {})}) }}
+      when: np_prefixes_v6 | length > 0
+
     - name: The placement's layer 3 VNI
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
       vars:

@@ -123,7 +123,8 @@ placement:
     defaultSource: {CloudAWS: Network, CloudGCP: Provider}   # applied when a placement names no source
     defaultPrefixLength: {CloudAWS: 60}                      # applied when a cloud placement names no size
     tenantPrefixes: {CloudGCP: false}                        # environment types that can't carry tenant IPv6
-    addressMode: {CloudOSO: dhcpv6-stateful}                 # how OpenStack subnets hand out addresses
+    addressMode: {CloudOSO: dhcpv6-stateful, CloudVirt: dhcpv6-stateful}   # how placement subnets hand out addresses
+  resolversBySite: {}       # <site>: [addresses]; resolvers handed to the site's placement subnets, per family
   siteReserved:             # per environment type; the defaults hold the product's own ranges
     CloudVirt: [100.64.0.0/16, 100.65.0.0/16, 100.88.0.0/16, 169.254.0.0/17,   # OVN-Kubernetes internal subnets
                 fd69::/112, fd97::/64, fd98::/64, fd99::/64]                   # and their IPv6 counterparts
@@ -147,25 +148,81 @@ placement:
   the cluster and service networks) and refuses a pinned prefix on them (`PrefixInvalid`). A tenant network whose
   IPv6 space lies wholly inside one of them can't be placed on that environment type (`PrefixInvalid`). Override
   the list only when a site's product version uses other internal ranges.
-- **`addressMode`:** `dhcpv6-stateful` is the only OpenStack mode in which resolvers reach a guest by protocol; the
-  config drive carries them in every mode.
+- **`addressMode`:** per environment type, how the workloads of a placement get their IPv6 addresses. On OpenStack
+  sites it is applied: every IPv6 placement subnet is created with it as RA mode and address mode (empty = the
+  site's own default), and it can't change on an existing subnet (Neutron fixes both at creation; a changed value
+  reaches new subnets only). On OpenShift sites it is informational: the cluster network hands out addresses by
+  stateful DHCPv6. `dhcpv6-stateful` is the only OpenStack mode in which resolvers reach a guest by protocol; the
+  config drive carries them in every mode. The placement's status reports the resulting addressing
+  (`status.ipv6.addressing`: `DHCPv6` or `SLAAC`).
+- **`resolversBySite`:** per site, the resolver addresses its placement subnets hand to the workloads. On OpenStack
+  sites they become each subnet's `dns_nameservers`, by family (IPv4 addresses on the IPv4 subnet, IPv6 on the
+  IPv6 subnet); a subnet whose list differs is updated on the next run, so a change reaches existing placements. A
+  site not listed gets an empty list (enforced on existing subnets too), so its workloads fall back to the site's
+  default, usually the site's own resolver, which a placement's workloads may not reach through the fabric; list
+  resolvers the network's egress can reach. OpenShift sites take
+  no resolvers from here (the cluster's DNS serves the VMs).
+- **OpenStack placements** (CloudOSO): the placement's network holds one subnet per allocated prefix, IPv4 first,
+  on one EVPN router whose VNI is the placement's. The first subnet attached to the router carries the site's host
+  advertisement flag and the others attach plainly: the site's EVPN plugin accepts one advertised interface per
+  network and advertises the host routes of every subnet regardless. The site therefore sends /128 host routes for
+  the IPv6 subnet (never the /64), which the gateway's site-import filter accepts inside the placement prefix. A
+  re-run creates nothing; deletion removes every router interface, then the router, the subnets and the network,
+  and waits while tenant ports remain on the network (`deletionBlockedBy`).
 
 ## Site capabilities
 
-The site job writes these booleans into `CloudInfrastructure.status.capabilities`, each the site's probe ANDed with
-the switches above; they are `false` while the switches are off:
+A site offers IPv6 placements when two things agree: what the site's probe found it can carry, and the switch the
+realization sets for that site. The site job (`cloudinfrastructure-provision`) writes the result into
+`CloudInfrastructure.status.capabilities`, each key the probe ANDed with its switch; all are `false` while the
+switches are off:
 
-| Key | Meaning |
-|---|---|
-| `ipv6` | IPv6 placement subnets can be carried |
-| `ipv6Only` | IPv6-only placements are offered |
-| `ipv6NetworkSource` | subnets can come from the network's IPv6 space |
-| `ipv6ProviderSource` | the cloud provider can assign subnets |
-| `ipv6Translation` | IPv6-only placements reach IPv4 by translation |
+| Key | Meaning | Probe | Switch |
+|---|---|---|---|
+| `ipv6` | IPv6 placement subnets can be carried | see below | `placement.ipFamiliesBySite.<site>` holds 6 (else `placement.ipFamilies.<environment type>`) |
+| `ipv6Only` | IPv6-only placements are offered | as `ipv6` | `placement.ipv6OnlyBySite.<site>: true` |
+| `ipv6NetworkSource` | subnets can come from the network's IPv6 space | as `ipv6`; never on Google Cloud | `Network` in `placement.ipv6SourcesBySite.<site>` (else `placement.ipv6.sources.<environment type>`) |
+| `ipv6ProviderSource` | the cloud provider can assign subnets | a cloud site | `Provider` in the same list |
+| `ipv6Translation` | IPv6-only placements reach IPv4 by translation | as `ipv6` | a `translation.<site>` entry |
 
-They reach tenants through the tenant profile's site list (`IPv6`, `IPv6Only`, `IPv6NetworkSource`,
-`IPv6ProviderSource`, `IPv6Translation`), so the forms show the IPv6 inputs only where a site offers them. The job's
-`FamilyUnavailable` stays the authority.
+The probe, per site type: an OpenShift site is dual-stack (its `network.config.openshift.io/cluster`
+`spec.clusterNetwork` has an IPv4 and an IPv6 entry); an OpenStack site has EVPN (its IPv6 subnets ride the same
+path as IPv4); AWS and Google Cloud offer IPv6 (Google Cloud from the provider only); an external site offers
+nothing. The probe is read on every run of the site job; a cluster converted to dual-stack shows it at the next run.
+
+**Where the switches live.** The site job reads the `placement` and `translation` switches from the **top level** of
+`FABRIC_REALIZATION` only: a site belongs to no single fabric, so the job never merges a `fabrics.<fabric name>`
+section (the fabric, gateway, network and placement jobs do merge it on top of the top level). Keep these switches
+at the top level. A switch written only under `fabrics.<name>` would let the placement job's own check pass while
+the site still reports `ipv6: false`, so the placement is refused all the same (`FamilyUnavailable`) and the site
+status does not say why.
+
+**Switching a site on.** The site's IPv6 data path comes first: the dual-stack core and its gateways
+([Transport](#transport-dual-stack-core)), and the site's own IPv6 (a dual-stack cluster, or an OpenStack site with
+EVPN). A switch turned on before that makes placements that cannot carry traffic. Then:
+
+1. Add the site to `placement.ipFamiliesBySite` at the top level of `FABRIC_REALIZATION`, for example
+   `{"placement": {"ipFamiliesBySite": {"<site>": [4, 6]}}}` merged into the installation's value (the other
+   switches the same way, only when the site is meant to offer them).
+2. Let the value reach the automation: `FABRIC_REALIZATION` is an environment value of the automation's inventory
+   (`fabric_realization`), so the aap-config and the activations that carry it have to pick the new value up.
+3. Run the site job: Retry now on the `CloudInfrastructure` (the `reconcileNow` annotation,
+   [Status reasons](../tenant/status-reasons.md#retry-now)), or wait for its next periodic run. Check
+   `status.capabilities.ipv6: true`. The job also wakes the tenants whose site view changed, so their profiles
+   follow.
+
+**What tenants see.** The capabilities reach the tenant profile's site list (`IPv6`, `IPv6Only`, `IPv6NetworkSource`,
+`IPv6ProviderSource`, `IPv6Translation`), so the forms show the IPv6 inputs only where a site offers them; the
+command line is not gated, the job's `FamilyUnavailable` stays the authority. On a switched site a placement with
+`ipv6` is realized with a family-6 row in `status.subnets` and a `status.ipv6` block: `addressing` (how workloads get
+their addresses, `DHCPv6` or `SLAAC`, from `placement.ipv6.addressMode` of the environment type) and `internet`
+(`{state: unavailable, reason: NotOffered}` while `egress.ipv6.enabled` is off; the egress realization fills the
+ready case). On a site not switched, or for a request the site does not offer (IPv6-only, a source), the placement
+fails with `FamilyUnavailable` and a message naming the site and the missing piece, before anything is allocated.
+
+**Switching a site off.** Take the site out of `placement.ipFamiliesBySite` (or set it to `[4]`) and run the site
+job again: new IPv6 placements are refused. Existing placements keep their IPv6 subnet (a placement's families are
+fixed at creation) until they are deleted; a converted cluster stays dual-stack.
 
 ## Translation (`translation`)
 
@@ -261,6 +318,12 @@ two resets per gateway session, one job at a time. Later runs change nothing. Do
 away, which resets the sessions as many times again. Emptying the pools removes the IPv6 loopback and ICMP source
 addresses (each node remembers the pools of its last run until a run without them removed their addresses); the
 IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
+
+- **`gateway.icmp6RateLimitMs`** (default 0): milliseconds between the ICMPv6 error messages a gateway namespace
+  sends to one destination; 0 means no per-destination limit (the kernel's global limit still applies). While the fabric offers no IPv6 internet access, a site's off-network IPv6 traffic ends
+  at the gateway VRF's unreachable default and is answered with "destination unreachable"; the kernel's default of
+  one message per second per destination (even one every 20 ms) leaves a guest connecting to a name with many
+  addresses waiting a full retransmit for the answers that were limited. Empty keeps the kernel default.
 
 ## Attachment circuits
 

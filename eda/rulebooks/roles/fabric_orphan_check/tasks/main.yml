@@ -59,18 +59,23 @@
   vars:
     fab_check: {action: orphan-report, crs: "{{ foc_crs }}", ledgers: "{{ foc_ledgers }}", sites: "{{ foc_sites }}", nodes: "{{ foc_nodes }}"}
 
+# the report's findings, and the nodes' IPv6 leftovers (nodes.yml: compared on the node against its own VRF devices)
+- name: Collect the findings
+  ansible.builtin.set_fact:
+    foc_findings: "{{ fab_check_result.findings + (foc_nodes | map(attribute='ipv6Orphans') | flatten) }}"
+
 - name: Report
   ansible.builtin.debug:
     msg: >-
-      {{ ['fabric orphan check: ' ~ (fab_check_result.findings | length) ~ ' finding(s); ' ~ (fab_check_result.counts | to_json)
+      {{ ['fabric orphan check: ' ~ (foc_findings | length) ~ ' finding(s); ' ~ (fab_check_result.counts | to_json)
           ~ ('; ' ~ (foc_skipped | length) ~ ' site(s) not checked' if foc_skipped | length > 0 else '')]
-         + fab_check_result.findings
+         + foc_findings
          + (foc_skipped | map('to_json') | map('regex_replace', '^', 'not checked: ') | list) }}
 
 - name: Record the result for the job
   ansible.builtin.set_stats:
     data:
-      fabric_orphan_findings: "{{ fab_check_result.findings }}"
+      fabric_orphan_findings: "{{ foc_findings }}"
       fabric_orphan_sites_not_checked: "{{ foc_skipped }}"
 
 - name: Warn about sites not checked
@@ -80,5 +85,5 @@
 
 - name: Fail on findings
   ansible.builtin.fail:
-    msg: "fabric orphan check: {{ fab_check_result.findings | length }} finding(s): {{ fab_check_result.findings | join('; ') }}"
-  when: fab_check_result.findings | length > 0
+    msg: "fabric orphan check: {{ foc_findings | length }} finding(s): {{ foc_findings | join('; ') }}"
+  when: foc_findings | length > 0

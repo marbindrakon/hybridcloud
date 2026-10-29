@@ -293,9 +293,24 @@ spec:
 - **The guest's IPv6 link-local address must be the EUI-64 one** (derived from the MAC address). The network drops
   DHCPv6 and neighbour discovery from any other link-local address, so a guest that uses stable-privacy or random
   interface identifiers gets no IPv6 address. Some images do that by default (RHEL with NetworkManager, Windows).
-- Always give cloud-init `networkData` with `dhcp6: true` (without it, cloud-init may leave IPv6 off). Match the
-  interface by its MAC address or its exact name: a name pattern such as `en*` is ignored by some renderers. On
-  images whose NetworkManager defaults to stable privacy, switch the profile to EUI-64 at first boot:
+- Always give cloud-init `networkData` with `dhcp6: true` (without it, cloud-init may leave IPv6 off):
+  ```yaml
+  version: 2
+  ethernets:
+    primary:
+      match: {macaddress: "0a:58:0a:6e:09:04"}   # the VM's MAC address, or the exact name: {name: eth0}
+      dhcp4: true                                 # false on an IPv6-only placement
+      dhcp6: true
+  ```
+  Name the interface by its MAC address or its exact name, never by a pattern such as `en*`: on RHEL images
+  cloud-init writes sysconfig profiles, and a profile matched by a pattern binds to no device, so NetworkManager's
+  own default profile takes the interface with a stable-privacy link-local address and the guest gets no IPv6
+  address (Fedora's NetworkManager renderer takes the pattern). The placement page offers a snippet of this form,
+  built from the placement's status.
+- **RHEL images:** also switch the interface's profile to EUI-64 at first boot. NetworkManager's default profile
+  may take the interface whatever `networkData` says, and a `NetworkManager.conf` default for `ipv6.addr-gen-mode`
+  is not enough on these images; the profile itself has to change. The DHCPv6 lease arrives as soon as the profile
+  comes up again, and the setting stays across reboots:
   ```yaml
   #cloud-config
   runcmd:

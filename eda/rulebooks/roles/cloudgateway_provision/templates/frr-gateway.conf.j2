@@ -52,12 +52,20 @@ bgp community-list standard GW-ORIG seq 5 permit {{ _asn }}:{{ fab_real.gatewayC
 ! the site; any other prefix of that family is refused. Prefix lists only: FRR 8.5 never matches `match evpn
 ! route-type prefix` on routes it receives, and a prefix-list match skips routes that carry no IP prefix of its
 ! family, so the final permit keeps the site's other routes (inclusive multicast, MAC-only MAC/IP routes, the other
-! family) flowing through the gateway's route reflection
+! family) flowing through the gateway's route reflection.
+! An entry's sequence number is its prefix's own (the first 8 hex digits of its SHA-256, kept inside 10..4000000000;
+! a collision takes the next free number, in prefix order), so a placement added or removed elsewhere leaves the
+! other entries as they are: a reload adds or deletes one line instead of renumbering the list (which would
+! delete and re-add every entry and could flap the other tenants' routes)
 {% endif %}
 {% if _sif.ipv4 | default(false) | bool %}
-{% set _p4 = cg_vrfs | map(attribute='prefixes4') | map('default', []) | sum(start=[]) | unique | list %}
+{% set _p4 = cg_vrfs | map(attribute='prefixes4') | map('default', []) | sum(start=[]) | unique | sort %}
+{% set _used4 = [] %}
 {% for p in _p4 %}
-ip prefix-list SITE-V4 seq {{ loop.index * 5 }} permit {{ p }} le 32
+{% set _s = namespace(seq=((p | hash('sha256'))[:8] | int(base=16)) % 3999999991 + 10) %}
+{% for _ in _p4 if _s.seq in _used4 %}{% set _s.seq = _s.seq + 1 %}{% endfor %}
+{% set _ = _used4.append(_s.seq) %}
+ip prefix-list SITE-V4 seq {{ _s.seq }} permit {{ p }} le 32
 {% else %}
 ip prefix-list SITE-V4 seq 5 deny 0.0.0.0/0 le 32
 {% endfor %}
@@ -65,9 +73,13 @@ ip prefix-list ANY-V4 seq 5 permit 0.0.0.0/0 le 32
 !
 {% endif %}
 {% if _sif.ipv6 | default(true) | bool %}
-{% set _p6 = cg_vrfs | map(attribute='prefixes6') | map('default', []) | sum(start=[]) | unique | list %}
+{% set _p6 = cg_vrfs | map(attribute='prefixes6') | map('default', []) | sum(start=[]) | unique | sort %}
+{% set _used6 = [] %}
 {% for p in _p6 %}
-ipv6 prefix-list SITE-V6 seq {{ loop.index * 5 }} permit {{ p }} le 128
+{% set _s = namespace(seq=((p | hash('sha256'))[:8] | int(base=16)) % 3999999991 + 10) %}
+{% for _ in _p6 if _s.seq in _used6 %}{% set _s.seq = _s.seq + 1 %}{% endfor %}
+{% set _ = _used6.append(_s.seq) %}
+ipv6 prefix-list SITE-V6 seq {{ _s.seq }} permit {{ p }} le 128
 {% else %}
 ipv6 prefix-list SITE-V6 seq 5 deny ::/0 le 128
 {% endfor %}
@@ -204,6 +216,13 @@ router bgp {{ _asn }} vrf {{ v.vrf }}
 {# the IPv6 loopback is the next hop: FRR installs no labelled IPv6 route over an IPv4 next hop. The address family
    gets its own label, the same RD and the same route target as IPv4 #}
  address-family ipv6 unicast
+{% if not (_egress6.enabled | default(false) | bool) %}
+{#- while the fabric offers no IPv6 internet, the gateway itself announces ::/0 to the site (Type-5, GW-T5), backed by
+    the kernel's unreachable default in the VRF table: the site forwards off-network IPv6 here and gets an ICMPv6
+    unreachable at once instead of dropping it silently. With egress.ipv6.enabled the egress VRF's ::/0 arrives over
+    the VPN and this local route must not shadow it #}
+  network ::/0
+{% endif %}
   label vpn export auto
   rd vpn export {{ _rd }}
   rt vpn both {{ _asn }}:{{ v.vpnTarget }}
