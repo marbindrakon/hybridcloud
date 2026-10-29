@@ -254,7 +254,7 @@ class Registry(unittest.TestCase):
         for reason, entry in R.REASONS.items():
             with self.subTest(reason=reason):
                 self.assertIn(entry["actor"], ("A", "T", "P"))
-                self.assertIn(entry["class"], (R.READY, R.PROGRESS, R.WAITING, R.FAILED, R.BLOCKED))
+                self.assertIn(entry["class"], (R.READY, R.PROGRESS, R.WAITING, R.FAILED, R.BLOCKED, R.PAUSED))
                 self.assertLessEqual(len(entry["summary"]), S.SUMMARY_MAX)
                 self.assertIsNone(S.BANNED_SUMMARY.search(entry["summary"]), entry["summary"])
         for phase, text in R.PHASE_SUMMARIES.items():

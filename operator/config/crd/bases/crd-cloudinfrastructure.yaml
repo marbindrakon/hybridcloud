@@ -71,6 +71,12 @@ spec:
                   type: string
                   maxLength: 128
                   description: Human-readable site name shown in consoles.
+                paused:
+                  type: boolean
+                  description: >-
+                    When true the platform stops probing and realizing this site. Environments and placements
+                    on the site keep their last realized state and report it as held; nothing is removed.
+                    Set it for maintenance or while the site is powered off; clear it to resume.
                 location:
                   type: string
                   maxLength: 128
@@ -289,7 +295,7 @@ spec:
                   x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
-                  description: Lifecycle status (reconciling, ready, failed)
+                  description: Lifecycle status (reconciling, ready, failed, paused)
                 message:
                   description: >-
                     What happened last, in plain words. Read it when the object is not ready.

@@ -637,6 +637,8 @@
     "egressInternetHelp": "Accès Internet sortant par la plateforme : la plateforme annonce une route par défaut dans le réseau. L'IPv4 sort avec des adresses source de la plateforme ; l'IPv6 issu de l'espace de la plateforme sort inchangé à travers un filtre qui n'admet que les réponses aux connexions ouvertes de l'intérieur ; vos propres préfixes IPv6 n'ont pas d'accès Internet. Les plages privées de la plateforme ne sont pas joignables ainsi. Laissez-le désactivé quand la route par défaut vient de votre propre routeur de bordure. Modifiable à tout moment.",
     "externalEvpn": "EVPN-VXLAN",
     "externalEvpnHelp": "Les VTEP du site parlent EVPN-VXLAN à la passerelle. L'opérateur du site les gère ; la plateforme rattache seulement le site par une Cloud Gateway.",
+    "sitePaused": "En pause",
+    "sitePausedHelp": "En pause, la plateforme ne vérifie ni ne modifie rien sur ce site. Les environnements et placements qui s'y trouvent gardent leur dernier état et s'affichent comme retenus ; rien n'est supprimé. À utiliser pour une maintenance ou quand le site est éteint ; décochez pour reprendre.",
     "fabricBgpPasswordHelp": "Chemin KV Vault du mot de passe TCP MD5 (clé password) des sessions entre les VTEP des sites et leurs passerelles. Sans lui, les sessions n'ont pas de mot de passe. Une Cloud Gateway peut le remplacer.",
     "fabricCredentialsHelp": "Chemin KV Vault d'un kubeconfig (clé kubeconfig) autorisé à gérer les objets réseau de la plateforme sur le cluster. Par défaut : l'identifiant du site.",
     "fabricCredentialsVaultPath": "Identifiant fabric (chemin Vault)",
@@ -1095,7 +1097,8 @@
     "Ready": "Prêt",
     "Degraded": "Dégradé",
     "Failed": "Échec",
-    "Deleting": "Suppression"
+    "Deleting": "Suppression",
+    "Paused": "En pause"
   },
   "attach": {
     "title": "Attacher un réseau",

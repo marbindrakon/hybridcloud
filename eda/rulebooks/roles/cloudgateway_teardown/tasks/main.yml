@@ -78,6 +78,15 @@
         ci_ref_name: "{{ cg_site_name }}"
         ci_ref_namespace: "{{ fab_namespace }}"
 
+    - name: Hold the deletion while the site is paused
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_paused_hold.yml"
+      vars:
+        sph_plural: cloudgateways
+        sph_name: "{{ fab_name }}"
+        sph_namespace: "{{ fab_namespace }}"
+        sph_site: "{{ cg_site_name }}"
+      when: ci_paused | default(false) | bool
+
     - name: The site side ({{ ci_type }})
       ansible.builtin.include_tasks: "site_{{ ci_type }}_down.yml"
       when: ci_found and ci_type in ['openshift', 'openstack', 'aws', 'gcp']

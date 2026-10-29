@@ -20,7 +20,7 @@ except ImportError:  # plain copy next to this file (CronJob, scripts)
     import shc_status_reasons as _reasons  # type: ignore
 
 LEGACY_TYPES = ("Running", "Successful", "Failure")
-PHASES = ("Waiting", "Creating", "Updating", "Ready", "Degraded", "Failed", "Deleting")
+PHASES = ("Waiting", "Creating", "Updating", "Ready", "Degraded", "Failed", "Deleting", "Paused")
 SUMMARY_MAX = 140
 DEFAULT_GIVE_UP_ATTEMPTS = 10
 
@@ -35,11 +35,12 @@ _LEGACY_READY = {
     "failed": ("False", "Failed"),
     "pending": ("False", "Waiting"),
     "reconciling": ("False", "InProgress"),
+    "paused": ("False", "Paused"),
 }
 
 # Job status recorded in status.edaJobs per action.
 _JOB_STATUS = {"ready": "success", "success": "success", "failed": "failed",
-               "reconciling": "running", "pending": "waiting"}
+               "reconciling": "running", "pending": "waiting", "paused": "success"}
 
 
 def utcnow():
@@ -264,6 +265,8 @@ def derive_phase(obj, conditions=None):
         return "Ready"
     legacy = str(status.get("status") or "").lower()
     rclass = _reasons.reason_class(ready_cond.get("reason")) if ready_cond is not None else None
+    if legacy == "paused" or rclass == _reasons.PAUSED:
+        return "Paused"
     if legacy == "failed" or rclass in (_reasons.FAILED, _reasons.BLOCKED):
         return "Failed"
     if legacy == "pending" or rclass == _reasons.WAITING:
@@ -282,6 +285,7 @@ _PHASE_CLASSES = {
     "Creating": (_reasons.PROGRESS,),
     "Updating": (_reasons.PROGRESS,),
     "Deleting": (_reasons.PROGRESS, _reasons.BLOCKED, _reasons.FAILED, _reasons.WAITING),
+    "Paused": (_reasons.PAUSED,),
 }
 
 

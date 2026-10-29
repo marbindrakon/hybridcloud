@@ -637,6 +637,8 @@
     "egressInternetHelp": "Outbound internet access through the platform: the platform advertises a default route into the network. IPv4 leaves with platform source addresses; IPv6 from the platform's space leaves unchanged through a filter that admits only replies to connections opened from inside; your own IPv6 prefixes have no internet access. The platform's private ranges are not reachable this way. Leave it off when the default route comes from your own edge router. Can be changed at any time.",
     "externalEvpn": "EVPN-VXLAN",
     "externalEvpnHelp": "The site's VTEPs speak EVPN-VXLAN to the gateway. The site's own operator runs them; the platform only attaches the site through a Cloud Gateway.",
+    "sitePaused": "Paused",
+    "sitePausedHelp": "While paused the platform neither checks nor changes anything on this site. Environments and placements on it keep their last state and show as held; nothing is removed. Use it for maintenance or while the site is powered off, and clear it to resume.",
     "fabricBgpPasswordHelp": "Vault KV path holding the TCP MD5 password (key password) of the sessions between the sites' VTEPs and their cloud gateways. Without it the sessions have no password. A Cloud Gateway can override it.",
     "fabricCredentialsHelp": "Vault KV path holding a kubeconfig (key kubeconfig) allowed to manage the platform's network objects on the cluster. Default: the site credential.",
     "fabricCredentialsVaultPath": "Fabric credential (Vault path)",
@@ -1095,7 +1097,8 @@
     "Ready": "Ready",
     "Degraded": "Degraded",
     "Failed": "Failed",
-    "Deleting": "Deleting"
+    "Deleting": "Deleting",
+    "Paused": "Paused"
   },
   "attach": {
     "title": "Attach network",

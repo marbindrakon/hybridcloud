@@ -268,6 +268,7 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         ],
       },
       { path: 'displayName', labelKey: 'fields.displayName', widget: 'text', omitWhenEmpty: true },
+      { path: 'paused', labelKey: 'fields.sitePaused', widget: 'boolean', helpKey: 'fields.sitePausedHelp', adminOnly: true },
       {
         path: 'credentialsRef',
         labelKey: 'fields.credentialsVaultPath',
