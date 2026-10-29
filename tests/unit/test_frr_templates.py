@@ -113,7 +113,8 @@ def gw_vars(v6=False, families=(4,), egress6=False, v4filter=False, password="",
     fam = list(families)
     vrfs = [{"placement": "entity-acme/core-site1", "vrf": "t51000", "vni": 51000, "vpnTarget": 10000, "mtu": 9000,
              "families": fam, "prefixes4": ["10.60.1.0/24"],
-             "prefixes6": ["2001:db8:100:1::/64"] if 6 in fam else []},
+             "prefixes6": ["2001:db8:100:1::/64"] if 6 in fam else [],
+             "egress6": bool(egress6 and 6 in fam), "covering6": []},
             {"placement": "entity-acme/batch-site1", "vrf": "t51003", "vni": 51003, "vpnTarget": 10001, "mtu": 9000,
              "families": [4], "prefixes4": ["10.61.1.0/24"], "prefixes6": []}]
     return {"fab_name": "site1", "cg_site_name": "site1", "bgw_node": {"name": "bgw-1"},
@@ -468,8 +469,19 @@ class SiteDefaultWithoutEgress(unittest.TestCase):
         self.assertNotIn("network 0.0.0.0/0", new)
 
     def test_no_local_default_once_the_egress_offers_ipv6(self):
-        new = render(GW, gw_vars(v6=True, families=(4, 6), egress6=True))
+        v = gw_vars(v6=True, families=(4, 6), egress6=True)
+        v["cg_vrfs"][0]["covering6"] = ["2001:db8:100::/56", "2001:db8:4005::/48"]
+        new = render(GW, v)
         self.assertNotIn("network ::/0", new)
+        # the covering routes (the network's own space, the platform's routed space) in the VRF's IPv6 family
+        self.assertIn(" address-family ipv6 unicast\n  network 2001:db8:100::/56\n  network 2001:db8:4005::/48\n", new)
+
+    def test_local_default_stays_for_a_network_without_ipv6_egress(self):
+        # the fabric offers IPv6 egress, but this network has none (its VRF entry says so): the local ::/0 stays
+        v = gw_vars(v6=True, families=(4, 6), egress6=True)
+        v["cg_vrfs"][0].update({"egress6": False, "covering6": ["2001:db8:100::/56"]})
+        new = render(GW, v)
+        self.assertIn(" address-family ipv6 unicast\n  network ::/0\n  network 2001:db8:100::/56\n", new)
 
     def test_no_local_default_in_an_ipv4_only_vrf(self):
         new = render(GW, gw_vars(v6=True, families=(4,)))

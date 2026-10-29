@@ -71,7 +71,9 @@
   ansible.builtin.copy:
     dest: /etc/shc-fabric/root.json
     content: >
-      {{ hf_root | combine({'egress': hf_node_egress} if hf_node_egress | length > 0 else {})
+      {{ hf_root | combine({'egress': (hf_node_egress | combine({'ipv6': hf_node_egress.ipv6 | combine({'icmp6': _hf_icmp6})})
+                                        if hf_node_egress.ipv6 is defined else hf_node_egress)}
+                            if hf_node_egress | length > 0 else {})
          | combine({'attachments': hf_node_attach} if hf_node_attach | length > 0 else {})
          | combine({'loopback6': hf_pe.loopback6 | default(''), 'icmp6': _hf_icmp6,
                     'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
@@ -170,6 +172,54 @@
     - _hf_frrconf is changed or _hf_daemons is changed
   delegate_to: "{{ bgw_node.name }}"
 
+# the fail-closed rule of the IPv6 egress (after the configuration reload: the filter table is loaded by the apply
+# above and the sessions are in the configuration now): a timer unit that shuts the upstream sessions whenever the
+# filter table is missing, and opens them again when it is back
+- name: "{{ bgw_node.name }}: install the IPv6 egress guard"
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../common/files/bgw/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode }}"
+    owner: root
+    group: root
+  loop:
+    - {src: shc-egress6-guard, dest: /usr/local/sbin/shc-egress6-guard, mode: "0755"}
+    - {src: shc-egress6-guard.service, dest: /etc/systemd/system/shc-egress6-guard.service, mode: "0644"}
+    - {src: shc-egress6-guard.timer, dest: /etc/systemd/system/shc-egress6-guard.timer, mode: "0644"}
+  loop_control:
+    label: "{{ item.dest }}"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_guard_files
+  when: hf_node_egress.ipv6 is defined
+
+- name: "{{ bgw_node.name }}: run the IPv6 egress guard on its timer"
+  ansible.builtin.systemd:
+    name: shc-egress6-guard.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ _hf_guard_files is changed }}"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_guard_unit
+  when: hf_node_egress.ipv6 is defined
+
+- name: "{{ bgw_node.name }}: no IPv6 egress guard without IPv6 egress"
+  ansible.builtin.shell: |
+    changed=no
+    if systemctl -q is-enabled shc-egress6-guard.timer 2>/dev/null || systemctl -q is-active shc-egress6-guard.timer 2>/dev/null; then
+      systemctl disable --now shc-egress6-guard.timer; changed=yes
+    fi
+    for f in /etc/systemd/system/shc-egress6-guard.timer /etc/systemd/system/shc-egress6-guard.service /usr/local/sbin/shc-egress6-guard /run/shc-egress6-guard.shut; do
+      [ -e "$f" ] && { rm -f "$f"; changed=yes; }
+    done
+    [ "$changed" = no ] || systemctl daemon-reload
+    echo "changed=$changed"
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_guard_gone
+  changed_when: "'changed=yes' in _hf_guard_gone.stdout"
+  when: hf_node_egress.ipv6 is not defined
+
 - name: "{{ bgw_node.name }}: wait for BGP and IS-IS"
   ansible.builtin.shell:
     cmd: |
@@ -196,6 +246,63 @@
       ip route show vrf {{ hf_node_egress.vrf }} | grep -Eq '^{{ c }} (nhid [0-9]+ )?via {{ n.xeIp }} '
       {% endfor %}
       {% endfor %}
+      {% if hf_node_egress.ipv6 is defined %}
+      # IPv6 egress: the hand-off address is on egress0 and past duplicate address detection, egress0's IPv6 MTU is the
+      # WAN MTU, the filter table is loaded (fail closed), the egress VRF's BGP instance knows every upstream, and while
+      # the egress VRF holds the default route from an upstream every network VRF with IPv6 egress holds it too (over
+      # its veth). The upstream sessions' states are reported, not required (the upstream decides when they come up).
+      # Prints egress6=<json> for the node record.
+      python3 - <<'PY'
+      import json, subprocess, sys
+
+
+      def run(cmd):
+          p = subprocess.run(cmd, capture_output=True, text=True)
+          return p.stdout if p.returncode == 0 else ""
+
+
+      def main(run):
+          ev, addr, mtu = {{ hf_node_egress.vrf | to_json }}, {{ hf_node_egress.ipv6.address | to_json }}, {{ hf_node_egress.ipv6.wanMtu | int }}
+          ups = {{ hf_node_egress.ipv6.upstream | to_json }}
+          nets = {{ hf_node_egress.networks | selectattr('ipv6', 'defined') | map(attribute='vrf') | list | to_json }}
+          errors = []
+          ip, plen = addr.split("/")
+          have = [a for l in json.loads(run(["ip", "-j", "-6", "addr", "show", "dev", "egress0"]) or "[]")
+                  for a in l.get("addr_info", []) if a.get("local", "").lower() == ip.lower()]
+          if not have:
+              errors.append("egress0 lacks %s" % addr)
+          elif have[0].get("tentative"):
+              errors.append("egress0: %s is still tentative" % addr)
+          if run(["sysctl", "-n", "net/ipv6/conf/egress0/mtu"]).strip() != str(mtu):
+              errors.append("egress0 IPv6 MTU is not %d" % mtu)
+          table = subprocess.run(["nft", "list", "table", "inet", "shc_egress6"], capture_output=True).returncode == 0
+          if not table:
+              errors.append("the filter table inet shc_egress6 is not loaded")
+          peers = json.loads(run(["vtysh", "-c", "show bgp vrf %s ipv6 unicast summary json" % ev]) or "{}").get("peers", {})
+          sessions = []
+          for u in ups:
+              p = peers.get(u["address"])
+              if p is None:
+                  errors.append("upstream %s is not configured in the egress VRF's BGP instance" % u["address"])
+              sessions.append({"address": u["address"], "asn": u["asn"], "state": (p or {}).get("state", "Missing")})
+          default = bool(json.loads(run(["vtysh", "-c", "show ipv6 route vrf %s ::/0 json" % ev]) or "{}").get("::/0"))
+          if default:
+              for v in nets:
+                  if not json.loads(run(["vtysh", "-c", "show ipv6 route vrf %s ::/0 json" % v]) or "{}").get("::/0"):
+                      errors.append("network VRF %s lacks the default route from the egress VRF" % v)
+          up = [s for s in sessions if s["state"] == "Established"]
+          healthy = bool(table and default and up and not errors)
+          for e in errors:
+              print(e, file=sys.stderr)
+          print("egress6=" + json.dumps({"address": addr, "upstream": sessions, "default": default, "table": table,
+                                         "networks": len(nets), "healthy": healthy}, sort_keys=True))
+          return 1 if errors else 0
+
+
+      if __name__ == "__main__":
+          sys.exit(main(run))
+      PY
+      {% endif %}
       {% endif %}
       {% for v in hf_node_vrfs %}
       {% for c in v.circuits %}
@@ -432,12 +539,16 @@
 
 # ipv6Vpn: "" without the IPv6 core; else Established (every VPNv4 PE peer negotiated VPNv6), Partial, NoNeg (none
 # did yet) or NoPeers
+# egressIpv6 (with IPv6 egress): {address, upstream: [{address, asn, state}], default, table, networks, healthy}
 - name: "{{ bgw_node.name }}: record the node"
   vars:
     _v6: "{{ hf_pe.loopback6 | default('') | length > 0 }}"
     _ipv6vpn: >-
       {{ ((_hf_verify.stdout_lines | default([]) | select('match', '^ipv6Vpn=') | list | last | default('='))
           .split('=', 1) | last) if _v6 | bool else '' }}
+    _eg6: >-
+      {{ (((_hf_verify.stdout_lines | default([]) | select('match', '^egress6=') | list | last | default('egress6={}'))
+           .split('=', 1) | last) | from_json) if hf_node_egress.ipv6 is defined else {} }}
   ansible.builtin.set_fact:
     hf_node_results: >-
       {{ hf_node_results | default([]) + [{
@@ -449,9 +560,15 @@
                       ~ ((' ' ~ hf_pe.loopbackIp6 | default('')) if _v6 | bool else '')
                       ~ ((', internet egress via ' ~ hf_node_egress.address ~ ' for ' ~ hf_node_egress.networks | length
                           ~ ' network(s)') if hf_node_egress | length > 0 else '')
+                      ~ ((', IPv6 internet egress via ' ~ hf_node_egress.ipv6.address ~ ' (AS ' ~ hf_node_egress.ipv6.asn ~ ', '
+                          ~ (_eg6.upstream | default([]) | selectattr('state', 'equalto', 'Established') | list | length)
+                          ~ '/' ~ (_eg6.upstream | default([]) | length) ~ ' upstream sessions up) for '
+                          ~ (_eg6.networks | default(0)) ~ ' network(s)') if hf_node_egress.ipv6 is defined else '')
                       ~ ((', ' ~ hf_node_attach.circuits | length ~ ' attachment circuit(s)')
                          if hf_node_attach.circuits | default([]) | length > 0 else ''),
-           'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}] }}
+           'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
+           | combine({'egressIpv6': _eg6} if hf_node_egress.ipv6 is defined else {})] }}
     hf_changed_nodes: >-
       {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_vrfgone, _hf_unit,
-         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state] | select('changed') | list | length > 0 else []) }}
+         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state, _hf_guard_files, _hf_guard_unit, _hf_guard_gone]
+         | select('changed') | list | length > 0 else []) }}

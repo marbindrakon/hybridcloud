@@ -54,9 +54,10 @@
 
         def vrfs_and_ipv6(ns, run, icmp_pool):
             """The VRF devices of a namespace (root: the node itself) and the IPv6 pieces the apply script gives a VRF
-            that belong to none of them: an unreachable default (its metric, 4278198272) in a table no VRF device uses,
-            an address from the ICMPv6 source pool on a device that is no VRF. Both are the leftovers of a VRF that
-            went away behind the apply script, which removes them only with the VRF."""
+            that belong to none of them: an unreachable route (its metric, 4278198272: the default, or a covering
+            route of a gateway) in a table no VRF device uses, an address from the ICMPv6 source pool on a device that
+            is no VRF. Both are the leftovers of a VRF that went away behind the apply script, which removes them only
+            with the VRF."""
             x = [] if ns == "root" else ["ip", "netns", "exec", ns]
             links = loads(run(x + ["ip", "-j", "-d", "link", "show", "type", "vrf"]))
             names = {l["ifname"] for l in links}
@@ -64,8 +65,8 @@
             gone = []
             for r in loads(run(x + ["ip", "-j", "-6", "route", "show", "table", "all", "type", "unreachable"])):
                 table = str(r.get("table", "main"))
-                if r.get("dst") == "default" and r.get("metric") == 4278198272 and table not in tables:
-                    gone.append("IPv6 unreachable default in table %s (%s) belongs to no VRF" % (table, ns))
+                if r.get("metric") == 4278198272 and table not in tables:
+                    gone.append("IPv6 unreachable %s in table %s (%s) belongs to no VRF" % (r.get("dst"), table, ns))
             if icmp_pool:
                 pool = ipaddress.ip_network(icmp_pool, strict=False)
                 for l in loads(run(x + ["ip", "-j", "-6", "addr", "show"])):

@@ -61,7 +61,7 @@ ANSWERS = {
     "ip netns exec gw-atuin ip -j -6 addr show": json.dumps([addrs("lo", "::1", "2001:db8:4005:ffff::5")]),
     "ip -j -d link show type vrf": json.dumps([vrf("e10000", 110000), vrf("egress", 9000)]),
     "ip -j -6 route show table all type unreachable": json.dumps([
-        unreachable(110000), unreachable(9000), unreachable(metric=1024), unreachable(110001, dst="2001:db8:ffff::/48")]),
+        unreachable(110000), unreachable(9000), unreachable(metric=1024), unreachable(110001, dst="2001:db8:ffff::/48", metric=1024)]),
     "ip -j -6 addr show": json.dumps([addrs("lo", "::1", "2001:db8:4005:ffff::1"), addrs("e10000", "2001:db8:4005:1::1:1"),
                                       addrs("egress", "2001:db8:4005:1::1:1")]),
     "ip -j -d link show type vlan": json.dumps([{"ifname": "bond1.3001", "link": "bond1", "master": "e10001",
@@ -128,6 +128,14 @@ class NodeReadTest(unittest.TestCase):
                                  addrs("lo", "::1", "2001:db8:4005:ffff::2"), addrs("t51000", "2001:db8:4005:1::1:2")])})
         out, _ = execute(a)
         self.assertEqual(out["ipv6Orphans"], [])
+
+    def test_covering_route_of_a_gone_vrf_is_a_finding(self):
+        # a gateway's covering route (the apply script's metric, not the default) in a table no VRF uses
+        a = dict(ANSWERS, **{"ip netns exec gw-atuin ip -j -6 route show table all type unreachable": json.dumps([
+            unreachable(51002), unreachable(51002, dst="2001:db8:4005::/48"), unreachable(51004, dst="2001:db8:4005:4200::/56")])})
+        out, _ = execute(a)
+        self.assertIn("IPv6 unreachable 2001:db8:4005:4200::/56 in table 51004 (gw-atuin) belongs to no VRF", out["ipv6Orphans"])
+        self.assertIn("IPv6 unreachable 2001:db8:4005::/48 in table 51002 (gw-atuin) belongs to no VRF", out["ipv6Orphans"])
 
     def test_without_the_icmp_pool_no_address_read(self):
         v = {"foc_parents": [], "foc_pool": [1, 0], "fab_real": {"core": {"icmpSource6": ""}}}

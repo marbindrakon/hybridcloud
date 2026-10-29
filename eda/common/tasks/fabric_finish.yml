@@ -10,7 +10,8 @@
 # its dependents need not wait for it (fabric_usable in the roles).
 # Included from a role (paths are role_path-relative).
 # inputs: fab_kind, fab_name, fab_namespace, fab_generation, fab_outcome (ready|pending|failed), fab_reason,
-#         fab_message; optional fab_waiting_for (list), fab_status (extra status fields, merged in)
+#         fab_message; optional fab_waiting_for (list), fab_status (extra status fields, merged in), fab_conditions
+#         (further conditions, [{type, status, reason, message}], written next to Ready; merged by type)
 - name: "Set the {{ fab_kind }} status body"
   ansible.builtin.set_fact:
     _fab_now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
@@ -36,7 +37,7 @@
              'lastTransitionTime': _fab_now,
              'reason': fab_reason,
              'message': (fab_message | string)[:1000]
-           }]
+           }] + (fab_conditions | default([]))
          } | combine({'observedGeneration': fab_generation | int} if fab_generation is defined else {})
            | combine({'realized': true} if fab_outcome == 'ready' else ({'realized': false} if fab_outcome == 'failed' else {}))
            | combine(fab_status | default({})) }}

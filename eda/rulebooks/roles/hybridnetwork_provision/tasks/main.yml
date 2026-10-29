@@ -375,13 +375,20 @@
         _eg: "{{ ((hn_fabric.status | default({}, true)).realization | default({}, true)).egress | default({}, true) }}"
       ansible.builtin.set_fact:
         hn_egress_want: "{{ (fab_spec.egress | default({})).internet | default(false) | bool }}"
-        # IPv4 egress (source NAT) needs IPv4 space; IPv6 egress is not realized by the fabric yet
+        # IPv4 egress (source NAT) needs IPv4 space; IPv6 egress (routed) a platform block, and the fabric must offer
+        # it (egress.ipv6.enabled in its realization)
         hn_egress_want4: "{{ ((fab_spec.egress | default({})).internet | default(false) | bool) and hn_v4 | length > 0 }}"
+        hn_egress_want6: >-
+          {{ ((fab_spec.egress | default({})).internet | default(false) | bool) and hn_mode6 == 'Platform'
+             and (hn_block | default('', true)) | length > 0 }}
         # platform reach (annotation written by the platform's automation) needs the same root VRF and veth
         hn_platform_reach: >-
           {{ (fab_obj.metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach'] | default('[]', true) | from_json
              | length > 0 }}
         hn_egress_offered: "{{ _eg.enabled | default(false) | bool }}"
+        hn_egress_offered6: "{{ (_eg.ipv6 | default({}, true)).enabled | default(false) | bool }}"
+        hn_egress6_degraded: "{{ (_eg.ipv6 | default({}, true)).degraded | default(false) | bool }}"
+        hn_egress6_degraded_nodes: "{{ (_eg.ipv6 | default({}, true)).degradedNodes | default([], true) }}"
         hn_egress_carried: >-
           {{ (_eg.networks | default([], true) | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list
               + [{}]) | first }}
@@ -395,7 +402,7 @@
           fabric: "{{ hn_fabric_name }}"
           kind: egress
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
-      when: (hn_egress_want4 | bool or hn_platform_reach | bool) and hn_egress_offered | bool
+      when: (hn_egress_want4 | bool or hn_platform_reach | bool or (hn_egress_want6 | bool and hn_egress_offered6 | bool)) and hn_egress_offered | bool
 
     # off, and the fabric no longer carries it: the index goes back
     - name: Give the egress index back
@@ -407,18 +414,21 @@
           fabric: "{{ hn_fabric_name }}"
           kind: egress
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
-      when: not ((hn_egress_want4 | bool or hn_platform_reach | bool) and hn_egress_offered | bool) and hn_egress_carried | length == 0
+      when: >-
+        not ((hn_egress_want4 | bool or hn_platform_reach | bool or (hn_egress_want6 | bool and hn_egress_offered6 | bool))
+             and hn_egress_offered | bool)
+        and hn_egress_carried | length == 0
 
     - name: Set the egress state
       ansible.builtin.include_tasks: egress_status.yml
 
-    # the fabric adds or removes the network's egress and wakes it again when it did
+    # the fabric adds or removes the network's egress (either family) and wakes it again when it did
     - name: Wake the fabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ hn_fabric_name }}"}]
       when: >-
-        hn_egress.internet | default('') in ['pending', 'removing']
+        (hn_egress.families | default([]) | selectattr('state', 'in', ['pending', 'removing']) | list | length > 0)
         or ((hn_platform_reach | bool) != ((hn_egress_carried.platform | default([])) | length > 0))
 
     - name: Report the network ready

@@ -104,8 +104,11 @@ class StatusIPv6Test(unittest.TestCase):
     def test_task_shape(self):
         task = by_name(load(MAIN), TASK)
         self.assertEqual(task["when"], "np_prefixes_v6 | length > 0")
-        self.assertIn("NotOffered", task["ansible.builtin.set_fact"]["np_status"])
-        self.assertIn(MESSAGE, task["ansible.builtin.set_fact"]["np_status"])
+        # the internet row is built in the task's vars (NotOffered while the fabric offers no IPv6 egress, else the
+        # network's family-6 row); the set_fact only adds it to the status
+        self.assertIn("NotOffered", task["vars"]["_internet"])
+        self.assertIn(MESSAGE, task["vars"]["_internet"])
+        self.assertIn("_internet", task["ansible.builtin.set_fact"]["np_status"])
 
 
 if __name__ == "__main__":

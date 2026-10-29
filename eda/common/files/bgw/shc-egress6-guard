@@ -1,0 +1,40 @@
+#!/bin/bash
+# shc-egress6-guard: the fail-closed rule of the IPv6 internet egress on a border gateway node. The egress VRF's
+# sessions to the upstream routers may only carry traffic while the filter table inet shc_egress6 is loaded
+# (shc-fabric-apply root up loads it before FRR takes the configuration). Run by shc-egress6-guard.timer: when the
+# table is gone, the upstream neighbours the running configuration holds are shut (and remembered in the marker
+# file); when the table is back, the neighbours this guard shut are opened again. The fabric job's configuration
+# reload also opens them (the rendered configuration has no shutdown). Reads /etc/shc-fabric/root.json; nothing to do
+# without egress.ipv6, without FRR, or for a neighbour the running configuration does not hold.
+set -euo pipefail
+CONF=/etc/shc-fabric/root.json
+MARK=/run/shc-egress6-guard.shut
+[ -r "$CONF" ] || exit 0
+asn=$(jq -r '.egress.ipv6.asn // empty' "$CONF"); vrf=$(jq -r '.egress.vrf // empty' "$CONF")
+[ -n "$asn" ] && [ -n "$vrf" ] || exit 0
+systemctl -q is-active frr || exit 0
+mapfile -t ups < <(jq -r '.egress.ipv6.upstream[].address' "$CONF")
+[ "${#ups[@]}" -gt 0 ] || exit 0
+RUN=$(vtysh -c 'show running-config bgpd' 2>/dev/null) || exit 0
+
+present() { grep -qE "^ neighbor $1 remote-as " <<<"$RUN"; }   # the running configuration holds the neighbour
+shut() { grep -qE "^ neighbor $1 shutdown" <<<"$RUN"; }         # and has it shut
+
+if nft list table inet shc_egress6 >/dev/null 2>&1; then
+  [ -f "$MARK" ] || exit 0
+  for u in "${ups[@]}"; do
+    if grep -qx "$u" "$MARK" && present "$u" && shut "$u"; then
+      vtysh -c 'configure terminal' -c "router bgp $asn vrf $vrf" -c "no neighbor $u shutdown" >/dev/null
+      logger -t shc-egress6-guard "filter table inet shc_egress6 back: upstream $u opened again"
+    fi
+  done
+  rm -f "$MARK"
+  exit 0
+fi
+for u in "${ups[@]}"; do
+  present "$u" || continue
+  shut "$u" && continue
+  vtysh -c 'configure terminal' -c "router bgp $asn vrf $vrf" -c "neighbor $u shutdown" >/dev/null
+  echo "$u" >> "$MARK"
+  logger -t shc-egress6-guard "filter table inet shc_egress6 missing: upstream $u shut (fail closed)"
+done

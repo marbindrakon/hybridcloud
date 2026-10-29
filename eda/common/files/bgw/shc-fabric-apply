@@ -17,6 +17,14 @@
 #   into a network - except the platform's sources to a network's platform prefixes on platformPorts (and their
 #   replies, stateless: they may return through the other node), never source-NATed. Veths of networks no longer
 #   listed are removed. Routes are FRR's (staticd).
+#   egress.ipv6 {address, wanMtu, mss, routed, deny6, allow6, resolvers6, platDeny6, external6, icmp6} with per
+#   network ipv6 {block, prefixes, src6} (IPv6 internet egress; absent = none, the IPv6 side is removed): the node's
+#   address on egress0 and egress0's IPv6 MTU = wanMtu (the node sends Packet Too Big), and the nftables table inet
+#   shc_egress6 (IPv6 rules only; the IPv4 table above is untouched): the networks' conntrack zones, outbound only
+#   from a network's src6 (its platform block, the node's ICMPv6 source), not to platDeny6, allow6 and the resolvers
+#   on 53 before deny6, the TCP MSS clamp at mss, inbound only neighbour discovery, ICMPv6 errors and replies, and a
+#   routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR takes the
+#   sessions' configuration (fail closed; shc-egress6-guard keeps it so). The sessions themselves are FRR's.
 #   attachments {vlanPool: [start, end], parents: [interface], platformSources, circuits: [{circuit, device, parent,
 #   vlan, mtu, vrf, table, zone, address, link, nat}]} (attachment circuits; absent = none): per circuit a VLAN
 #   device <parent>.<vlan> in the network's root VRF e<n> (created when missing; the same VRF as the network's
@@ -45,7 +53,9 @@
 #   icmpSource6 (their pools: other addresses from them are removed, also when loopback6 is empty). With loopback6
 #   the namespace is an IPv6 router: forwarding, no router advertisements or SLAAC anywhere; the core leg (gateway
 #   core0, root core bridge) carries IPv6 link-local only, the gateway's site leg no IPv6 at all (the underlay stays
-#   IPv4); every VRF table gets an IPv6 unreachable default; the root's egress0 never takes RAs or SLAAC. The root
+#   IPv4); every VRF table gets an IPv6 unreachable default (a gateway VRF also an unreachable route per entry of
+#   its covering6 list: the prefixes the gateway announces into the site as covering routes); the root's egress0
+#   never takes RAs or SLAAC. The root
 #   leaves IPv6 out (prints "warning: ... IPv6 core not applied", IPv4 as always, exit 0) when a host interface
 #   outside the VRFs holds routes from router advertisements, and the same when an IPv6 step fails (a sysctl the
 #   host lacks, an address refused): the rest of IPv6 is left out, IPv4 goes on as without the keys. The
@@ -71,6 +81,8 @@ LOPOOL6=$(opt .loopbackPool6); ICMPPOOL6=$(opt .icmpSource6)
 ICMP6RATE=$(opt .icmp6RateLimitMs)
 # the pools a run without them still cleans up (line 1 loopbackPool6, line 2 icmpSource6)
 POOLS6=/etc/shc-fabric/$I.pools6; POOLS6_USED=""
+# the IPv6 egress was applied (egress6_up): a run without egress.ipv6 removes it
+MARK6=/etc/shc-fabric/$I.egress6
 if [ -z "$LOPOOL6$ICMPPOOL6" ] && [ -r "$POOLS6" ]; then
   { read -r LOPOOL6 || true; read -r ICMPPOOL6 || true; } < "$POOLS6"
   POOLS6_USED=1
@@ -168,12 +180,38 @@ vrf6() {
   [ -z "$ICMP6" ] || addr_ensure "$1" "$ICMP6" nodad
 }
 
-# <table>: a deleted VRF's IPv6 unreachable default (vrf6). The route is on lo, not on the VRF device, so it outlives
-# the device; a VRF created later on the same table would find it there. Only with the IPv6 keys (or remembered
-# pools): without them no IPv6 command runs at all, and the defaults a rollback leaves are inert.
+# <table>: a deleted VRF's IPv6 unreachable routes (vrf6, vrf6_covers). They are on lo, not on the VRF device, so they
+# outlive the device; a VRF created later on the same table would find them there. Only with the IPv6 keys (or
+# remembered pools): without them no IPv6 command runs at all, and the routes a rollback leaves are inert.
 vrf6_gone() {
+  local p
   [ -n "$V6KNOWN" ] && [ -n "$1" ] || return 0
-  $NSX ip -6 route del unreachable default metric 4278198272 table "$1" 2>/dev/null || true
+  for p in $(unreachables6 "$1") default; do
+    $NSX ip -6 route del unreachable "$p" metric 4278198272 table "$1" 2>/dev/null || true
+  done
+}
+
+# <table>: the unreachable routes other than the default that this script put into the table (its metric)
+unreachables6() {
+  $NSX ip -6 route show table "$1" type unreachable 2>/dev/null \
+    | awk '$1 == "unreachable" && $2 != "default" && / metric 4278198272( |$)/ {print $2}' || true
+}
+
+# <vrf> <table> [prefix...]: a gateway VRF's covering routes, unreachable at the same metric as the default: the
+# prefixes the gateway announces into the site (the network's own IPv6 space, the platform's routed space), so a
+# lookup for space the fabric does not route fails in the gateway. Others of this script's are removed.
+vrf6_covers() {
+  local t=$2 p have want=""
+  shift 2
+  [ -n "$V6" ] || return 0
+  for p in "$@"; do want="$want $(canon "$p") "; done
+  have=$(unreachables6 "$t")
+  for p in $have; do
+    case "$want" in *" $p "*) ;; *) $NSX ip -6 route del unreachable "$p" metric 4278198272 table "$t" ;; esac
+  done
+  for p in $want; do
+    echo "$have" | grep -qx "$p" || $NSX ip -6 route replace unreachable "$p" metric 4278198272 table "$t"
+  done
 }
 
 # a VRF's table (ip -d link), "" when the device is no VRF
@@ -232,6 +270,13 @@ egress_state() {
   ip -br -4 addr show 2>/dev/null | grep -E '^(egress0|x[eo][0-9]+)[@ ]' || true
   ip -4 neigh show proxy dev egress0 2>/dev/null || true
   nft -s list table ip shc_egress 2>/dev/null || true
+  # the IPv6 egress (only once it was applied, or is asked for: no IPv6 command otherwise): the hand-off address and
+  # IPv6 MTU, the filter table
+  if [ -e "$MARK6" ] || jq -e '.egress.ipv6' "$CONF" >/dev/null 2>&1; then
+    ip -br -6 addr show dev egress0 2>/dev/null | grep -v ' fe80:' || true
+    sysctl -n net/ipv6/conf/egress0/mtu 2>/dev/null || true
+    nft -s list table inet shc_egress6 2>/dev/null || true
+  fi
 }
 
 # the root VRFs e<digits> (networks' VRFs: egress and attachment circuits)
@@ -257,6 +302,8 @@ root_vrfs_prune() {
 
 egress_down() {
   local m x t
+  nft delete table inet shc_egress6 2>/dev/null || true
+  rm -f "$MARK6"
   nft delete table ip shc_egress 2>/dev/null || true
   for x in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
   m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty')
@@ -321,6 +368,107 @@ print("\n".join(out))
 PY
 }
 
+# the IPv6 filter table for the listed networks (replaced as a whole; IPV6-PLAN §3.4 rule order)
+egress6_nft() {
+  python3 - "$CONF" <<'PY'
+import json, sys
+e = json.load(open(sys.argv[1]))["egress"]
+v6 = e["ipv6"]
+nets = [n for n in e.get("networks") or [] if n.get("ipv6")]
+icmp = (v6.get("icmp6") or "").split("/")[0]
+mss = int(v6.get("mss") or 1360)
+def elements(xs):
+    return ", ".join(xs)
+def iset(name, xs, interval=True):
+    if xs:
+        out.append(f"  set {name} {{ type ipv6_addr;{' flags interval;' if interval else ''} elements = {{ {elements(xs)} }}; }}")
+out = ["table inet shc_egress6", "delete table inet shc_egress6", "table inet shc_egress6 {"]
+def tag(n):  # the network's VRF e<vpnTarget>: the set name's suffix
+    return n["vrf"][1:]
+for n in nets:
+    iset(f"src6_{tag(n)}", list(n["ipv6"].get("src6") or []) + ([icmp] if icmp else []))
+iset("plat_deny6", v6.get("platDeny6"))
+iset("allow6", v6.get("allow6"))
+iset("resolvers6", v6.get("resolvers6"), interval=False)
+iset("deny6", v6.get("deny6"))
+iset("routed6", v6.get("routed"))
+iset("external6", v6.get("external6"))
+zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
+for hook, by in (("prerouting", "iifname"), ("output", "oifname")):
+    out.append(f"  chain zone_{hook} {{")
+    out.append(f"    type filter hook {hook} priority raw; policy accept;")
+    if nets:
+        out.append(f"    meta nfproto ipv6 ct zone set {by} map {{ {zones} }}")
+    out.append("  }")
+# from a network toward the egress VRF (packets leave the network's VRF through its xe veth)
+out.append("  chain outbound {")
+out.append('    oifname "xe*" ip6 saddr { ::, fe80::/10 } accept comment "neighbour discovery and the veth sessions"')
+for n in nets:
+    out.append(f'    oifname "{n["xe"]}" ip6 saddr != @src6_{tag(n)} counter drop comment "source outside the network\'s platform space"')
+if v6.get("platDeny6"):
+    out.append('    oifname "xe*" ip6 daddr @plat_deny6 counter drop comment "private IPv4 through the translator"')
+if v6.get("allow6"):
+    out.append('    oifname "xe*" ip6 daddr @allow6 accept')
+if v6.get("resolvers6"):
+    out.append('    oifname "xe*" ip6 daddr @resolvers6 meta l4proto { tcp, udp } th dport 53 accept')
+if v6.get("deny6"):
+    out.append('    oifname "xe*" ip6 daddr @deny6 counter drop comment "destination not reachable through egress"')
+out.append("  }")
+for hook in ("forward", "output"):
+    out.append(f"  chain out_{hook} {{ type filter hook {hook} priority filter; policy accept; meta nfproto ipv6 jump outbound; }}")
+# TCP toward and from the internet never uses segments larger than the WAN carries
+out.append("  chain clamp {")
+for by, what in (("oifname", "out"), ("iifname", "in")):
+    out.append(f'    {by} "xe*" tcp flags & syn == syn tcp option maxseg size > {mss} counter tcp option maxseg size set {mss} comment "mss {what}"')
+out.append("  }")
+for hook in ("forward", "output"):
+    out.append(f"  chain clamp_{hook} {{ type filter hook {hook} priority mangle; policy accept; meta nfproto ipv6 jump clamp; }}")
+# into a network (packets arrive on its xe veth from the egress VRF)
+out.append("  chain inbound {")
+out.append("    type filter hook prerouting priority filter; policy accept;")
+out.append('    iifname "xe*" ip6 saddr fe80::/10 accept')
+out.append('    iifname "xe*" icmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept')
+out.append('    iifname "xe*" icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } counter accept comment "icmpv6 errors"')
+out.append('    iifname "xe*" meta nfproto ipv6 ct state established,related accept')
+out.append('    iifname "xe*" meta nfproto ipv6 counter drop comment "nothing unsolicited into a network"')
+out.append("  }")
+# from upstream: a source inside the platform's routed space is spoofed (external site prefixes excepted)
+out.append("  chain handoff {")
+out.append("    type filter hook prerouting priority filter; policy accept;")
+if v6.get("external6"):
+    out.append('    iifname "egress0" ip6 saddr @external6 accept')
+if v6.get("routed"):
+    out.append('    iifname "egress0" ip6 saddr @routed6 counter drop comment "routed source from upstream"')
+out.append("  }")
+out.append("}")
+print("\n".join(out))
+PY
+}
+
+# the IPv6 side of the hand-off: egress0's address and IPv6 MTU, then the filter table; a failure fails the apply
+# (the sessions' configuration must not follow a missing filter). The marker remembers that it was applied, so a run
+# without the keys removes it again (and a run that never had them issues no IPv6 command)
+egress6_up() {
+  local a6 mtu6 a
+  a6=$(canon "$(q .egress.ipv6.address)"); mtu6=$(q .egress.ipv6.wanMtu)
+  sysctl_ensure net/ipv6/conf/egress0/disable_ipv6=0 "net/ipv6/conf/egress0/mtu=$mtu6"
+  for a in $(stray egress0 ::/0 "$a6" 6); do ip addr del "$a" dev egress0; done
+  addr_ensure egress0 "$a6"
+  egress6_nft | nft -f -
+  [ -e "$MARK6" ] || : > "$MARK6"
+}
+
+# <link mtu>: no IPv6 egress any more: the table, the hand-off's global addresses and the IPv6 MTU go
+egress6_down() {
+  local a
+  nft delete table inet shc_egress6 2>/dev/null || true
+  if ip link show egress0 >/dev/null 2>&1; then
+    for a in $(stray egress0 ::/0 none 6); do ip addr del "$a" dev egress0; done
+    [ -z "$1" ] || sysctl_ensure "net/ipv6/conf/egress0/mtu=$1"
+  fi
+  rm -f "$MARK6"
+}
+
 egress_up() {
   local ev et par emtu eaddr want nat n v t z xe xo xea xoa a
   ev=$(q .egress.vrf); et=$(q .egress.table); par=$(q .egress.parent); emtu=$(q .egress.mtu); eaddr=$(q .egress.address)
@@ -357,6 +505,7 @@ egress_up() {
   done
   for a in $nat; do ip -4 neigh show proxy dev egress0 | grep -q "^$a " || ip neigh add proxy "$a" dev egress0; done
   egress_nft | nft -f -
+  if jq -e '.egress.ipv6' "$CONF" >/dev/null 2>&1; then egress6_up; elif [ -e "$MARK6" ]; then egress6_down "$emtu"; fi
 }
 
 # attachment circuits (root): the circuit devices present - VLAN devices in a root VRF, or on a listed parent with
@@ -539,7 +688,7 @@ gateway)
             net.ipv6.conf.all.autoconf net.ipv6.conf.default.autoconf 2>/dev/null || true
           $X sysctl -n net/ipv6/conf/core0/disable_ipv6 net/ipv6/conf/core0/accept_ra net/ipv6/conf/core0/autoconf \
             "net/ipv6/conf/$VDEV/disable_ipv6" 2>/dev/null || true
-          $X ip -6 route show table all | grep '^unreachable default' || true
+          $X ip -6 route show table all | grep '^unreachable ' || true
           $X sysctl -n net.ipv6.icmp.ratelimit 2>/dev/null || true
         fi
         if [ -n "$WG" ] && $X ip link show "$VDEV" >/dev/null 2>&1; then
@@ -618,6 +767,9 @@ gateway)
       $X ip link show "$VRF" >/dev/null 2>&1 || $X ip link add "$VRF" type vrf table "$VNI"
       $X ip link set "$VRF" up
       v6 "IPv6 in VRF $VRF" vrf6 "$VRF" "$VNI"
+      # shellcheck disable=SC2046
+      v6 "IPv6 covering routes in VRF $VRF" vrf6_covers "$VRF" "$VNI" \
+        $(jq -r --arg v "$VRF" '.vrfs[] | select(.name == $v) | .covering6 // [] | .[]' "$CONF")
       if ! $X ip link show "br$VNI" >/dev/null 2>&1; then
         $X ip link add "br$VNI" type bridge
         $X ip link set "br$VNI" addrgenmode none

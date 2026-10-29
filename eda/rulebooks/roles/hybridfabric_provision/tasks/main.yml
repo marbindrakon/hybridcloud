@@ -156,33 +156,69 @@
         kind: HybridNetwork
       register: _hf_networks
 
+    # the placements: their IPv6 prefixes are what the IPv6 egress announces for a network
+    - name: List the NetworkPlacements
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: NetworkPlacement
+      register: _hf_placements
+
     # platform reach (P8 §13): annotation shc.signal9.gg/platform-reach on a HybridNetwork (a JSON list of the
     # network's prefixes the platform's own sources must reach, e.g. a private cluster's API) is written by the
-    # platform's automation, never by tenants
+    # platform's automation, never by tenants.
+    # ipv4: the network has IPv4 address space (the IPv4 egress, source NAT, needs it). ipv6 (with egress.ipv6
+    # enabled): the network wants internet egress and holds a platform block (status.ipv6 mode Platform): its block
+    # and the IPv6 prefixes of its placements (status.subnets), the ones that are not being deleted
     - name: Set the networks with internet egress or platform reach
       vars:
         _alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
+        _v6on: "{{ (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool }}"
       ansible.builtin.set_fact:
         hf_egress_networks: >-
           {%- set out = [] -%}
           {%- for n in _hf_networks.resources | default([]) -%}
             {%- set owner = 'HybridNetwork/' ~ n.metadata.namespace ~ '/' ~ n.metadata.name -%}
+            {%- set st = n.status | default({}, true) -%}
             {%- set internet = ((n.spec | default({})).egress | default({})).internet | default(false) | bool -%}
             {%- set platform = ((n.metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach']
                                 | default('[]', true) | from_json) -%}
-            {%- if (n.status | default({}, true)).fabric | default('') == fab_name
+            {%- set has4 = ((((n.spec | default({})).prefixes | default([], true)) | reject('search', ':') | list | length > 0)
+                            or ((st.addressSpace | default([], true)) | selectattr('family', 'defined')
+                                | selectattr('family', 'equalto', 4) | list | length > 0)) -%}
+            {%- set block = ((st.ipv6 | default({}, true)).block | default({}, true)).prefix | default('', true) -%}
+            {%- set v6 = _v6on | bool and internet and (st.ipv6 | default({}, true)).mode | default('') == 'Platform'
+                         and block | length > 0 -%}
+            {%- if st.fabric | default('') == fab_name
                   and (internet or platform | length > 0)
                   and n.metadata.deletionTimestamp is not defined
                   and owner in (_alloc.egress | default({})) and owner in (_alloc.vpnTarget | default({})) -%}
+              {%- set p6 = [] -%}
+              {%- if v6 -%}
+                {%- for p in _hf_placements.resources | default([])
+                      if p.metadata.namespace == n.metadata.namespace
+                         and (p.spec | default({})).network | default('') == n.metadata.name
+                         and p.metadata.deletionTimestamp is not defined -%}
+                  {%- for s in (p.status | default({}, true)).subnets | default([], true) if (s.family | default(4) | int) == 6 -%}
+                    {%- set _ = p6.append(s.prefix) -%}
+                  {%- endfor -%}
+                {%- endfor -%}
+              {%- endif -%}
               {%- set _ = out.append({'network': n.metadata.namespace ~ '/' ~ n.metadata.name,
                                       'vpnTarget': _alloc.vpnTarget[owner] | int, 'index': _alloc.egress[owner] | int,
-                                      'internet': internet, 'platform': platform}) -%}
+                                      'internet': internet, 'ipv4': has4, 'platform': platform}
+                                     | combine({'ipv6': {'block': block, 'prefixes': p6 | unique | list}} if v6 else {})) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out if fab_real.egress.enabled | default(false) | bool else [] }}
         hf_egress_before: >-
           {{ ((fab_st.realization | default({}, true)).egress | default({}, true)).networks | default([], true)
              | map(attribute='network') | list }}
+        hf_egress6_before: >-
+          {{ ((fab_st.realization | default({}, true)).egress | default({}, true)).networks | default([], true)
+             | selectattr('ipv6', 'defined') | selectattr('ipv6', 'equalto', true) | map(attribute='network') | list }}
 
     - name: Plan the egress on the nodes
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
@@ -193,6 +229,8 @@
           nodes: "{{ fab_spec.borderGateway.nodes | map(attribute='name') | list }}"
           networks: "{{ hf_egress_networks }}"
           domainAsn: "{{ fab_spec.domainAsn }}"
+          core: "{{ fab_real.core | default({}) }}"
+          translation: "{{ fab_real.translation | default({}, true) }}"
 
     - name: Refuse an unusable egress plan
       ansible.builtin.set_fact:
@@ -269,14 +307,18 @@
                else [] }}
           platformSources: "{{ fab_real.egress.platformSources | default([], true) }}"
 
-    # the address families of each root VRF (its FRR VRF's unicast families): IPv4 only so far, the root VRFs carry
-    # no IPv6 routes until IPv6 egress and circuits exist
+    # the address families of each root VRF (its FRR VRF's unicast families): IPv4, and IPv6 for a network with IPv6
+    # egress (its default route into the VPN; circuits are IPv4 only)
     - name: Keep the attachment plan
       ansible.builtin.set_fact:
         hf_attach: >-
           {%- set vrfs = {} -%}
           {%- for node, vs in (fab_check_result.vrfs | default({})).items() -%}
-            {%- set _ = vrfs.update({node: vs | map('combine', {'families': [4]}) | list}) -%}
+            {%- set lst = [] -%}
+            {%- for v in vs -%}
+              {%- set _ = lst.append(v | combine({'families': [4, 6] if v.ipv6 is defined else [4]})) -%}
+            {%- endfor -%}
+            {%- set _ = vrfs.update({node: lst}) -%}
           {%- endfor -%}
           {{ fab_check_result | combine({'vrfs': vrfs}) }}
         hf_attach_restart: "{{ fab_real.attachments.maxPrefixRestart | default(2) }}"
@@ -312,9 +354,70 @@
           {%- set out = [] -%}
           {%- for k, v in hf_egress.networks | dictsort -%}
             {%- set _ = out.append({'network': k, 'vpnTarget': v.vpnTarget, 'sourceAddresses': v.sourceAddresses,
-                                    'internet': v.internet | default(true), 'platform': v.platform | default([])}) -%}
+                                    'internet': v.internet | default(true), 'platform': v.platform | default([]),
+                                    'ipv6': v.ipv6 | default(false), 'prefixes6': v.prefixes6 | default([]),
+                                    'primary': v.primary | default('')}) -%}
           {%- endfor -%}
           {{ out }}
+
+    # the IPv6 egress as the nodes report it (node_root.yml egressIpv6): per node the hand-off address, the upstream
+    # sessions and the default route; degraded while a node has no upstream session or no default (its networks'
+    # traffic takes the other node); degradedSince is kept across runs, and a node down for
+    # egress.ipv6.sessionDownAlertMinutes is reported as an event below
+    - name: Set the IPv6 egress status
+      vars:
+        _on: "{{ hf_egress.ipv6 | default(false) | bool }}"
+        _prev: "{{ (((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)) }}"
+        _nodes: >-
+          {%- set out = {} -%}
+          {%- for r in hf_node_results if r.egressIpv6 is defined -%}{%- set _ = out.update({r.name: r.egressIpv6}) -%}{%- endfor -%}
+          {{ out }}
+        _down: "{{ _nodes | dict2items | rejectattr('value.healthy', 'defined') | map(attribute='key') | list
+                   + (_nodes | dict2items | selectattr('value.healthy', 'defined') | rejectattr('value.healthy') | map(attribute='key') | list) }}"
+        _now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        _since: >-
+          {{ (_prev.degradedSince | default('', true) or _now) if (_down | length > 0 and _prev.degraded | default(false) | bool)
+             else (_now if _down | length > 0 else '') }}
+      ansible.builtin.set_fact:
+        hf_egress6_status: >-
+          {{ {'enabled': _on | bool, 'nodes': _nodes, 'degraded': _down | length > 0,
+              'degradedNodes': _down | sort, 'degradedSince': _since | trim} if _on | bool else {'enabled': false} }}
+        hf_egress6_alert: >-
+          {{ _on | bool and _down | length > 0 and (_since | trim) | length > 0
+             and (((_now | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - ((_since | trim) | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds()
+                  >= (fab_real.egress.ipv6.sessionDownAlertMinutes | default(5) | int) * 60) }}
+
+    - name: Report the IPv6 egress upstream outage as an event
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Event
+          metadata:
+            name: "{{ fab_name }}-ipv6-egress-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+            namespace: "{{ fab_namespace }}"
+          involvedObject:
+            apiVersion: hybridsovereign.redhat/v1alpha1
+            kind: HybridFabric
+            name: "{{ fab_name }}"
+            namespace: "{{ fab_namespace }}"
+            uid: "{{ fab_obj.metadata.uid }}"
+          type: Warning
+          reason: IPv6EgressUpstreamDown
+          message: >-
+            IPv6 internet egress: {{ hf_egress6_status.degradedNodes | join(', ') }} without an upstream session or
+            the default route since {{ hf_egress6_status.degradedSince }}; the networks' IPv6 internet traffic takes
+            the other node(s) meanwhile
+          source: {component: shc-hybridfabric}
+          reportingComponent: shc-hybridfabric
+          firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          count: 1
+      failed_when: false
+      when: hf_egress6_alert | bool
 
     # what tenants see of the fabric changed since the Entities were last told (status.realization.ipam.tenantOffer,
     # stored below; absent before the first run that stores it): its IPv6 offer, or its spec (who may use it). The
@@ -351,10 +454,24 @@
           Ledger fabric-ledger-{{ fab_name }}; root instance on {{ hf_node_results | map(attribute='name') | join(', ') }}
           ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }}){{
           ('; internet egress for ' ~ hf_egress.networks | length ~ ' network(s)') if fab_real.egress.enabled | default(false) | bool else '' }}{{
+          ('; IPv6 internet egress for ' ~ (hf_egress_status | selectattr('ipv6') | list | length) ~ ' network(s)'
+           ~ ((', degraded: ' ~ hf_egress6_status.degradedNodes | join(', ') ~ ' without upstream')
+              if hf_egress6_status.degraded | default(false) else ''))
+          if hf_egress6_status.enabled | default(false) else '' }}{{
           ('; ' ~ hf_attach.status | length ~ ' attachment circuit(s)' ~ ((', not realized: ' ~ hf_attach.skipped
              | map(attribute='circuit') | join(', ')) if hf_attach.skipped else ''))
           if fab_real.attachments.enabled | default(false) | bool else '' }}{{
           ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}
+        # the IPv6 egress condition (only with IPv6 egress): True while every node has an upstream session and the
+        # default route; Degraded otherwise (the networks' rows say the same)
+        fab_conditions: >-
+          {{ [{'type': 'IPv6EgressUpstream',
+               'status': 'False' if hf_egress6_status.degraded | default(false) else 'True',
+               'reason': 'Degraded' if hf_egress6_status.degraded | default(false) else 'Ready',
+               'message': (('no upstream session or default route on ' ~ hf_egress6_status.degradedNodes | join(', ')
+                            ~ ' since ' ~ hf_egress6_status.degradedSince) if hf_egress6_status.degraded | default(false)
+                           else 'every node has an upstream session and the default route')}]
+             if hf_egress6_status.enabled | default(false) else [] }}
         fab_status: >-
           {{ {'ledger': 'fabric-ledger-' ~ fab_name,
               'allocated': hf_ledger.allocated,
@@ -365,20 +482,46 @@
                               'ipv6Core': hf_pe.loopbackIp6 | default('') | length > 0,
                               'core': fab_real.core.loopbackPool ~ ' / ' ~ fab_real.core.linkSubnet,
                               'egress': {'enabled': fab_real.egress.enabled | default(false) | bool,
-                                         'networks': hf_egress_status},
+                                         'networks': hf_egress_status, 'ipv6': hf_egress6_status},
                               'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
                               'ipam': hf_ipam}} }}
 
-    # the networks this run added to or removed from the egress wait for it: wake them
+    # the networks this run added to or removed from the egress (or whose IPv6 egress came or went) wait for it: wake
+    # them
     - name: Wake the networks whose egress changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        _now6: "{{ hf_egress_status | selectattr('ipv6') | map(attribute='network') | list }}"
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for k in ((hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before))
+                        | union(_now6 | symmetric_difference(hf_egress6_before)) -%}
+            {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # a network's IPv6 egress came or went: its gateways stop or resume announcing their own default route
+    - name: List the CloudGateways when a network's IPv6 egress changed
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudGateway
+        namespace: "{{ fab_namespace }}"
+      register: _hf_gateways
+      when: (hf_egress_status | selectattr('ipv6') | map(attribute='network') | list) | symmetric_difference(hf_egress6_before) | length > 0
+
+    - name: Wake the gateways when a network's IPv6 egress changed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         nudge_crs: >-
           {%- set out = [] -%}
-          {%- for k in (hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before) -%}
-            {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
+          {%- for g in _hf_gateways.resources | default([]) if (g.spec.fabricRef | default({})).name | default('') == fab_name -%}
+            {%- set _ = out.append({'kind': 'CloudGateway', 'namespace': g.metadata.namespace, 'name': g.metadata.name}) -%}
           {%- endfor -%}
           {{ out }}
+      when: _hf_gateways is not skipped
 
     # a pool change (more blocks, a larger allowance, a shorter hold-down) may give a waiting network its block
     - name: Wake the networks waiting for platform address space

@@ -234,17 +234,40 @@
         kind: NetworkPlacement
       register: _cg_placements
 
+    # the placements' networks: a network's IPv6 prefixes are announced into the site as covering routes
+    - name: List the HybridNetworks
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: HybridNetwork
+      register: _cg_networks
+
     - name: Set the gateway's VRFs
+      vars:
+        _egress6: "{{ (fab_real.egress | default({}, true)).ipv6 | default({}, true) }}"
       ansible.builtin.set_fact:
         # a site behind a tunnel carries less than the fabric: its VRFs' bridge/VXLAN run at the site leg's MTU minus
         # VXLAN, so the gateway knows the real limit for traffic towards the site. Per VRF the placement's address
         # families and prefixes (status.subnets; a status from before per-family subnets: status.prefixes; none yet:
-        # IPv4): the families its FRR VRF carries and the prefixes the site may announce into it
+        # IPv4): the families its FRR VRF carries and the prefixes the site may announce into it. With IPv6: network
+        # (the placement's HybridNetwork), egress6 (the fabric realizes the network's IPv6 internet egress: the
+        # gateway then stops announcing its own default route) and covering6 (the network's IPv6 prefixes and the
+        # platform's routed space, announced into the site backed by unreachable routes; IPv6 egress on only)
         cg_vrfs: >-
           {%- set out = [] -%}
           {%- set vmtu = ([cg_fabric.spec.overlayMtu | int, (cg_instance.mtu | int) - 50] | min)
                 if ((fab_spec.transport | default('none')) == 'wireguard' and cg_instance.mtu is defined)
                 else (cg_fabric.spec.overlayMtu | int) -%}
+          {%- set eg = ((cg_fabric.status | default({}, true)).realization | default({}, true)).egress | default({}, true) -%}
+          {%- set v6nets = eg.networks | default([], true) | selectattr('ipv6', 'defined') | selectattr('ipv6', 'equalto', true)
+                           | map(attribute='network') | list -%}
+          {%- set routed = (_egress6.routedPrefixes | default([], true)) if (_egress6.enabled | default(false) | bool) else [] -%}
+          {%- set nets = {} -%}
+          {%- for n in _cg_networks.resources | default([]) -%}
+            {%- set _ = nets.update({n.metadata.namespace ~ '/' ~ n.metadata.name: n}) -%}
+          {%- endfor -%}
           {%- for p in _cg_placements.resources | default([]) -%}
             {%- set st = p.status | default({}, true) -%}
             {%- set r = st.realization | default({}, true) -%}
@@ -262,9 +285,13 @@
                 {%- endfor -%}
               {%- endif -%}
               {%- set fams = ([4] if p4 else []) + ([6] if p6 else []) -%}
-              {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name,
+              {%- set key = p.metadata.namespace ~ '/' ~ ((p.spec | default({})).network | default('')) -%}
+              {%- set n6 = ((nets.get(key, {}).status | default({}, true)).ipv6 | default({}, true)) -%}
+              {%- set cov = ((n6.prefixes | default([], true)) + routed) | unique | list if p6 else [] -%}
+              {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name, 'network': key,
                                       'vrf': 't' ~ r.l3Vni, 'vni': r.l3Vni | int, 'vpnTarget': r.vpnTarget | int,
-                                      'mtu': vmtu, 'families': fams or [4], 'prefixes4': p4, 'prefixes6': p6}) -%}
+                                      'mtu': vmtu, 'families': fams or [4], 'prefixes4': p4, 'prefixes6': p6,
+                                      'egress6': (key in v6nets) and (p6 | length > 0), 'covering6': cov}) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out | sort(attribute='vni') }}
@@ -274,7 +301,10 @@
       ansible.builtin.set_fact:
         cg_instance: >-
           {%- set out = [] -%}
-          {%- for v in cg_vrfs -%}{%- set _ = out.append({'name': v.vrf, 'vni': v.vni, 'mtu': v.mtu}) -%}{%- endfor -%}
+          {%- for v in cg_vrfs -%}
+            {%- set _ = out.append({'name': v.vrf, 'vni': v.vni, 'mtu': v.mtu}
+                                   | combine({'covering6': v.covering6} if v.covering6 | default([]) | length > 0 else {})) -%}
+          {%- endfor -%}
           {{ cg_instance | combine({'vrfs': out}) }}
 
     - name: Read the BGP session password
@@ -358,7 +388,7 @@
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name,
                                                    'vrfs': cg_vrfs | map('dict2items')
-                                                           | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6'])
+                                                           | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6', 'covering6'])
                                                            | map('items2dict') | list}}) }}
 
     # an aws site's routers got new keys: look again once they applied them, so the status shows their sessions

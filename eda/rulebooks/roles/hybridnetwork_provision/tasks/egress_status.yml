@@ -2,35 +2,54 @@
 # status.egress of the network, per family (status is merge-patched: a field left out keeps its old value, so
 # fields that don't apply are written as null).
 #   IPv4 (the network has IPv4 prefixes): source NAT on the fabric's egress: pending | ready | removing | unavailable
-#   IPv6: mode Platform = routed from the assigned block, not offered on this platform yet (NotOffered); mode Tenant
-#         = no internet access for tenant-provided prefixes (AddressChoice); mode None = no row
+#   IPv6: mode Platform = routed from the assigned block: pending | ready (reason Degraded while a node of the fabric
+#         has no upstream session) | removing, or unavailable while the fabric offers no IPv6 egress (NotOffered);
+#         mode Tenant = no internet access for tenant-provided prefixes (AddressChoice); mode None = no row
 #   internet (overall) = the IPv4 state when the network has IPv4, else the IPv6 state
 #   ipv4Translation: for a network without IPv4 that wants internet access (not offered yet)
-# Written while spec.egress.internet is on, or while the fabric still removes the IPv4 egress; {} otherwise.
-# Inputs: hn_v4, hn_mode6, hn_egress_want, hn_egress_offered, hn_egress_carried, hn_fabric_name.
+# Written while spec.egress.internet is on, or while the fabric still removes an egress; {} otherwise.
+# Inputs: hn_v4, hn_mode6, hn_egress_want, hn_egress_want6, hn_egress_offered, hn_egress_offered6, hn_egress_carried
+# (the fabric's entry for the network: ipv6 true while its IPv6 egress is realized), hn_egress6_degraded,
+# hn_egress6_degraded_nodes, hn_fabric_name.
 # Sets hn_egress, hn_egress_note.
 - name: Set the egress state per family
   vars:
     _v4: "{{ hn_v4 | length > 0 }}"
     _want: "{{ hn_egress_want | bool }}"
     _carried: "{{ hn_egress_carried | default({}, true) | length > 0 }}"
+    # the fabric's entry says which side it realizes: internet = the IPv4 default route and source NAT (false for a
+    # network without IPv4), ipv6 = the IPv6 egress
+    _carried4: "{{ _carried | bool and ((hn_egress_carried | default({}, true)).internet | default(true) | bool) }}"
+    _carried6: "{{ (hn_egress_carried | default({}, true)).ipv6 | default(false) | bool }}"
     _want4: "{{ _want | bool and _v4 | bool }}"
+    _want6: "{{ hn_egress_want6 | default(false) | bool }}"
     _state4: >-
       {{ 'unavailable' if (_want4 | bool and not hn_egress_offered | bool)
-         else ('ready' if (_want4 | bool and _carried | bool)
-         else ('pending' if _want4 | bool else ('removing' if _carried | bool else ''))) }}
+         else ('ready' if (_want4 | bool and _carried4 | bool)
+         else ('pending' if _want4 | bool else ('removing' if _carried4 | bool else ''))) }}
     _row4: >-
       {{ {} if _state4 | trim == ''
          else ({'family': 4, 'state': _state4 | trim, 'mode': 'SourceNAT'}
                | combine({'reason': 'NotOffered', 'message': 'internet access is not offered on this fabric'}
                          if _state4 | trim == 'unavailable' else {})) }}
+    _state6: >-
+      {{ '' if (hn_mode6 == 'None' or (not _want | bool and not _carried6 | bool))
+         else ('removing' if not _want | bool
+         else ('choice' if hn_mode6 != 'Platform'
+         else ('unavailable' if not hn_egress_offered6 | default(false) | bool
+         else ('ready' if _carried6 | bool else 'pending')))) }}
     _row6: >-
-      {{ {} if not _want | bool or hn_mode6 == 'None'
+      {{ {} if _state6 | trim == ''
+         else ({'family': 6, 'state': 'unavailable', 'reason': 'AddressChoice',
+                'message': 'IPv6 internet: not offered for tenant-provided prefixes'} if _state6 | trim == 'choice'
          else ({'family': 6, 'state': 'unavailable', 'mode': 'Routed', 'reason': 'NotOffered',
-                'message': 'IPv6 internet access is not offered on this fabric yet'}
-               if hn_mode6 == 'Platform'
-               else {'family': 6, 'state': 'unavailable', 'reason': 'AddressChoice',
-                     'message': 'IPv6 internet: not offered for tenant-provided prefixes'}) }}
+                'message': 'IPv6 internet access is not offered on this fabric yet'} if _state6 | trim == 'unavailable'
+         else ({'family': 6, 'state': _state6 | trim, 'mode': 'Routed'}
+               | combine({'reason': 'Degraded',
+                          'message': 'IPv6 internet works through one node of the fabric: '
+                                     ~ (hn_egress6_degraded_nodes | default([]) | join(', ')) ~ ' has no upstream session; '
+                                     ~ 'connections that only receive data may have reset'}
+                         if (_state6 | trim == 'ready' and hn_egress6_degraded | default(false) | bool) else {})))) }}
     # (a var can't hold null on every Ansible version: empty means "does not apply", written as null below)
     _translation: >-
       {{ {} if (_v4 | bool or not _want | bool)
@@ -55,4 +74,8 @@
           'pending': '; internet egress being added',
           'removing': '; internet egress being removed'}.get(_state4 | trim, '')
          ~ ('; IPv6 internet: not offered for tenant-provided prefixes' if _row6.reason | default('') == 'AddressChoice'
-            else ('; IPv6 internet not offered yet' if _row6 | length > 0 else '')) }}
+            else ('; IPv6 internet not offered yet' if _row6.reason | default('') == 'NotOffered'
+            else ('; IPv6 internet egress degraded' if _row6.reason | default('') == 'Degraded'
+            else {'ready': '; IPv6 internet egress',
+                  'pending': '; IPv6 internet egress being added',
+                  'removing': '; IPv6 internet egress being removed'}.get(_row6.state | default(''), '')))) }}
