@@ -87,6 +87,15 @@
             ci_ref_name: "{{ fab_st.site }}"
             ci_ref_namespace: "{{ fabric_platform_namespace }}"
 
+        - name: Hold the deletion while the site is paused
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_paused_hold.yml"
+          vars:
+            sph_plural: networkplacements
+            sph_name: "{{ fab_name }}"
+            sph_namespace: "{{ fab_namespace }}"
+            sph_site: "{{ fab_st.site }}"
+          when: ci_paused | default(false) | bool
+
         - name: The platform's realization parameters
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
           vars:

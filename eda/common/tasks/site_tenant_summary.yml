@@ -6,8 +6,8 @@
 # Input:  sts_sites  list of CloudInfrastructure objects (as read from the API)
 # Output: site_tenant_summaries  list of {name, displayName?, type, location?, region?, billable, state,
 #                                         capabilities, storageClasses?}, in the order of sts_sites
-#   state         Available when the last probe authenticated (status.capabilities.api), the site is not failed
-#                 and not being deleted (the rule of resolve_cloud_infrastructure.yml); else Unavailable
+#   state         Available when the last probe authenticated (status.capabilities.api), the site is not failed,
+#                 not paused and not being deleted (the rule of resolve_cloud_infrastructure.yml); else Unavailable
 #   capabilities  Virtualization (openshift site with OpenShift Virtualization), HybridNetworking (evpn), DNS (dns),
 #                 IPv6, IPv6Only, IPv6NetworkSource, IPv6ProviderSource, IPv6Translation (the ipv6* capabilities)
 #   location      spec.location, in words, for every site type when the platform set it (a tenant view shows it,
@@ -27,7 +27,8 @@
         {%- set type = spec.type | default('external', true) -%}
         {%- set regional = type in ['aws', 'gcp'] -%}
         {%- set usable = (caps.api | default(false) | bool) and (st.status | default('') != 'failed')
-                         and o.metadata.deletionTimestamp is not defined -%}
+                         and o.metadata.deletionTimestamp is not defined
+                         and not (spec.paused | default(false) | bool) -%}
         {%- set c = [] -%}
         {%- if type == 'openshift' and (caps.virtualization | default(false) | bool) -%}{%- set _ = c.append('Virtualization') -%}{%- endif -%}
         {%- if caps.evpn | default(false) | bool -%}{%- set _ = c.append('HybridNetworking') -%}{%- endif -%}

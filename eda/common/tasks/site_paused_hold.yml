@@ -1,0 +1,29 @@
+---
+# A teardown whose site is paused (CloudInfrastructure spec.paused) holds: the site side is not touched, the object
+# keeps its finalizer and reads Ready=False/SitePaused with a deletion blocker naming the site. The operator's requeue
+# retries; once the site is resumed the teardown runs to the end. Included from a role (paths are role_path-relative).
+# inputs: sph_plural (cloudvirts, networkplacements, cloudgateways, cloudosos), sph_name, sph_namespace, sph_site
+- name: "Hold the deletion of {{ sph_plural }}/{{ sph_name }}: site {{ sph_site }} is paused"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    _sph_now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: "{{ sph_plural }}"
+    cr_name: "{{ sph_name }}"
+    cr_namespace: "{{ sph_namespace }}"
+    patch_ignore_not_found: true
+    cr_status_body:
+      status: pending
+      ready: false
+      message: "Deletion waits: site {{ sph_site }} is paused; its part is removed once the site is resumed"
+      deletionBlockedBy: ["CloudInfrastructure {{ sph_site }} (paused)"]
+      lastReconciledAt: "{{ _sph_now }}"
+      conditions:
+        - type: Ready
+          status: "False"
+          lastTransitionTime: "{{ _sph_now }}"
+          reason: SitePaused
+          message: "Deletion waits: site {{ sph_site }} is paused; its part is removed once the site is resumed"
+
+- name: "End the job: {{ sph_plural }}/{{ sph_name }} waits for site {{ sph_site }} to resume"
+  ansible.builtin.meta: end_play

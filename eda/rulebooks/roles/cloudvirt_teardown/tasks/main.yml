@@ -20,6 +20,15 @@
         ci_ref_namespace: "{{ fabric_platform_namespace }}"
         ci_expected_type: openshift
 
+    - name: Hold the deletion while the site is paused
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_paused_hold.yml"
+      vars:
+        sph_plural: cloudvirts
+        sph_name: "{{ fab_name }}"
+        sph_namespace: "{{ fab_namespace }}"
+        sph_site: "{{ fab_spec.cloudRef.name }}"
+      when: ci_paused | default(false) | bool
+
     - name: The environment's namespace labels
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:

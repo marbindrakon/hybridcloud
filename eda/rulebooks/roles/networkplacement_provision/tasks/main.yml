@@ -126,8 +126,9 @@
                     if ci_error | trim | length == 0 and not (ci_capabilities.evpn | default(false) | bool) else [])
                  + ([] if np_gateway else ['a CloudGateway for site ' ~ np_site]) }}
             np_reason: >-
-              {{ 'SiteNotEvpnCapable' if ci_error | trim | length == 0 and not (ci_capabilities.evpn | default(false) | bool)
-                 else np_reason }}
+              {{ 'SitePaused' if (ci_paused | default(false) | bool)
+                 else ('SiteNotEvpnCapable' if ci_error | trim | length == 0 and not (ci_capabilities.evpn | default(false) | bool)
+                       else np_reason) }}
 
     - name: Refuse a gateway on another fabric
       ansible.builtin.set_fact:

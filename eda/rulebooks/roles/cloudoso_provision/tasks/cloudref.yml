@@ -26,6 +26,12 @@
     ci_expected_type: openstack
   when: oso_cloudinfra_name | length > 0
 
+# a paused site: the environment is held (Ready=False/SitePaused through the failure path), nothing is created
+- name: Hold the environment while its site is paused
+  ansible.builtin.set_fact:
+    cloudoso_failure_reason: SitePaused
+  when: oso_cloudinfra_name | length > 0 and (ci_paused | default(false) | bool)
+
 - name: Require a usable openstack site
   ansible.builtin.assert:
     that: ci_error | length == 0

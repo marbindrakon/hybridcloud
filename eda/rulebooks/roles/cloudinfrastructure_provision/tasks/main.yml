@@ -48,6 +48,49 @@
         ci_site_out: {}
         ci_notes: []
 
+    # spec.paused: no probe, no realization, no wake of dependants; the record says so and the job ends here.
+    # Capabilities and site facts keep their last values (it is still the same site); dependants hold through
+    # resolve_cloud_infrastructure (ci_paused) and the tenants see it as Unavailable.
+    - name: A paused site is recorded as paused and left alone
+      when: ci_cr_spec.paused | default(false) | bool
+      block:
+        - name: Get timestamp (paused)
+          ansible.builtin.set_fact:
+            cloudinfrastructure_status_transition_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+            ci_paused_message: >-
+              site paused by its administrator (spec.paused): probing and realization are suspended; environments and
+              placements on it keep their last state
+
+        - name: Mark CloudInfrastructure paused
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: cloudinfrastructures
+            cr_name: "{{ cloudinfrastructure_cr_name }}"
+            cr_namespace: "{{ cloudinfrastructure_cr_namespace }}"
+            cr_status_body:
+              status: paused
+              ready: false
+              message: "{{ ci_paused_message | trim }}"
+              lastReconciledAt: "{{ cloudinfrastructure_status_transition_time }}"
+              observedGeneration: "{{ cloudinfrastructure_generation }}"
+              conditions:
+                - type: Ready
+                  status: "False"
+                  lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
+                  reason: Paused
+                  message: "{{ ci_paused_message | trim }}"
+
+        - name: Refresh the tenants' view of the paused site
+          ansible.builtin.include_tasks: tenant_view.yml
+          vars:
+            civ_before: "{{ shc_live_cr | default(cloudinfrastructure_cr_lookup.resources[0], true) }}"
+            civ_after_status:
+              status: paused
+
+        - name: End the job (site paused)
+          ansible.builtin.meta: end_play
+
     - name: Set the unsupported-type failure reason
       ansible.builtin.set_fact:
         cloudinfrastructure_fail_reason: TypeNotSupported

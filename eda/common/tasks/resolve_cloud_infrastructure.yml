@@ -3,12 +3,13 @@
 # that follow a cloudRef (CloudOSO now; CloudGateway, CloudVirt, NetworkPlacement in P7.3). Ported from
 # the hybridcloud-demojam helper.
 #
-# Usable = the last probe authenticated (status.capabilities.api) and the site isn't failed. Not
+# Usable = the last probe authenticated (status.capabilities.api), the site isn't failed and it isn't paused
+# (spec.paused: the platform neither probes nor realizes; dependants hold with reason SitePaused). Not
 # status.ready: every job's acknowledge step sets ready=false while it runs, so a site would look
 # unusable for the duration of its periodic re-probe.
 #
 # Required vars: ci_ref_name. Optional: ci_ref_namespace (default sovereign-cloud), ci_expected_type.
-# Sets (never fails; callers decide): ci_found, ci_obj, ci_spec, ci_type, ci_usable, ci_capabilities,
+# Sets (never fails; callers decide): ci_found, ci_obj, ci_spec, ci_type, ci_usable, ci_paused, ci_capabilities,
 # ci_error ('' when usable).
 - name: Reset CloudInfrastructure facts
   ansible.builtin.set_fact:
@@ -17,6 +18,7 @@
     ci_spec: {}
     ci_type: ""
     ci_usable: false
+    ci_paused: false
     ci_capabilities: {}
     ci_error: ""
 
@@ -43,9 +45,11 @@
     ci_spec: "{{ _o.spec | default({}) }}"
     ci_type: "{{ _o.spec.type | default('') }}"
     ci_capabilities: "{{ _st.capabilities | default({}, true) }}"
+    ci_paused: "{{ (_o.spec | default({})).paused | default(false) | bool }}"
     ci_usable: >-
       {{ ((_st.capabilities | default({}, true)).api | default(false) | bool)
-         and (_st.status | default('')) != 'failed' and _o.metadata.deletionTimestamp is not defined }}
+         and (_st.status | default('')) != 'failed' and _o.metadata.deletionTimestamp is not defined
+         and not ((_o.spec | default({})).paused | default(false) | bool) }}
   when: (_ci_lookup.resources | default([])) | length > 0
 
 - name: Record the resolution error
@@ -56,5 +60,6 @@
       {%- elif not ci_found -%}CloudInfrastructure {{ ns }}/{{ ci_ref_name }} not found
       {%- elif (ci_expected_type | default('')) | length > 0 and ci_type != ci_expected_type -%}CloudInfrastructure {{ ci_ref_name }} has type {{ ci_type }}, expected {{ ci_expected_type }}
       {%- elif ci_obj.metadata.deletionTimestamp is defined -%}CloudInfrastructure {{ ci_ref_name }} is being deleted
+      {%- elif ci_paused | bool -%}CloudInfrastructure {{ ci_ref_name }} is paused
       {%- elif not ci_usable -%}CloudInfrastructure {{ ci_ref_name }} is not usable (status {{ (ci_obj.status | default({}, true)).status | default('unprobed', true) }}: {{ ((ci_obj.status | default({}, true)).message | default('') | string)[:200] }})
       {%- endif -%}

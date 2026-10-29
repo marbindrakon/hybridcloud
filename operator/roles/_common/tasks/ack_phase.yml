@@ -18,7 +18,8 @@
       {%- set summaries = {'Waiting': 'Waiting for a prerequisite.', 'Creating': 'Being created.',
                            'Updating': 'Applying the latest change.', 'Ready': 'Ready.',
                            'Degraded': 'Working with reduced health.',
-                           'Failed': 'Could not be completed; see the reason.', 'Deleting': 'Being deleted.'} -%}
+                           'Failed': 'Could not be completed; see the reason.', 'Deleting': 'Being deleted.',
+                           'Paused': 'Paused; nothing changes until it is resumed.'} -%}
       {%- if cur in ['', 'Creating'] and observed == 0 and not (st.ready | default(false, true) | bool)
              and not (st.realized | default(false, true) | bool) -%}
         {%- set phase = 'Creating' -%}

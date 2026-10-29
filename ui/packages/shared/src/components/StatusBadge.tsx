@@ -14,6 +14,7 @@ import {
   ExclamationTriangleIcon,
   SyncAltIcon,
   OutlinedClockIcon,
+  PauseCircleIcon,
   TrashIcon,
 } from '@patternfly/react-icons';
 import { useTranslation } from '../i18n';
@@ -42,6 +43,7 @@ const PHASE_COLOR: Record<Phase, LabelColor> = {
   Degraded: 'yellow',
   Failed: 'red',
   Deleting: 'purple',
+  Paused: 'grey',
 };
 
 const PHASE_ICON: Record<Phase, React.ComponentType> = {
@@ -52,6 +54,7 @@ const PHASE_ICON: Record<Phase, React.ComponentType> = {
   Degraded: ExclamationTriangleIcon,
   Failed: ExclamationCircleIcon,
   Deleting: TrashIcon,
+  Paused: PauseCircleIcon,
 };
 
 export interface StatusBadgeProps {
@@ -100,7 +103,7 @@ function PopoverBody({ rows }: { rows: [string, React.ReactNode][] }): React.Rea
 }
 
 /**
- * Status label with icon and text (never colour alone), one of the seven phase
+ * Status label with icon and text (never colour alone), one of the eight phase
  * words. The label is a real button: Tab reaches it and Enter opens the
  * details (summary, reason, since).
  */

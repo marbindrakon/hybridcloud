@@ -5262,7 +5262,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.3.6"
+      tag: "img-2.3.7"  # img-2.3.7: site pause (phase Paused badge, the site form paused switch, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5302,7 +5302,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.3.6"
+      tag: "img-5.3.7"  # img-5.3.7: site pause (phase Paused badge, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5336,7 +5336,7 @@ sovereignAdminPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.4.7"
+      tag: "img-1.4.8"  # img-1.4.8: site pause (phase Paused badge, the site form paused switch, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5361,7 +5361,7 @@ sovereignTenantPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.5.7"
+      tag: "img-1.5.8"  # img-1.5.8: site pause (phase Paused badge, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5456,7 +5456,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.28"  # shc.28: per-family HybridNetwork/NetworkPlacement CRDs, status.ipv6/subnets, site IPv6 capabilities, TenantProfile IPv6 values (IPv6 V3, OD63-OD69, OD73, OD103); images unchanged; shc.27: image defaults for the fix round; shc.26: delivery.stateEventId on 30 kinds, CloudVirt status.virtualMachines, ACM creator ExternalSecret (OD48); shc.25: operator image defaults for the acknowledgement-phase fix; shc.24: Status column on Assignment, Entity and Rbac (P2DC-O1); shc.23: CloudInfrastructure spec.location description (PCR-F1); shc.22: edaJobs status enum accepts waiting (PGF-F1); shc.21: tenant namespace delete guard, Entity READY and TenantProfile REASON columns, reasons Deleted and WaitingForCluster, Kafka protocol version value; shc.20: a current team admin manages the Team access lists (OD28 revised); shc.19: TenantProfile CRD, Entity displayName/contacts/allowedSites, categories + alias short names, REASON/AGE columns, API-only descriptions, admission policies (P0/P3/P4 Warn, P12 + delete guard + access-field ladder Deny), GitOps marks; shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
+  chartVersion: "0.1.22-shc.30"  # shc.30: the GitOps admission policy allows a live change of spec.paused alone; shc.29: CloudInfrastructure spec.paused (site pause); shc.28: per-family HybridNetwork/NetworkPlacement CRDs, status.ipv6/subnets, site IPv6 capabilities, TenantProfile IPv6 values (IPv6 V3, OD63-OD69, OD73, OD103); images unchanged; shc.27: image defaults for the fix round; shc.26: delivery.stateEventId on 30 kinds, CloudVirt status.virtualMachines, ACM creator ExternalSecret (OD48); shc.25: operator image defaults for the acknowledgement-phase fix; shc.24: Status column on Assignment, Entity and Rbac (P2DC-O1); shc.23: CloudInfrastructure spec.location description (PCR-F1); shc.22: edaJobs status enum accepts waiting (PGF-F1); shc.21: tenant namespace delete guard, Entity READY and TenantProfile REASON columns, reasons Deleted and WaitingForCluster, Kafka protocol version value; shc.20: a current team admin manages the Team access lists (OD28 revised); shc.19: TenantProfile CRD, Entity displayName/contacts/allowedSites, categories + alias short names, REASON/AGE columns, API-only descriptions, admission policies (P0/P3/P4 Warn, P12 + delete guard + access-field ladder Deny), GitOps marks; shc.18: CloudInfrastructure type gcp (spec.gcp region/attachment), CloudGCP kind, NetworkPlacement backend CloudGCP, PlatformOpenshift platform gcp (P11); shc.17: HybridNetwork spec.prefixes + status.addressSpace, NetworkPlacement ipv4/ipv6 + status.prefixes (P10 IPAM); shc.16: DNSConfig.spec.designate.zoneAttributes + CloudInfrastructure.spec.dns.zoneAttributes (Designate pool scope); shc.15: ProviderEdge + AttachmentCircuit CRDs, provider-edges template (P9.1); shc.14: PlatformOpenshift spec.aws.network + publish (P8 §13); shc.13: PlatformOpenshift spec.aws.region defaults to the environment's (no us-east-1 default); shc.12: CloudAWS edaJobs status may be waiting (a pending run was refused); shc.11: CloudAWS backend for NetworkPlacement, CloudAWS.spec.cloudRef (no keys), CloudInfrastructure.spec.aws.region only, CloudGateway wireguard peers optional (P8); shc.10: CloudGateway transport wireguard, CloudInfrastructure type external (P7.3b); shc.9: HybridNetwork spec.egress / status.egress (P7.4); shc.4: CloudInfrastructure (P7.1); shc.5: DNSConfig, CloudInfrastructure.spec.dns (TENANT-DNS D1); shc.6: fabric API (P7.3.3); shc.7: CloudVirt owns its namespaces; shc.8: realization params out of the fabric CRDs, CloudGateway upstream RRs, CloudInfrastructure fabricCredentialsRef
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:

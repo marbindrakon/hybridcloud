@@ -55,6 +55,22 @@
         - ((cloudoso_cr_lookup.resources | default([]) | first | default({})).status | default({}, true)).domainName
           | default('', true) | length == 0
 
+    # a paused site: hold the deletion (its project and DNS live on the site); resumed later by the operator's requeue
+    - name: Read the site's pause state
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ rca_site }}"
+      when: rca_site | length > 0
+
+    - name: Hold the deletion while the site is paused
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_paused_hold.yml"
+      vars:
+        sph_plural: cloudosos
+        sph_name: "{{ cloudoso_cr_name }}"
+        sph_namespace: "{{ cloudoso_cr_namespace }}"
+        sph_site: "{{ rca_site }}"
+      when: rca_site | length > 0 and (ci_paused | default(false) | bool)
+
     - name: Set CloudOSO teardown facts from the recorded status
       vars:
         _cr: "{{ cloudoso_cr_lookup.resources | default([]) | first | default({}) }}"

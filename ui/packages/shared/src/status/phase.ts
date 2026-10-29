@@ -1,7 +1,7 @@
 /**
  * The status contract seen from the UI (Q10, OD8).
  *
- * Every object of the platform carries a stored `status.phase` (one of seven
+ * Every object of the platform carries a stored `status.phase` (one of eight
  * words), `status.phaseSince` and a tenant-safe `status.summary`, written by the
  * status library on each write. The UI shows the stored phase. Objects the
  * library has not written yet (older objects, or a status written by an older
@@ -14,7 +14,7 @@
 import { DELETE_REQUESTED_SUFFIX, PHASE_SUMMARIES, REASONS, type ReasonClass, type ReasonEntry } from './reasons.generated';
 import { parseObjectRef } from '../i18n/vocabulary';
 
-export const PHASES = ['Waiting', 'Creating', 'Updating', 'Ready', 'Degraded', 'Failed', 'Deleting'] as const;
+export const PHASES = ['Waiting', 'Creating', 'Updating', 'Ready', 'Degraded', 'Failed', 'Deleting', 'Paused'] as const;
 export type Phase = (typeof PHASES)[number];
 
 /** Phases in which something is still happening (the UI polls faster then). */
@@ -156,6 +156,7 @@ export function derivePhase(item: PhaseSubject | null | undefined): Phase {
   }
   const legacy = String(status.status ?? '').toLowerCase();
   const rclass = readyCond ? reasonClass(readyCond.reason) : undefined;
+  if (legacy === 'paused' || rclass === 'paused') return 'Paused';
   if (legacy === 'failed' || rclass === 'failed' || rclass === 'blocked') return 'Failed';
   if (legacy === 'pending' || rclass === 'waiting') return 'Waiting';
   if (!observed && status.realized !== true) return 'Creating';
@@ -164,7 +165,7 @@ export function derivePhase(item: PhaseSubject | null | undefined): Phase {
 
 /**
  * The phase to show: deletion always wins, then the stored `status.phase` when
- * it is one of the seven words, otherwise the derived phase.
+ * it is one of the eight words, otherwise the derived phase.
  */
 export function phaseOf(item: PhaseSubject | null | undefined): Phase {
   if (item?.metadata?.deletionTimestamp) return 'Deleting';
@@ -340,6 +341,7 @@ export function healthOfPhase(phase: Phase): HealthBucket {
     case 'Degraded':
       return 'failed';
     case 'Waiting':
+    case 'Paused':
       return 'pending';
     default:
       return 'reconciling';
@@ -355,4 +357,5 @@ export const PHASE_SORT_ORDER: Record<Phase, number> = {
   Creating: 4,
   Updating: 5,
   Ready: 6,
+  Paused: 7,
 };

@@ -52,6 +52,7 @@
     - name: Wait for a missing or unusable site
       ansible.builtin.set_fact:
         ca_waiting: "{{ ca_waiting + [ci_error | trim] }}"
+        ca_reason: "{{ 'SitePaused' if (ci_paused | default(false) | bool) else ca_reason }}"
       when: ci_error | trim | length > 0
 
     - name: The platform's tenant DNS namespace

@@ -34,7 +34,7 @@ def render():
         "// eda/rulebooks/collections/ansible_collections/hybridsovereign/shc/plugins/module_utils/shc_status_reasons.py.",
         "// Do not edit by hand.",
         "",
-        "export type ReasonClass = 'ready' | 'progress' | 'waiting' | 'failed' | 'blocked';",
+        "export type ReasonClass = 'ready' | 'progress' | 'waiting' | 'failed' | 'blocked' | 'paused';",
         "/** A = automatic (nothing to do), T = the tenant can act, P = the platform team acts. */",
         "export type ReasonActor = 'A' | 'T' | 'P';",
         "",

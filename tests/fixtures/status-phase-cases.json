@@ -692,5 +692,74 @@
   "expect": {
    "phase": "Ready"
   }
+ },
+ {
+  "name": "paused-site-reason-paused",
+  "object": {
+   "metadata": {
+    "name": "paused-site-reason-paused",
+    "generation": 3
+   },
+   "status": {
+    "status": "paused",
+    "ready": false,
+    "observedGeneration": 3,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "Paused",
+      "message": "site paused by its administrator",
+      "lastTransitionTime": "2026-10-29T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Paused"
+  }
+ },
+ {
+  "name": "held-placement-site-paused",
+  "object": {
+   "metadata": {
+    "name": "held-placement-site-paused",
+    "generation": 2
+   },
+   "status": {
+    "status": "pending",
+    "ready": false,
+    "realized": true,
+    "observedGeneration": 2,
+    "conditions": [
+     {
+      "type": "Ready",
+      "status": "False",
+      "reason": "SitePaused",
+      "message": "Waiting for CloudInfrastructure site-a is paused",
+      "lastTransitionTime": "2026-10-29T10:00:00Z"
+     }
+    ]
+   }
+  },
+  "expect": {
+   "phase": "Paused"
+  }
+ },
+ {
+  "name": "paused-legacy-status-only",
+  "object": {
+   "metadata": {
+    "name": "paused-legacy-status-only",
+    "generation": 1
+   },
+   "status": {
+    "status": "paused",
+    "ready": false
+   }
+  },
+  "expect": {
+   "phase": "Paused"
+  }
  }
 ]

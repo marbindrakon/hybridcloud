@@ -121,9 +121,16 @@ spec:
       expression: >-
         'hybridsovereign.redhat/gitops-source' in variables.oldAnnotations
         ? variables.oldAnnotations['hybridsovereign.redhat/gitops-source'] : 'the platform values'
+    # spec.paused of a site is an operational switch, set live (also by the power procedures); a change that
+    # touches nothing else in the spec is allowed, and the GitOps sync ignores the field (ignoreDifferences)
+    - name: pauseOnly
+      expression: >-
+        oldObject.kind == 'CloudInfrastructure' && has(object.spec) && has(oldObject.spec)
+        && object.spec.filter(k, k != 'paused').all(k, k in oldObject.spec && object.spec[k] == oldObject.spec[k])
+        && oldObject.spec.filter(k, k != 'paused').all(k, k in object.spec)
   validations:
     - expression: >-
-        variables.override
+        variables.override || variables.pauseOnly
         || ((has(object.spec) == has(oldObject.spec)) && (!has(object.spec) || object.spec == oldObject.spec))
       messageExpression: >-
         'This ' + oldObject.kind + ' is managed in Git (' + variables.source + '). Edit Git instead; '

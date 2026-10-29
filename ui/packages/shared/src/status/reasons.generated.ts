@@ -2,7 +2,7 @@
 // eda/rulebooks/collections/ansible_collections/hybridsovereign/shc/plugins/module_utils/shc_status_reasons.py.
 // Do not edit by hand.
 
-export type ReasonClass = 'ready' | 'progress' | 'waiting' | 'failed' | 'blocked';
+export type ReasonClass = 'ready' | 'progress' | 'waiting' | 'failed' | 'blocked' | 'paused';
 /** A = automatic (nothing to do), T = the tenant can act, P = the platform team acts. */
 export type ReasonActor = 'A' | 'T' | 'P';
 
@@ -68,6 +68,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "NotReady": { actor: "A", class: "progress", summary: "Not ready yet." },
   "NotRealizable": { actor: "T", class: "failed", summary: "The request cannot be realized on the chosen site." },
   "OperatorFailed": { actor: "P", class: "failed", summary: "The request could not be queued. The platform team is looking at it." },
+  "Paused": { actor: "P", class: "paused", summary: "Paused by the platform team; nothing changes on this site until it is resumed." },
   "PeerAsnReserved": { actor: "T", class: "failed", summary: "This AS number is reserved by the platform. Configure your router with another AS number." },
   "PlatformEdge": { actor: "A", class: "ready", summary: "Ready." },
   "PolicyRefused": { actor: "T", class: "failed", summary: "The request was refused by a platform policy." },
@@ -91,6 +92,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "SiteNotAllowed": { actor: "T", class: "failed", summary: "This site is not available to this tenant." },
   "SiteNotEvpnCapable": { actor: "T", class: "failed", summary: "The chosen site cannot join hybrid networks." },
   "SiteNotVirtualizationCapable": { actor: "T", class: "failed", summary: "The chosen site does not offer virtual machines." },
+  "SitePaused": { actor: "A", class: "paused", summary: "Held: its site is paused. It keeps its last state until the site is resumed." },
   "SiteTypeMismatch": { actor: "T", class: "failed", summary: "This kind of environment cannot be created on the chosen site." },
   "SiteUnreachable": { actor: "P", class: "failed", summary: "The site does not answer. The platform team is looking at it." },
   "Synced": { actor: "A", class: "ready", summary: "Ready; in sync." },
@@ -131,4 +133,5 @@ export const PHASE_SUMMARIES: Record<string, string> = {
   Degraded: "Working with reduced health.",
   Failed: "Could not be completed; see the reason.",
   Deleting: "Being deleted.",
+  Paused: "Paused; nothing changes until it is resumed.",
 };

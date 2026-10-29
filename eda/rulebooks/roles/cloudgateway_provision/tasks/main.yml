@@ -68,6 +68,7 @@
     - name: Wait for a missing or unusable site
       ansible.builtin.set_fact:
         cg_waiting: "{{ cg_waiting + [ci_error | trim] }}"
+        cg_reason: "{{ 'SitePaused' if (ci_paused | default(false) | bool) else cg_reason }}"
       when: ci_error | trim | length > 0
 
     - name: Wait for the site's EVPN capability

@@ -17,6 +17,7 @@ PROGRESS = "progress"
 WAITING = "waiting"
 FAILED = "failed"
 BLOCKED = "blocked"
+PAUSED = "paused"
 
 
 def _r(actor, klass, summary):
@@ -122,6 +123,9 @@ REASONS = {
     "NoDefaultConfig": _r("P", FAILED, "No default connection is configured for this service. Ask the platform team."),
     # Warning Event on an Entity (never a condition): its operator-version annotation names an image that is not allowed
     "NamespaceOperatorImageRejected": _r("P", FAILED, "The requested operator version for this tenant is not allowed; the default version is used."),
+    # ---- paused (an administrator holds the object; nothing changes until it is resumed) --
+    "Paused": _r("P", PAUSED, "Paused by the platform team; nothing changes on this site until it is resumed."),
+    "SitePaused": _r("A", PAUSED, "Held: its site is paused. It keeps its last state until the site is resumed."),
     # ---- blocked (deletion) ------------------------------------------------------------
     "ProtectedChildren": _r("T", BLOCKED, "Deletion waits: some objects have deletion protection turned on."),
     "UnknownKind": _r("P", BLOCKED, "Deletion waits: an object of an unknown kind is in the tenant. The platform team is looking at it."),
@@ -152,6 +156,7 @@ PHASE_SUMMARIES = {
     "Degraded": "Working with reduced health.",
     "Failed": "Could not be completed; see the reason.",
     "Deleting": "Being deleted.",
+    "Paused": "Paused; nothing changes until it is resumed.",
 }
 
 
