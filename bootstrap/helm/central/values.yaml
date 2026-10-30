@@ -5465,6 +5465,12 @@ hybridsovereignPrimaryOperator:
     # GitOps marks: hybridsovereign.redhat/gitops-source names this Argo application (Q16a)
     gitopsSource:
       app: hybridsovereign-primary-operator
+    # OD31: after the quiet week (10-23 to 10-30) the three admission policies that shipped as Warn refuse:
+    # mode Deny renders validationActions [Deny, Audit] and failurePolicy Fail
+    admission:
+      namespaceLabelIntegrity: {mode: Deny}   # shc-namespace-label-integrity
+      platformOnlyFields: {mode: Deny}        # shc-platform-only-fields
+      gitopsManaged: {mode: Deny}             # shc-gitops-managed
     # shc: "img-" tags - the operator charts share these Quay repositories, and a chart push of
     # hybridsovereign-namespace-operator 0.1.10 replaced the 0.1.10 image (namespace operators then
     # failed "image not known"); chart versions are semver, so img-* can never collide.
