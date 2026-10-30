@@ -60,6 +60,11 @@ def fabric_checks(fns, fname):
     def delete_dry():
         return kubectl(["-n", fns, "delete", "hybridfabric", fname, "--dry-run=server"])
 
+    # An exported fabric is usually Git-managed, so shc-gitops-delete-guard would refuse these deletes first (and
+    # which refusal comes back depends on the evaluation order); its break-glass annotation sets it aside here, so
+    # only shc-fabric-ledger-guard decides. delete_guard_checks covers the delete guard itself.
+    kubectl(["-n", fns, "annotate", "hybridfabric", fname, "hybridsovereign.redhat/gitops-override=ledger guard test",
+             "--overwrite"])
     rc, _, err = delete_dry()
     check("P12 denies deleting a fabric without the label whose status holds allocations",
           rc != 0 and "still holds" in err, err.strip())
@@ -81,6 +86,7 @@ def fabric_checks(fns, fname):
     rc, _, err = delete_dry()
     check("P12 break-glass annotation allows the delete", rc == 0, err.strip())
     kubectl(["-n", fns, "annotate", "hybridfabric", fname, "hybridsovereign.redhat/allow-delete-with-allocations-"])
+    kubectl(["-n", fns, "annotate", "hybridfabric", fname, "hybridsovereign.redhat/gitops-override-"])
 
 
 def gitops_checks(mode, kind, ns, name):
@@ -140,9 +146,11 @@ def delete_guard_checks(kind, ns, name, unmarked):
 def tenant_namespace_guard_checks():
     """shc-tenant-namespace-delete-guard (UX-102): a tenant namespace is deleted through its Entity."""
     ns, entity, plain = "entity-replay-guard", "replay-guard", "replay-plain-ns"
+    # created as the platform automation, as on a cluster: shc-namespace-label-integrity lets no one else set the
+    # tenant label (in Deny mode the create would be refused)
     for name, labels in ((ns, {"hybridsovereign.redhat/entity": entity}), (plain, {})):
         body = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": name, "labels": labels}}
-        rc, _, err = kubectl(["apply", "-f", "-"], body=body)
+        rc, _, err = kubectl(["apply", "-f", "-"], body=body, as_user=AUTOMATION)
         if rc:
             check(f"namespace guard: create {name}", False, err.strip())
             return
