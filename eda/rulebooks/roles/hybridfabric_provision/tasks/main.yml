@@ -487,15 +487,19 @@
                               'ipam': hf_ipam}} }}
 
     # the networks this run added to or removed from the egress (or whose IPv6 egress came or went) wait for it: wake
-    # them
+    # them; when the IPv6 egress became degraded or recovered, every network with IPv6 egress (their family row says so)
     - name: Wake the networks whose egress changed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         _now6: "{{ hf_egress_status | selectattr('ipv6') | map(attribute='network') | list }}"
+        _degraded_flip: >-
+          {{ (hf_egress6_status.degraded | default(false) | bool)
+             != ((((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)).degraded | default(false) | bool) }}
         nudge_crs: >-
           {%- set out = [] -%}
           {%- for k in ((hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before))
-                        | union(_now6 | symmetric_difference(hf_egress6_before)) -%}
+                        | union(_now6 | symmetric_difference(hf_egress6_before))
+                        | union(_now6 if _degraded_flip | bool else []) -%}
             {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
           {%- endfor -%}
           {{ out }}
