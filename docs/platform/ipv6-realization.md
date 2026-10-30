@@ -238,15 +238,67 @@ switch. Dual-stack networks never get DNS64 resolvers. With no entry for a site,
 ```yaml
 egress:
   ipv6:
-    enabled: false         # routed IPv6 egress for platform-assigned space; off: IPv6 internet reads NotOffered
-    standbyCommunity: 998  # the standby node's default route carries <domainAsn>:998 ...
-    standbyLocalPref: 50   # ... and reaches the sites with this local preference (they prefer the primary node)
+    enabled: false            # routed IPv6 egress for platform-assigned space; off: IPv6 internet reads NotOffered
+    routedPrefixes: []        # the platform's globally routed IPv6 space (the platform address pools lie inside it)
+    asn: 0                    # the egress VRF's own AS toward the upstream routers
+    upstream: []              # [{address, asn}]: the upstream routers on the hand-off network (one session each per node)
+    nodes: {}                 # per node: {address: <address/length on the hand-off network>}
+    wanMtu: 1420              # IPv6 MTU of the hand-off device and the TCP MSS clamp (wanMtu - 60)
+    maxPrefixesUpstream: 10   # prefixes accepted from each upstream (the default plus the external site prefixes)
+    maxPrefixesNetwork: 1000  # prefixes accepted from each network's VRF
+    standbyCommunity: 998     # the standby node's default route carries <domainAsn>:998 ...
+    standbyLocalPref: 50      # ... and reaches the sites with this local preference (they prefer the primary node)
+    standbyPrepend: 2         # ... and the standby node prepends its AS this often toward the upstream
+    sessionDownAlertMinutes: 5  # a node without an upstream session for this long is reported as a fabric event
+    denyDestinations6: [...]  # the IANA special-purpose ranges; an installation adds its own address space
+    allowDestinations6: []    # reachable although inside denyDestinations6
+    resolverDestinations6: [] # resolvers reachable on port 53 only
+    externalSitePrefixes: {}  # per network: routed sources that legitimately arrive from upstream
 ```
 IPv6 egress is routed, not translated: a network's platform block leaves unchanged through a stateful filter on the
 border gateway nodes that admits only replies to connections opened from inside. Tenant-provided prefixes never get
 an internet path. While `enabled` is false every network in mode `Platform` reports
 `{family: 6, state: unavailable, reason: NotOffered}` in `status.egress.families`, and `status.egress.internet`
 keeps reporting the IPv4 state of networks with IPv4.
+
+With `enabled` the fabric job gives the egress VRF of every border gateway node its address on the hand-off network
+and one eBGP session (AS `asn`, timers 10/30, no BFD, no password) to each upstream router: in, the default route
+only; out, the placement prefixes of the networks with internet egress and IPv6 from the platform (prefixes inside
+`routedPrefixes`, longer than it and at most /64; never an aggregate). Per such network the root VRF `e<vpnTarget>`
+gains an unnumbered IPv6 session over its veth into the egress VRF: it takes the default route (which therefore
+reaches the network's VPN, and the sites, only while an upstream sends it) and announces exactly its placement
+prefixes, each originated as an aggregate of the routes the sites send. The whole of `routedPrefixes` is discarded
+(`reject`) in the egress VRF and in every network VRF, so space the fabric does not route never loops.
+
+Each network's IPv6 internet traffic leaves and returns through one primary node, the node at position (egress index
+mod number of nodes): the standby node marks its default route with `<domainAsn>:<standbyCommunity>` (the gateways
+hand it to the sites with `standbyLocalPref`) and prepends its AS `standbyPrepend` times toward the upstream. When
+the primary's upstream sessions fail, the sites' default moves to the standby and the upstream's return path follows
+the prefixes the standby still announces; flows where the tenant sends next recover, receive-only flows reset.
+
+The filter is the nftables table `inet shc_egress6` on every node (IPv6 rules only; the IPv4 table stays as it is):
+outbound from a network only from its platform block (and the node's ICMPv6 source), not to the translator-embedded
+forms of `egress.denyDestinations` (from `translation.<site>.pref64`), then `allowDestinations6` and the resolvers on
+port 53, then not to `denyDestinations6`; a TCP MSS clamp at `wanMtu - 60` both ways; inbound only neighbour
+discovery, ICMPv6 errors and replies to connections opened from inside; a source inside `routedPrefixes` arriving
+from upstream is dropped (`externalSitePrefixes` excepted). The table is loaded before FRR takes the sessions'
+configuration, and the timer unit `shc-egress6-guard` shuts the upstream sessions whenever the table is missing
+(fail closed). The hand-off device's IPv6 MTU is `wanMtu`, so the node itself sends Packet Too Big for larger
+packets bound for the internet.
+
+Status: `HybridFabric status.realization.egress.ipv6` holds per node the hand-off address, the upstream sessions'
+states and whether the default route is held; `status.realization.egress.networks[]` says per network whether its
+IPv6 egress is realized (`ipv6`), the prefixes announced (`prefixes6`) and its primary node. A network with IPv6
+egress reads `{family: 6, state: ready, mode: Routed}`, or `reason: Degraded` while a node's upstream sessions are
+all down; a node down for `sessionDownAlertMinutes` is reported as a Warning event on the HybridFabric. A placement
+with IPv6 copies the network's row into `status.ipv6.internet`.
+
+The gateways announce covering routes into every site: the network's own IPv6 prefixes (its platform block, or the
+tenant's prefixes) and `routedPrefixes`, each backed by an unreachable route in the VRF table. A destination the
+fabric does not route (an unallocated prefix, another tenant's space) therefore fails fast at the gateway with an
+ICMPv6 unreachable and never leaves for the internet; the placement prefixes and the default route are longer or
+shorter than these and take precedence as usual. While a network has no IPv6 egress its gateways keep announcing
+`::/0` themselves (unreachable), so internet-bound IPv6 fails fast and guests fall back to IPv4.
 
 ## Transport (dual-stack core)
 

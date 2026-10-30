@@ -302,17 +302,26 @@
 
     # the placement's IPv6 in plain words (status.ipv6, design/IPV6-PLAN.md §2.3): how workloads get their addresses
     # (the kind's placement.ipv6.addressMode: SLAAC for slaac or dhcpv6-stateless, else DHCPv6) and its internet
-    # access, which the fabric offers only with IPv6 egress (egress.ipv6.enabled: the egress realization then
-    # reports the state; until then unavailable, NotOffered)
+    # access: the network's IPv6 egress state (status.egress.families, family 6: the fabric realizes it; a network
+    # that asks for no internet has no row and gets none here) while the fabric offers IPv6 egress
+    # (egress.ipv6.enabled); until then unavailable, NotOffered
     - name: Describe the placement's IPv6
       vars:
         _mode: "{{ ((fab_real.placement.ipv6 | default({}, true)).addressMode | default({}, true))[np_backend_kind] | default('', true) }}"
+        _row6: >-
+          {{ ((((np_network | default({}, true)).status | default({}, true)).egress | default({}, true)).families | default([], true)
+              | selectattr('family', 'defined') | selectattr('family', 'equalto', 6) | list + [{}]) | first }}
+        _internet: >-
+          {{ {'internet': {'state': 'unavailable', 'reason': 'NotOffered',
+                           'message': 'IPv6 internet access is not offered on this fabric yet'}}
+             if not (fab_real.egress.ipv6.enabled | default(false) | bool)
+             else ({'internet': {'state': _row6.state} | combine({'reason': _row6.reason} if _row6.reason is defined else {})
+                                | combine({'message': _row6.message} if _row6.message is defined else {})}
+                   if _row6 | length > 0 else {}) }}
       ansible.builtin.set_fact:
         np_status: >-
           {{ np_status | combine({'ipv6': {'addressing': ('SLAAC' if (_mode | trim) in ['slaac', 'dhcpv6-stateless'] else 'DHCPv6')}
-             | combine({'internet': {'state': 'unavailable', 'reason': 'NotOffered',
-                                     'message': 'IPv6 internet access is not offered on this fabric yet'}}
-                       if not (fab_real.egress.ipv6.enabled | default(false) | bool) else {})}) }}
+             | combine(_internet)}) }}
       when: np_prefixes_v6 | length > 0
 
     - name: The placement's layer 3 VNI

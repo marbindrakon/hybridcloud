@@ -45,12 +45,19 @@ router bgp {{ fab_spec.domainAsn }}
   neighbor PE activate
   neighbor PE route-reflector-client
  exit-address-family
+{% set _e6 = hf_node_egress.ipv6 if (_v6 and hf_node_egress.ipv6 is defined) else none %}
+{% set _n6 = (hf_node_egress.networks | selectattr('ipv6', 'defined') | list) if _e6 else [] %}
 {% if _v6 %}
  !
-{# the IPv6 VPN routes ride the same sessions (IPv4 loopbacks), with the provider edges' IPv6 loopbacks as next hops #}
+{# the IPv6 VPN routes ride the same sessions (IPv4 loopbacks), with the provider edges' IPv6 loopbacks as next hops.
+   With IPv6 egress the reflector drops a default route a gateway sends (a gateway's own unreachable default, meant for
+   its site only, has an empty AS path and would beat the egress default everywhere) #}
  address-family ipv6 vpn
   neighbor PE activate
   neighbor PE route-reflector-client
+{% if _e6 %}
+  neighbor PE route-map SHC-RR-IN6 in
+{% endif %}
  exit-address-family
 {% endif %}
 exit
@@ -58,6 +65,10 @@ exit
 {% if hf_node_egress.networks is defined %}
 ! provider internet egress: the hand-off's default route, and each network's NAT address back to its VRF;
 ! platform reach: each network's platform prefixes towards its VRF, and the platform's sources back to the hand-off
+{% if _e6 %}
+! IPv6 internet egress: the platform's routed space is discarded here and in every network VRF (the placement
+! prefixes learned from the networks are longer), so unallocated space never loops between the upstream and the node
+{% endif %}
 vrf {{ hf_node_egress.vrf }}
  ip route 0.0.0.0/0 {{ hf_node_egress.gateway }}
 {% for n in hf_node_egress.networks %}
@@ -67,6 +78,9 @@ vrf {{ hf_node_egress.vrf }}
 {% for c in n.platform | default([]) %}
  ip route {{ c }} {{ n.xeIp }}
 {% endfor %}
+{% endfor %}
+{% for r in (_e6.routed if _e6 else []) %}
+ ipv6 route {{ r }} reject 254
 {% endfor %}
 exit-vrf
 !
@@ -80,6 +94,11 @@ vrf {{ n.vrf }}
  ip route {{ c }} {{ n.xoIp }}
 {% endfor %}
 {% endif %}
+{% if _e6 and n.ipv6 is defined %}
+{% for r in _e6.routed %}
+ ipv6 route {{ r }} reject 254
+{% endfor %}
+{% endif %}
 exit-vrf
 !
 {% endfor %}
@@ -91,6 +110,86 @@ ip prefix-list SHC-EGRESS-DEFAULT seq {{ 10 + loop.index0 * 5 }} permit {{ c }}
 route-map SHC-EGRESS-DEFAULT permit 10
  match ip address prefix-list SHC-EGRESS-DEFAULT
 exit
+!
+{% endif %}
+{% if _e6 %}
+{# IPv6 internet egress (AS _e6.asn, IPV6-PLAN §3.2): the egress VRF takes the default route from the upstream routers
+   (and the external site prefixes) and sends them the placement prefixes inside the routed space, prepended for the
+   networks this node is the standby of; each network's VRF takes the default over its veth and sends exactly its
+   placement prefixes; into the network's VPN goes the default only (the aggregates stay in the VRF), marked with the
+   standby community on the standby node. frr defaults traditional: every eBGP session carries both route-maps #}
+ipv6 prefix-list SHC-DEFAULT6 seq 5 permit ::/0
+{% for r in _e6.routed %}
+ipv6 prefix-list SHC-ROUTED6 seq {{ loop.index * 5 }} permit {{ r }} ge {{ r.split('/')[1] | int + 1 }} le 64
+{% endfor %}
+{% for p in _e6.external6 | default([]) %}
+ipv6 prefix-list SHC-EXTERNAL6 seq {{ loop.index * 5 }} permit {{ p }}
+{% endfor %}
+{% set _sb = [] %}
+{% for n in _n6 if n.ipv6.standby %}{% for p in n.ipv6.prefixes %}{% set _ = _sb.append(p) %}{% endfor %}{% endfor %}
+{% for p in _sb %}
+ipv6 prefix-list SHC-EGRESS-STANDBY6 seq {{ loop.index * 5 }} permit {{ p }}
+{% endfor %}
+{% for n in _n6 %}
+{% for p in n.ipv6.prefixes %}
+ipv6 prefix-list E{{ n.vpnTarget }}-PL6 seq {{ loop.index * 5 }} permit {{ p }}
+{% else %}
+ipv6 prefix-list E{{ n.vpnTarget }}-PL6 seq 5 deny ::/0 le 128
+{% endfor %}
+{% endfor %}
+!
+route-map SHC-RR-IN6 deny 10
+ match ipv6 address prefix-list SHC-DEFAULT6
+exit
+route-map SHC-RR-IN6 permit 20
+exit
+route-map SHC-EGRESS-FROM-UP6 permit 10
+ match ipv6 address prefix-list SHC-DEFAULT6
+exit
+{% if _e6.external6 | default([]) %}
+route-map SHC-EGRESS-FROM-UP6 permit 20
+ match ipv6 address prefix-list SHC-EXTERNAL6
+exit
+{% endif %}
+{% if _sb %}
+route-map SHC-EGRESS-TO-UP6 permit 10
+ match ipv6 address prefix-list SHC-EGRESS-STANDBY6
+ set as-path prepend {{ ([_e6.asn] * (_e6.standbyPrepend | int)) | join(' ') }}
+exit
+{% endif %}
+route-map SHC-EGRESS-TO-UP6 permit 20
+ match ipv6 address prefix-list SHC-ROUTED6
+exit
+route-map SHC-EGRESS-FROM-NET6 permit 10
+ match ipv6 address prefix-list SHC-ROUTED6
+exit
+route-map SHC-EGRESS-TO-NET6 permit 10
+ match ipv6 address prefix-list SHC-DEFAULT6
+exit
+{% for n in _n6 %}
+route-map E{{ n.vpnTarget }}-FROM-EG6 permit 10
+ match ipv6 address prefix-list SHC-DEFAULT6
+exit
+route-map E{{ n.vpnTarget }}-TO-EG6 permit 10
+ match ipv6 address prefix-list E{{ n.vpnTarget }}-PL6
+exit
+route-map E{{ n.vpnTarget }}-VPN6 deny 5
+ match ipv6 address prefix-list E{{ n.vpnTarget }}-PL6
+exit
+route-map E{{ n.vpnTarget }}-VPN6 permit 10
+ match ipv6 address prefix-list SHC-DEFAULT6
+{% if n.ipv6.standby %}
+ set community {{ fab_spec.domainAsn }}:{{ _e6.standbyCommunity }} additive
+{% endif %}
+exit
+route-map E{{ n.vpnTarget }}-VPN6 permit 20
+exit
+route-map E{{ n.vpnTarget }}-IMPORT6 deny 5
+ match ipv6 address prefix-list SHC-DEFAULT6
+exit
+route-map E{{ n.vpnTarget }}-IMPORT6 permit 10
+exit
+{% endfor %}
 !
 {% endif %}
 {% for v in hf_node_vrfs %}
@@ -128,10 +227,16 @@ exit
 {% endfor %}
 {% for n in hf_node_vrfs %}
 {% set _fam = n.families | default([4]) | map('int') | list %}
-! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ' platform reach ' ~ n.platform | default([]) | join(',') if n.platform | default([]) else '' }}{{ ((' ' if n.egress else '') ~ 'attachment circuits ' ~ n.circuits | map(attribute='id') | join(',')) if n.circuits else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
+! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ' platform reach ' ~ n.platform | default([]) | join(',') if n.platform | default([]) else '' }}{{ ((' ' if n.egress else '') ~ 'attachment circuits ' ~ n.circuits | map(attribute='id') | join(',')) if n.circuits else '' }}{{ (' IPv6 internet egress (' ~ ('standby' if n.ipv6.standby else 'primary') ~ ' node)') if (_e6 and n.ipv6 is defined) else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
 router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  bgp router-id {{ hf_pe.loopbackIp }}
  no bgp default ipv4-unicast
+{% if _e6 and n.ipv6 is defined %}
+{# v6only: the veth also carries the IPv4 /31 of the IPv4 egress, and FRR would peer over it (the IPv4 filter drops
+   that); the session stays on the link-local addresses the router advertisements exchange #}
+ neighbor {{ n.xe }} interface v6only remote-as external
+ neighbor {{ n.xe }} description IPv6 egress of {{ n.network }}
+{% endif %}
 {% for c in n.circuits %}
  neighbor {{ c.ce }} remote-as {{ c.peerAsn }}
  neighbor {{ c.ce }} description {{ c.id }} {{ c.circuit }}
@@ -169,9 +274,68 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   import vpn
  exit-address-family
 {% endif %}
+{% if _e6 and n.ipv6 is defined %}
+ !
+{# the network's IPv6 side: the default route from the egress VRF over the veth (into the VPN with the IPv6 loopback
+   as next hop, as the gateways do), and toward the egress VRF exactly the placement prefixes, each originated here as
+   an aggregate of the routes the sites send (active only while a route inside it exists) #}
+ address-family ipv6 unicast
+{% for p in n.ipv6.prefixes %}
+  aggregate-address {{ p }}
+{% endfor %}
+  neighbor {{ n.xe }} activate
+  neighbor {{ n.xe }} route-map E{{ n.vpnTarget }}-FROM-EG6 in
+  neighbor {{ n.xe }} route-map E{{ n.vpnTarget }}-TO-EG6 out
+  neighbor {{ n.xe }} maximum-prefix {{ _e6.maxPrefixesUpstream }}
+  label vpn export auto
+  rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
+  rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
+  nexthop vpn export {{ hf_pe.loopbackIp6 }}
+  route-map vpn export E{{ n.vpnTarget }}-VPN6
+  route-map vpn import E{{ n.vpnTarget }}-IMPORT6
+  export vpn
+  import vpn
+ exit-address-family
+{% endif %}
 exit
 !
 {% endfor %}
+{% if _e6 %}
+! the egress VRF (AS {{ _e6.asn }}): single-hop eBGP to the upstream routers (in: the default route; out: the placement
+! prefixes, prepended for the networks this node is the standby of) and unnumbered eBGP to each network's VRF over
+! its veth (in: its placement prefixes; out: the default route). Timers 10/30, no BFD, no password.
+router bgp {{ _e6.asn }} vrf {{ hf_node_egress.vrf }}
+ bgp router-id {{ hf_node_egress.address.split('/')[0] }}
+ no bgp default ipv4-unicast
+ bgp graceful-restart-disable
+{% for n in _n6 %}
+ neighbor {{ n.xo }} interface v6only remote-as external
+ neighbor {{ n.xo }} description IPv6 egress of {{ n.network }}
+{% endfor %}
+{% for u in _e6.upstream %}
+ neighbor {{ u.address }} remote-as {{ u.asn }}
+ neighbor {{ u.address }} description upstream
+ neighbor {{ u.address }} timers 10 30
+ neighbor {{ u.address }} timers connect 5
+{% endfor %}
+ !
+ address-family ipv6 unicast
+{% for n in _n6 %}
+  neighbor {{ n.xo }} activate
+  neighbor {{ n.xo }} route-map SHC-EGRESS-FROM-NET6 in
+  neighbor {{ n.xo }} route-map SHC-EGRESS-TO-NET6 out
+  neighbor {{ n.xo }} maximum-prefix {{ _e6.maxPrefixesNetwork }}
+{% endfor %}
+{% for u in _e6.upstream %}
+  neighbor {{ u.address }} activate
+  neighbor {{ u.address }} route-map SHC-EGRESS-FROM-UP6 in
+  neighbor {{ u.address }} route-map SHC-EGRESS-TO-UP6 out
+  neighbor {{ u.address }} maximum-prefix {{ _e6.maxPrefixesUpstream }}
+{% endfor %}
+ exit-address-family
+exit
+!
+{% endif %}
 router isis CORE
  is-type level-2-only
  net {{ hf_pe.net }}

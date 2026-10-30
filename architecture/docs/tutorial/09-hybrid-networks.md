@@ -232,6 +232,12 @@ spec:
 - `status.egress.internet` keeps its meaning: the IPv4 state on a network with IPv4, the IPv6 state on an IPv6-only
   network.
 - Nothing unsolicited reaches your IPv6 addresses from the internet; inbound IPv6 is not offered.
+- Platform IPv6 space that is not yours (another tenant's block, space nobody holds) is unreachable from inside your
+  network: the gateway answers at once with an ICMPv6 unreachable instead of sending the packet out. The same holds
+  while your network's IPv6 internet is not (yet) available: internet-bound IPv6 fails fast and dual-stack guests fall
+  back to IPv4.
+- The path to the internet carries at most 1420-byte IPv6 packets; the platform tells larger packets so (Packet Too
+  Big) and clamps TCP accordingly, so path MTU discovery works as usual.
 - When the platform moves IPv6 traffic to another path after a failure, the row may read `ready` with reason
   `Degraded`; connections in progress may reset.
 - **Translation to IPv4.** A network with IPv6 from the platform, no IPv4 and internet access on reaches IPv4-only

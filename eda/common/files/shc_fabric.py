@@ -33,11 +33,17 @@ actions:
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
   orphan-report   {crs, ledgers, sites, nodes}  the fabric orphan check's findings (see orphan_report)
   egress-plan     {egress: realization egress, nodes: [node names], networks: [{network, vpnTarget, index,
-                  internet?, platform?}], domainAsn}  per node: the hand-off (egress VRF on the node's site network)
-                  and per network a VRF e<vpnTarget> with a veth pair xe/xo into the egress VRF; internet (default
-                  true): a default route and one source NAT address per node (the node's natPool + the network's
-                  egress index); platform: [CIDRs of the network] the platform's sources (egress.platformSources)
-                  may reach on egress.platformPorts (default 6443, 443); errors for an unusable configuration
+                  internet?, ipv4?, platform?, ipv6?: {block, prefixes}}], domainAsn, core?, translation?}
+                  per node: the hand-off (egress VRF on the node's site network) and per network a VRF e<vpnTarget>
+                  with a veth pair xe/xo into the egress VRF; internet (default true) with ipv4 (default true): a
+                  default route and one source NAT address per node (the node's natPool + the network's egress
+                  index); platform: [CIDRs of the network] the platform's sources (egress.platformSources) may reach
+                  on egress.platformPorts (default 6443, 443). With egress.ipv6.enabled (needs core.loopbackPool6):
+                  per node the hand-off's IPv6 side (address, the upstream sessions, the filter's lists; the
+                  translator-embedded deny list from translation.<site>.pref64 and egress.denyDestinations) and per
+                  network with ipv6 (its platform block and the placement prefixes inside it, all inside
+                  egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes and whether the
+                  node is the network's standby (index mod nodes); errors for an unusable configuration
   circuit-plan    {attachments: realization attachments, nodes: [node names], index}  an attachment circuit's link
                   subnet (the index-th of attachments.linkPool), each node's address and the CE's
   check-circuit   {accept: [prefix-list entries], space: [the network's prefixes], reserved: [cidr], egressInternet,
@@ -121,7 +127,8 @@ def check_fabric(req):
     except ValueError:
         pass
     errors += core6_check(core, srgb, pe_max, len((spec.get("borderGateway") or {}).get("nodes") or []))
-    eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []])
+    eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []],
+                      spec.get("domainAsn"), core)
     errors += eg["errors"]
     size["egressPool"] = eg["poolSize"]
     at = attachments_check(real.get("attachments") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []], core)
@@ -181,7 +188,7 @@ def core6_check(core, srgb, pe_max, node_count):
 EGRESS_RESERVED_TABLES = {253, 254, 255}
 
 
-def egress_check(eg, node_names):
+def egress_check(eg, node_names, domain_asn=0, core=None):
     """Validate the realization's egress settings for the fabric's nodes. poolSize = networks with egress (0 when
     egress is off): the smallest node NAT pool, and no more than the link pool's /31s."""
     if not eg.get("enabled"):
@@ -223,12 +230,197 @@ def egress_check(eg, node_names):
     vrf = eg.get("vrf") or {}
     if int(vrf.get("table") or 0) in EGRESS_RESERVED_TABLES or not vrf.get("name"):
         errors.append("realization egress.vrf needs a name and a table other than 253-255")
+    errors += egress6_check(eg.get("ipv6") or {}, node_names, domain_asn, core)
     return {"errors": errors, "poolSize": min(sizes) if sizes and not errors else 0}
+
+
+def _nets6(values, what, errors):
+    out = []
+    for c in values or []:
+        try:
+            n = ipaddress.ip_network(str(c), strict=True)
+        except ValueError as e:
+            errors.append(f"realization egress.ipv6.{what}: {e}")
+            continue
+        if n.version != 6:
+            errors.append(f"realization egress.ipv6.{what}: {n} is not IPv6")
+            continue
+        out.append(n)
+    return out
+
+
+def egress6_check(e6, node_names, domain_asn=0, core=None):
+    """Validate the realization's IPv6 egress for the fabric's nodes (nothing when it is off): the routed
+    prefixes, the AS (neither the domain's nor an upstream's), the upstream routers and each node's address on one
+    hand-off network, and the dual-stack core it needs."""
+    if not e6.get("enabled"):
+        return []
+    errors = []
+    if not str((core or {}).get("loopbackPool6") or ""):
+        errors.append("realization egress.ipv6 needs the dual-stack core (core.loopbackPool6)")
+    routed = _nets6(e6.get("routedPrefixes"), "routedPrefixes", errors)
+    if not routed:
+        errors.append("realization egress.ipv6.routedPrefixes is required when IPv6 egress is enabled")
+    for r in routed:
+        if r.prefixlen > 63:
+            errors.append(f"realization egress.ipv6.routedPrefixes: {r} leaves no room for placement prefixes up to /64")
+    try:
+        asn = int(e6.get("asn") or 0)
+    except (TypeError, ValueError):
+        asn = 0
+    if not 0 < asn < 4294967296:
+        errors.append("realization egress.ipv6.asn is required when IPv6 egress is enabled")
+    elif asn == int(domain_asn or 0):
+        errors.append(f"realization egress.ipv6.asn {asn} is the fabric's own domainAsn")
+    ups = e6.get("upstream") or []
+    if not ups:
+        errors.append("realization egress.ipv6.upstream is required when IPv6 egress is enabled")
+    up_addrs = []
+    for u in ups:
+        try:
+            a = ipaddress.ip_address(str((u or {}).get("address")))
+            ua = int((u or {}).get("asn") or 0)
+        except (TypeError, ValueError):
+            errors.append(f"realization egress.ipv6.upstream: {u} needs an address and an asn")
+            continue
+        if a.version != 6 or ua <= 0:
+            errors.append(f"realization egress.ipv6.upstream: {u} needs an IPv6 address and an asn")
+            continue
+        if ua == asn:
+            errors.append(f"realization egress.ipv6.upstream {a}: its asn {ua} is the egress VRF's own")
+        up_addrs.append(a)
+    nets = set()
+    for name in node_names:
+        n = (e6.get("nodes") or {}).get(name) or {}
+        try:
+            addr = ipaddress.ip_interface(str(n.get("address")))
+        except ValueError as e:
+            errors.append(f"realization egress.ipv6.nodes.{name}: address/length required ({e})")
+            continue
+        if addr.version != 6 or addr.network.prefixlen == 128:
+            errors.append(f"realization egress.ipv6.nodes.{name}.address {addr} is not an IPv6 address with its network length")
+            continue
+        nets.add(addr.network)
+        for a in up_addrs:
+            if a not in addr.network:
+                errors.append(f"realization egress.ipv6.nodes.{name}.address {addr} is not on the upstream {a}'s network")
+        for r in routed:
+            if addr.ip in r:
+                errors.append(f"realization egress.ipv6.nodes.{name}.address {addr} lies inside the routed prefix {r}")
+    if len(nets) > 1:
+        errors.append("realization egress.ipv6.nodes: the nodes' addresses are not on one hand-off network")
+    try:
+        mtu = int(e6.get("wanMtu") or 1420)
+        if not 1280 <= mtu <= 65535:
+            errors.append(f"realization egress.ipv6.wanMtu {mtu} is outside 1280-65535")
+    except (TypeError, ValueError):
+        errors.append("realization egress.ipv6.wanMtu is not a number")
+    _nets6(e6.get("denyDestinations6"), "denyDestinations6", errors)
+    _nets6(e6.get("allowDestinations6"), "allowDestinations6", errors)
+    for c in e6.get("resolverDestinations6") or []:
+        try:
+            if ipaddress.ip_address(str(c)).version != 6:
+                raise ValueError("not IPv6")
+        except ValueError:
+            errors.append(f"realization egress.ipv6.resolverDestinations6: {c} is not an IPv6 address")
+    for k, v in (e6.get("externalSitePrefixes") or {}).items():
+        for p in _nets6(v, f"externalSitePrefixes.{k}", errors):
+            if not any(p.subnet_of(r) for r in routed):
+                errors.append(f"realization egress.ipv6.externalSitePrefixes.{k}: {p} is outside the routed prefixes")
+    return errors
+
+
+def plat_deny6(translation, deny4):
+    """The translator-embedded forms of the IPv4 deny list: for every translation prefix (a /96) each IPv4 range
+    becomes prefix + range (length 96 + its length), so a translator never re-opens them."""
+    out = []
+    for site in sorted((translation or {}).keys()):
+        p = str(((translation or {}).get(site) or {}).get("pref64") or "")
+        if not p:
+            continue
+        try:
+            pref = ipaddress.ip_network(p, strict=True)
+        except ValueError:
+            continue
+        if pref.version != 6 or pref.prefixlen != 96:
+            continue
+        for d in deny4 or []:
+            try:
+                n4 = ipaddress.ip_network(str(d), strict=True)
+            except ValueError:
+                continue
+            if n4.version != 4:
+                continue
+            emb = ipaddress.ip_network((int(pref.network_address) + int(n4.network_address), 96 + n4.prefixlen))
+            if emb not in out:
+                out.append(emb)
+    return [str(n) for n in sorted(out, key=lambda n: (int(n.network_address), n.prefixlen))]
+
+
+def egress6_plan(eg, req, node_names, errors):
+    """The IPv6 side of egress-plan: per node its hand-off and filter lists, per network (the ones with ipv6) the
+    prefixes it announces and the node that is its standby."""
+    e6 = eg.get("ipv6") or {}
+    routed = [ipaddress.ip_network(str(c), strict=True) for c in e6.get("routedPrefixes") or []]
+    networks = {}
+    for w in req.get("networks") or []:
+        v6 = w.get("ipv6")
+        if not v6:
+            continue
+        try:
+            block = ipaddress.ip_network(str(v6.get("block")), strict=True)
+        except ValueError as e:
+            errors.append(f"{w['network']}: IPv6 block: {e}")
+            continue
+        if block.version != 6 or not any(block.subnet_of(r) for r in routed):
+            errors.append(f"{w['network']}: IPv6 block {block} is outside the routed prefixes")
+            continue
+        prefixes = []
+        for c in v6.get("prefixes") or []:
+            try:
+                p = ipaddress.ip_network(str(c), strict=True)
+            except ValueError as e:
+                errors.append(f"{w['network']}: IPv6 prefix {c}: {e}")
+                continue
+            if p.version != 6 or not p.subnet_of(block):
+                errors.append(f"{w['network']}: IPv6 prefix {p} is outside the network's block {block}")
+                continue
+            if p.prefixlen > 64:
+                errors.append(f"{w['network']}: IPv6 prefix {p} is longer than /64")
+                continue
+            if str(p) not in prefixes:
+                prefixes.append(str(p))
+        networks[w["network"]] = {"block": str(block), "prefixes": sorted(prefixes, key=lambda s: (ipaddress.ip_network(s).network_address, ipaddress.ip_network(s).prefixlen)),
+                                  "index": int(w["index"])}
+    count = max(1, len(node_names))
+    for k, v in networks.items():
+        v["primary"] = node_names[v["index"] % count] if node_names else ""
+    nodes = {}
+    for name in node_names:
+        n = (e6.get("nodes") or {}).get(name) or {}
+        addr = ipaddress.ip_interface(str(n.get("address")))
+        nodes[name] = {
+            "address": str(addr), "ip": str(addr.ip), "asn": int(e6.get("asn") or 0),
+            "upstream": [{"address": str(ipaddress.ip_address(str(u.get("address")))), "asn": int(u.get("asn"))}
+                         for u in e6.get("upstream") or []],
+            "wanMtu": int(e6.get("wanMtu") or 1420), "mss": int(e6.get("wanMtu") or 1420) - 60,
+            "maxPrefixesUpstream": int(e6.get("maxPrefixesUpstream") or 10),
+            "maxPrefixesNetwork": int(e6.get("maxPrefixesNetwork") or 1000),
+            "routed": [str(r) for r in routed],
+            "standbyCommunity": int(e6.get("standbyCommunity") or 998),
+            "standbyPrepend": int(e6.get("standbyPrepend") or 2),
+            "deny6": [str(c) for c in e6.get("denyDestinations6") or []],
+            "allow6": [str(c) for c in e6.get("allowDestinations6") or []],
+            "resolvers6": [str(c) for c in e6.get("resolverDestinations6") or []],
+            "platDeny6": plat_deny6(req.get("translation"), eg.get("denyDestinations")),
+            "external6": sorted({str(p) for v in (e6.get("externalSitePrefixes") or {}).values() for p in v or []}),
+        }
+    return nodes, networks
 
 
 def egress_plan(req):
     eg, node_names = req.get("egress") or {}, req.get("nodes") or []
-    chk = egress_check(eg, node_names)
+    chk = egress_check(eg, node_names, req.get("domainAsn"), req.get("core"))
     if chk["errors"]:
         return {"errors": chk["errors"], "poolSize": 0, "nodes": {}, "networks": {}}
     if not eg.get("enabled"):
@@ -240,6 +432,8 @@ def egress_plan(req):
     errors, nodes, networks = [], {}, {}
     sources = [str(ipaddress.ip_network(str(c), strict=True)) for c in eg.get("platformSources") or []]
     ports = [int(x) for x in eg.get("platformPorts") or [6443, 443]]
+    v6_on = bool((eg.get("ipv6") or {}).get("enabled"))
+    nodes6, nets6 = egress6_plan(eg, req, node_names, errors) if v6_on else ({}, {})
     seen = []
     for w in req.get("networks") or []:
         for c in w.get("platform") or []:
@@ -267,16 +461,27 @@ def egress_plan(req):
                 errors.append(f"{w['network']}: egress index {i} is outside the pool (0-{chk['poolSize'] - 1})")
                 continue
             xo, xe = link.network_address + 2 * i, link.network_address + 2 * i + 1
-            internet = bool(w.get("internet", True))
+            # internet: the IPv4 default route and source NAT (only for a network with IPv4 address space)
+            internet = bool(w.get("internet", True)) and bool(w.get("ipv4", True))
             nat = str(pool.network_address + i) if internet else ""
             platform = [str(ipaddress.ip_network(str(c), strict=True)) for c in w.get("platform") or []]
-            out.append({"network": w["network"], "vpnTarget": t, "vrf": f"e{t}", "table": base + t, "zone": i + 1,
-                        "xe": f"xe{t}", "xo": f"xo{t}", "xeAddr": f"{xe}/31", "xoAddr": f"{xo}/31",
-                        "xeIp": str(xe), "xoIp": str(xo), "nat": nat, "internet": internet, "platform": platform,
-                        # RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback form at render
-                        "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""})
+            v6 = nets6.get(w["network"])
+            e = {"network": w["network"], "vpnTarget": t, "vrf": f"e{t}", "table": base + t, "zone": i + 1,
+                 "xe": f"xe{t}", "xo": f"xo{t}", "xeAddr": f"{xe}/31", "xoAddr": f"{xo}/31",
+                 "xeIp": str(xe), "xoIp": str(xo), "nat": nat, "internet": internet, "platform": platform,
+                 # RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback form at render
+                 "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""}
+            if v6:
+                # the IPv6 session over the veth, the prefixes announced, and the sources the filter admits (the
+                # node's own ICMPv6 source is added by the node's job: it differs per node)
+                e["ipv6"] = {"block": v6["block"], "prefixes": v6["prefixes"], "standby": v6["primary"] != name,
+                             "src6": [v6["block"]]}
+            out.append(e)
             entry = networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": [],
-                                                       "internet": internet, "platform": platform})
+                                                       "internet": internet, "platform": platform,
+                                                       "ipv6": bool(v6),
+                                                       "prefixes6": v6["prefixes"] if v6 else [],
+                                                       "primary": v6["primary"] if v6 else ""})
             if nat:
                 entry["sourceAddresses"].append(nat)
         nodes[name] = {"vrf": (eg.get("vrf") or {}).get("name", "egress"), "table": int((eg.get("vrf") or {}).get("table", 9000)),
@@ -286,7 +491,9 @@ def egress_plan(req):
                        "allow": [str(c) for c in eg.get("allowDestinations") or []],
                        "platformSources": sources, "platformPorts": ports,
                        "networks": out}
-    return {"errors": errors, "poolSize": chk["poolSize"], "nodes": nodes, "networks": networks}
+        if v6_on:
+            nodes[name]["ipv6"] = nodes6[name]
+    return {"errors": errors, "poolSize": chk["poolSize"], "nodes": nodes, "networks": networks, "ipv6": v6_on}
 
 
 def pe_addresses(req):

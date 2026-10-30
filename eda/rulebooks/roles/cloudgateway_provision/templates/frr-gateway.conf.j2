@@ -127,10 +127,25 @@ route-map GW-T5 permit 10
  set community {{ _asn }}:{{ fab_real.gatewayCommunity }} additive
 exit
 !
+{% if _v6 %}
+! routes this gateway originates for its own site (its unreachable IPv6 default while the network has no IPv6 egress,
+! the covering routes) carry this community and stay out of the network's VPN: at another site they would compete with
+! the real routes (a default with an empty AS path beats the egress default)
+bgp community-list standard GW-LOCAL seq 5 permit {{ _asn }}:{{ fab_real.gatewayLocalCommunity | default(997) }}
+route-map GW-LOCAL permit 10
+ set community {{ _asn }}:{{ fab_real.gatewayLocalCommunity | default(997) }} additive
+exit
+!
+{% endif %}
 ! the site's route targets and router MAC stay out of the core. One map per network: FRR 9 and later attach the
 ! export route target before this map runs, so the map sets it again (`set extcommunity none` alone would strip it
 ! and nothing would reach the VPN); FRR 8.5 adds the same route target after the map
 {% for rt in cg_vrfs | map(attribute='vpnTarget') | unique | sort %}
+{% if _v6 %}
+route-map TO-VPN-{{ rt }} deny 5
+ match community GW-LOCAL
+exit
+{% endif %}
 route-map TO-VPN-{{ rt }} permit 10
  set extcommunity none
  set extcommunity rt {{ _asn }}:{{ rt }}
@@ -216,13 +231,19 @@ router bgp {{ _asn }} vrf {{ v.vrf }}
 {# the IPv6 loopback is the next hop: FRR installs no labelled IPv6 route over an IPv4 next hop. The address family
    gets its own label, the same RD and the same route target as IPv4 #}
  address-family ipv6 unicast
-{% if not (_egress6.enabled | default(false) | bool) %}
-{#- while the fabric offers no IPv6 internet, the gateway itself announces ::/0 to the site (Type-5, GW-T5), backed by
-    the kernel's unreachable default in the VRF table: the site forwards off-network IPv6 here and gets an ICMPv6
-    unreachable at once instead of dropping it silently. With egress.ipv6.enabled the egress VRF's ::/0 arrives over
-    the VPN and this local route must not shadow it #}
-  network ::/0
+{% if not (v.egress6 | default(false) | bool) %}
+{#- while the network has no IPv6 internet through the fabric, the gateway itself announces ::/0 to the site (Type-5,
+    GW-T5), backed by the kernel's unreachable default in the VRF table: the site forwards off-network IPv6 here and
+    gets an ICMPv6 unreachable at once instead of dropping it silently. With the network's IPv6 egress realized the
+    egress VRF's ::/0 arrives over the VPN and this local route must not shadow it #}
+  network ::/0 route-map GW-LOCAL
 {% endif %}
+{#- the covering routes: the network's own IPv6 space and the platform's routed space, longer than any default, each
+    backed by an unreachable route in the VRF table: space the fabric does not route (an unallocated or another
+    tenant's prefix) fails fast here and never leaves for the internet #}
+{% for p in v.covering6 | default([]) %}
+  network {{ p }} route-map GW-LOCAL
+{% endfor %}
   label vpn export auto
   rd vpn export {{ _rd }}
   rt vpn both {{ _asn }}:{{ v.vpnTarget }}

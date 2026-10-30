@@ -338,19 +338,19 @@ def ip_main(k, nsname, args, out):
                     out.append(s + " metric %s pref medium" % r["metric"])
             return False
         if verb == "replace":
-            if rest[:2] != ["unreachable", "default"]:
-                raise Fail("only unreachable defaults are modelled")
+            if rest[:1] != ["unreachable"]:
+                raise Fail("only unreachable routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
-            r = {"type": "unreachable", "dst": "default", "metric": sel["metric"], "table": sel.get("table", "main")}
-            ns["routes6"] = [x for x in ns["routes6"] if not (x["table"] == r["table"] and x["dst"] == "default"
+            r = {"type": "unreachable", "dst": rest[1], "metric": sel["metric"], "table": sel.get("table", "main")}
+            ns["routes6"] = [x for x in ns["routes6"] if not (x["table"] == r["table"] and x["dst"] == r["dst"]
                                                                and x["metric"] == r["metric"])]
             ns["routes6"].append(r)
             return True
         if verb in ("del", "delete"):
-            if rest[:2] != ["unreachable", "default"]:
-                raise Fail("only unreachable defaults are modelled")
+            if rest[:1] != ["unreachable"]:
+                raise Fail("only unreachable routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
-            match = [x for x in ns["routes6"] if x["type"] == "unreachable" and x["dst"] == "default"
+            match = [x for x in ns["routes6"] if x["type"] == "unreachable" and x["dst"] == rest[1]
                      and x["table"] == sel.get("table", "main") and ("metric" not in sel or x["metric"] == sel["metric"])]
             if not match:
                 raise Fail("RTNETLINK answers: No such process", 2)

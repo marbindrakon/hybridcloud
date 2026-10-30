@@ -28,7 +28,7 @@ def placement(name, vni, vt, subnets=None, prefixes=None, gateway="site1", relea
         st["subnets"] = subnets
     if prefixes is not None:
         st["prefixes"] = prefixes
-    return {"metadata": {"namespace": "entity-acme", "name": name}, "status": st}
+    return {"metadata": {"namespace": "entity-acme", "name": name}, "spec": {"network": "net-" + name}, "status": st}
 
 
 def copy_as_fact(task, fact):
@@ -40,11 +40,12 @@ def copy_as_fact(task, fact):
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class GatewayVrfs(unittest.TestCase):
-    def vrfs(self, placements):
+    def vrfs(self, placements, networks=None, fab_real=None, cg_fabric=None):
         t = copy.deepcopy(by_name(load(os.path.join(CG, "main.yml")), "Set the gateway's VRFs"))
         return run_play([t, write_out("cg_vrfs")],
                         {"fab_name": "site1", "_cg_placements": {"resources": placements},
-                         "cg_fabric": {"spec": {"overlayMtu": 9000}}, "fab_spec": {"transport": "none"},
+                         "_cg_networks": {"resources": networks or []}, "fab_real": fab_real or {},
+                         "cg_fabric": cg_fabric or {"spec": {"overlayMtu": 9000}}, "fab_spec": {"transport": "none"},
                          "cg_instance": {}, "fab_st": {}})
 
     def test_families_and_prefixes(self):
@@ -60,13 +61,41 @@ class GatewayVrfs(unittest.TestCase):
         ])
         self.assertEqual([v["vrf"] for v in out], ["t51000", "t51001", "t51002", "t51003", "t51004"])
         by = {v["vrf"]: v for v in out}
-        self.assertEqual(by["t51000"], {"placement": "entity-acme/v4", "vrf": "t51000", "vni": 51000, "vpnTarget": 10000,
-                                        "mtu": 9000, "families": [4], "prefixes4": ["10.60.0.0/24"], "prefixes6": []})
+        self.assertEqual(by["t51000"], {"placement": "entity-acme/v4", "network": "entity-acme/net-v4", "vrf": "t51000",
+                                        "vni": 51000, "vpnTarget": 10000, "mtu": 9000, "families": [4],
+                                        "prefixes4": ["10.60.0.0/24"], "prefixes6": [], "egress6": False, "covering6": []})
+        # an IPv6 VRF without IPv6 egress on the fabric: no egress6, no covering routes
+        self.assertEqual((by["t51001"]["egress6"], by["t51001"]["covering6"]), (False, []))
         self.assertEqual((by["t51001"]["families"], by["t51001"]["prefixes6"]), ([4, 6], ["2001:db8:100:1::/64"]))
         self.assertEqual((by["t51002"]["families"], by["t51002"]["prefixes4"]), ([6], []))
         # a status from before per-family subnets, and one without any prefix yet
         self.assertEqual((by["t51003"]["families"], by["t51003"]["prefixes4"]), ([4], ["10.60.3.0/24"]))
         self.assertEqual((by["t51004"]["families"], by["t51004"]["prefixes4"], by["t51004"]["prefixes6"]), ([4], [], []))
+
+    def test_ipv6_egress_and_covering_routes(self):
+        real = {"egress": {"ipv6": {"enabled": True, "routedPrefixes": ["2001:db8:4005::/48"]}}}
+        fab = {"spec": {"overlayMtu": 9000},
+               "status": {"realization": {"egress": {"networks": [{"network": "entity-acme/net-dual", "ipv6": True},
+                                                                  {"network": "entity-acme/net-v6only", "ipv6": False}]}}}}
+        nets = [{"metadata": {"namespace": "entity-acme", "name": "net-dual"},
+                 "status": {"ipv6": {"mode": "Platform", "prefixes": ["2001:db8:4005:4200::/56"]}}},
+                {"metadata": {"namespace": "entity-acme", "name": "net-v6only"},
+                 "status": {"ipv6": {"mode": "Tenant", "prefixes": ["2001:db8:100::/48"]}}}]
+        out = self.vrfs([
+            placement("dual", 51001, 10001, subnets=[{"family": 4, "prefix": "10.60.1.0/24", "source": "Network"},
+                                                     {"family": 6, "prefix": "2001:db8:4005:4200::/64", "source": "Platform"}]),
+            placement("v6only", 51002, 10002, subnets=[{"family": 6, "prefix": "2001:db8:100:2::/64", "source": "Network"}]),
+            placement("v4", 51000, 10000, subnets=[{"family": 4, "prefix": "10.60.0.0/24", "source": "Network"}]),
+        ], networks=nets, fab_real=real, cg_fabric=fab)
+        by = {v["vrf"]: v for v in out}
+        # the network with IPv6 egress: no local default; its block and the routed space as covering routes
+        self.assertEqual((by["t51001"]["egress6"], by["t51001"]["covering6"]),
+                         (True, ["2001:db8:4005:4200::/56", "2001:db8:4005::/48"]))
+        # tenant prefixes: covered too, no egress
+        self.assertEqual((by["t51002"]["egress6"], by["t51002"]["covering6"]),
+                         (False, ["2001:db8:100::/48", "2001:db8:4005::/48"]))
+        # an IPv4-only VRF: nothing
+        self.assertEqual((by["t51000"]["egress6"], by["t51000"]["covering6"]), (False, []))
 
     def test_status_realization(self):
         t = by_name(load(os.path.join(CG, "main.yml")), "Report the gateway ready")
@@ -75,14 +104,15 @@ class GatewayVrfs(unittest.TestCase):
                  "families": [4, 6], "prefixes4": ["10.60.1.0/24"], "prefixes6": ["2001:db8:100:1::/64"]}]
         common = {"cg_status": {"site": {}}, "cg_site_extra": {}, "cg_node_results": [], "cg_instance": {},
                   "fab_real": {"model": "linux-pe"}, "fab_name": "site1", "cg_vrfs": vrfs}
+        vrfs[0].update({"network": "entity-acme/net", "egress6": True, "covering6": ["2001:db8:4005::/48"]})
         for core, lo6 in ((REAL["core"], ""), (CORE6, "2001:db8:4005:ffff::2")):
             out = run_play([{"ansible.builtin.set_fact": {"_s": expr}}, write_out("_s")],
                            dict(common, cg_pe=F.pe_addresses({"core": core, "index": 2}),
                                 cg_root_pe=F.pe_addresses({"core": core, "index": 1})))
             r = out["realization"]
             self.assertEqual(r["loopback6"], lo6)
-            self.assertEqual(r["vrfs"], [{"placement": "entity-acme/dual", "vrf": "t51001", "vni": 51001,
-                                          "vpnTarget": 10001, "families": [4, 6]}])
+            self.assertEqual(r["vrfs"], [{"placement": "entity-acme/dual", "network": "entity-acme/net", "vrf": "t51001",
+                                          "vni": 51001, "vpnTarget": 10001, "families": [4, 6], "egress6": True}])
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -244,7 +274,8 @@ class RootConfig(unittest.TestCase):
     def test_status_realization(self):
         t = by_name(load(os.path.join(HF, "main.yml")), "Report the fabric ready")
         common = {"fab_name": "lab", "hf_ledger": {"allocated": {}, "available": {}}, "hf_node_results": [],
-                  "hf_egress_status": [], "hf_attach": {"status": [], "skipped": []}, "hf_ipam": {}}
+                  "hf_egress_status": [], "hf_egress6_status": {"enabled": False},
+                  "hf_attach": {"status": [], "skipped": []}, "hf_ipam": {}}
         for core, rr6, on in ((REAL["core"], "", False), (CORE6, "2001:db8:4005:ffff::1", True)):
             out = run_play([{"ansible.builtin.set_fact": {"_s": t["vars"]["fab_status"]}}, write_out("_s")],
                            dict(common, fab_real=dict(REAL, core=core), hf_pe=F.pe_addresses({"core": core, "index": 1})))

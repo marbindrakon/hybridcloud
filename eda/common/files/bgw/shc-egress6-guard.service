@@ -1,0 +1,7 @@
+[Unit]
+Description=shc fabric: IPv6 egress fail-closed guard
+After=frr.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/shc-egress6-guard

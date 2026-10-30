@@ -16,6 +16,10 @@ fabric_realization_defaults:
   vpnTargetPool: {start: 10000, end: 10999}
   # standard community <domainAsn>:<value> on the routes gateways originate into a site; never taken back
   gatewayCommunity: 999
+  # standard community <domainAsn>:<value> on the routes a gateway originates for its own site only (its unreachable
+  # IPv6 default while the network has no IPv6 egress, the covering routes): never exported into the network's VPN,
+  # where an unreachable default of one site would compete with the egress default
+  gatewayLocalCommunity: 997
   gateway:
     # per address family: only the placements' prefixes (and the host routes inside them) enter a VRF from the
     # site, so a site router can't put another prefix into a tenant's network. Off for a family: the site's routes
@@ -172,10 +176,54 @@ fabric_realization_defaults:
     denyDestinations: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12,
                        192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3]
     allowDestinations: []
-    # IPv6 internet egress (routed, platform-assigned space only); off: the networks' IPv6 egress reads NotOffered
+    # IPv6 internet egress (routed, platform-assigned space only); off: the networks' IPv6 egress reads NotOffered.
+    # On: the egress VRF of every node speaks eBGP (asn) with the upstream routers on the hand-off network, sends them
+    # the placement prefixes of the networks with internet egress (IPv6 from the platform) and takes their default
+    # route; per network the root VRF e<vpnTarget> gains an IPv6 session over its veth (the default route reaches the
+    # network's VPN only while an upstream sends it) and the nftables table inet shc_egress6 admits outbound traffic
+    # only from the network's platform block and inbound only replies and ICMPv6 errors. Needs the dual-stack core
+    # (core.loopbackPool6).
     ipv6:
       enabled: false
-      # the standby node marks its IPv6 default route with <domainAsn>:<standbyCommunity>; the gateways announce
-      # it to the sites with this local preference, so the sites prefer the primary node for IPv6 internet traffic
+      # the platform's globally routed IPv6 space (the platform address pools lie inside it): only prefixes inside
+      # it, longer than it and at most /64, are announced upstream; the whole of it is discarded at the egress VRF
+      # and in every network VRF, so unallocated space never loops; a source inside it arriving from upstream is
+      # dropped. The gateways announce it (and each network's own IPv6 prefixes) into the sites, backed by an
+      # unreachable route, so space the fabric does not route fails fast at the gateway
+      routedPrefixes: []
+      # the egress VRF's own AS toward the upstream routers (not domainAsn, not an upstream's)
+      asn: 0
+      # the upstream routers on the hand-off network: [{address, asn}]; one single-hop eBGP session each per node,
+      # timers 10/30, no BFD, no password; in: the default route only; out: the placement prefixes
+      upstream: []
+      # per node (borderGateway.nodes[].name): {address: <address/length on the hand-off network>}
+      nodes: {}
+      # the smallest MTU on the way to the internet: IPv6 MTU of the hand-off device (the node itself sends Packet
+      # Too Big) and the TCP MSS clamp (wanMtu - 60) on the networks' veths
+      wanMtu: 1420
+      # prefixes accepted from each upstream (the default plus the external site prefixes) and from each network
+      maxPrefixesUpstream: 10
+      maxPrefixesNetwork: 1000
+      # each network's IPv6 internet traffic leaves and returns through one primary node (the filter is stateful):
+      # the node at position (egress index mod number of nodes). The standby node marks its IPv6 default route with
+      # <domainAsn>:<standbyCommunity> (the gateways announce it to the sites with standbyLocalPref) and prepends
+      # its own AS standbyPrepend times toward the upstream
       standbyCommunity: 998
       standbyLocalPref: 50
+      standbyPrepend: 2
+      # a node whose upstream sessions are all down for this long is reported as an event on the HybridFabric; the
+      # networks read Degraded for IPv6 egress meanwhile
+      sessionDownAlertMinutes: 5
+      # destinations never reachable through the IPv6 egress unless listed in allowDestinations6 (the IANA
+      # special-purpose ranges); an installation adds its own address space here
+      denyDestinations6: ["::/128", "::1/128", "::ffff:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48", "100::/64",
+                          "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20", "5f00::/16", "fc00::/7",
+                          "fe80::/10", "ff00::/8"]
+      allowDestinations6: []
+      # resolver addresses reachable on port 53 only (TCP and UDP), also when inside denyDestinations6
+      resolverDestinations6: []
+      # (the IPv4 destinations of egress.denyDestinations stay unreachable through a translator: for every
+      # translation prefix (translation.<site>.pref64) their embedded forms are denied before the allow list)
+      # per network ("<namespace>/<name>": [prefixes]): sources inside routedPrefixes that legitimately arrive from
+      # upstream (a site reached through the upstream rather than the fabric); filled by the platform's automation
+      externalSitePrefixes: {}
