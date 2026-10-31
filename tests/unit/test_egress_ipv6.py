@@ -662,3 +662,39 @@ class PlacementStatus(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NetworkWakesFabric(unittest.TestCase):
+    """The network job wakes the fabric when a placement's IPv6 subnet came or went since the fabric announced the
+    network's prefixes (the /64 has no return path from the internet until the fabric's next run)."""
+
+    def woke(self, placements, carried, families=None):
+        t = by_name(load(os.path.join(HN, "main.yml")), "Wake the fabric")
+        t = dict(t)
+        t.pop("ansible.builtin.include_tasks")
+        t["ansible.builtin.set_fact"] = {"woke": True}
+        base = {"fabric_platform_namespace": "platform", "hn_fabric_name": "lab", "fab_name": "g",
+                "hn_egress": {"families": families or [{"family": 6, "state": "ready"}]}, "hn_platform_reach": False,
+                "hn_egress_carried": carried, "_hn_placements": {"resources": placements}}
+        return run_play([t, write_out("woke | default(false)")], base)
+
+    def pl(self, name, network, prefixes, deleting=False):
+        md = {"name": name, "namespace": "acme"}
+        if deleting:
+            md["deletionTimestamp"] = "2001-01-01T00:00:00Z"
+        return {"metadata": md, "spec": {"network": network},
+                "status": {"subnets": [{"family": 6 if ":" in p else 4, "prefix": p} for p in prefixes]}}
+
+    def test_a_new_placement_wakes_the_fabric(self):
+        carried = {"network": "acme/g", "ipv6": True, "prefixes6": ["2001:db8:1:1::/64"]}
+        self.assertTrue(self.woke([self.pl("a", "g", ["2001:db8:1:1::/64"]), self.pl("b", "g", ["2001:db8:1:2::/64"])], carried))
+
+    def test_the_announced_set_wakes_nothing(self):
+        carried = {"network": "acme/g", "ipv6": True, "prefixes6": ["2001:db8:1:2::/64", "2001:db8:1:1::/64"]}
+        pls = [self.pl("a", "g", ["10.0.1.0/24", "2001:db8:1:1::/64"]), self.pl("b", "g", ["2001:db8:1:2::/64"]),
+               self.pl("c", "g", ["2001:db8:1:3::/64"], deleting=True), self.pl("x", "other", ["2001:db8:9::/64"])]
+        self.assertFalse(self.woke(pls, carried))
+
+    def test_without_realized_ipv6_egress_the_prefixes_do_not_matter(self):
+        carried = {"network": "acme/g", "ipv6": False, "prefixes6": []}
+        self.assertFalse(self.woke([self.pl("a", "g", ["2001:db8:1:1::/64"])], carried))

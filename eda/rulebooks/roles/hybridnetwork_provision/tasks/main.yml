@@ -426,14 +426,30 @@
     - name: Set the egress state
       ansible.builtin.include_tasks: egress_status.yml
 
-    # the fabric adds or removes the network's egress (either family) and wakes it again when it did
+    # the fabric adds or removes the network's egress (either family) and wakes it again when it did; with the IPv6
+    # egress realized, the fabric announces exactly the placements' IPv6 subnets upstream, so a placement that came or
+    # went since the fabric's last run wakes it too (its /64 has no return path from the internet until then)
     - name: Wake the fabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ hn_fabric_name }}"}]
+        _placed6: >-
+          {%- set out = [] -%}
+          {%- for p in _hn_placements.resources | default([]) -%}
+            {%- if p.spec.network == fab_name and p.metadata.deletionTimestamp is not defined -%}
+              {%- for sn in (p.status | default({}, true)).subnets | default([], true) -%}
+                {%- if sn.family | default(0) | int == 6 and sn.prefix | default('') | length > 0 -%}
+                  {%- set _ = out.append(sn.prefix) -%}
+                {%- endif -%}
+              {%- endfor -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out | unique | sort }}
+        _announced6: "{{ hn_egress_carried.prefixes6 | default([], true) | unique | sort }}"
       when: >-
         (hn_egress.families | default([]) | selectattr('state', 'in', ['pending', 'removing']) | list | length > 0)
         or ((hn_platform_reach | bool) != ((hn_egress_carried.platform | default([])) | length > 0))
+        or ((hn_egress_carried.ipv6 | default(false) | bool) and (_placed6 != _announced6))
 
     - name: Report the network ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
