@@ -201,7 +201,9 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | Reason | What it means | Who acts |
 |---|---|---|
 | `AddressChoice` | Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4. | You (the tenant) |
+| `CanaryFailed` | The platform's translation canary on a site fails or is stale; the platform team is looking at it. | The platform team |
 | `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
 | `IPv6EgressUpstreamDown` | IPv6 internet access works through the other node; a node's upstream sessions are down. | The platform team |
+| `IPv6TranslationCanaryFailed` | Translation to IPv4 may not work on a site: the platform's canary there has failed for several minutes; the platform team is alerted. | The platform team |
 | `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 <!-- reasons:end -->

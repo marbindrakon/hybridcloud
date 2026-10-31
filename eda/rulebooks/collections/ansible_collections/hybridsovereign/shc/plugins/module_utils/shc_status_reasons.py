@@ -144,6 +144,10 @@ PART_REASONS = {
     "Degraded": _r("A", READY, "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path."),
     # the HybridFabric's IPv6EgressUpstream condition and its Warning event: a node without an upstream session
     "IPv6EgressUpstreamDown": _r("P", READY, "IPv6 internet access works through the other node; a node's upstream sessions are down."),
+    # the HybridFabric's IPv6Translation condition and its Warning event: the platform's translation canary on a site
+    # fails one of its checks, has not run for a while or cannot be reached
+    "CanaryFailed": _r("P", READY, "The platform's translation canary on a site fails or is stale; the platform team is looking at it."),
+    "IPv6TranslationCanaryFailed": _r("P", READY, "Translation to IPv4 may not work on a site: the platform's canary there has failed for several minutes; the platform team is alerted."),
 }
 
 # Deletion requests written by the operator are named <Kind>DeleteRequested.

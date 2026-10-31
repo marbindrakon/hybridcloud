@@ -54,6 +54,9 @@ identity provider, automation and registry. The tenant itself
 ([entity/example-corp.yaml](entity/example-corp.yaml)) is created by the platform team too. Do
 not apply platform objects by hand; the platform's GitOps owns them.
 
+[platform/ipv6-canary/](platform/ipv6-canary/README.md) is different: the translation canary, a
+probe workload the platform team deploys on a tenant of its own and names in the realization.
+
 ## Checking the samples
 
 Every sample passes a strict server-side dry run (nothing is created):

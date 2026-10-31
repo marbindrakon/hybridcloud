@@ -233,6 +233,79 @@ Translation follows from the network: IPv6 from the platform, no IPv4 and `egres
 switch. Dual-stack networks never get DNS64 resolvers. With no entry for a site, `status.egress.ipv4Translation` reads
 `unavailable` (`NotOffered`).
 
+### Translation canary
+
+```yaml
+canaries:
+  ipv6Translation:
+    network: ""        # "<namespace>/<name>" of the platform team's IPv6-only network; "" = no canary
+    workload: ""       # the probe's name on every placement of that network (VM or server)
+    port: 9464         # the probe's metrics port
+    alertMinutes: 5    # a site failed or stale this long is reported as a Warning event on the fabric
+```
+The translation canary is a probe VM the platform team runs on every site that offers IPv6-only placements with
+translation, on an IPv6-only network of its own tenant (IPv6 from the platform, internet access on). Every minute it
+checks what a tenant's IPv6-only guest depends on: its global address, every translation resolver, that
+`ipv4only.arpa` resolves inside the site's translation prefix, an IPv4-only name by name and an IPv4 literal through
+its CLAT, a native IPv6 name, a 1400-byte path with "don't fragment", and that a denied IPv4 destination embedded in
+the translation prefix stays refused. It serves the results in Prometheus text format at
+`http://[<address>]:<port>/metrics` (`shc_ipv6_canary_check{check="<name>"} 0|1`,
+`shc_ipv6_canary_run_timestamp_seconds`). Deploy it from [samples/platform/ipv6-canary](../../samples/platform/ipv6-canary/README.md),
+then set the realization keys. With `network` empty nothing below is written.
+
+**The site job** finds the probe: the canary network's placement on the site (a NetworkPlacement in the network's
+namespace whose `status.site` is the site, of the site type's backend kind), then on OpenShift Virtualization the
+VirtualMachineInstance named `workload` in the placement's site namespaces (`status.namespaces`; read with the site's
+fabric credential), on OpenStack the server named `workload` in the environment's project (read with the site
+account), and takes the probe's first global IPv6 address (on OpenStack: on the placement's network). The probe's
+address is never read from labels or annotations on tenant objects. It records on the CloudInfrastructure:
+
+```yaml
+status:
+  realization:
+    ipv6Canary:
+      placement: <namespace>/<name>   # the canary network's placement on this site
+      vrf: t<vni>                      # the placement's VRF on the site's gateway
+      address: <the probe's global IPv6 address>
+      workload: <namespace>/<name> of the VirtualMachineInstance, or the server's id
+      # instead of address: error: <why the probe or its address was not found>
+```
+No placement of the canary network on the site: no `ipv6Canary`. A lookup that fails never fails the site job; it is
+recorded as `error`.
+
+**The fabric job**, after the nodes are configured, reads the canary of every site of the fabric (the sites of its
+gateways) that reports one, on one border gateway node (the first that answers): from the site's gateway namespace in
+the placement's VRF, `ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 http://[<address>]:<port>/metrics`, with
+the VRF's own global IPv6 address as source (the ICMPv6 source of the dual-stack core, `core.icmpSource6`; the probe's
+replies must route back to it). It records on the HybridFabric:
+
+```yaml
+status:
+  realization:
+    translation:
+      canaries:
+        <site>:
+          placement: <namespace>/<name>
+          address: <the probe's address>
+          at: <when the probe's last run finished>
+          checks: {address: 1, resolver: 1, pref64: 1, name4: 1, literal4: 1, name6: 1, mtu: 1, deny: 1}
+          stale: false        # true: the last run is older than three minutes, or the probe was not reachable
+          healthy: true       # reachable, not stale, every check 1
+          error: ""           # why not healthy, when that is not a failed check
+          failedSince: ""     # since when it has not been healthy (kept across runs)
+```
+The condition `IPv6Translation` is `True` (`Ready`) while every site's canary is healthy and `False`
+(`CanaryFailed`) naming the failing sites, their failed checks and since when; it is absent while no canary is
+configured or no site reports one (the status library never removes a condition: after the canary is switched off the
+last one stays until the fabric is recreated). Once a site has been failed or stale for `alertMinutes`, every fabric
+run while it lasts adds a Warning event `IPv6TranslationCanaryFailed` on the HybridFabric, as for the IPv6 egress.
+A canary that could not be read at all (no node answered) reads `stale` with the reason in `error`; the fabric job
+itself never fails because of the canary.
+
+**Testing the alert:** on one site, replace the probe with a copy whose user data names a resolver address where no
+resolver answers (same probe name). Its `resolver` check reads 0 within a minute, the condition turns `False` on the
+next fabric run, and the event follows after `alertMinutes`. Put the original user data back to clear it.
+
 ## IPv6 internet egress (`egress.ipv6`)
 
 ```yaml

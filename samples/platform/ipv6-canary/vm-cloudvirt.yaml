@@ -1,0 +1,51 @@
+# The translation canary probe on an OpenShift Virtualization site: one Fedora VM in the canary environment's site
+# namespace on the canary network's placement (the namespace's primary network), with the l2bridge binding. Its name
+# is the realization's canaries.ipv6Translation.workload. The user data is probe-user-data.yaml with its placeholders
+# replaced, kept in a Secret of the same namespace:
+#   oc create secret generic __WORKLOAD__-user-data -n __NAMESPACE__ --from-file=userdata=probe-user-data.yaml
+# The network data configures the NIC (matched by its MAC address) by DHCPv6 and router advertisements, without DHCPv4,
+# with the translation resolvers of the placement (status.ipv6.translation.resolvers). Replace every placeholder
+# (README.md lists them).
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: __WORKLOAD__
+  namespace: __NAMESPACE__
+  labels: {app: shc-ipv6-canary}
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels: {app: shc-ipv6-canary}
+    spec:
+      evictionStrategy: LiveMigrate
+      domain:
+        cpu: {cores: 1}
+        memory: {guest: 1Gi}
+        resources: {requests: {cpu: 250m}}
+        devices:
+          disks:
+            - {name: root, disk: {bus: virtio}}
+            - {name: cloudinit, disk: {bus: virtio}}
+          interfaces:
+            - name: default
+              macAddress: "__MAC__"
+              binding: {name: l2bridge}
+      networks:
+        - {name: default, pod: {}}
+      volumes:
+        - name: root
+          containerDisk: {image: quay.io/containerdisks/fedora:42}
+        - name: cloudinit
+          cloudInitNoCloud:
+            secretRef: {name: __WORKLOAD__-user-data}
+            networkData: |
+              version: 2
+              ethernets:
+                primary:
+                  match: {macaddress: "__MAC__"}
+                  dhcp4: false
+                  dhcp6: true
+                  accept-ra: true
+                  nameservers:
+                    addresses: [__RESOLVERS__]
