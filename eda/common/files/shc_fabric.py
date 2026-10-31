@@ -40,8 +40,9 @@ actions:
                   index); platform: [CIDRs of the network] the platform's sources (egress.platformSources) may reach
                   on egress.platformPorts (default 6443, 443). With egress.ipv6.enabled (needs core.loopbackPool6):
                   per node the hand-off's IPv6 side (address, the upstream sessions, the filter's lists; the
-                  translator-embedded deny list from translation.<site>.pref64 and egress.denyDestinations) and per
-                  network with ipv6 (its platform block and the placement prefixes inside it, all inside
+                  translator-embedded deny list from translation.<site>.pref64 and egress.denyDestinations; the
+                  resolvers on port 53, egress.ipv6.resolverDestinations6 and every translation.<site>.dns64Resolvers)
+                  and per network with ipv6 (its platform block and the placement prefixes inside it, all inside
                   egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes and whether the
                   node is the network's standby (index mod nodes); errors for an unusable configuration
   circuit-plan    {attachments: realization attachments, nodes: [node names], index}  an attachment circuit's link
@@ -357,6 +358,26 @@ def plat_deny6(translation, deny4):
     return [str(n) for n in sorted(out, key=lambda n: (int(n.network_address), n.prefixlen))]
 
 
+def resolvers6(e6, translation):
+    """The resolver addresses the IPv6 filter admits on port 53: egress.ipv6.resolverDestinations6 and the DNS64
+    resolvers of every site's translation entry (translation.<site>.dns64Resolvers), so a site that hands its
+    IPv6-only placements DNS64 resolvers needs no second list. Single addresses (the filter's set has no intervals; a
+    /128 is written as its address), sorted and without duplicates; anything that is not one IPv6 address is left out
+    (the realization check names a bad resolverDestinations6 entry)."""
+    out = set()
+    given = list(e6.get("resolverDestinations6") or [])
+    for site in sorted((translation or {}).keys()):
+        given += list(((translation or {}).get(site) or {}).get("dns64Resolvers") or [])
+    for c in given:
+        try:
+            n = ipaddress.ip_network(str(c), strict=True)
+        except ValueError:
+            continue
+        if n.version == 6 and n.prefixlen == 128:
+            out.add(n.network_address)
+    return [str(a) for a in sorted(out)]
+
+
 def egress6_plan(eg, req, node_names, errors):
     """The IPv6 side of egress-plan: per node its hand-off and filter lists, per network (the ones with ipv6) the
     prefixes it announces and the node that is its standby."""
@@ -411,7 +432,7 @@ def egress6_plan(eg, req, node_names, errors):
             "standbyPrepend": int(e6.get("standbyPrepend") or 2),
             "deny6": [str(c) for c in e6.get("denyDestinations6") or []],
             "allow6": [str(c) for c in e6.get("allowDestinations6") or []],
-            "resolvers6": [str(c) for c in e6.get("resolverDestinations6") or []],
+            "resolvers6": resolvers6(e6, req.get("translation")),
             "platDeny6": plat_deny6(req.get("translation"), eg.get("denyDestinations")),
             "external6": sorted({str(p) for v in (e6.get("externalSitePrefixes") or {}).values() for p in v or []}),
         }

@@ -387,6 +387,10 @@
              | length > 0 }}
         hn_egress_offered: "{{ _eg.enabled | default(false) | bool }}"
         hn_egress_offered6: "{{ (_eg.ipv6 | default({}, true)).enabled | default(false) | bool }}"
+        # translation for IPv6-only placements: some site of the realization has a translation prefix
+        hn_translation_offered: >-
+          {{ (fab_real.translation | default({}, true)).values() | select('mapping') | selectattr('pref64', 'defined')
+             | map(attribute='pref64') | select | list | length > 0 }}
         hn_egress6_degraded: "{{ (_eg.ipv6 | default({}, true)).degraded | default(false) | bool }}"
         hn_egress6_degraded_nodes: "{{ (_eg.ipv6 | default({}, true)).degradedNodes | default([], true) }}"
         hn_egress_carried: >-

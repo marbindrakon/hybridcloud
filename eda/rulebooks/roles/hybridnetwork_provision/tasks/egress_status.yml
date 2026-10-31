@@ -6,11 +6,15 @@
 #         has no upstream session) | removing, or unavailable while the fabric offers no IPv6 egress (NotOffered);
 #         mode Tenant = no internet access for tenant-provided prefixes (AddressChoice); mode None = no row
 #   internet (overall) = the IPv4 state when the network has IPv4, else the IPv6 state
-#   ipv4Translation: for a network without IPv4 that wants internet access (not offered yet)
+#   ipv4Translation: for a network without IPv4 that wants internet access: mode Tenant = unavailable
+#         (AddressChoice); mode Platform = unavailable (NotOffered) while the fabric offers no IPv6 egress or no site
+#         of the fabric's realization has a translation entry, else the state of the IPv6 row (pending | ready);
+#         each IPv6-only placement's status names the translation prefix and resolvers of its site
 # Written while spec.egress.internet is on, or while the fabric still removes an egress; {} otherwise.
 # Inputs: hn_v4, hn_mode6, hn_egress_want, hn_egress_want6, hn_egress_offered, hn_egress_offered6, hn_egress_carried
 # (the fabric's entry for the network: ipv6 true while its IPv6 egress is realized), hn_egress6_degraded,
-# hn_egress6_degraded_nodes, hn_fabric_name.
+# hn_egress6_degraded_nodes, hn_fabric_name, hn_translation_offered (a site of the fabric's realization has a
+# translation entry with a prefix; default false).
 # Sets hn_egress, hn_egress_note.
 - name: Set the egress state per family
   vars:
@@ -53,11 +57,18 @@
     # (a var can't hold null on every Ansible version: empty means "does not apply", written as null below)
     _translation: >-
       {{ {} if (_v4 | bool or not _want | bool)
+         else ({'state': 'unavailable', 'reason': 'AddressChoice',
+                'message': 'translation to IPv4 needs IPv6 address space from the platform'}
+               if hn_mode6 != 'Platform'
          else ({'state': 'unavailable', 'reason': 'NotOffered',
                 'message': 'translation to IPv4 is not offered on this fabric yet'}
-               if hn_mode6 == 'Platform'
-               else {'state': 'unavailable', 'reason': 'AddressChoice',
-                     'message': 'translation to IPv4 needs IPv6 address space from the platform'}) }}
+               if (not hn_egress_offered6 | default(false) | bool or not hn_translation_offered | default(false) | bool
+                   or _row6.state | default('') not in ['pending', 'ready', 'removing'])
+         else ({'state': _row6.state}
+               | combine({'message': "IPv6-only placements reach IPv4-only destinations through the platform's "
+                                     ~ "translator on the sites that offer it; each placement's status names its "
+                                     ~ 'translation prefix and resolvers'}
+                         if _row6.state == 'ready' else {})))) }}
     _rows: "{{ ([_row4] if _row4 | length > 0 else []) + ([_row6] if _row6 | length > 0 else []) }}"
     _overall: "{{ _row4.state if _row4 | length > 0 else (_row6.state | default('')) }}"
   ansible.builtin.set_fact:

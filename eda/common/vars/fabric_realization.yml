@@ -128,8 +128,12 @@ fabric_realization_defaults:
       CloudOSO: []
       CloudAWS: [fd00::/16, 2001:db8::/32]
       CloudGCP: []
-  # translation for placements without IPv4, per site (CloudInfrastructure name): {pref64, dns64Resolvers}; a site
-  # not listed offers none (capabilities.ipv6Translation false)
+  # translation for placements without IPv4, per site (CloudInfrastructure name): {pref64 (the translator's /96),
+  # dns64Resolvers (IPv6 resolvers that synthesize answers inside pref64)}; a site not listed offers none
+  # (capabilities.ipv6Translation false). An IPv6-only placement of a network with platform IPv6 and internet access
+  # gets both in its status (status.ipv6.translation; an OpenStack site also puts the resolvers on the placement's
+  # IPv6 subnet); the IPv6 egress filter admits the resolvers on port 53 and denies the private IPv4 ranges of
+  # egress.denyDestinations inside every pref64
   translation: {}
   # CloudGateways over transport wireguard (remote sites): each node's tunnel listens on listenPort (unless the
   # gateway sets one); the tunnel's MTU is the site leg's MTU unless siteUnderlay.mtu says otherwise (1420 = a 1500
@@ -220,7 +224,8 @@ fabric_realization_defaults:
                           "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20", "5f00::/16", "fc00::/7",
                           "fe80::/10", "ff00::/8"]
       allowDestinations6: []
-      # resolver addresses reachable on port 53 only (TCP and UDP), also when inside denyDestinations6
+      # resolver addresses reachable on port 53 only (TCP and UDP), also when inside denyDestinations6 (the DNS64
+      # resolvers of every translation.<site> entry are added to these automatically)
       resolverDestinations6: []
       # (the IPv4 destinations of egress.denyDestinations stay unreachable through a translator: for every
       # translation prefix (translation.<site>.pref64) their embedded forms are denied before the allow list)

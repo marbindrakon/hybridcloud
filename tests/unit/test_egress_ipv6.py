@@ -648,12 +648,13 @@ class PlacementStatus(unittest.TestCase):
 
     def test_copies_the_network_row(self):
         s = self.status(True, {"family": 6, "state": "ready", "mode": "Routed", "reason": "Degraded", "message": "m"})
-        self.assertEqual(s["ipv6"], {"addressing": "DHCPv6", "internet": {"state": "ready", "reason": "Degraded", "message": "m"}})
+        self.assertEqual(s["ipv6"], {"addressing": "DHCPv6", "internet": {"state": "ready", "reason": "Degraded", "message": "m"},
+                                     "translation": None})
         s = self.status(True, {"family": 6, "state": "ready", "mode": "Routed"})
         self.assertEqual(s["ipv6"]["internet"], {"state": "ready"})
 
     def test_no_row_no_internet_key(self):
-        self.assertEqual(self.status(True), {"ipv6": {"addressing": "DHCPv6"}})
+        self.assertEqual(self.status(True), {"ipv6": {"addressing": "DHCPv6", "translation": None}})
 
     def test_not_offered_while_off(self):
         self.assertEqual(self.status(False)["ipv6"]["internet"]["reason"], "NotOffered")
