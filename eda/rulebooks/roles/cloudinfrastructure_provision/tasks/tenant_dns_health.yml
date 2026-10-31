@@ -1,0 +1,147 @@
+---
+# The health of the site's tenant DNS controller (shc-cluster-base tenantDns): its ConfigMap tenant-dns-status in the
+# controller's namespace (realization dns.tenantDnsNamespace, default the chart's shc-tenant-dns), read with the
+# site probe's connection (ci_k8s of openshift.yml; the probe account may get that one ConfigMap). Recorded as
+#   status.realization.tenantDns {lastSuccess, lastError, lastErrorAt, refused, ptrs}   the controller reports
+#   status.realization.tenantDns null                                                 no ConfigMap (no controller)
+# and the condition TenantDns:
+#   True  / Ready               the last round succeeded, within dns.reverse6.staleMinutes (default 30)
+#   False / DNSReconcileFailed  the last error is newer than the last success, there was no success yet, or the last
+#                               success is older than staleMinutes
+#   Unknown / NotReported       the ConfigMap is gone after a TenantDns was recorded, or it could not be read
+# (no condition at all on a site that never reported one). The condition is not the site's Ready: tenants' names keep
+# resolving while the controller is down, only changes wait. Written alone (a partial status write), only when the
+# record or the condition changed; never fails the site job.
+# Inputs: ci_k8s, cloudinfrastructure_cr_name, cloudinfrastructure_cr_namespace, cloudinfrastructure_cr_lookup;
+# ci_tdns_now (epoch seconds) for tests. Sets ci_tdns ({} = no record) and ci_tdns_condition ({} = none). Values that
+# may be absent stay {} until the status write (a bare null does not survive templating on every Ansible release).
+- name: Load the realization defaults (tenant DNS health)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: The tenant DNS health settings and the last record
+  vars:
+    _real: "{{ fabric_realization_defaults | default({}) | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _dns: "{{ _real.dns | default({}, true) }}"
+    _r6: "{{ _dns.reverse6 | default({}, true) }}"
+    _st: "{{ cloudinfrastructure_cr_lookup.resources[0].status | default({}, true) }}"
+  ansible.builtin.set_fact:
+    ci_tdns_namespace: "{{ _dns.tenantDnsNamespace | default('shc-tenant-dns', true) | string | trim }}"
+    ci_tdns_stale_minutes: >-
+      {{ [(_r6.staleMinutes if (_r6.staleMinutes | default(none)) is not none else 30) | int, 1] | max }}
+    ci_tdns_prev: "{{ (_st.realization | default({}, true)).tenantDns | default({}, true) }}"
+    ci_tdns_prev_condition: >-
+      {{ ((_st.conditions | default([], true)) | selectattr('type', 'equalto', 'TenantDns') | list + [{}]) | first }}
+    ci_tdns_now_epoch: "{{ ci_tdns_now | default(lookup('pipe', 'date -u +%s')) | int }}"
+    ci_tdns: {}
+    ci_tdns_condition: {}
+
+- name: Read and judge the tenant DNS controller's health
+  block:
+    - name: Read the tenant DNS controller's health
+      kubernetes.core.k8s_info:
+        host: "{{ ci_k8s.host | default(omit) }}"
+        api_key: "{{ ci_k8s.api_key | default(omit) }}"
+        kubeconfig: "{{ ci_k8s.kubeconfig | default(omit) }}"
+        api_version: v1
+        kind: ConfigMap
+        name: tenant-dns-status
+        namespace: "{{ ci_tdns_namespace }}"
+      register: _ci_tdns_cm
+      failed_when: false
+
+    - name: The tenant DNS health record and condition
+      vars:
+        # k8s_info answers resources (empty when the ConfigMap does not exist); none = the read failed
+        _failed: "{{ _ci_tdns_cm.failed | default(false) or _ci_tdns_cm.resources is not defined }}"
+        _d: "{{ ((_ci_tdns_cm.resources | default([]) + [{}]) | first).data | default({}, true) }}"
+        _present: "{{ (_ci_tdns_cm.resources | default([])) | length > 0 }}"
+        _rfc: '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$'
+        _ok: "{{ _d.lastSuccess | default('', true) | string | trim }}"
+        _err_at: "{{ _d.lastErrorAt | default('', true) | string | trim }}"
+        _err: "{{ _d.lastError | default('', true) | string | trim }}"
+      ansible.builtin.set_fact:
+        ci_tdns: >-
+          {%- if _failed | bool -%}
+            {{ ci_tdns_prev }}
+          {%- elif not (_present | bool) -%}
+            {{ {} }}
+          {%- else -%}
+            {{ {'lastSuccess': _ok if _ok | length > 0 else none,
+                'lastError': _err[:300] if _err | length > 0 else none,
+                'lastErrorAt': _err_at if _err_at | length > 0 else none,
+                'refused': (_d.refused | default(0, true) | int),
+                'ptrs': (_d.ptrs | default(0, true) | int)} }}
+          {%- endif -%}
+        ci_tdns_condition: >-
+          {%- set e0 = '1970-01-01T00:00:00Z' | to_datetime('%Y-%m-%dT%H:%M:%SZ') -%}
+          {%- set ok_s = ((_ok | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - e0).total_seconds() | int
+                         if _ok is match(_rfc) else none -%}
+          {%- set err_s = ((_err_at | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - e0).total_seconds() | int
+                          if _err_at is match(_rfc) else none -%}
+          {%- set stale = ci_tdns_stale_minutes | int -%}
+          {%- if _failed | bool -%}
+            {{ {'type': 'TenantDns', 'status': 'Unknown', 'reason': 'NotReported',
+                'message': 'the tenant DNS controller health in ' ~ ci_tdns_namespace ~ ' is not readable: '
+                           ~ ((_ci_tdns_cm.msg | default('no answer from the site API', true) | string | trim)[:300])} }}
+          {%- elif not (_present | bool) -%}
+            {{ {'type': 'TenantDns', 'status': 'Unknown', 'reason': 'NotReported',
+                'message': 'no tenant DNS controller reports on this site (no ConfigMap tenant-dns-status in '
+                           ~ ci_tdns_namespace ~ ')'}
+               if ci_tdns_prev_condition | length > 0 else {} }}
+          {%- elif ok_s is none -%}
+            {{ {'type': 'TenantDns', 'status': 'False', 'reason': 'DNSReconcileFailed',
+                'message': 'the tenant DNS controller has not reconciled successfully yet'
+                           ~ ((': last error at ' ~ _err_at ~ ': ' ~ _err[:300]) if _err | length > 0 else '')} }}
+          {%- elif err_s is not none and err_s > ok_s -%}
+            {{ {'type': 'TenantDns', 'status': 'False', 'reason': 'DNSReconcileFailed',
+                'message': 'the last reconcile failed at ' ~ _err_at ~ ' (last success ' ~ _ok ~ '): ' ~ _err[:300]} }}
+          {%- elif (ci_tdns_now_epoch | int) - ok_s > stale * 60 -%}
+            {{ {'type': 'TenantDns', 'status': 'False', 'reason': 'DNSReconcileFailed',
+                'message': 'no successful reconcile since ' ~ _ok ~ ' (more than ' ~ stale ~ ' minutes)'} }}
+          {%- else -%}
+            {{ {'type': 'TenantDns', 'status': 'True', 'reason': 'Ready',
+                'message': 'last success ' ~ _ok ~ '; ' ~ (_d.ptrs | default(0, true) | int) ~ ' PTR(s), '
+                           ~ (_d.refused | default(0, true) | int) ~ ' object(s) with a refusal'} }}
+          {%- endif -%}
+  rescue:
+    - name: Record why the tenant DNS health was not judged
+      ansible.builtin.set_fact:
+        ci_tdns: "{{ ci_tdns_prev }}"
+        ci_tdns_condition:
+          type: TenantDns
+          status: Unknown
+          reason: NotReported
+          message: >-
+            {{ ('the tenant DNS controller health could not be judged: '
+                ~ (ansible_failed_result.msg | default('failed', true) | string | trim))[:400] }}
+
+- name: Record the tenant DNS health of this site
+  vars:
+    _cond_now: >-
+      {{ {} if ci_tdns_condition | length == 0
+         else {'status': ci_tdns_condition.status, 'reason': ci_tdns_condition.reason,
+               'message': ci_tdns_condition.message} }}
+    _cond_prev: >-
+      {{ {} if ci_tdns_prev_condition | length == 0
+         else {'status': ci_tdns_prev_condition.status | default(''), 'reason': ci_tdns_prev_condition.reason | default(''),
+               'message': ci_tdns_prev_condition.message | default('')} }}
+    _changed: "{{ (ci_tdns != ci_tdns_prev) or (_cond_now | length > 0 and _cond_now != _cond_prev) }}"
+    _status: >-
+      {{ {'realization': {'tenantDns': (ci_tdns if ci_tdns | length > 0 else none)}}
+         | combine({'conditions': [ci_tdns_condition]} if ci_tdns_condition | length > 0 else {}) }}
+  hybridsovereign.shc.cr_status:
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    plural: cloudinfrastructures
+    name: "{{ cloudinfrastructure_cr_name }}"
+    namespace: "{{ cloudinfrastructure_cr_namespace }}"
+    status: "{{ _status }}"
+    action: reconcile
+    partial: true
+    ignore_not_found: true
+  register: _ci_tdns_write
+  failed_when: false
+  when: _changed | bool

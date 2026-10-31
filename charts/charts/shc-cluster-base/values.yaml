@@ -296,7 +296,11 @@ selfProvisioning:
 # ─── Tenant DNS controller (TENANT-DNS D3) — layer "certs" ───────────────────
 # Tenants publish names in their CloudVirt environment's zone with DNSEndpoint objects and external-dns hostname
 # annotations on Services/Routes (templates/tenant-dns.yaml, files/tenant_dns_controller.py). Installs the
-# DNSEndpoint CRD (schema only).
+# DNSEndpoint CRD (schema only). Reverse names: an AAAA address inside the namespace's placement prefixes (platform
+# annotation hybridsovereign.redhat/ipv6-prefixes) gets a forward-confirmed PTR in the DNS project's reverse zone
+# (*.ip6.arpa, created by the platform; no reverse zone = no PTRs). Health: the ConfigMap tenant-dns-status in
+# `namespace` {lastSuccess, lastError, lastErrorAt, refused, ptrs}, read by the platform's site job
+# (status.realization.tenantDns and the site's TenantDns condition).
 tenantDns:
   enabled: false
   namespace: shc-tenant-dns

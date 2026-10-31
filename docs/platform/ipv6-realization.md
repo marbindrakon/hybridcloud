@@ -513,6 +513,68 @@ attachments:
 A circuit whose peer AS is listed fails with `PeerAsnReserved`. IPv6 entries in a circuit's accept list stay refused at
 admission.
 
+## Tenant reverse names
+
+The tenant DNS controller on an OpenShift Virtualization site (chart `shc-cluster-base`, `tenantDns`) publishes the
+names tenants ask for in their environment zone. For an AAAA it publishes, it also writes the reverse name, so that
+every tenant PTR is forward-confirmed:
+
+- **Which addresses:** those inside the namespace's placement prefixes. The platform writes them on every
+  namespace a placement serves, in the annotation `hybridsovereign.redhat/ipv6-prefixes` (comma-separated IPv6
+  prefixes), the same trust model as the zone annotation `hybridsovereign.redhat/dns-zone`: tenants can't change
+  namespaces. Entries that are not IPv6 prefixes are skipped (logged once). A namespace without the annotation gets
+  no reverse names.
+- **Which zone:** the longest reverse zone (`*.ip6.arpa`) of the controller's DNS project that contains the
+  address's reverse name. The platform creates those zones (`dns.reverse6.zones`); the controller only finds them
+  in the zone listing it already reads on every round.
+- **The record:** a PTR at the address's reverse name whose target is the AAAA's name, with the AAAA's ownership
+  description (`shc-tenant-dns cluster=<cluster> owner=<namespace>/<Kind>/<name>`). One owner per reverse name: when
+  two objects publish the same address, the older object's name wins, as for forward names.
+- **Not written:** an address outside the prefixes ("no PTR for <address>: outside the placement prefixes"), one no
+  reverse zone covers ("no PTR for <address>: no platform reverse zone"), or a reverse name another owner holds.
+  The object's `hybridsovereign.redhat/dns-status` says so, with one Event when that status changes; the AAAA is
+  still published. A PTR is written only after its AAAA is published. Tenants can't request PTRs themselves (the
+  type is never allowed in their objects).
+- **Removed:** with its AAAA (the object, its name or the address goes, or the address leaves the namespace's
+  prefixes), and in the sweep of the controller's own records: a PTR whose owner object is gone or whose AAAA it no
+  longer publishes. Records of other clusters and records without the controller's marker are never touched.
+
+**Health.** After every round the controller writes the ConfigMap `tenant-dns-status` in its own namespace:
+
+```yaml
+data:
+  lastSuccess: "2026-01-01T10:00:00Z"   # the last successful round (RFC 3339, UTC); "" before the first
+  lastError: "HttpException: ..."       # the last failure (kept after a later success)
+  lastErrorAt: "2026-01-01T09:55:00Z"
+  refused: "0"                          # objects with a refusal in the last successful round
+  ptrs: "3"                             # PTRs the controller holds after it
+```
+A failed round also adds a Warning Event `DNSReconcileFailed` on that ConfigMap, once per distinct error (again after
+a success). The pod's liveness file still only tells that the loop runs.
+
+**The site job** of an OpenShift site reads that ConfigMap with the site probe's credential (it may read that one
+ConfigMap name) and records it on the CloudInfrastructure, with the condition `TenantDns`:
+
+```yaml
+dns:
+  tenantDnsNamespace: shc-tenant-dns   # the tenant DNS controller's namespace on the sites (the chart's default)
+  reverse6:
+    staleMinutes: 30                   # a last success older than this turns TenantDns False
+```
+```yaml
+status:
+  realization:
+    tenantDns: {lastSuccess, lastError, lastErrorAt, refused, ptrs}   # null: no ConfigMap on the site
+  conditions:
+    - type: TenantDns
+      status: "True"                   # reason Ready
+      # "False", reason DNSReconcileFailed: the last error is newer than the last success, no success yet, or the
+      #   last success is older than staleMinutes
+      # "Unknown", reason NotReported: the record went after one was reported, or it could not be read
+```
+The condition does not change the site's phase: names keep resolving while the controller is down, only changes
+wait. A site that never reported a record gets no condition. The read never fails the site job.
+
 ## Rollout and rollback
 
 - Order: the primary chart with both CRD copies, then the EDA content (repository seed, then the AAP configuration,
