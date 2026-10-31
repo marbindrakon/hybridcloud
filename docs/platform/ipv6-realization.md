@@ -527,7 +527,10 @@ zone under a delegated reverse block), the zone attributes of the site's `dns.zo
 `scope: public`), email `hostmaster@<global domain>`. It records them in
 `status.realization.dns.reverseZones` (`[{name, id, nameservers}]`, or `{name, error}` for a zone it could not
 ensure); a zone error never fails the site. Other sites write nothing; a site that no longer hosts the zones loses
-the record. Removing a zone from the list does not delete it.
+the record. Removing a zone from the list does not delete it. When the DNS service refuses the name to the site
+account (a blacklist under the delegated reverse block answers "Blacklisted zone name"), an administrator creates
+the zone with the same attributes and hands it to the DNS project by a zone ownership transfer; the site job then
+finds it there on its next run and records it.
 
 **Who writes which record.** Every name is forward-confirmed: an AAAA in a forward zone and the PTR of the address in
 the reverse zone that covers it (the longest one), both written with the DNSConfig's DNS-only account (a member of the
