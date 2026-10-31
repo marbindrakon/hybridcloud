@@ -5,7 +5,10 @@
 #    placement again once its VRF is gone (the deletion waits meanwhile);
 # 2. the site side: CloudVirt = the RouteAdvertisements and the ClusterUserDefinedNetwork; CloudOSO = the share,
 #    router, subnets and network in the platform project (refused while the tenant's ports still use the network);
-# 3. the VNIs go back to the fabric's ledger and the subnets to the network's address space (design/P10-PLAN.md §3),
+# 3. the forward-confirmed names of the placement's IPv6 gateway (status.realization.reverseDns, design/IPV6-PLAN.md
+#    §8.3): the PTR, then the AAAA, before the subnets go back (the deletion waits while a removal fails and the
+#    DNSConfig is usable; without one the platform can remove nothing and goes on);
+# 4. the VNIs go back to the fabric's ledger and the subnets to the network's address space (design/P10-PLAN.md §3),
 #    which wakes the network's placements waiting for address space; deletionComplete.
 - block:
     # nothing on a site (refused at validation): delete without site cleanup
@@ -118,6 +121,19 @@
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
               vars:
                 site_kc_tag: "npd-{{ fab_namespace }}-{{ fab_name }}"
+
+            # the tenant DNS controller's trusted prefixes go with the placement (only where the value is still this
+            # placement's)
+            - name: Remove the placement's IPv6 prefixes from its namespaces
+              ansible.builtin.include_tasks: "{{ role_path }}/../networkplacement_provision/tasks/namespace_prefixes.yml"
+              vars:
+                npp_set: []
+                npp_value: ""
+                npp_clear: "{{ fab_st.namespaces | default([], true) }}"
+                npp_owned: >-
+                  {{ (fab_st.subnets | default([], true) | selectattr('family', 'defined') | selectattr('family', 'equalto', 6)
+                      | map(attribute='prefix') | list
+                      + (fab_st.prefixes | default([], true) | select('search', ':') | list)) | unique | list }}
 
             - name: Namespaces still on the network
               kubernetes.core.k8s_info:
@@ -329,6 +345,26 @@
               ansible.builtin.fail:
                 msg: "AWS place-down failed: {{ aws_error }}"
               when: aws_error | length > 0
+
+    # before the subnets go back: the next holder of the prefix never inherits a name
+    - name: Remove the IPv6 gateway's names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/reverse_dns.yml"
+      vars:
+        rdns_cfg: {}
+        rdns_owner: "{{ npd_owner }}"
+        rdns_want: []
+        rdns_prev: "{{ (npd_real.reverseDns | default({}, true)).names | default([], true) }}"
+        rdns_dnsconfig: "{{ (npd_real.reverseDns | default({}, true)).dnsConfig | default('', true) }}"
+        rdns_tag: "npd-{{ fab_namespace }}-{{ fab_name }}"
+      when: (npd_real.reverseDns | default({}, true)).names | default([], true) | length > 0
+
+    - name: Wait while a gateway name could not be removed
+      ansible.builtin.fail:
+        msg: "Deletion waits for the removal of the reverse DNS names {{ rdns_names | map(attribute='name') | join(', ') }}: {{ rdns_notes | join('; ') }}"
+      when:
+        - (npd_real.reverseDns | default({}, true)).names | default([], true) | length > 0
+        - rdns_names | default([]) | length > 0
+        - dnscfg_usable | default(false) | bool
 
     - name: Release the VNIs
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"

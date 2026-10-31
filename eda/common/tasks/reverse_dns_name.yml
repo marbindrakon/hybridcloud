@@ -1,0 +1,126 @@
+---
+# shc (design/IPV6-PLAN.md §8.3): one name of reverse_dns_apply.yml (rdns_item {name, address, zone}, rdns_state).
+#   present: the PTR name and the covering zone among the realization's reverse zones first (no zone covers the
+#            address: neither record, a note); then the AAAA (ensure-record), then the PTR (ensure-ptr) -> the name.
+#            The name is kept in rdns_names once its AAAA exists (a later run or the teardown removes it).
+#   absent:  the PTR (delete-ptr), then the AAAA (delete-record); kept in rdns_names when either fails (retried).
+# Soft calls: an error is a note in rdns_notes, never a failure.
+- name: "{{ rdns_item.name }}: the names"
+  ansible.builtin.set_fact:
+    _rdns_fqdn: "{{ rdns_item.name | lower | regex_replace('\\.$', '') }}."
+    _rdns_zone: "{{ rdns_item.zone | lower | regex_replace('\\.$', '') }}."
+    _rdns_ttl: "{{ (rdns_cfg | default({}, true)).ttl | default(3600, true) | int }}"
+    _rdns_errors: []
+
+- name: "{{ rdns_item.name }}: publish"
+  when: rdns_state == 'present'
+  block:
+    - name: "{{ rdns_item.name }}: the covering reverse zone"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: ptr-name
+          address: "{{ rdns_item.address }}"
+          zones: "{{ (rdns_cfg | default({}, true)).zones | default([], true) }}"
+
+    - name: "{{ rdns_item.name }}: no reverse zone covers the address"
+      ansible.builtin.set_fact:
+        _rdns_errors: >-
+          {{ ['no PTR for ' ~ rdns_item.address ~ ': ' ~ (os_result.error | default('no platform reverse zone covers it', true))] }}
+      when: os_result.error is defined or os_result.zone | default('', true) | length == 0
+
+    - name: "{{ rdns_item.name }}: the AAAA"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: ensure-record
+          project_id: "{{ dnscfg_project_id }}"
+          zone: "{{ _rdns_zone }}"
+          name: "{{ _rdns_fqdn }}"
+          type: AAAA
+          records: ["{{ rdns_item.address }}"]
+          ttl: "{{ _rdns_ttl | int }}"
+          owner: "{{ rdns_owner }}"
+      when: _rdns_errors | length == 0
+
+    - name: "{{ rdns_item.name }}: keep the AAAA result"
+      ansible.builtin.set_fact:
+        _rdns_errors: "{{ ['AAAA ' ~ _rdns_fqdn ~ ': ' ~ os_result.error] if os_result.error is defined else [] }}"
+        rdns_names: >-
+          {{ rdns_names + ([{'name': _rdns_fqdn, 'address': rdns_item.address, 'zone': _rdns_zone}]
+                           if os_result.error is not defined else []) }}
+      when: _rdns_errors | length == 0
+
+    - name: "{{ rdns_item.name }}: the PTR"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: ensure-ptr
+          project_id: "{{ dnscfg_project_id }}"
+          address: "{{ rdns_item.address }}"
+          target: "{{ _rdns_fqdn }}"
+          ttl: "{{ _rdns_ttl | int }}"
+          owner: "{{ rdns_owner }}"
+      when: _rdns_errors | length == 0
+
+    - name: "{{ rdns_item.name }}: keep the PTR result"
+      ansible.builtin.set_fact:
+        _rdns_errors: "{{ ['PTR of ' ~ rdns_item.address ~ ': ' ~ os_result.error] }}"
+      when:
+        - _rdns_errors | length == 0
+        - os_result.error is defined
+
+- name: "{{ rdns_item.name }}: remove"
+  when: rdns_state == 'absent'
+  block:
+    - name: "{{ rdns_item.name }}: the PTR"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: delete-ptr
+          project_id: "{{ dnscfg_project_id }}"
+          address: "{{ rdns_item.address }}"
+          owner: "{{ rdns_owner }}"
+
+    - name: "{{ rdns_item.name }}: keep the PTR result"
+      ansible.builtin.set_fact:
+        _rdns_errors: "{{ ['PTR of ' ~ rdns_item.address ~ ': ' ~ os_result.error] if os_result.error is defined else [] }}"
+
+    - name: "{{ rdns_item.name }}: the AAAA"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_helper: shc_dns.py
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: delete-record
+          project_id: "{{ dnscfg_project_id }}"
+          zone: "{{ _rdns_zone }}"
+          name: "{{ _rdns_fqdn }}"
+          type: AAAA
+          owner: "{{ rdns_owner }}"
+
+    - name: "{{ rdns_item.name }}: keep the name when a deletion failed"
+      ansible.builtin.set_fact:
+        _rdns_errors: "{{ _rdns_errors + (['AAAA ' ~ _rdns_fqdn ~ ': ' ~ os_result.error] if os_result.error is defined else []) }}"
+
+    - name: "{{ rdns_item.name }}: retry later"
+      ansible.builtin.set_fact:
+        rdns_names: "{{ rdns_names + [{'name': _rdns_fqdn, 'address': rdns_item.address, 'zone': _rdns_zone}] }}"
+      when: _rdns_errors | length > 0
+
+- name: "{{ rdns_item.name }}: notes"
+  ansible.builtin.set_fact:
+    rdns_notes: "{{ rdns_notes + _rdns_errors | map('string') | map('truncate', 300, true, '…') | list }}"

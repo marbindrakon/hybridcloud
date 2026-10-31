@@ -1,0 +1,77 @@
+---
+# shc (design/IPV6-PLAN.md §8.3): forward-confirmed names of platform IPv6 addresses. Each wanted name gets an AAAA in
+# its zone and the PTR of its address in the platform's reverse zone that covers it (realization dns.reverse6.zones,
+# created by the site job in the DNSConfig's project), both with the DNSConfig's DNS-only account and the ownership
+# marker of rdns_owner (shc_dns.py ensure-record / ensure-ptr: a recordset another owner holds is never changed). A
+# name recorded before (rdns_prev) that is no longer wanted loses its PTR first, then its AAAA. Never fails the job:
+# every error is a note (rdns_notes) for the caller's status message.
+# Skipped without reverse zones (nothing wanted then) and nothing recorded; an address no reverse zone covers gets
+# neither record (a note says so).
+# Inputs: rdns_cfg (realization dns.reverse6), rdns_owner, rdns_want [{name, address, zone}] (names and zones with or
+# without the trailing dot; zone = the zone the AAAA goes into, in the DNSConfig's project), rdns_prev (the caller's
+# record of an earlier run, same shape), rdns_dnsconfig (the DNSConfig name recorded before; '' = the first usable),
+# rdns_tag (temp file name). Sets rdns_names (what is published now, the record to keep: [{name, address, zone}]),
+# rdns_notes, rdns_dnsconfig_name.
+- name: What to publish and what to remove
+  vars:
+    _zones: "{{ (rdns_cfg | default({}, true)).zones | default([], true) }}"
+    _want: "{{ rdns_want | default([], true) if _zones | length > 0 else [] }}"
+    _keys: "{{ _want | map(attribute='name') | map('lower') | map('regex_replace', '\\.$', '') | zip(_want | map(attribute='address')) | map('join', '#') | list }}"
+  ansible.builtin.set_fact:
+    rdns_names: []
+    rdns_notes: []
+    rdns_dnsconfig_name: "{{ rdns_dnsconfig | default('', true) }}"
+    _rdns_publish: "{{ _want }}"
+    _rdns_remove: >-
+      {%- set out = [] -%}
+      {%- for p in rdns_prev | default([], true) -%}
+        {%- if ((p.name | lower | regex_replace('\.$', '')) ~ '#' ~ p.address) not in _keys -%}
+          {%- set _ = out.append(p) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Publish and remove the names
+  when: _rdns_publish | length > 0 or _rdns_remove | length > 0
+  block:
+    - name: The DNSConfig of the names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+      vars:
+        dnscfg_wanted_name: "{{ rdns_dnsconfig | default('', true) }}"
+
+    - name: Keep the names while there is no usable DNSConfig
+      ansible.builtin.set_fact:
+        rdns_names: "{{ rdns_prev | default([], true) }}"
+        rdns_notes: >-
+          {{ ['no reverse DNS names: no usable DNSConfig'
+              ~ ((' ' ~ rdns_dnsconfig) if rdns_dnsconfig | default('', true) | length > 0 else '')] }}
+      when: not dnscfg_usable | bool
+
+    - name: Write the names with the DNS-only account
+      when: dnscfg_usable | bool
+      block:
+        - name: Keep the account the job had
+          ansible.builtin.set_fact:
+            _rdns_saved_account: "{{ {'clouds_yaml': os_account_clouds_yaml | default(''), 'cacert': os_account_cacert | default('')} }}"
+            rdns_dnsconfig_name: "{{ dnscfg_name }}"
+
+        - name: The DNS-only account
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+          vars:
+            os_account_vault_path: "{{ dnscfg_secret }}"
+            os_account_tag: "rdns-{{ rdns_tag }}"
+
+        - name: Write the names
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/reverse_dns_apply.yml"
+      always:
+        - name: Remove the DNS-only account file
+          ansible.builtin.file:
+            path: "/tmp/eda-rdns-{{ rdns_tag }}-{{ item }}"
+            state: absent
+          loop: [clouds.yaml, ca.crt]
+
+        - name: Give the job its account back
+          ansible.builtin.set_fact:
+            os_account_clouds_yaml: "{{ _rdns_saved_account.clouds_yaml }}"
+            os_account_cacert: "{{ _rdns_saved_account.cacert }}"
+          when: _rdns_saved_account is defined

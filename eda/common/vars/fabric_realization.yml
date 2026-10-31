@@ -157,6 +157,24 @@ fabric_realization_defaults:
       # how long a site's canary may fail, be stale or be unreachable before the fabric reports it as an event (and
       # every run while it lasts)
       alertMinutes: 5
+  # tenant DNS of the platform's own records
+  dns:
+    # reverse DNS of the platform's IPv6 space. Generic: no reverse zone, so nothing below happens.
+    reverse6:
+      # the reverse zones the platform owns under ip6.arpa (e.g. "8.b.d.0.1.0.0.2.ip6.arpa" for 2001:db8::/32). The
+      # site job of the site that hosts the global tenant zone (the DNSConfig's) creates them in the DNSConfig's
+      # Designate project, with the zone attributes of that site's dns settings (pool scheduling, e.g. public), and
+      # records them in status.realization.dns.reverseZones. A platform address outside every zone gets no PTR
+      # (provider-assigned space and tenant prefixes have their reverse DNS elsewhere).
+      zones: []
+      # the label under which gateway names are published: the IPv6 gateway of a placement is
+      # <network>.<gatewayLabel>.<environment zone>, the ICMPv6 source of a border gateway node in a gateway namespace
+      # <node>.<gateway>.<gatewayLabel>.<global tenant domain>; both get an AAAA and the matching PTR (forward-confirmed)
+      gatewayLabel: gateways
+      # the TTL of these records (seconds)
+      ttl: 3600
+      # how old the tenant DNS controller's last successful reconcile on a site may be before the site reports it
+      staleMinutes: 30
   # CloudGateways over transport wireguard (remote sites): each node's tunnel listens on listenPort (unless the
   # gateway sets one); the tunnel's MTU is the site leg's MTU unless siteUnderlay.mtu says otherwise (1420 = a 1500
   # path minus WireGuard over IPv4); keepalives keep NAT state open

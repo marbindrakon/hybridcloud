@@ -1,0 +1,21 @@
+---
+# shc (design/IPV6-PLAN.md §8.3): the writes of reverse_dns.yml with the account already loaded (os_account_*): first
+# the names no longer wanted (_rdns_remove: PTR, then AAAA), then the wanted ones (_rdns_publish: AAAA, then PTR).
+# Inputs: _rdns_remove, _rdns_publish, rdns_cfg, rdns_owner, dnscfg_project_id. Adds to rdns_names and rdns_notes.
+- name: Remove the names no longer wanted
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/reverse_dns_name.yml"
+  vars:
+    rdns_state: absent
+  loop: "{{ _rdns_remove }}"
+  loop_control:
+    loop_var: rdns_item
+    label: "{{ rdns_item.name }}"
+
+- name: Publish the wanted names
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/reverse_dns_name.yml"
+  vars:
+    rdns_state: present
+  loop: "{{ _rdns_publish }}"
+  loop_control:
+    loop_var: rdns_item
+    label: "{{ rdns_item.name }}"

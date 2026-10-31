@@ -1,8 +1,10 @@
 ---
 # The placement's subnets from the ipam-allocate result: status.prefixes (IPv4 first, unchanged meaning) and
-# status.subnets, one row per family {family, prefix, gateway (IPv4: the first host), source} — the IPAM's own rows
-# when it returns them, else built from the prefixes (source Network).
-# Inputs: fab_ipam_result, np_status. Sets np_prefixes, np_prefixes_v4, np_prefixes_v6 (the IPv6 rows' prefixes, also
+# status.subnets, one row per family {family, prefix, gateway (IPv4: the first host; IPv6 on a CloudVirt or CloudOSO:
+# the first host too, OVN-Kubernetes' gateway and Neutron's default; a CloudOSO's row then takes the gateway the site
+# reports, backend_cloudoso.yml), source} — the IPAM's own rows when it returns them, else built from the prefixes
+# (source Network). A provider's subnet (source Provider) gets no gateway here.
+# Inputs: fab_ipam_result, np_status, np_backend_kind. Sets np_prefixes, np_prefixes_v4, np_prefixes_v6 (the IPv6 rows' prefixes, also
 # the ones only status.subnets holds, e.g. a provider prefix), np_subnets, np_status.
 - name: Keep the subnets
   vars:
@@ -21,6 +23,16 @@
         {%- if r.family | int == 4 -%}
           {%- set a = r.prefix.split('/')[0].split('.') -%}
           {%- set _ = rows.append(r | combine({'gateway': a[:3] | join('.') ~ '.' ~ (a[3] | int + 1)})) -%}
+        {%- elif np_backend_kind | default('') in ['CloudVirt', 'CloudOSO'] and r.source | default('Network') != 'Provider' -%}
+          {#- the first host: the network address has its last bit clear, so its last group + 1 never carries -#}
+          {%- set a = r.prefix.split('/')[0] | lower -%}
+          {%- if a.endswith('::') -%}
+            {%- set gw = a ~ '1' -%}
+          {%- else -%}
+            {%- set parts = a.split(':') -%}
+            {%- set gw = parts[:-1] | join(':') ~ ':' ~ '%x' | format(parts[-1] | int(base=16) + 1) -%}
+          {%- endif -%}
+          {%- set _ = rows.append(r | combine({'gateway': gw})) -%}
         {%- else -%}
           {%- set _ = rows.append(r) -%}
         {%- endif -%}

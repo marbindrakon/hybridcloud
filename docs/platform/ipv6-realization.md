@@ -504,6 +504,62 @@ IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
   one message per second per destination (even one every 20 ms) leaves a guest connecting to a name with many
   addresses waiting a full retransmit for the answers that were limited. Empty keeps the kernel default.
 
+## Reverse DNS (`dns.reverse6`)
+
+```yaml
+dns:
+  reverse6:
+    zones: []                # reverse zones the platform owns, e.g. 8.b.d.0.1.0.0.2.ip6.arpa for 2001:db8::/32
+    gatewayLabel: gateways   # the label gateway names are published under
+    ttl: 3600                # TTL of the platform's AAAA and PTR records
+    staleMinutes: 30         # how old the tenant DNS controller's last success on a site may be
+```
+
+With no zone (the default) the platform writes no reverse DNS. List a zone only for space the platform assigns from
+its own pools and whose reverse delegation points at the Designate pool of the global tenant zone; the delegation of
+the zone itself (the NS records in the parent reverse zone) is the address holder's step and comes after the zone
+exists, otherwise it is a lame delegation.
+
+**Zones.** The CloudInfrastructure job of the site that hosts the global tenant zone (`dns.mode: native`, a usable
+DNSConfig, and the parent zone it ensures is the DNSConfig's zone) creates every listed zone next to the global zone:
+the same DNS project, the site account (the cloud admin; a cloud's DNS service may let only an administrator create a
+zone under a delegated reverse block), the zone attributes of the site's `dns.zoneAttributes` (pool scheduling, e.g.
+`scope: public`), email `hostmaster@<global domain>`. It records them in
+`status.realization.dns.reverseZones` (`[{name, id, nameservers}]`, or `{name, error}` for a zone it could not
+ensure); a zone error never fails the site. Other sites write nothing; a site that no longer hosts the zones loses
+the record. Removing a zone from the list does not delete it.
+
+**Who writes which record.** Every name is forward-confirmed: an AAAA in a forward zone and the PTR of the address in
+the reverse zone that covers it (the longest one), both written with the DNSConfig's DNS-only account (a member of the
+DNS project) and both carrying the ownership marker `shc:<owner>` in the recordset description. A recordset of the same
+name and type with another marker is never changed or deleted ("held by another owner").
+
+| Address | Name (AAAA in) | Owner | Written by |
+|---|---|---|---|
+| A placement's IPv6 gateway (`status.subnets[family=6].gateway`: the first host on OpenShift Virtualization, the subnet's gateway from Neutron on OpenStack) | `<network>.<gatewayLabel>.<environment zone>` (the environment's zone, `status.dns.zone`) | `NetworkPlacement/<namespace>/<name>` | the placement job, recorded in `status.realization.reverseDns` |
+| A border gateway node's ICMPv6 source in a gateway namespace (`core.icmpSource6`) | `<node>.<gateway>.<gatewayLabel>.<global domain>` (the global zone) | `CloudGateway/<name>` | the gateway job, recorded in `status.realization.reverseDns` |
+| A tenant VM on OpenShift Virtualization that publishes an AAAA through the tenant DNS controller | the tenant's own name in its environment zone | the controller's marker | the tenant DNS controller, only for addresses inside the namespace's placement prefixes |
+
+The placement job also writes the annotation `hybridsovereign.redhat/ipv6-prefixes` (the placement's IPv6 subnets,
+comma-separated) on every OpenShift Virtualization namespace the placement serves; the tenant DNS controller trusts
+only that annotation (tenants can't change it, as with `hybridsovereign.redhat/dns-zone`). Node labels and network
+names are lowercased, with characters outside `a-z0-9-` replaced by `-`.
+
+**Notes, not failures.** An environment without a zone, an environment zone held by another site's DNS service, an
+address no listed zone covers and every API error end in the job's status message (`reverse DNS: …`); the placement
+and the gateway still become ready. A name the job published before and no longer wants (the IPv6 subnet went away, a
+node left) loses its PTR, then its AAAA, on the next run.
+
+**Teardown order.** A placement removes its PTR, then its AAAA, after the site side and before its subnets go back to
+the network's address space, so the next holder of the prefix never inherits a name; while a removal fails (with a
+usable DNSConfig) the deletion waits and retries. It also removes the namespace annotation where the value is still
+its own. A gateway removes its names once its instance is off the nodes; a failure is noted in the final message.
+
+**Not covered.** Space from a cloud provider (AWS, GCP) and tenant-provided prefixes have their reverse DNS with the
+provider or the tenant: no listed zone covers them, so they get no PTR. OpenStack tenant VMs get no PTR from the
+platform (Neutron's own DNS integration is the cloud's). Per-network reverse sub-zones shared with tenants are not
+offered.
+
 ## Attachment circuits
 
 ```yaml
