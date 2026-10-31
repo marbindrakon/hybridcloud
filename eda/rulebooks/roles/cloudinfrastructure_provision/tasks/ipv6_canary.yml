@@ -206,7 +206,21 @@
           {{ ci_canary_base | combine({'error': (ansible_failed_result.msg | default('the canary lookup failed', true)
                                                   | string | trim)[:300]}) }}
 
+# The record always carries address, workload and error (null when they do not apply): the status is merge-patched,
+# so a probe found after a run that recorded an error must clear that error, and a probe that disappears must clear
+# its address.
 - name: Record the translation canary of this site
+  vars:
+    _rec: >-
+      {{ {} if ((ci_canary | default(none)) is none or ci_canary | length == 0)
+         else {'placement': ci_canary.placement | default(''), 'vrf': ci_canary.vrf | default(none),
+               'address': ci_canary.address | default(none), 'workload': ci_canary.workload | default(none),
+               'error': ci_canary.error | default(none)} }}
+    _prev: >-
+      {{ {} if ((ci_canary_prev | default(none)) is none or ci_canary_prev | length == 0)
+         else {'placement': ci_canary_prev.placement | default(''), 'vrf': ci_canary_prev.vrf | default(none),
+               'address': ci_canary_prev.address | default(none), 'workload': ci_canary_prev.workload | default(none),
+               'error': ci_canary_prev.error | default(none)} }}
   hybridsovereign.shc.cr_status:
     host: "{{ services_api_host | trim }}"
     api_key: "{{ services_bearer_token | trim }}"
@@ -215,10 +229,10 @@
     plural: cloudinfrastructures
     name: "{{ cloudinfrastructure_cr_name }}"
     namespace: "{{ cloudinfrastructure_cr_namespace }}"
-    status: "{{ {'realization': {'ipv6Canary': ci_canary}} }}"
+    status: "{{ {'realization': {'ipv6Canary': (_rec if _rec | length > 0 else none)}} }}"
     action: reconcile
     partial: true
     ignore_not_found: true
   register: _ci_canary_write
   failed_when: false
-  when: ci_canary != ci_canary_prev
+  when: _rec != _prev

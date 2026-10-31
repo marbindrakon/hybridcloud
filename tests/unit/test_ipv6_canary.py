@@ -419,7 +419,7 @@ class SiteLookup(unittest.TestCase):
         tasks = load(os.path.join(CI, "ipv6_canary.yml"))
         rec = by_name(tasks, "Record the translation canary of this site")
         rec["ansible.builtin.debug"] = {"msg": "{{ rec_status }}"}  # the status module stands in as a debug
-        rec["vars"] = {"rec_status": rec.pop("hybridsovereign.shc.cr_status")["status"]}
+        rec["vars"] = dict(rec.get("vars") or {}, rec_status=rec.pop("hybridsovereign.shc.cr_status")["status"])
         out = run_play(tasks + [write_out("{'canary': ci_canary, 'write': _ci_canary_write is skipped}")],
                        {"role_path": os.path.join(ROLES, "cloudinfrastructure_provision"), "ci_cr_type": "openshift",
                         "cloudinfrastructure_cr_name": "site-a", "cloudinfrastructure_cr_namespace": "platform",
@@ -431,7 +431,7 @@ class SiteLookup(unittest.TestCase):
         tasks = load(os.path.join(CI, "ipv6_canary.yml"))
         rec = by_name(tasks, "Record the translation canary of this site")
         rec["ansible.builtin.debug"] = {"msg": "{{ rec_status }}"}
-        rec["vars"] = {"rec_status": rec.pop("hybridsovereign.shc.cr_status")["status"]}
+        rec["vars"] = dict(rec.get("vars") or {}, rec_status=rec.pop("hybridsovereign.shc.cr_status")["status"])
         out = run_play(tasks + [write_out("{'canary': ci_canary, 'write': _ci_canary_write is skipped}")],
                        {"role_path": os.path.join(ROLES, "cloudinfrastructure_provision"), "ci_cr_type": "openshift",
                         "cloudinfrastructure_cr_name": "site-a", "cloudinfrastructure_cr_namespace": "platform",
@@ -461,7 +461,7 @@ class SiteLookup(unittest.TestCase):
         rec = self.tasks("Record the translation canary of this site")[0]
         self.assertTrue(rec["hybridsovereign.shc.cr_status"]["partial"])
         self.assertFalse(rec["failed_when"])
-        self.assertEqual(rec["when"], "ci_canary != ci_canary_prev")
+        self.assertEqual(rec["when"], "_rec != _prev")
         blk = self.tasks("Find the translation canary on this site")[0]
         self.assertEqual([t["name"] for t in blk["rescue"]], ["Record why the translation canary was not found"])
 
