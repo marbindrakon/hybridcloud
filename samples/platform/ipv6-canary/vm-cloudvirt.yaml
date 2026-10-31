@@ -35,7 +35,7 @@ spec:
         - {name: default, pod: {}}
       volumes:
         - name: root
-          containerDisk: {image: quay.io/containerdisks/fedora:42}
+          containerDisk: {image: quay.io/containerdisks/fedora:44}   # Fedora 44 or later: its clatd (2.1) runs under the network's port security
         - name: cloudinit
           cloudInitNoCloud:
             secretRef: {name: __WORKLOAD__-user-data}

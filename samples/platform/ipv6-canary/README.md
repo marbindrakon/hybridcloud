@@ -60,7 +60,7 @@ last run with its own.
 | `__NAMESPACE__` | vm-cloudvirt.yaml | The site namespace the placement serves (its `status.namespaces`). |
 | `__MAC__` | vm-cloudvirt.yaml | A locally administered MAC address for the VM's NIC (for example `02:00:00:00:00:01`); the network data matches it. |
 | `__PLACEMENT_NETWORK__` | server-cloudoso.md | The placement's network on the site (the network shared to the environment's project). |
-| `__IMAGE__`, `__FLAVOR__` | server-cloudoso.md | A Fedora cloud image and a small flavor of the site. |
+| `__IMAGE__`, `__FLAVOR__` | server-cloudoso.md | A Fedora cloud image (Fedora 44 or later: its clatd 2.1 keeps the single address the network assigned; older clatd releases fail under port security) and a small flavor of the site. |
 | `__SECURITY_GROUP__` | server-cloudoso.md | A security group for the probe. |
 | `__SCRAPE_SOURCE__` | server-cloudoso.md | The IPv6 range the fabric reads the probes from. |
 
