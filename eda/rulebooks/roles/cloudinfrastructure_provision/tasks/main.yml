@@ -13,6 +13,8 @@
 #   type external  : nothing to probe (the platform doesn't manage the site); capabilities.evpn = spec.external.evpn.
 #   every type     : capabilities.ipv6* (ipv6_capabilities.yml) = the probe ANDed with the realization's placement
 #                    switches; false until the platform realizes IPv6 on the site.
+#   openshift, openstack: status.realization.ipv6Canary (ipv6_canary.yml) = the address of the platform's translation
+#                    canary probe on this site, when the realization names a canary network.
 - block:
     - name: Parse event payload
       ansible.builtin.set_fact:
@@ -219,6 +221,12 @@
     - name: Refresh the VirtualMachine lists of the environments on this site
       ansible.builtin.include_tasks: cloudvirt_vms.yml
       when: ci_cr_type == 'openshift'
+
+    # the translation canary (realization canaries.ipv6Translation): where the platform's probe answers on this site,
+    # for the fabric job (status.realization.ipv6Canary, a partial write); never fails the job
+    - name: Find the translation canary's probe on this site
+      ansible.builtin.include_tasks: ipv6_canary.yml
+      when: ci_cr_type in ['openshift', 'openstack']
 
   rescue:
     # a key left out of the merge-patch keeps its last value: switch every stored capability off

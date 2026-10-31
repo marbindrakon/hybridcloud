@@ -573,5 +573,5 @@
            | combine({'egressIpv6': _eg6} if hf_node_egress.ipv6 is defined else {})] }}
     hf_changed_nodes: >-
       {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_vrfgone, _hf_unit,
-         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state, _hf_guard_files, _hf_guard_unit, _hf_guard_gone]
-         | select('changed') | list | length > 0 else []) }}
+         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state, _hf_guard_files | default({}), _hf_guard_unit | default({}),
+         _hf_guard_gone | default({})] | select('changed') | list | length > 0 else []) }}

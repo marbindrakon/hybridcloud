@@ -35,6 +35,8 @@ Actions (request["action"]):
                 recreateRouter: delete and recreate the router (the site fills its gateway chassis at creation).
   platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
                 owners in the platform project, for the fabric orphan check.
+  server-address  read only, cloud admin scope: the server of a name in a project (the translation canary's probe)
+                and the IPv6 addresses of its ports on one network; address = the first global one ('' if none).
 """
 import ipaddress
 import json
@@ -557,10 +559,37 @@ def platform_inventory(req):
     return {"found": True, "projectId": proj.id, "networks": nets, "routers": routers}
 
 
+def _global6(a):
+    """A global IPv6 unicast address: not link-local, unique local (fc00::/7), multicast, loopback or unspecified."""
+    ip = ipaddress.ip_address(a)
+    return (ip.version == 6 and not (ip.is_link_local or ip.is_multicast or ip.is_loopback or ip.is_unspecified)
+            and ip not in ipaddress.ip_network("fc00::/7"))
+
+
+def server_address(req):
+    """The cloud admin's own scope, read only: the server named req["name"] in project req["projectId"] and the IPv6
+    addresses of its ports on network req["networkId"]. Several servers of that name: the first by id (count says
+    how many)."""
+    acct = Account(req)
+    conn = acct.own_scope()
+    name = req["name"]
+    # Nova's name filter is a regular expression: keep the exact matches only
+    servers = sorted((s for s in conn.compute.servers(all_projects=True, project_id=req["projectId"], name=name)
+                      if s.name == name), key=lambda s: s.id)
+    if not servers:
+        return {"found": False, "name": name, "projectId": req["projectId"], "count": 0, "addresses": [], "address": ""}
+    srv = servers[0]
+    addrs = [ip["ip_address"] for p in conn.network.ports(device_id=srv.id, network_id=req["networkId"])
+             for ip in (p.fixed_ips or []) if ":" in ip.get("ip_address", "")]
+    glob = [a for a in addrs if _global6(a)]
+    return {"found": True, "name": name, "projectId": req["projectId"], "serverId": srv.id, "count": len(servers),
+            "status": getattr(srv, "status", "") or "", "addresses": addrs, "address": glob[0] if glob else ""}
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
            "platform-project": platform_project, "placement-network": placement_network,
-           "platform-inventory": platform_inventory}
+           "platform-inventory": platform_inventory, "server-address": server_address}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

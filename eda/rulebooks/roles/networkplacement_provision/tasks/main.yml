@@ -304,7 +304,13 @@
     # (the kind's placement.ipv6.addressMode: SLAAC for slaac or dhcpv6-stateless, else DHCPv6) and its internet
     # access: the network's IPv6 egress state (status.egress.families, family 6: the fabric realizes it; a network
     # that asks for no internet has no row and gets none here) while the fabric offers IPv6 egress
-    # (egress.ipv6.enabled); until then unavailable, NotOffered
+    # (egress.ipv6.enabled); until then unavailable, NotOffered. Translation (design/IPV6-PLAN.md §7.1): an IPv6-only
+    # placement (no IPv4 subnet) of a network whose IPv6 the platform assigns (mode Platform) and that wants internet
+    # access (spec.egress.internet), on a fabric that offers IPv6 egress, at a site that reports
+    # capabilities.ipv6Translation, gets the site's translation entry (realization translation.<site>: pref64 and
+    # dns64Resolvers) as status.ipv6.translation {pref64, resolvers}; otherwise translation is written as null (status
+    # is merge-patched: a placement that no longer qualifies loses the block). np_translation keeps the block (or {})
+    # for the site side (backend_cloudoso.yml: the resolvers go on the placement's IPv6 subnet).
     - name: Describe the placement's IPv6
       vars:
         _mode: "{{ ((fab_real.placement.ipv6 | default({}, true)).addressMode | default({}, true))[np_backend_kind] | default('', true) }}"
@@ -318,10 +324,28 @@
              else ({'internet': {'state': _row6.state} | combine({'reason': _row6.reason} if _row6.reason is defined else {})
                                 | combine({'message': _row6.message} if _row6.message is defined else {})}
                    if _row6 | length > 0 else {}) }}
+        _tr: "{{ (fab_real.translation | default({}, true))[np_site | default('', true)] | default({}, true) }}"
+        _net: "{{ np_network | default({}, true) }}"
+        _tr_mode: >-
+          {{ np_ipv6_mode | default('', true)
+             or (((_net.status | default({}, true)).ipv6 | default({}, true)).mode | default('', true)) }}
+        _tr_on: >-
+          {{ (np_prefixes_v4 | default([], true) | length == 0)
+             and (_tr_mode | trim == 'Platform')
+             and (((_net.spec | default({}, true)).egress | default({}, true)).internet | default(false) | bool)
+             and (fab_real.egress.ipv6.enabled | default(false) | bool)
+             and ((ci_capabilities | default({}, true)).ipv6Translation | default(false) | bool)
+             and (_tr.pref64 | default('', true) | string | trim | length > 0) }}
+        _translation: >-
+          {{ {'pref64': _tr.pref64 | string | trim,
+              'resolvers': _tr.dns64Resolvers | default([], true) | map('string') | map('trim') | list}
+             if _tr_on | bool else {} }}
       ansible.builtin.set_fact:
+        np_translation: "{{ _translation }}"
         np_status: >-
           {{ np_status | combine({'ipv6': {'addressing': ('SLAAC' if (_mode | trim) in ['slaac', 'dhcpv6-stateless'] else 'DHCPv6')}
-             | combine(_internet)}) }}
+             | combine(_internet)
+             | combine({'translation': _translation if _translation | length > 0 else none})}) }}
       when: np_prefixes_v6 | length > 0
 
     - name: The placement's layer 3 VNI

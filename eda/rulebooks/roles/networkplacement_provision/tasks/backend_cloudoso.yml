@@ -4,7 +4,11 @@
 # subnets with the realization's address mode, every subnet with the site's resolvers of its family) and a router
 # with the placement's layer 3 VNI (the site advertises the subnets as EVPN type-5 routes under it), shared to the
 # CloudOSO's project (Neutron RBAC). The tenant attaches its VMs to the network; the router and subnets stay the
-# platform's. Uses the site account (cloud admin). Input: np_recreate_router (bool). Sets np_backend_status.
+# platform's. Resolvers: the site's (placement.resolversBySite); an IPv6-only placement with translation
+# (np_translation, main.yml "Describe the placement's IPv6") gets the site's DNS64 resolvers first, so its IPv6
+# subnet's dns_nameservers (DHCPv6 and the config drive) carry them; a dual-stack placement never does (its workloads
+# reach IPv4 natively and must not be steered into the translator). Uses the site account (cloud admin). Input:
+# np_recreate_router (bool). Sets np_backend_status.
 - name: The site's OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
   vars:
@@ -26,7 +30,9 @@
       mtu: "{{ np_real.mtu | int }}"
       prefixes: "{{ np_prefixes_v4 + (np_prefixes_v6 | default([])) }}"
       addressMode: "{{ (fab_real.placement.ipv6.addressMode | default({}, true))['CloudOSO'] | default('', true) }}"
-      resolvers: "{{ (fab_real.placement.resolversBySite | default({}, true))[np_site] | default([], true) }}"
+      resolvers: >-
+        {{ ((np_translation | default({}, true)).resolvers | default([], true)
+            + (fab_real.placement.resolversBySite | default({}, true))[np_site] | default([], true)) | unique | list }}
       l3Vni: "{{ np_real.l3Vni | int }}"
       shareProjectId: "{{ np_backend.status.projectId }}"
       recreateRouter: "{{ np_recreate_router | default(false) | bool }}"

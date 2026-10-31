@@ -58,8 +58,10 @@ class StatusIPv6Test(unittest.TestCase):
     @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
     def test_openstack_stateful_dhcpv6_and_no_internet(self):
         st = self.run_task()
+        # (translation is written as null: the placement has IPv4, so it gets none)
         self.assertEqual(st["ipv6"], {"addressing": "DHCPv6",
-                                      "internet": {"state": "unavailable", "reason": "NotOffered", "message": MESSAGE}})
+                                      "internet": {"state": "unavailable", "reason": "NotOffered", "message": MESSAGE},
+                                      "translation": None})
         # the rest of the status is kept
         self.assertEqual(st["entity"], "acme")
         self.assertEqual(st["prefixes"], ["10.60.1.0/24", "2001:db8:100:1::/64"])
@@ -81,7 +83,7 @@ class StatusIPv6Test(unittest.TestCase):
     @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
     def test_with_ipv6_egress_the_internet_state_is_left_to_the_egress(self):
         st = self.run_task(fab_real=real(**{"egress.ipv6.enabled": True}))
-        self.assertEqual(st["ipv6"], {"addressing": "DHCPv6"})
+        self.assertEqual(st["ipv6"], {"addressing": "DHCPv6", "translation": None})
 
     @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
     def test_no_ipv6_subnet_writes_nothing(self):

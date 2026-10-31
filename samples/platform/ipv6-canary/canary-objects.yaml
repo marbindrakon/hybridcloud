@@ -1,0 +1,72 @@
+# The translation canary's objects, in the platform team's own tenant (here entity-example-platform): an IPv6-only
+# network with IPv6 from the platform and internet access, an OpenShift Virtualization environment and an OpenStack
+# environment, and one placement of the network per site that offers IPv6-only placements with translation. Then one
+# probe per placement (vm-cloudvirt.yaml, server-cloudoso.md), and the realization names the network and the probe:
+#   canaries.ipv6Translation: {network: entity-example-platform/ipv6-canary, workload: canary}
+# Site names (site-vm, site-osp) are placeholders for the sites that offer IPv6-only placements.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: HybridNetwork
+metadata:
+  name: ipv6-canary
+  namespace: entity-example-platform
+spec:
+  description: The platform's translation canary (IPv6-only, IPv6 from the platform, internet access).
+  platformPrefixes:
+    - family: 6
+  egress:
+    internet: true
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudVirt
+metadata:
+  name: canary-vms
+  namespace: entity-example-platform
+spec:
+  cloudRef:
+    name: site-vm
+  description: The translation canary probe on an OpenShift Virtualization site.
+  namespaces:
+    - name: probes
+      network: ipv6-canary
+  quota:
+    cpu: "2"
+    memory: 4Gi
+    storage: 20Gi
+    virtualMachines: 2
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: NetworkPlacement
+metadata:
+  name: ipv6-canary-vms
+  namespace: entity-example-platform
+spec:
+  network: ipv6-canary
+  backend:
+    kind: CloudVirt
+    name: canary-vms
+  ipv6:
+    prefixLength: 64
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: CloudOSO
+metadata:
+  name: canary-osp
+  namespace: entity-example-platform
+spec:
+  cloudRef:
+    name: site-osp
+  project: canary-osp
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: NetworkPlacement
+metadata:
+  name: ipv6-canary-osp
+  namespace: entity-example-platform
+spec:
+  network: ipv6-canary
+  backend:
+    kind: CloudOSO
+    name: canary-osp
+  ipv6:
+    prefixLength: 64

@@ -1,0 +1,132 @@
+---
+# One border gateway node (hf_canary_bgw) reads the translation canaries of hf_canary_targets (canary.yml), unless a
+# node before it already did (hf_canary_node). Per site with an address, from the site's gateway namespace in the
+# placement's VRF:
+#   ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 -s -f --max-time 5 [--interface <source>] http://[<address>]:<port>/metrics
+# where <source> is the VRF's own global IPv6 address (the ICMPv6 source /128 of the dual-stack core on the VRF
+# device; without one the kernel chooses). Parses `shc_ipv6_canary_check{check="<name>"} <0|1>` and
+# `shc_ipv6_canary_run_timestamp_seconds <epoch>`; a run older than three probe periods (180 s) is stale. Prints
+# canary=<json> {site: {address, at, checks {name: 0|1}, stale, healthy, error}} and always exits 0; an unreachable node
+# or a failed script leaves hf_canary_node empty, so the next node tries.
+- name: "{{ hf_canary_bgw.name }}: read the translation canaries"
+  when: hf_canary_node | length == 0
+  block:
+    - name: "{{ hf_canary_bgw.name }}: read the canary metrics through the gateways"
+      ansible.builtin.shell:
+        cmd: |
+          python3 - <<'PY'
+          import datetime, ipaddress, json, re, subprocess, sys, time
+
+          CHECK = re.compile(r'^shc_ipv6_canary_check\{check="([A-Za-z0-9_]+)"\}\s+(\S+)$')
+          STAMP = re.compile(r'^shc_ipv6_canary_run_timestamp_seconds\s+(\S+)$')
+          NAME = re.compile(r'^[A-Za-z0-9_.-]{1,64}$')
+          STALE_AFTER = 180
+
+
+          def run(cmd):
+              try:
+                  p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+              except (OSError, subprocess.TimeoutExpired) as e:
+                  return 124, "", str(e)
+              return p.returncode, p.stdout, p.stderr
+
+
+          def source(run, netns, vrf):
+              """The VRF's own global IPv6 address in the gateway namespace ('' when it has none)."""
+              rc, out, _ = run(["ip", "-n", netns, "-j", "-6", "addr", "show", "dev", vrf, "scope", "global"])
+              if rc != 0:
+                  return ""
+              try:
+                  links = json.loads(out or "[]")
+              except ValueError:
+                  return ""
+              for link in links:
+                  for a in link.get("addr_info", []):
+                      if a.get("family", "inet6") == "inet6" and a.get("local") and not a.get("tentative"):
+                          return a["local"]
+              return ""
+
+
+          def read(run, t, port, now):
+              rec = {"address": t["address"], "at": "", "checks": {}, "stale": True, "healthy": False, "error": ""}
+              try:
+                  addr = str(ipaddress.IPv6Address(t["address"]))
+              except ValueError:
+                  rec["error"] = "not an IPv6 address: %s" % t["address"]
+                  return rec
+              if not (NAME.match(t["netns"]) and NAME.match(t["vrf"])):
+                  rec["error"] = "unusable gateway namespace or VRF name"
+                  return rec
+              cmd = ["ip", "netns", "exec", t["netns"], "ip", "vrf", "exec", t["vrf"],
+                     "curl", "-6", "-s", "-f", "--max-time", "5"]
+              src = source(run, t["netns"], t["vrf"])
+              if src:
+                  cmd += ["--interface", src]
+              cmd.append("http://[%s]:%d/metrics" % (addr, port))
+              rc, text, err = run(cmd)
+              if rc != 0:
+                  rec["error"] = "unreachable from %s VRF %s (curl exit %d%s)" % (
+                      t["netns"], t["vrf"], rc, (": " + err.strip().splitlines()[-1][:120]) if err.strip() else "")
+                  return rec
+              checks, stamp = {}, None
+              for line in text.splitlines():
+                  line = line.strip()
+                  m = CHECK.match(line)
+                  if m:
+                      try:
+                          checks[m.group(1)] = 1 if float(m.group(2)) == 1 else 0
+                      except ValueError:
+                          checks[m.group(1)] = 0
+                      continue
+                  m = STAMP.match(line)
+                  if m:
+                      try:
+                          stamp = float(m.group(1))
+                      except ValueError:
+                          stamp = None
+              rec["checks"] = checks
+              if stamp is None:
+                  rec["error"] = "the metrics carry no run timestamp"
+                  return rec
+              rec["at"] = datetime.datetime.fromtimestamp(stamp, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+              age = now - stamp
+              rec["stale"] = age > STALE_AFTER
+              if rec["stale"]:
+                  rec["error"] = "the last run is %d s old" % age
+              elif not checks:
+                  rec["error"] = "the metrics carry no checks"
+              rec["healthy"] = (not rec["stale"]) and bool(checks) and all(v == 1 for v in checks.values())
+              return rec
+
+
+          def main(run, now=None):
+              targets = json.loads({{ hf_canary_targets | selectattr('address') | list | to_json | to_json }})
+              port = int({{ hf_canary_cfg.port | default(9464, true) | int }})
+              now = time.time() if now is None else now
+              out = {}
+              for t in targets:
+                  out[t["site"]] = read(run, t, port, now)
+              print("canary=" + json.dumps(out, sort_keys=True))
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(run))
+          PY
+        executable: /bin/bash
+      delegate_to: "{{ hf_canary_bgw.name }}"
+      register: _hf_canary_run
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: "{{ hf_canary_bgw.name }}: keep the canary readings"
+      vars:
+        _line: "{{ _hf_canary_run.stdout_lines | default([]) | select('match', '^canary=') | list | last | default('') }}"
+      ansible.builtin.set_fact:
+        hf_canary_scrape: "{{ _line.split('=', 1) | last | from_json }}"
+        hf_canary_node: "{{ hf_canary_bgw.name }}"
+      when:
+        - not (_hf_canary_run.unreachable | default(false) | bool)
+        - _hf_canary_run.rc | default(1) | int == 0
+        - _line | length > 0

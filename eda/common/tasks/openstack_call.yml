@@ -10,7 +10,7 @@
       - "{{ role_path }}/../../../common/files/{{ os_helper | default('shc_openstack.py') }}"
     stdin: "{{ os_request | combine({'clouds_yaml': os_account_clouds_yaml, 'cacert': os_account_cacert | default('')}) | to_json }}"
   register: _os_call
-  changed_when: os_request.action not in ['check-empty']
+  changed_when: os_request.action not in ['check-empty', 'server-address']
   failed_when: false
   no_log: "{{ os_call_no_log | default(true) }}"
 

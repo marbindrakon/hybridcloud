@@ -343,16 +343,43 @@ spec:
   advertisements in the guest.
 
 **IPv6-only guests and translation**
+- **When a placement gets translation:** it has no IPv4 subnet, its network has IPv6 from the platform and
+  `egress.internet: true` (the translator is reached over the network's IPv6 internet path: without internet access
+  there is no translation), and its site offers translation. Its status then carries the translation prefix and
+  the resolvers to use:
+  ```yaml
+  status:
+    ipv6:
+      translation:
+        pref64: "2001:db8:64::/96"                      # example values
+        resolvers: ["2001:db8:53::10", "2001:db8:53::11"]
+  ```
+  Until then `status.ipv6.translation` is absent and the network's `status.egress.ipv4Translation` says why
+  (`NotOffered`: the platform offers no translation yet; `AddressChoice`: the network uses your own IPv6 prefixes).
 - Translation needs a CLAT in the guest: **clatd** (2.1 or later) with its default `clat-v6-addr=shared`, which needs
   no second address on the port (the network drops traffic from addresses it did not assign). Some distributions
   package it (Fedora, Debian); on others build it yourself. Windows guests are not covered.
+- **Debian 13:** the `clatd` package needs two fixes. Install `libjson-perl` with it (without it clatd stops with
+  "Can't locate JSON.pm"), and disable the `tayga` service the `tayga` dependency starts on its own (it runs a
+  translator of its own; clatd starts tayga itself):
+  ```yaml
+  #cloud-config
+  packages: [clatd, libjson-perl]
+  runcmd:
+    - [systemctl, disable, --now, tayga.service]
+    - [systemctl, enable, --now, clatd]
+  ```
+  On Debian with netplan, a guest configured from router advertisements alone (SLAAC) also needs the resolvers
+  written into its network configuration (`nameservers:`); DHCPv6 (the default of OpenStack sites) carries them.
 - clatd finds the translation prefix by the standard DNS query (RFC 7050) through the resolvers in
   `status.ipv6.translation`; the sites put no translation prefix in router advertisements.
 - **Keep clatd's IPv4 route MTU of 1260.** The translator fragments translated replies larger than 1280 bytes, and
   those fragments are lost on the way into the CLAT: with a larger MTU, IPv4 datagrams that must not be fragmented
   are lost above 1232 bytes of payload. TCP is not affected.
-- On OpenShift Virtualization the resolvers come from the placement's status: the placement page offers a cloud-init
-  `networkData` and clatd snippet built from it, to copy into the VM.
+- On OpenStack the placement's IPv6 subnet hands the resolvers out (DHCPv6 and the config drive). On OpenShift
+  Virtualization they come from the placement's status: the placement page offers a cloud-init `networkData` and
+  clatd snippet built from it, to copy into the VM. Names inside the cluster (services, other VMs) resolve over
+  DHCPv6 only where the platform team runs the cluster's DNS service dual-stack.
 - A guest that validates DNSSEC itself gets no translated addresses for signed IPv4-only names. Reach those by an
   IPv4 address through the CLAT, or let the resolver validate.
 

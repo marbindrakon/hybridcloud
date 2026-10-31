@@ -229,9 +229,136 @@ fixed at creation) until they are deleted; a converted cluster stays dual-stack.
 ```yaml
 translation: {}   # <site>: {pref64: <the site's translation /96>, dns64Resolvers: [<IPv6 resolver>, ...]}
 ```
-Translation follows from the network: IPv6 from the platform, no IPv4 and `egress.internet` on. There is no tenant
-switch. Dual-stack networks never get DNS64 resolvers. With no entry for a site, `status.egress.ipv4Translation` reads
-`unavailable` (`NotOffered`).
+- **`pref64`:** the IPv6 /96 into which the translator (NAT64) the site's IPv6-only workloads use embeds IPv4
+  addresses. The platform doesn't run the translator; it reaches it through the IPv6 egress (`egress.ipv6`). List
+  the prefix in `allowDestinations6` when it lies inside `denyDestinations6`, and in `network.exclusiveRanges` so no
+  tenant prefix overlaps it.
+- **`dns64Resolvers`:** IPv6 resolvers that answer IPv4-only names with addresses inside `pref64` (DNS64), in the
+  order the workloads should use them.
+- An entry turns the site's `capabilities.ipv6Translation` on (with the site's IPv6, see
+  [Site capabilities](#site-capabilities)); a site without an entry offers no translation. Keep the entry at the top
+  level of `FABRIC_REALIZATION`, like the `placement` switches. Translation is useful only where the site offers
+  IPv6-only placements (`placement.ipv6OnlyBySite`).
+
+**Who gets it.** Translation follows from the network and the placement; there is no tenant switch. A placement gets
+`status.ipv6.translation {pref64, resolvers}` (the site's entry) when all of these hold: it has no IPv4 subnet, its
+network's IPv6 comes from the platform (mode `Platform`), the network asks for internet access
+(`spec.egress.internet: true`), the fabric offers IPv6 egress (`egress.ipv6.enabled`) and the site reports
+`capabilities.ipv6Translation`. Otherwise the field is cleared, so a placement that stops qualifying (the entry
+removed, IPv6 egress turned off) loses it on its next run. Translation needs `egress.internet` on: the translator
+is reached over the network's IPv6 internet path, so a network without internet access has no egress status and no
+translation. Dual-stack placements never get the DNS64 resolvers: their workloads reach IPv4 natively and would
+otherwise send IPv4-only names through the translator.
+
+The network reports the translation in `status.egress.ipv4Translation` (only for a network without IPv4 that asks
+for internet access):
+
+| Network | `ipv4Translation` |
+|---|---|
+| mode `Tenant` | `{state: unavailable, reason: AddressChoice}` |
+| mode `Platform`, the fabric offers no IPv6 egress, or no site has a `translation` entry with a `pref64` | `{state: unavailable, reason: NotOffered}` |
+| mode `Platform` otherwise | the state of the network's IPv6 egress row (`pending`, then `ready`); each IPv6-only placement's status names its site's prefix and resolvers |
+
+**The resolvers through the egress filter.** The IPv6 egress filter of every border gateway node admits the DNS64
+resolvers of every site's entry on port 53 (TCP and UDP), in addition to `egress.ipv6.resolverDestinations6`: the
+fabric job derives the list (single addresses, sorted, each once), so the resolvers are not configured twice. The
+rule comes before `denyDestinations6`, so resolvers inside a denied range (a unique local address inside `fc00::/7`,
+for example) are reachable on port 53 and nothing else. The private IPv4 ranges of `egress.denyDestinations`, in
+their forms embedded in every `pref64`, are denied before the allow list, so the translator never re-opens them.
+Run the fabric job (Retry now on the HybridFabric) after changing an entry.
+
+**What each site does.**
+- **OpenStack sites (CloudOSO):** an IPv6-only placement with translation gets the DNS64 resolvers first in its IPv6
+  subnet's `dns_nameservers` (then the site's IPv6 resolvers from `placement.resolversBySite`, if any), so DHCPv6
+  and the config drive carry them; a placement that doesn't qualify keeps the site's resolvers only. A subnet whose
+  list differs is updated on the next run of the placement job.
+- **OpenShift Virtualization sites (CloudVirt):** the platform changes nothing on the site. The resolvers reach the
+  guests through the placement's status and the console's cloud-init snippet (the placement page builds `networkData`
+  with `dhcp4: false` and the resolvers as `nameservers`, and clatd user data with the placement's `pref64` as
+  `plat-prefix`), which the tenant copies into the VM. Cluster-internal names (services, other VMs by name) reach a
+  guest over DHCPv6 only when the cluster's DNS service (`dns-default` in `openshift-dns`) is dual-stack; on a
+  cluster where it has only an IPv4 address, DHCPv6 hands out no cluster resolver and an IPv6-only guest resolves
+  through the DNS64 resolvers alone.
+
+OpenShift clusters (PlatformOpenshift) are refused on a network whose placement has no IPv4 subnet: the platform
+reaches clusters over IPv4.
+
+**Rollback.** Set `placement.ipv6OnlyBySite.<site>` to `false`: new IPv6-only placements are refused, existing ones
+keep working inside the network. Removing the site's `translation` entry clears `status.ipv6.translation` on the
+placements' next run and the resolvers from the egress filter on the fabric's next run.
+
+### Translation canary
+
+```yaml
+canaries:
+  ipv6Translation:
+    network: ""        # "<namespace>/<name>" of the platform team's IPv6-only network; "" = no canary
+    workload: ""       # the probe's name on every placement of that network (VM or server)
+    port: 9464         # the probe's metrics port
+    alertMinutes: 5    # a site failed or stale this long is reported as a Warning event on the fabric
+```
+The translation canary is a probe VM the platform team runs on every site that offers IPv6-only placements with
+translation, on an IPv6-only network of its own tenant (IPv6 from the platform, internet access on). Every minute it
+checks what a tenant's IPv6-only guest depends on: its global address, every translation resolver, that
+`ipv4only.arpa` resolves inside the site's translation prefix, an IPv4-only name by name and an IPv4 literal through
+its CLAT, a native IPv6 name, a 1400-byte path with "don't fragment", and that a denied IPv4 destination embedded in
+the translation prefix stays refused. It serves the results in Prometheus text format at
+`http://[<address>]:<port>/metrics` (`shc_ipv6_canary_check{check="<name>"} 0|1`,
+`shc_ipv6_canary_run_timestamp_seconds`). Deploy it from [samples/platform/ipv6-canary](../../samples/platform/ipv6-canary/README.md),
+then set the realization keys. With `network` empty nothing below is written.
+
+**The site job** finds the probe: the canary network's placement on the site (a NetworkPlacement in the network's
+namespace whose `status.site` is the site, of the site type's backend kind), then on OpenShift Virtualization the
+VirtualMachineInstance named `workload` in the placement's site namespaces (`status.namespaces`; read with the site's
+fabric credential), on OpenStack the server named `workload` in the environment's project (read with the site
+account), and takes the probe's first global IPv6 address (on OpenStack: on the placement's network). The probe's
+address is never read from labels or annotations on tenant objects. It records on the CloudInfrastructure:
+
+```yaml
+status:
+  realization:
+    ipv6Canary:
+      placement: <namespace>/<name>   # the canary network's placement on this site
+      vrf: t<vni>                      # the placement's VRF on the site's gateway
+      address: <the probe's global IPv6 address>
+      workload: <namespace>/<name> of the VirtualMachineInstance, or the server's id
+      # instead of address: error: <why the probe or its address was not found>
+```
+No placement of the canary network on the site: no `ipv6Canary`. A lookup that fails never fails the site job; it is
+recorded as `error`.
+
+**The fabric job**, after the nodes are configured, reads the canary of every site of the fabric (the sites of its
+gateways) that reports one, on one border gateway node (the first that answers): from the site's gateway namespace in
+the placement's VRF, `ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 http://[<address>]:<port>/metrics`, with
+the VRF's own global IPv6 address as source (the ICMPv6 source of the dual-stack core, `core.icmpSource6`; the probe's
+replies must route back to it). It records on the HybridFabric:
+
+```yaml
+status:
+  realization:
+    translation:
+      canaries:
+        <site>:
+          placement: <namespace>/<name>
+          address: <the probe's address>
+          at: <when the probe's last run finished>
+          checks: {address: 1, resolver: 1, pref64: 1, name4: 1, literal4: 1, name6: 1, mtu: 1, deny: 1}
+          stale: false        # true: the last run is older than three minutes, or the probe was not reachable
+          healthy: true       # reachable, not stale, every check 1
+          error: ""           # why not healthy, when that is not a failed check
+          failedSince: ""     # since when it has not been healthy (kept across runs)
+```
+The condition `IPv6Translation` is `True` (`Ready`) while every site's canary is healthy and `False`
+(`CanaryFailed`) naming the failing sites, their failed checks and since when; it is absent while no canary is
+configured or no site reports one (the status library never removes a condition: after the canary is switched off the
+last one stays until the fabric is recreated). Once a site has been failed or stale for `alertMinutes`, every fabric
+run while it lasts adds a Warning event `IPv6TranslationCanaryFailed` on the HybridFabric, as for the IPv6 egress.
+A canary that could not be read at all (no node answered) reads `stale` with the reason in `error`; the fabric job
+itself never fails because of the canary.
+
+**Testing the alert:** on one site, replace the probe with a copy whose user data names a resolver address where no
+resolver answers (same probe name). Its `resolver` check reads 0 within a minute, the condition turns `False` on the
+next fabric run, and the event follows after `alertMinutes`. Put the original user data back to clear it.
 
 ## IPv6 internet egress (`egress.ipv6`)
 
@@ -252,7 +379,7 @@ egress:
     sessionDownAlertMinutes: 5  # a node without an upstream session for this long is reported as a fabric event
     denyDestinations6: [...]  # the IANA special-purpose ranges; an installation adds its own address space
     allowDestinations6: []    # reachable although inside denyDestinations6
-    resolverDestinations6: [] # resolvers reachable on port 53 only
+    resolverDestinations6: [] # resolvers reachable on port 53 only (the translation entries' DNS64 resolvers are added)
     externalSitePrefixes: {}  # per network: routed sources that legitimately arrive from upstream
 ```
 IPv6 egress is routed, not translated: a network's platform block leaves unchanged through a stateful filter on the
@@ -279,12 +406,12 @@ the prefixes the standby still announces; flows where the tenant sends next reco
 The filter is the nftables table `inet shc_egress6` on every node (IPv6 rules only; the IPv4 table stays as it is):
 outbound from a network only from its platform block (and the node's ICMPv6 source), not to the translator-embedded
 forms of `egress.denyDestinations` (from `translation.<site>.pref64`), then `allowDestinations6` and the resolvers on
-port 53, then not to `denyDestinations6`; a TCP MSS clamp at `wanMtu - 60` both ways; inbound only neighbour
-discovery, ICMPv6 errors and replies to connections opened from inside; a source inside `routedPrefixes` arriving
-from upstream is dropped (`externalSitePrefixes` excepted). The table is loaded before FRR takes the sessions'
-configuration, and the timer unit `shc-egress6-guard` shuts the upstream sessions whenever the table is missing
-(fail closed). The hand-off device's IPv6 MTU is `wanMtu`, so the node itself sends Packet Too Big for larger
-packets bound for the internet.
+port 53 (`resolverDestinations6` and every `translation.<site>.dns64Resolvers`), then not to `denyDestinations6`; a TCP
+MSS clamp at `wanMtu - 60` both ways; inbound only neighbour discovery, ICMPv6 errors and replies to connections opened
+from inside; a source inside `routedPrefixes` arriving from upstream is dropped (`externalSitePrefixes` excepted). The
+table is loaded before FRR takes the sessions' configuration, and the timer unit `shc-egress6-guard` shuts the upstream
+sessions whenever the table is missing (fail closed). The hand-off device's IPv6 MTU is `wanMtu`, so the node itself
+sends Packet Too Big for larger packets bound for the internet.
 
 Status: `HybridFabric status.realization.egress.ipv6` holds per node the hand-off address, the upstream sessions'
 states and whether the default route is held; `status.realization.egress.networks[]` says per network whether its
