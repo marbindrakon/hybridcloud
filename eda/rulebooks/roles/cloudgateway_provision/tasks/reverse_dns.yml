@@ -1,0 +1,65 @@
+---
+# The forward-confirmed names of the gateway's ICMPv6 sources (design/IPV6-PLAN.md §8.3): the source a node's gateway
+# namespace answers traceroutes and errors from (cg_rdns_nodes, node_gateway.yml: only with the IPv6 core and
+# core.icmpSource6) gets <node>.<gateway>.<gatewayLabel>.<global tenant domain>: an AAAA in the global zone (the
+# DNSConfig's) and the PTR in the platform's reverse zone that covers it, owner CloudGateway/<name>. Silent without
+# reverse zones (realization dns.reverse6.zones) or ICMPv6 sources; a name recorded before and no longer wanted is
+# removed. Never fails the gateway: notes go to the status message (cg_rdns_note). Recorded in
+# status.realization.reverseDns {dnsConfig, names [{name, address, zone}]}, which the teardown reads.
+# Inputs: fab_real, fab_st, fab_name, cg_rdns_nodes. Sets cg_rdns_note, cg_rdns_record.
+- name: The names the gateway wants
+  vars:
+    _prev: "{{ (fab_st.realization | default({}, true)).reverseDns | default({}, true) }}"
+  ansible.builtin.set_fact:
+    cg_rdns_cfg: "{{ (fab_real.dns | default({}, true)).reverse6 | default({}, true) }}"
+    cg_rdns_prev: "{{ _prev.names | default([], true) }}"
+    cg_rdns_dnscfg: "{{ _prev.dnsConfig | default('', true) }}"
+    cg_rdns_want: []
+    cg_rdns_note: ""
+    cg_rdns_record: {}
+
+- name: The global tenant domain
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_dns_config.yml"
+  vars:
+    dnscfg_wanted_name: "{{ cg_rdns_dnscfg }}"
+  when:
+    - cg_rdns_cfg.zones | default([], true) | length > 0
+    - cg_rdns_nodes | default([], true) | length > 0
+
+- name: Name every node's ICMPv6 source
+  vars:
+    _gw: "{{ (fab_name | lower | regex_replace('[^a-z0-9-]', '-'))[:63] | regex_replace('-+$', '') }}"
+    _label: "{{ cg_rdns_cfg.gatewayLabel | default('gateways', true) }}"
+  ansible.builtin.set_fact:
+    cg_rdns_want: >-
+      {%- set out = [] -%}
+      {%- for n in cg_rdns_nodes | default([], true) -%}
+        {%- set node = ((n.node | lower).split('.') | first | regex_replace('[^a-z0-9-]', '-'))[:63] | regex_replace('-+$', '') -%}
+        {%- set _ = out.append({'name': node ~ '.' ~ _gw ~ '.' ~ _label ~ '.' ~ dnscfg_domain, 'address': n.address | lower,
+                                'zone': dnscfg_domain}) -%}
+      {%- endfor -%}
+      {{ out }}
+  when:
+    - cg_rdns_cfg.zones | default([], true) | length > 0
+    - cg_rdns_nodes | default([], true) | length > 0
+    - dnscfg_usable | default(false) | bool
+    - dnscfg_domain | default('', true) | length > 0
+
+- name: Publish the names
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/reverse_dns.yml"
+  vars:
+    rdns_cfg: "{{ cg_rdns_cfg }}"
+    rdns_owner: "CloudGateway/{{ fab_name }}"
+    rdns_want: "{{ cg_rdns_want }}"
+    rdns_prev: "{{ cg_rdns_prev }}"
+    rdns_dnsconfig: "{{ cg_rdns_dnscfg }}"
+    rdns_tag: "cg-{{ fab_name }}"
+  when: cg_rdns_want | length > 0 or cg_rdns_prev | length > 0
+
+- name: Record the names
+  ansible.builtin.set_fact:
+    cg_rdns_note: >-
+      {{ ('; reverse DNS: ' ~ rdns_notes | join('; ')) if rdns_notes | default([], true) | length > 0 else '' }}
+    cg_rdns_record: >-
+      {{ {'reverseDns': {'dnsConfig': rdns_dnsconfig_name | default('', true), 'names': rdns_names | default([], true)}} }}
+  when: cg_rdns_want | length > 0 or cg_rdns_prev | length > 0

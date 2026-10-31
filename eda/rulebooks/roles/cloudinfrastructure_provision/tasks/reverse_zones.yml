@@ -1,0 +1,59 @@
+---
+# The platform's reverse zones (realization dns.reverse6.zones, design/IPV6-PLAN.md §8.3): on the site that hosts the
+# global tenant zone (dns.mode native, a usable DNSConfig, and the parent zone this job ensured is the DNSConfig's
+# zone), every zone is ensured like the parent zone: in the same DNS project, with the site account (the cloud admin,
+# which a reverse zone under a delegated block needs), the same zone attributes, email hostmaster@<global domain>.
+# The platform's PTR writers (the placement and gateway jobs, the tenant DNS controller) write into them with the
+# DNSConfig's DNS-only account, a member of that project. status.realization.dns.reverseZones:
+#   [{name, id, nameservers}]   a zone that exists (created by this run or before)
+#   [{name, error}]             a zone this run could not ensure (never fails the site job)
+#   null (absent)               not this site, or no reverse zone configured
+# Written alone (a partial status write) and only when it changed.
+# Inputs: ci_dns, ci_dns_native, ci_dns_parent, ci_probe, dnscfg_* (resolve_dns_config.yml), the site account
+# (os_account_clouds_yaml), cloudinfrastructure_cr_lookup. Sets ci_reverse_zones; adds to ci_notes.
+- name: Load the realization defaults (reverse DNS)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: The platform's reverse zones and whether this site hosts them
+  vars:
+    _real: "{{ fabric_realization_defaults | default({}) | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _zones: "{{ ((_real.dns | default({}, true)).reverse6 | default({}, true)).zones | default([], true) }}"
+  ansible.builtin.set_fact:
+    ci_reverse_wanted: >-
+      {{ _zones | map('string') | map('trim') | map('lower') | map('regex_replace', '\.$', '')
+         | reject('equalto', '') | unique | list }}
+    ci_reverse_prev: >-
+      {{ ((((cloudinfrastructure_cr_lookup.resources | default([{}], true))[0].status | default({}, true)).realization
+           | default({}, true)).dns | default({}, true)).reverseZones | default(none) }}
+    ci_reverse_here: >-
+      {{ (ci_dns_native | bool) and (dnscfg_usable | default(false) | bool)
+         and ((ci_dns_parent | default({}, true)).zone_id | default('', true) | length > 0)
+         and (ci_dns_parent | default({}, true)).zone_id | default('', true) == dnscfg_zone_id | default('', true) }}
+    ci_reverse_zones: []
+
+- name: Ensure each reverse zone in the DNS project
+  ansible.builtin.include_tasks: reverse_zone.yml
+  loop: "{{ ci_reverse_wanted }}"
+  loop_control:
+    loop_var: ci_reverse_name
+  when: ci_reverse_here | bool
+
+- name: Record the reverse zones of this site
+  vars:
+    _rec: "{{ ci_reverse_zones if (ci_reverse_here | bool and ci_reverse_wanted | length > 0) else none }}"
+  hybridsovereign.shc.cr_status:
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    plural: cloudinfrastructures
+    name: "{{ cloudinfrastructure_cr_name }}"
+    namespace: "{{ cloudinfrastructure_cr_namespace }}"
+    status: "{{ {'realization': {'dns': {'reverseZones': _rec}}} }}"
+    action: reconcile
+    partial: true
+    ignore_not_found: true
+  register: _ci_reverse_write
+  failed_when: false
+  when: _rec != ci_reverse_prev

@@ -11,7 +11,8 @@
 # can't give them, design/IPV6-PLAN.md §2.3). Then (P7.3.8): VNIs from the fabric's
 # ledger (layer 3; layer 2 for a CloudVirt), recorded in status.realization (the gateway job reads them), the site
 # side (backend_<kind>.yml), the gateway asked to carry the placement's VRF (pending WaitingForGateway until it
-# does; the gateway job wakes the placement), and the site's routes checked on every border gateway node.
+# does; the gateway job wakes the placement), and the site's routes checked on every border gateway node. Last, the
+# forward-confirmed name of the placement's IPv6 gateway (gateway_name.yml, design/IPV6-PLAN.md §8.3).
 - block:
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -475,11 +476,17 @@
           vars:
             np_route_wait: "{{ fab_real.placement.routeWait }}"
 
+    # the forward-confirmed name of the placement's IPv6 gateway (design/IPV6-PLAN.md §8.3): never fails the placement,
+    # notes go to the message; status.realization.reverseDns
+    - name: The IPv6 gateway's name
+      ansible.builtin.include_tasks: gateway_name.yml
+
     - name: Set the final status
       ansible.builtin.set_fact:
         np_final: >-
           {{ np_status | combine({'realization': np_real | combine({'site': np_backend_status, 'gateway': np_route_nodes,
-                                                                    'routerRecreated': np_recreated | bool})}) }}
+                                                                    'routerRecreated': np_recreated | bool})
+                                                        | combine(np_rdns_record | default({}, true))}) }}
 
     - name: Report the placement waiting for the site's routes
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
@@ -506,7 +513,8 @@
         fab_message: >-
           {{ np_prefixes | join(', ') }} on {{ np_site }} through CloudGateway {{ np_gateway.metadata.name }}
           (VNI {{ np_l3vni }}{{ (', MAC-VRF ' ~ np_real.l2Vni) if np_real.l2Vni is defined else '' }}); routes of
-          the network's other placements on the gateway: {{ np_route_nodes | map(attribute='vpnRoutes') | map('string') | join('/') }}
+          the network's other placements on the gateway: {{ np_route_nodes | map(attribute='vpnRoutes') | map('string') | join('/') }}{{
+          np_rdns_note | default('') }}{{ npp_note | default('') }}
         fab_status: "{{ np_final }}"
 
     - name: Tell the network and the backend
