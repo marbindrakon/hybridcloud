@@ -1,0 +1,171 @@
+#cloud-config
+# The translation canary probe (Fedora): a CLAT (clatd) for IPv4 literals, a check script run every minute by a
+# systemd timer, and a small HTTP server that serves the last run's results at http://[<address>]:__PORT__/metrics in
+# Prometheus text format. The platform's fabric job reads that page from the site's gateway. Replace every placeholder
+# first (README.md lists them); the file is the same for an OpenShift Virtualization VM and an OpenStack
+# server.
+package_update: false
+packages:
+  - clatd
+  - python3
+  - bind-utils
+  - iputils
+  - curl
+  # reports the VM's addresses to OpenShift Virtualization (the site job reads the probe's address there)
+  - qemu-guest-agent
+write_files:
+  # the CLAT: IPv4 literals leave as IPv6 through the site's translation prefix
+  - path: /etc/clatd.conf
+    permissions: "0644"
+    content: |
+      plat-prefix=__PREF64__
+  - path: /usr/local/bin/shc-ipv6-canary
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Translation canary: run every check once and write the results atomically to /var/lib/shc-ipv6-canary/metrics
+      # (Prometheus text format): shc_ipv6_canary_check{check="<name>"} 1 when the check passed, 0 when it failed,
+      # and shc_ipv6_canary_run_timestamp_seconds, the time the run finished.
+      PREF64="__PREF64__"
+      RESOLVERS="__RESOLVERS__"
+      IPV4_ONLY_NAME="__IPV4_ONLY_NAME__"
+      IPV4_LITERAL="__IPV4_LITERAL__"
+      IPV6_NAME="__IPV6_NAME__"
+      IPV6_PING_TARGET="__IPV6_PING_TARGET__"
+      DENIED_IPV4="__DENIED_IPV4__"
+      DIR=/var/lib/shc-ipv6-canary
+
+      # address: a global IPv6 address on the NIC (not unique local, past duplicate address detection)
+      check_address() {
+        ip -6 -o addr show scope global -tentative | awk '{print $4}' | grep -Eqv '^f[cd]'
+      }
+
+      # resolver: every resolver answers an A query
+      check_resolver() {
+        local r n=0
+        for r in ${RESOLVERS//,/ }; do
+          n=$((n + 1))
+          dig +short +time=2 +tries=2 A ipv4only.arpa "@$r" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || return 1
+        done
+        [ "$n" -gt 0 ]
+      }
+
+      # pref64: the synthesized AAAA of ipv4only.arpa lies inside the translation prefix (its first 96 bits)
+      check_pref64() {
+        local a
+        a=$(dig +short +time=2 +tries=2 AAAA ipv4only.arpa | grep ':' | head -n 1)
+        [ -n "$a" ] || return 1
+        python3 -c 'import ipaddress, sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(sys.argv[2], strict=False) else 1)' "$a" "$PREF64"
+      }
+
+      # name4: an IPv4-only name by name over IPv6 (the resolver synthesizes its address, the translator carries it)
+      check_name4() {
+        curl -6 -s -o /dev/null --max-time 10 "https://$IPV4_ONLY_NAME/"
+      }
+
+      # literal4: an IPv4 literal through the CLAT; any HTTP status counts
+      check_literal4() {
+        local code
+        code=$(curl -4 -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$IPV4_LITERAL/")
+        [ -n "$code" ] && [ "$code" != "000" ]
+      }
+
+      # name6: a native IPv6 name
+      check_name6() {
+        curl -6 -s -o /dev/null --max-time 10 "https://$IPV6_NAME/"
+      }
+
+      # mtu: 1400 bytes on the wire with "don't fragment" (1352 bytes of payload + 8 ICMPv6 + 40 IPv6)
+      check_mtu() {
+        ping -6 -M do -c 2 -W 3 -s 1352 "$IPV6_PING_TARGET"
+      }
+
+      # deny: a denied IPv4 destination embedded in the translation prefix stays refused (the check passes when the
+      # connection fails)
+      check_deny() {
+        local t
+        t=$(python3 -c 'import ipaddress, sys; n = ipaddress.ip_network(sys.argv[1], strict=False); print(ipaddress.IPv6Address(int(n.network_address) | int(ipaddress.IPv4Address(sys.argv[2]))))' "$PREF64" "$DENIED_IPV4") || return 1
+        ! curl -6 -s -o /dev/null --max-time 5 "http://[$t]/"
+      }
+
+      result() {
+        local name=$1
+        shift
+        if "$@" >/dev/null 2>&1; then
+          echo "shc_ipv6_canary_check{check=\"$name\"} 1"
+        else
+          echo "shc_ipv6_canary_check{check=\"$name\"} 0"
+        fi
+      }
+
+      main() {
+        local tmp
+        mkdir -p "$DIR" && chmod 0755 "$DIR" || exit 1
+        tmp=$(mktemp "$DIR/.metrics.XXXXXX") || exit 1
+        {
+          echo "# HELP shc_ipv6_canary_check 1 when the check passed in the last run, 0 when it failed"
+          echo "# TYPE shc_ipv6_canary_check gauge"
+          result address check_address
+          result resolver check_resolver
+          result pref64 check_pref64
+          result name4 check_name4
+          result literal4 check_literal4
+          result name6 check_name6
+          result mtu check_mtu
+          result deny check_deny
+          echo "# HELP shc_ipv6_canary_run_timestamp_seconds When the last run finished, in seconds since the epoch"
+          echo "# TYPE shc_ipv6_canary_run_timestamp_seconds gauge"
+          echo "shc_ipv6_canary_run_timestamp_seconds $(date +%s)"
+        } > "$tmp"
+        chmod 0644 "$tmp"
+        mv -f "$tmp" "$DIR/metrics"
+      }
+
+      main "$@"
+  - path: /etc/systemd/system/shc-ipv6-canary.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Translation canary: run the checks once
+      Wants=network-online.target
+      After=network-online.target clatd.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/shc-ipv6-canary
+  - path: /etc/systemd/system/shc-ipv6-canary.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Translation canary: run the checks every minute
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=60s
+      AccuracySec=1s
+
+      [Install]
+      WantedBy=timers.target
+  - path: /etc/systemd/system/shc-ipv6-canary-http.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Translation canary: serve the last results at /metrics
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      ExecStartPre=+/usr/bin/install -d -m 0755 /var/lib/shc-ipv6-canary
+      ExecStart=/usr/bin/python3 -m http.server __PORT__ --bind :: --directory /var/lib/shc-ipv6-canary
+      User=nobody
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, start, qemu-guest-agent.service]
+  - [systemctl, enable, --now, clatd.service]
+  - [systemctl, enable, --now, shc-ipv6-canary-http.service]
+  - [systemctl, enable, --now, shc-ipv6-canary.timer]

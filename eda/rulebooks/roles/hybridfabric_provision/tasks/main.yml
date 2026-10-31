@@ -16,6 +16,10 @@
 #    the network's root VRF on every node, a VLAN device on their bearer and an eBGP session to the CE with the
 #    circuit's routing policy (status.realization.attachments, with what wasn't realized and why under
 #    attachmentsSkipped); the job wakes the circuits whose realization changed.
+# 6. Translation canary (realization canaries.ipv6Translation, canary.yml): on one node, the metrics of the platform's
+#    probe on every site of the fabric that reports one (CloudInfrastructure status.realization.ipv6Canary), read from
+#    the site's gateway namespace in the placement's VRF; status.realization.translation.canaries, condition
+#    IPv6Translation and, after alertMinutes of failure, a Warning event IPv6TranslationCanaryFailed. Never fails the job.
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -339,6 +343,11 @@
             loop_var: bgw_node
             label: "{{ bgw_node.name }}"
 
+        # the translation canary (realization canaries.ipv6Translation): the probes' metrics, read from the sites'
+        # gateways on one node while the SSH key is there; never fails the job
+        - name: Read the translation canaries
+          ansible.builtin.include_tasks: canary.yml
+
       always:
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
@@ -419,6 +428,111 @@
       failed_when: false
       when: hf_egress6_alert | bool
 
+    # the translation canary as read from the sites (canary.yml): per site that reports one, the probe's address, when
+    # it last ran, its checks, stale (no run in the last three minutes, or not reachable) and healthy (reachable, not
+    # stale, every check 1); failedSince is kept across runs (as degradedSince), and a site failed or stale for
+    # canaries.ipv6Translation.alertMinutes is reported as an event below, every run while it lasts. Condition
+    # IPv6Translation: True/Ready while every site's canary is healthy, False/CanaryFailed naming the sites and their
+    # failed checks; none while no canary is configured or no site reports one.
+    - name: Set the translation canary status
+      vars:
+        _on: "{{ (hf_canary_cfg | default({}, true)).network | default('', true) | length > 0 }}"
+        _prev: >-
+          {{ (((fab_st.realization | default({}, true)).translation | default({}, true)).canaries | default({}, true)) }}
+        _now: "{{ hf_canary_now | default(lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ'), true) }}"
+        _status: >-
+          {%- set out = {} -%}
+          {%- for t in hf_canary_targets | default([]) if _on | bool -%}
+            {%- if t.address | default('', true) | length > 0 -%}
+              {%- set r = (hf_canary_scrape | default({}, true)).get(t.site) or {'address': t.address, 'at': '', 'checks': {},
+                            'stale': true, 'healthy': false,
+                            'error': hf_canary_error | default('', true) or 'not read: no border gateway node answered'} -%}
+            {%- else -%}
+              {%- set r = {'address': '', 'at': '', 'checks': {}, 'stale': true, 'healthy': false,
+                           'error': t.error | default('', true) or 'the site reports no probe address'} -%}
+            {%- endif -%}
+            {%- set p = _prev[t.site] | default({}, true) -%}
+            {%- set since = '' if r.healthy | bool else (p.failedSince | default('', true) or _now) -%}
+            {%- set _ = out.update({t.site: r | combine({'placement': t.placement | default('', true), 'failedSince': since})}) -%}
+          {%- endfor -%}
+          {{ out }}
+        _summary: >-
+          {%- set parts = [] -%}
+          {%- for site, r in (_status | dictsort) if not r.healthy | bool -%}
+            {%- set failed = r.checks | dict2items | rejectattr('value', 'equalto', 1) | map(attribute='key') | sort | list -%}
+            {%- set why = ((['failed ' ~ failed | join(', ')] if failed else []) + ([r.error] if r.error | length > 0 else [])) -%}
+            {%- set _ = parts.append(site ~ ' (' ~ (why | join('; ') or 'unhealthy') ~ ', since ' ~ r.failedSince ~ ')') -%}
+          {%- endfor -%}
+          {{ parts | join(', ') }}
+      ansible.builtin.set_fact:
+        hf_canary_status: "{{ _status }}"
+        hf_canary_summary: "{{ _summary | trim }}"
+        # what the status write sends: the status is merge-patched, so a site that no longer reports a canary and a
+        # check the probe no longer runs are removed explicitly (null)
+        hf_canary_patch: >-
+          {%- set out = {} -%}
+          {%- for site, r in _status.items() -%}
+            {%- set gone = {} -%}
+            {%- for k in (_prev[site] | default({}, true)).checks | default({}, true) if k not in r.checks -%}
+              {%- set _ = gone.update({k: none}) -%}
+            {%- endfor -%}
+            {%- set _ = out.update({site: r | combine({'checks': r.checks | combine(gone)})}) -%}
+          {%- endfor -%}
+          {%- for site in _prev if site not in _status -%}{%- set _ = out.update({site: none}) -%}{%- endfor -%}
+          {{ out }}
+        hf_canary_alert_sites: >-
+          {%- set out = [] -%}
+          {%- for site, r in (_status | dictsort) if not r.healthy | bool and r.failedSince | length > 0 -%}
+            {%- if ((_now | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (r.failedSince | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds()
+                  >= ((hf_canary_cfg | default({}, true)).alertMinutes | default(5) | int) * 60 -%}
+              {%- set _ = out.append(site) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        hf_canary_conditions: >-
+          {%- set bad = _status | dict2items | rejectattr('value.healthy') | list -%}
+          {%- if _status | length == 0 -%}
+            {{ [] }}
+          {%- else -%}
+            {{ [{'type': 'IPv6Translation',
+                 'status': 'False' if bad | length > 0 else 'True',
+                 'reason': 'CanaryFailed' if bad | length > 0 else 'Ready',
+                 'message': ('translation canary failing on ' ~ (_summary | trim)) if bad | length > 0
+                            else 'the translation canary passes every check on ' ~ (_status.keys() | sort | join(', '))}] }}
+          {%- endif -%}
+
+    - name: Report the translation canary failure as an event
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Event
+          metadata:
+            name: "{{ fab_name }}-ipv6-canary-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+            namespace: "{{ fab_namespace }}"
+          involvedObject:
+            apiVersion: hybridsovereign.redhat/v1alpha1
+            kind: HybridFabric
+            name: "{{ fab_name }}"
+            namespace: "{{ fab_namespace }}"
+            uid: "{{ fab_obj.metadata.uid }}"
+          type: Warning
+          reason: IPv6TranslationCanaryFailed
+          message: >-
+            IPv6 translation canary failed or stale for at least {{ hf_canary_cfg.alertMinutes | default(5) }} minutes on
+            {{ hf_canary_alert_sites | join(', ') }}: {{ hf_canary_summary }}; IPv6-only placements on those sites may
+            not reach IPv4-only destinations
+          source: {component: shc-hybridfabric}
+          reportingComponent: shc-hybridfabric
+          firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          count: 1
+      failed_when: false
+      when: hf_canary_alert_sites | length > 0
+
     # what tenants see of the fabric changed since the Entities were last told (status.realization.ipam.tenantOffer,
     # stored below; absent before the first run that stores it): its IPv6 offer, or its spec (who may use it). The
     # wake comes before the status write: the pool rows the Entity job reads are published already (the ensure
@@ -461,17 +575,21 @@
           ('; ' ~ hf_attach.status | length ~ ' attachment circuit(s)' ~ ((', not realized: ' ~ hf_attach.skipped
              | map(attribute='circuit') | join(', ')) if hf_attach.skipped else ''))
           if fab_real.attachments.enabled | default(false) | bool else '' }}{{
-          ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}
+          ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}{{
+          ('; translation canary ' ~ ('healthy on ' ~ (hf_canary_status.keys() | sort | join(', '))
+             if hf_canary_conditions[0].status == 'True' else ('failing on ' ~ hf_canary_summary)))
+          if hf_canary_conditions | default([]) | length > 0 else '' }}
         # the IPv6 egress condition (only with IPv6 egress): True while every node has an upstream session and the
-        # default route; Degraded otherwise (the networks' rows say the same)
+        # default route; Degraded otherwise (the networks' rows say the same). Then the translation canary's condition
+        # (IPv6Translation, only while a site reports a canary)
         fab_conditions: >-
-          {{ [{'type': 'IPv6EgressUpstream',
+          {{ ([{'type': 'IPv6EgressUpstream',
                'status': 'False' if hf_egress6_status.degraded | default(false) else 'True',
                'reason': 'Degraded' if hf_egress6_status.degraded | default(false) else 'Ready',
                'message': (('no upstream session or default route on ' ~ hf_egress6_status.degradedNodes | join(', ')
                             ~ ' since ' ~ hf_egress6_status.degradedSince) if hf_egress6_status.degraded | default(false)
                            else 'every node has an upstream session and the default route')}]
-             if hf_egress6_status.enabled | default(false) else [] }}
+             if hf_egress6_status.enabled | default(false) else []) + hf_canary_conditions | default([]) }}
         fab_status: >-
           {{ {'ledger': 'fabric-ledger-' ~ fab_name,
               'allocated': hf_ledger.allocated,
@@ -484,7 +602,9 @@
                               'egress': {'enabled': fab_real.egress.enabled | default(false) | bool,
                                          'networks': hf_egress_status, 'ipv6': hf_egress6_status},
                               'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
-                              'ipam': hf_ipam}} }}
+                              'ipam': hf_ipam,
+                              'translation': {'canaries': hf_canary_patch | default({})}
+                                             if hf_canary_status | default({}) | length > 0 else none}} }}
 
     # the networks this run added to or removed from the egress (or whose IPv6 egress came or went) wait for it: wake
     # them; when the IPv6 egress became degraded or recovered, every network with IPv6 egress (their family row says so)

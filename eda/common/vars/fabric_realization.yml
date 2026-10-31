@@ -135,6 +135,28 @@ fabric_realization_defaults:
   # IPv6 subnet); the IPv6 egress filter admits the resolvers on port 53 and denies the private IPv4 ranges of
   # egress.denyDestinations inside every pref64
   translation: {}
+  # platform canaries: workloads the platform team runs on an Entity of its own, read by the platform's jobs to tell
+  # whether a service works end to end for a tenant. Generic: no canary runs by default.
+  canaries:
+    # the translation canary (samples/platform/ipv6-canary): one probe VM on every site that offers IPv6-only
+    # placements with translation. Every minute it checks its address, the resolvers, the translation prefix, an
+    # IPv4-only name and an IPv4 literal through its CLAT, a native IPv6 name, the path MTU and that a denied IPv4
+    # destination stays refused, and serves the results in Prometheus text format at http://[<address>]:<port>/metrics.
+    # The site job finds the probe's address (status.realization.ipv6Canary of the CloudInfrastructure), the fabric
+    # job reads the metrics from the site's gateway (status.realization.translation.canaries of the HybridFabric,
+    # condition IPv6Translation, Warning event IPv6TranslationCanaryFailed).
+    ipv6Translation:
+      # "<namespace>/<name>" of the platform team's IPv6-only HybridNetwork (platformPrefixes family 6, mode Platform,
+      # egress.internet true) that carries the probes; "" = no canary (no status, no condition, no event)
+      network: ""
+      # the name of the probe VM (CloudVirt: the VirtualMachineInstance) or server (CloudOSO) on every placement of
+      # that network
+      workload: ""
+      # the TCP port the probe serves its metrics on
+      port: 9464
+      # how long a site's canary may fail, be stale or be unreachable before the fabric reports it as an event (and
+      # every run while it lasts)
+      alertMinutes: 5
   # CloudGateways over transport wireguard (remote sites): each node's tunnel listens on listenPort (unless the
   # gateway sets one); the tunnel's MTU is the site leg's MTU unless siteUnderlay.mtu says otherwise (1420 = a 1500
   # path minus WireGuard over IPv4); keepalives keep NAT state open

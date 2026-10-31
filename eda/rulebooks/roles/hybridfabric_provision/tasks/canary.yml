@@ -1,0 +1,78 @@
+---
+# The translation canary (realization canaries.ipv6Translation, samples/platform/ipv6-canary): read the probe's metrics
+# on every site of the fabric that reports one. Runs in the node configuration block, while the SSH key is there.
+# The fabric's sites are the sites of its CloudGateways (spec.fabricRef, spec.cloudRef); a site reports where its probe
+# answers in status.realization.ipv6Canary {placement, vrf, address} (the site job), or why it found none (error).
+# One border gateway node, the first that answers, reads every probe from the site's gateway namespace in the
+# placement's VRF (canary_scrape.yml). Never fails the fabric job: a canary that could not be read says so in the
+# status (main.yml, "Set the translation canary status").
+# Sets hf_canary_cfg, hf_canary_targets [{site, gateway, netns, placement, vrf, address, error}], hf_canary_scrape
+# ({site: {address, at, checks, stale, healthy, error}} from the node), hf_canary_node (the node that read them),
+# hf_canary_error (why nothing could be read, '' otherwise), hf_canary_now (the run's time).
+- name: The translation canary's realization
+  ansible.builtin.set_fact:
+    hf_canary_cfg: "{{ (fab_real.canaries | default({}, true)).ipv6Translation | default({}, true) }}"
+    hf_canary_targets: []
+    hf_canary_scrape: {}
+    hf_canary_node: ""
+    hf_canary_error: ""
+    # the run's time, once (failedSince and the alert compare against it)
+    hf_canary_now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Read the translation canaries
+  when: hf_canary_cfg.network | default('', true) | length > 0
+  block:
+    - name: List the gateways and the sites (translation canary)
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+        namespace: "{{ fab_namespace }}"
+      loop: [CloudGateway, CloudInfrastructure]
+      register: _hf_canary_objs
+
+    # one entry per site of the fabric whose site job recorded a canary (an address, or the reason it has none)
+    - name: The sites that report a translation canary
+      vars:
+        _gws: "{{ (_hf_canary_objs.results | default([{}, {}]))[0].resources | default([]) }}"
+        _sites: "{{ (_hf_canary_objs.results | default([{}, {}]))[1].resources | default([]) }}"
+      ansible.builtin.set_fact:
+        hf_canary_targets: >-
+          {%- set out = [] -%}
+          {%- set seen = [] -%}
+          {%- for g in _gws | sort(attribute='metadata.name')
+                if ((g.spec | default({}, true)).fabricRef | default({}, true)).name | default('') == fab_name
+                   and g.metadata.deletionTimestamp is not defined -%}
+            {%- set site = ((g.spec | default({}, true)).cloudRef | default({}, true)).name | default('') -%}
+            {%- set ci = (_sites | selectattr('metadata.name', 'equalto', site) | list + [{}]) | first -%}
+            {%- set c = ((ci.status | default({}, true)).realization | default({}, true)).ipv6Canary | default(none) -%}
+            {%- if site | length > 0 and site not in seen and c is mapping -%}
+              {%- set _ = seen.append(site) -%}
+              {%- set _ = out.append({'site': site, 'gateway': g.metadata.name, 'netns': 'gw-' ~ g.metadata.name,
+                                      'placement': c.placement | default('', true), 'vrf': c.vrf | default('', true),
+                                      'address': c.address | default('', true) if c.vrf | default('', true) | length > 0 else '',
+                                      'error': c.error | default('', true)}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Read the canaries from a border gateway node
+      ansible.builtin.include_tasks: canary_scrape.yml
+      loop: "{{ fab_spec.borderGateway.nodes }}"
+      loop_control:
+        loop_var: hf_canary_bgw
+        label: "{{ hf_canary_bgw.name }}"
+      when: hf_canary_targets | selectattr('address') | list | length > 0
+
+    - name: Note that no border gateway node read the canaries
+      ansible.builtin.set_fact:
+        hf_canary_error: "no border gateway node could read the canaries"
+      when:
+        - hf_canary_targets | selectattr('address') | list | length > 0
+        - hf_canary_node | length == 0
+  rescue:
+    - name: Note that the translation canaries were not read
+      ansible.builtin.set_fact:
+        hf_canary_error: "{{ ('the canaries were not read: ' ~ (ansible_failed_result.msg | default('failed', true) | string))[:300] }}"

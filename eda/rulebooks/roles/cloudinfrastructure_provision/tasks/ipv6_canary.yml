@@ -1,0 +1,224 @@
+---
+# The translation canary of this site (realization canaries.ipv6Translation, samples/platform/ipv6-canary): where the
+# platform team's probe answers on the canary network's placement of this site. The fabric job reads the probe's
+# metrics from the site's gateway with it. status.realization.ipv6Canary:
+#   {placement: "<namespace>/<name>", vrf: <the placement's gateway VRF>, address: <the probe's global IPv6 address>,
+#    workload: <the VirtualMachineInstance "<site namespace>/<name>" or the server id>}    the probe was found
+#   {placement, vrf, error: <why not>}       the placement exists, but not the probe or its address (or the lookup failed)
+#   null (absent)                             no canary configured, or the canary network has no placement on this site
+# The placement: a NetworkPlacement in the canary network's namespace on that network, recorded on this site
+# (status.site), of the backend kind of the site type (openshift: CloudVirt, openstack: CloudOSO), not being deleted.
+# CloudVirt: the VirtualMachineInstance named `workload` in the placement's site namespaces (status.namespaces), read
+# with the site's fabric credential; its first global IPv6 address (status.interfaces[].ipAddresses; not link-local,
+# unique local or multicast). CloudOSO: the server named `workload` in the environment's project (the placement's
+# status.realization.site.sharedTo), read with the site account; its first global IPv6 fixed address on the
+# placement's network (status.realization.site.networkId). The probe's address is never taken from a label or an
+# annotation on tenant objects: only the platform's own records name what the fabric reads.
+# Never fails the site job: a lookup that fails is recorded as the error. Written alone (a partial status write), and
+# only when it changed; with no canary configured and none recorded nothing is written.
+# Inputs: cloudinfrastructure_cr_name, ci_cr_type, ci_cr_spec, cloudinfrastructure_cr_lookup, the site account of
+# openstack.yml (os_account_clouds_yaml, os_account_cacert). Sets ci_canary.
+- name: Load the realization defaults (canaries)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: The translation canary's realization
+  vars:
+    _real: "{{ fabric_realization_defaults | default({}) | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _cfg: "{{ (_real.canaries | default({}, true)).ipv6Translation | default({}, true) }}"
+  ansible.builtin.set_fact:
+    ci_canary_network: "{{ _cfg.network | default('', true) | trim }}"
+    ci_canary_workload: "{{ _cfg.workload | default('', true) | trim }}"
+    ci_canary_prev: >-
+      {{ ((cloudinfrastructure_cr_lookup.resources[0].status | default({}, true)).realization | default({}, true)).ipv6Canary
+         | default(none) }}
+    ci_canary_kind: "{{ {'openshift': 'CloudVirt', 'openstack': 'CloudOSO'}.get(ci_cr_type, '') }}"
+    ci_canary: null
+    ci_canary_base: {placement: ""}
+    ci_canary_placement: {}
+    ci_canary_namespaces: []
+
+- name: Find the translation canary on this site
+  when:
+    - ci_canary_network | length > 0
+    - ci_canary_kind | length > 0
+  block:
+    - name: Refuse a canary realization without "<namespace>/<name>" and a workload name
+      ansible.builtin.fail:
+        msg: >-
+          canaries.ipv6Translation: network must be "<namespace>/<name>" (is "{{ ci_canary_network }}") and workload a
+          name (is "{{ ci_canary_workload }}")
+      when: ci_canary_network.split('/') | length != 2 or ci_canary_workload | length == 0
+
+    - name: List the canary network's placements
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: NetworkPlacement
+        namespace: "{{ ci_canary_network.split('/')[0] }}"
+      register: _ci_canary_placements
+
+    - name: Find the canary network's placement on this site
+      ansible.builtin.set_fact:
+        ci_canary_placement: >-
+          {%- set out = [] -%}
+          {%- for p in _ci_canary_placements.resources | default([]) | sort(attribute='metadata.name')
+                if (p.spec | default({}, true)).network | default('') == ci_canary_network.split('/')[1]
+                   and ((p.spec | default({}, true)).backend | default({}, true)).kind | default('') == ci_canary_kind
+                   and (p.status | default({}, true)).site | default('') == cloudinfrastructure_cr_name
+                   and p.metadata.deletionTimestamp is not defined -%}
+            {%- set _ = out.append(p) -%}
+          {%- endfor -%}
+          {{ (out + [{}]) | first }}
+
+    - name: Name the placement, its gateway VRF and its site namespaces
+      ansible.builtin.set_fact:
+        ci_canary_base:
+          placement: "{{ ci_canary_placement.metadata.namespace ~ '/' ~ ci_canary_placement.metadata.name }}"
+          vrf: "{{ ((ci_canary_placement.status | default({}, true)).realization | default({}, true)).vrf | default('', true) }}"
+        ci_canary_namespaces: >-
+          {%- set out = [] -%}
+          {%- for n in (ci_canary_placement.status | default({}, true)).namespaces | default([], true) -%}
+            {%- set v = (n.namespace | default('', true) if n is mapping else n) | string -%}
+            {%- if v | length > 0 -%}{%- set _ = out.append(v) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      when: ci_canary_placement | length > 0
+
+    - name: Require the placement's gateway VRF
+      ansible.builtin.fail:
+        msg: "placement {{ ci_canary_base.placement }} has no gateway VRF yet"
+      when:
+        - ci_canary_placement | length > 0
+        - ci_canary_base.vrf | length == 0
+
+    # ---- CloudVirt: the VirtualMachineInstance in the placement's site namespaces ----
+    - name: The probe on a CloudVirt
+      when:
+        - ci_canary_placement | length > 0
+        - ci_canary_kind == 'CloudVirt'
+      block:
+        - name: The site's fabric credential (translation canary)
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
+          vars:
+            ci_spec: "{{ ci_cr_spec }}"
+            site_kc_tag: "ci-canary-{{ cloudinfrastructure_cr_name }}"
+
+        - name: Read the probe's VirtualMachineInstance
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ site_kubeconfig }}"
+            api_version: kubevirt.io/v1
+            kind: VirtualMachineInstance
+            name: "{{ ci_canary_workload }}"
+            namespace: "{{ item }}"
+          loop: "{{ ci_canary_namespaces }}"
+          register: _ci_canary_vmis
+          failed_when: false
+
+        - name: The probe's address (CloudVirt)
+          ansible.builtin.set_fact:
+            ci_canary: >-
+              {%- set ns = namespace(addr='', where='', failed=[]) -%}
+              {%- for r in _ci_canary_vmis.results | default([]) -%}
+                {%- if r.failed | default(false) or (r.msg is defined and r.resources is not defined) -%}
+                  {%- set ns.failed = ns.failed + [r.item | string] -%}
+                {%- endif -%}
+                {%- for vmi in r.resources | default([]) if ns.where == '' -%}
+                  {%- set ns.where = vmi.metadata.namespace ~ '/' ~ vmi.metadata.name -%}
+                  {%- for i in (vmi.status | default({}, true)).interfaces | default([], true) -%}
+                    {%- for a in (i.ipAddresses | default([], true))
+                                 + ([i.ipAddress] if i.ipAddress | default('', true) | length > 0 else []) -%}
+                      {%- set b = (a | string).split('/')[0] | lower -%}
+                      {%- if ns.addr == '' and ':' in b and b is not match('(fe[89ab]|f[cd]|ff)') and b not in ['::', '::1'] -%}
+                        {%- set ns.addr = b -%}
+                      {%- endif -%}
+                    {%- endfor -%}
+                  {%- endfor -%}
+                {%- endfor -%}
+              {%- endfor -%}
+              {%- set nss = ci_canary_namespaces -%}
+              {%- if ns.where == '' -%}
+                {{ ci_canary_base | combine({'error': 'no VirtualMachineInstance ' ~ ci_canary_workload ~ ' in '
+                     ~ (('the site namespaces ' ~ nss | join(', ')) if nss | length > 0 else 'the placement (it serves no namespace yet)')
+                     ~ ((' (not readable: ' ~ ns.failed | join(', ') ~ ')') if ns.failed | length > 0 else '')}) }}
+              {%- elif ns.addr == '' -%}
+                {{ ci_canary_base | combine({'workload': ns.where,
+                                             'error': 'VirtualMachineInstance ' ~ ns.where ~ ' reports no global IPv6 address'}) }}
+              {%- else -%}
+                {{ ci_canary_base | combine({'address': ns.addr, 'workload': ns.where}) }}
+              {%- endif -%}
+      always:
+        - name: Remove the site kubeconfig of the canary lookup
+          ansible.builtin.file:
+            path: "/tmp/eda-ci-canary-{{ cloudinfrastructure_cr_name }}-kubeconfig"
+            state: absent
+
+    # ---- CloudOSO: the server in the environment's project, on the placement's network ----
+    - name: Require the placement's site network (CloudOSO)
+      ansible.builtin.fail:
+        msg: "placement {{ ci_canary_base.placement }} has no site network recorded yet"
+      when:
+        - ci_canary_placement | length > 0
+        - ci_canary_kind == 'CloudOSO'
+        - >-
+          (((ci_canary_placement.status | default({}, true)).realization | default({}, true)).site | default({}, true)).networkId
+          | default('', true) | length == 0
+          or (((ci_canary_placement.status | default({}, true)).realization | default({}, true)).site | default({}, true)).sharedTo
+          | default('', true) | length == 0
+
+    - name: Ask the site for the probe server (CloudOSO)
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_request:
+          action: server-address
+          region: "{{ (ci_cr_spec.openstack | default({})).region | default('', true) }}"
+          name: "{{ ci_canary_workload }}"
+          projectId: "{{ ci_canary_placement.status.realization.site.sharedTo }}"
+          networkId: "{{ ci_canary_placement.status.realization.site.networkId }}"
+      when:
+        - ci_canary_placement | length > 0
+        - ci_canary_kind == 'CloudOSO'
+
+    - name: The probe's address (CloudOSO)
+      ansible.builtin.set_fact:
+        ci_canary: >-
+          {%- if not os_result.found | default(false) -%}
+            {{ ci_canary_base | combine({'error': 'no server ' ~ ci_canary_workload ~ ' in the environment project '
+                                                   ~ ci_canary_placement.status.realization.site.sharedTo}) }}
+          {%- elif os_result.address | default('', true) | length == 0 -%}
+            {{ ci_canary_base | combine({'workload': os_result.serverId,
+                                         'error': 'server ' ~ ci_canary_workload ~ ' (' ~ os_result.serverId ~ ') has no global '
+                                                  ~ 'IPv6 address on the placement network '
+                                                  ~ ci_canary_placement.status.realization.site.networkId}) }}
+          {%- else -%}
+            {{ ci_canary_base | combine({'address': os_result.address, 'workload': os_result.serverId}) }}
+          {%- endif -%}
+      when:
+        - ci_canary_placement | length > 0
+        - ci_canary_kind == 'CloudOSO'
+  rescue:
+    - name: Record why the translation canary was not found
+      ansible.builtin.set_fact:
+        ci_canary: >-
+          {{ ci_canary_base | combine({'error': (ansible_failed_result.msg | default('the canary lookup failed', true)
+                                                  | string | trim)[:300]}) }}
+
+- name: Record the translation canary of this site
+  hybridsovereign.shc.cr_status:
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    plural: cloudinfrastructures
+    name: "{{ cloudinfrastructure_cr_name }}"
+    namespace: "{{ cloudinfrastructure_cr_namespace }}"
+    status: "{{ {'realization': {'ipv6Canary': ci_canary}} }}"
+    action: reconcile
+    partial: true
+    ignore_not_found: true
+  register: _ci_canary_write
+  failed_when: false
+  when: ci_canary != ci_canary_prev
