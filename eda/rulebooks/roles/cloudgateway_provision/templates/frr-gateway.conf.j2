@@ -186,6 +186,10 @@ router bgp {{ _asn }}
   neighbor SITE activate
   neighbor SITE route-reflector-client
   neighbor SITE route-map FROM-SITE in
+{# the site's routes are kept as received: when a placement's prefix enters the site-import filter after the site
+   already advertised it (a provider-assigned prefix is known only once the site side ran), FRR re-runs FROM-SITE on
+   what it holds instead of asking the site to send again, which some site routers never answer #}
+  neighbor SITE soft-reconfiguration inbound
 {% if fab_spec.siteUnderlay.upstreamRouteReflectors | default([]) %}
   neighbor UPSTREAM activate
   neighbor UPSTREAM route-map FROM-SITE in
