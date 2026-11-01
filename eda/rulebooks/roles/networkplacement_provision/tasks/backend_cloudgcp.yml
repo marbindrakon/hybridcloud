@@ -10,16 +10,22 @@
 # HA VPN gateways of a site whose routers carry IPv6 (GCP_REALIZATION edge.ipv6.enabled) are created dual-stack for
 # every placement: a gateway's stack type can't change later.
 # IPv6 (design/IPV6-PLAN.md §6.3; the placement's family-6 want from families.yml, which refused source Network,
-# tenant prefixes and IPv6-only placements before anything was allocated): source Provider only. The subnet is
-# dual-stack with an external /64 Google assigns; the Cloud Router's peers exchange IPv6 on the IPv4 sessions and
-# advertise the /64; IPv6 from the fabric (the network's IPv6 space, the fabric's ICMPv6 sources) is admitted by a
-# firewall rule of its own; internet (spec.egress.internet) through Google's IPv6 default route, never through the
-# network. The /64 is recorded in the network's IPAM as a provider-assigned subnet (ipam-external), so status.subnets
-# carries it with source Provider and the gateway's route check waits for the routers' Type-5 route for it (they
+# tenant prefixes and IPv6-only placements on a site without ipv6Only before anything was allocated): source
+# Provider only. The subnet is dual-stack with an external /64 Google assigns; the Cloud Router's peers exchange IPv6
+# on the IPv4 sessions and advertise the /64; IPv6 from the fabric (the network's IPv6 space, the fabric's ICMPv6
+# sources) is admitted by a firewall rule of its own; internet (spec.egress.internet) through Google's IPv6 default
+# route, never through the network. The /64 is recorded in the network's IPAM as a provider-assigned subnet
+# (ipam-external), so status.subnets carries it with source Provider and the gateway's route check waits for the routers' Type-5 route for it (they
 # take it from the Cloud Router and announce it to the site gateway for traffic with the network's other sites;
 # never toward another cloud's provider-source placements); status.ipv6 is described again once the /64 is known
 # (ipv6_status.yml, internet.path Provider). The routers get the /64 and the network's IPv6 space with net-up.
-# Sets np_backend_status, np_backend_changed.
+# IPv6-only (design/IPV6-PLAN.md §6.4; no IPv4 prefix): the subnet is IPV6_ONLY, everything else as above (the
+# routers' IPv4 sessions carry the IPv6 routes). While translation qualifies (np_translation path Provider: the
+# network wants internet access and the site's translation entry says provider), the VPC gets a Cloud DNS DNS64
+# server policy and the Cloud Router a Cloud NAT for NAT64; they go when it stops qualifying. The backend reports
+# np_backend_translation {path: Provider, pref64 64:ff9b::/96, resolvers (the metadata server), ipv4Source (the
+# NAT's address once Google allocated one)} before the second description publishes it.
+# Sets np_backend_status, np_backend_changed, np_backend_translation.
 - name: The installation's GCP realization and the site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
   vars:
@@ -56,7 +62,8 @@
   when: np_gcp_edge.routers | length == 0
 
 # {} without spec.ipv6; else {source, internet, fabricSources (the network's IPv6 space in effect and the fabric's
-# ICMPv6 sources: the VPC firewall admits them, so Packet Too Big from the fabric reaches the workloads)}
+# ICMPv6 sources: the VPC firewall admits them, so Packet Too Big from the fabric reaches the workloads)}; an
+# IPv6-only placement adds translation (the provider's NAT64 path wanted: np_translation path Provider)
 - name: The placement's IPv6 here
   vars:
     _w6: "{{ (np_want | default([], true) | selectattr('family', 'equalto', 6) | list + [{}]) | first }}"
@@ -71,7 +78,10 @@
       {{ {} if _w6 | length == 0
          else {'source': _w6.source, 'internet': _internet | bool,
                'fabricSources': (_nst.prefixes | default([], true) | list
-                                 + ([_icmp6] if _icmp6 | length > 0 else [])) | unique | list} }}
+                                 + ([_icmp6] if _icmp6 | length > 0 else [])) | unique | list}
+              | combine({'translation': (np_translation | default({}, true)).path | default('', true) == 'Provider'}
+                        if np_want | default([], true) | selectattr('family', 'equalto', 4) | list | length == 0
+                        else {}) }}
 
 # families.yml refuses it first; the site side has no other source
 - name: Refuse a source other than the provider's
@@ -118,6 +128,16 @@
   ansible.builtin.set_fact:
     np_gcp_place: "{{ gcp_result.result }}"
     np_gcp_changed: "{{ gcp_result.changed | default([]) | length > 0 }}"
+
+# the provider's NAT64 path as the placement reports it (ipv6_status.yml publishes it with the second description)
+- name: The provider's translation
+  vars:
+    _t: "{{ (np_gcp_place.ipv6 | default({}, true)).translation | default({}, true) }}"
+  ansible.builtin.set_fact:
+    np_backend_translation: >-
+      {{ ({'path': 'Provider', 'pref64': _t.pref64, 'resolvers': _t.resolvers | default([], true) | list}
+          | combine({'ipv4Source': _t.ipv4Source} if _t.ipv4Source | default('', true) | length > 0 else {}))
+         if _t.pref64 | default('', true) | length > 0 else {} }}
 
 - name: The provider's IPv6 subnet in the network's address space
   when: (np_gcp_place.ipv6 | default({}, true)).subnet | default('', true) | length > 0
@@ -183,5 +203,9 @@
     np_backend_status: >-
       {{ np_backend_status | combine({'ipv6': {'source': 'Provider', 'subnet': np_gcp_place.ipv6.subnet,
                                                'internet': np_gcp_ipv6.internet,
-                                               'nexthops': np_gcp_place.ipv6.nexthops}}) }}
+                                               'nexthops': np_gcp_place.ipv6.nexthops}
+                                              | combine({'only': true} if np_gcp_place.ipv6.only | default(false) else {})
+                                              | combine({'nat64': np_gcp_place.ipv6.translation.nat,
+                                                         'dns64Policy': np_gcp_place.ipv6.translation.dnsPolicy}
+                                                        if np_gcp_place.ipv6.translation is defined else {})}) }}
   when: np_gcp_place.ipv6 | default({}, true) | length > 0
