@@ -1,9 +1,22 @@
 ---
 # shc (design/P11-GCP-PLAN.md §5.1): this installation's Google Cloud realization (inventory variable
 # gcp_realization, from GCP_REALIZATION) and the job's GCP identity (the shc-cloud container group). Sets gcp_real.
+# Generic defaults merged under an installation's edge section (the realization's own keys win):
+#   edge.ipv6.enabled   IPv6 on the edge routers (design/IPV6-PLAN.md §6.1, §6.3): per network VRF whose placement
+#                       has IPv6, two IPsec child SAs per HA VPN tunnel (one per family), IPv6 unicast on the Cloud
+#                       Router sessions and the placement's prefixes as EVPN Type-5. Off: nothing IPv6 on the edge
+#                       (the sites' ipv6 capability is switched separately, in FABRIC_REALIZATION
+#                       placement.ipFamiliesBySite). No next-hop pool: Google assigns each BGP peer's IPv6 next hops
+#                       and the placement job hands them to the routers with the tunnels.
 - name: The installation's GCP realization
+  vars:
+    _gcp_r: "{{ gcp_realization | default({}, true) }}"
+    _gcp_edge_defaults:
+      ipv6: {enabled: false}
   ansible.builtin.set_fact:
-    gcp_real: "{{ gcp_realization | default({}, true) }}"
+    gcp_real: >-
+      {{ _gcp_r | combine({'edge': _gcp_edge_defaults | combine(_gcp_r.edge, recursive=true)}
+                          if _gcp_r.edge is defined and _gcp_r.edge is mapping else {}) }}
 
 - name: Require the GCP realization and the job's GCP identity
   ansible.builtin.assert:

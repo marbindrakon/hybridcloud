@@ -11,11 +11,35 @@ config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?,
          "nodes": {<instance name>: {"name", "address", "publicKey"?, "underlay"?, "externalIp"?}},
          "gateways": [{"name", "publicKey", "address"}],
          "vrfs": [{"name", "vni", "mtu", "peerAsn",
-                   "vpn": {<instance name>: [{"ifId", "peerIp", "inside", "bgp": [..], "psk"}]},
-                   "testAddress"?: {<instance name>: "a.b.c.d"}}]}
+                   "vpn": {<instance name>: [{"ifId", "peerIp", "inside", "bgp": [..], "psk",
+                                              "inside6"?: "<a>/126", "bgp6"?: [..]}]},
+                   "testAddress"?: {<instance name>: "a.b.c.d"},
+                   "ipv6"?: {"prefixes": [..], "network": [..]}}],
+         "ipv6"?: {"icmp6": {<instance name>: "<a>/128"}}}
 Per network VRF: an L3VNI bridge + VXLAN over the WireGuard tunnel (the fabric side), and one XFRM interface
 (ipsec<ifId>, Libreswan ipsec-interface) per HA VPN tunnel inside the VRF with eBGP to the Cloud Router (the cloud
 side).
+
+IPv6 (design/IPV6-PLAN.md §6.1, §6.3), per VRF with an ipv6 block, on the tunnels of this router that carry inside6
+(the Cloud Router peer has IPv6 on; Google assigned the next-hop pair, the router's side is inside6); a VRF without an
+ipv6 block is configured exactly as before IPv6 existed:
+- Libreswan: two conns per such tunnel, shc-<vni>-<ifId>-v4 (0.0.0.0/0) and -v6 (::/0), with identical IKE
+  parameters on the same ipsec-interface: one IKE SA, two child SAs, both families on one XFRM device (Libreswan 4.15
+  takes no mixed-family subnet list in one conn). A tunnel without inside6 keeps its single conn shc-<vni>-<ifId>.
+- kernel: IPv6 forwarding and no ICMPv6 rate limit (Packet Too Big for every oversized packet); the XFRM device
+  takes inside6 next to the IPv4 /30 (Libreswan re-creates the device when it restarts, so its VRF master, MTU and
+  both addresses are asserted after Libreswan on every run); lo<vni> takes the router's ICMPv6 source /128 (icmp6,
+  never announced); an unreachable IPv6 default in the VRF table, so a lookup that misses fails in the VRF instead
+  of falling through to the main table.
+- FRR, on the IPv4 sessions to the Cloud Router (MP-BGP): address-family ipv6 unicast with route-maps per family
+  (RFC 8212). In (<vrf>-vpn6-in): the placement's prefixes only (ipv6.prefixes: the subnets' Google-assigned /64s),
+  never a default. Out (<vrf>-vpn6-out): the network's IPv6 space (ipv6.network) learned from the fabric, never the
+  placement's own prefixes and never ::/0 (Google's own default route is the provider path), next hop the router's
+  inside6 address. A provider-assigned prefix of another cloud is outside ipv6.network, so it is never announced into
+  this cloud. advertise ipv6 unicast in the VRF's EVPN family, limited to the placement's prefixes (Type-5 toward the
+  site's gateway). zebra installs the VRF's BGP routes toward the fabric with the icmp6 /128 as their source (ipv6
+  protocol bgp route-map <vrf>-src6), so ICMPv6 errors toward the fabric leave from it; routes toward the Cloud
+  Router keep the XFRM device's address.
 """
 import base64
 import datetime
@@ -23,6 +47,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -30,8 +55,19 @@ import urllib.request
 
 STATE = "/etc/shc-edge"
 KEY = STATE + "/wg.key"
-SITE = open(STATE + "/site").read().strip()
-PROJECT = open(STATE + "/project").read().strip()
+# an unreachable IPv6 default at the highest metric: any route FRR installs wins over it
+UNREACHABLE_METRIC = "4278198272"
+
+
+def _local(name):
+    try:
+        return open(os.path.join(STATE, name)).read().strip()
+    except OSError:  # not on a router (the unit tests import the module)
+        return ""
+
+
+SITE = _local("site")
+PROJECT = _local("project")
 MD = "http://metadata.google.internal/computeMetadata/v1/"
 IPSEC_CONF = "/etc/ipsec.d/shc-edge.conf"
 IPSEC_SECRETS = "/etc/ipsec.d/shc-edge.secrets"
@@ -84,16 +120,80 @@ def public_key():
     return sh(["wg", "pubkey"], inp=open(KEY).read()).strip()
 
 
+def tunnels6(v, me):
+    """This router's tunnels of the VRF that carry IPv6 (the VRF has an ipv6 block and the tunnel its inside6)."""
+    if not v.get("ipv6"):
+        return []
+    return [t for t in v.get("vpn", {}).get(me, []) if t.get("inside6")]
+
+
+def v6_of(v, me):
+    """The VRF's ipv6 block when IPv6 is on for it on this router (at least one tunnel with inside6), else None."""
+    return v["ipv6"] if tunnels6(v, me) else None
+
+
+def icmp6_of(cfg, me):
+    """This router's ICMPv6 source /128 (the site's ipv6.icmp6), or None."""
+    return ((cfg.get("ipv6") or {}).get("icmp6") or {}).get(me) or None
+
+
+def _pl6(name, seq, action, prefix):
+    """One ipv6 prefix-list line: the prefix and every longer one inside it (exactly ::/0 for the default route)."""
+    n = ipaddress.ip_network(prefix)
+    more = "" if n.prefixlen in (0, 128) else " le 128"
+    return "ipv6 prefix-list %s seq %d %s %s%s" % (name, seq, action, n, more)
+
+
+def frr_policy6(v, six, icmp, nexthop):
+    """The VRF's IPv6 prefix lists and route-maps (see the module docstring). nexthop: the router's inside6 address
+    for the outbound route-map, None when the router holds more than one IPv6 tunnel in the VRF (FRR then takes each
+    session's interface address, which is that tunnel's inside6)."""
+    name = v["name"]
+    own = list(six.get("prefixes") or [])
+    out = [_pl6(name + "-in6", 5 * (i + 1), "permit", p) for i, p in enumerate(own)]
+    if not own:
+        out.append("ipv6 prefix-list %s-in6 seq 5 deny ::/0 le 128" % name)
+    # toward Google: never the default route (the provider path is Google's own), never the placement's prefixes
+    lines = [_pl6(name + "-out6", 5, "deny", "::/0")]
+    seq = 5
+    for p in own:
+        seq += 5
+        lines.append(_pl6(name + "-out6", seq, "deny", p))
+    for p in six.get("network") or []:
+        seq += 5
+        lines.append(_pl6(name + "-out6", seq, "permit", p))
+    out += lines
+    out += ["route-map %s-vpn6-in permit 10" % name, " match ipv6 address prefix-list %s-in6" % name, "exit",
+            "route-map %s-vpn6-out permit 10" % name, " match ipv6 address prefix-list %s-out6" % name]
+    if nexthop:
+        out.append(" set ipv6 next-hop global %s" % nexthop)
+    out += ["exit", "route-map %s-evpn6 permit 10" % name, " match ipv6 address prefix-list %s-in6" % name, "exit"]
+    if icmp:
+        # zebra: the Cloud Router's routes as they are, every other BGP route with the ICMPv6 source as its source
+        out += ["route-map %s-src6 permit 10" % name, " match ipv6 address prefix-list %s-in6" % name, "exit",
+                "route-map %s-src6 permit 20" % name, " set src %s" % icmp.split("/")[0], "exit"]
+    return out + ["!"]
+
+
 def frr_conf(cfg, me, node):
     gws = cfg.get("gateways", [])
     pw = cfg.get("bgpPassword")
     out = ["frr defaults traditional", "hostname %s" % node["name"], "service integrated-vtysh-config", "!"]
     for v in cfg.get("vrfs", []):
-        out += ["vrf %s" % v["name"], " vni %d" % v["vni"], "exit-vrf", "!"]
+        six = v6_of(v, me)
+        icmp = icmp6_of(cfg, me) if six else None
+        out += ["vrf %s" % v["name"], " vni %d" % v["vni"]]
+        if icmp:
+            out.append(" ipv6 protocol bgp route-map %s-src6" % v["name"])
+        out += ["exit-vrf", "!"]
         # FRR 8.5 sends and accepts nothing on eBGP without policy (RFC 8212). The HA VPN belongs to this network's
         # VPC alone: take its routes, give it the network's
         out += ["route-map %s-vpn-in permit 10" % v["name"], "exit", "route-map %s-vpn-out permit 10" % v["name"],
                 "exit", "!"]
+        if six:
+            t6 = tunnels6(v, me)
+            nh = str(ipaddress.ip_interface(t6[0]["inside6"]).ip) if len(t6) == 1 else None
+            out += frr_policy6(v, six, icmp, nh)
         if v.get("testAddress", {}).get(me):
             out += ["ip prefix-list %s-test seq 5 permit %s/32" % (v["name"], v["testAddress"][me]),
                     "route-map %s-connected permit 10" % v["name"], " match ip address prefix-list %s-test" % v["name"],
@@ -109,6 +209,7 @@ def frr_conf(cfg, me, node):
             "exit", "!"]
     for v in cfg.get("vrfs", []):
         tunnels = v.get("vpn", {}).get(me, [])
+        six = v6_of(v, me)
         out += ["router bgp %d vrf %s" % (cfg["asn"], v["name"]), " bgp router-id %s" % rid,
                 " no bgp default ipv4-unicast"]
         if tunnels:
@@ -123,34 +224,100 @@ def frr_conf(cfg, me, node):
                     "  neighbor VPN route-map %s-vpn-out out" % v["name"]]
         if v.get("testAddress", {}).get(me):
             out.append("  redistribute connected route-map %s-connected" % v["name"])
-        out += [" exit-address-family", " address-family l2vpn evpn", "  advertise ipv4 unicast",
-                " exit-address-family", "exit", "!"]
+        out += [" exit-address-family"]
+        if six:
+            # IPv6 NLRI on the IPv4 sessions (MP-BGP); the Cloud Router peer has IPv6 on
+            out += [" address-family ipv6 unicast", "  neighbor VPN activate",
+                    "  neighbor VPN route-map %s-vpn6-in in" % v["name"],
+                    "  neighbor VPN route-map %s-vpn6-out out" % v["name"], " exit-address-family"]
+        out += [" address-family l2vpn evpn", "  advertise ipv4 unicast"]
+        if six:
+            out.append("  advertise ipv6 unicast route-map %s-evpn6" % v["name"])
+        out += [" exit-address-family", "exit", "!"]
     return "\n".join(out) + "\n"
+
+
+def conn_names(v, me, t):
+    """The Libreswan conns of one tunnel: (name, family subnet) pairs; two for a tunnel that carries IPv6."""
+    base = "shc-%d-%d" % (v["vni"], t["ifId"])
+    if v.get("ipv6") and t.get("inside6"):
+        return [(base + "-v4", "0.0.0.0/0"), (base + "-v6", "::/0")]
+    return [(base, "0.0.0.0/0")]
+
+
+def wanted_conns(cfg, me):
+    return [n for v in cfg.get("vrfs", []) for t in v.get("vpn", {}).get(me, []) for n, _ in conn_names(v, me, t)]
 
 
 def ipsec_conf(cfg, me, node, local_ip, gateway):
     """Libreswan: one route-based (XFRM interface) IKEv2 tunnel per HA VPN gateway interface, PSK. Google Cloud
     sees the router at its external address (one-to-one NAT), so the router identifies itself by it. leftnexthop is
     the subnet gateway: Libreswan routes the encrypted packets through its table 50, and on GCE (a /32 on eth0) a
-    link-scope host route to the peer never resolves ARP, so nothing leaves (P11 spike, 10-20)."""
+    link-scope host route to the peer never resolves ARP, so nothing leaves (P11 spike, 10-20). A tunnel that carries
+    IPv6 has one conn per family with the same IKE parameters on the same ipsec-interface (one IKE SA, two child
+    SAs); the secret is per tunnel (by the IDs) either way."""
     ext = node.get("externalIp", "")
     conns, secrets = [], []
     for v in cfg.get("vrfs", []):
         for t in v.get("vpn", {}).get(me, []):
-            name = "shc-%d-%d" % (v["vni"], t["ifId"])
-            conns += ["conn %s" % name,
-                      "    type=tunnel", "    authby=secret", "    ikev2=insist",
-                      "    left=%s" % local_ip, "    leftid=%s" % ext, "    leftnexthop=%s" % gateway,
-                      "    right=%s" % t["peerIp"], "    rightid=%s" % t["peerIp"],
-                      "    leftsubnet=0.0.0.0/0", "    rightsubnet=0.0.0.0/0",
-                      # Google's recommended AEAD set: AES-GCM-16-256, PRF SHA2-512, DH group 20 (ECP-384), PFS
-                      "    ike=aes_gcm256-sha2_512;dh20", "    esp=aes_gcm256;dh20", "    pfs=yes",
-                      "    ikelifetime=36000s", "    salifetime=10800s",
-                      "    dpddelay=10", "    dpdaction=restart",
-                      "    encapsulation=yes", "    ipsec-interface=%d" % t["ifId"],
-                      "    auto=start", ""]
+            for name, sub in conn_names(v, me, t):
+                conns += ["conn %s" % name,
+                          "    type=tunnel", "    authby=secret", "    ikev2=insist",
+                          "    left=%s" % local_ip, "    leftid=%s" % ext, "    leftnexthop=%s" % gateway,
+                          "    right=%s" % t["peerIp"], "    rightid=%s" % t["peerIp"],
+                          "    leftsubnet=%s" % sub, "    rightsubnet=%s" % sub,
+                          # Google's recommended AEAD set: AES-GCM-16-256, PRF SHA2-512, DH group 20 (ECP-384), PFS
+                          "    ike=aes_gcm256-sha2_512;dh20", "    esp=aes_gcm256;dh20", "    pfs=yes",
+                          "    ikelifetime=36000s", "    salifetime=10800s",
+                          "    dpddelay=10", "    dpdaction=restart",
+                          "    encapsulation=yes", "    ipsec-interface=%d" % t["ifId"],
+                          "    auto=start", ""]
             secrets.append('%s %s : PSK "%s"' % (ext, t["peerIp"], t["psk"]))
     return "\n".join(conns), "\n".join(secrets) + ("\n" if secrets else "")
+
+
+def loaded_conns(status):
+    """The shc conns Libreswan has loaded, from `ipsec auto --status` (4.x prefixes each line with a number)."""
+    out = set()
+    for line in status.splitlines():
+        m = re.match(r'^(?:\d+ )?"(shc-[^"]+)"', line)
+        if m:
+            out.add(m.group(1))
+    return out
+
+
+def addrs6(dev, want):
+    """Exactly these global IPv6 addresses on dev (nodad: an address the router alone holds)."""
+    want = [str(ipaddress.ip_interface(w)) for w in want]
+    have = []
+    for a in json.loads(sh(["ip", "-j", "-6", "addr", "show", "dev", dev, "scope", "global"]) or "[]"):
+        for i in a.get("addr_info", []):
+            if i.get("family") == "inet6" and i.get("scope", "global") == "global":
+                have.append(str(ipaddress.ip_interface("%s/%s" % (i["local"], i["prefixlen"]))))
+    for h in have:
+        if h not in want:
+            sh(["ip", "-6", "addr", "del", h, "dev", dev])
+    for w in want:
+        if w not in have:
+            sh(["ip", "-6", "addr", "replace", w, "dev", dev, "nodad"])
+
+
+def xfrm_assert(cfg, me, v):
+    """The VRF's XFRM devices as they must be: in the VRF, at the VPN MTU, up, with the tunnel's IPv4 /30 and (IPv6)
+    its inside6. Libreswan creates the device on --add and re-creates it, bare, when it restarts."""
+    vrf = v["name"]
+    for tn in v.get("vpn", {}).get(me, []):
+        dev = "ipsec%d" % tn["ifId"]
+        if not link_exists(dev):  # Libreswan creates it on --add; make sure it exists for the VRF and FRR
+            sh(["ip", "link", "add", dev, "type", "xfrm", "if_id", str(tn["ifId"])], check=False)
+        sh(["ip", "link", "set", dev, "master", vrf, "mtu", str(int(cfg.get("vpnMtu", 1406))), "up"], check=False)
+        sh(["ip", "addr", "replace", tn["inside"], "dev", dev], check=False)
+        if "ipv6" in v:
+            try:
+                addrs6(dev, [tn["inside6"]] if tn.get("inside6") else [])
+            except RuntimeError:
+                if link_exists(dev):
+                    raise
 
 
 def write_if_changed(path, content, mode=0o640, owner=None):
@@ -189,6 +356,9 @@ def apply(cfg, me):
                  "allowed-ips", n["address"] + "/32", "persistent-keepalive", "25"]
     sh(args)
     sh("ip addr replace %s/%d dev wg0 && ip link set wg0 mtu %d up" % (node["address"], plen, t["mtu"]))
+    if any(v6_of(v, me) for v in cfg.get("vrfs", [])):
+        sh(["sysctl", "-qw", "net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.default.forwarding=1",
+            "net.ipv6.icmp.ratelimit=0"])  # Packet Too Big for every oversized packet, like the border gateways
     # one VRF per network: L3VNI bridge + VXLAN over the tunnel, the HA VPN's XFRM interfaces, a test loopback
     want_vrfs = {v["name"] for v in cfg.get("vrfs", [])}
     for line in sh("ip -o link show type vrf").splitlines():
@@ -198,6 +368,8 @@ def apply(cfg, me):
             for dev in ("lo" + n, "vx" + n, "br" + n, name):
                 if link_exists(dev):
                     sh(["ip", "link", "del", dev])
+            # its IPv6 unreachable default sits on lo and outlives the VRF
+            sh(["ip", "-6", "route", "del", "unreachable", "default", "metric", UNREACHABLE_METRIC, "table", n], check=False)
     # Libreswan first (it creates the XFRM interfaces), then the VRF membership
     conf, secrets = ipsec_conf(cfg, me, node, local_ip, gateway)
     changed = write_if_changed(IPSEC_CONF, conf + "\n")
@@ -207,15 +379,14 @@ def apply(cfg, me):
         changed = True
     if changed:
         sh(["ipsec", "auto", "--rereadsecrets"], check=False)
-        for v in cfg.get("vrfs", []):
-            for tn in v.get("vpn", {}).get(me, []):
-                sh(["ipsec", "auto", "--replace", "shc-%d-%d" % (v["vni"], tn["ifId"])], check=False)
-                sh(["ipsec", "auto", "--asynchronous", "--up", "shc-%d-%d" % (v["vni"], tn["ifId"])], check=False)
-        # connections no longer configured
-        listed = [l.split('"')[1] for l in sh(["ipsec", "auto", "--status"], check=False).splitlines() if l.startswith('"shc-')]
-        wanted = {"shc-%d-%d" % (v["vni"], tn["ifId"]) for v in cfg.get("vrfs", []) for tn in v.get("vpn", {}).get(me, [])}
-        for name in set(listed) - wanted:
+        # connections no longer configured go first: a tunnel that changes between one conn and one per family
+        # keeps its ipsec-interface, and the old conn's SAs must not hold the device while the new conns come up
+        wanted = wanted_conns(cfg, me)
+        for name in sorted(loaded_conns(sh(["ipsec", "auto", "--status"], check=False)) - set(wanted)):
             sh(["ipsec", "auto", "--delete", name], check=False)
+        for name in wanted:
+            sh(["ipsec", "auto", "--replace", name], check=False)
+            sh(["ipsec", "auto", "--asynchronous", "--up", name], check=False)
     for v in cfg.get("vrfs", []):
         for tn in v.get("vpn", {}).get(me, []):
             sh(["ip", "route", "replace", tn["peerIp"], "via", gateway, "dev", eth, "table", "50"], check=False)
@@ -231,26 +402,39 @@ def apply(cfg, me):
             sh(["ip", "link", "add", "vx" + n, "type", "vxlan", "id", n, "dstport", "4789", "local", node["address"],
                 "nolearning"])
         sh(["ip", "link", "set", "vx" + n, "master", "br" + n, "mtu", str(v["mtu"]), "up"])
-        for tn in v.get("vpn", {}).get(me, []):
-            dev = "ipsec%d" % tn["ifId"]
-            if not link_exists(dev):  # Libreswan creates it on --add; make sure it exists for the VRF and FRR
-                sh(["ip", "link", "add", dev, "type", "xfrm", "if_id", str(tn["ifId"])], check=False)
-            sh(["ip", "link", "set", dev, "master", vrf, "mtu", str(int(cfg.get("vpnMtu", 1406))), "up"], check=False)
-            sh(["ip", "addr", "replace", tn["inside"], "dev", dev], check=False)
+        xfrm_assert(cfg, me, v)
         ta = v.get("testAddress", {}).get(me)
-        if ta:
+        six = v6_of(v, me)
+        icmp = icmp6_of(cfg, me) if six else None
+        if ta or icmp:
             if not link_exists("lo" + n):
                 sh(["ip", "link", "add", "lo" + n, "type", "dummy"])
             sh(["ip", "link", "set", "lo" + n, "master", vrf, "up"])
-            sh(["ip", "addr", "replace", ta + "/32", "dev", "lo" + n])
+            if ta:
+                sh(["ip", "addr", "replace", ta + "/32", "dev", "lo" + n])
+            else:
+                sh(["ip", "-4", "addr", "flush", "dev", "lo" + n, "scope", "global"])
         elif link_exists("lo" + n):
             sh(["ip", "link", "del", "lo" + n])
+        if "ipv6" in v:
+            if ta or icmp:
+                addrs6("lo" + n, [icmp] if icmp else [])
+            if six:
+                sh(["ip", "-6", "route", "replace", "unreachable", "default", "metric", UNREACHABLE_METRIC, "table", n])
+            else:
+                sh(["ip", "-6", "route", "del", "unreachable", "default", "metric", UNREACHABLE_METRIC, "table", n],
+                   check=False)
     # FRR: rewrite and reload only on change
     if write_if_changed("/etc/frr/frr.conf", frr_conf(cfg, me, node), owner="frr:frr"):
         if subprocess.run(["systemctl", "is-active", "--quiet", "frr"]).returncode == 0:
             sh(["systemctl", "reload", "frr"])
         else:
             sh(["systemctl", "enable", "--now", "frr"])
+    # Libreswan brought its conns up asynchronously and may have re-created an XFRM device bare meanwhile: the
+    # devices again, so the sessions find their addresses without waiting for the next run
+    if changed:
+        for v in cfg.get("vrfs", []):
+            xfrm_assert(cfg, me, v)
 
 
 def state(cfg, me):
@@ -268,8 +452,9 @@ def state(cfg, me):
         except Exception:
             continue
         peers = {}
-        for af in j.values():
-            if isinstance(af, dict):
+        for key, af in j.items():
+            # the IPv6 family's sessions are reported apart (bgp6): the same addresses would overwrite the IPv4 counts
+            if isinstance(af, dict) and key != "ipv6Unicast":
                 for addr, p in (af.get("peers") or {}).items():
                     peers[addr] = {"state": p.get("state"), "pfxRcd": p.get("pfxRcd", p.get("prefixReceivedCount")),
                                    "pfxSnt": p.get("pfxSnt")}
@@ -282,7 +467,41 @@ def state(cfg, me):
             continue
         st["routes"][v["name"]] = {p: sorted({r.get("protocol", "?") for r in rs}) for p, rs in j.items()
                                    if isinstance(rs, list)}
+    six = [v for v in cfg.get("vrfs", []) if v6_of(v, me)]
+    if six:
+        st["bgp6"], st["routes6"] = {}, {}
+    for v in six:
+        try:
+            st["bgp6"][v["name"]] = bgp6_peers(json.loads(
+                sh(["vtysh", "-c", "show bgp vrf %s ipv6 unicast summary json" % v["name"]]) or "{}"))
+        except Exception:
+            pass
+        try:
+            j = json.loads(sh(["vtysh", "-c", "show ipv6 route vrf %s json" % v["name"]]) or "{}")
+        except Exception:
+            continue
+        st["routes6"][v["name"]] = {p: sorted({r.get("protocol", "?") for r in rs}) for p, rs in j.items()
+                                    if isinstance(rs, list)}
     return st
+
+
+def bgp6_peers(j):
+    """The Cloud Router sessions of a VRF's IPv6 unicast summary: per peer its state, whether the IPv6 family was
+    negotiated on it (af6: negotiated, NoNeg when the session is up without it, else the session state) and the
+    prefix counts."""
+    af = j if "peers" in j else (j.get("ipv6Unicast") or {})
+    out = {}
+    for addr, p in (af.get("peers") or {}).items():
+        state = p.get("state")
+        rcd = p.get("pfxRcd", p.get("prefixReceivedCount"))
+        if state == "Established" and isinstance(rcd, int):
+            af6 = "negotiated"
+        elif state in ("Established", "NoNeg"):
+            af6 = "NoNeg"
+        else:
+            af6 = state
+        out[addr] = {"state": state, "af6": af6, "pfxRcd": rcd, "pfxSnt": p.get("pfxSnt")}
+    return out
 
 
 def main():

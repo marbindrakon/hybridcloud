@@ -767,6 +767,82 @@ the placement prefixes not learned from the transit gateway yet (`missing6`). Th
 and are inert. With `edge.ipv6.enabled: false` the gateway's next run removes the IPv6 side from the routers'
 configuration; addresses already on the routers stay until a `replace`.
 
+## Cloud sites: Google Cloud
+
+A Google Cloud site carries IPv6 in two halves as well: the platform's edge routers in the hub project (this
+section) and each placement's VPC with its HA VPN and Cloud Router in the tenant project. The underlay stays IPv4:
+the routers' WireGuard tunnels to the border gateways, the HA VPN tunnels' outer addresses and the BGP sessions to
+the Cloud Routers. A placement's IPv6 on Google Cloud is always the provider's (source `Provider`): a Google-assigned
+external /64 per subnet.
+
+### Google Cloud edge
+
+The edge settings live in the installation's `GCP_REALIZATION` (`edge`), next to the IPv4 ones; the generic defaults
+(`common/tasks/gcp_realization.yml`) leave IPv6 off:
+
+```yaml
+edge:
+  ipv6:
+    enabled: false   # IPv6 on the edge routers
+```
+- **No next-hop pool.** Google assigns each Cloud Router peer its IPv6 next-hop pair when IPv6 is turned on for the
+  peer (from Google's own range, unique per VPC). The placement job reads the pair back and hands it to the routers
+  with the tunnels: the router's side, a /126, goes on the tunnel's XFRM device and is the next hop of everything the
+  router announces to the Cloud Router; Google's side is the next hop of the routes it learns.
+- **The site switches stay separate.** `edge.ipv6.enabled` prepares the routers; placements are offered IPv6 only
+  once the site's `placement.ipFamiliesBySite` holds 6 ([Site capabilities](#site-capabilities)). Turn the edge on
+  first.
+- **Routers created before IPv6 need a `replace`** (`shc_gcp_edge.py replace`: new instances with the same names,
+  addresses and configuration; the gateway's next run hands them the gateway nodes' keys): the agent that renders
+  the IPv6 side ships with the instance. New routers also get IPv6 forwarding in their first-boot settings.
+
+**IPsec.** Per HA VPN tunnel that carries IPv6 the router runs two IKEv2 child SAs, one per family (`0.0.0.0/0` and
+`::/0`), with identical IKE parameters on the same XFRM interface: one IKE SA, both families on one device. A tunnel
+without IPv6 (an IPv4-only placement, or a peer without IPv6) keeps its single child SA, configured exactly as
+before. The IPsec daemon re-creates the XFRM device when it restarts, so the agent puts the device back in the VRF
+with its MTU and both addresses after the daemon on every run (every 30 seconds), and once more right after it
+changed the IPsec configuration.
+
+**What the routers announce, per network VRF.** The placement job hands the routers each IPv6 placement's settings
+(`shc_gcp_edge.py net-up --ipv6`): the placement's prefixes (its subnets' external /64s) and the network's IPv6
+space. FRR runs IPv6 unicast on the IPv4 sessions to the Cloud Router with a route-map per family (FRR applies RFC
+8212 to eBGP even with the traditional defaults):
+
+| Direction | IPv6 |
+|---|---|
+| From the Cloud Router | the placement's prefixes only; never a default route |
+| To the Cloud Router | the network's IPv6 space learned from the fabric, with the router's /126 address as next hop; never `::/0` (the VPC's own default route to Google's internet gateway is the internet path, present only while the network's internet egress is on) and never the placement's own prefixes |
+| To the site's gateway (EVPN Type-5) | the placement's prefixes only: the provider's prefix enters the fabric for traffic between sites |
+
+The IPv4 side is unchanged. Google advertises an external IPv6 subnet range only as a custom advertisement on the
+Cloud Router peer, which the placement side keeps in step with the subnets. The network's IPv6 space never holds
+another cloud's provider-assigned prefix, so a router never announces one into its own cloud: two provider-source
+placements of one network on different clouds talk over the internet, both ways.
+
+**ICMPv6 source.** Each router gets a /128 on `lo<vni>` in every IPv6 VRF, from the fabric's `core.icmpSource6`,
+with the same formula as on AWS: node ordinal 100 + the router's position by name, and the gateway's provider-edge
+index. The gateway job computes them and hands them to the routers with the gateway nodes' keys. The routers install
+their fabric-side routes with that address as source, so Packet Too Big and Time Exceeded toward the fabric come from
+it; toward the VPC they come from the XFRM device's /126 address. The routers send Packet Too Big without a rate
+limit. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an unreachable
+IPv6 default, so a destination nothing routes fails at once. The VRFs keep the site leg's MTU (1370 behind the
+WireGuard tunnels) and the XFRM devices the VPN MTU, for both families.
+
+**State.** `shc_gcp_edge.py status` lists per VRF its IPv6 settings and, under `ipv6`, per router the tunnels' /126
+addresses, the ICMPv6 source, the sessions that negotiated IPv6 (`sessions6`, for example `1/1`), the IPv6 routes by
+protocol, whether a default route is present (it should not be) and the placement prefixes not learned from the
+Cloud Router yet (`missing6`). The routers' own reports carry `bgp6` (per session: `af6` negotiated or `NoNeg`, the
+prefix counts), `routes6`, and both child SAs of each IPv6 tunnel under `ipsec`.
+
+**Not done.** No IPv6 BGP sessions (IPv6 rides the IPv4 sessions), no IPv6 outer addresses on the tunnels, no
+default route toward Google, and no tenant or platform prefixes on Google's side (source `Network` is not offered on
+Google Cloud).
+
+**Rollback.** Take the site out of `placement.ipFamiliesBySite` (no new IPv6 placements). With
+`edge.ipv6.enabled: false` the gateway's next run removes the IPv6 side from the routers' configuration (the VRFs'
+IPv6 settings, the tunnels' IPv6 next hops, the ICMPv6 sources) and the tunnels return to one child SA each;
+addresses already on the routers stay until a `replace`.
+
 ## Rollout and rollback
 
 - Order: the primary chart with both CRD copies, then the EDA content (repository seed, then the AAP configuration,

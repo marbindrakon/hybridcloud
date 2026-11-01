@@ -6,16 +6,32 @@ per network. No inbound management: the routers pull their configuration from Se
 service account and publish their keys and state as guest attributes. Runs with the platform identity (the hub
 project). Prints one JSON line.
 
-  shc_gcp_edge.py --config '<json>' status|up|down|replace
-  shc_gcp_edge.py --config '<json>' gateways --gateways '[{"name","publicKey","address"}]'   (SHC_EDGE_BGP_PASSWORD)
-  shc_gcp_edge.py --config '<json>' net-up --vni N [--test]        tunnels from SHC_EDGE_VPN_TUNNELS_FILE (JSON, PSKs; or SHC_EDGE_VPN_TUNNELS)
+  shc_gcp_edge.py --config '<json>' status|down|replace
+  shc_gcp_edge.py --config '<json>' up [--icmp6 '{<node name>: "<a>/128"}']
+  shc_gcp_edge.py --config '<json>' gateways --gateways '[{"name","publicKey","address"}]' [--icmp6 '{..}']
+                                                                   (SHC_EDGE_BGP_PASSWORD)
+  shc_gcp_edge.py --config '<json>' net-up --vni N [--test] [--ipv6 '{"prefixes": [..], "network": [..]}']
+                                                                   tunnels from SHC_EDGE_VPN_TUNNELS_FILE (JSON, PSKs; or SHC_EDGE_VPN_TUNNELS)
   shc_gcp_edge.py --config '<json>' net-known --vni N           tunnel peers whose secret the routers hold
   shc_gcp_edge.py --config '<json>' net-down --vni N
 
 config: {"project", "region", "zones": [..], "vpcName", "subnetName", "machineType", "image": {"project", "family"},
          "networkTag", "edgeHostIndex", "site", "asn",
-         "tunnel": {"cidr", "mtu", "listenPort", "routerHostIndex"}, "vpn": {"cloudRouterAsn", "mtu"}}
-SHC_EDGE_VPN_TUNNELS: {<node name>: [{"ifId", "peerIp", "inside", "bgp": [..], "psk"}]}
+         "tunnel": {"cidr", "mtu", "listenPort", "routerHostIndex"}, "vpn": {"cloudRouterAsn", "mtu"},
+         "ipv6": {"enabled"}}
+SHC_EDGE_VPN_TUNNELS: {<node name>: [{"ifId", "peerIp", "inside", "bgp": [..], "psk", "inside6"?, "bgp6"?: [..]}]}
+  every tunnel of the placement is listed; psk null = the tunnel's secret is the one the routers hold already (an
+  error for a tunnel they don't know). The other fields replace the stored ones.
+
+IPv6 (design/IPV6-PLAN.md §6.1, §6.3; ipv6.enabled): there is no next-hop pool. Google assigns each Cloud Router
+peer's IPv6 next hops (ipv6NexthopAddress, peerIpv6NexthopAddress) and the placement job hands them over with the
+tunnels: inside6 "<peerIpv6NexthopAddress>/126" (the router's side, on its XFRM device) and bgp6
+["<ipv6NexthopAddress>"] (Google's side). net-up --ipv6 gives a network VRF its IPv6 side: prefixes (the placement's
+Google-assigned subnet /64s: what the routers accept from the Cloud Router and announce to the site's gateway as
+Type-5) and network (the network's IPv6 space: what they announce to the Cloud Router); without it the VRF is
+IPv4-only. The site's routers' ICMPv6 sources (the gateway job's, from the fabric's ICMPv6 pool) are kept at
+ipv6.icmp6 of the routers' config. With ipv6.enabled off nothing IPv6 is kept: inside6/bgp6, --ipv6 and --icmp6
+are ignored, and gateways/up remove an IPv6 side left from before, so the config is what it was before IPv6.
 """
 import argparse
 import base64
@@ -31,6 +47,7 @@ sys.path.insert(0, HERE)
 import shc_gcp_api as g  # noqa: E402
 
 IAM = "https://iam.googleapis.com/v1"
+TUNNEL_FIELDS = ("ifId", "peerIp", "inside", "bgp")
 SM = "https://secretmanager.googleapis.com/v1"
 LETTERS = "abcdefgh"
 
@@ -45,7 +62,7 @@ dnf -y install frr wireguard-tools nftables libreswan
 sed -i 's/^bgpd=no/bgpd=yes/; s/^bfdd=no/bfdd=yes/' /etc/frr/daemons
 printf '%%s\n' 'net.ipv4.ip_forward = 1' 'net.ipv4.conf.all.rp_filter = 0' 'net.ipv4.conf.default.rp_filter = 0' \
   'net.ipv4.tcp_l3mdev_accept = 1' 'net.ipv4.udp_l3mdev_accept = 1' > /etc/sysctl.d/90-shc-edge.conf
-sysctl --system >/dev/null
+%(sysctl6)ssysctl --system >/dev/null
 # firewalld's forward chain drops conntrack-INVALID packets: with ECMP over two tunnels and two blades a reply often
 # reaches the router that never saw the request (ICMP replies are then INVALID). Forwarding here is stateless; the
 # VPC firewall and the IPsec/WireGuard peers are the fence.
@@ -72,6 +89,90 @@ def fail(msg, **extra):
     g.fail(msg, **extra)
 
 
+def ipv6_enabled(cfg):
+    return bool((cfg.get("ipv6") or {}).get("enabled"))
+
+
+def v6_prefixes(xs, what):
+    """Canonical IPv6 prefixes, sorted; never ::/0 (a default route is neither accepted from Google nor sent to it)."""
+    out = set()
+    for x in xs or []:
+        try:
+            n = ipaddress.ip_network(str(x).strip())
+        except ValueError as e:
+            fail("%s: %s" % (what, e))
+        if n.version != 6 or n.prefixlen == 0:
+            fail("%s: %s is not an IPv6 prefix other than ::/0" % (what, n))
+        out.add(str(n))
+    return sorted(out)
+
+
+def network6_entry(ipv6, vni):
+    """One VRF's IPv6 side as net-up --ipv6 gives it: {"prefixes", "network"}, normalized."""
+    if not isinstance(ipv6, dict):
+        fail("network %s: --ipv6 must be a JSON object with prefixes and network" % vni)
+    return {"prefixes": v6_prefixes(ipv6.get("prefixes"), "network %s ipv6.prefixes" % vni),
+            "network": v6_prefixes(ipv6.get("network"), "network %s ipv6.network" % vni)}
+
+
+def icmp6_entries(icmp6, nodes):
+    """The routers' ICMPv6 sources: {<node name>: "<a>/128"} for the site's routers; empty values are dropped."""
+    out = {}
+    for k, a in sorted((icmp6 or {}).items()):
+        if not a or k not in nodes:
+            continue
+        try:
+            n = ipaddress.ip_network(str(a).strip())
+        except ValueError:
+            n = None
+        if n is None or n.version != 6 or n.prefixlen != 128:
+            fail("icmp6 %s of %s is not an IPv6 /128" % (a, k))
+        out[k] = str(n)
+    return out
+
+
+def merge_tunnels(stored, tunnels, v6):
+    """The VRF's tunnels from the tunnels file (every tunnel of the placement, by router) over the stored ones (by
+    router and peer address): the file's fields replace the stored ones, a null psk keeps the stored secret, and a
+    null psk for a tunnel the routers don't hold is an error. inside6/bgp6 only with IPv6 on."""
+    old = {k: {t["peerIp"]: t for t in ts} for k, ts in (stored or {}).items()}
+    out = {}
+    for k, ts in tunnels.items():
+        rows = []
+        for t in ts:
+            e = {x: t[x] for x in TUNNEL_FIELDS}
+            e["psk"] = t.get("psk") or (old.get(k, {}).get(t["peerIp"]) or {}).get("psk")
+            if not e["psk"]:
+                fail("tunnel ipsec%s of %s to %s has no shared secret (none in the tunnels file, none held by the "
+                     "routers)" % (t["ifId"], k, t["peerIp"]))
+            if v6 and t.get("inside6"):
+                try:
+                    i6 = ipaddress.ip_interface(str(t["inside6"]).strip())
+                    b6 = [str(ipaddress.ip_address(str(b).strip())) for b in (
+                        t.get("bgp6") if isinstance(t.get("bgp6"), list) else [t.get("bgp6")] if t.get("bgp6") else [])]
+                except ValueError as ex:
+                    fail("tunnel ipsec%s of %s: %s" % (t["ifId"], k, ex))
+                if i6.version != 6 or "/" not in str(t["inside6"]) or any(":" not in b for b in b6):
+                    fail("tunnel ipsec%s of %s: inside6 %s / bgp6 %s are not IPv6 (<address>/126, [<address>])"
+                         % (t["ifId"], k, t["inside6"], t.get("bgp6")))
+                e["inside6"], e["bgp6"] = str(i6), b6
+            rows.append(e)
+        out[k] = rows
+    return out
+
+
+def strip_ipv6(conf):
+    """The routers' config without any IPv6 side (edge ipv6 off)."""
+    conf.pop("ipv6", None)
+    for v in conf.get("vrfs", []):
+        v.pop("ipv6", None)
+        for ts in (v.get("vpn") or {}).values():
+            for t in ts:
+                t.pop("inside6", None)
+                t.pop("bgp6", None)
+    return conf
+
+
 class Edge:
     def __init__(self, cfg):
         t = cfg.setdefault("tunnel", {})
@@ -80,6 +181,7 @@ class Edge:
             t["nodeAddresses"] = [str(net[int(t.get("routerHostIndex", 10)) + i]) for i in range(len(cfg["zones"]))]
         cfg.setdefault("overlayMtu", int(t.get("mtu", 1420)) - 50)
         self.cfg = cfg
+        self.v6 = ipv6_enabled(cfg)
         self.site = cfg["site"]
         self.project, self.region = cfg["project"], cfg["region"]
         self.base = "%s/projects/%s" % (g.COMPUTE, self.project)
@@ -198,9 +300,21 @@ class Edge:
 
     def startup_script(self):
         agent = base64.b64encode(gzip.compress(open(os.path.join(HERE, "shc_gcp_edge_agent.py"), "rb").read())).decode()
-        return STARTUP % {"site": self.site, "project": self.project, "agent": agent}
+        # IPv6 forwarding and Packet Too Big without a rate limit (the agent sets them too, for routers made before)
+        sysctl6 = ("printf '%s\\n' 'net.ipv6.conf.all.forwarding = 1' 'net.ipv6.conf.default.forwarding = 1' "
+                   "'net.ipv6.icmp.ratelimit = 0' > /etc/sysctl.d/91-shc-edge-ipv6.conf\n") if self.v6 else ""
+        return STARTUP % {"site": self.site, "project": self.project, "agent": agent, "sysctl6": sysctl6}
 
-    def up(self):
+    def set_icmp6(self, conf, icmp6):
+        """The site-level IPv6 side of the routers' config: the routers' ICMPv6 sources (icmp6 None: as stored).
+        With IPv6 off, the whole IPv6 side goes."""
+        if not self.v6:
+            return strip_ipv6(conf)
+        if icmp6 is not None:
+            conf["ipv6"] = {"icmp6": icmp6_entries(icmp6, conf.get("nodes") or {})}
+        return conf
+
+    def up(self, icmp6=None):
         c = self.cfg
         self.network()
         subnet = self.subnet()
@@ -247,6 +361,7 @@ class Edge:
             node["externalIp"] = addr["address"]
             node["underlay"] = inst["networkInterfaces"][0]["networkIP"]
         conf["nodes"] = {k: v for k, v in conf["nodes"].items() if k in self.node_names()}
+        self.set_icmp6(conf, icmp6)
         self.write_config(conf)
         self.sync_nodes(wait=True)
         return self.status()
@@ -300,7 +415,7 @@ class Edge:
         self.write_config(conf)
         return self.up()
 
-    def set_gateways(self, gateways):
+    def set_gateways(self, gateways, icmp6=None):
         conf = self.read_config()
         if conf is None:
             fail("site %s has no config yet (run up first)" % self.site)
@@ -310,11 +425,12 @@ class Edge:
             conf["bgpPassword"] = pw
         else:
             conf.pop("bgpPassword", None)
+        self.set_icmp6(conf, icmp6)
         self.write_config(conf)
         return self.status()
 
     # ---- networks (the cloud side is the tenant VPC's HA VPN; here only the routers' VRF and tunnels)
-    def net_up(self, vni, test=False):
+    def net_up(self, vni, test=False, ipv6=None):
         conf = self.read_config()
         if conf is None or not conf.get("nodes"):
             fail("site %s is not up" % self.site)
@@ -328,26 +444,24 @@ class Edge:
         else:
             tunnels = json.loads(os.environ.get("SHC_EDGE_VPN_TUNNELS") or "{}")
         # a tunnel the tenant side didn't mint again (psk null) keeps the secret the config already holds
-        old = {}
-        for v in conf.get("vrfs", []):
-            if v["vni"] == vni:
-                old = {k: {t["peerIp"]: t.get("psk") for t in ts} for k, ts in v.get("vpn", {}).items()}
-        for k, ts in tunnels.items():
-            for t in ts:
-                if not t.get("psk"):
-                    t["psk"] = old.get(k, {}).get(t["peerIp"])
-                if not t.get("psk"):
-                    fail("tunnel %s -> %s has no shared secret (not minted, none known)" % (k, t["peerIp"]))
+        stored = next((v.get("vpn", {}) for v in conf.get("vrfs", []) if v["vni"] == vni), {})
+        tunnels = merge_tunnels(stored, tunnels, self.v6)
         vrf = {"name": "t%d" % vni, "vni": vni, "mtu": int(self.cfg["overlayMtu"]),
                "peerAsn": int((self.cfg.get("vpn") or {}).get("cloudRouterAsn", 65020)),
                "vpn": {k: v for k, v in tunnels.items() if k in conf["nodes"]}}
         if test:
             base = ipaddress.ip_address(self.cfg.get("testBase", "10.252.1.1"))
             vrf["testAddress"] = {n: str(base + i) for i, n in enumerate(sorted(conf["nodes"]))}
+        if self.v6 and ipv6 is not None:
+            vrf["ipv6"] = network6_entry(ipv6, vni)
         conf["vrfs"] = sorted([v for v in conf["vrfs"] if v["vni"] != vni] + [vrf], key=lambda v: v["vni"])
         self.write_config(conf)
-        return {"vni": vni, "vrf": vrf["name"],
-                "tunnels": {k: [{x: t[x] for x in ("ifId", "peerIp", "inside", "bgp")} for t in v] for k, v in vrf["vpn"].items()}}
+        fields = TUNNEL_FIELDS + (("inside6", "bgp6") if self.v6 else ())
+        out = {"vni": vni, "vrf": vrf["name"],
+               "tunnels": {k: [{x: t[x] for x in fields if x in t} for t in v] for k, v in vrf["vpn"].items()}}
+        if "ipv6" in vrf:
+            out["ipv6"] = vrf["ipv6"]
+        return out
 
     def net_known(self, vni):
         """The tunnel peers (Google's HA VPN interface addresses) whose shared secret the routers' config holds for
@@ -376,11 +490,44 @@ class Edge:
                                      "type": inst["machineType"].rsplit("/", 1)[1], "privateIp": nic.get("networkIP"),
                                      "publicIp": ((nic.get("accessConfigs") or [{}])[0]).get("natIP")})
         conf = self.read_config() or {}
-        out["vrfs"] = [{k: v[k] for k in ("name", "vni")} for v in conf.get("vrfs", [])]
+        out["vrfs"] = [dict({k: v[k] for k in ("name", "vni")}, **({"ipv6": v["ipv6"]} if v.get("ipv6") else {}))
+                       for v in conf.get("vrfs", [])]
         out["gateways"] = [x["name"] for x in conf.get("gateways", [])]
         out["tunnelAddresses"] = {k: v["address"] for k, v in conf.get("nodes", {}).items()}
         out["nodes"] = self.node_reports()
+        if self.v6 or conf.get("ipv6") or any(v.get("ipv6") for v in conf.get("vrfs", [])):
+            out["ipv6"] = ipv6_status(conf, out["nodes"])
         return out
+
+
+def ipv6_status(conf, reports):
+    """Per IPv6 VRF and router what its report says: the tunnels' IPv6 addresses, the router's ICMPv6 source, the
+    Cloud Router sessions that negotiated IPv6 unicast (of those reported), the IPv6 routes the router holds by
+    protocol, whether it has a default route (it never should: Google's default is the provider path) and the
+    placement's prefixes it has not learned from the Cloud Router yet."""
+    icmp6 = (conf.get("ipv6") or {}).get("icmp6") or {}
+    out = {}
+    for v in conf.get("vrfs", []):
+        six = v.get("ipv6") or {}
+        if not six:
+            continue
+        row = {"prefixes": list(six.get("prefixes") or []), "network": list(six.get("network") or []), "routers": {}}
+        for name in sorted(v.get("vpn") or {}):
+            t6 = [t for t in v["vpn"][name] if t.get("inside6")]
+            st = ((reports.get(name) or {}).get("state") or {})
+            peers = (st.get("bgp6") or {}).get(v["name"]) or {}
+            routes = (st.get("routes6") or {}).get(v["name"]) or {}
+            bgp = {p for p, protos in routes.items() if "bgp" in protos}
+            row["routers"][name] = {
+                "inside6": {"ipsec%d" % t["ifId"]: t["inside6"] for t in t6},
+                "icmp6": icmp6.get(name, ""),
+                "sessions6": "%d/%d" % (sum(1 for p in peers.values() if p.get("af6") == "negotiated"), len(peers)),
+                "routes6": {proto: sum(1 for ps in routes.values() if proto in ps)
+                            for proto in sorted({x for ps in routes.values() for x in ps})},
+                "default6": "::/0" in routes,
+                "missing6": [p for p in six.get("prefixes") or [] if p not in bgp] if t6 else list(six.get("prefixes") or [])}
+        out[v["name"]] = row
+    return out
 
 
 def main():
@@ -388,6 +535,8 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("command", choices=["status", "up", "down", "replace", "gateways", "net-up", "net-known", "net-down"])
     ap.add_argument("--gateways")
+    ap.add_argument("--icmp6", help="up, gateways: the routers' ICMPv6 sources {<node name>: <a>/128}")
+    ap.add_argument("--ipv6", help="net-up: the VRF's IPv6 side {prefixes, network}")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--test", action="store_true")
     a = ap.parse_args()
@@ -396,9 +545,11 @@ def main():
     e = None
     try:
         e = Edge(json.loads(a.config))
-        r = {"status": e.status, "up": e.up, "down": e.down, "replace": e.replace,
-             "gateways": lambda: e.set_gateways(json.loads(a.gateways or "[]")),
-             "net-up": lambda: e.net_up(a.vni, a.test), "net-known": lambda: e.net_known(a.vni),
+        icmp6 = json.loads(a.icmp6) if a.icmp6 else None
+        r = {"status": e.status, "up": lambda: e.up(icmp6), "down": e.down, "replace": e.replace,
+             "gateways": lambda: e.set_gateways(json.loads(a.gateways or "[]"), icmp6),
+             "net-up": lambda: e.net_up(a.vni, a.test, json.loads(a.ipv6) if a.ipv6 else None),
+             "net-known": lambda: e.net_known(a.vni),
              "net-down": lambda: e.net_down(a.vni)}[a.command]()
     except g.GcpError as ex:
         fail(str(ex), code=ex.code, changed=e.changed if e else [])
