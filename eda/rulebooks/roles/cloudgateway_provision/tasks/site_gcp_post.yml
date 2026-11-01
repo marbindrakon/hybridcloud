@@ -3,6 +3,14 @@
 # nodes' WireGuard keys and tunnel addresses and the site's BGP key (written to the routers' config secret;
 # the key never goes on a command line). The routers apply it within half a minute; when it changed, the gateway is
 # reconciled once more so its status shows the sessions that come up.
+# IPv6 (design/IPV6-PLAN.md §6.1, §6.3; only with the realization's edge.ipv6.enabled): the routers' ICMPv6 sources
+# go with the same call (site level; each network VRF's IPv6 side comes from the placement job's net-up). Each
+# router's /128 comes from the fabric's core.icmpSource6 like the border gateway nodes' (shc_fabric.py pe-addresses
+# with this gateway's provider-edge index), at node ordinal cg_gcp_icmp6_ordinal_base (100) + the router's 0-based
+# position by name (100, 101, ...), as on the AWS edge: the nodes use their 1-based position in
+# borderGateway.nodes, so the two never meet while a fabric has fewer than 100 border gateway nodes. Only with the
+# IPv6 core (cg_ipv6_core) and core.icmpSource6; otherwise the routers get none. With edge.ipv6 off no --icmp6 is
+# passed and the helper removes any IPv6 side left in the routers' configuration.
 - name: The border gateway nodes as the routers see them
   ansible.builtin.set_fact:
     cg_gcp_gateways: >-
@@ -12,13 +20,63 @@
         {%- set _ = out.append({'name': n.name, 'publicKey': n.publicKey, 'address': a}) -%}
       {%- endfor -%}
       {{ out }}
+    cg_gcp_ipv6: "{{ (gcp_edge_cfg.ipv6 | default({}, true)).enabled | default(false) | bool }}"
+
+- name: The routers' ICMPv6 sources
+  when: cg_gcp_ipv6 | bool
+  block:
+    - name: The ICMPv6 source of each router
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ role_path }}/../../../common/files/shc_fabric.py"
+        stdin: >-
+          {{ {'action': 'pe-addresses', 'core': fab_real.core, 'index': cg_pe.index | int,
+              'nodeOrdinal': (cg_gcp_icmp6_ordinal_base | default(100)) | int + _cg_i} | to_json }}
+      loop: "{{ cg_gcp_routers | sort(attribute='name') }}"
+      loop_control:
+        index_var: _cg_i
+        label: "{{ item.name }}"
+      register: _cg_gcp_icmp6
+      changed_when: false
+      when:
+        - cg_ipv6_core | default(false) | bool
+        - fab_real.core.icmpSource6 | default('', true) | length > 0
+
+    - name: Collect the routers' ICMPv6 sources
+      ansible.builtin.set_fact:
+        cg_gcp_icmp6_errors: >-
+          {%- set out = [] -%}
+          {%- for r in (_cg_gcp_icmp6 | default({})).results | default([]) if not (r.skipped | default(false)) -%}
+            {%- set res = r.stdout | from_json -%}
+            {%- if res.errors | default([]) | length > 0 -%}
+              {%- set _ = out.append(r.item.name ~ ': ' ~ (res.errors | join('; '))) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        cg_gcp_icmp6: >-
+          {%- set icmp = {} -%}
+          {%- for r in (_cg_gcp_icmp6 | default({})).results | default([]) if not (r.skipped | default(false)) -%}
+            {%- set res = r.stdout | from_json -%}
+            {%- if res.errors | default([]) | length == 0 and res.icmp6 | default('', true) | length > 0 -%}
+              {%- set _ = icmp.update({r.item.name: res.icmp6}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ icmp }}
+
+    - name: Stop on a router ICMPv6 source that does not fit
+      ansible.builtin.fail:
+        msg: "CloudGateway {{ fab_name }}: the edge router ICMPv6 source of {{ cg_gcp_icmp6_errors | join(', ') }}"
+      when: cg_gcp_icmp6_errors | length > 0
 
 - name: Hand them to the routers
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
   vars:
     gcp_helper: shc_gcp_edge.py
     gcp_config: "{{ gcp_edge_cfg }}"
-    gcp_args: [gateways, --gateways, "{{ cg_gcp_gateways | to_json }}"]
+    gcp_args: >-
+      {{ ['gateways', '--gateways', cg_gcp_gateways | to_json]
+         + (['--icmp6', cg_gcp_icmp6 | to_json] if cg_gcp_ipv6 | bool else []) }}
     gcp_env: {SHC_EDGE_BGP_PASSWORD: "{{ cg_bgp_password | default('') }}"}
     gcp_no_log: true
 
