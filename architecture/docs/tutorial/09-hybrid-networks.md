@@ -584,7 +584,10 @@ For the platform team; tenants can skip the rest of this page. Onboarding a tena
   `status.wireguard`, and a node's tunnel shows `up`/`down` in `status.nodes`. A site whose network the platform
   doesn't run (a remote data center, a partner's EVPN fabric) is a `CloudInfrastructure` of type `external`; its
   own operator configures its VTEPs with the gateway's public keys and tunnel addresses. The tunnel's MTU (default
-  1420, for a 1500 path) caps what networks placed there can use.
+  1420, for a 1500 path) caps what networks placed there can use. The nodes' listen port
+  (`spec.wireguard.listenPort`, default 51820) is a port on the border gateway nodes themselves, so two tunnel
+  gateways of one fabric need different ports; a gateway whose port another gateway already uses is refused with
+  `InvalidSpec`, naming that gateway.
 - **Internet egress:** each border gateway node's root holds an egress VRF that hands traffic to the site network
   (a macvlan; default route via the network's router, whose own NAT reaches the internet). Per network with
   egress: a VRF `e<vpnTarget>` that imports the network's VPN routes and exports a default route into it, a veth
