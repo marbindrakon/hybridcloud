@@ -5,6 +5,8 @@
 #    placement again once its VRF is gone (the deletion waits meanwhile);
 # 2. the site side: CloudVirt = the RouteAdvertisements and the ClusterUserDefinedNetwork; CloudOSO = the share,
 #    router, subnets and network in the platform project (refused while the tenant's ports still use the network);
+#    CloudAWS = the VPC with its attachment (shc_aws_tenant.py place-down; with spec.ipv6 its IPv6 routes,
+#    egress-only gateway, IPv6 block and IPAM pool first and last; refused while instances remain);
 # 3. the forward-confirmed names of the placement's IPv6 gateway (status.realization.reverseDns, design/IPV6-PLAN.md
 #    §8.3): the PTR, then the AAAA, before the subnets go back (the deletion waits while a removal fails and the
 #    DNSConfig is usable; without one the platform can remove nothing and goes on);
@@ -318,7 +320,16 @@
                   memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
                   entry: automation
                   edge: "{{ aws_edge_cfg }}"
-                aws_args: [place-down, --placement, "{{ fab_namespace }}/{{ fab_name }}", --vni, "{{ npd_real.l3Vni | string }}"]
+                # with spec.ipv6 the IPv6 side goes too (routes, egress-only gateway, the VPC's block, the
+                # placement's IPAM pool and the IPAM with its last pool); the source the site side recorded, else the
+                # spec's
+                _v6: >-
+                  {{ {} if fab_spec.ipv6 is not defined
+                     else {'source': (_site_st.ipv6 | default({}, true)).source | default(fab_spec.ipv6.source | default('Network', true), true)}
+                          | combine({'prefix': _site_st.ipv6.prefix} if (_site_st.ipv6 | default({}, true)).prefix is defined else {}) }}
+                aws_args: >-
+                  {{ ['place-down', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', npd_real.l3Vni | string]
+                     + (['--ipv6', _v6 | to_json] if _v6 | length > 0 else []) }}
                 aws_soft: true
 
             - name: Report the workloads that block the deletion

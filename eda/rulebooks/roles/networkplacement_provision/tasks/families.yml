@@ -10,7 +10,9 @@
 #      when not listed) is not a product source of the kind (placement.ipv6.sources)   FamilyUnavailable
 #   5. the site doesn't offer IPv6: realization placement.ipFamiliesBySite[site], else ipFamilies[kind], AND the
 #      site's probe (CloudInfrastructure status.capabilities.ipv6)            FamilyUnavailable
-#   6. no ipv4 and the site doesn't offer IPv6-only (placement.ipv6OnlyBySite AND capabilities.ipv6Only)
+#   6. no ipv4 and the site doesn't offer IPv6-only (placement.ipv6OnlyBySite AND capabilities.ipv6Only; never on
+#      a CloudAWS, whatever the switches say: a VPC keeps an IPv4 CIDR and its transit gateway attachment needs IPv4
+#      subnets, which the AWS site side builds from the placement's IPv4 prefix)
 #   7. the site doesn't offer the source (placement.ipv6SourcesBySite[site], else the kind's sources, AND
 #      capabilities.ipv6NetworkSource / ipv6ProviderSource)                   FamilyUnavailable
 # IPv4: the site's families (5.) must hold 4.
@@ -47,7 +49,8 @@
     _src_cap: "{{ {'Network': 'ipv6NetworkSource', 'Provider': 'ipv6ProviderSource'}.get(_src | trim, '') }}"
     _only_ok: >-
       {{ ((_pl.ipv6OnlyBySite | default({}, true))[np_site] | default(false) | bool)
-         and (_caps.ipv6Only | default(false) | bool) }}
+         and (_caps.ipv6Only | default(false) | bool)
+         and np_backend_kind != 'CloudAWS' }}
     _refuse6: >-
       {%- if fab_spec.ipv6 is not defined -%}{{ {} }}
       {%- elif _nmode | trim == 'None' -%}

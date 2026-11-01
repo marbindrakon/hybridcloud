@@ -637,7 +637,7 @@ class FabricIPv6Status(unittest.TestCase):
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class PlacementStatus(unittest.TestCase):
     def status(self, enabled, row=None):
-        t = by_name(load(os.path.join(NP, "main.yml")), "Describe the placement's IPv6")
+        t = by_name(load(os.path.join(NP, "ipv6_status.yml")), "Describe the placement's IPv6")
         # (an extra var can't be overwritten by set_fact: the expression is written to another fact)
         t = {"vars": t["vars"], "ansible.builtin.set_fact": {"_s": t["ansible.builtin.set_fact"]["np_status"]}}
         net = {"status": {"egress": {"families": ([row] if row else []) + [{"family": 4, "state": "ready"}]}}}
@@ -648,10 +648,10 @@ class PlacementStatus(unittest.TestCase):
 
     def test_copies_the_network_row(self):
         s = self.status(True, {"family": 6, "state": "ready", "mode": "Routed", "reason": "Degraded", "message": "m"})
-        self.assertEqual(s["ipv6"], {"addressing": "DHCPv6", "internet": {"state": "ready", "reason": "Degraded", "message": "m"},
+        self.assertEqual(s["ipv6"], {"addressing": "DHCPv6", "internet": {"state": "ready", "path": "Fabric", "reason": "Degraded", "message": "m"},
                                      "translation": None})
         s = self.status(True, {"family": 6, "state": "ready", "mode": "Routed"})
-        self.assertEqual(s["ipv6"]["internet"], {"state": "ready"})
+        self.assertEqual(s["ipv6"]["internet"], {"state": "ready", "path": "Fabric"})
 
     def test_no_row_no_internet_key(self):
         self.assertEqual(self.status(True), {"ipv6": {"addressing": "DHCPv6", "translation": None}})

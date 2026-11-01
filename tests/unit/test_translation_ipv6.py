@@ -1,6 +1,6 @@
 """Translation for IPv6-only placements (design/IPV6-PLAN.md §7.1, §7.2, §11.8): the egress filter's resolver list
 (shc_fabric.py egress-plan: resolverDestinations6 plus every site's translation dns64Resolvers), the placement's
-status.ipv6.translation (networkplacement_provision main.yml "Describe the placement's IPv6": only for an IPv6-only
+status.ipv6.translation (networkplacement_provision ipv6_status.yml "Describe the placement's IPv6": only for an IPv6-only
 placement of a mode-Platform network with internet access, on a fabric with IPv6 egress, at a site that reports
 capabilities.ipv6Translation; null otherwise), the network's status.egress.ipv4Translation (egress_status.yml), the
 CloudOSO placement-network request (the DNS64 resolvers on the IPv6-only placement's subnet, never on a dual-stack
@@ -85,7 +85,7 @@ class PlacementTranslation(unittest.TestCase):
 
     def run_task(self, v4=(), mode="Platform", internet=True, egress6=True, cap=True, translation=None, site="site1",
                  mode_from_network=False):
-        task = by_name(load(os.path.join(NP, "main.yml")), "Describe the placement's IPv6")
+        task = by_name(load(os.path.join(NP, "ipv6_status.yml")), "Describe the placement's IPv6")
         fab_real = real(**{"egress.ipv6.enabled": egress6})
         fab_real["translation"] = copy.deepcopy(self.TR if translation is None else translation)
         start = {"ansible.builtin.set_fact": {"np_status": "{{ seed_status }}"}}

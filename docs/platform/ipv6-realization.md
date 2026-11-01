@@ -224,6 +224,64 @@ fails with `FamilyUnavailable` and a message naming the site and the missing pie
 job again: new IPv6 placements are refused. Existing placements keep their IPv6 subnet (a placement's families are
 fixed at creation) until they are deleted; a converted cluster stays dual-stack.
 
+## Cloud sites: AWS placements
+
+An AWS environment's placement is one VPC in the environment's account. With `spec.ipv6` it is dual-stack: the VPC
+always keeps its IPv4 CIDR, and the IPv6 block comes from one of two sources (`spec.ipv6.source`; without one,
+`placement.ipv6.defaultSource.CloudAWS`, shipped `Network`).
+
+| | `Network` (the network's space) | `Provider` (Amazon's block) |
+|---|---|---|
+| Block | a /60 (`placement.ipv6.defaultPrefixLength.CloudAWS`) or a /56 from the network's IPv6 space, allocated like any placement subnet | the /56 Amazon assigns to the VPC |
+| How it gets into the VPC | the account's IPAM in the region (Free Tier, one per account and region, private GUA enabled, tagged `shc-role: tenant-ipam`): a private-scope pool per placement that holds exactly the block, and the VPC's IPv6 block from that pool. AWS never advertises a private-scope block | an Amazon-provided block on the VPC |
+| Subnets | per availability zone a /64 for the workload subnet (from the bottom of the block) and a /64 for the transit gateway attachment subnet (from its top); the attachment subnets keep their IPv4 /28s, an attachment needs IPv4 | the same, inside the /56 |
+| Routes in the VPC | the network's IPv6 space (the network's `status.ipv6.prefixes`, less the VPC's own block) to the transit gateway; `::/0` to the transit gateway when the network has IPv6 from the platform and `spec.egress.internet` is on | the network's IPv6 space to the transit gateway; `::/0` to an egress-only internet gateway, created only while `spec.egress.internet` is on and removed when it goes off |
+| Internet | through the fabric and the site gateway's IPv6 egress filter, with the workload's own address as source; tenant prefixes (mode `Tenant`) have none | AWS's own path, outbound only; never through the platform (the block is not in the fabric's egress filter) |
+| `status.ipv6.internet` | the network's IPv6 egress row, with `path: Fabric` | `{state: ready, path: Provider}` while `spec.egress.internet` is on, otherwise none |
+
+**What the fabric sees.** The edge routers learn the VPC's IPv6 block from the transit gateway (the placement's
+attachment propagates into the network's route table there) and announce it to the site gateway as an EVPN Type-5
+route in the placement's VRF, like the IPv4 prefix ([Transport](#transport-dual-stack-core); the routers' IPv6 is the
+AWS realization's `edge.ipv6`). A provider-assigned block is also recorded in the network's address space as a
+provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`): the placement's `status.subnets`
+then carries it with `source: Provider`, the gateway's route check waits for it like for an allocated prefix, and the
+network's placements in VM and OpenStack environments reach it through the fabric. A cloud edge router never
+announces another cloud site's provider-assigned block toward its own cloud, so two provider-source placements of one
+network on different cloud sites reach each other over the internet, in both directions.
+
+**What the tenant sees.** `status.subnets` has a family-6 row `{family: 6, prefix, source}` (no gateway: AWS keeps
+the subnet's router addresses); `status.ipv6` has `addressing` and `internet` with its `path`;
+`status.realization.site.ipv6` records `source`, `prefix`, the /64s per zone, the pool and IPAM (source `Network`) or
+the egress-only internet gateway (source `Provider`), and the IPv6 routes of the VPC. A re-run creates nothing: the
+VPC, its block and the routes are kept, and the VPC's IPv6 routes are set back to exactly the set above.
+
+**Costs.** IPAM Free Tier is free, private GUA included. Source `Network` sends the placement's internet and
+inter-site traffic through the fabric: the round trip to the site gateway adds latency, and AWS charges data
+transfer out on the tunnel leg. Source `Provider` pays AWS's own data transfer rates through the egress-only internet
+gateway (which has no hourly charge). The transit gateway attachment and the edge routers are shared with IPv4.
+
+**Refused** (before anything is allocated or built):
+- IPv6-only placements: `FamilyUnavailable` ("IPv6-only placements are not offered on this site"), whatever
+  `placement.ipv6OnlyBySite` says: a VPC keeps an IPv4 CIDR and its attachment needs IPv4 subnets.
+- A tenant prefix (mode `Tenant`) inside a range AWS keeps out of a VPC's IPv6 space
+  (`placement.siteReserved.CloudAWS`: `fd00::/16`, `2001:db8::/32`): `PrefixInvalid`, the message ending "the cloud
+  reserves this range". ULA outside `fd00::/16` and any GUA are accepted; AWS performs no ownership check on a
+  private-scope block, so the network's own check of tenant prefixes
+  ([Exclusive ranges](#exclusive-ranges-networkexclusiveranges)) is the only one.
+- `source: Provider` on a network with tenant prefixes: `PrefixInvalid` ("provider IPv6 needs a network with IPv6 from
+  the platform").
+- Sizes other than /56 and /60 with source `Network`, and any size with source `Provider`: refused at admission.
+- Bringing your own IPv6 block (BYOIPv6): not offered (no field).
+
+**Teardown** goes in reverse: the VPC's IPv6 routes, the egress-only internet gateway, the attachment, the subnets,
+the VPC's IPv6 block, the VPC, then the placement's pool (deleted with its contents: IPAM releases a VPC's
+allocation several minutes after the VPC is gone, and a plain deprovision would wait for it) and the IPAM with its
+last pool. The provider-assigned block leaves the network's address space with the placement's subnets.
+
+**An IPAM the platform does not manage.** An account holds one IPAM per region by default. When the environment's
+account already has one there that is not tagged `shc-role: tenant-ipam`, creating the platform's fails on the
+account's quota and the placement fails with AWS's message; raise the quota or remove the other IPAM.
+
 ## Translation (`translation`)
 
 ```yaml
