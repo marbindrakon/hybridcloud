@@ -625,7 +625,7 @@ class AgentApply(unittest.TestCase):
     def test_ipv6_vrf(self):
         host = FakeHost(addrs6={"gre51000": ["fd00:db8:5c::9/125"]})
         cmds = apply_cmds(agent_cfg(six(), test=False), host)
-        self.assertIn("sysctl -qw net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1", cmds)
+        self.assertIn("sysctl -qw net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1 net.ipv6.icmp.ratelimit=0", cmds)
         self.assertIn("ip -6 addr del fd00:db8:5c::9/125 dev gre51000", cmds)
         self.assertIn("ip -6 addr replace fd00:db8:5c::1/125 dev gre51000 nodad", cmds)
         self.assertIn("ip link add lo51000 type dummy", cmds)
@@ -647,7 +647,7 @@ class AgentApply(unittest.TestCase):
         self.assertIn("ip -6 addr del fd00:db8:5c::1/125 dev gre51000", cmds)
         self.assertIn("ip -6 addr del 2001:db8:4005:1::64:5/128 dev lo51000", cmds)
         self.assertIn("ip -6 route del unreachable default metric 4278198272 table 51000", cmds)
-        self.assertNotIn("sysctl -qw net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1", cmds)
+        self.assertNotIn("sysctl -qw net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1 net.ipv6.icmp.ratelimit=0", cmds)
 
 
 class AgentState(unittest.TestCase):

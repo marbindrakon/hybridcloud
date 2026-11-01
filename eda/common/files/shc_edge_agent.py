@@ -265,7 +265,8 @@ def apply(cfg, me):
     sh(args)
     sh("ip addr replace %s/%d dev wg0 && ip link set wg0 mtu %d up" % (node["address"], plen, t["mtu"]))
     if any(v6_of(v, me) for v in cfg.get("vrfs", [])):
-        sh(["sysctl", "-qw", "net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.default.forwarding=1"])
+        sh(["sysctl", "-qw", "net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.default.forwarding=1",
+           "net.ipv6.icmp.ratelimit=0"])  # Packet Too Big for every oversized packet, like the border gateways
     # one VRF per network: L3VNI bridge + VXLAN over the tunnel, GRE to the transit gateway, a test loopback
     want_vrfs = {v["name"] for v in cfg.get("vrfs", [])}
     for line in sh("ip -o link show type vrf").splitlines():

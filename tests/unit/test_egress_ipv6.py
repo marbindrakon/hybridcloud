@@ -574,7 +574,8 @@ class FabricSelection(unittest.TestCase):
         pls = [self.pl("core-a", "core", [{"family": 4, "prefix": "10.60.0.0/24"}, {"family": 6, "prefix": P64[0]}]),
                self.pl("core-b", "core", [{"family": 6, "prefix": P64[1]}]),
                self.pl("core-gone", "core", [{"family": 6, "prefix": "2001:db8:4005:4202::/64"}], deleting=True),
-               self.pl("t6-a", "t6", [{"family": 6, "prefix": "2001:db8:100:1::/64"}])]
+               self.pl("t6-a", "t6", [{"family": 6, "prefix": "2001:db8:100:1::/64"}]),
+               self.pl("core-cloud", "core", [{"family": 6, "prefix": "2001:db8:ffff:1::/56", "source": "Provider"}])]
         out = {e["network"]: e for e in self.networks(nets, pls)}
         self.assertEqual(out["acme/core"]["ipv6"], {"block": BLOCK, "prefixes": P64})
         self.assertEqual((out["acme/core"]["ipv4"], out["acme/core"]["index"], out["acme/core"]["vpnTarget"]), (True, 0, 10000))
