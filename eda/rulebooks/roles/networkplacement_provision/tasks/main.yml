@@ -1,6 +1,6 @@
 ---
 # shc (design/P7-PLAN.md P7.3.3, §12.3): NetworkPlacement provision. Resolves the network, the backend (CloudOSO,
-# CloudVirt or CloudAWS, design/P8-PLAN.md §11), the backend's site and the site's CloudGateway; records site and gateway as soon as they are known
+# CloudVirt, CloudAWS or CloudGCP, design/P8-PLAN.md §11), the backend's site and the site's CloudGateway; records site and gateway as soon as they are known
 # (the CloudGateway's delete waits on status.cloudGateway). On a CloudVirt it serves the environment's namespaces
 # that name the network (status.namespaces). Ends pending on the network, backend or gateway while those aren't
 # ready. Then the placement's subnets from the network's address space (design/P10-PLAN.md §3, files/shc_ipam.py):
@@ -312,7 +312,8 @@
       ansible.builtin.include_tasks: subnets.yml
 
     # the placement's IPv6 in plain words (status.ipv6): ipv6_status.yml; a provider-assigned block is known only
-    # after the site side has run on the first pass, so backend_cloudaws.yml describes it again then
+    # after the site side has run on the first pass, so backend_cloudaws.yml and backend_cloudgcp.yml describe it
+    # again then
     - name: The placement's IPv6 in status
       ansible.builtin.include_tasks: ipv6_status.yml
 

@@ -282,6 +282,62 @@ last pool. The provider-assigned block leaves the network's address space with t
 account already has one there that is not tagged `shc-role: tenant-ipam`, creating the platform's fails on the
 account's quota and the placement fails with AWS's message; raise the quota or remove the other IPAM.
 
+## Cloud sites: Google Cloud placements
+
+A Google Cloud environment's placement is one VPC in the environment's project with one regional subnet. With
+`spec.ipv6` the subnet is dual-stack, and its IPv6 range always comes from Google: source `Provider` is the only
+one offered (`placement.ipv6.sources.CloudGCP`) and the default (`placement.ipv6.defaultSource.CloudGCP`).
+
+| | Source `Provider` (Google's range) |
+|---|---|
+| Range | the /64 Google assigns to the subnet (external IPv6 access: Google's globally routed space) |
+| Subnet | stack type `IPV4_IPV6`, IPv6 access type `EXTERNAL`; an IPv4-only subnet of the placement is changed in place, its IPv4 range stays |
+| HA VPN gateway | dual-stack (`IPV4_IPV6`, IPv4 outer addresses; the tunnels and the edge routers' addresses stay IPv4). A gateway's stack type can't change after creation, so with the site's edge IPv6 on (the GCP realization's `edge.ipv6.enabled`) every new placement gateway is dual-stack, IPv4-only placements included, at the same price. A placement gateway that exists IPv4-only is deleted and created again when its placement asks for IPv6: the Cloud Router's interfaces and peers of its two tunnels go, then the tunnels and the gateway; the tunnels come back with new shared secrets, which reach the routers with the routers' VRF. Its BGP sessions are down meanwhile |
+| Routing with the fabric | the Cloud Router's peers exchange IPv6 on their IPv4 sessions (`enableIpv6`); Google assigns each peer its IPv6 next-hop pair from `2600:2d00:0:2::/63`, and the routers take the pair from the placement job. Google never advertises an external IPv6 range by default, so each peer advertises in custom mode: all subnets plus the subnet's /64, set back on every run |
+| Firewall | `<vpc>-fabric6`: IPv6 ingress, all protocols, from the network's IPv6 space (`HybridNetwork` `status.ipv6.prefixes`), the fabric's ICMPv6 sources (`core.icmpSource6`, so Packet Too Big from the fabric reaches the workloads) and the subnet's own /64; its sources are set back on every run. A rule holds one family, so the IPv4 rule stays as it was. Nothing from the internet: Google's implied deny-ingress rule covers IPv6, and the platform adds no inbound rule |
+| Internet | Google's own path: the VPC's IPv6 default route (`::/0` to the default internet gateway), present only while the network's `spec.egress.internet` is on. It is deleted when the setting goes off and put back as `<vpc>-default6` when it comes on again. Never through the platform (the range is not in the fabric's egress filter); the IPv4 egress of the placement (`spec.egress`) is unchanged |
+| `status.ipv6.internet` | `{state: ready, path: Provider}` while `spec.egress.internet` is on, otherwise none |
+
+**What the fabric sees.** The edge routers learn the /64 from the Cloud Router and announce it to the site gateway as
+an EVPN Type-5 route in the placement's VRF, like the IPv4 prefix. The /64 is recorded in the network's address space
+as a provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`): the placement's
+`status.subnets` then carries it with `source: Provider`, the gateway's route check waits for it like for an
+allocated prefix, and the network's placements in VM and OpenStack environments reach it through the fabric. The
+routers announce the network's IPv6 space toward the VPC, never a default route, and never another cloud site's
+provider-assigned range: two provider-source placements of one network on different cloud sites reach each other over
+the internet, in both directions.
+
+**What the tenant sees.** `status.subnets` has a family-6 row `{family: 6, prefix, source: Provider}` (no gateway:
+Google's subnet router answers); `status.ipv6` has `addressing` (`DHCPv6`) and `internet` with its `path`;
+`status.realization.site.ipv6` records `source`, `subnet`, `internet` and the IPv6 next hops per tunnel. A workload
+uses the range through a dual-stack interface with an external IPv6 address (Google hands each interface a /96 of the
+/64); its IPv4 internet access follows `spec.egress` as before. Google's metadata server answers on IPv6 only to
+IPv6-only instances, and Cloud DNS's DNS64 does not apply to dual-stack instances. A re-run creates nothing.
+
+**Costs.** A dual-stack HA VPN gateway costs the same as an IPv4-only one (per tunnel-hour, two tunnels per
+placement); external IPv6 addresses on instances have no charge; internet traffic is billed at Google's data
+transfer rates. The edge routers are shared with IPv4.
+
+**Reverse DNS.** None from the platform: the range is Google's.
+
+**Refused** (before anything is allocated or built), all with `FamilyUnavailable`:
+- source `Network`: "this site offers IPv6 only from the cloud provider; use source Provider". A Google subnet's
+  IPv6 is Google's own space, a Google ULA, or brought-your-own space that Google either announces or keeps as a
+  separate prefix, so none of them can be a slice of the network's IPv6 space.
+- a network with tenant prefixes (mode `Tenant`), with or without `source`: "this site can't carry tenant-provided
+  IPv6 prefixes". The mode is checked before the default source is applied.
+- IPv6-only placements: "IPv6-only placements are not offered on this site", whatever `placement.ipv6OnlyBySite`
+  says.
+- `prefixLength` or `prefix` with source `Provider`: refused at admission. Bringing your own IPv6 range (BYOIP): not
+  offered (no field).
+- OpenShift clusters stay IPv4: a cluster on a dual-stack placement takes the placement's IPv4 subnet as its machine
+  network.
+
+**Teardown** goes in reverse: the tunnels, the Cloud Router, the HA VPN gateway, the firewall rules (the IPv6 rule
+too), the subnet with its /64, the `<vpc>-default6` route if the platform put it back, then the VPC (Google's own
+default routes go with it) and the routers' VRF. The /64 leaves the network's address space with the placement's
+subnets.
+
 ## Translation (`translation`)
 
 ```yaml
@@ -766,6 +822,82 @@ the placement prefixes not learned from the transit gateway yet (`missing6`). Th
 **Rollback.** Take the site out of `placement.ipFamiliesBySite` (no new IPv6 placements). The /125s on the peers stay
 and are inert. With `edge.ipv6.enabled: false` the gateway's next run removes the IPv6 side from the routers'
 configuration; addresses already on the routers stay until a `replace`.
+
+## Cloud sites: Google Cloud
+
+A Google Cloud site carries IPv6 in two halves as well: the platform's edge routers in the hub project (this
+section) and each placement's VPC with its HA VPN and Cloud Router in the tenant project. The underlay stays IPv4:
+the routers' WireGuard tunnels to the border gateways, the HA VPN tunnels' outer addresses and the BGP sessions to
+the Cloud Routers. A placement's IPv6 on Google Cloud is always the provider's (source `Provider`): a Google-assigned
+external /64 per subnet.
+
+### Google Cloud edge
+
+The edge settings live in the installation's `GCP_REALIZATION` (`edge`), next to the IPv4 ones; the generic defaults
+(`common/tasks/gcp_realization.yml`) leave IPv6 off:
+
+```yaml
+edge:
+  ipv6:
+    enabled: false   # IPv6 on the edge routers
+```
+- **No next-hop pool.** Google assigns each Cloud Router peer its IPv6 next-hop pair when IPv6 is turned on for the
+  peer (from Google's own range, unique per VPC). The placement job reads the pair back and hands it to the routers
+  with the tunnels: the router's side, a /126, goes on the tunnel's XFRM device and is the next hop of everything the
+  router announces to the Cloud Router; Google's side is the next hop of the routes it learns.
+- **The site switches stay separate.** `edge.ipv6.enabled` prepares the routers; placements are offered IPv6 only
+  once the site's `placement.ipFamiliesBySite` holds 6 ([Site capabilities](#site-capabilities)). Turn the edge on
+  first.
+- **Routers created before IPv6 need a `replace`** (`shc_gcp_edge.py replace`: new instances with the same names,
+  addresses and configuration; the gateway's next run hands them the gateway nodes' keys): the agent that renders
+  the IPv6 side ships with the instance. New routers also get IPv6 forwarding in their first-boot settings.
+
+**IPsec.** Per HA VPN tunnel that carries IPv6 the router runs two IKEv2 child SAs, one per family (`0.0.0.0/0` and
+`::/0`), with identical IKE parameters on the same XFRM interface: one IKE SA, both families on one device. A tunnel
+without IPv6 (an IPv4-only placement, or a peer without IPv6) keeps its single child SA, configured exactly as
+before. The IPsec daemon re-creates the XFRM device when it restarts, so the agent puts the device back in the VRF
+with its MTU and both addresses after the daemon on every run (every 30 seconds), and once more right after it
+changed the IPsec configuration.
+
+**What the routers announce, per network VRF.** The placement job hands the routers each IPv6 placement's settings
+(`shc_gcp_edge.py net-up --ipv6`): the placement's prefixes (its subnets' external /64s) and the network's IPv6
+space. FRR runs IPv6 unicast on the IPv4 sessions to the Cloud Router with a route-map per family (FRR applies RFC
+8212 to eBGP even with the traditional defaults):
+
+| Direction | IPv6 |
+|---|---|
+| From the Cloud Router | the placement's prefixes only; never a default route |
+| To the Cloud Router | the network's IPv6 space learned from the fabric, with the router's /126 address as next hop; never `::/0` (the VPC's own default route to Google's internet gateway is the internet path, present only while the network's internet egress is on) and never the placement's own prefixes |
+| To the site's gateway (EVPN Type-5) | the placement's prefixes only: the provider's prefix enters the fabric for traffic between sites |
+
+The IPv4 side is unchanged. Google advertises an external IPv6 subnet range only as a custom advertisement on the
+Cloud Router peer, which the placement side keeps in step with the subnets. The network's IPv6 space never holds
+another cloud's provider-assigned prefix, so a router never announces one into its own cloud: two provider-source
+placements of one network on different clouds talk over the internet, both ways.
+
+**ICMPv6 source.** Each router gets a /128 on `lo<vni>` in every IPv6 VRF, from the fabric's `core.icmpSource6`,
+with the same formula as on AWS: node ordinal 100 + the router's position by name, and the gateway's provider-edge
+index. The gateway job computes them and hands them to the routers with the gateway nodes' keys. The routers install
+their fabric-side routes with that address as source, so Packet Too Big and Time Exceeded toward the fabric come from
+it; toward the VPC they come from the XFRM device's /126 address. The routers send Packet Too Big without a rate
+limit. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an unreachable
+IPv6 default, so a destination nothing routes fails at once. The VRFs keep the site leg's MTU (1370 behind the
+WireGuard tunnels) and the XFRM devices the VPN MTU, for both families.
+
+**State.** `shc_gcp_edge.py status` lists per VRF its IPv6 settings and, under `ipv6`, per router the tunnels' /126
+addresses, the ICMPv6 source, the sessions that negotiated IPv6 (`sessions6`, for example `1/1`), the IPv6 routes by
+protocol, whether a default route is present (it should not be) and the placement prefixes not learned from the
+Cloud Router yet (`missing6`). The routers' own reports carry `bgp6` (per session: `af6` negotiated or `NoNeg`, the
+prefix counts), `routes6`, and both child SAs of each IPv6 tunnel under `ipsec`.
+
+**Not done.** No IPv6 BGP sessions (IPv6 rides the IPv4 sessions), no IPv6 outer addresses on the tunnels, no
+default route toward Google, and no tenant or platform prefixes on Google's side (source `Network` is not offered on
+Google Cloud).
+
+**Rollback.** Take the site out of `placement.ipFamiliesBySite` (no new IPv6 placements). With
+`edge.ipv6.enabled: false` the gateway's next run removes the IPv6 side from the routers' configuration (the VRFs'
+IPv6 settings, the tunnels' IPv6 next hops, the ICMPv6 sources) and the tunnels return to one child SA each;
+addresses already on the routers stay until a `replace`.
 
 ## Rollout and rollback
 

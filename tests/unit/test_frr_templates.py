@@ -151,7 +151,9 @@ def root_vars(v6=False, families=None):
 # the only lines in which the gateway's IPv4-only render may differ from the release's
 GW_ALLOWED = [r"^!", r"^route-map (FROM-SITE|TO-VPN)\b", r"^ match (community GW-ORIG|ipv6 address prefix-list (SITE|ANY)-V6)$",
               r"^ set extcommunity (none|rt \d+:\d+)$", r"^exit$", r"^ipv6 prefix-list (SITE|ANY)-V6 ",
-              r"^  route-map vpn export TO-VPN(-\d+)?$"]
+              r"^  route-map vpn export TO-VPN(-\d+)?$",
+              # the site's routes kept as received, so a later site-import filter change re-evaluates them locally
+              r"^  neighbor SITE soft-reconfiguration inbound$"]
 
 
 def changed_lines(a, b):
@@ -388,7 +390,9 @@ class SiteFilterSequences(unittest.TestCase):
         # GW-LOCAL: the routes a gateway originates for its site stay out of the VPN (IPv6 egress)
         allowed = [r"^!", r"^ipv6 prefix-list SITE-V6 seq \d+ permit ", r"^ip prefix-list SITE-V4 seq \d+ permit ",
                    r"^  network ::/0 route-map GW-LOCAL$", r"^bgp community-list standard GW-LOCAL ", r"^route-map GW-LOCAL permit 10$",
-                   r"^ set community \d+:997 additive$", r"^route-map TO-VPN-\d+ deny 5$", r"^ match community GW-LOCAL$", r"^exit$"]
+                   r"^ set community \d+:997 additive$", r"^route-map TO-VPN-\d+ deny 5$", r"^ match community GW-LOCAL$", r"^exit$",
+                   # the site's routes kept as received (a later filter change re-evaluates them locally)
+                   r"^  neighbor SITE soft-reconfiguration inbound$"]
         for variables in (gw_vars(), gw_vars(v4filter=True), gw_vars(v6=True, families=(4, 6)),
                           gw_vars(v6=True, families=(4, 6), v4filter=True, egress6=True),
                           gw_vars(v6=True, families=(4, 6), upstream=("192.0.2.30", "203.0.113.30"))):
