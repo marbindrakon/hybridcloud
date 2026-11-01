@@ -5,14 +5,35 @@ platform identity by impersonating the project's member account. Idempotent; pri
   shc_gcp_tenant.py --config '<json>' check                              the project is usable (label, APIs)
   shc_gcp_tenant.py --config '<json>' zone-up --zone FQDN                the environment's Cloud DNS public zone
   shc_gcp_tenant.py --config '<json>' zone-down --zone FQDN
-  shc_gcp_tenant.py --config '<json>' place-up --placement NAME --vni N --prefixes '[cidr]' --edge '<json>' [--egress fabric|cloudNat] [--known-peers '<json>']
+  shc_gcp_tenant.py --config '<json>' place-up --placement NAME --vni N --prefixes '[cidr]' --edge '<json>' [--egress fabric|cloudNat] [--known-peers '<json>'] [--ipv6 '<json>']
       the placement's VPC, subnet, Cloud Router, HA VPN gateway and tunnels to the site's routers; prints the
       routers' tunnel parameters (PSKs go to SHC_EDGE_VPN_TUNNELS_FILE, never to stdout)
   shc_gcp_tenant.py --config '<json>' place-down --placement NAME
   shc_gcp_tenant.py --config '<json>' place-status --placement NAME
 
-config: {"project", "region", "labels": {..}, "vpcMtu", "linkLocalPool", "cloudRouterAsn"}
+config: {"project", "region", "labels": {..}, "vpcMtu", "linkLocalPool", "cloudRouterAsn", "ipv6Edge"}
+  ipv6Edge: the site's routers carry IPv6, so a new HA VPN gateway is created dual-stack (IPV4_IPV6, IPv4 outer
+  addresses) even for an IPv4-only placement: a gateway's stack type can't change after creation
 --edge: {"site", "asn", "routers": [{"name", "publicIp"}]}
+--ipv6: {"source": "Provider", "internet": bool, "fabricSources": [IPv6 CIDR]} (design/IPV6-PLAN.md §6.3; absent =
+  IPv4 only, nothing below happens):
+  - the subnet is dual-stack with an external IPv6 range (stackType IPV4_IPV6, ipv6AccessType EXTERNAL: Google
+    assigns a /64); an IPv4-only subnet is changed in place;
+  - an HA VPN gateway that exists IPV4_ONLY is re-created dual-stack: the router's interfaces and BGP peers of its
+    tunnels go, then the tunnels and the gateway; the tunnels come back with new shared secrets (the external VPN
+    gateway of the site's routers stays);
+  - the Cloud Router's peers exchange IPv6 on their IPv4 sessions (enableIpv6; Google assigns the next-hop pair from
+    2600:2d00:0:2::/63, read back as ipv6NexthopAddress / peerIpv6NexthopAddress) and advertise ALL_SUBNETS plus the
+    external /64 as a custom range (Google never advertises an external IPv6 range by default), kept in step;
+  - firewall <vpc>-fabric6: IPv6 ingress from fabricSources and the subnet's own /64 (a rule holds one family);
+    nothing from the internet (the implied deny ingress covers IPv6);
+  - Google's IPv6 default route (::/0 to the default internet gateway) only while internet is true; when Google's own
+    is gone it is put back as <vpc>-default6;
+  - the tunnels file entries gain inside6 ("<peerIpv6NexthopAddress>/126", the router's side) and bgp6
+    (["<ipv6NexthopAddress>"], Google's side); the result gains ipv6 {"subnet", "nexthops": {<tunnel>: {"cloud",
+    "router"}}}.
+Tunnels file (SHC_EDGE_VPN_TUNNELS_FILE): {<router name>: [{"ifId", "peerIp", "inside", "bgp", "psk"[, "inside6",
+  "bgp6"]}]}, every tunnel of the placement; psk is null for a tunnel this run did not mint (the routers keep theirs).
 """
 import argparse
 import ipaddress
@@ -37,6 +58,33 @@ def fail(msg, **extra):
 
 def zone_name(fqdn):
     return "shc-" + fqdn.rstrip(".").replace(".", "-")[:55]
+
+
+def truthy(v):
+    return v is True or str(v).strip().lower() in ("true", "yes", "1")
+
+
+def ipv6_request(ipv6):
+    """The --ipv6 request in canonical form, or None for an IPv4-only placement."""
+    if not ipv6:
+        return None
+    if (ipv6.get("source") or "Provider") != "Provider":
+        fail("this site offers IPv6 only from the cloud provider; use source Provider", reason="FamilyUnavailable")
+    srcs = []
+    for p in ipv6.get("fabricSources") or []:
+        try:
+            n = ipaddress.ip_network(str(p).strip(), strict=False)
+        except ValueError:
+            fail("fabricSources: %s is not a prefix" % p)
+        if n.version != 6:
+            fail("fabricSources: %s is not IPv6" % p)
+        srcs.append(str(n))
+    return {"source": "Provider", "internet": truthy(ipv6.get("internet", False)), "fabricSources": sorted(set(srcs))}
+
+
+def same_ranges(a, b):
+    return sorted(str(ipaddress.ip_network(x, strict=False)) for x in a or []) == \
+        sorted(str(ipaddress.ip_network(x, strict=False)) for x in b or [])
 
 
 class Tenant:
@@ -110,12 +158,64 @@ class Tenant:
     def names(self, placement):
         return "shc-%s" % placement
 
+    @staticmethod
+    def nexthops6(n, rt):
+        """{<tunnel>: {"cloud": ipv6NexthopAddress, "router": peerIpv6NexthopAddress}} of the peers with IPv6 on."""
+        out = {}
+        for p in (rt or {}).get("bgpPeers", []):
+            if p.get("enableIpv6") and p.get("name", "").startswith("peer-t") and p.get("ipv6NexthopAddress"):
+                out["%s-%s" % (n, p["name"][len("peer-"):])] = {"cloud": p["ipv6NexthopAddress"],
+                                                                "router": p.get("peerIpv6NexthopAddress")}
+        return out
+
+    @staticmethod
+    def peer6_in_step(p, ext6):
+        return (p.get("enableIpv6") is True and p.get("advertiseMode") == "CUSTOM"
+                and list(p.get("advertisedGroups") or []) == ["ALL_SUBNETS"]
+                and same_ranges([r.get("range") for r in p.get("advertisedIpRanges") or []], [ext6]))
+
+    @staticmethod
+    def peer6(p, ext6):
+        """A BGP peer with IPv6 route exchange and the external /64 advertised (Google keeps the next hops it gave)."""
+        return dict(p, enableIpv6=True, advertiseMode="CUSTOM", advertisedGroups=["ALL_SUBNETS"],
+                    advertisedIpRanges=[{"range": ext6}])
+
+    def recreate_gateway(self, n, net, labels):
+        """An IPV4_ONLY HA VPN gateway can't take IPv6 (its stack type is fixed at creation): the router's interfaces
+        and peers of its tunnels, the tunnels, then the gateway go; it comes back dual-stack, and the tunnels follow
+        with new shared secrets."""
+        rt = self.get("/regions/%s/routers/%s" % (self.region, n))
+        if rt:
+            mine_if = {"if-t%d" % i for i in range(2)}
+            mine_peer = {"peer-t%d" % i for i in range(2)}
+            patch = {"interfaces": [x for x in rt.get("interfaces", []) if x["name"] not in mine_if],
+                     "bgpPeers": [x for x in rt.get("bgpPeers", []) if x["name"] not in mine_peer]}
+            if patch != {"interfaces": rt.get("interfaces", []), "bgpPeers": rt.get("bgpPeers", [])}:
+                self.op("PATCH", "/regions/%s/routers/%s" % (self.region, n), patch)
+        for i in range(2):
+            if self.get("/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i)):
+                self.op("DELETE", "/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i))
+        self.op("DELETE", "/regions/%s/vpnGateways/%s" % (self.region, n))
+        self.changed.append("ha vpn gateway %s recreated dual-stack (tunnels with new secrets)" % n)
+        return self.create_gateway(n, net, labels, True)
+
+    def create_gateway(self, n, net, labels, dual):
+        body = {"name": n, "network": net["selfLink"], "labels": labels}
+        if dual:
+            body.update(stackType="IPV4_IPV6", gatewayIpVersion="IPV4")
+        self.op("POST", "/regions/%s/vpnGateways" % self.region, body)
+        return self.get("/regions/%s/vpnGateways/%s" % (self.region, n))
+
     def place_status(self, placement):
         n = self.names(placement)
         net = self.get("/global/networks/" + n)
         out = {"placement": placement, "vpc": n if net else None}
         if net:
-            out["subnet"] = (self.get("/regions/%s/subnetworks/%s" % (self.region, n)) or {}).get("ipCidrRange")
+            sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n)) or {}
+            out["subnet"] = sn.get("ipCidrRange")
+            if sn.get("stackType") == "IPV4_IPV6":
+                rt = self.get("/regions/%s/routers/%s" % (self.region, n)) or {}
+                out["ipv6"] = {"subnet": sn.get("externalIpv6Prefix"), "nexthops": self.nexthops6(n, rt)}
             out["tunnels"] = {}
             for i in range(2):
                 t = self.get("/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i))
@@ -127,9 +227,10 @@ class Tenant:
             out["routes"] = sorted({r["destRange"] for r in ((rs or {}).get("result") or {}).get("bestRoutesForRouter", [])})
         return out
 
-    def place_up(self, placement, vni, prefixes, edge, egress="fabric", known=None):
+    def place_up(self, placement, vni, prefixes, edge, egress="fabric", known=None, ipv6=None):
         c = self.cfg
         n = self.names(placement)
+        v6 = ipv6_request(ipv6)
         labels = dict(self.labels, **{"shc-placement": placement, "shc-vni": str(vni)})
         mtu = int(c.get("vpcMtu", 1370))
         net = self.get("/global/networks/" + n)
@@ -148,8 +249,25 @@ class Tenant:
             self.changed.append("subnet " + n)
             body = {"name": n, "network": net["selfLink"], "ipCidrRange": prefixes[0], "privateIpGoogleAccess": True,
                     "secondaryIpRanges": [{"rangeName": "extra%d" % i, "ipCidrRange": p} for i, p in enumerate(prefixes[1:])]}
+            if v6:
+                body.update(stackType="IPV4_IPV6", ipv6AccessType="EXTERNAL")
             self.op("POST", "/regions/%s/subnetworks" % self.region, body)
             sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n))
+        ext6 = None
+        if v6:
+            # an IPv4-only subnet takes an external IPv6 range in place; the access type can't change afterwards
+            if sn.get("stackType", "IPV4_ONLY") == "IPV4_ONLY":
+                self.changed.append("subnet %s dual-stack" % n)
+                self.op("PATCH", "/regions/%s/subnetworks/%s" % (self.region, n),
+                        {"stackType": "IPV4_IPV6", "ipv6AccessType": "EXTERNAL", "fingerprint": sn.get("fingerprint")})
+                sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n))
+            if sn.get("stackType") != "IPV4_IPV6" or sn.get("ipv6AccessType") != "EXTERNAL":
+                fail("subnet %s is %s with IPv6 access %s, want IPV4_IPV6 with EXTERNAL"
+                     % (n, sn.get("stackType"), sn.get("ipv6AccessType")))
+            ext6 = sn.get("externalIpv6Prefix")
+            if not ext6:
+                fail("subnet %s has no external IPv6 range yet" % n)
+            ext6 = str(ipaddress.ip_network(ext6))
         # the VPC's own default route to the internet goes when the fabric is the egress
         for r in g.list_all(self.base + "/global/routes", "items", self.tok, {"filter": 'network eq ".*/%s"' % n}):
             if r.get("destRange") == "0.0.0.0/0" and r.get("nextHopGateway") and egress == "fabric":
@@ -164,6 +282,19 @@ class Tenant:
             if not self.get("/global/firewalls/" + name):
                 self.changed.append("firewall " + name)
                 self.op("POST", "/global/firewalls", dict(want, name=name, network=net["selfLink"], direction="INGRESS"))
+        if v6:
+            # IPv6 in from the fabric (the network's IPv6 space, the fabric's ICMPv6 sources) and the subnet itself;
+            # one family per rule, so it is a rule of its own, kept in step with the sources
+            name, src6 = n + "-fabric6", sorted(set(v6["fabricSources"] + [ext6]))
+            f6 = self.get("/global/firewalls/" + name)
+            if not f6:
+                self.changed.append("firewall " + name)
+                self.op("POST", "/global/firewalls", {"sourceRanges": src6, "allowed": [{"IPProtocol": "all"}],
+                                                      "description": "IPv6 from the hybrid fabric and the subnet",
+                                                      "name": name, "network": net["selfLink"], "direction": "INGRESS"})
+            elif not same_ranges(f6.get("sourceRanges"), src6):
+                self.changed.append("firewall %s sources" % name)
+                self.op("PATCH", "/global/firewalls/" + name, {"sourceRanges": src6})
         # Cloud Router and HA VPN gateway
         if not self.get("/regions/%s/routers/%s" % (self.region, n)):
             self.changed.append("router " + n)
@@ -172,8 +303,9 @@ class Tenant:
         gw = self.get("/regions/%s/vpnGateways/%s" % (self.region, n))
         if not gw:
             self.changed.append("ha vpn gateway " + n)
-            self.op("POST", "/regions/%s/vpnGateways" % self.region, {"name": n, "network": net["selfLink"], "labels": labels})
-            gw = self.get("/regions/%s/vpnGateways/%s" % (self.region, n))
+            gw = self.create_gateway(n, net, labels, bool(v6) or truthy(c.get("ipv6Edge", False)))
+        elif v6 and gw.get("stackType", "IPV4_ONLY") == "IPV4_ONLY":
+            gw = self.recreate_gateway(n, net, labels)
         # the site's routers as the external VPN gateway (one per site, shared by the project's placements)
         ext_name = "shc-edge-" + edge["site"]
         routers = sorted(edge["routers"], key=lambda r: r["name"])[:2]
@@ -228,23 +360,64 @@ class Tenant:
                 patch["interfaces"] = rt.get("interfaces", []) + [{"name": "if-t%d" % i, "linkedVpnTunnel": t["selfLink"],
                                                                      "ipRange": "%s/30" % cloud_ip}]
             if "peer-t%d" % i not in peers:
-                patch["bgpPeers"] = rt.get("bgpPeers", []) + [{"name": "peer-t%d" % i, "interfaceName": "if-t%d" % i,
-                                                                 "peerIpAddress": router_ip, "peerAsn": int(edge["asn"])}]
+                peer = {"name": "peer-t%d" % i, "interfaceName": "if-t%d" % i,
+                        "peerIpAddress": router_ip, "peerAsn": int(edge["asn"])}
+                patch["bgpPeers"] = rt.get("bgpPeers", []) + [self.peer6(peer, ext6) if v6 else peer]
             if patch:
                 self.changed.append("router %s %s" % (n, "+".join(patch)))
                 self.op("PATCH", "/regions/%s/routers/%s" % (self.region, n), patch)
             entry = {"ifId": int(vni), "peerIp": gw["vpnInterfaces"][i]["ipAddress"], "inside": "%s/30" % router_ip,
                      "bgp": [cloud_ip], "psk": psk}
             tunnels[r["name"]] = [entry]
-        # the routers need the PSKs: new ones were generated here; existing tunnels' secrets are in the edge config
-        # already (the file carries only what this run minted)
+        out6 = None
+        if v6:
+            out6 = self.place_up6(n, net, v6, ext6, tunnels, routers)
+        # the routers need the PSKs: new ones were generated here; the file lists every tunnel of the placement, an
+        # existing one with psk null (the routers keep the secret they hold)
         if psk_file:
             old = os.umask(0o077)
             json.dump({k: [dict(e) for e in v] for k, v in tunnels.items()}, open(psk_file, "w"))
             os.umask(old)
-        return {"placement": placement, "vpc": n, "subnet": sn["ipCidrRange"], "haVpnGateway": {"name": n, "interfaces": [x["ipAddress"] for x in gw["vpnInterfaces"]]},
-                "externalGateway": ext_name, "routerAsn": int(c.get("cloudRouterAsn", 65020)), "egress": egress,
-                "tunnels": {k: [{x: e[x] for x in ("ifId", "peerIp", "inside", "bgp")} for e in v] for k, v in tunnels.items()}}
+        shown = ("ifId", "peerIp", "inside", "bgp", "inside6", "bgp6")
+        out = {"placement": placement, "vpc": n, "subnet": sn["ipCidrRange"], "haVpnGateway": {"name": n, "interfaces": [x["ipAddress"] for x in gw["vpnInterfaces"]]},
+               "externalGateway": ext_name, "routerAsn": int(c.get("cloudRouterAsn", 65020)), "egress": egress,
+               "tunnels": {k: [{x: e[x] for x in shown if x in e} for e in v] for k, v in tunnels.items()}}
+        if out6 is not None:
+            out["ipv6"] = out6
+        return out
+
+    def place_up6(self, n, net, v6, ext6, tunnels, routers):
+        """The IPv6 side once the tunnels and peers exist: the peers' IPv6 route exchange and custom advertisement in
+        step, Google's next-hop pair into the tunnel entries, Google's IPv6 default route following internet."""
+        rt = self.get("/regions/%s/routers/%s" % (self.region, n))
+        mine = {"peer-t%d" % i for i in range(len(routers))}
+        peers = rt.get("bgpPeers", [])
+        if any(p["name"] in mine and not self.peer6_in_step(p, ext6) for p in peers):
+            self.changed.append("router %s peers IPv6" % n)
+            self.op("PATCH", "/regions/%s/routers/%s" % (self.region, n),
+                    {"bgpPeers": [self.peer6(p, ext6) if p["name"] in mine else p for p in peers]})
+            rt = self.get("/regions/%s/routers/%s" % (self.region, n))
+        hops = self.nexthops6(n, rt)
+        for i, r in enumerate(routers):
+            h = hops.get("%s-t%d" % (n, i))
+            if not h or not h.get("router"):
+                fail("Cloud Router %s: peer-t%d has no IPv6 next hops from Google yet" % (n, i))
+            for e in tunnels[r["name"]]:
+                e["inside6"] = "%s/126" % h["router"]
+                e["bgp6"] = [h["cloud"]]
+        # Google's ::/0 to the default internet gateway: the placement's internet path, only while it wants internet
+        default6 = [x for x in g.list_all(self.base + "/global/routes", "items", self.tok, {"filter": 'network eq ".*/%s"' % n})
+                    if x.get("destRange") == "::/0" and x.get("nextHopGateway")]
+        if v6["internet"] and not default6:
+            self.changed.append("ipv6 default internet route")
+            self.op("POST", "/global/routes", {"name": n + "-default6", "network": net["selfLink"], "destRange": "::/0",
+                                               "nextHopGateway": self.base + "/global/gateways/default-internet-gateway",
+                                               "priority": 1000, "description": "IPv6 internet through Google"})
+        elif not v6["internet"]:
+            for x in default6:
+                self.op("DELETE", "/global/routes/" + x["name"])
+                self.changed.append("ipv6 default internet route removed")
+        return {"subnet": ext6, "nexthops": hops}
 
     def place_down(self, placement):
         n = self.names(placement)
@@ -271,6 +444,10 @@ class Tenant:
             self.op("DELETE", "/regions/%s/subnetworks/%s" % (self.region, n))
             self.changed.append("deleted subnet " + n)
         if self.get("/global/networks/" + n):
+            # the IPv6 default route the platform put back (Google's own go with the VPC)
+            if self.get("/global/routes/%s-default6" % n):
+                self.op("DELETE", "/global/routes/%s-default6" % n)
+                self.changed.append("deleted route %s-default6" % n)
             self.op("DELETE", "/global/networks/" + n)
             self.changed.append("deleted vpc " + n)
         # the site's external VPN gateway goes with the project's last tunnel
@@ -294,6 +471,7 @@ def main():
     ap.add_argument("--edge")
     ap.add_argument("--egress", default="fabric")
     ap.add_argument("--known-peers", help="JSON {router: [peer ip]} of tunnels whose secret the routers hold (place-up)")
+    ap.add_argument("--ipv6", help='JSON {"source": "Provider", "internet": bool, "fabricSources": [cidr]} (place-up)')
     a = ap.parse_args()
     if a.command.startswith("zone") and not a.zone:
         fail("--zone is required")
@@ -304,7 +482,8 @@ def main():
         t = Tenant(json.loads(a.config))
         r = {"check": t.check, "zone-up": lambda: t.zone_up(a.zone), "zone-down": lambda: t.zone_down(a.zone),
              "place-up": lambda: t.place_up(a.placement, a.vni, json.loads(a.prefixes or "[]"), json.loads(a.edge or "{}"), a.egress,
-                                             json.loads(a.known_peers) if a.known_peers else None),
+                                             json.loads(a.known_peers) if a.known_peers else None,
+                                             json.loads(a.ipv6) if a.ipv6 else None),
              "place-down": lambda: t.place_down(a.placement), "place-status": lambda: t.place_status(a.placement)}[a.command]()
     except g.GcpError as ex:
         fail(str(ex), code=ex.code, changed=t.changed if t else [])

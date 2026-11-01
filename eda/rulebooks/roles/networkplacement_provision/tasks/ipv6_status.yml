@@ -6,8 +6,8 @@
 #             fabric realizes it; a network that asks for no internet has no row and gets none here) while the fabric
 #             offers IPv6 egress (egress.ipv6.enabled); until then unavailable, NotOffered
 #   Provider  (source Provider, a cloud's own path): ready while the network asks for internet access
-#             (spec.egress.internet; the site side then has the provider's outbound path), else none (written as
-#             null: status is merge-patched)
+#             (spec.egress.internet; the site side then has the provider's outbound path: AWS's egress-only internet
+#             gateway, Google's IPv6 default route), else none (written as null: status is merge-patched)
 # Translation (design/IPV6-PLAN.md §7.1): an IPv6-only placement (no IPv4 subnet) of a network whose IPv6 the
 # platform assigns (mode Platform) and that wants internet access (spec.egress.internet), on a fabric that offers
 # IPv6 egress, at a site that reports capabilities.ipv6Translation, gets the site's translation entry (realization

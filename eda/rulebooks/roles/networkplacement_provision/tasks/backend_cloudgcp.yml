@@ -6,7 +6,20 @@
 # (shc_gcp_edge.py net-up; the shared secrets travel in a file and the routers' config secret, never on a command
 # line). The routers learn the VPC's prefix from the Cloud Router and advertise it to the gateway as EVPN Type-5
 # (checked by gateway_routes.yml). Egress: fabric (the VPC's default internet route removed; 0/0 learned from the
-# routers) or cloudNat. Sets np_backend_status, np_backend_changed.
+# routers) or cloudNat.
+# HA VPN gateways of a site whose routers carry IPv6 (GCP_REALIZATION edge.ipv6.enabled) are created dual-stack for
+# every placement: a gateway's stack type can't change later.
+# IPv6 (design/IPV6-PLAN.md §6.3; the placement's family-6 want from families.yml, which refused source Network,
+# tenant prefixes and IPv6-only placements before anything was allocated): source Provider only. The subnet is
+# dual-stack with an external /64 Google assigns; the Cloud Router's peers exchange IPv6 on the IPv4 sessions and
+# advertise the /64; IPv6 from the fabric (the network's IPv6 space, the fabric's ICMPv6 sources) is admitted by a
+# firewall rule of its own; internet (spec.egress.internet) through Google's IPv6 default route, never through the
+# network. The /64 is recorded in the network's IPAM as a provider-assigned subnet (ipam-external), so status.subnets
+# carries it with source Provider and the gateway's route check waits for the routers' Type-5 route for it (they
+# take it from the Cloud Router and announce it to the site gateway for traffic with the network's other sites;
+# never toward another cloud's provider-source placements); status.ipv6 is described again once the /64 is known
+# (ipv6_status.yml, internet.path Provider). The routers get the /64 and the network's IPv6 space with net-up.
+# Sets np_backend_status, np_backend_changed.
 - name: The installation's GCP realization and the site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
   vars:
@@ -23,6 +36,7 @@
       vpcMtu: "{{ (gcp_real.placement | default({})).vpcMtu | default(1370) }}"
       linkLocalPool: "{{ (gcp_real.edge.vpn | default({})).linkLocalPool | default('169.254.0.0/16') }}"
       cloudRouterAsn: "{{ (gcp_real.edge.vpn | default({})).cloudRouterAsn | default(65020) }}"
+      ipv6Edge: "{{ ((gcp_real.edge | default({}, true)).ipv6 | default({}, true)).enabled | default(false) | bool }}"
     np_gcp_placement: "{{ (fab_namespace ~ '-' ~ fab_name) | regex_replace('[^a-z0-9-]', '-') | truncate(55, true, '') }}"
     np_gcp_egress: >-
       {{ fab_spec.egress | default((gcp_real.placement | default({})).defaultEgress | default('fabric')) }}
@@ -40,6 +54,36 @@
   ansible.builtin.fail:
     msg: "CloudGateway {{ np_gateway.metadata.name }} reports no edge routers yet"
   when: np_gcp_edge.routers | length == 0
+
+# {} without spec.ipv6; else {source, internet, fabricSources (the network's IPv6 space in effect and the fabric's
+# ICMPv6 sources: the VPC firewall admits them, so Packet Too Big from the fabric reaches the workloads)}
+- name: The placement's IPv6 here
+  vars:
+    _w6: "{{ (np_want | default([], true) | selectattr('family', 'equalto', 6) | list + [{}]) | first }}"
+    _nst: "{{ (np_network.status | default({}, true)).ipv6 | default({}, true) }}"
+    _internet: >-
+      {{ (((np_network.spec | default({}, true)).egress | default({}, true)).internet | default(false) | bool)
+         and np_ipv6_mode | default('', true) == 'Platform' }}
+    _icmp6: "{{ ((fab_real | default({}, true)).core | default({}, true)).icmpSource6 | default('', true) | string | trim }}"
+  ansible.builtin.set_fact:
+    np_gcp_network6: "{{ _nst.prefixes | default([], true) | list }}"
+    np_gcp_ipv6: >-
+      {{ {} if _w6 | length == 0
+         else {'source': _w6.source, 'internet': _internet | bool,
+               'fabricSources': (_nst.prefixes | default([], true) | list
+                                 + ([_icmp6] if _icmp6 | length > 0 else [])) | unique | list} }}
+
+# families.yml refuses it first; the site side has no other source
+- name: Refuse a source other than the provider's
+  ansible.builtin.set_fact:
+    fab_fail_reason: FamilyUnavailable
+    fab_fail_msg: "NetworkPlacement {{ fab_name }}: this site offers IPv6 only from the cloud provider; use source Provider"
+  when: np_gcp_ipv6 | length > 0 and np_gcp_ipv6.source != 'Provider'
+
+- name: Stop on a source the site can't give
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: np_gcp_ipv6 | length > 0 and np_gcp_ipv6.source != 'Provider'
 
 # which tunnel secrets the routers already hold: a tunnel they have no secret for is recreated by place-up
 - name: The tunnel secrets the routers hold for this network
@@ -66,13 +110,38 @@
     gcp_config: "{{ np_gcp_cfg }}"
     gcp_args: >-
       {{ ['place-up', '--placement', np_gcp_placement, '--vni', np_l3vni | string, '--prefixes', np_prefixes_v4 | to_json,
-          '--edge', np_gcp_edge | to_json, '--egress', np_gcp_egress, '--known-peers', np_gcp_known | to_json] }}
+          '--edge', np_gcp_edge | to_json, '--egress', np_gcp_egress, '--known-peers', np_gcp_known | to_json]
+         + (['--ipv6', np_gcp_ipv6 | to_json] if np_gcp_ipv6 | length > 0 else []) }}
     gcp_env: {SHC_EDGE_VPN_TUNNELS_FILE: "{{ _np_gcp_tunnels.path }}"}
 
 - name: Keep the cloud side
   ansible.builtin.set_fact:
     np_gcp_place: "{{ gcp_result.result }}"
     np_gcp_changed: "{{ gcp_result.changed | default([]) | length > 0 }}"
+
+- name: The provider's IPv6 subnet in the network's address space
+  when: (np_gcp_place.ipv6 | default({}, true)).subnet | default('', true) | length > 0
+  block:
+    - name: Record the provider-assigned subnet
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam:
+          action: ipam-external
+          fabric: "{{ np_fabric.metadata.name }}"
+          network: "HybridNetwork/{{ fab_namespace }}/{{ fab_spec.network }}"
+          owner: "{{ np_owner }}"
+          external: [{family: 6, prefix: "{{ np_gcp_place.ipv6.subnet }}"}]
+
+    # ipam-external answers with the owner's rows; the placement's allocated prefixes stay as they were
+    - name: Keep the rows with the allocated prefixes
+      ansible.builtin.set_fact:
+        fab_ipam_result: "{{ fab_ipam_result | combine({'prefixes': np_prefixes}) }}"
+
+    - name: The subnets with the provider's subnet
+      ansible.builtin.include_tasks: subnets.yml
+
+    - name: The placement's IPv6 with the provider's subnet
+      ansible.builtin.include_tasks: ipv6_status.yml
 
 # the tunnels file (PSKs inside) is handed over by path: templating its JSON into an environment value turns it
 # into a dict whose Python repr is not JSON (placement gcpnet-gcp1, 10-20)
@@ -81,7 +150,12 @@
   vars:
     gcp_helper: shc_gcp_edge.py
     gcp_config: "{{ gcp_edge_cfg }}"
-    gcp_args: [net-up, --vni, "{{ np_l3vni | string }}"]
+    # with IPv6: the placement's external /64 (the routers accept only it from the Cloud Router) and the network's
+    # IPv6 space (what they announce toward the VPC)
+    gcp_args: >-
+      {{ ['net-up', '--vni', np_l3vni | string]
+         + (['--ipv6', {'prefixes': [np_gcp_place.ipv6.subnet], 'network': np_gcp_network6} | to_json]
+            if np_gcp_ipv6 | length > 0 else []) }}
     gcp_env: {SHC_EDGE_VPN_TUNNELS_FILE: "{{ _np_gcp_tunnels.path }}"}
     gcp_no_log: true
 
@@ -102,3 +176,12 @@
       externalGateway: "{{ np_gcp_place.externalGateway }}"
       egress: "{{ np_gcp_egress }}"
     np_backend_changed: "{{ np_gcp_changed | bool or gcp_result.changed | default([]) | length > 0 }}"
+
+# {source, subnet (the external /64), internet, nexthops (per tunnel: Google's and the router's IPv6 next hop)}
+- name: Record the site side's IPv6
+  ansible.builtin.set_fact:
+    np_backend_status: >-
+      {{ np_backend_status | combine({'ipv6': {'source': 'Provider', 'subnet': np_gcp_place.ipv6.subnet,
+                                               'internet': np_gcp_ipv6.internet,
+                                               'nexthops': np_gcp_place.ipv6.nexthops}}) }}
+  when: np_gcp_place.ipv6 | default({}, true) | length > 0
