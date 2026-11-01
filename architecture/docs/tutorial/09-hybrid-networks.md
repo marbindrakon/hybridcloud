@@ -278,7 +278,7 @@ spec:
   gateway: outbound only, and present only while the network's `egress.internet` is on; a provider range on one cloud
   reaches a provider range on another cloud over the internet. Your own prefixes on an AWS environment travel through
   the platform with no internet path, and a prefix inside `fd00::/16` or `2001:db8::/32` is refused with
-  `PrefixInvalid` ("the cloud reserves this range"); AWS environments don't offer IPv6-only placements.
+  `PrefixInvalid` ("the cloud reserves this range"). An AWS site that offers IPv6-only placements builds the VPC with an IPv4 range that is never routed (AWS requires one); your workloads see only IPv6.
 - **On a Google Cloud environment** the placement's subnet is dual-stack with a /64 Google assigns (source
   `Provider`, the only one; leave `source` out or name it). The network's other sites reach it through the platform;
   its internet path is Google's own, outbound only, and present only while the network's `egress.internet` is on. A
