@@ -43,7 +43,7 @@ REAL = V.REAL
 N, PLACEMENT, VNI = V.N, V.PLACEMENT, V.VNI
 NAT_IP = "203.0.113.46"
 V6T = dict(V.V6, translation=True)
-TRANSLATION = {"pref64": "64:ff9b::/96", "resolvers": ["fd20:ce::254"], "nat": N + "-nat64", "dnsPolicy": N + "-dns64"}
+TRANSLATION = {"pref64": "64:ff9b::/96", "resolvers": ["169.254.169.254"], "nat": N + "-nat64", "dnsPolicy": N + "-dns64"}
 
 
 class FakeCloud(V.FakeCompute):
@@ -392,7 +392,7 @@ NET_P6 = {"spec": {"prefixes": [], "platformPrefixes": [{"family": 6}], "egress"
           "status": {"ipv6": {"mode": "Platform", "prefixes": [V.NET6]}}}
 PREF64_LAB = "2001:db8:64::/96"
 DNS64_LAB = ["2001:db8:53::10", "2001:db8:53::11"]
-BACKEND_TR = {"path": "Provider", "pref64": "64:ff9b::/96", "resolvers": ["fd20:ce::254"], "ipv4Source": NAT_IP}
+BACKEND_TR = {"path": "Provider", "pref64": "64:ff9b::/96", "resolvers": ["169.254.169.254"], "ipv4Source": NAT_IP}
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")

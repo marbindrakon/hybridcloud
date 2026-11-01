@@ -61,10 +61,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shc_gcp_api as g  # noqa: E402
 
 DNS = "https://dns.googleapis.com/dns/v1"
-# the provider's NAT64 path (Cloud DNS DNS64 + Cloud NAT): the well-known prefix, and the resolver of an IPv6-only VM
-# (the metadata server's IPv6 address)
+# the provider's NAT64 path (Cloud DNS DNS64 + Cloud NAT): the well-known prefix, and the resolver Google hands an
+# IPv6-only VM (the metadata server at its link-local IPv4 address: the guest gets a link-local IPv4 address for it;
+# metadata itself also answers at fd20:ce::254)
 NAT64_PREFIX = "64:ff9b::/96"
-GCP_RESOLVERS6 = ["fd20:ce::254"]
+GCP_RESOLVERS6 = ["169.254.169.254"]
 NEEDED_APIS = ["compute.googleapis.com", "dns.googleapis.com", "iam.googleapis.com", "iamcredentials.googleapis.com",
                "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com", "serviceusage.googleapis.com"]
 

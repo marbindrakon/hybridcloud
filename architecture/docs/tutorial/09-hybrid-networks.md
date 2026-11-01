@@ -287,8 +287,8 @@ spec:
 - **IPv6-only on a Google Cloud environment** (leave `ipv4` out, where the site offers IPv6-only placements): the
   subnet has no IPv4 range at all, only the /64 Google assigns. Create the VMs IPv6-only (stack type `IPV6_ONLY`,
   an external IPv6 address) from a **Debian or Ubuntu image**: Google offers IPv6-only VMs with those images only. Such
-  a VM reaches its metadata server over IPv6 at `fd20:ce::254`, which is also its DNS resolver; nothing needs
-  configuring. With internet access on, IPv4-only destinations are reached through Google's own DNS64 and NAT64 (see
+  a VM reaches its metadata server over IPv6 at `fd20:ce::254`; its DNS resolver is the metadata server at
+  `169.254.169.254` (Google gives the VM a link-local IPv4 address for it); nothing needs configuring. With internet access on, IPv4-only destinations are reached through Google's own DNS64 and NAT64 (see
   below). A placement stays IPv6-only or dual-stack for its life.
 - The placement reports one row per family in `status.subnets` (`family`, `prefix`, `source`, and the
   `gateway`: IPv4 always, IPv6 in VM and OpenStack environments); `status.prefixes` keeps listing the prefixes, IPv4
@@ -387,7 +387,7 @@ spec:
       translation:                                       # a Google Cloud IPv6-only placement
         path: Provider
         pref64: "64:ff9b::/96"
-        resolvers: ["fd20:ce::254"]
+        resolvers: ["169.254.169.254"]
         ipv4Source: "203.0.113.46"                       # example value
   ```
   Until then `status.ipv6.translation` is absent and the network's `status.egress.ipv4Translation` says why
