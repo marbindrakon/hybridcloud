@@ -634,6 +634,81 @@ status:
 The condition does not change the site's phase: names keep resolving while the controller is down, only changes
 wait. A site that never reported a record gets no condition. The read never fails the site job.
 
+## Cloud sites: AWS
+
+An AWS site carries IPv6 in two halves: the platform's edge routers and the transit gateway in the hub account (this
+section), and each placement's VPC in the tenant account. Neither changes the underlay: the routers' WireGuard
+tunnels to the border gateways, their GRE tunnels to the transit gateway and the BGP sessions stay IPv4.
+
+### AWS edge
+
+The edge settings live in the installation's `AWS_REALIZATION` (`edge`), next to the IPv4 ones; the generic defaults
+(`common/tasks/aws_realization.yml`) leave IPv6 off:
+
+```yaml
+edge:
+  insideCidrPool: 169.254.100.0/24   # IPv4: a /29 per Connect peer (AWS's reserved /29s are stepped around)
+  ipv6:
+    enabled: false                   # IPv6 on the edge routers and their Connect peers
+    insideCidrPool6: ""              # a ULA /64 from fd00::/8: a /125 per Connect peer
+```
+- **`insideCidrPool6`:** one per transit gateway. Its ledger is the /125s the region's Connect peers already hold;
+  AWS reserves no IPv6 inside range, so nothing else is stepped around. Keep it out of tenant space: list it in
+  `FABRIC_REALIZATION` `network.exclusiveRanges` (a pool inside `siteReserved.CloudAWS`, such as `fd00::/16`, is
+  refused to tenants on AWS already). A pool that is not an IPv6 network inside `fd00::/8` stops the gateway job.
+- **The site switches stay separate.** `edge.ipv6.enabled` prepares the routers and the peers; placements are offered
+  IPv6 only once the site's `placement.ipFamiliesBySite` holds 6 ([Site capabilities](#site-capabilities)). Turn the
+  edge on first.
+- **Connect peers get a /125 at creation, and existing ones are re-created once.** The transit gateway has no IPv6
+  BGP peering: it negotiates IPv6 unicast on a peer's IPv4 sessions only when the peer has an IPv6 inside /125, and a
+  peer can't be modified. With the edge on, every new peer is created with its /29 and a /125 from the pool; a peer
+  that exists without one (created before IPv6) is deleted and created again with the same /29 and a new /125 on the
+  next run that brings its network up. Its BGP sessions are down for about 9 minutes, so do it in a window. The
+  re-created peer is tagged `shc-ipv6-recreated` and is never re-created a second time; if it still has no /125 the
+  job says so and the network stays IPv4 on that router. The router takes the /125's first address on its GRE
+  device, the transit gateway the second and third (its next hops).
+- **Routers created before IPv6 need a `replace`** (`shc_aws_edge.py replace`: new instances on the same addresses
+  and Elastic IPs; the gateway's next run hands them the gateway nodes' keys): the agent that renders the IPv6 side
+  ships with the instance.
+
+**What the routers announce, per network VRF.** The gateway job hands the routers each placement's IPv6 settings
+(`shc_aws_edge.py vrfs6`): the placement's family-6 subnets (`prefixes6`), the network's IPv6 space
+(`HybridNetwork` `status.ipv6.prefixes`), the subnet's source and whether the network gets the fabric's IPv6 internet
+(mode `Platform` with `spec.egress.internet`). FRR runs IPv6 unicast on the IPv4 sessions with a route-map per
+family (FRR applies RFC 8212 to eBGP even with the traditional defaults):
+
+| Direction | Source `Network` | Source `Provider` |
+|---|---|---|
+| From the transit gateway | the placement's prefixes only (the VPC's IPv6 blocks); never a default route | the same (the Amazon /56) |
+| To the transit gateway | the network's other IPv6 space learned from the fabric; `::/0` only with internet (the fabric's IPv6 egress, from the network's own addresses) | the network's other IPv6 space only; the VPC's own egress-only internet gateway carries its default route |
+| To the site's gateway (EVPN Type-5) | the placement's prefixes only | the same: the provider's prefix enters the fabric for traffic between sites |
+
+The network's IPv6 space never holds another cloud's provider-assigned prefix, so a router never announces one into
+its own cloud: two provider-source placements of one network on different clouds talk over the internet, both ways.
+A network with tenant prefixes (mode `Tenant`) gets no `::/0` toward the transit gateway in any case. The gateway
+accepts the routers' Type-5 routes inside the placements' prefixes only (its site-import filter), and the placement's
+readiness checks those routes at the gateway per family, as on every site; a placement whose gateway took it up before
+its IPv6 subnet was known asks the gateway again.
+
+**ICMPv6 source.** Each router gets a /128 on `lo<vni>` in every IPv6 VRF, from the fabric's `core.icmpSource6`: the
+same formula as the border gateway nodes (network address + (node ordinal << 16) + the gateway's provider-edge
+index), at node ordinal 100 + the router's position by name (100 for the first router, 101 for the second). The
+nodes use their position in `borderGateway.nodes` from 1, so the two never meet while a fabric has fewer than 100
+border gateway nodes. The routers install their fabric-side routes with that address as source, so Packet Too Big
+and Time Exceeded toward the fabric come from it; toward the VPC they come from the GRE device's /125 address, which
+the transit gateway delivers. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table
+also gets an unreachable IPv6 default, so a destination nothing routes fails at once. The routers' VRFs keep the site
+leg's MTU (1370 behind the WireGuard tunnels) for both families.
+
+**State.** `shc_aws_edge.py status` lists per VRF its IPv6 settings and, under `ipv6`, per router the sessions that
+negotiated IPv6 (`sessions6`, for example `2/2`), the IPv6 routes by protocol, whether a default route is present and
+the placement prefixes not learned from the transit gateway yet (`missing6`). The routers' own reports carry `bgp6`
+(per session: `af6` negotiated or `NoNeg`, the prefix counts) and `routes6`.
+
+**Rollback.** Take the site out of `placement.ipFamiliesBySite` (no new IPv6 placements). The /125s on the peers stay
+and are inert. With `edge.ipv6.enabled: false` the gateway's next run removes the IPv6 side from the routers'
+configuration; addresses already on the routers stay until a `replace`.
+
 ## Rollout and rollback
 
 - Order: the primary chart with both CRD copies, then the EDA content (repository seed, then the AAP configuration,
