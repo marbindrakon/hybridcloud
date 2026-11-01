@@ -1,8 +1,9 @@
 """Translation for IPv6-only placements (design/IPV6-PLAN.md §7.1, §7.2, §11.8): the egress filter's resolver list
 (shc_fabric.py egress-plan: resolverDestinations6 plus every site's translation dns64Resolvers), the placement's
-status.ipv6.translation (networkplacement_provision ipv6_status.yml "Describe the placement's IPv6": only for an IPv6-only
-placement of a mode-Platform network with internet access, on a fabric with IPv6 egress, at a site that reports
-capabilities.ipv6Translation; null otherwise), the network's status.egress.ipv4Translation (egress_status.yml), the
+status.ipv6.translation on the fabric path (networkplacement_provision ipv6_status.yml "Describe the placement's
+IPv6": only for an IPv6-only placement of a mode-Platform network with internet access, on a fabric with IPv6 egress,
+at a site that reports capabilities.ipv6Translation; null otherwise; the provider's path: test_gcp_ipv6_only), the
+network's status.egress.ipv4Translation (egress_status.yml), the
 CloudOSO placement-network request (the DNS64 resolvers on the IPv6-only placement's subnet, never on a dual-stack
 one) and PlatformOpenshift (refused on a network without IPv4 on every backend that can name a network). The plays
 run in ansible-playbook (skipped without it). Documentation prefixes and generic names only."""
@@ -100,8 +101,8 @@ class PlacementTranslation(unittest.TestCase):
 
     def test_ipv6_only_platform_with_internet_gets_the_site_entry(self):
         ipv6, kept = self.run_task()
-        self.assertEqual(ipv6["translation"], {"pref64": PREF64, "resolvers": DNS64})
-        self.assertEqual(kept, {"pref64": PREF64, "resolvers": DNS64})
+        self.assertEqual(ipv6["translation"], {"path": "Fabric", "pref64": PREF64, "resolvers": DNS64})
+        self.assertEqual(kept, {"path": "Fabric", "pref64": PREF64, "resolvers": DNS64})
         # the rest of status.ipv6 is unchanged by it
         self.assertEqual(ipv6["addressing"], "DHCPv6")
 
@@ -125,7 +126,7 @@ class PlacementTranslation(unittest.TestCase):
 
     def test_entry_without_resolvers_still_names_the_prefix(self):
         ipv6, _ = self.run_task(translation={"site1": {"pref64": PREF64}})
-        self.assertEqual(ipv6["translation"], {"pref64": PREF64, "resolvers": []})
+        self.assertEqual(ipv6["translation"], {"path": "Fabric", "pref64": PREF64, "resolvers": []})
 
 
 class PlacementTranslationSchema(unittest.TestCase):
@@ -133,7 +134,7 @@ class PlacementTranslationSchema(unittest.TestCase):
         for path in CRDS:
             tr = status_schema(path)["ipv6"]["properties"]["translation"]
             self.assertEqual(tr["type"], "object", path)
-            self.assertEqual(set(tr["properties"]), {"pref64", "resolvers"}, path)
+            self.assertEqual(set(tr["properties"]), {"path", "pref64", "resolvers", "ipv4Source"}, path)
             self.assertEqual(tr["properties"]["resolvers"]["items"]["type"], "string", path)
 
     def test_hybridnetwork_ipv4_translation_fields(self):
