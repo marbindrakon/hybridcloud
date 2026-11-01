@@ -348,8 +348,9 @@ NAT64 routes and the static route.
 ## Cloud sites: Google Cloud placements
 
 A Google Cloud environment's placement is one VPC in the environment's project with one regional subnet. With
-`spec.ipv6` the subnet is dual-stack, and its IPv6 range always comes from Google: source `Provider` is the only
-one offered (`placement.ipv6.sources.CloudGCP`) and the default (`placement.ipv6.defaultSource.CloudGCP`).
+`spec.ipv6` the subnet is dual-stack (IPv6-only without `spec.ipv4`: [Google Cloud: IPv6-only
+placements](#google-cloud-ipv6-only-placements)), and its IPv6 range always comes from Google: source `Provider`
+is the only one offered (`placement.ipv6.sources.CloudGCP`) and the default (`placement.ipv6.defaultSource.CloudGCP`).
 
 | | Source `Provider` (Google's range) |
 |---|---|
@@ -389,8 +390,9 @@ transfer rates. The edge routers are shared with IPv4.
   separate prefix, so none of them can be a slice of the network's IPv6 space.
 - a network with tenant prefixes (mode `Tenant`), with or without `source`: "this site can't carry tenant-provided
   IPv6 prefixes". The mode is checked before the default source is applied.
-- IPv6-only placements: "IPv6-only placements are not offered on this site", whatever `placement.ipv6OnlyBySite`
-  says.
+- IPv6-only placements on a site that doesn't offer them: "IPv6-only placements are not offered on this site"
+  (`placement.ipv6OnlyBySite.<site>` off, or the site's `capabilities.ipv6Only` false). Where they are offered, see
+  [Google Cloud: IPv6-only placements](#google-cloud-ipv6-only-placements).
 - `prefixLength` or `prefix` with source `Provider`: refused at admission. Bringing your own IPv6 range (BYOIP): not
   offered (no field).
 - OpenShift clusters stay IPv4: a cluster on a dual-stack placement takes the placement's IPv4 subnet as its machine
@@ -401,10 +403,48 @@ too), the subnet with its /64, the `<vpc>-default6` route if the platform put it
 default routes go with it) and the routers' VRF. The /64 leaves the network's address space with the placement's
 subnets.
 
+### Google Cloud: IPv6-only placements
+
+A placement without `ipv4` on a site with `placement.ipv6OnlyBySite.<site>: true` (and the site's
+`capabilities.ipv6Only`) gets a VPC with no IPv4 range at all:
+
+| | IPv6-only placement |
+|---|---|
+| Subnet | stack type `IPV6_ONLY`, IPv6 access type `EXTERNAL` (the /64 Google assigns, external access); no IPv4 range, no secondary ranges. A subnet's stack type can't change in either direction, so a placement is IPv6-only or dual-stack for its life (`spec.ipv4` can't be added or removed either) |
+| HA VPN, routing, firewall | as for a dual-stack placement: the dual-stack HA VPN gateway, the Cloud Router's peers exchanging IPv6 on their IPv4 sessions (the link-local /30 per tunnel carries the session, not workload traffic), the custom advertisement of the /64, `<vpc>-fabric6`. The IPv4 firewall rules stay; they admit nothing without IPv4 workloads |
+| Internet | Google's `::/0`, present only while the network's `spec.egress.internet` is on, as for a dual-stack placement. Google's IPv4 default route of the VPC stays whatever `spec.egress` says: no workload sends IPv4, and Cloud NAT forwards translated traffic by the VPC's IPv4 routes |
+| DNS64 | while translation applies: a Cloud DNS server policy `<vpc>-dns64` bound to the VPC with DNS64 for all queries (`dns64Config.scope.allQueries`); IPv6-only instances then get AAAA answers inside `64:ff9b::/96` for IPv4-only names. Google applies DNS64 to IPv6-only instances only |
+| NAT64 | while translation applies: one Cloud NAT `<vpc>-nat64` on the placement's Cloud Router, translating `64:ff9b::/96` for all IPv6-only subnet ranges (`sourceSubnetworkIpRangesToNat64: ALL_IPV6_SUBNETWORKS`), with addresses Google allocates (`natIpAllocateOption: AUTO_ONLY`) and no IPv4 source ranges. If Google's IPv4 default route is missing, `<vpc>-default4` is added for it |
+| Resolver and metadata | the metadata server: `fd20:ce::254` answers metadata and DNS on IPv6-only instances (only there; dual-stack instances use `169.254.169.254`) |
+| `status.ipv6.translation` | `{path: Provider, pref64: "64:ff9b::/96", resolvers: ["fd20:ce::254"], ipv4Source}`; `ipv4Source` is the Cloud NAT's address once Google has allocated one (it allocates on demand, so it appears on a run after the first instance used NAT64) |
+
+**When translation applies** (the provider's path, [Translation](#translation-translation)): the network's IPv6
+comes from the platform, `spec.egress.internet` is on, and the site's `translation.<site>` entry has
+`provider: true`. Nothing of the fabric's IPv6 egress or translator is involved. When it stops applying (internet
+access off, the entry removed) the next run removes the NAT and detaches and deletes the policy, and
+`status.ipv6.translation` is cleared; the placement keeps its IPv6 and its routes to the network's other sites.
+
+**Instances.** Google offers IPv6-only instances with Debian and Ubuntu images only; other images (CentOS, RHEL)
+need a dual-stack placement. An instance on the subnet takes `stackType: IPV6_ONLY` and an external IPv6 access
+config. IPv4-only names are reached by name through DNS64 and NAT64 with no software in the guest; an IPv4 literal
+needs a CLAT in the guest, with `64:ff9b::/96` as its translation prefix.
+
+**What the tenant sees.** `status.subnets` has only the family-6 row; `status.realization.site` names no IPv4
+subnet, and `status.realization.site.ipv6` adds `only: true` and, with translation, the NAT's and the policy's
+names. The site side's `place-status` reports the NAT (with its addresses) and the policy and whether each is in step.
+
+**Costs.** As for a dual-stack placement, plus Cloud NAT while translation applies: an hourly charge per instance
+that uses it and a per-GB charge for translated traffic (Google's Cloud NAT rates). The DNS server policy has no
+charge.
+
+**Teardown.** As for a dual-stack placement; the Cloud NAT goes with the Cloud Router, and the DNS policy is
+detached and deleted (and `<vpc>-default4` removed, if the platform added it) before the subnet and the VPC.
+
 ## Translation (`translation`)
 
 ```yaml
-translation: {}   # <site>: {pref64: <the site's translation /96>, dns64Resolvers: [<IPv6 resolver>, ...]}
+translation: {}   # <site>: {pref64: <the site's translation /96>, dns64Resolvers: [<IPv6 resolver>, ...],
+                  #          provider: <true: the cloud provider's own DNS64 and NAT64 for source Provider>}
 ```
 - **`pref64`:** the IPv6 /96 into which the translator (NAT64) the site's IPv6-only workloads use embeds IPv4
   addresses. The platform doesn't run the translator; it reaches it through the IPv6 egress (`egress.ipv6`). List
@@ -412,19 +452,30 @@ translation: {}   # <site>: {pref64: <the site's translation /96>, dns64Resolver
   tenant prefix overlaps it.
 - **`dns64Resolvers`:** IPv6 resolvers that answer IPv4-only names with addresses inside `pref64` (DNS64), in the
   order the workloads should use them.
+- **`provider`:** on a cloud site, `true` offers the provider's own translation to placements whose IPv6 comes from
+  the provider (source `Provider`); `pref64` and `dns64Resolvers` then aren't needed for them (they serve source
+  `Network` only). A Google Cloud site's entry is `{provider: true}`.
 - An entry turns the site's `capabilities.ipv6Translation` on (with the site's IPv6, see
   [Site capabilities](#site-capabilities)); a site without an entry offers no translation. Keep the entry at the top
   level of `FABRIC_REALIZATION`, like the `placement` switches. Translation is useful only where the site offers
   IPv6-only placements (`placement.ipv6OnlyBySite`).
 
-**Who gets it.** Translation follows from the network and the placement; there is no tenant switch. A placement gets
-`status.ipv6.translation {pref64, resolvers}` (the site's entry) when all of these hold: it has no IPv4 subnet, its
-network's IPv6 comes from the platform (mode `Platform`), the network asks for internet access
-(`spec.egress.internet: true`), the fabric offers IPv6 egress (`egress.ipv6.enabled`) and the site reports
-`capabilities.ipv6Translation`. Otherwise the field is cleared, so a placement that stops qualifying (the entry
-removed, IPv6 egress turned off) loses it on its next run. Translation needs `egress.internet` on: the translator
-is reached over the network's IPv6 internet path, so a network without internet access has no egress status and no
-translation. Dual-stack placements never get the DNS64 resolvers: their workloads reach IPv4 natively and would
+**Who gets it.** Translation follows from the network and the placement; there is no tenant switch. Only a placement
+with no IPv4 subnet, whose network's IPv6 comes from the platform (mode `Platform`) and asks for internet access
+(`spec.egress.internet: true`), gets it, and its path follows the placement's IPv6 source:
+
+| Source | Path | Also needs | `status.ipv6.translation` |
+|---|---|---|---|
+| `Network` (every environment type) | `Fabric`: the site's translator, reached over the fabric's IPv6 egress | the fabric offers IPv6 egress (`egress.ipv6.enabled`), the site reports `capabilities.ipv6Translation` and its entry has a `pref64` | `{path: Fabric, pref64, resolvers}` from the site's entry |
+| `Provider` (cloud environments) | `Provider`: the cloud's own DNS64 and NAT64, built by the placement's site side | the site's entry has `provider: true` (the fabric's IPv6 egress is not involved) | `{path: Provider, pref64, resolvers[, ipv4Source]}` as the site side reports them; `ipv4Source` is the provider translator's IPv4 address once the provider reports it |
+
+Otherwise the field is cleared, so a placement that stops qualifying (the entry removed, IPv6 egress turned off,
+internet access off) loses it on its next run, and on the provider's path its site side removes the provider's
+translation objects. Translation needs `egress.internet` on: on the fabric's path the translator is reached over the
+network's IPv6 internet path, on the provider's path the provider's translator is an internet gateway; a network
+without internet access has no translation and no provider translation objects. A provider-path placement's first
+run builds the translation before its status shows it (the field keeps its previous value until the site side has
+reported). Dual-stack placements never get the DNS64 resolvers: their workloads reach IPv4 natively and would
 otherwise send IPv4-only names through the translator.
 
 The network reports the translation in `status.egress.ipv4Translation` (only for a network without IPv4 that asks
@@ -435,6 +486,9 @@ for internet access):
 | mode `Tenant` | `{state: unavailable, reason: AddressChoice}` |
 | mode `Platform`, the fabric offers no IPv6 egress, or no site has a `translation` entry with a `pref64` | `{state: unavailable, reason: NotOffered}` |
 | mode `Platform` otherwise | the state of the network's IPv6 egress row (`pending`, then `ready`); each IPv6-only placement's status names its site's prefix and resolvers |
+
+This row describes the fabric's path. Placements on the provider's path report their translation in their own
+`status.ipv6.translation` whatever the network's row says.
 
 **The resolvers through the egress filter.** The IPv6 egress filter of every border gateway node admits the DNS64
 resolvers of every site's entry on port 53 (TCP and UDP), in addition to `egress.ipv6.resolverDestinations6`: the
@@ -456,6 +510,10 @@ Run the fabric job (Retry now on the HybridFabric) after changing an entry.
   guest over DHCPv6 only when the cluster's DNS service (`dns-default` in `openshift-dns`) is dual-stack; on a
   cluster where it has only an IPv4 address, DHCPv6 hands out no cluster resolver and an IPv6-only guest resolves
   through the DNS64 resolvers alone.
+
+- **Google Cloud sites (CloudGCP):** source `Provider` only, so the provider's path: the VPC's DNS64 server policy and
+  the Cloud NAT for NAT64 ([Google Cloud: IPv6-only placements](#google-cloud-ipv6-only-placements)); the resolver is
+  the metadata server, which IPv6-only instances use without configuration.
 
 OpenShift clusters (PlatformOpenshift) are refused on a network whose placement has no IPv4 subnet: the platform
 reaches clusters over IPv4.

@@ -264,8 +264,13 @@ spec:
                       type: object
                       description: >-
                         For an IPv6-only placement: the translation prefix and resolvers its workloads use to reach
-                        IPv4-only destinations.
+                        IPv4-only destinations. Offered only while the network has internet access.
                       properties:
+                        path:
+                          type: string
+                          description: >-
+                            Where IPv4-bound traffic is translated: Fabric (the platform's translator, reached through
+                            the platform) or Provider (the cloud provider's own translator).
                         pref64:
                           type: string
                           description: The IPv6 prefix that IPv4 destinations are translated into.
@@ -274,6 +279,11 @@ spec:
                           description: DNS resolvers that synthesize IPv6 answers for IPv4-only names.
                           items:
                             type: string
+                        ipv4Source:
+                          type: string
+                          description: >-
+                            The IPv4 address translated traffic leaves from on the internet (path Provider, once the
+                            provider reports it).
                 namespaces:
                   type: array
                   description: CloudVirt site namespaces the network serves (the environment's namespaces that name it).

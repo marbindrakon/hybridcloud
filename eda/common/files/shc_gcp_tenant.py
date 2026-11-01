@@ -15,8 +15,8 @@ config: {"project", "region", "labels": {..}, "vpcMtu", "linkLocalPool", "cloudR
   ipv6Edge: the site's routers carry IPv6, so a new HA VPN gateway is created dual-stack (IPV4_IPV6, IPv4 outer
   addresses) even for an IPv4-only placement: a gateway's stack type can't change after creation
 --edge: {"site", "asn", "routers": [{"name", "publicIp"}]}
---ipv6: {"source": "Provider", "internet": bool, "fabricSources": [IPv6 CIDR]} (design/IPV6-PLAN.md §6.3; absent =
-  IPv4 only, nothing below happens):
+--ipv6: {"source": "Provider", "internet": bool, "fabricSources": [IPv6 CIDR][, "translation": bool]}
+  (design/IPV6-PLAN.md §6.3; absent = IPv4 only, nothing below happens):
   - the subnet is dual-stack with an external IPv6 range (stackType IPV4_IPV6, ipv6AccessType EXTERNAL: Google
     assigns a /64); an IPv4-only subnet is changed in place;
   - an HA VPN gateway that exists IPV4_ONLY is re-created dual-stack: the router's interfaces and BGP peers of its
@@ -32,6 +32,19 @@ config: {"project", "region", "labels": {..}, "vpcMtu", "linkLocalPool", "cloudR
   - the tunnels file entries gain inside6 ("<peerIpv6NexthopAddress>/126", the router's side) and bgp6
     (["<ipv6NexthopAddress>"], Google's side); the result gains ipv6 {"subnet", "nexthops": {<tunnel>: {"cloud",
     "router"}}}.
+IPv6-only placement (--prefixes [], design/IPV6-PLAN.md §6.4): the subnet is IPV6_ONLY with an external range (no
+  IPv4 range at all; the HA VPN, peers, firewall and IPv6 default route as above, the routers keep the IPv4 BGP
+  sessions that carry IPv6). Google's IPv4 default route stays whatever --egress says (no workload sends IPv4;
+  Cloud NAT forwards translated IPv4 by the VPC's IPv4 routes). translation (read only here) asks for the
+  provider's NAT64 path:
+  - Cloud DNS server policy <vpc>-dns64 on the VPC (dns64Config.scope.allQueries: IPv6-only VMs get AAAA answers in
+    64:ff9b::/96 for IPv4-only names; Google never applies it to dual-stack VMs);
+  - Cloud NAT <vpc>-nat64 on the placement's Cloud Router (sourceSubnetworkIpRangesToNat64 ALL_IPV6_SUBNETWORKS,
+    natIpAllocateOption AUTO_ONLY, no IPv4 source ranges);
+  - when Google's IPv4 default route is gone, <vpc>-default4 (Cloud NAT needs a route to the internet gateway);
+  without translation the policy and the NAT go. The result's ipv6 gains "only": true and, with translation,
+  "translation": {"pref64": "64:ff9b::/96", "resolvers": [the metadata server, the VMs' resolver], "nat", "dnsPolicy"
+  [, "ipv4Source": the NAT's address Google allocated, once it reports one]}.
 Tunnels file (SHC_EDGE_VPN_TUNNELS_FILE): {<router name>: [{"ifId", "peerIp", "inside", "bgp", "psk"[, "inside6",
   "bgp6"]}]}, every tunnel of the placement; psk is null for a tunnel this run did not mint (the routers keep theirs).
 """
@@ -48,6 +61,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shc_gcp_api as g  # noqa: E402
 
 DNS = "https://dns.googleapis.com/dns/v1"
+# the provider's NAT64 path (Cloud DNS DNS64 + Cloud NAT): the well-known prefix, and the resolver of an IPv6-only VM
+# (the metadata server's IPv6 address)
+NAT64_PREFIX = "64:ff9b::/96"
+GCP_RESOLVERS6 = ["fd20:ce::254"]
 NEEDED_APIS = ["compute.googleapis.com", "dns.googleapis.com", "iam.googleapis.com", "iamcredentials.googleapis.com",
                "secretmanager.googleapis.com", "cloudresourcemanager.googleapis.com", "serviceusage.googleapis.com"]
 
@@ -79,7 +96,10 @@ def ipv6_request(ipv6):
         if n.version != 6:
             fail("fabricSources: %s is not IPv6" % p)
         srcs.append(str(n))
-    return {"source": "Provider", "internet": truthy(ipv6.get("internet", False)), "fabricSources": sorted(set(srcs))}
+    out = {"source": "Provider", "internet": truthy(ipv6.get("internet", False)), "fabricSources": sorted(set(srcs))}
+    if "translation" in ipv6:
+        out["translation"] = truthy(ipv6.get("translation"))
+    return out
 
 
 def same_ranges(a, b):
@@ -206,6 +226,48 @@ class Tenant:
         self.op("POST", "/regions/%s/vpnGateways" % self.region, body)
         return self.get("/regions/%s/vpnGateways/%s" % (self.region, n))
 
+    @staticmethod
+    def nat64_body(n):
+        """The placement's Cloud NAT for NAT64: IPv6-only subnets only, addresses Google allocates, no IPv4 NAT."""
+        return {"name": n + "-nat64", "type": "PUBLIC", "natIpAllocateOption": "AUTO_ONLY",
+                "sourceSubnetworkIpRangesToNat64": "ALL_IPV6_SUBNETWORKS"}
+
+    @staticmethod
+    def nat64_in_step(x):
+        return (x.get("natIpAllocateOption") == "AUTO_ONLY"
+                and x.get("sourceSubnetworkIpRangesToNat64") == "ALL_IPV6_SUBNETWORKS"
+                and not x.get("sourceSubnetworkIpRangesToNat") and not x.get("subnetworks")
+                and x.get("type", "PUBLIC") == "PUBLIC")
+
+    def policy_url(self, name=None):
+        return "%s/projects/%s/policies%s" % (DNS, self.project, "/" + name if name else "")
+
+    def get_policy(self, n):
+        return g.http("GET", self.policy_url(n + "-dns64"), token=self.tok, ok404=True)
+
+    @staticmethod
+    def policy_in_step(pol, n):
+        return (((pol.get("dns64Config") or {}).get("scope") or {}).get("allQueries") is True
+                and [x.get("networkUrl", "").rsplit("/networks/", 1)[-1] for x in pol.get("networks") or []] == [n])
+
+    def drop_policy(self, n):
+        """The VPC's DNS64 server policy, detached from the network first (a policy in use can't be deleted)."""
+        pol = self.get_policy(n)
+        if pol:
+            if pol.get("networks"):
+                g.http("PATCH", self.policy_url(n + "-dns64"), {"networks": []}, token=self.tok)
+            g.http("DELETE", self.policy_url(n + "-dns64"), token=self.tok)
+            self.changed.append("deleted dns policy %s-dns64" % n)
+
+    def nat64_address(self, n):
+        """The address Google allocated to the placement's NAT64 (getRouterStatus natStatus), or None until it has."""
+        rs = g.http("GET", "%s/regions/%s/routers/%s/getRouterStatus" % (self.base, self.region, n), token=self.tok, ok404=True)
+        for st in ((rs or {}).get("result") or {}).get("natStatus", []):
+            if st.get("name") == n + "-nat64":
+                ips = sorted(st.get("autoAllocatedNatIps") or [], key=ipaddress.ip_address)
+                return ips[0] if ips else None
+        return None
+
     def place_status(self, placement):
         n = self.names(placement)
         net = self.get("/global/networks/" + n)
@@ -213,9 +275,16 @@ class Tenant:
         if net:
             sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n)) or {}
             out["subnet"] = sn.get("ipCidrRange")
-            if sn.get("stackType") == "IPV4_IPV6":
+            if sn.get("stackType") in ("IPV4_IPV6", "IPV6_ONLY"):
                 rt = self.get("/regions/%s/routers/%s" % (self.region, n)) or {}
                 out["ipv6"] = {"subnet": sn.get("externalIpv6Prefix"), "nexthops": self.nexthops6(n, rt)}
+            if sn.get("stackType") == "IPV6_ONLY":
+                # the provider's NAT64 path: the Cloud NAT on the router and the VPC's DNS64 policy
+                nat = next((x for x in rt.get("nats", []) if x.get("name") == n + "-nat64"), None)
+                pol = self.get_policy(n)
+                out["ipv6"]["only"] = True
+                out["ipv6"]["nat64"] = {"name": nat["name"], "inStep": self.nat64_in_step(nat)} if nat else None
+                out["ipv6"]["dns64"] = {"name": pol["name"], "inStep": self.policy_in_step(pol, n)} if pol else None
             out["tunnels"] = {}
             for i in range(2):
                 t = self.get("/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i))
@@ -225,12 +294,19 @@ class Tenant:
             out["bgp"] = [{"name": p["name"], "status": p.get("status"), "state": p.get("state"), "learned": p.get("numLearnedRoutes")}
                           for p in ((rs or {}).get("result") or {}).get("bgpPeerStatus", [])]
             out["routes"] = sorted({r["destRange"] for r in ((rs or {}).get("result") or {}).get("bestRoutesForRouter", [])})
+            if (out.get("ipv6") or {}).get("nat64"):
+                st = next((x for x in ((rs or {}).get("result") or {}).get("natStatus", []) if x.get("name") == n + "-nat64"), {})
+                out["ipv6"]["nat64"]["addresses"] = sorted(st.get("autoAllocatedNatIps") or [])
         return out
 
     def place_up(self, placement, vni, prefixes, edge, egress="fabric", known=None, ipv6=None):
         c = self.cfg
         n = self.names(placement)
         v6 = ipv6_request(ipv6)
+        # an IPv6-only placement: no IPv4 range anywhere in the VPC (an IPV6_ONLY subnet)
+        only6 = not prefixes
+        if only6 and not v6:
+            fail("placement %s has neither an IPv4 prefix nor IPv6" % placement)
         labels = dict(self.labels, **{"shc-placement": placement, "shc-vni": str(vni)})
         mtu = int(c.get("vpcMtu", 1370))
         net = self.get("/global/networks/" + n)
@@ -243,18 +319,27 @@ class Tenant:
                                                   "description": "SHC placement %s (VNI %d)" % (placement, vni)})
             net = self.get("/global/networks/" + n)
         sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n))
-        if sn and sn.get("ipCidrRange") != prefixes[0]:
+        if sn and only6 and (sn.get("stackType") != "IPV6_ONLY" or sn.get("ipCidrRange")):
+            # a subnet's stack type can't change in place in either direction
+            fail("subnet %s exists as %s %s, want IPV6_ONLY" % (n, sn.get("stackType", "IPV4_ONLY"), sn.get("ipCidrRange") or ""))
+        if sn and not only6 and sn.get("ipCidrRange") != prefixes[0]:
             fail("subnet %s exists as %s, want %s" % (n, sn.get("ipCidrRange"), prefixes[0]))
         if not sn:
             self.changed.append("subnet " + n)
-            body = {"name": n, "network": net["selfLink"], "ipCidrRange": prefixes[0], "privateIpGoogleAccess": True,
-                    "secondaryIpRanges": [{"rangeName": "extra%d" % i, "ipCidrRange": p} for i, p in enumerate(prefixes[1:])]}
-            if v6:
-                body.update(stackType="IPV4_IPV6", ipv6AccessType="EXTERNAL")
+            if only6:
+                body = {"name": n, "network": net["selfLink"], "stackType": "IPV6_ONLY", "ipv6AccessType": "EXTERNAL"}
+            else:
+                body = {"name": n, "network": net["selfLink"], "ipCidrRange": prefixes[0], "privateIpGoogleAccess": True,
+                        "secondaryIpRanges": [{"rangeName": "extra%d" % i, "ipCidrRange": p} for i, p in enumerate(prefixes[1:])]}
+                if v6:
+                    body.update(stackType="IPV4_IPV6", ipv6AccessType="EXTERNAL")
             self.op("POST", "/regions/%s/subnetworks" % self.region, body)
             sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n))
         ext6 = None
-        if v6:
+        if only6:
+            if sn.get("ipv6AccessType") != "EXTERNAL":
+                fail("subnet %s is IPV6_ONLY with IPv6 access %s, want EXTERNAL" % (n, sn.get("ipv6AccessType")))
+        elif v6:
             # an IPv4-only subnet takes an external IPv6 range in place; the access type can't change afterwards
             if sn.get("stackType", "IPV4_ONLY") == "IPV4_ONLY":
                 self.changed.append("subnet %s dual-stack" % n)
@@ -264,13 +349,15 @@ class Tenant:
             if sn.get("stackType") != "IPV4_IPV6" or sn.get("ipv6AccessType") != "EXTERNAL":
                 fail("subnet %s is %s with IPv6 access %s, want IPV4_IPV6 with EXTERNAL"
                      % (n, sn.get("stackType"), sn.get("ipv6AccessType")))
+        if v6:
             ext6 = sn.get("externalIpv6Prefix")
             if not ext6:
                 fail("subnet %s has no external IPv6 range yet" % n)
             ext6 = str(ipaddress.ip_network(ext6))
-        # the VPC's own default route to the internet goes when the fabric is the egress
+        # the VPC's own default route to the internet goes when the fabric is the egress (an IPv6-only VPC keeps it:
+        # it carries no workload's IPv4, and Cloud NAT routes translated IPv4 by it)
         for r in g.list_all(self.base + "/global/routes", "items", self.tok, {"filter": 'network eq ".*/%s"' % n}):
-            if r.get("destRange") == "0.0.0.0/0" and r.get("nextHopGateway") and egress == "fabric":
+            if r.get("destRange") == "0.0.0.0/0" and r.get("nextHopGateway") and egress == "fabric" and not only6:
                 self.op("DELETE", "/global/routes/" + r["name"])
                 self.changed.append("default internet route removed")
         # firewall: the fabric's address space and the platform's sources in, everything inside the VPC
@@ -372,6 +459,11 @@ class Tenant:
         out6 = None
         if v6:
             out6 = self.place_up6(n, net, v6, ext6, tunnels, routers)
+        if only6:
+            out6["only"] = True
+            tr = self.place_nat64(n, net, bool(v6.get("translation")) and v6["internet"])
+            if tr:
+                out6["translation"] = tr
         # the routers need the PSKs: new ones were generated here; the file lists every tunnel of the placement, an
         # existing one with psk null (the routers keep the secret they hold)
         if psk_file:
@@ -379,7 +471,7 @@ class Tenant:
             json.dump({k: [dict(e) for e in v] for k, v in tunnels.items()}, open(psk_file, "w"))
             os.umask(old)
         shown = ("ifId", "peerIp", "inside", "bgp", "inside6", "bgp6")
-        out = {"placement": placement, "vpc": n, "subnet": sn["ipCidrRange"], "haVpnGateway": {"name": n, "interfaces": [x["ipAddress"] for x in gw["vpnInterfaces"]]},
+        out = {"placement": placement, "vpc": n, "subnet": sn.get("ipCidrRange"), "haVpnGateway": {"name": n, "interfaces": [x["ipAddress"] for x in gw["vpnInterfaces"]]},
                "externalGateway": ext_name, "routerAsn": int(c.get("cloudRouterAsn", 65020)), "egress": egress,
                "tunnels": {k: [{x: e[x] for x in shown if x in e} for e in v] for k, v in tunnels.items()}}
         if out6 is not None:
@@ -419,6 +511,50 @@ class Tenant:
                 self.changed.append("ipv6 default internet route removed")
         return {"subnet": ext6, "nexthops": hops}
 
+    def place_nat64(self, n, net, on):
+        """The provider's NAT64 path of an IPv6-only placement: the VPC's DNS64 server policy, the Cloud NAT on the
+        placement's Cloud Router and an IPv4 route to the internet gateway for it, in step while on; the policy and
+        the NAT removed while off. Returns the translation the placement reports, or None while off."""
+        pname = n + "-dns64"
+        pol = self.get_policy(n)
+        rt = self.get("/regions/%s/routers/%s" % (self.region, n))
+        nats = rt.get("nats", [])
+        mine = next((x for x in nats if x.get("name") == n + "-nat64"), None)
+        if not on:
+            if mine:
+                self.op("PATCH", "/regions/%s/routers/%s" % (self.region, n),
+                        {"nats": [x for x in nats if x.get("name") != n + "-nat64"]})
+                self.changed.append("deleted nat %s-nat64" % n)
+            self.drop_policy(n)
+            return None
+        want_pol = {"name": pname, "description": "DNS64 for the placement's IPv6-only subnet",
+                    "networks": [{"networkUrl": net["selfLink"]}], "dns64Config": {"scope": {"allQueries": True}},
+                    "enableInboundForwarding": False, "enableLogging": False}
+        if not pol:
+            g.http("POST", self.policy_url(), want_pol, token=self.tok)
+            self.changed.append("dns policy " + pname)
+        elif not self.policy_in_step(pol, n):
+            g.http("PATCH", self.policy_url(pname), {"networks": want_pol["networks"], "dns64Config": want_pol["dns64Config"]},
+                   token=self.tok)
+            self.changed.append("dns policy %s in step" % pname)
+        if not mine or not self.nat64_in_step(mine):
+            self.op("PATCH", "/regions/%s/routers/%s" % (self.region, n),
+                    {"nats": [x for x in nats if x.get("name") != n + "-nat64"] + [self.nat64_body(n)]})
+            self.changed.append("nat %s-nat64%s" % (n, " in step" if mine else ""))
+        # Cloud NAT forwards the translated packet by the VPC's IPv4 routes: one to the internet gateway must exist
+        v4default = [x for x in g.list_all(self.base + "/global/routes", "items", self.tok, {"filter": 'network eq ".*/%s"' % n})
+                     if x.get("destRange") == "0.0.0.0/0" and x.get("nextHopGateway")]
+        if not v4default:
+            self.changed.append("ipv4 default internet route for NAT64")
+            self.op("POST", "/global/routes", {"name": n + "-default4", "network": net["selfLink"], "destRange": "0.0.0.0/0",
+                                               "nextHopGateway": self.base + "/global/gateways/default-internet-gateway",
+                                               "priority": 1000, "description": "Translated IPv4 through Google"})
+        tr = {"pref64": NAT64_PREFIX, "resolvers": list(GCP_RESOLVERS6), "nat": n + "-nat64", "dnsPolicy": pname}
+        addr = self.nat64_address(n)
+        if addr:
+            tr["ipv4Source"] = addr
+        return tr
+
     def place_down(self, placement):
         n = self.names(placement)
         # workload guard: any instance on the VPC refuses the teardown
@@ -431,8 +567,11 @@ class Tenant:
             if self.get("/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i)):
                 self.op("DELETE", "/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i))
                 self.changed.append("deleted tunnel %s-t%d" % (n, i))
-        if self.get("/regions/%s/routers/%s" % (self.region, n)):
+        rt = self.get("/regions/%s/routers/%s" % (self.region, n))
+        if rt:
+            # the NAT64 (a Cloud NAT is part of its router) goes with it
             self.op("DELETE", "/regions/%s/routers/%s" % (self.region, n))
+            self.changed += ["deleted nat " + x["name"] for x in rt.get("nats", []) if x.get("name") == n + "-nat64"]
             self.changed.append("deleted router " + n)
         if self.get("/regions/%s/vpnGateways/%s" % (self.region, n)):
             self.op("DELETE", "/regions/%s/vpnGateways/%s" % (self.region, n))
@@ -440,7 +579,15 @@ class Tenant:
         for f in g.list_all(self.base + "/global/firewalls", "items", self.tok, {"filter": 'network eq ".*/%s"' % n}):
             self.op("DELETE", "/global/firewalls/" + f["name"])
             self.changed.append("deleted firewall " + f["name"])
-        if self.get("/regions/%s/subnetworks/%s" % (self.region, n)):
+        sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n))
+        if sn:
+            if sn.get("stackType") == "IPV6_ONLY":
+                # an IPv6-only VPC's DNS64 policy and the IPv4 route kept for its NAT64, while the subnet still says
+                # what the VPC was (a run that fails here finds them again)
+                self.drop_policy(n)
+                if self.get("/global/routes/%s-default4" % n):
+                    self.op("DELETE", "/global/routes/%s-default4" % n)
+                    self.changed.append("deleted route %s-default4" % n)
             self.op("DELETE", "/regions/%s/subnetworks/%s" % (self.region, n))
             self.changed.append("deleted subnet " + n)
         if self.get("/global/networks/" + n):
@@ -471,7 +618,7 @@ def main():
     ap.add_argument("--edge")
     ap.add_argument("--egress", default="fabric")
     ap.add_argument("--known-peers", help="JSON {router: [peer ip]} of tunnels whose secret the routers hold (place-up)")
-    ap.add_argument("--ipv6", help='JSON {"source": "Provider", "internet": bool, "fabricSources": [cidr]} (place-up)')
+    ap.add_argument("--ipv6", help='JSON {"source": "Provider", "internet": bool, "fabricSources": [cidr], "translation": bool} (place-up)')
     a = ap.parse_args()
     if a.command.startswith("zone") and not a.zone:
         fail("--zone is required")

@@ -624,7 +624,9 @@ class GcpPlacementTasksTest(unittest.TestCase):
         self.assertEqual(self.families({"ipv4": {"prefixLength": 24}, "ipv6": {"source": "Network"}}),
                          {"reason": "FamilyUnavailable",
                           "msg": "this site offers IPv6 only from the cloud provider; use source Provider"})
-        self.assertEqual(self.families({"ipv6": {}}),                    # whatever ipv6OnlyBySite says
+        # IPv6-only: offered on a switched site (test_gcp_ipv6_only), refused where the site doesn't offer it
+        self.assertEqual(self.families({"ipv6": {}}), {})
+        self.assertEqual(self.families({"ipv6": {}}, caps=dict(CAPS, ipv6Only=False)),
                          {"reason": "FamilyUnavailable",
                           "msg": "IPv6-only placements are not offered on this site (%s)" % SITE})
         self.assertEqual(self.families({"ipv4": {"prefixLength": 24}, "ipv6": {}}), {})

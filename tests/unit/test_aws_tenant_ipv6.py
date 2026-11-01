@@ -719,8 +719,9 @@ class AwsPlacementTasksTest(unittest.TestCase):
         return run_play(tasks, {"fab_spec": spec, "fab_name": "p1", "np_backend_kind": "CloudAWS", "np_site": SITE,
                                 "np_network": network, "ci_capabilities": caps, "fab_real": merged(REAL, on)})
 
-    def test_ipv6_only_refused_on_aws_whatever_the_switches(self):
-        out = self.families({"ipv6": {"prefixLength": 60}})
+    def test_ipv6_only_follows_the_site_switch(self):
+        self.assertEqual(self.families({"ipv6": {"prefixLength": 60}}), {})
+        out = self.families({"ipv6": {"prefixLength": 60}}, caps=dict(CAPS, ipv6Only=False))
         self.assertEqual(out, {"reason": "FamilyUnavailable",
                                "msg": "IPv6-only placements are not offered on this site (%s)" % SITE})
         self.assertEqual(self.families({"ipv4": {"prefixLength": 24}, "ipv6": {}}), {})
