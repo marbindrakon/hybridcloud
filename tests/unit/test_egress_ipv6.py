@@ -574,7 +574,8 @@ class FabricSelection(unittest.TestCase):
         pls = [self.pl("core-a", "core", [{"family": 4, "prefix": "10.60.0.0/24"}, {"family": 6, "prefix": P64[0]}]),
                self.pl("core-b", "core", [{"family": 6, "prefix": P64[1]}]),
                self.pl("core-gone", "core", [{"family": 6, "prefix": "2001:db8:4005:4202::/64"}], deleting=True),
-               self.pl("t6-a", "t6", [{"family": 6, "prefix": "2001:db8:100:1::/64"}])]
+               self.pl("t6-a", "t6", [{"family": 6, "prefix": "2001:db8:100:1::/64"}]),
+               self.pl("core-cloud", "core", [{"family": 6, "prefix": "2001:db8:ffff:1::/56", "source": "Provider"}])]
         out = {e["network"]: e for e in self.networks(nets, pls)}
         self.assertEqual(out["acme/core"]["ipv6"], {"block": BLOCK, "prefixes": P64})
         self.assertEqual((out["acme/core"]["ipv4"], out["acme/core"]["index"], out["acme/core"]["vpnTarget"]), (True, 0, 10000))
@@ -637,7 +638,7 @@ class FabricIPv6Status(unittest.TestCase):
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class PlacementStatus(unittest.TestCase):
     def status(self, enabled, row=None):
-        t = by_name(load(os.path.join(NP, "main.yml")), "Describe the placement's IPv6")
+        t = by_name(load(os.path.join(NP, "ipv6_status.yml")), "Describe the placement's IPv6")
         # (an extra var can't be overwritten by set_fact: the expression is written to another fact)
         t = {"vars": t["vars"], "ansible.builtin.set_fact": {"_s": t["ansible.builtin.set_fact"]["np_status"]}}
         net = {"status": {"egress": {"families": ([row] if row else []) + [{"family": 4, "state": "ready"}]}}}
@@ -648,10 +649,10 @@ class PlacementStatus(unittest.TestCase):
 
     def test_copies_the_network_row(self):
         s = self.status(True, {"family": 6, "state": "ready", "mode": "Routed", "reason": "Degraded", "message": "m"})
-        self.assertEqual(s["ipv6"], {"addressing": "DHCPv6", "internet": {"state": "ready", "reason": "Degraded", "message": "m"},
+        self.assertEqual(s["ipv6"], {"addressing": "DHCPv6", "internet": {"state": "ready", "path": "Fabric", "reason": "Degraded", "message": "m"},
                                      "translation": None})
         s = self.status(True, {"family": 6, "state": "ready", "mode": "Routed"})
-        self.assertEqual(s["ipv6"]["internet"], {"state": "ready"})
+        self.assertEqual(s["ipv6"]["internet"], {"state": "ready", "path": "Fabric"})
 
     def test_no_row_no_internet_key(self):
         self.assertEqual(self.status(True), {"ipv6": {"addressing": "DHCPv6", "translation": None}})

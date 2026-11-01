@@ -3,6 +3,20 @@
 # nodes' WireGuard keys and tunnel addresses and the site's BGP key (written to the routers' SecureString config;
 # the key never goes on a command line). The routers apply it within half a minute; when it changed, the gateway is
 # reconciled once more so its status shows the sessions that come up.
+# IPv6 (design/IPV6-PLAN.md §6.1-§6.2; only with the realization's edge.ipv6.enabled): the IPv6 side of every network
+# VRF on the routers (`shc_aws_edge.py vrfs6`), per VRF of this gateway (cg_vrfs) whose placement holds IPv6
+# prefixes: prefixes6 (the placement's family-6 subnets: what the routers accept from the transit gateway and announce
+# to this gateway as Type-5), network6 (the network's IPv6 space, status.ipv6.prefixes: what they announce to the
+# transit gateway), source (the family-6 subnet's source: Network or Provider) and internet (the network's IPv6 is
+# the platform's, status.ipv6.mode Platform, and it asked for internet, spec.egress.internet: the fabric's ::/0 then
+# goes to the transit gateway for source Network). Each router's ICMPv6 source /128 comes from the fabric's
+# core.icmpSource6 like the border gateway nodes' (shc_fabric.py pe-addresses with this gateway's provider-edge
+# index), at node ordinal cg_aws_icmp6_ordinal_base (100) + the router's 0-based position by name (100, 101, ...):
+# the nodes use their 1-based position in borderGateway.nodes, so the two never meet while a fabric has fewer than
+# 100 border gateway nodes. Only with the IPv6 core (cg_ipv6_core) and core.icmpSource6; otherwise the routers get
+# no /128. Placements whose routers' IPv6 configuration changed are woken (their readiness waits for the site's
+# IPv6 routes). With edge.ipv6 off the call runs only while the routers' configuration still has an IPv6 side
+# (cg_aws_ipv6_left, site_aws.yml), and removes it; an installation that never turned IPv6 on makes no extra call.
 - name: The border gateway nodes as the routers see them
   ansible.builtin.set_fact:
     cg_aws_gateways: >-
@@ -26,3 +40,100 @@
   ansible.builtin.set_fact:
     cg_site_changed: "{{ cg_site_changed | bool or aws_result.changed | default([]) | length > 0 }}"
     cg_aws_recheck: "{{ aws_result.changed | default([]) | length > 0 }}"
+
+- name: The IPv6 side of the routers' VRFs
+  when: >-
+    ((aws_edge_cfg.ipv6 | default({}, true)).enabled | default(false) | bool)
+    or (cg_aws_ipv6_left | default(false) | bool)
+  block:
+    - name: The routers' ICMPv6 sources
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ role_path }}/../../../common/files/shc_fabric.py"
+        stdin: >-
+          {{ {'action': 'pe-addresses', 'core': fab_real.core, 'index': cg_pe.index | int,
+              'nodeOrdinal': (cg_aws_icmp6_ordinal_base | default(100)) | int + _cg_i} | to_json }}
+      loop: "{{ cg_aws_routers | sort(attribute='name') }}"
+      loop_control:
+        index_var: _cg_i
+        label: "{{ item.name }}"
+      register: _cg_aws_icmp6
+      changed_when: false
+      when:
+        - cg_ipv6_core | default(false) | bool
+        - fab_real.core.icmpSource6 | default('', true) | length > 0
+
+    - name: The networks' IPv6 settings for the routers
+      ansible.builtin.set_fact:
+        cg_aws_icmp6_errors: >-
+          {%- set out = [] -%}
+          {%- for r in (_cg_aws_icmp6 | default({})).results | default([]) if not (r.skipped | default(false)) -%}
+            {%- set res = r.stdout | from_json -%}
+            {%- if res.errors | default([]) | length > 0 -%}
+              {%- set _ = out.append(r.item.name ~ ': ' ~ (res.errors | join('; '))) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        cg_aws_vrfs6: >-
+          {%- set icmp = {} -%}
+          {%- for r in (_cg_aws_icmp6 | default({})).results | default([]) if not (r.skipped | default(false)) -%}
+            {%- set res = r.stdout | from_json -%}
+            {%- if res.errors | default([]) | length == 0 and res.icmp6 | default('', true) | length > 0 -%}
+              {%- set _ = icmp.update({r.item.instance: res.icmp6}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set pls = {} -%}
+          {%- for p in (_cg_placements | default({})).resources | default([]) -%}
+            {%- set _ = pls.update({p.metadata.namespace ~ '/' ~ p.metadata.name: p}) -%}
+          {%- endfor -%}
+          {%- set nets = {} -%}
+          {%- for n in (_cg_networks | default({})).resources | default([]) -%}
+            {%- set _ = nets.update({n.metadata.namespace ~ '/' ~ n.metadata.name: n}) -%}
+          {%- endfor -%}
+          {%- set out = [] -%}
+          {%- for v in cg_vrfs | default([]) if v.prefixes6 | default([]) | length > 0 -%}
+            {%- set pst = (pls.get(v.placement, {}).status | default({}, true)) -%}
+            {%- set rows6 = pst.subnets | default([], true) | selectattr('family', 'defined')
+                            | selectattr('family', 'equalto', 6) | list -%}
+            {%- set n = nets.get(v.network, {}) -%}
+            {%- set n6 = (n.status | default({}, true)).ipv6 | default({}, true) -%}
+            {%- set _ = out.append({'vni': v.vni | int, 'prefixes6': v.prefixes6,
+                                    'network6': n6.prefixes | default([], true),
+                                    'source': ((rows6 + [{}]) | first).source | default('Network', true),
+                                    'internet': (n6.mode | default('', true) == 'Platform')
+                                                and (((n.spec | default({}, true)).egress | default({}, true)).internet
+                                                     | default(false) | bool)}) -%}
+          {%- endfor -%}
+          {{ {'icmp6': icmp, 'networks': out} }}
+
+    - name: Stop on a router ICMPv6 source that does not fit
+      ansible.builtin.fail:
+        msg: "CloudGateway {{ fab_name }}: the edge router ICMPv6 source of {{ cg_aws_icmp6_errors | join(', ') }}"
+      when: cg_aws_icmp6_errors | length > 0
+
+    - name: Hand the IPv6 settings to the routers
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+      vars:
+        aws_helper: shc_aws_edge.py
+        aws_config: "{{ aws_edge_cfg }}"
+        aws_args: [vrfs6, --vrfs6, "{{ cg_aws_vrfs6 | to_json }}"]
+
+    - name: Note the IPv6 change
+      ansible.builtin.set_fact:
+        cg_site_changed: "{{ cg_site_changed | bool or aws_result.changed | default([]) | length > 0 }}"
+        cg_aws_recheck: "{{ cg_aws_recheck | bool or aws_result.changed | default([]) | length > 0 }}"
+        cg_aws_woken6: >-
+          {{ cg_vrfs | default([]) | selectattr('vni', 'in', (aws_result.result | default({}, true)).changedVnis | default([], true))
+             | map(attribute='placement') | list }}
+
+    - name: Wake the placements whose routers' IPv6 changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for p in cg_aws_woken6 -%}
+            {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': p.split('/')[0], 'name': p.split('/')[1]}) -%}
+          {%- endfor -%}
+          {{ out }}
+      when: cg_aws_woken6 | length > 0

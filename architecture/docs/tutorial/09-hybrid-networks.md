@@ -272,6 +272,13 @@ spec:
   takes a range from the cloud provider, with the provider's own internet path; give no `prefixLength` or `prefix`
   then. `Provider` needs a network with IPv6 from the platform. When you leave `source` out, the site's default
   applies; the placement reports the result. A Google Cloud site can't carry your own IPv6 prefixes.
+- **On an AWS environment** each availability zone's subnet gets a /64 of the placement's IPv6 range, and the
+  network's other sites are reached through the platform with either source. With `Network` the range is placed in
+  the VPC without AWS announcing it anywhere. With `Provider` the internet path is AWS's egress-only internet
+  gateway: outbound only, and present only while the network's `egress.internet` is on; a provider range on one cloud
+  reaches a provider range on another cloud over the internet. Your own prefixes on an AWS environment travel through
+  the platform with no internet path, and a prefix inside `fd00::/16` or `2001:db8::/32` is refused with
+  `PrefixInvalid` ("the cloud reserves this range"); AWS environments don't offer IPv6-only placements.
 - The placement reports one row per family in `status.subnets` (`family`, `prefix`, `source`, and the
   `gateway`: IPv4 always, IPv6 in VM and OpenStack environments); `status.prefixes` keeps listing the prefixes, IPv4
   first. `status.ipv6` shows how guests get their

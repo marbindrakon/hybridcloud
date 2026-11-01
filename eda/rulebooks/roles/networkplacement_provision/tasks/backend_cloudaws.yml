@@ -6,7 +6,20 @@
 # and the routers' VRF on first use), the VPC's default route to the transit gateway. The routers learn the VPC's
 # prefix from the transit gateway and advertise it to the gateway as EVPN Type-5 (checked by gateway_routes.yml).
 # A network with internet egress gets a NAT egress VPC of its own at the hub when the realization says so
-# (AWS_REALIZATION edge.egress.mode nat-vpc). Sets np_backend_status, np_backend_changed.
+# (AWS_REALIZATION edge.egress.mode nat-vpc).
+# IPv6 (design/IPV6-PLAN.md §6.2; the placement's family-6 want from families.yml):
+#   source Network   the placement's block from the network's space (status.subnets, /60 or /56) through a private-
+#                    scope pool of the account's IPAM; its internet traffic (a network whose IPv6 the platform
+#                    assigns, with spec.egress.internet) leaves through the network: ::/0 to the transit gateway
+#   source Provider  Amazon's /56; internet (spec.egress.internet) through an egress-only internet gateway, never
+#                    through the network. The /56 is recorded in the network's IPAM as a provider-assigned subnet
+#                    (ipam-external), so status.subnets carries it with source Provider and the gateway's route check
+#                    looks for it: the edge routers learn it from the transit gateway like any VPC block and announce
+#                    it to the site gateway as an EVPN Type-5 route, for traffic with the network's other sites (a
+#                    cloud edge router never announces it toward another cloud's provider-source placements)
+#   both             the network's IPv6 space routed to the transit gateway; status.ipv6 described again once the
+#                    provider's block is known (ipv6_status.yml, internet.path Fabric or Provider)
+# Sets np_backend_status, np_backend_changed.
 - name: The installation's AWS realization and the site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
   vars:
@@ -38,6 +51,33 @@
     msg: "CloudAWS {{ np_backend_name }} has no account in its status yet"
   when: np_aws_cfg.account | length == 0
 
+# {} without spec.ipv6; else {source, prefix (Network: the block allocated from the network's space), internet,
+# networkPrefixes6 (the network's IPv6 space in effect)}
+- name: The placement's IPv6 here
+  vars:
+    _w6: "{{ (np_want | default([], true) | selectattr('family', 'equalto', 6) | list + [{}]) | first }}"
+    _block: >-
+      {{ (np_subnets | default([], true) | selectattr('family', 'equalto', 6)
+          | rejectattr('source', 'equalto', 'Provider') | map(attribute='prefix') | list + ['']) | first }}
+    _nst: "{{ (np_network.status | default({}, true)).ipv6 | default({}, true) }}"
+    _internet: >-
+      {{ (((np_network.spec | default({}, true)).egress | default({}, true)).internet | default(false) | bool)
+         and np_ipv6_mode | default('', true) == 'Platform' }}
+  ansible.builtin.set_fact:
+    np_aws_ipv6: >-
+      {{ {} if _w6 | length == 0
+         else ({'source': _w6.source, 'internet': _internet | bool,
+                'networkPrefixes6': _nst.prefixes | default([], true) | list}
+               | combine({'prefix': _block | trim} if _w6.source == 'Network' else {})) }}
+
+- name: Refuse a Network-source placement without its block
+  ansible.builtin.fail:
+    msg: "NetworkPlacement {{ fab_name }}: the IPAM gave no IPv6 block for the placement"
+  when:
+    - np_aws_ipv6 | length > 0
+    - np_aws_ipv6.source == 'Network'
+    - np_aws_ipv6.prefix | default('') | length == 0
+
 - name: The placement's VPC and its attachment to the network
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
   vars:
@@ -46,7 +86,45 @@
     aws_args: >-
       {{ ['place-up', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', np_l3vni | string]
          + (np_prefixes_v4 | map('regex_replace', '^', '--prefix=') | list)
-         + (['--egress'] if np_aws_nat_egress | bool else []) }}
+         + (['--egress'] if np_aws_nat_egress | bool else [])
+         + (['--ipv6', np_aws_ipv6 | to_json] if np_aws_ipv6 | length > 0 else []) }}
+    aws_soft: true
+
+# the account's IPAM refuses a block AWS keeps for itself (the site's reserved ranges normally refuse it first)
+- name: Refuse a block the cloud won't hold
+  ansible.builtin.set_fact:
+    fab_fail_reason: PrefixInvalid
+    fab_fail_msg: "NetworkPlacement {{ fab_name }}: {{ aws_error }}"
+  when: aws_error | length > 0 and aws_result.reason | default('') == 'PrefixInvalid'
+
+- name: Stop on a site side error
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg if aws_result.reason | default('') == 'PrefixInvalid' else 'AWS place-up failed: ' ~ aws_error }}"
+  when: aws_error | length > 0
+
+- name: The provider's IPv6 block in the network's address space
+  when: (aws_result.result.ipv6 | default({}, true)).source | default('') == 'Provider'
+  block:
+    - name: Record the provider-assigned block
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+      vars:
+        fab_ipam:
+          action: ipam-external
+          fabric: "{{ np_fabric.metadata.name }}"
+          network: "HybridNetwork/{{ fab_namespace }}/{{ fab_spec.network }}"
+          owner: "{{ np_owner }}"
+          external: [{family: 6, prefix: "{{ aws_result.result.ipv6.prefix }}"}]
+
+    # ipam-external answers with the owner's rows; the placement's allocated prefixes stay as they were
+    - name: Keep the rows with the allocated prefixes
+      ansible.builtin.set_fact:
+        fab_ipam_result: "{{ fab_ipam_result | combine({'prefixes': np_prefixes}) }}"
+
+    - name: The subnets with the provider's block
+      ansible.builtin.include_tasks: subnets.yml
+
+    - name: The placement's IPv6 with the provider's block
+      ansible.builtin.include_tasks: ipv6_status.yml
 
 - name: Record the site side
   ansible.builtin.set_fact:
@@ -60,3 +138,9 @@
       connectAttachment: "{{ aws_result.result.connectAttachment }}"
       egress: "{{ ('nat-vpc ' ~ aws_result.result.egress.publicIp) if aws_result.result.egress else 'none' }}"
     np_backend_changed: "{{ aws_result.changed | default([]) | length > 0 }}"
+
+# {source, prefix, subnets (the /64 per AZ), internet, path, pool, ipam, egressOnlyGateway, routes}
+- name: Record the site side's IPv6
+  ansible.builtin.set_fact:
+    np_backend_status: "{{ np_backend_status | combine({'ipv6': aws_result.result.ipv6}) }}"
+  when: aws_result.result.ipv6 | default({}, true) | length > 0

@@ -56,6 +56,8 @@
       {%- endfor -%}
       {{ out }}
     cg_site_changed: "{{ aws_result.changed | default([]) | length > 0 }}"
+    # VRFs whose router configuration still has an IPv6 side (site_aws_post.yml removes it once edge.ipv6 is off)
+    cg_aws_ipv6_left: "{{ _r.vrfs | default([], true) | selectattr('ipv6', 'defined') | list | length > 0 }}"
 
 - name: Wait for routers that haven't published their keys
   ansible.builtin.set_fact:

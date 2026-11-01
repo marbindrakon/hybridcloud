@@ -175,7 +175,8 @@
     # platform's automation, never by tenants.
     # ipv4: the network has IPv4 address space (the IPv4 egress, source NAT, needs it). ipv6 (with egress.ipv6
     # enabled): the network wants internet egress and holds a platform block (status.ipv6 mode Platform): its block
-    # and the IPv6 prefixes of its placements (status.subnets), the ones that are not being deleted
+    # and the IPv6 prefixes of its placements (status.subnets), the ones that are not being deleted and that come
+    # from the network's space (a provider-assigned prefix is never announced upstream nor part of the network's block)
     - name: Set the networks with internet egress or platform reach
       vars:
         _alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
@@ -205,7 +206,8 @@
                       if p.metadata.namespace == n.metadata.namespace
                          and (p.spec | default({})).network | default('') == n.metadata.name
                          and p.metadata.deletionTimestamp is not defined -%}
-                  {%- for s in (p.status | default({}, true)).subnets | default([], true) if (s.family | default(4) | int) == 6 -%}
+                  {%- for s in (p.status | default({}, true)).subnets | default([], true)
+                            if (s.family | default(4) | int) == 6 and (s.source | default('Network')) != 'Provider' -%}
                     {%- set _ = p6.append(s.prefix) -%}
                   {%- endfor -%}
                 {%- endfor -%}

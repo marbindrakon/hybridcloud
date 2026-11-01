@@ -7,7 +7,8 @@ the hub through shc_aws_edge.py for the network's transit gateway side. Idempote
   shc_aws_tenant.py --config '<json>' zone-up --zone FQDN           the environment's Route53 public zone
   shc_aws_tenant.py --config '<json>' zone-down --zone FQDN
   shc_aws_tenant.py --config '<json>' place-up --placement NS/NAME --vni N --prefix CIDR [--prefix CIDR ...] [--egress]
-  shc_aws_tenant.py --config '<json>' place-down --placement NS/NAME --vni N
+                                                [--ipv6 '<json>']
+  shc_aws_tenant.py --config '<json>' place-down --placement NS/NAME --vni N [--ipv6 '<json>']
   shc_aws_tenant.py --config '<json>' place-public --placement NS/NAME --state up|down
       public /28s (one per AZ, below the attachment /28s) with an internet gateway, for internet-facing load
       balancers of a DMZ-like workload; the workload subnets keep leaving through the network
@@ -23,6 +24,23 @@ to the edge routers created on first use), and the VPC's default route to the tr
 VPC only through the network (--egress: the network's internet egress is its NAT egress VPC at the hub). An account
 outside the Organization is added to the hub's transit gateway share on first use (the invitation accepted here) and
 removed again with share-down.
+
+IPv6 (design/IPV6-PLAN.md §6.2), --ipv6 {"source": "Network" | "Provider", "prefix": CIDR (Network: the placement's
+block, a /44 to /60 in steps of 4), "internet": bool, "networkPrefixes6": [CIDR]} (the network's IPv6 space):
+  Network   the block from the network's space, placed in the VPC as space AWS never advertises: the account's IPAM in
+            the region (Free Tier, one per account and region, private GUA enabled, tagged shc-role tenant-ipam), a
+            private-scope pool per placement holding exactly the block, the VPC's IPv6 block from that pool; internet
+            (when asked) is ::/0 to the transit gateway, through the network
+  Provider  the Amazon-assigned /56; internet (when asked) is ::/0 to an egress-only internet gateway, never through
+            the network
+Both: a /64 per AZ for the workload subnet (from the bottom of the block) and the attachment subnet (from its top;
+the attachment subnets keep their IPv4 /28s, an attachment needs IPv4), the attachment with IPv6 support, and the
+network's IPv6 space (networkPrefixes6, less the VPC's own block) routed to the transit gateway. The IPv6 routes of
+the VPC's main route table are reconciled to exactly that set. place-up's result carries ipv6 {source, prefix,
+subnets, internet, path, pool, ipam, egressOnlyGateway, routes}. place-down with --ipv6 (or a VPC holding IPv6) removes
+in reverse: the IPv6 routes, the egress-only gateway, the VPC's IPv6 block, the placement's pool (cascade: IPAM
+releases a VPC's allocation minutes after the VPC is gone, so a plain deprovision would wait that long) and the
+IPAM once it holds no other pool.
 """
 import argparse
 import ipaddress
@@ -80,6 +98,50 @@ def layout(prefixes, azs):
     tops = list(upper.subnets(new_prefix=28))
     tgw, public = tops[-len(azs):], tops[-2 * len(azs):-len(azs)]
     return [{"az": az, "work": str(work[i]), "tgw": str(tgw[i]), "public": str(public[i])} for i, az in enumerate(azs)]
+
+
+def layout6(block, azs):
+    """A placement's IPv6 /64s: per AZ the workload subnet from the bottom of the block (index 0, 1, ...) and the
+    attachment subnet from its top (the last len(azs) /64s)."""
+    b = ipaddress.ip_network(block)
+    if b.version != 6 or not 44 <= b.prefixlen <= 64:
+        fail("IPv6 block %s: an AWS placement takes a /44 to /64" % b)
+    count = 1 << (64 - b.prefixlen)
+    if count < 2 * len(azs):
+        fail("IPv6 block %s has %d /64s, %d AZs need %d" % (b, count, len(azs), 2 * len(azs)))
+    base = int(b.network_address)
+
+    def nth(i):
+        return str(ipaddress.IPv6Network((base + (i << 64), 64)))
+    return [{"az": az, "work": nth(i), "tgw": nth(count - len(azs) + i)} for i, az in enumerate(azs)]
+
+
+def ipv6_want(ipv6):
+    """The --ipv6 request, canonical; None without one."""
+    if not ipv6:
+        return None
+    src = ipv6.get("source") or "Network"
+    if src not in ("Network", "Provider"):
+        fail("IPv6 source %s: Network or Provider" % src)
+    out = {"source": src, "internet": bool(ipv6.get("internet")),
+           "networkPrefixes6": [str(ipaddress.ip_network(p)) for p in ipv6.get("networkPrefixes6") or []]}
+    if src == "Network":
+        if not ipv6.get("prefix"):
+            fail("IPv6 source Network needs the placement's block (prefix)")
+        b = ipaddress.ip_network(ipv6["prefix"])
+        if b.version != 6 or not 44 <= b.prefixlen <= 60 or b.prefixlen % 4:
+            fail("IPv6 block %s: a VPC takes a /44 to /60 in steps of 4" % b)
+        out["prefix"] = str(b)
+    return out
+
+
+def v6_assoc(vpc):
+    """The VPC's live IPv6 block associations."""
+    return [a for a in vpc.get("Ipv6CidrBlockAssociationSet") or []
+            if a.get("Ipv6CidrBlockState", {}).get("State") in ("associated", "associating")]
+
+
+GONE = ("delete-in-progress", "delete-complete", "delete-failed")
 
 
 class Tenant:
@@ -171,8 +233,187 @@ class Tenant:
         self.changed += edge.changed
         return r
 
-    def place_up(self, placement, vni, prefixes, egress=False):
+    # ---- IPv6: the account's IPAM, a placement's pool, routes
+    def wait_ipam(self, ipam_id):
+        for _ in range(60):
+            i = self.ec2.describe_ipams(IpamIds=[ipam_id])["Ipams"][0]
+            if i["State"].endswith("-complete"):
+                return i
+            if i["State"].endswith("-failed"):
+                fail("IPAM %s: %s" % (ipam_id, i["State"]))
+            time.sleep(5)
+        fail("IPAM %s never settled (%s)" % (ipam_id, i["State"]))
+
+    def find_ipam(self):
+        region = self.cfg["region"]
+        mine = [i for i in self.ec2.describe_ipams()["Ipams"]
+                if tagmap(i).get("shc-role") == "tenant-ipam" and tagmap(i).get("shc-managed") == "true"
+                and i.get("IpamRegion", region) == region and i["State"] not in GONE]
+        return mine[0] if mine else None
+
+    def ensure_ipam(self):
+        """The account's IPAM in the region: Free Tier, private GUA enabled (the network's own GUA space, which AWS
+        never advertises, can then be provisioned into its private scope)."""
+        ipam = self.find_ipam()
+        if not ipam:
+            extra = {"shc-role": "tenant-ipam"}
+            if self.cfg.get("tags", {}).get("shc-entity"):
+                extra["shc-entity"] = self.cfg["tags"]["shc-entity"]
+            ipam = self.ec2.create_ipam(Description="SHC placements' IPv6", Tier="free",
+                                        OperatingRegions=[{"RegionName": self.cfg["region"]}],
+                                        TagSpecifications=tagspec("ipam", "shc-tenant-ipam", extra))["Ipam"]
+            self.changed.append("ipam " + ipam["IpamId"])
+        ipam = self.wait_ipam(ipam["IpamId"])
+        if not ipam.get("EnablePrivateGua"):
+            self.ec2.modify_ipam(IpamId=ipam["IpamId"], EnablePrivateGua=True)
+            self.changed.append("ipam %s private GUA" % ipam["IpamId"])
+            ipam = self.wait_ipam(ipam["IpamId"])
+        return ipam
+
+    def find_pool(self, placement):
+        p = [x for x in self.ec2.describe_ipam_pools()["IpamPools"]
+             if tagmap(x).get("shc-placement") == placement and x["State"] not in GONE]
+        return p[0] if p else None
+
+    def ensure_pool(self, ipam, placement, block, name, extra):
+        """The placement's private-scope pool, holding exactly its block."""
+        pool = self.find_pool(placement)
+        if pool and pool.get("IpamArn") and pool["IpamArn"] != ipam["IpamArn"]:
+            fail("IPAM pool %s of %s belongs to another IPAM" % (pool["IpamPoolId"], placement))
+        if not pool:
+            pool = self.ec2.create_ipam_pool(IpamScopeId=ipam["PrivateDefaultScopeId"], Locale=self.cfg["region"],
+                                             AddressFamily="ipv6", AutoImport=False,
+                                             Description="SHC placement " + placement,
+                                             TagSpecifications=tagspec("ipam-pool", name, extra))["IpamPool"]
+            self.changed.append("ipam pool " + name)
+        pool_id = pool["IpamPoolId"]
+        for _ in range(60):
+            pool = self.ec2.describe_ipam_pools(IpamPoolIds=[pool_id])["IpamPools"][0]
+            if pool["State"].endswith("-complete"):
+                break
+            if pool["State"].endswith("-failed"):
+                fail("IPAM pool %s: %s %s" % (pool_id, pool["State"], pool.get("StateMessage", "")))
+            time.sleep(5)
+        else:
+            fail("IPAM pool %s never settled" % pool_id)
+        provisioned = False
+        for _ in range(60):
+            cidrs = self.ec2.get_ipam_pool_cidrs(IpamPoolId=pool_id)["IpamPoolCidrs"]
+            other = [x["Cidr"] for x in cidrs if x["Cidr"] != block
+                     and x["State"] not in ("deprovisioned", "failed-provision", "failed-deprovision")]
+            if other:
+                fail("IPAM pool %s of %s holds %s, not only %s" % (pool_id, placement, ", ".join(other), block))
+            mine = [x for x in cidrs if x["Cidr"] == block]
+            state = mine[-1]["State"] if mine else ""
+            if state == "provisioned":
+                return pool_id
+            if state == "failed-provision" and provisioned:
+                why = (mine[-1].get("FailureReason") or {}).get("Message", "failed-provision")
+                fail("IPAM refused %s: %s" % (block, why), reason="PrefixInvalid")
+            if not provisioned and state != "pending-provision":
+                self.ec2.provision_ipam_pool_cidr(IpamPoolId=pool_id, Cidr=block)
+                self.changed.append("ipam pool cidr " + block)
+            provisioned = True
+            time.sleep(5)
+        fail("IPAM pool %s: %s never provisioned" % (pool_id, block))
+
+    def vpc_block(self, vpc_id, want, pool_id=None):
+        """The VPC's IPv6 block: the pool's (source Network, want = the block) or Amazon's /56 (want None)."""
+        asked = False
+        for _ in range(60):
+            vpc = self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]
+            live = v6_assoc(vpc)
+            if want:
+                other = [a["Ipv6CidrBlock"] for a in live if a.get("Ipv6CidrBlock") and a["Ipv6CidrBlock"] != want]
+                if other:
+                    fail("VPC %s has IPv6 %s, want %s" % (vpc_id, ", ".join(other), want))
+                mine = [a for a in live if a.get("Ipv6CidrBlock") == want or a.get("Ipv6Pool") == "IPAM Managed"]
+            else:
+                other = [a.get("Ipv6CidrBlock") for a in live if a.get("Ipv6Pool") not in ("Amazon", None)]
+                if other:
+                    fail("VPC %s has IPv6 %s that Amazon did not assign" % (vpc_id, ", ".join(map(str, other))))
+                mine = live
+            if mine and mine[0]["Ipv6CidrBlockState"]["State"] == "associated" and mine[0].get("Ipv6CidrBlock"):
+                return mine[0]["Ipv6CidrBlock"]
+            if not mine and not asked:
+                plen = int(want.split("/")[1]) if want else None
+                kw = ({"Ipv6IpamPoolId": pool_id, "Ipv6NetmaskLength": plen} if want
+                      else {"AmazonProvidedIpv6CidrBlock": True})
+                self.ec2.associate_vpc_cidr_block(VpcId=vpc_id, **kw)
+                self.changed.append("vpc ipv6 " + (want or "Amazon /56"))
+                asked = True
+            time.sleep(3)
+        fail("VPC %s: its IPv6 block never associated" % vpc_id)
+
+    def find_eigw(self, vpc_id):
+        return [g["EgressOnlyInternetGatewayId"] for g in
+                self.ec2.describe_egress_only_internet_gateways()["EgressOnlyInternetGateways"]
+                if any(a.get("VpcId") == vpc_id for a in g.get("Attachments") or [])]
+
+    def main_table(self, vpc_id):
+        return self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]},
+                                                       {"Name": "association.main", "Values": ["true"]}])["RouteTables"][0]
+
+    def route_retry(self, fn, **kw):
+        """A route to the transit gateway waits for the attachment to become available."""
+        for _ in range(30):
+            try:
+                return fn(**kw)
+            except botocore.exceptions.ClientError as e:
+                if "InvalidTransitGatewayID" not in str(e) and "IncorrectState" not in str(e):
+                    raise
+                time.sleep(10)
+        fail("route %s: the transit gateway attachment never became usable" % kw)
+
+    def routes6(self, vpc_id, want):
+        """The main route table's IPv6 routes become exactly want {destination: {TransitGatewayId | EgressOnlyInternetGatewayId: id}}."""
+        main = self.main_table(vpc_id)
+        rt = main["RouteTableId"]
+        have = {r["DestinationIpv6CidrBlock"]: r for r in main["Routes"]
+                if r.get("DestinationIpv6CidrBlock") and r.get("Origin") != "CreateRouteTable"}
+        for dest in sorted(want):
+            target = want[dest]
+            r = have.get(dest)
+            if r is None:
+                self.route_retry(self.ec2.create_route, RouteTableId=rt, DestinationIpv6CidrBlock=dest, **target)
+                self.changed.append("route %s" % dest)
+            elif any(r.get(k) != v for k, v in target.items()):
+                self.route_retry(self.ec2.replace_route, RouteTableId=rt, DestinationIpv6CidrBlock=dest, **target)
+                self.changed.append("route %s replaced" % dest)
+        for dest in sorted(set(have) - set(want)):
+            self.ec2.delete_route(RouteTableId=rt, DestinationIpv6CidrBlock=dest)
+            self.changed.append("deleted route " + dest)
+
+    def eigw_down(self, vpc_id):
+        for g in self.find_eigw(vpc_id):
+            self.ec2.delete_egress_only_internet_gateway(EgressOnlyInternetGatewayId=g)
+            self.changed.append("deleted egress-only internet gateway " + g)
+
+    def pool_down(self, placement):
+        """The placement's pool (cascade, see the module doc), then the IPAM when no other pool is left in it."""
+        pool = self.find_pool(placement)
+        out = {"pool": None, "ipamDeleted": False}
+        if not pool:
+            return out
+        self.ec2.delete_ipam_pool(IpamPoolId=pool["IpamPoolId"], Cascade=True)
+        self.changed.append("deleted ipam pool " + pool["IpamPoolId"])
+        out["pool"] = pool["IpamPoolId"]
+        ipam = self.find_ipam()
+        if ipam and ipam["IpamArn"] == pool.get("IpamArn", ipam["IpamArn"]):
+            left = [x for x in self.ec2.describe_ipam_pools()["IpamPools"]
+                    if x.get("IpamArn") == ipam["IpamArn"] and x["State"] not in GONE
+                    and x["IpamPoolId"] != pool["IpamPoolId"]]
+            if not left:
+                self.ec2.delete_ipam(IpamId=ipam["IpamId"], Cascade=True)
+                self.changed.append("deleted ipam " + ipam["IpamId"])
+                out["ipamDeleted"] = True
+        return out
+
+    def place_up(self, placement, vni, prefixes, egress=False, ipv6=None):
         c = self.cfg
+        v6 = ipv6_want(ipv6)
+        if not prefixes:
+            fail("an AWS placement needs an IPv4 prefix: a VPC keeps an IPv4 CIDR and the attachment needs IPv4")
         edge = shc_aws_edge.Edge(c["edge"])
         tgw_id = edge.tgw()["TransitGatewayId"]
         if not self.tgw_visible(tgw_id):
@@ -180,12 +421,23 @@ class Tenant:
         extra = dict(c.get("tags", {}), **{"shc-placement": placement, "shc-vni": str(vni)})
         name = "shc-" + placement.replace("/", "-")
         lay = layout(prefixes, c["azs"])
+        pool_id = ipam_id = None
+        if v6 and v6["source"] == "Network":
+            layout6(v6["prefix"], c["azs"])  # refuse a block too small before anything is made
+            ipam = self.ensure_ipam()
+            ipam_id = ipam["IpamId"]
+            pool_id = self.ensure_pool(ipam, placement, v6["prefix"], name, extra)
         vpc = self.find_vpc(placement)
         if vpc and vpc["CidrBlock"] != prefixes[0]:
             fail("VPC %s of %s has CIDR %s, want %s" % (vpc["VpcId"], placement, vpc["CidrBlock"], prefixes[0]))
         if not vpc:
             self.changed.append("vpc " + name)
-            vpc = self.ec2.create_vpc(CidrBlock=prefixes[0], TagSpecifications=tagspec("vpc", name, extra))["Vpc"]
+            v6kw = {}
+            if v6 and v6["source"] == "Network":
+                v6kw = {"Ipv6IpamPoolId": pool_id, "Ipv6NetmaskLength": int(v6["prefix"].split("/")[1])}
+            elif v6:
+                v6kw = {"AmazonProvidedIpv6CidrBlock": True}
+            vpc = self.ec2.create_vpc(CidrBlock=prefixes[0], TagSpecifications=tagspec("vpc", name, extra), **v6kw)["Vpc"]
             self.ec2.get_waiter("vpc_available").wait(VpcIds=[vpc["VpcId"]])
             self.ec2.modify_vpc_attribute(VpcId=vpc["VpcId"], EnableDnsHostnames={"Value": True})
         vpc_id = vpc["VpcId"]
@@ -195,33 +447,58 @@ class Tenant:
             if p not in have_cidrs:
                 self.changed.append("vpc cidr " + p)
                 self.ec2.associate_vpc_cidr_block(VpcId=vpc_id, CidrBlock=p)
+        block6, lay6 = None, {}
+        if v6:
+            block6 = self.vpc_block(vpc_id, v6.get("prefix"), pool_id)
+            lay6 = {l["az"]: l for l in layout6(block6, c["azs"])}
         subnets = {tagmap(s).get("Name"): s for s in self.ec2.describe_subnets(
             Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
         work, tgw_subnets = [], []
         for l in lay:
             for role, cidr in (("work", l["work"]), ("tgw", l["tgw"])):
                 sn_name = "%s-%s-%s" % (name, role, l["az"][-1])
+                cidr6 = lay6[l["az"]][role] if v6 else None
                 s = subnets.get(sn_name)
                 if not s:
                     self.changed.append("subnet " + sn_name)
                     s = self.ec2.create_subnet(VpcId=vpc_id, CidrBlock=cidr, AvailabilityZone=l["az"],
-                                               TagSpecifications=tagspec("subnet", sn_name, dict(extra, **{"shc-role": role})))["Subnet"]
-                (work if role == "work" else tgw_subnets).append({"id": s["SubnetId"], "cidr": cidr, "az": l["az"]})
+                                               TagSpecifications=tagspec("subnet", sn_name, dict(extra, **{"shc-role": role})),
+                                               **({"Ipv6CidrBlock": cidr6} if cidr6 else {}))["Subnet"]
+                if cidr6:
+                    have6 = [a["Ipv6CidrBlock"] for a in s.get("Ipv6CidrBlockAssociationSet") or []
+                             if a.get("Ipv6CidrBlockState", {}).get("State") in ("associated", "associating")]
+                    if have6 and cidr6 not in have6:
+                        fail("subnet %s has IPv6 %s, want %s" % (s["SubnetId"], ", ".join(have6), cidr6))
+                    if not have6:
+                        self.ec2.associate_subnet_cidr_block(SubnetId=s["SubnetId"], Ipv6CidrBlock=cidr6)
+                        self.changed.append("subnet %s ipv6 %s" % (sn_name, cidr6))
+                    if role == "work" and not s.get("AssignIpv6AddressOnCreation"):
+                        self.ec2.modify_subnet_attribute(SubnetId=s["SubnetId"], AssignIpv6AddressOnCreation={"Value": True})
+                        self.changed.append("subnet %s assigns IPv6" % sn_name)
+                row = {"id": s["SubnetId"], "cidr": cidr, "az": l["az"]}
+                if cidr6:
+                    row["ipv6"] = cidr6
+                (work if role == "work" else tgw_subnets).append(row)
         att = [a for a in self.ec2.describe_transit_gateway_vpc_attachments(Filters=[
             {"Name": "vpc-id", "Values": [vpc_id]}])["TransitGatewayVpcAttachments"]
             if a["State"] not in ("deleted", "deleting", "rejected", "failed")]
         if att:
             att_id = att[0]["TransitGatewayAttachmentId"]
+            if v6 and (att[0].get("Options") or {}).get("Ipv6Support") != "enable":
+                self.ec2.modify_transit_gateway_vpc_attachment(TransitGatewayAttachmentId=att_id,
+                                                               Options={"Ipv6Support": "enable"})
+                self.changed.append("tgw attachment %s ipv6" % att_id)
         else:
             self.changed.append("tgw attachment " + name)
             att_id = self.ec2.create_transit_gateway_vpc_attachment(
                 TransitGatewayId=tgw_id, VpcId=vpc_id, SubnetIds=[s["id"] for s in tgw_subnets],
-                TagSpecifications=tagspec("transit-gateway-attachment", name, extra))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
+                TagSpecifications=tagspec("transit-gateway-attachment", name, extra),
+                **({"Options": {"Ipv6Support": "enable"}} if v6 else {}))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
         # the hub: the network's route table, Connect attachment and router VRF; accept the attachment into it
         net = edge.net_up(vni, egress=egress)
         for _ in range(30):  # the attachment shows up on the hub side shortly after creation
             try:
-                acc = edge.net_attach(vni, att_id)
+                edge.net_attach(vni, att_id)
                 break
             except botocore.exceptions.ClientError as e:
                 if "NotFound" not in str(e):
@@ -231,23 +508,40 @@ class Tenant:
             fail("attachment %s never reached the hub" % att_id)
         self.changed += edge.changed
         # the VPC's default route leaves through the network
-        main = self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]},
-                                                       {"Name": "association.main", "Values": ["true"]}])["RouteTables"][0]
+        main = self.main_table(vpc_id)
         if not any(r.get("DestinationCidrBlock") == "0.0.0.0/0" for r in main["Routes"]):
-            for _ in range(30):
-                try:
-                    self.ec2.create_route(RouteTableId=main["RouteTableId"], DestinationCidrBlock="0.0.0.0/0",
-                                          TransitGatewayId=tgw_id)
-                    self.changed.append("default route")
-                    break
-                except botocore.exceptions.ClientError as e:
-                    if "InvalidTransitGatewayID" not in str(e) and "IncorrectState" not in str(e):
-                        raise
-                    time.sleep(10)
+            self.route_retry(self.ec2.create_route, RouteTableId=main["RouteTableId"], DestinationCidrBlock="0.0.0.0/0",
+                             TransitGatewayId=tgw_id)
+            self.changed.append("default route")
+        out6 = None
+        if v6:
+            # the network's IPv6 space through the network (not the VPC's own block: that route is local)
+            mine = ipaddress.ip_network(block6)
+            want = {p: {"TransitGatewayId": tgw_id} for p in v6["networkPrefixes6"]
+                    if not ipaddress.ip_network(p).subnet_of(mine)}
+            eigw = None
+            if v6["internet"] and v6["source"] == "Provider":
+                found = self.find_eigw(vpc_id)
+                if found:
+                    eigw = found[0]
+                else:
+                    eigw = self.ec2.create_egress_only_internet_gateway(
+                        VpcId=vpc_id, TagSpecifications=tagspec("egress-only-internet-gateway", name, extra)
+                    )["EgressOnlyInternetGateway"]["EgressOnlyInternetGatewayId"]
+                    self.changed.append("egress-only internet gateway " + eigw)
+                want["::/0"] = {"EgressOnlyInternetGatewayId": eigw}
+            elif v6["internet"]:
+                want["::/0"] = {"TransitGatewayId": tgw_id}
+            self.routes6(vpc_id, want)
+            if not eigw:
+                self.eigw_down(vpc_id)
+            out6 = {"source": v6["source"], "prefix": block6, "subnets": list(lay6.values()), "internet": v6["internet"],
+                    "path": "Provider" if v6["source"] == "Provider" else "Fabric",
+                    "pool": pool_id, "ipam": ipam_id, "egressOnlyGateway": eigw, "routes": sorted(want)}
         return {"placement": placement, "account": c["account"], "vpcId": vpc_id, "prefixes": prefixes,
                 "subnets": work, "attachmentSubnets": tgw_subnets, "attachment": att_id,
                 "routeTable": net["routeTable"], "connectAttachment": net["connectAttachment"],
-                "egress": net.get("egress")}
+                "egress": net.get("egress"), "ipv6": out6}
 
     def place_public(self, placement, state):
         vpc = self.find_vpc(placement)
@@ -308,10 +602,12 @@ class Tenant:
             out.append({"id": s["SubnetId"], "cidr": l["public"], "az": l["az"]})
         return {"placement": placement, "public": out, "internetGateway": igw_id}
 
-    def place_down(self, placement, vni):
+    def place_down(self, placement, vni, ipv6=None):
         c = self.cfg
         edge = shc_aws_edge.Edge(c["edge"])
         vpc = self.find_vpc(placement)
+        with6 = bool(ipv6) or bool(vpc and v6_assoc(vpc))
+        out6 = {"pool": None, "ipamDeleted": False}
         if vpc:
             vpc_id = vpc["VpcId"]
             left = [i["InstanceId"] for r in self.ec2.describe_instances(Filters=[
@@ -321,6 +617,9 @@ class Tenant:
             if left:
                 fail("VPC %s still has instances %s; the tenant removes its workloads first" % (vpc_id, left),
                      reason="WorkloadsPresent")
+            if with6:  # IPv6 in reverse: the routes, then the egress-only gateway
+                self.routes6(vpc_id, {})
+                self.eigw_down(vpc_id)
             for a in self.ec2.describe_transit_gateway_vpc_attachments(Filters=[
                     {"Name": "vpc-id", "Values": [vpc_id]}])["TransitGatewayVpcAttachments"]:
                 if a["State"] not in ("deleted", "deleting"):
@@ -342,18 +641,24 @@ class Tenant:
                         if "DependencyViolation" not in str(e):
                             raise
                         time.sleep(10)
+            if with6:  # the VPC's IPv6 block, once no subnet holds a /64 of it
+                for a in v6_assoc(self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]):
+                    self.ec2.disassociate_vpc_cidr_block(AssociationId=a["AssociationId"])
+                    self.changed.append("vpc ipv6 %s released" % a.get("Ipv6CidrBlock", ""))
             for sg in self.ec2.describe_security_groups(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["SecurityGroups"]:
                 if sg["GroupName"] != "default":
                     self.ec2.delete_security_group(GroupId=sg["GroupId"])
             self.ec2.delete_vpc(VpcId=vpc_id)
             self.changed.append("deleted vpc " + vpc_id)
+        if with6:  # the placement's pool and, with its last pool, the IPAM
+            out6 = self.pool_down(placement)
         # the network's hub side goes with its last tenant attachment
         tgw_id = edge.tgw()["TransitGatewayId"]
         others = [a for a in edge.attachments(tgw_id, **{"shc-vni": str(vni)}) if a["ResourceType"] == "vpc"]
         if not others:
             edge.net_down(vni)
             self.changed += edge.changed
-        return {"placement": placement, "vni": vni, "networkKept": bool(others)}
+        return {"placement": placement, "vni": vni, "networkKept": bool(others), "ipv6": out6 if with6 else None}
 
     def check(self):
         who = boto3.client("sts").get_caller_identity()["Arn"]
@@ -372,6 +677,7 @@ def main():
     ap.add_argument("--prefix", action="append", default=[])
     ap.add_argument("--egress", action="store_true")
     ap.add_argument("--state", choices=["up", "down"])
+    ap.add_argument("--ipv6", type=json.loads, default=None)
     a = ap.parse_args()
     t = Tenant(json.loads(a.config))
     if a.command.startswith("zone") and not a.zone:
@@ -382,8 +688,9 @@ def main():
         fail("--placement and --state are required")
     r = {"check": t.check,
          "zone-up": lambda: t.zone_up(a.zone), "zone-down": lambda: t.zone_down(a.zone),
-         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix or fail("--prefix is required"), a.egress),
-         "place-down": lambda: t.place_down(a.placement, a.vni),
+         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix or fail("--prefix is required"), a.egress,
+                                        a.ipv6),
+         "place-down": lambda: t.place_down(a.placement, a.vni, a.ipv6),
          "place-public": lambda: t.place_public(a.placement, a.state),
          "share-down": t.share_down}[a.command]()
     print(json.dumps({"ok": True, "changed": t.changed, "result": r}, default=str))

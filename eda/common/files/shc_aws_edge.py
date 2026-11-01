@@ -16,13 +16,27 @@ while it exists, so the site and its networks are brought up for use and removed
                                   routers; with --egress its NAT egress VPC (config egress), else none
     net-attach --vni N --attachment ID   accept a tenant VPC attachment into the network's route table
     net-down --vni N              the network's egress VPC, Connect attachment, peers, route table; its VRF on the routers
+    vrfs6 --vrfs6 '<json>'        the IPv6 side of the networks' VRFs (edge.ipv6 on): {"icmp6": {<instance-id>: "<a>/128"},
+                                  "networks": [{"vni", "prefixes6", "network6", "source", "internet"}]}, from the
+                                  site's gateway job; replaces the whole set (networks left out lose their IPv6)
     share-add --account ID        share the hub's transit gateway with an account outside the Organization
     share-remove --account ID     stop sharing it with that account
 
 config: {"account", "region", "memberRole", "entry": "automation" | "org-access", "site", "vpcName", "tgwName",
          "tgwCidr", "edgeSubnets": [names], "transportSubnets": [names], "instanceType", "ami": {"owner", "name"},
          "asn", "tunnel": {"cidr", "mtu", "listenPort", "nodeAddresses": [..]}, "wireguardSources": [cidrs],
-         "insideCidrPool", "overlayMtu", "egress": {"cidrPool", "az"}, "shareName"}
+         "insideCidrPool", "overlayMtu", "egress": {"cidrPool", "az"}, "shareName",
+         "ipv6": {"enabled", "insideCidrPool6"}}
+IPv6 (design/IPV6-PLAN.md §6.1-§6.2; ipv6.enabled): every Connect peer gets an IPv6 /125 from ipv6.insideCidrPool6 (a
+ULA network inside fd00::/8, a /64 in practice) next to its IPv4 /29; the transit gateway then negotiates IPv6 unicast
+on the peer's IPv4 BGP sessions (it has no IPv6 BGP peering). The router takes the /125's first address on its GRE
+device, the transit gateway the second and third. The pool's ledger is the /125s the region's Connect peers already
+hold; AWS keeps no IPv6 inside range for itself (unlike RESERVED_INSIDE for IPv4). Connect peers cannot be modified:
+a peer that exists without a /125 is deleted and re-created once with its /29 and a new /125 (its BGP sessions take
+about 9 minutes to come back), tagged shc-ipv6-recreated so it is never re-created twice. Per network VRF the
+routers' config carries "ipv6": {"enabled", "prefixes6", "network6", "source", "internet",
+"inside6": {<instance-id>: {"inside": "<a>/125", "tgw": [<a>, <a>]}}, "icmp6": {<instance-id>: "<a>/128"}}, composed
+from the peers (net-up) and the gateway job's settings (vrfs6; net-up --ipv6 takes one network's the same way).
 A network's internet egress (net-up --egress): a NAT egress VPC of its own, shc-egress-<vni> (a /26 from
 egress.cidrPool): an attachment /28 (0/0 -> NAT gateway) and a public /28 (NAT gateway, 0/0 -> internet gateway,
 RFC 1918 -> transit gateway), its attachment associated with the network's route table (no propagation) and a static
@@ -32,6 +46,7 @@ the caller's management-account credentials assume OrganizationAccountAccessRole
 """
 import argparse
 import base64
+import copy
 import gzip
 import ipaddress
 import json
@@ -48,6 +63,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RESERVED_INSIDE = [ipaddress.ip_network(n) for n in ("169.254.0.0/29", "169.254.1.0/29", "169.254.2.0/29",
                                                     "169.254.3.0/29", "169.254.4.0/29", "169.254.5.0/29",
                                                     "169.254.169.248/29")]
+# Connect peer IPv6 inside CIDRs: a /125 from the ULA range; AWS reserves none inside it (no RESERVED_INSIDE6)
+INSIDE6_RANGE = ipaddress.ip_network("fd00::/8")
+INSIDE6_PREFIXLEN = 125
+# a peer re-created to gain its /125 carries this tag, so a peer that still has none is not re-created again
+RECREATED_TAG = "shc-ipv6-recreated"
 
 
 def fail(msg, **extra):
@@ -65,6 +85,84 @@ def tagspec(kind, name, **more):
 
 def tagmap(o):
     return {t["Key"]: t["Value"] for t in o.get("Tags", o.get("tags", []))}
+
+
+def ipv6_settings(cfg):
+    """(enabled, insideCidrPool6 as a network or None) from the config's ipv6 block; a pool that is not an IPv6
+    ULA network inside fd00::/8 with room for a /125 is refused while IPv6 is on."""
+    v = cfg.get("ipv6") or {}
+    if not v.get("enabled"):
+        return False, None
+    raw = str(v.get("insideCidrPool6") or "").strip()
+    try:
+        pool = ipaddress.ip_network(raw)
+    except ValueError:
+        fail("edge.ipv6.insideCidrPool6 %r is not a network (a ULA /64 inside fd00::/8)" % raw)
+    if pool.version != 6 or not pool.subnet_of(INSIDE6_RANGE) or pool.prefixlen > INSIDE6_PREFIXLEN:
+        fail("edge.ipv6.insideCidrPool6 %s must be an IPv6 network inside %s holding at least one /%d"
+             % (pool, INSIDE6_RANGE, INSIDE6_PREFIXLEN))
+    return True, pool
+
+
+def inside_blocks(peer):
+    """A Connect peer's inside CIDRs: (the IPv4 /29, the IPv6 /125 or None)."""
+    v4, v6 = None, None
+    for x in peer["ConnectPeerConfiguration"].get("InsideCidrBlocks", []):
+        n = ipaddress.ip_network(x)
+        if n.version == 4 and v4 is None:
+            v4 = n
+        elif n.version == 6 and v6 is None:
+            v6 = n
+    return v4, v6
+
+
+def inside6_entry(block):
+    """The router's and the transit gateway's addresses in a peer's /125: the router the first, the transit gateway
+    the second and third (its BGP next hops)."""
+    n = ipaddress.ip_network(block)
+    return {"inside": "%s/%d" % (n[1], n.prefixlen), "tgw": [str(n[2]), str(n[3])]}
+
+
+def free_blocks(pool, prefixlen, taken):
+    """The pool's blocks of that size that overlap nothing taken, in order."""
+    taken = [t for t in taken if t.version == pool.version]
+    return (n for n in pool.subnets(new_prefix=prefixlen) if not any(n.overlaps(t) for t in taken))
+
+
+def network6_entry(n):
+    """One network's IPv6 settings as the gateway job (or net-up --ipv6) gives them, normalized."""
+    try:
+        canon = [str(ipaddress.ip_network(str(x).strip())) for x in (n.get("prefixes6") or [])]
+        net6 = [str(ipaddress.ip_network(str(x).strip())) for x in (n.get("network6") or [])]
+    except ValueError as e:
+        fail("network %s: %s" % (n.get("vni"), e))
+    if any(ipaddress.ip_network(x).version != 6 for x in canon + net6):
+        fail("network %s: prefixes6 and network6 must be IPv6 prefixes" % n.get("vni"))
+    src = n.get("source") or "Network"
+    if src not in ("Network", "Provider"):
+        fail("network %s: source %r is not Network or Provider" % (n.get("vni"), src))
+    return {"prefixes6": sorted(set(canon)), "network6": sorted(set(net6)), "source": src,
+            "internet": bool(n.get("internet"))}
+
+
+def compose_ipv6(vrf, conf, inside6=None):
+    """A VRF's "ipv6" block for the routers: the peers' /125 addresses (inside6, from net-up; kept as they are when
+    None) and the network's settings from the site config's ipv6.networks (the gateway job's). enabled: the network
+    holds IPv6 prefixes here and the peers have their /125s. No block at all when there is neither."""
+    old = vrf.get("ipv6") or {}
+    inside6 = (old.get("inside6") or {}) if inside6 is None else inside6
+    st = conf.get("ipv6") or {}
+    net = (st.get("networks") or {}).get(str(vrf["vni"])) or {}
+    if not inside6 and not net:
+        vrf.pop("ipv6", None)
+        return vrf
+    nodes = conf.get("nodes") or {}
+    vrf["ipv6"] = {"enabled": bool(net.get("prefixes6")) and bool(inside6),
+                   "prefixes6": list(net.get("prefixes6") or []), "network6": list(net.get("network6") or []),
+                   "source": net.get("source") or "Network", "internet": bool(net.get("internet")),
+                   "inside6": inside6,
+                   "icmp6": {k: v for k, v in sorted((st.get("icmp6") or {}).items()) if k in nodes}}
+    return vrf
 
 
 def session(cfg):
@@ -89,6 +187,7 @@ class Edge:
             t["nodeAddresses"] = [str(net[int(t.get("routerHostIndex", 10)) + i]) for i in range(len(cfg["edgeSubnets"]))]
         cfg.setdefault("overlayMtu", int(t.get("mtu", 1420)) - 50)
         self.cfg = cfg
+        self.v6, self.pool6 = ipv6_settings(cfg)
         self.site = cfg["site"]
         s = session(cfg)
         self.ec2, self.iam, self.ssm, self.ram = s.client("ec2"), s.client("iam"), s.client("ssm"), s.client("ram")
@@ -367,7 +466,7 @@ net.ipv4.conf.all.rp_filter = 0
 net.ipv4.conf.default.rp_filter = 0
 net.ipv4.tcp_l3mdev_accept = 1
 net.ipv4.udp_l3mdev_accept = 1
-EOF
+%(sysctl6)sEOF
 sysctl --system >/dev/null
 cat > /etc/nftables/shc-edge.nft <<'EOF'
 table inet shc_edge {
@@ -402,7 +501,9 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 systemctl enable --now shc-edge-agent.timer
-""" % {"site": self.site, "region": self.cfg["region"], "agent": agent}
+""" % {"site": self.site, "region": self.cfg["region"], "agent": agent,
+       # IPv6 forwarding for the network VRFs (the agent sets it too, for routers created before IPv6)
+       "sysctl6": "net.ipv6.conf.all.forwarding = 1\nnet.ipv6.conf.default.forwarding = 1\n" if self.v6 else ""}
 
     def down(self):
         conf = self.read_config() or {}
@@ -514,7 +615,7 @@ systemctl enable --now shc-edge-agent.timer
     def net_names(self, vni):
         return "shc-net-%d" % vni
 
-    def net_up(self, vni, test=False, egress=False):
+    def net_up(self, vni, test=False, egress=False, ipv6=None):
         c = self.cfg
         tgw = self.tgw()
         tgw_id = tgw["TransitGatewayId"]
@@ -560,8 +661,8 @@ systemctl enable --now shc-edge-agent.timer
         for p in self.ec2.describe_transit_gateway_connect_peers()["TransitGatewayConnectPeers"]:
             if p["State"] not in ("deleting", "deleted"):
                 used |= {ipaddress.ip_network(x) for x in p["ConnectPeerConfiguration"]["InsideCidrBlocks"]}
-        pool = (n for n in ipaddress.ip_network(c["insideCidrPool"]).subnets(new_prefix=29)
-                if not any(n.overlaps(r) for r in RESERVED_INSIDE + list(used)))
+        # IPv6: a /125 per peer from the pool, clear of every /125 the region's peers hold (the pool's ledger)
+        pool6 = free_blocks(self.pool6, INSIDE6_PREFIXLEN, used) if self.v6 else None
         insts = {i["InstanceId"]: i for i in self.instances()}
         # peers of routers that are gone (their address isn't a current router's): remove them first
         current = {insts[i]["PrivateIpAddress"] for i in conf["nodes"] if i in insts}
@@ -573,18 +674,23 @@ systemctl enable --now shc-edge-agent.timer
                 if not any(n.overlaps(r) for r in RESERVED_INSIDE + list(used)))
         by_peer = {p["ConnectPeerConfiguration"]["PeerAddress"]: p for p in peers}
         connect = {}
+        inside6 = {}
         for iid in conf["nodes"]:
             inst = insts.get(iid)
             if not inst:
                 continue
             pa = inst["PrivateIpAddress"]
             p = by_peer.get(pa)
+            pname = "%s-%s" % (name, conf["nodes"][iid]["name"])
+            if p and self.v6 and inside_blocks(p)[1] is None:
+                p = self.recreate_peer6(p, pname, vni, pool6)
             if not p:
                 self.changed.append("connect peer " + conf["nodes"][iid]["name"])
+                blocks = [str(next(pool))] + ([str(self.next6(pool6))] if self.v6 else [])
                 p = self.ec2.create_transit_gateway_connect_peer(
                     TransitGatewayAttachmentId=ca_id, PeerAddress=pa, BgpOptions={"PeerAsn": int(c["asn"])},
-                    InsideCidrBlocks=[str(next(pool))],
-                    TagSpecifications=tagspec("transit-gateway-connect-peer", "%s-%s" % (name, conf["nodes"][iid]["name"]),
+                    InsideCidrBlocks=blocks,
+                    TagSpecifications=tagspec("transit-gateway-connect-peer", pname,
                                               shc_edge_site=self.site, shc_vni=vni))["TransitGatewayConnectPeer"]
             for _ in range(30):  # the peer's BGP addresses appear shortly after creation
                 cpc = p["ConnectPeerConfiguration"]
@@ -596,20 +702,99 @@ systemctl enable --now shc-edge-agent.timer
                     TransitGatewayConnectPeerIds=[p["TransitGatewayConnectPeerId"]])["TransitGatewayConnectPeers"][0]
             if not bgp:
                 fail("connect peer %s has no BGP addresses" % p["TransitGatewayConnectPeerId"])
-            plen = ipaddress.ip_network(cpc["InsideCidrBlocks"][0]).prefixlen
+            v4, v6 = inside_blocks(p)
+            plen = v4.prefixlen
             connect[iid] = {"local": pa, "remote": cpc["TransitGatewayAddress"],
                             "inside": "%s/%d" % (bgp[0]["PeerAddress"], plen),
                             "bgp": sorted({b["TransitGatewayAddress"] for b in bgp}), "peerId": p["TransitGatewayConnectPeerId"]}
+            if v6 is not None:
+                inside6[iid] = inside6_entry(v6)
+                connect[iid]["inside6"] = inside6[iid]["inside"]
         # the VRF on the routers
         vrf = {"name": "t%d" % vni, "vni": vni, "mtu": int(c["overlayMtu"]), "tgwAsn": int(tgw["Options"]["AmazonSideAsn"]),
                "connect": {k: {x: v[x] for x in ("local", "remote", "inside", "bgp")} for k, v in connect.items()}}
         if test:
             base = ipaddress.ip_address(c.get("testBase", "10.252.0.1"))
             vrf["testAddress"] = {iid: str(base + i) for i, iid in enumerate(sorted(conf["nodes"], key=lambda k: conf["nodes"][k]["name"]))}
+        if self.v6:
+            if ipv6 is not None:  # one network's settings given with the call (net-up --ipv6)
+                st = conf.setdefault("ipv6", {})
+                st.setdefault("networks", {})[str(vni)] = network6_entry(dict(ipv6, vni=vni))
+            compose_ipv6(vrf, conf, inside6)
         conf["vrfs"] = sorted([v for v in conf["vrfs"] if v["vni"] != vni] + [vrf], key=lambda v: v["vni"])
         self.write_config(conf)
         eg = self.egress_up(vni, rt_id) if egress else self.egress_down(vni)
         return {"vni": vni, "routeTable": rt_id, "connectAttachment": ca_id, "peers": connect, "egress": eg}
+
+    def next6(self, pool6):
+        b = next(pool6, None)
+        if b is None:
+            fail("edge.ipv6.insideCidrPool6 %s has no free /%d left" % (self.pool6, INSIDE6_PREFIXLEN))
+        return b
+
+    def recreate_peer6(self, p, pname, vni, pool6, tries=60):
+        """A peer created before IPv6 has no /125, and Connect peers cannot be modified: delete it and create it again
+        with its /29 and a new /125, once (the new peer carries RECREATED_TAG). Its BGP sessions are down until the
+        transit gateway brings them up again, about 9 minutes. Returns the new peer, or the old one when it was
+        already re-created once (the IPv6 side then stays off for it; status shows the missing /125)."""
+        pid = p["TransitGatewayConnectPeerId"]
+        if tagmap(p).get(RECREATED_TAG) == "true":
+            print("connect peer %s %s has no IPv6 /125 although it was re-created for one; not again" % (pname, pid),
+                  file=sys.stderr)
+            return p
+        v4, _ = inside_blocks(p)
+        cpc = p["ConnectPeerConfiguration"]
+        msg = ("re-creating connect peer %s %s with an IPv6 /125 (no modify API; its BGP sessions take about 9 min "
+               "to return)" % (pname, pid))
+        print(msg, file=sys.stderr)
+        self.changed.append(msg)
+        self.ec2.delete_transit_gateway_connect_peer(TransitGatewayConnectPeerId=pid)
+        for _ in range(tries):  # the /29 is free again only once the old peer is gone
+            left = [x for x in self.ec2.describe_transit_gateway_connect_peers(
+                TransitGatewayConnectPeerIds=[pid])["TransitGatewayConnectPeers"] if x["State"] != "deleted"]
+            if not left:
+                break
+            time.sleep(10)
+        else:
+            fail("connect peer %s is still being deleted; the next run re-creates it" % pid)
+        return self.ec2.create_transit_gateway_connect_peer(
+            TransitGatewayAttachmentId=p["TransitGatewayAttachmentId"], PeerAddress=cpc["PeerAddress"],
+            BgpOptions={"PeerAsn": int(self.cfg["asn"])}, InsideCidrBlocks=[str(v4), str(self.next6(pool6))],
+            TagSpecifications=tagspec("transit-gateway-connect-peer", pname, shc_edge_site=self.site, shc_vni=vni,
+                                      shc_ipv6_recreated="true"))["TransitGatewayConnectPeer"]
+
+    def set_vrfs6(self, req):
+        """The gateway job's IPv6 settings for the networks' VRFs (replaces the set; see the module docstring).
+        With edge.ipv6 off the VRFs lose any IPv6 block instead."""
+        conf = self.read_config()
+        if conf is None:
+            fail("site %s has no config yet (run up first)" % self.site)
+        before = copy.deepcopy(conf)
+        if not self.v6:
+            conf.pop("ipv6", None)
+            for v in conf.get("vrfs", []):
+                v.pop("ipv6", None)
+        else:
+            nets = {}
+            for n in req.get("networks") or []:
+                nets[str(int(n["vni"]))] = network6_entry(n)
+            icmp = {}
+            for k, a in sorted((req.get("icmp6") or {}).items()):
+                if a:
+                    try:
+                        n = ipaddress.ip_network(str(a).strip())
+                    except ValueError:
+                        n = None
+                    if n is None or n.version != 6 or n.prefixlen != 128:
+                        fail("icmp6 %s of %s is not an IPv6 /128" % (a, k))
+                    icmp[k] = str(n)
+            conf["ipv6"] = {"icmp6": icmp, "networks": nets}
+            for v in conf.get("vrfs", []):
+                compose_ipv6(v, conf)
+        self.write_config(conf)
+        changed = [v["vni"] for v in conf.get("vrfs", []) if v.get("ipv6") != next(
+            (o.get("ipv6") for o in before.get("vrfs", []) if o["vni"] == v["vni"]), None)]
+        return {"vrfs": [{"vni": v["vni"], "ipv6": v.get("ipv6")} for v in conf.get("vrfs", [])], "changedVnis": changed}
 
     def association(self, att_id):
         """The route table an attachment is associated with (the route tables' own lists: DescribeTransitGateway-
@@ -672,8 +857,10 @@ systemctl enable --now shc-edge-agent.timer
         tgw_id = self.tgw()["TransitGatewayId"]
         name = self.net_names(vni)
         conf = self.read_config()
-        if conf and any(v["vni"] == vni for v in conf.get("vrfs", [])):
+        if conf and (any(v["vni"] == vni for v in conf.get("vrfs", []))
+                     or str(vni) in ((conf.get("ipv6") or {}).get("networks") or {})):
             conf["vrfs"] = [v for v in conf["vrfs"] if v["vni"] != vni]
+            ((conf.get("ipv6") or {}).get("networks") or {}).pop(str(vni), None)
             self.write_config(conf)
         rts = [r for r in self.ec2.describe_transit_gateway_route_tables(Filters=[
             {"Name": "transit-gateway-id", "Values": [tgw_id]}, {"Name": "tag:Name", "Values": [name]}])["TransitGatewayRouteTables"]
@@ -932,19 +1119,53 @@ systemctl enable --now shc-edge-agent.timer
                                        "owner": a["ResourceOwnerId"], "state": a["State"], "name": tagmap(a).get("Name"),
                                        "routeTable": self.association(a["TransitGatewayAttachmentId"])})
         conf = self.read_config() or {}
-        out["vrfs"] = [{k: v[k] for k in ("name", "vni")} for v in conf.get("vrfs", [])]
+        out["vrfs"] = [dict({k: v[k] for k in ("name", "vni")},
+                            **({"ipv6": {k: v["ipv6"][k] for k in ("enabled", "source", "internet", "prefixes6", "inside6")}}
+                               if v.get("ipv6") else {})) for v in conf.get("vrfs", [])]
         out["gateways"] = [g["name"] for g in conf.get("gateways", [])]
         out["tunnelAddresses"] = {k: v["address"] for k, v in conf.get("nodes", {}).items()}
         out["nodes"] = self.node_reports()
+        if self.v6 or any(v.get("ipv6") for v in conf.get("vrfs", [])):
+            out["ipv6"] = ipv6_status(conf, out["nodes"])
         return out
+
+
+def ipv6_status(conf, reports):
+    """Per IPv6 VRF and router what its report says: the transit gateway sessions that negotiated IPv6 unicast (of
+    those configured), the IPv6 routes the router holds by protocol, whether it has a default route, and the
+    placement's prefixes it has not learned from the transit gateway yet."""
+    out = {}
+    for v in conf.get("vrfs", []):
+        six = v.get("ipv6") or {}
+        if not six:
+            continue
+        row = {"enabled": bool(six.get("enabled")), "source": six.get("source"), "internet": bool(six.get("internet")),
+               "routers": {}}
+        for iid in sorted(six.get("inside6") or {}):
+            st = ((reports.get(iid) or {}).get("state") or {})
+            peers = (st.get("bgp6") or {}).get(v["name"]) or {}
+            routes = (st.get("routes6") or {}).get(v["name"]) or {}
+            bgp = {p for p, protos in routes.items() if "bgp" in protos}
+            row["routers"][iid] = {
+                "inside6": six["inside6"][iid]["inside"],
+                "icmp6": (six.get("icmp6") or {}).get(iid, ""),
+                "sessions6": "%d/%d" % (sum(1 for p in peers.values() if p.get("af6") == "negotiated"), len(peers)),
+                "routes6": {proto: sum(1 for ps in routes.values() if proto in ps)
+                            for proto in sorted({x for ps in routes.values() for x in ps})},
+                "default6": "::/0" in routes,
+                "missing6": [p for p in six.get("prefixes6") or [] if p not in bgp]}
+        out[v["name"]] = row
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("command", choices=["status", "up", "down", "replace", "gateways", "net-up", "net-attach", "net-down",
-                                        "share-add", "share-remove"])
+                                        "vrfs6", "share-add", "share-remove"])
     ap.add_argument("--gateways")
+    ap.add_argument("--vrfs6")
+    ap.add_argument("--ipv6", help="net-up: the network's IPv6 settings {prefixes6, network6, source, internet}")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--attachment")
     ap.add_argument("--test", action="store_true")
@@ -956,8 +1177,9 @@ def main():
         fail("--vni is required")
     r = {"status": e.status, "up": e.up, "down": e.down, "replace": e.replace,
          "gateways": lambda: e.set_gateways(json.loads(a.gateways or "[]")),
-         "net-up": lambda: e.net_up(a.vni, a.test, a.egress), "net-attach": lambda: e.net_attach(a.vni, a.attachment),
-         "net-down": lambda: e.net_down(a.vni),
+         "net-up": lambda: e.net_up(a.vni, a.test, a.egress, json.loads(a.ipv6) if a.ipv6 else None),
+         "net-attach": lambda: e.net_attach(a.vni, a.attachment),
+         "net-down": lambda: e.net_down(a.vni), "vrfs6": lambda: e.set_vrfs6(json.loads(a.vrfs6 or "{}")),
          "share-add": lambda: e.share_add(a.account or fail("--account is required")),
          "share-remove": lambda: e.share_remove(a.account or fail("--account is required"))}[a.command]()
     print(json.dumps({"ok": True, "changed": e.changed, "result": r}, default=str))

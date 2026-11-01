@@ -1,4 +1,4 @@
-"""The placement's status.ipv6 (networkplacement_provision main.yml "Describe the placement's IPv6", design/IPV6-PLAN.md
+"""The placement's status.ipv6 (networkplacement_provision ipv6_status.yml "Describe the placement's IPv6", design/IPV6-PLAN.md
 §2.3): written when the placement holds an IPv6 subnet; addressing from the backend kind's placement.ipv6.addressMode
 (SLAAC for slaac or dhcpv6-stateless, else DHCPv6), internet unavailable/NotOffered while egress.ipv6.enabled is
 off (the ready case is the egress realization's). Every key written is one the NetworkPlacement CRD declares, in
@@ -13,7 +13,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from play_helper import HAVE_ANSIBLE, ROOT, by_name, load, run_play, write_out  # noqa: E402
 
-MAIN = os.path.join(ROOT, "eda", "rulebooks", "roles", "networkplacement_provision", "tasks", "main.yml")
+TASKS = os.path.join(ROOT, "eda", "rulebooks", "roles", "networkplacement_provision", "tasks", "ipv6_status.yml")
 DEFAULTS = os.path.join(ROOT, "eda", "common", "vars", "fabric_realization.yml")
 CRDS = [os.path.join(ROOT, "operator", "config", "crd", "bases", "crd-networkplacement.yaml"),
         os.path.join(ROOT, "operator", "primary", "helm", "templates", "crds.yaml")]
@@ -48,7 +48,7 @@ def status_schema(path):
 
 class StatusIPv6Test(unittest.TestCase):
     def run_task(self, kind="CloudOSO", prefixes6=("2001:db8:100:1::/64",), fab_real=None, status=None):
-        task = by_name(load(MAIN), TASK)
+        task = by_name(load(TASKS), TASK)
         # np_status is set by a task, as in the job (an extra var would win over the task's set_fact)
         start = {"ansible.builtin.set_fact": {"np_status": "{{ seed_status }}"}}
         variables = {"seed_status": status if status is not None else {"entity": "acme", "prefixes": ["10.60.1.0/24"] + list(prefixes6)},
@@ -60,7 +60,7 @@ class StatusIPv6Test(unittest.TestCase):
         st = self.run_task()
         # (translation is written as null: the placement has IPv4, so it gets none)
         self.assertEqual(st["ipv6"], {"addressing": "DHCPv6",
-                                      "internet": {"state": "unavailable", "reason": "NotOffered", "message": MESSAGE},
+                                      "internet": {"state": "unavailable", "path": "Fabric", "reason": "NotOffered", "message": MESSAGE},
                                       "translation": None})
         # the rest of the status is kept
         self.assertEqual(st["entity"], "acme")
@@ -96,7 +96,7 @@ class StatusIPv6Test(unittest.TestCase):
             self.assertIn("addressing", ipv6, path)
             self.assertEqual(ipv6["addressing"]["type"], "string")
             internet = ipv6["internet"]["properties"]
-            for key in ("state", "reason", "message"):
+            for key in ("state", "path", "reason", "message"):
                 self.assertEqual(internet[key]["type"], "string", (path, key))
             # the values the task writes are the ones the descriptions name
             self.assertIn("unavailable", internet["state"]["description"])
@@ -104,7 +104,7 @@ class StatusIPv6Test(unittest.TestCase):
             self.assertIn("SLAAC", ipv6["addressing"]["description"])
 
     def test_task_shape(self):
-        task = by_name(load(MAIN), TASK)
+        task = by_name(load(TASKS), TASK)
         self.assertEqual(task["when"], "np_prefixes_v6 | length > 0")
         # the internet row is built in the task's vars (NotOffered while the fabric offers no IPv6 egress, else the
         # network's family-6 row); the set_fact only adds it to the status

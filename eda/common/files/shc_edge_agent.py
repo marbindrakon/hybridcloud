@@ -10,7 +10,27 @@ config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?,
          "nodes": {<instance-id>: {"name", "address"}},
          "gateways": [{"name", "publicKey", "address"}],
          "vrfs": [{"name", "vni", "mtu", "tgwAsn", "connect": {<instance-id>: {"local", "remote", "inside", "bgp": [..]}},
-                   "testAddress"?: {<instance-id>: "a.b.c.d"}}]}
+                   "testAddress"?: {<instance-id>: "a.b.c.d"},
+                   "ipv6"?: {"enabled", "prefixes6": [..], "network6": [..], "source": "Network" | "Provider",
+                             "internet", "inside6": {<instance-id>: {"inside": "<a>/125", "tgw": [..]}},
+                             "icmp6": {<instance-id>: "<a>/128"}}}]}
+
+IPv6 (design/IPV6-PLAN.md §6.1-§6.2), per VRF whose ipv6 block is enabled and names this router in inside6; a VRF
+without an ipv6 block is configured exactly as before IPv6 existed:
+- kernel: IPv6 forwarding; the GRE device takes the peer's /125 address (FRR's IPv6 next hop toward the transit
+  gateway, and the source of the router's ICMPv6 errors toward the VPC); lo<vni> takes the router's ICMPv6 source
+  /128 (icmp6, never announced); an unreachable IPv6 default in the VRF table, so a lookup that misses fails in the
+  VRF instead of falling through to the main table.
+- FRR, on the IPv4 sessions to the transit gateway (it has no IPv6 BGP peering): address-family ipv6 unicast with
+  route-maps per family (RFC 8212). In from the transit gateway: the placement's prefixes (prefixes6: the VPC's IPv6
+  blocks) only, never a default route. Out to it: the network's IPv6 space (network6) learned from the fabric, never
+  the placement's own prefixes, and ::/0 only for source Network with internet (the fabric's IPv6 egress; internet is
+  set only for a network whose IPv6 the platform assigned and that asked for internet). Source Provider: the network's
+  space only (the VPC's own internet gateway carries its default route); a provider-assigned prefix of another cloud
+  is outside network6 and is never announced into this cloud. advertise ipv6 unicast in the VRF's EVPN family, limited
+  to prefixes6 (Type-5 toward the site's gateway). zebra installs the VRF's BGP routes toward the fabric with the
+  icmp6 /128 as their source (ipv6 protocol bgp route-map <vrf>-src6), so ICMPv6 errors toward the fabric leave from
+  it; routes toward the transit gateway keep the GRE address.
 """
 import datetime
 import hashlib
@@ -24,8 +44,19 @@ import urllib.request
 
 STATE = "/etc/shc-edge"
 KEY = STATE + "/wg.key"
-SITE = open(STATE + "/site").read().strip()
-REGION = open(STATE + "/region").read().strip()
+# an unreachable IPv6 default at the highest metric: any route FRR installs wins over it
+UNREACHABLE_METRIC = "4278198272"
+
+
+def _local(name):
+    try:
+        return open(os.path.join(STATE, name)).read().strip()
+    except OSError:  # not on a router (the unit tests import the module)
+        return ""
+
+
+SITE = _local("site")
+REGION = _local("region")
 
 
 def imds(path, token=None):
@@ -86,16 +117,72 @@ def public_key():
     return sh(["wg", "pubkey"], inp=open(KEY).read()).strip()
 
 
+def v6_of(v, me):
+    """The VRF's ipv6 block when IPv6 is on for it on this router (enabled, a /125 here and a Connect peer), else None."""
+    six = v.get("ipv6") or {}
+    if six.get("enabled") and (six.get("inside6") or {}).get(me) and (v.get("connect") or {}).get(me):
+        return six
+    return None
+
+
+def _pl6(name, seq, action, prefix):
+    """One ipv6 prefix-list line: the prefix and every longer one inside it (exactly ::/0 for the default route)."""
+    n = ipaddress.ip_network(prefix)
+    more = "" if n.prefixlen in (0, 128) else " le 128"
+    return "ipv6 prefix-list %s seq %d %s %s%s" % (name, seq, action, n, more)
+
+
+def frr_policy6(v, six, icmp):
+    """The VRF's IPv6 prefix lists and route-maps (see the module docstring)."""
+    name = v["name"]
+    own = list(six.get("prefixes6") or [])
+    out = [_pl6(name + "-in6", 5 * (i + 1), "permit", p) for i, p in enumerate(own)]
+    if not own:
+        out.append("ipv6 prefix-list %s-in6 seq 5 deny ::/0 le 128" % name)
+    seq, permits = 0, 0
+    lines = []
+    for p in own:
+        seq += 5
+        lines.append(_pl6(name + "-out6", seq, "deny", p))
+    for p in six.get("network6") or []:
+        seq += 5
+        permits += 1
+        lines.append(_pl6(name + "-out6", seq, "permit", p))
+    if six.get("source", "Network") == "Network" and six.get("internet"):
+        seq += 5
+        permits += 1
+        lines.append(_pl6(name + "-out6", seq, "permit", "::/0"))
+    if not permits:
+        seq += 5
+        lines.append("ipv6 prefix-list %s-out6 seq %d deny ::/0 le 128" % (name, seq))
+    out += lines
+    out += ["route-map %s-tgw-in6 permit 10" % name, " match ipv6 address prefix-list %s-in6" % name, "exit",
+            "route-map %s-tgw-out6 permit 10" % name, " match ipv6 address prefix-list %s-out6" % name, "exit",
+            "route-map %s-evpn6 permit 10" % name, " match ipv6 address prefix-list %s-in6" % name, "exit"]
+    if icmp:
+        # zebra: the transit gateway's routes as they are, every other BGP route with the ICMPv6 source as its source
+        out += ["route-map %s-src6 permit 10" % name, " match ipv6 address prefix-list %s-in6" % name, "exit",
+                "route-map %s-src6 permit 20" % name, " set src %s" % icmp.split("/")[0], "exit"]
+    return out + ["!"]
+
+
 def frr_conf(cfg, me, node):
     gws = cfg.get("gateways", [])
     pw = cfg.get("bgpPassword")
     out = ["frr defaults traditional", "hostname %s" % node["name"], "service integrated-vtysh-config", "!"]
     for v in cfg.get("vrfs", []):
-        out += ["vrf %s" % v["name"], " vni %d" % v["vni"], "exit-vrf", "!"]
+        six = v6_of(v, me)
+        icmp = (six.get("icmp6") or {}).get(me) if six else None
+        out += ["vrf %s" % v["name"], " vni %d" % v["vni"]]
+        if icmp:
+            out.append(" ipv6 protocol bgp route-map %s-src6" % v["name"])
+        out += ["exit-vrf", "!"]
         # FRR 8.5 sends and accepts nothing on eBGP without policy (RFC 8212, also under "traditional"). The transit
         # gateway's route table belongs to this network alone: take its routes, give it the network's
         out += ["route-map %s-tgw-in permit 10" % v["name"], "exit", "route-map %s-tgw-out permit 10" % v["name"],
                 "exit", "!"]
+        if six:
+            out += frr_policy6(v, six, icmp)
         if v.get("testAddress", {}).get(me):
             out += ["ip prefix-list %s-test seq 5 permit %s/32" % (v["name"], v["testAddress"][me]),
                     "route-map %s-connected permit 10" % v["name"], " match ip address prefix-list %s-test" % v["name"],
@@ -123,9 +210,34 @@ def frr_conf(cfg, me, node):
                     "  neighbor TGW route-map %s-tgw-out out" % v["name"]]
         if v.get("testAddress", {}).get(me):
             out.append("  redistribute connected route-map %s-connected" % v["name"])
-        out += [" exit-address-family", " address-family l2vpn evpn", "  advertise ipv4 unicast",
-                " exit-address-family", "exit", "!"]
+        out += [" exit-address-family"]
+        six = v6_of(v, me)
+        if six:
+            # IPv6 NLRI on the IPv4 sessions; FRR sends the GRE device's /125 address as the next hop
+            out += [" address-family ipv6 unicast", "  neighbor TGW activate",
+                    "  neighbor TGW route-map %s-tgw-in6 in" % v["name"],
+                    "  neighbor TGW route-map %s-tgw-out6 out" % v["name"], " exit-address-family"]
+        out += [" address-family l2vpn evpn", "  advertise ipv4 unicast"]
+        if six:
+            out.append("  advertise ipv6 unicast route-map %s-evpn6" % v["name"])
+        out += [" exit-address-family", "exit", "!"]
     return "\n".join(out) + "\n"
+
+
+def addrs6(dev, want):
+    """Exactly these global IPv6 addresses on dev (nodad: a /125 or /128 the router alone holds)."""
+    want = [str(ipaddress.ip_interface(w)) for w in want]
+    have = []
+    for a in json.loads(sh(["ip", "-j", "-6", "addr", "show", "dev", dev, "scope", "global"]) or "[]"):
+        for i in a.get("addr_info", []):
+            if i.get("family") == "inet6" and i.get("scope", "global") == "global":
+                have.append(str(ipaddress.ip_interface("%s/%s" % (i["local"], i["prefixlen"]))))
+    for h in have:
+        if h not in want:
+            sh(["ip", "-6", "addr", "del", h, "dev", dev])
+    for w in want:
+        if w not in have:
+            sh(["ip", "-6", "addr", "replace", w, "dev", dev, "nodad"])
 
 
 def apply(cfg, me):
@@ -152,6 +264,9 @@ def apply(cfg, me):
                  "allowed-ips", n["address"] + "/32", "persistent-keepalive", "25"]
     sh(args)
     sh("ip addr replace %s/%d dev wg0 && ip link set wg0 mtu %d up" % (node["address"], plen, t["mtu"]))
+    if any(v6_of(v, me) for v in cfg.get("vrfs", [])):
+        sh(["sysctl", "-qw", "net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.default.forwarding=1",
+           "net.ipv6.icmp.ratelimit=0"])  # Packet Too Big for every oversized packet, like the border gateways
     # one VRF per network: L3VNI bridge + VXLAN over the tunnel, GRE to the transit gateway, a test loopback
     want_vrfs = {v["name"] for v in cfg.get("vrfs", [])}
     for line in sh("ip -o link show type vrf").splitlines():
@@ -161,6 +276,8 @@ def apply(cfg, me):
             for dev in ("gre" + n, "lo" + n, "vx" + n, "br" + n, name):
                 if link_exists(dev):
                     sh(["ip", "link", "del", dev])
+            # its IPv6 unreachable default sits on lo and outlives the VRF
+            sh(["ip", "-6", "route", "del", "unreachable", "default", "metric", UNREACHABLE_METRIC, "table", n], check=False)
     for v in cfg.get("vrfs", []):
         n, vrf = str(v["vni"]), v["name"]
         if not link_exists(vrf):
@@ -185,16 +302,32 @@ def apply(cfg, me):
                     "dev", eth])
             sh(["ip", "link", "set", gre, "master", vrf, "mtu", "1476", "up"])
             sh(["ip", "addr", "replace", c["inside"], "dev", gre])
+            if "ipv6" in v:
+                six = v6_of(v, me)
+                addrs6(gre, [six["inside6"][me]["inside"]] if six else [])
         elif link_exists("gre" + n):
             sh(["ip", "link", "del", "gre" + n])
         ta = v.get("testAddress", {}).get(me)
-        if ta:
+        six = v6_of(v, me)
+        icmp = (six.get("icmp6") or {}).get(me) if six else None
+        if ta or icmp:
             if not link_exists("lo" + n):
                 sh(["ip", "link", "add", "lo" + n, "type", "dummy"])
             sh(["ip", "link", "set", "lo" + n, "master", vrf, "up"])
-            sh(["ip", "addr", "replace", ta + "/32", "dev", "lo" + n])
+            if ta:
+                sh(["ip", "addr", "replace", ta + "/32", "dev", "lo" + n])
+            else:
+                sh(["ip", "-4", "addr", "flush", "dev", "lo" + n, "scope", "global"])
         elif link_exists("lo" + n):
             sh(["ip", "link", "del", "lo" + n])
+        if "ipv6" in v:
+            if ta or icmp:
+                addrs6("lo" + n, [icmp] if icmp else [])
+            if six:
+                sh(["ip", "-6", "route", "replace", "unreachable", "default", "metric", UNREACHABLE_METRIC, "table", n])
+            else:
+                sh(["ip", "-6", "route", "del", "unreachable", "default", "metric", UNREACHABLE_METRIC, "table", n],
+                   check=False)
     # FRR: rewrite and reload only on change
     conf = frr_conf(cfg, me, node)
     path = "/etc/frr/frr.conf"
@@ -221,8 +354,9 @@ def state(cfg, me):
         except Exception:
             continue
         peers = {}
-        for af in j.values():
-            if isinstance(af, dict):
+        for key, af in j.items():
+            # the IPv6 family's sessions are reported apart (bgp6): the same addresses would overwrite the IPv4 counts
+            if isinstance(af, dict) and key != "ipv6Unicast":
                 for addr, p in (af.get("peers") or {}).items():
                     peers[addr] = {"state": p.get("state"), "pfxRcd": p.get("pfxRcd", p.get("prefixReceivedCount")),
                                    "pfxSnt": p.get("pfxSnt")}
@@ -236,7 +370,41 @@ def state(cfg, me):
             continue
         st["routes"][v["name"]] = {p: sorted({r.get("protocol", "?") for r in rs}) for p, rs in j.items()
                                    if isinstance(rs, list)}
+    six = [v for v in cfg.get("vrfs", []) if v6_of(v, me)]
+    if six:
+        st["bgp6"], st["routes6"] = {}, {}
+    for v in six:
+        try:
+            st["bgp6"][v["name"]] = bgp6_peers(json.loads(
+                sh(["vtysh", "-c", "show bgp vrf %s ipv6 unicast summary json" % v["name"]]) or "{}"))
+        except Exception:
+            pass
+        try:
+            j = json.loads(sh(["vtysh", "-c", "show ipv6 route vrf %s json" % v["name"]]) or "{}")
+        except Exception:
+            continue
+        st["routes6"][v["name"]] = {p: sorted({r.get("protocol", "?") for r in rs}) for p, rs in j.items()
+                                    if isinstance(rs, list)}
     return st
+
+
+def bgp6_peers(j):
+    """The transit gateway sessions of a VRF's IPv6 unicast summary: per peer its state, whether the IPv6 family was
+    negotiated on it (af6: negotiated, NoNeg when the session is up without it, else the session state) and the
+    prefix counts."""
+    af = j if "peers" in j else (j.get("ipv6Unicast") or {})
+    out = {}
+    for addr, p in (af.get("peers") or {}).items():
+        state = p.get("state")
+        rcd = p.get("pfxRcd", p.get("prefixReceivedCount"))
+        if state == "Established" and isinstance(rcd, int):
+            af6 = "negotiated"
+        elif state in ("Established", "NoNeg"):
+            af6 = "NoNeg"
+        else:
+            af6 = state
+        out[addr] = {"state": state, "af6": af6, "pfxRcd": rcd, "pfxSnt": p.get("pfxSnt")}
+    return out
 
 
 def main():
