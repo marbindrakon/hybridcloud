@@ -261,8 +261,9 @@ transfer out on the tunnel leg. Source `Provider` pays AWS's own data transfer r
 gateway (which has no hourly charge). The transit gateway attachment and the edge routers are shared with IPv4.
 
 **Refused** (before anything is allocated or built):
-- IPv6-only placements: `FamilyUnavailable` ("IPv6-only placements are not offered on this site"), whatever
-  `placement.ipv6OnlyBySite` says: a VPC keeps an IPv4 CIDR and its attachment needs IPv4 subnets.
+- IPv6-only placements on a site without `placement.ipv6OnlyBySite` and the `ipv6Only` capability:
+  `FamilyUnavailable` ("IPv6-only placements are not offered on this site"); on an installation without a placeholder
+  pool, see [AWS: IPv6-only placements](#aws-ipv6-only-placements).
 - A tenant prefix (mode `Tenant`) inside a range AWS keeps out of a VPC's IPv6 space
   (`placement.siteReserved.CloudAWS`: `fd00::/16`, `2001:db8::/32`): `PrefixInvalid`, the message ending "the cloud
   reserves this range". ULA outside `fd00::/16` and any GUA are accepted; AWS performs no ownership check on a
@@ -281,6 +282,68 @@ last pool. The provider-assigned block leaves the network's address space with t
 **An IPAM the platform does not manage.** An account holds one IPAM per region by default. When the environment's
 account already has one there that is not tagged `shc-role: tenant-ipam`, creating the platform's fails on the
 account's quota and the placement fails with AWS's message; raise the quota or remove the other IPAM.
+
+### AWS: IPv6-only placements
+
+A placement without `spec.ipv4` on an AWS site that offers IPv6-only (`placement.ipv6OnlyBySite` and the site's
+`ipv6Only` capability) is a VPC whose workloads have IPv6 only. Either source works; the block, its pool and the
+network's IPv6 routes are as for a dual-stack placement above.
+
+**The placeholder IPv4.** A VPC always has an IPv4 CIDR, and AWS refuses a transit gateway attachment on IPv6-only
+subnets (the attachment's interfaces need an IPv4 address). The AWS realization therefore names a range for these
+CIDRs, `tenant.placeholderV4Pool` (default empty):
+
+```yaml
+tenant:
+  placeholderV4Pool: ""   # an IPv4 range never routed anywhere, /16 to /26; AWS must accept it as a VPC's primary
+                          # CIDR (RFC 1918, 100.64.0.0/10 or publicly routable; not 172.17.0.0/16)
+```
+- Each IPv6-only VPC takes a /26 of it, chosen by the placement's layer 3 VNI (the same on every run), holding only
+  the attachment subnets: per availability zone a /28 plus the /64 from the top of the block (room for four zones).
+  Two placements may share a /26: the CIDR never leaves its VPC.
+- It is never routed. The edge routers' IPv4 route-map from the transit gateway denies the whole pool in every
+  network VRF, so it never enters the network nor becomes an EVPN Type-5 route; it is not allocated from the
+  network, not in `status.subnets` and not in the IPAM. The only record is `status.realization.site.placeholderV4`.
+  List the pool in `FABRIC_REALIZATION` `network.exclusiveRanges` so no tenant network can hold it.
+- Without a pool an IPv6-only placement on AWS fails with `FamilyUnavailable` ("this site has no placeholder IPv4
+  for IPv6-only VPCs").
+
+**Workload subnets** are IPv6-only (`Ipv6Native`, a /64 per availability zone from the bottom of the block), with
+resource-name hostnames (required on IPv6-only subnets) and their AAAA record on launch. The VPC has no IPv4 default
+route. Instances reach the instance metadata service over IPv6 at `fd00:ec2::254` on Nitro instance types (enable
+`HttpProtocolIpv6` on the instance); cloud-init works with it.
+
+**Reaching IPv4 follows the source** (`status.ipv6.translation`, with its `path`):
+
+| | Source `Network` | Source `Provider` |
+|---|---|---|
+| Translator | the site's translation (`translation.<site>`): its `pref64`, reached through the fabric's `::/0` | the NAT egress VPC (AWS realization `edge.egress.mode: nat-vpc`): its NAT gateway translates `64:ff9b::/96` |
+| DNS64 | the site's DNS64 resolvers | the VPC resolver (`fd00:ec2::253`) with DNS64 on the workload subnets |
+| Resolvers for the guests | a DHCP option set `shc-<namespace>-<name>` on the VPC with the translation's resolvers (`AmazonProvidedDNS` while translation doesn't apply); the VPC holds IPv6-only workload subnets only, so no dual-stack guest is left without a resolver | the VPC's default option set |
+| IPv4 source on the internet | the site translator's addresses | the NAT gateway's Elastic IP (`translation.ipv4Source`) |
+| Objects | the option set | DNS64 on the subnets; `64:ff9b::/96` to the transit gateway in the VPC; in the NAT egress VPC an Amazon /56, a /64 on each of its subnets, IPv6 on its attachment, `64:ff9b::/96` from the attachment subnet to the NAT gateway and the placement's block from the NAT gateway's subnet back to the transit gateway; a static `64:ff9b::/96` to the egress attachment in the network's transit gateway route table |
+
+Translation needs `spec.egress.internet` (and, for source `Provider`, the realization's `translation.<site>.provider`
+and a NAT egress VPC). Without it `status.ipv6.translation` is null and none of the `64:ff9b::/96` objects exist:
+they are removed when the network turns internet access off, and come back when it turns it on. Source `Network`
+needs no NAT egress VPC (nothing in the VPC sends IPv4); source `Provider` uses the same NAT egress VPC a dual-stack
+placement uses for IPv4 internet access (the one of the placement's transit gateway route table), with no NAT gateway
+of its own.
+
+**Costs.** The placeholder costs nothing. Source `Network` adds nothing beyond a dual-stack placement and builds no
+NAT egress VPC. Source `Provider` with translation pays for the NAT egress VPC: its NAT gateway's hourly charge and
+per-GB processing, its Elastic IP and attachment, plus the transit gateway's per-GB charge for the translated
+traffic.
+
+**Refused:**
+- An installation without `tenant.placeholderV4Pool`: `FamilyUnavailable` (above).
+- Source `Provider` on a network with tenant prefixes: `PrefixInvalid`, as for dual-stack; with source `Network` such
+  a placement gets no translation.
+- Public IPv4 subnets for internet-facing load balancers: an IPv6-only placement has none.
+
+**Teardown** adds, in reverse order: the VPC's `64:ff9b::/96` route with its other IPv6 routes, the DHCP option set
+(the VPC goes back to the default set first) before the VPC's IPv6 block, and with the NAT egress VPC its
+NAT64 routes and the static route.
 
 ## Cloud sites: Google Cloud placements
 
@@ -803,6 +866,12 @@ A network with tenant prefixes (mode `Tenant`) gets no `::/0` toward the transit
 accepts the routers' Type-5 routes inside the placements' prefixes only (its site-import filter), and the placement's
 readiness checks those routes at the gateway per family, as on every site; a placement whose gateway took it up before
 its IPv6 subnet was known asks the gateway again.
+
+**The placeholder IPv4.** With the AWS realization's `tenant.placeholderV4Pool` set, the gateway job writes it to the
+routers' configuration, and every network VRF's IPv4 route-map from the transit gateway denies the pool and anything
+inside it ahead of its permit (prefix list `<vrf>-placeholder4`), so an IPv6-only VPC's IPv4 CIDR never enters the
+VRF ([AWS: IPv6-only placements](#aws-ipv6-only-placements)). Without a pool the routers' configuration and FRR
+render are as before.
 
 **ICMPv6 source.** Each router gets a /128 on `lo<vni>` in every IPv6 VRF, from the fabric's `core.icmpSource6`: the
 same formula as the border gateway nodes (network address + (node ordinal << 16) + the gateway's provider-edge

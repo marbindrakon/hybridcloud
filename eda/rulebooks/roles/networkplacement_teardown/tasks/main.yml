@@ -325,11 +325,12 @@
                   edge: "{{ aws_edge_cfg }}"
                 # with spec.ipv6 the IPv6 side goes too (routes, egress-only gateway, the VPC's block, the
                 # placement's IPAM pool and the IPAM with its last pool); the source the site side recorded, else the
-                # spec's
+                # spec's; an IPv6-only placement (no spec.ipv4) also has its VPC's DHCP option set removed
                 _v6: >-
                   {{ {} if fab_spec.ipv6 is not defined
                      else {'source': (_site_st.ipv6 | default({}, true)).source | default(fab_spec.ipv6.source | default('Network', true), true)}
-                          | combine({'prefix': _site_st.ipv6.prefix} if (_site_st.ipv6 | default({}, true)).prefix is defined else {}) }}
+                          | combine({'prefix': _site_st.ipv6.prefix} if (_site_st.ipv6 | default({}, true)).prefix is defined else {})
+                          | combine({'only': true} if fab_spec.ipv4 is not defined else {}) }}
                 aws_args: >-
                   {{ ['place-down', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', npd_real.l3Vni | string]
                      + (['--ipv6', _v6 | to_json] if _v6 | length > 0 else []) }}

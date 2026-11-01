@@ -2,7 +2,8 @@
 # shc (design/P8-PLAN.md §11): this installation's AWS realization (inventory variable aws_realization, from
 # AWS_REALIZATION) and the job's AWS identity (the shc-aws container group). Optional inputs: aws_edge_site,
 # aws_edge_cidr, aws_edge_asn (a CloudGateway's edge site). Sets aws_real, and aws_edge_cfg when aws_edge_site is
-# given: the shc_aws_edge.py config of that site.
+# given: the shc_aws_edge.py config of that site (with placeholderV4Pool when the tenant section sets one: the
+# routers drop it from the transit gateway).
 # Generic defaults merged under an installation's edge section (the realization's own keys win):
 #   edge.ipv6.enabled          IPv6 on the edge routers (design/IPV6-PLAN.md §6.1-§6.2): every Connect peer gets an
 #                              IPv6 /125 next to its IPv4 /29, the routers carry the placements' IPv6 per network VRF.
@@ -13,15 +14,26 @@
 #                              range inside siteReserved.CloudAWS such as fd00::/16 is refused to tenants already).
 #                              Its ledger is the /125s the region's Connect peers hold; AWS reserves no IPv6 inside
 #                              range (the IPv4 insideCidrPool steps around AWS's reserved /29s, the /125s need none).
+# and under its tenant section:
+#   tenant.placeholderV4Pool   the IPv4 range IPv6-only placements take their VPC's IPv4 CIDR from (a VPC always has
+#                              an IPv4 CIDR and a transit gateway attachment needs IPv4 subnets): a /26 per placement,
+#                              chosen by its layer 3 VNI, holding the attachment /28s and nothing else. Never routed:
+#                              the edge routers drop it from the transit gateway (every network VRF), it stays out of
+#                              the IPAM and the network, and it belongs in FABRIC_REALIZATION network.exclusiveRanges.
+#                              It must be a range AWS takes as a VPC's primary CIDR (RFC 1918, 100.64.0.0/10 or
+#                              publicly routable; /16 to /26 here). Empty: IPv6-only placements are refused on AWS.
 - name: The installation's AWS realization
   vars:
     _aws_r: "{{ aws_realization | default({}, true) }}"
     _aws_edge_defaults:
       ipv6: {enabled: false, insideCidrPool6: ""}
+    _aws_tenant_defaults:
+      placeholderV4Pool: ""
   ansible.builtin.set_fact:
     aws_real: >-
       {{ _aws_r | combine({'edge': _aws_edge_defaults | combine(_aws_r.edge, recursive=true)}
-                          if _aws_r.edge is defined and _aws_r.edge is mapping else {}) }}
+                          if _aws_r.edge is defined and _aws_r.edge is mapping else {})
+                | combine({'tenant': _aws_tenant_defaults | combine(_aws_r.tenant | default({}, true), recursive=true)}) }}
 
 - name: Require the AWS realization and the job's AWS identity
   ansible.builtin.assert:
@@ -42,5 +54,7 @@
            'account': aws_real.hub.account, 'region': aws_real.hub.region,
            'memberRole': aws_real.hub.memberRole | default('shc-automation'), 'entry': 'automation',
            'site': aws_edge_site, 'asn': aws_edge_asn | int,
-           'tunnel': (aws_real.edge.tunnel | default({})) | combine({'cidr': aws_edge_cidr})}) }}
+           'tunnel': (aws_real.edge.tunnel | default({})) | combine({'cidr': aws_edge_cidr})})
+         | combine({'placeholderV4Pool': aws_real.tenant.placeholderV4Pool | string | trim}
+                   if aws_real.tenant.placeholderV4Pool | default('', true) | string | trim | length > 0 else {}) }}
   when: aws_edge_site is defined

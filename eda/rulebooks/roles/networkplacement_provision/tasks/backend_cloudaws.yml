@@ -19,7 +19,18 @@
 #                    cloud edge router never announces it toward another cloud's provider-source placements)
 #   both             the network's IPv6 space routed to the transit gateway; status.ipv6 described again once the
 #                    provider's block is known (ipv6_status.yml, internet.path Fabric or Provider)
-# Sets np_backend_status, np_backend_changed.
+# IPv6-only (no IPv4 subnet; design/IPV6-PLAN.md §6.4): refused (FamilyUnavailable) on an installation without
+# AWS_REALIZATION tenant.placeholderV4Pool. Otherwise the VPC's IPv4 CIDR is a placeholder /26 of that pool (chosen by
+# the VNI; it holds only the attachment subnets, is never routed and is recorded only as
+# status.realization.site.placeholderV4), the workload subnets are IPv6-only, and the translation follows the source:
+#   source Network   the fabric's (np_translation from ipv6_status.yml): its resolvers go into the VPC's DHCP option
+#                    set (AmazonProvidedDNS without translation); no NAT egress VPC, nothing in the VPC uses IPv4
+#   source Provider  while the placement qualifies (np_translation.path Provider) and the network has its NAT egress
+#                    VPC (edge.egress.mode nat-vpc): DNS64 on the workload subnets, 64:ff9b::/96 through the transit
+#                    gateway to that VPC's NAT gateway; the site side reports the translation (np_backend_translation
+#                    {path, pref64, resolvers, ipv4Source}), which the second description of status.ipv6 publishes.
+#                    Otherwise no NAT egress VPC and none of the 64:ff9b objects (removed when present)
+# Sets np_backend_status, np_backend_changed, np_backend_translation ({} unless the provider translates).
 - name: The installation's AWS realization and the site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
   vars:
@@ -46,6 +57,33 @@
       {{ (((np_network.spec | default({})).egress | default({})).internet | default(false) | bool)
          and ((aws_real.edge.egress | default({})).mode | default('fabric')) == 'nat-vpc' }}
 
+- name: Is the placement IPv6-only
+  ansible.builtin.set_fact:
+    np_aws_only: "{{ np_prefixes_v4 | default([], true) | length == 0 }}"
+    np_aws_placeholder_pool: "{{ aws_real.tenant.placeholderV4Pool | default('', true) | string | trim }}"
+
+# a VPC always has an IPv4 CIDR and its transit gateway attachment IPv4 subnets: without a placeholder range for them
+# this installation can't build an IPv6-only VPC
+- name: Refuse an IPv6-only placement without the site's placeholder IPv4
+  ansible.builtin.set_fact:
+    fab_fail_reason: FamilyUnavailable
+    fab_fail_msg: "NetworkPlacement {{ fab_name }}: this site has no placeholder IPv4 for IPv6-only VPCs"
+  when: np_aws_only | bool and np_aws_placeholder_pool | length == 0
+
+- name: Stop on an IPv6-only placement without a placeholder
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: np_aws_only | bool and np_aws_placeholder_pool | length == 0
+
+# an IPv6-only VPC has no IPv4 workload: the network's NAT egress VPC is built for it only to translate (source
+# Provider, while translation qualifies)
+- name: The network's NAT egress VPC for an IPv6-only placement
+  vars:
+    _provider_tr: "{{ (np_translation | default({}, true)).path | default('', true) == 'Provider' }}"
+  ansible.builtin.set_fact:
+    np_aws_nat_egress: "{{ np_aws_nat_egress | bool and np_ipv6_source | default('', true) == 'Provider' and _provider_tr | bool }}"
+  when: np_aws_only | bool
+
 - name: Refuse an environment without an account yet
   ansible.builtin.fail:
     msg: "CloudAWS {{ np_backend_name }} has no account in its status yet"
@@ -69,6 +107,19 @@
          else ({'source': _w6.source, 'internet': _internet | bool,
                 'networkPrefixes6': _nst.prefixes | default([], true) | list}
                | combine({'prefix': _block | trim} if _w6.source == 'Network' else {})) }}
+
+# IPv6-only: the placeholder range, and per source the resolvers for the DHCP option set (Network) or whether the
+# provider translates (Provider)
+- name: The placement's IPv6-only side here
+  vars:
+    _tr: "{{ np_translation | default({}, true) }}"
+  ansible.builtin.set_fact:
+    np_aws_ipv6: >-
+      {{ np_aws_ipv6 | combine({'placeholderV4Pool': np_aws_placeholder_pool})
+         | combine({'resolvers': (_tr.resolvers | default([], true) | list) if _tr.path | default('', true) != 'Provider' else []}
+                   if np_aws_ipv6.source == 'Network'
+                   else {'nat64': _tr.path | default('', true) == 'Provider' and np_aws_nat_egress | bool}) }}
+  when: np_aws_only | bool and np_aws_ipv6 | length > 0
 
 - name: Refuse a Network-source placement without its block
   ansible.builtin.fail:
@@ -101,6 +152,11 @@
   ansible.builtin.fail:
     msg: "{{ fab_fail_msg if aws_result.reason | default('') == 'PrefixInvalid' else 'AWS place-up failed: ' ~ aws_error }}"
   when: aws_error | length > 0
+
+# what the provider's translator reports (IPv6-only, source Provider), for the second description of status.ipv6
+- name: The site side's translation
+  ansible.builtin.set_fact:
+    np_backend_translation: "{{ (aws_result.result.ipv6 | default({}, true)).translation | default({}, true) }}"
 
 - name: The provider's IPv6 block in the network's address space
   when: (aws_result.result.ipv6 | default({}, true)).source | default('') == 'Provider'
@@ -144,3 +200,9 @@
   ansible.builtin.set_fact:
     np_backend_status: "{{ np_backend_status | combine({'ipv6': aws_result.result.ipv6}) }}"
   when: aws_result.result.ipv6 | default({}, true) | length > 0
+
+# the only record of an IPv6-only VPC's IPv4 CIDR (never in status.subnets, the IPAM or the fabric)
+- name: Record the placeholder IPv4
+  ansible.builtin.set_fact:
+    np_backend_status: "{{ np_backend_status | combine({'placeholderV4': aws_result.result.placeholderV4}) }}"
+  when: aws_result.result.placeholderV4 | default('', true) | length > 0

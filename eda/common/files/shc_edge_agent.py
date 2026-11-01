@@ -6,7 +6,7 @@ public key and its state back, so the router needs no inbound management access 
   /shc/edge/<site>/config            SecureString JSON written by the automation (shc_aws_edge.py)
   /shc/edge/<site>/nodes/<instance>  String JSON written here: publicKey, tunnelAddress, applied, state
 
-config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?,
+config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?, "placeholderV4Pool"?,
          "nodes": {<instance-id>: {"name", "address"}},
          "gateways": [{"name", "publicKey", "address"}],
          "vrfs": [{"name", "vni", "mtu", "tgwAsn", "connect": {<instance-id>: {"local", "remote", "inside", "bgp": [..]}},
@@ -14,6 +14,10 @@ config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?,
                    "ipv6"?: {"enabled", "prefixes6": [..], "network6": [..], "source": "Network" | "Provider",
                              "internet", "inside6": {<instance-id>: {"inside": "<a>/125", "tgw": [..]}},
                              "icmp6": {<instance-id>: "<a>/128"}}}]}
+
+placeholderV4Pool (the IPv4 range IPv6-only VPCs take their never-routed IPv4 CIDR from): every network VRF's IPv4
+route-map from the transit gateway denies it and everything inside it before its permit, so such a CIDR never
+enters the VRF nor becomes an EVPN Type-5 route. Without the key the render is as before.
 
 IPv6 (design/IPV6-PLAN.md §6.1-§6.2), per VRF whose ipv6 block is enabled and names this router in inside6; a VRF
 without an ipv6 block is configured exactly as before IPv6 existed:
@@ -166,9 +170,18 @@ def frr_policy6(v, six, icmp):
     return out + ["!"]
 
 
+def placeholder4(name, pool):
+    """The deny of the placeholder IPv4 range ahead of a VRF's tgw-in permit (see the module docstring)."""
+    n = ipaddress.ip_network(pool)
+    more = "" if n.prefixlen == 32 else " le 32"
+    return ["ip prefix-list %s-placeholder4 seq 5 permit %s%s" % (name, n, more),
+            "route-map %s-tgw-in deny 5" % name, " match ip address prefix-list %s-placeholder4" % name, "exit"]
+
+
 def frr_conf(cfg, me, node):
     gws = cfg.get("gateways", [])
     pw = cfg.get("bgpPassword")
+    pool4 = cfg.get("placeholderV4Pool")
     out = ["frr defaults traditional", "hostname %s" % node["name"], "service integrated-vtysh-config", "!"]
     for v in cfg.get("vrfs", []):
         six = v6_of(v, me)
@@ -178,7 +191,10 @@ def frr_conf(cfg, me, node):
             out.append(" ipv6 protocol bgp route-map %s-src6" % v["name"])
         out += ["exit-vrf", "!"]
         # FRR 8.5 sends and accepts nothing on eBGP without policy (RFC 8212, also under "traditional"). The transit
-        # gateway's route table belongs to this network alone: take its routes, give it the network's
+        # gateway's route table belongs to this network alone: take its routes (an IPv6-only VPC's placeholder IPv4
+        # CIDR excepted), give it the network's
+        if pool4:
+            out += placeholder4(v["name"], pool4)
         out += ["route-map %s-tgw-in permit 10" % v["name"], "exit", "route-map %s-tgw-out permit 10" % v["name"],
                 "exit", "!"]
         if six:
