@@ -148,6 +148,11 @@ PART_REASONS = {
     # fails one of its checks, has not run for a while or cannot be reached
     "CanaryFailed": _r("P", READY, "The platform's translation canary on a site fails or is stale; the platform team is looking at it."),
     "IPv6TranslationCanaryFailed": _r("P", READY, "Translation to IPv4 may not work on a site: the platform's canary there has failed for several minutes; the platform team is alerted."),
+    # the CloudInfrastructure's TenantDns condition: the site's tenant DNS controller reports a failed reconcile newer
+    # than its last success, or no success for dns.reverse6.staleMinutes
+    "DNSReconcileFailed": _r("P", READY, "The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it."),
+    # the same condition when the site no longer reports a tenant DNS controller, or its report cannot be read
+    "NotReported": _r("A", READY, "The site does not report this health check."),
 }
 
 # Deletion requests written by the operator are named <Kind>DeleteRequested.

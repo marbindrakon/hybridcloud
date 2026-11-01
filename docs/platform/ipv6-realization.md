@@ -504,6 +504,65 @@ IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
   one message per second per destination (even one every 20 ms) leaves a guest connecting to a name with many
   addresses waiting a full retransmit for the answers that were limited. Empty keeps the kernel default.
 
+## Reverse DNS (`dns.reverse6`)
+
+```yaml
+dns:
+  reverse6:
+    zones: []                # reverse zones the platform owns, e.g. 8.b.d.0.1.0.0.2.ip6.arpa for 2001:db8::/32
+    gatewayLabel: gateways   # the label gateway names are published under
+    ttl: 3600                # TTL of the platform's AAAA and PTR records
+    staleMinutes: 30         # how old the tenant DNS controller's last success on a site may be
+```
+
+With no zone (the default) the platform writes no reverse DNS. List a zone only for space the platform assigns from
+its own pools and whose reverse delegation points at the Designate pool of the global tenant zone; the delegation of
+the zone itself (the NS records in the parent reverse zone) is the address holder's step and comes after the zone
+exists, otherwise it is a lame delegation.
+
+**Zones.** The CloudInfrastructure job of the site that hosts the global tenant zone (`dns.mode: native`, a usable
+DNSConfig, and the parent zone it ensures is the DNSConfig's zone) creates every listed zone next to the global zone:
+the same DNS project, the site account (the cloud admin; a cloud's DNS service may let only an administrator create a
+zone under a delegated reverse block), the zone attributes of the site's `dns.zoneAttributes` (pool scheduling, e.g.
+`scope: public`), email `hostmaster@<global domain>`. It records them in
+`status.realization.dns.reverseZones` (`[{name, id, nameservers}]`, or `{name, error}` for a zone it could not
+ensure); a zone error never fails the site. Other sites write nothing; a site that no longer hosts the zones loses
+the record. Removing a zone from the list does not delete it. When the DNS service refuses the name to the site
+account (a blacklist under the delegated reverse block answers "Blacklisted zone name"), an administrator creates
+the zone with the same attributes and hands it to the DNS project by a zone ownership transfer; the site job then
+finds it there on its next run and records it.
+
+**Who writes which record.** Every name is forward-confirmed: an AAAA in a forward zone and the PTR of the address in
+the reverse zone that covers it (the longest one), both written with the DNSConfig's DNS-only account (a member of the
+DNS project) and both carrying the ownership marker `shc:<owner>` in the recordset description. A recordset of the same
+name and type with another marker is never changed or deleted ("held by another owner").
+
+| Address | Name (AAAA in) | Owner | Written by |
+|---|---|---|---|
+| A placement's IPv6 gateway (`status.subnets[family=6].gateway`: the first host on OpenShift Virtualization, the subnet's gateway from Neutron on OpenStack) | `<network>.<gatewayLabel>.<environment zone>` (the environment's zone, `status.dns.zone`) | `NetworkPlacement/<namespace>/<name>` | the placement job, recorded in `status.realization.reverseDns` |
+| A border gateway node's ICMPv6 source in a gateway namespace (`core.icmpSource6`) | `<node>.<gateway>.<gatewayLabel>.<global domain>` (the global zone) | `CloudGateway/<name>` | the gateway job, recorded in `status.realization.reverseDns` |
+| A tenant VM on OpenShift Virtualization that publishes an AAAA through the tenant DNS controller | the tenant's own name in its environment zone | the controller's marker | the tenant DNS controller, only for addresses inside the namespace's placement prefixes |
+
+The placement job also writes the annotation `hybridsovereign.redhat/ipv6-prefixes` (the placement's IPv6 subnets,
+comma-separated) on every OpenShift Virtualization namespace the placement serves; the tenant DNS controller trusts
+only that annotation (tenants can't change it, as with `hybridsovereign.redhat/dns-zone`). Node labels and network
+names are lowercased, with characters outside `a-z0-9-` replaced by `-`.
+
+**Notes, not failures.** An environment without a zone, an environment zone held by another site's DNS service, an
+address no listed zone covers and every API error end in the job's status message (`reverse DNS: …`); the placement
+and the gateway still become ready. A name the job published before and no longer wants (the IPv6 subnet went away, a
+node left) loses its PTR, then its AAAA, on the next run.
+
+**Teardown order.** A placement removes its PTR, then its AAAA, after the site side and before its subnets go back to
+the network's address space, so the next holder of the prefix never inherits a name; while a removal fails (with a
+usable DNSConfig) the deletion waits and retries. It also removes the namespace annotation where the value is still
+its own. A gateway removes its names once its instance is off the nodes; a failure is noted in the final message.
+
+**Not covered.** Space from a cloud provider (AWS, GCP) and tenant-provided prefixes have their reverse DNS with the
+provider or the tenant: no listed zone covers them, so they get no PTR. OpenStack tenant VMs get no PTR from the
+platform (Neutron's own DNS integration is the cloud's). Per-network reverse sub-zones shared with tenants are not
+offered.
+
 ## Attachment circuits
 
 ```yaml
@@ -512,6 +571,68 @@ attachments:
 ```
 A circuit whose peer AS is listed fails with `PeerAsnReserved`. IPv6 entries in a circuit's accept list stay refused at
 admission.
+
+## Tenant reverse names
+
+The tenant DNS controller on an OpenShift Virtualization site (chart `shc-cluster-base`, `tenantDns`) publishes the
+names tenants ask for in their environment zone. For an AAAA it publishes, it also writes the reverse name, so that
+every tenant PTR is forward-confirmed:
+
+- **Which addresses:** those inside the namespace's placement prefixes. The platform writes them on every
+  namespace a placement serves, in the annotation `hybridsovereign.redhat/ipv6-prefixes` (comma-separated IPv6
+  prefixes), the same trust model as the zone annotation `hybridsovereign.redhat/dns-zone`: tenants can't change
+  namespaces. Entries that are not IPv6 prefixes are skipped (logged once). A namespace without the annotation gets
+  no reverse names.
+- **Which zone:** the longest reverse zone (`*.ip6.arpa`) of the controller's DNS project that contains the
+  address's reverse name. The platform creates those zones (`dns.reverse6.zones`); the controller only finds them
+  in the zone listing it already reads on every round.
+- **The record:** a PTR at the address's reverse name whose target is the AAAA's name, with the AAAA's ownership
+  description (`shc-tenant-dns cluster=<cluster> owner=<namespace>/<Kind>/<name>`). One owner per reverse name: when
+  two objects publish the same address, the older object's name wins, as for forward names.
+- **Not written:** an address outside the prefixes ("no PTR for <address>: outside the placement prefixes"), one no
+  reverse zone covers ("no PTR for <address>: no platform reverse zone"), or a reverse name another owner holds.
+  The object's `hybridsovereign.redhat/dns-status` says so, with one Event when that status changes; the AAAA is
+  still published. A PTR is written only after its AAAA is published. Tenants can't request PTRs themselves (the
+  type is never allowed in their objects).
+- **Removed:** with its AAAA (the object, its name or the address goes, or the address leaves the namespace's
+  prefixes), and in the sweep of the controller's own records: a PTR whose owner object is gone or whose AAAA it no
+  longer publishes. Records of other clusters and records without the controller's marker are never touched.
+
+**Health.** After every round the controller writes the ConfigMap `tenant-dns-status` in its own namespace:
+
+```yaml
+data:
+  lastSuccess: "2026-01-01T10:00:00Z"   # the last successful round (RFC 3339, UTC); "" before the first
+  lastError: "HttpException: ..."       # the last failure (kept after a later success)
+  lastErrorAt: "2026-01-01T09:55:00Z"
+  refused: "0"                          # objects with a refusal in the last successful round
+  ptrs: "3"                             # PTRs the controller holds after it
+```
+A failed round also adds a Warning Event `DNSReconcileFailed` on that ConfigMap, once per distinct error (again after
+a success). The pod's liveness file still only tells that the loop runs.
+
+**The site job** of an OpenShift site reads that ConfigMap with the site probe's credential (it may read that one
+ConfigMap name) and records it on the CloudInfrastructure, with the condition `TenantDns`:
+
+```yaml
+dns:
+  tenantDnsNamespace: shc-tenant-dns   # the tenant DNS controller's namespace on the sites (the chart's default)
+  reverse6:
+    staleMinutes: 30                   # a last success older than this turns TenantDns False
+```
+```yaml
+status:
+  realization:
+    tenantDns: {lastSuccess, lastError, lastErrorAt, refused, ptrs}   # null: no ConfigMap on the site
+  conditions:
+    - type: TenantDns
+      status: "True"                   # reason Ready
+      # "False", reason DNSReconcileFailed: the last error is newer than the last success, no success yet, or the
+      #   last success is older than staleMinutes
+      # "Unknown", reason NotReported: the record went after one was reported, or it could not be read
+```
+The condition does not change the site's phase: names keep resolving while the controller is down, only changes
+wait. A site that never reported a record gets no condition. The read never fails the site job.
 
 ## Rollout and rollback
 

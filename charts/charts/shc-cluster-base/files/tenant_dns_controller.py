@@ -21,8 +21,20 @@ NS/SOA), so platform records and other clusters' records are left alone. A recor
 name in the object, or the namespace's label goes. Deleting the environment deletes the zone with everything in
 it (CloudVirt teardown).
 
+Reverse names (forward-confirmed PTRs): the platform writes the namespace annotation hybridsovereign.redhat/ipv6-prefixes
+(comma-separated IPv6 prefixes of the placements that serve the namespace), the same trust model as the zone
+annotation. Every address of an AAAA the controller publishes for an object in that namespace that lies inside one of
+those prefixes gets a PTR to the AAAA's name, in the covering reverse zone (*.ip6.arpa.) of the controller's DNS
+project (the longest zone that contains the address's reverse name), with the AAAA's ownership description. An address
+outside the prefixes, or one no reverse zone covers, gets no PTR (the object's status says so; the AAAA is still
+published). A PTR goes with its AAAA (object, name, address or annotation gone) and in the sweep of owned records the
+controller no longer wants. Tenants never write PTRs themselves.
+
 Runs level-triggered: watches namespaces, DNSEndpoints, Services and Routes, and reconciles everything a few
-seconds after a change, and every resyncSeconds (repairs records changed in Designate).
+seconds after a change, and every resyncSeconds (repairs records changed in Designate). After every round it writes
+its health to the ConfigMap tenant-dns-status in its own namespace (lastSuccess, lastError, lastErrorAt, refused,
+ptrs), read by the platform's site job, and a Warning Event DNSReconcileFailed on that ConfigMap once per distinct
+error.
 """
 import argparse
 import datetime
@@ -41,6 +53,10 @@ from kubernetes import client, config, watch
 NS_LABEL = "hybridsovereign.redhat/cloudvirt"
 ZONE_ANNOTATION = "hybridsovereign.redhat/dns-zone"
 STATUS_ANNOTATION = "hybridsovereign.redhat/dns-status"
+PREFIXES_ANNOTATION = "hybridsovereign.redhat/ipv6-prefixes"
+REVERSE_SUFFIX = ".ip6.arpa."
+STATUS_CONFIGMAP = "tenant-dns-status"
+SA_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 HOSTNAME_ANNOTATION = "external-dns.alpha.kubernetes.io/hostname"
 TARGET_ANNOTATION = "external-dns.alpha.kubernetes.io/target"
 TTL_ANNOTATION = "external-dns.alpha.kubernetes.io/ttl"
@@ -63,6 +79,24 @@ def is_host(name):
     return len(name) <= 253 and bool(HOST_RE.match(name.rstrip(".")))
 
 
+def rfc3339(t=None):
+    return (t or datetime.datetime.now(datetime.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def reverse_name(address):
+    """The ip6.arpa name of an IPv6 address (fully qualified)."""
+    return ipaddress.ip_address(address).reverse_pointer + "."
+
+
+def covering_zone(name, zone_names):
+    """The longest zone of zone_names that contains the name (equal to it or a parent of it), else None."""
+    best = None
+    for z in zone_names:
+        if (name == z or name.endswith("." + z)) and (best is None or len(z) > len(best)):
+            best = z
+    return best
+
+
 class Refused(Exception):
     pass
 
@@ -73,7 +107,8 @@ class Controller:
         self.domain = fqdn(cfg["domain"])
         self.depth = int(cfg.get("zoneDepth", 2))
         self.ttl = int(cfg.get("defaultTTL", 300))
-        self.types = set(cfg.get("types") or ["A", "AAAA", "CNAME", "TXT", "MX", "SRV", "CAA"]) - {"NS", "SOA"}
+        # PTRs are the controller's own (forward-confirmed, in the platform's reverse zones), never a tenant's
+        self.types = set(cfg.get("types") or ["A", "AAAA", "CNAME", "TXT", "MX", "SRV", "CAA"]) - {"NS", "SOA", "PTR"}
         self.resync = int(cfg.get("resyncSeconds", 300))
         self.prefix = f"{MARKER} cluster={self.cluster} "
         with open(clouds) as f:
@@ -84,6 +119,18 @@ class Controller:
         self.trigger = threading.Event()
         self.tenant_ns = set()
         self.health = cfg.get("healthFile", "/tmp/healthy")
+        self.namespace = cfg.get("namespace") or self._own_namespace()
+        self.reported_error = None  # the error of the last DNSReconcileFailed event (one event per distinct error)
+        self.bad_prefixes = set()  # annotation values already logged as unusable
+        self.counts = {"refused": 0, "ptrs": 0}
+
+    @staticmethod
+    def _own_namespace():
+        try:
+            with open(SA_NAMESPACE_FILE) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
 
     # ── OpenStack ──────────────────────────────────────────────────────────────────────────────────────────────
     def dns(self):
@@ -123,6 +170,28 @@ class Controller:
         if not rel or len(rel.rstrip(".").split(".")) != self.depth or not is_host(zone):
             return None, f"the namespace's zone {zone} is not an environment zone of {self.domain}"
         return zone, None
+
+    def prefixes_of(self, ns):
+        """The namespace's placement IPv6 prefixes (platform-set annotation), or None when it has no annotation.
+        Entries that are not IPv6 prefixes are skipped (logged once)."""
+        raw = (ns.metadata.annotations or {}).get(PREFIXES_ANNOTATION)
+        if raw is None or not raw.strip():
+            return None
+        out = []
+        for p in raw.split(","):
+            p = p.strip()
+            if not p:
+                continue
+            try:
+                net = ipaddress.ip_network(p, strict=False)
+                if net.version != 6:
+                    raise ValueError("not IPv6")
+                out.append(net)
+            except ValueError as e:
+                if (ns.metadata.name, p) not in self.bad_prefixes:
+                    self.bad_prefixes.add((ns.metadata.name, p))
+                    log(f"namespace {ns.metadata.name}: {PREFIXES_ANNOTATION} entry {p!r} ignored ({e})")
+        return out
 
     def records(self, rtype, targets):
         """Designate record data for a type; raises Refused."""
@@ -239,18 +308,20 @@ class Controller:
 
     # ── reconcile ──────────────────────────────────────────────────────────────────────────────────────────────
     def reconcile(self):
-        zones_by_ns, ns_problem = {}, {}
+        zones_by_ns, ns_problem, prefixes_by_ns = {}, {}, {}
         for ns in self.core.list_namespace(label_selector=NS_LABEL).items:
             zone, problem = self.zone_of(ns)
             if zone:
                 zones_by_ns[ns.metadata.name] = zone
+                prefixes_by_ns[ns.metadata.name] = self.prefixes_of(ns)
             else:
                 ns_problem[ns.metadata.name] = problem
         self.tenant_ns = set(zones_by_ns) | set(ns_problem)
         objs = self.objects(self.tenant_ns)
 
         conn = self.dns()
-        zones = {z.name: z for z in conn.dns.zones()}
+        zones = {z.name: z for z in conn.dns.zones()}  # one listing per round: forward and reverse zones
+        reverse_zones = [n for n in zones if n.endswith(REVERSE_SUFFIX)]
         actual = {}
         for rs in self.owned(conn):
             if rs.type in ("NS", "SOA") or not (rs.description or "").startswith(self.prefix):
@@ -263,7 +334,7 @@ class Controller:
         for kind, o in objs:
             m = o["metadata"]
             key = f"{m['namespace']}/{kind}/{m['name']}"
-            results[key] = {"kind": kind, "obj": o, "records": [], "refused": []}
+            results[key] = {"kind": kind, "obj": o, "records": [], "refused": [], "notes": []}
             if m["namespace"] in ns_problem:
                 results[key]["refused"].append(ns_problem[m["namespace"]])
                 continue
@@ -293,7 +364,7 @@ class Controller:
                     results[key]["refused"].append(str(e))
                     continue
                 claims.append({"key": key, "zone": zone, "name": name, "type": rtype, "records": data, "ttl": ttl,
-                               "description": self.description(key),
+                               "description": self.description(key), "namespace": m["namespace"],
                                "created": m.get("creationTimestamp") or ""})
 
         # one owner per name and type: the current owner keeps it, then the oldest object
@@ -306,28 +377,42 @@ class Controller:
                 continue
             desired[k] = c
 
-        # apply
-        for k, c in desired.items():
-            rs = actual.get(k)
-            try:
-                if rs is not None:
-                    if sorted(rs.records) != c["records"] or rs.ttl != c["ttl"] or rs.description != c["description"]:
-                        conn.dns.update_recordset(rs, records=c["records"], ttl=c["ttl"], description=c["description"])
-                        log(f"updated {c['name']} {c['type']} {c['records']} ({c['key']})")
-                else:
-                    z = zones.get(c["zone"])
-                    if z is None:
-                        raise Refused(f"the environment zone {c['zone']} does not exist (yet)")
-                    conn.dns.create_recordset(z, name=c["name"], type=c["type"], records=c["records"], ttl=c["ttl"],
-                                              description=c["description"])
-                    log(f"created {c['name']} {c['type']} {c['records']} ({c['key']})")
-                results[c["key"]]["records"].append(f"{c['name'].rstrip('.')} {c['type']}")
-            except Refused as e:
-                results[c["key"]]["refused"].append(str(e))
-            except openstack.exceptions.ConflictException:
-                results[c["key"]]["refused"].append(f"{c['name']} {c['type']} already exists (not this object's)")
-            except openstack.exceptions.BadRequestException as e:
-                results[c["key"]]["refused"].append(f"{c['name']} {c['type']}: {getattr(e, 'details', None) or e}")
+        # apply the tenants' records; an AAAA counts for its PTRs only once it is published
+        published = [c for c in desired.values() if self.apply(conn, zones, actual, c, results[c["key"]])]
+
+        # forward-confirmed PTRs: the published AAAA addresses inside the namespace's placement prefixes
+        ptr_claims = []
+        for c in published:
+            if c["type"] != "AAAA":
+                continue
+            prefixes = prefixes_by_ns.get(c["namespace"])
+            if prefixes is None:  # the namespace has no placement prefixes: no reverse names there
+                continue
+            for addr in c["records"]:
+                a = ipaddress.ip_address(addr)
+                if not any(a in p for p in prefixes):
+                    results[c["key"]]["notes"].append(f"no PTR for {addr}: outside the placement prefixes")
+                    continue
+                name = reverse_name(addr)
+                rzone = covering_zone(name, reverse_zones)
+                if rzone is None:
+                    results[c["key"]]["notes"].append(f"no PTR for {addr}: no platform reverse zone")
+                    continue
+                ptr_claims.append(dict(c, zone=rzone, name=name, type="PTR", records=[c["name"]], address=addr))
+        ptr_claims.sort(key=lambda c: (owner_of.get((c["name"], "PTR")) != c["description"], c["created"], c["key"],
+                                       c["records"][0]))
+        ptrs = 0
+        for c in ptr_claims:
+            k = (c["name"], "PTR")
+            if k in desired:
+                results[c["key"]]["notes"].append(
+                    f"no PTR for {c['address']}: its reverse name points to {desired[k]['records'][0].rstrip('.')}")
+                continue
+            desired[k] = c
+            if self.apply(conn, zones, actual, c, results[c["key"]]):
+                ptrs += 1
+
+        # the sweep: every owned record nobody wants any more (PTRs whose AAAA went included)
         for k, rs in actual.items():
             if k not in desired:
                 try:
@@ -338,6 +423,37 @@ class Controller:
 
         for key, r in results.items():
             self.report(r)
+        self.counts = {"refused": sum(1 for r in results.values() if r["refused"]), "ptrs": ptrs}
+
+    def apply(self, conn, zones, actual, c, result):
+        """Create or update one desired recordset; True when it is published."""
+        rs = actual.get((c["name"], c["type"]))
+        label = f"{c['address']} PTR" if c["type"] == "PTR" else f"{c['name'].rstrip('.')} {c['type']}"
+        try:
+            if rs is not None:
+                if sorted(rs.records) != c["records"] or rs.ttl != c["ttl"] or rs.description != c["description"]:
+                    conn.dns.update_recordset(rs, records=c["records"], ttl=c["ttl"], description=c["description"])
+                    log(f"updated {c['name']} {c['type']} {c['records']} ({c['key']})")
+            else:
+                z = zones.get(c["zone"])
+                if z is None:
+                    raise Refused(f"the environment zone {c['zone']} does not exist (yet)")
+                conn.dns.create_recordset(z, name=c["name"], type=c["type"], records=c["records"], ttl=c["ttl"],
+                                          description=c["description"])
+                log(f"created {c['name']} {c['type']} {c['records']} ({c['key']})")
+            result["records"].append(label)
+            return True
+        except Refused as e:
+            result["refused"].append(str(e))
+        except openstack.exceptions.ConflictException:
+            if c["type"] == "PTR":  # someone else's PTR at that name: not the tenant's fault, the AAAA stands
+                result["notes"].append(f"no PTR for {c['address']}: its reverse name is held by another owner")
+            else:
+                result["refused"].append(f"{c['name']} {c['type']} already exists (not this object's)")
+        except openstack.exceptions.BadRequestException as e:
+            target = result["notes"] if c["type"] == "PTR" else result["refused"]
+            target.append(f"{label}: {getattr(e, 'details', None) or e}")
+        return False
 
     def report(self, r):
         kind, o = r["kind"], r["obj"]
@@ -347,6 +463,8 @@ class Controller:
             status = "refused: " + "; ".join(r["refused"]) + (f"; published {published}" if r["records"] else "")
         else:
             status = f"ok: {published}"
+        if r.get("notes"):  # what was published without its reverse name (not a refusal)
+            status += "; " + "; ".join(r["notes"])
         status = status[:1000]
         if (m.get("annotations") or {}).get(STATUS_ANNOTATION) == status:
             return
@@ -385,6 +503,65 @@ class Controller:
         except client.ApiException as e:
             log(f"event not written ({e.status} {e.reason})")
 
+    # ── health ─────────────────────────────────────────────────────────────────────────────────────────────────
+    def reconcile_round(self):
+        """One reconcile with its health record; True on success."""
+        try:
+            self.reconcile()
+        except Exception as e:  # noqa: BLE001 - the caller retries
+            msg = f"{type(e).__name__}: {e}"
+            log(f"reconcile failed: {msg}")
+            self.conn = None
+            self.record_health(error=msg)
+            return False
+        self.record_health()
+        return True
+
+    def record_health(self, error=None):
+        """The ConfigMap tenant-dns-status in the controller's namespace: lastSuccess (on success), lastError and
+        lastErrorAt (on failure; kept after a success, so readers compare the two times), refused (objects with a
+        refusal) and ptrs (PTRs held) of the last successful round. A Warning Event DNSReconcileFailed on the
+        ConfigMap once per distinct error (again after a success). Never raises."""
+        now = rfc3339()
+        if error is None:
+            data = {"lastSuccess": now, "refused": str(self.counts["refused"]), "ptrs": str(self.counts["ptrs"])}
+        else:
+            data = {"lastError": error[:1000], "lastErrorAt": now}
+        if not self.namespace:
+            return
+        try:
+            try:
+                self.core.patch_namespaced_config_map(STATUS_CONFIGMAP, self.namespace, {"data": data})
+            except client.ApiException as e:
+                if e.status != 404:
+                    raise
+                base = {"lastSuccess": "", "lastError": "", "lastErrorAt": "", "refused": "0", "ptrs": "0"}
+                self.core.create_namespaced_config_map(self.namespace, client.V1ConfigMap(
+                    metadata=client.V1ObjectMeta(name=STATUS_CONFIGMAP, namespace=self.namespace,
+                                                 labels={"app": "tenant-dns-controller"}),
+                    data=dict(base, **data)))
+        except Exception as e:  # noqa: BLE001 - the API may be what failed; the loop goes on
+            log(f"health not written ({getattr(e, 'status', '')} {getattr(e, 'reason', '') or type(e).__name__})")
+        if error is None:
+            self.reported_error = None
+        elif error != self.reported_error:
+            self.reported_error = error
+            self.health_event(error, now)
+
+    def health_event(self, error, now):
+        ev = client.CoreV1Event(
+            metadata=client.V1ObjectMeta(generate_name=f"{STATUS_CONFIGMAP}.", namespace=self.namespace),
+            involved_object=client.V1ObjectReference(api_version="v1", kind="ConfigMap", name=STATUS_CONFIGMAP,
+                                                     namespace=self.namespace),
+            reason="DNSReconcileFailed", message=f"reconcile failed: {error}"[:1000], type="Warning",
+            first_timestamp=now, last_timestamp=now, count=1,
+            source=client.V1EventSource(component="shc-tenant-dns"),
+            reporting_component="shc-tenant-dns", reporting_instance=self.cluster)
+        try:
+            self.core.create_namespaced_event(self.namespace, ev)
+        except Exception as e:  # noqa: BLE001
+            log(f"event not written ({getattr(e, 'status', '')} {getattr(e, 'reason', '') or type(e).__name__})")
+
     # ── loops ──────────────────────────────────────────────────────────────────────────────────────────────────
     def watch_loop(self, what, list_fn, *args, **kwargs):
         while True:
@@ -420,11 +597,7 @@ class Controller:
             self.trigger.wait(self.resync)
             time.sleep(3)  # debounce a burst of events
             self.trigger.clear()
-            try:
-                self.reconcile()
-            except Exception as e:  # noqa: BLE001 - next round retries
-                log(f"reconcile failed: {type(e).__name__}: {e}")
-                self.conn = None
+            if not self.reconcile_round():  # next round retries
                 time.sleep(10)
                 self.trigger.set()
             with open(self.health, "w") as f:  # liveness: the loop runs (DNS outages only show in the log)
@@ -445,8 +618,7 @@ def main():
         config.load_kube_config()
     c = Controller(cfg, args.clouds)
     if args.once:
-        c.reconcile()
-        return 0
+        return 0 if c.reconcile_round() else 1
     c.run()
     return 0
 

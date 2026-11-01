@@ -3,13 +3,16 @@ Tenant DNS controller (shc design/TENANT-DNS.md D3): tenants publish names in th
 <cloudvirt>.<entity>.<domain> (platform-held, Designate) with DNSEndpoint objects and external-dns hostname
 annotations on Services and Routes in their VM namespaces (files/tenant_dns_controller.py). Only namespaces labelled
 hybridsovereign.redhat/cloudvirt count, and the zone comes from their platform-set annotation
-hybridsovereign.redhat/dns-zone. Certs layer: the DNS-only account comes from Vault through the cluster's
+hybridsovereign.redhat/dns-zone. AAAA addresses inside the namespace's platform-set placement prefixes
+(hybridsovereign.redhat/ipv6-prefixes) get forward-confirmed PTRs in the DNS project's reverse zones. Health: the
+controller writes the ConfigMap tenant-dns-status in its namespace after every round (read by the site job) and a
+Warning Event DNSReconcileFailed on failure. Certs layer: the DNS-only account comes from Vault through the cluster's
 ClusterSecretStore.
 */}}
 {{- if and .Values.layers.certs .Values.tenantDns.enabled }}
 {{- $t := .Values.tenantDns }}
 {{- $name := required "cluster.name is required" .Values.cluster.name }}
-{{- $cfg := merge (dict "cluster" $name) (deepCopy $t.config) }}
+{{- $cfg := merge (dict "cluster" $name "namespace" $t.namespace) (deepCopy $t.config) }}
 {{- $_ := required "tenantDns.config.domain is required" $t.config.domain }}
 # the external-dns DNSEndpoint schema (externaldns.k8s.io/v1alpha1); not the external-dns controller. Kept when the
 # layer is switched off, so tenants' objects survive.
@@ -172,6 +175,40 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  name: shc-tenant-dns-controller
+subjects:
+  - kind: ServiceAccount
+    name: tenant-dns-controller
+    namespace: {{ $t.namespace }}
+---
+# its health record: the ConfigMap tenant-dns-status in its own namespace (created by the controller, not by the chart,
+# so Argo never reverts its data); Events come from the cluster role above
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: shc-tenant-dns-controller
+  namespace: {{ $t.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [tenant-dns-status]
+    verbs: [get, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shc-tenant-dns-controller
+  namespace: {{ $t.namespace }}
+  labels:
+    {{- include "shc-cluster-base.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
   name: shc-tenant-dns-controller
 subjects:
   - kind: ServiceAccount

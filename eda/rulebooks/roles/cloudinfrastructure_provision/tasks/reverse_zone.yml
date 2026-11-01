@@ -1,0 +1,32 @@
+---
+# One reverse zone of reverse_zones.yml (ci_reverse_name, without the trailing dot): ensured with ensure-parent like
+# the global zone, never failing the site job. Appends {name, id, nameservers} or {name, error} to ci_reverse_zones.
+- name: "Ensure the reverse zone {{ ci_reverse_name }}"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_helper: shc_dns.py
+    os_call_no_log: false
+    os_call_soft: true
+    os_request:
+      action: ensure-parent
+      owner_project_id: "{{ ci_probe.dns_project.id }}"
+      name: "{{ ci_reverse_name }}"
+      email: "hostmaster@{{ dnscfg_domain }}"
+      description: Reverse DNS of the sovereign cloud platform
+      attributes: "{{ ci_dns.zoneAttributes | default({}) }}"
+  when: ci_reverse_name is match('^([0-9a-f]\.){1,32}ip6\.arpa$')
+
+- name: "Keep the reverse zone {{ ci_reverse_name }}"
+  vars:
+    _valid: "{{ ci_reverse_name is match('^([0-9a-f]\\.){1,32}ip6\\.arpa$') }}"
+    _row: >-
+      {{ {'name': ci_reverse_name ~ '.', 'error': 'not a reverse zone under ip6.arpa (one hexadecimal digit per label)'}
+         if not _valid | bool else
+         ({'name': ci_reverse_name ~ '.', 'error': (os_result.error | string | trim)[:300]} if os_result.error is defined
+          else {'name': os_result.zone, 'id': os_result.zone_id, 'nameservers': os_result.nameservers | default([])}) }}
+  ansible.builtin.set_fact:
+    ci_reverse_zones: "{{ ci_reverse_zones + [_row] }}"
+    ci_notes: >-
+      {{ ci_notes
+         + (['reverse zone ' ~ _row.name ~ ': ' ~ _row.error] if _row.error is defined else [])
+         + (['created reverse zone ' ~ _row.name] if _row.error is not defined and os_result.created | default(false) | bool else []) }}

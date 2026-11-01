@@ -201,6 +201,7 @@
              | combine({'mtu': _cg_mtu | int} if _cg_mtu | string | length > 0 else {}) }}
         cg_holder: "CloudGateway/{{ fab_name }} job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
         cg_node_results: []
+        cg_rdns_nodes: []
         cg_changed_nodes: []
         cg_bgp_password: ""
 
@@ -368,6 +369,10 @@
       ansible.builtin.include_tasks: site_gcp_post.yml
       when: ci_type == 'gcp'
 
+    # the forward-confirmed names of the nodes' ICMPv6 sources (design/IPV6-PLAN.md §8.3); never fails the gateway
+    - name: Name the nodes' ICMPv6 sources
+      ansible.builtin.include_tasks: reverse_dns.yml
+
     - name: Report the gateway ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -378,7 +383,8 @@
           {{ cg_node_results | map(attribute='siteSessions') | map('string') | join('/') }}, upstream
           {{ cg_node_results | map(attribute='upstreamSessions') | map('string') | join('/') }}
           ({{ ('changed on ' ~ cg_changed_nodes | join(', ')) if cg_changed_nodes or cg_site_changed | bool else 'no change' }}){{
-          ('; tunnel ' ~ cg_node_results | map(attribute='tunnel') | join('/')) if cg_instance.wireguard is defined else '' }}
+          ('; tunnel ' ~ cg_node_results | map(attribute='tunnel') | join('/')) if cg_instance.wireguard is defined else '' }}{{
+          cg_rdns_note | default('') }}
         fab_status: >-
           {{ cg_status | combine({'wireguard': {'nodes': cg_wg_nodes | default([])}} if cg_instance.wireguard is defined else {})
              | combine({'site': cg_status.site | combine(cg_site_extra),
@@ -389,7 +395,8 @@
                                                    'netns': 'gw-' ~ fab_name,
                                                    'vrfs': cg_vrfs | map('dict2items')
                                                            | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6', 'covering6'])
-                                                           | map('items2dict') | list}}) }}
+                                                           | map('items2dict') | list}
+                                                  | combine(cg_rdns_record | default({}, true))}) }}
 
     # an aws site's routers got new keys: look again once they applied them, so the status shows their sessions
     - name: Reconcile once more after the edge's configuration changed (aws)

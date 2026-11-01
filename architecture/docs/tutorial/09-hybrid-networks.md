@@ -272,8 +272,9 @@ spec:
   takes a range from the cloud provider, with the provider's own internet path; give no `prefixLength` or `prefix`
   then. `Provider` needs a network with IPv6 from the platform. When you leave `source` out, the site's default
   applies; the placement reports the result. A Google Cloud site can't carry your own IPv6 prefixes.
-- The placement reports one row per family in `status.subnets` (`family`, `prefix`, `source`, and the IPv4
-  `gateway`); `status.prefixes` keeps listing the prefixes, IPv4 first. `status.ipv6` shows how guests get their
+- The placement reports one row per family in `status.subnets` (`family`, `prefix`, `source`, and the
+  `gateway`: IPv4 always, IPv6 in VM and OpenStack environments); `status.prefixes` keeps listing the prefixes, IPv4
+  first. `status.ipv6` shows how guests get their
   address (`addressing`: `DHCPv6` or `SLAAC`), the internet path (`internet.path`: `Fabric` or `Provider`) and, for
   IPv6-only placements with translation, `translation`.
 - **Where IPv6 is offered:** a site offers IPv6 placements only once the platform team has turned IPv6 on for it,
@@ -428,6 +429,16 @@ Rules:
 - A record goes away with its object, or when its name leaves the object. Deleting the environment deletes the
   zone with everything in it.
 - Names are public; private addresses are allowed in them.
+
+**Reverse names for the platform's IPv6 addresses.** Where the platform team has set up reverse DNS for the
+platform's IPv6 space, addresses from that space get forward-confirmed reverse names automatically: the PTR of an
+address names a host whose AAAA points back to the same address. Nothing to request:
+- a placement's IPv6 gateway is `<network>.gateways.<environment zone>` (the label is the platform's; `gateways` by
+  default), and the border gateways' own addresses that answer a traceroute are named under the tenant DNS domain;
+- in a VM environment, an AAAA you publish as above for an address inside one of the namespace's placement subnets
+  gets its PTR, and loses it with the AAAA; an AAAA outside them is published without a PTR;
+- OpenStack environments' VMs, addresses from a cloud provider and your own prefixes get no PTR from the platform:
+  their reverse DNS is the cloud's, the provider's or yours.
 
 ## In the console and the dashboards
 

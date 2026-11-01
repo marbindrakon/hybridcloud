@@ -134,6 +134,12 @@
     - ci_dns_native | bool
     - dnscfg_usable | default(false) | bool
 
+# the reverse zones of the platform's IPv6 space (realization dns.reverse6.zones) next to the global zone, on the site
+# that hosts it: status.realization.dns.reverseZones (a partial write; a zone error is recorded, never raised). Run on
+# every OpenStack site, so a site that no longer hosts them loses the record.
+- name: Ensure the platform's reverse zones in the DNS project
+  ansible.builtin.include_tasks: reverse_zones.yml
+
 - name: Note grants and a created domain
   ansible.builtin.set_fact:
     ci_notes: >-

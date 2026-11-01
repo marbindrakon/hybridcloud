@@ -1,0 +1,66 @@
+---
+# The trusted IPv6 prefixes of a CloudVirt placement's namespaces (design/IPV6-PLAN.md §8.3): the annotation
+# hybridsovereign.redhat/ipv6-prefixes (the placement's IPv6 subnets, comma-separated) on every site namespace the
+# placement serves. The tenant DNS controller writes a PTR only for an AAAA inside these prefixes; tenants can't
+# change namespace annotations, the same trust model as the zone annotation hybridsovereign.redhat/dns-zone. Without
+# an IPv6 subnet the annotation is removed from the served namespaces. A namespace the placement no longer serves (and
+# every namespace at teardown) loses the annotation only while its value is this placement's (all its prefixes are
+# among npp_owned): a namespace that moved to another network keeps that placement's value. Never fails the job;
+# failures are a note (ignore_errors: a failed item is reported, the others still run).
+# Inputs: site_kubeconfig, npp_set (namespaces served now), npp_value (the comma-separated prefixes, '' = none),
+# npp_clear (namespaces no longer served), npp_owned (this placement's IPv6 prefixes, current and recorded).
+# Sets npp_note ('' or "; …").
+- name: The placement's IPv6 prefixes on the namespaces it serves
+  kubernetes.core.k8s:
+    kubeconfig: "{{ site_kubeconfig }}"
+    state: patched
+    definition: >-
+      {{ {'apiVersion': 'v1', 'kind': 'Namespace',
+          'metadata': {'name': item, 'annotations': {'hybridsovereign.redhat/ipv6-prefixes':
+                                                       (npp_value if npp_value | default('', true) | length > 0 else none)}}} }}
+  loop: "{{ npp_set | default([], true) }}"
+  register: _npp_set
+  ignore_errors: true
+
+- name: Read the namespaces the placement no longer serves
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ site_kubeconfig }}"
+    api_version: v1
+    kind: Namespace
+    name: "{{ item }}"
+  loop: "{{ npp_clear | default([], true) }}"
+  register: _npp_read
+  ignore_errors: true
+
+- name: Remove this placement's IPv6 prefixes from them
+  kubernetes.core.k8s:
+    kubeconfig: "{{ site_kubeconfig }}"
+    state: patched
+    definition: >-
+      {{ {'apiVersion': 'v1', 'kind': 'Namespace',
+          'metadata': {'name': item, 'annotations': {'hybridsovereign.redhat/ipv6-prefixes': none}}} }}
+  loop: >-
+    {%- set out = [] -%}
+    {%- for r in _npp_read.results | default([]) -%}
+      {%- for n in r.resources | default([]) -%}
+        {%- set v = ((n.metadata.annotations | default({}, true))['hybridsovereign.redhat/ipv6-prefixes'] | default('', true)) -%}
+        {%- set mine = v.split(',') | map('trim') | reject('equalto', '') | list -%}
+        {%- if mine | length > 0 and mine | difference(npp_owned | default([], true)) | length == 0 -%}
+          {%- set _ = out.append(n.metadata.name) -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endfor -%}
+    {{ out }}
+  register: _npp_clear
+  ignore_errors: true
+
+- name: Note the namespaces whose annotation could not be written
+  vars:
+    _failed: >-
+      {{ ((_npp_set.results | default([])) + (_npp_clear.results | default([])))
+         | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list
+         + ((_npp_read.results | default([])) | selectattr('failed', 'defined') | selectattr('failed')
+            | map(attribute='item') | list) }}
+  ansible.builtin.set_fact:
+    npp_note: >-
+      {{ ('; IPv6 prefixes annotation not written on ' ~ _failed | unique | join(', ')) if _failed | length > 0 else '' }}

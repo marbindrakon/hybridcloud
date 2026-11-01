@@ -118,8 +118,13 @@ export const REASONS: Record<string, ReasonEntry> = {
  *  as the Ready condition reason; they do not change the phase. */
 export const PART_REASONS: Record<string, ReasonEntry> = {
   "AddressChoice": { actor: "T", class: "ready", summary: "Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4." },
+  "CanaryFailed": { actor: "P", class: "ready", summary: "The platform's translation canary on a site fails or is stale; the platform team is looking at it." },
+  "DNSReconcileFailed": { actor: "P", class: "ready", summary: "The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it." },
   "Degraded": { actor: "A", class: "ready", summary: "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path." },
+  "IPv6EgressUpstreamDown": { actor: "P", class: "ready", summary: "IPv6 internet access works through the other node; a node's upstream sessions are down." },
+  "IPv6TranslationCanaryFailed": { actor: "P", class: "ready", summary: "Translation to IPv4 may not work on a site: the platform's canary there has failed for several minutes; the platform team is alerted." },
   "NotOffered": { actor: "A", class: "ready", summary: "Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4." },
+  "NotReported": { actor: "A", class: "ready", summary: "The site does not report this health check." },
 };
 
 export const DELETE_REQUESTED_SUFFIX = "DeleteRequested";

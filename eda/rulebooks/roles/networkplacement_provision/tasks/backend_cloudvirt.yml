@@ -3,8 +3,9 @@
 # primary ClusterUserDefinedNetwork with EVPN transport (IP-VRF = the placement's layer 3 VNI, MAC-VRF = its
 # layer 2 VNI, route targets <asn>:<vni>) over the site's VTEP, selecting the CloudVirt's namespaces that name the
 # network (by label), and a RouteAdvertisements that advertises it toward the site's gateway. The subnets are the
-# placement's allocated prefixes (np_prefixes; site_ranges.yml kept them off the cluster's own networks). Uses the
-# site's fabric credential. Sets np_backend_status.
+# placement's allocated prefixes (np_prefixes; site_ranges.yml kept them off the cluster's own networks). The served
+# namespaces get the placement's IPv6 prefixes as an annotation (namespace_prefixes.yml). Uses the site's fabric
+# credential. Sets np_backend_status, npp_note.
 - name: Realize the network on the site
   block:
     - name: The site's fabric credential
@@ -85,6 +86,19 @@
           clusterUserDefinedNetwork: "{{ np_names.cudn }}"
           routeAdvertisements: "{{ np_names.routeAdvertisement }}"
         np_backend_changed: "{{ _np_cudn is changed or _np_ra is changed }}"
+
+    # the tenant DNS controller's trusted prefixes (namespace_prefixes.yml); never fails the placement
+    - name: The placement's IPv6 prefixes on its namespaces
+      ansible.builtin.include_tasks: namespace_prefixes.yml
+      vars:
+        _was: "{{ fab_st.namespaces | default([], true) }}"
+        npp_set: "{{ np_status.namespaces | default([], true) }}"
+        npp_value: "{{ np_prefixes_v6 | default([], true) | join(',') }}"
+        npp_clear: "{{ _was | difference(np_status.namespaces | default([], true)) }}"
+        npp_owned: >-
+          {{ (np_prefixes_v6 | default([], true)
+              + (fab_st.subnets | default([], true) | selectattr('family', 'defined') | selectattr('family', 'equalto', 6)
+                 | map(attribute='prefix') | list)) | unique | list }}
   always:
     - name: Remove the site kubeconfig
       ansible.builtin.file:

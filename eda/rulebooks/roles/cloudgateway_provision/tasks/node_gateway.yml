@@ -56,6 +56,16 @@
     - fab_real.core.icmpSource6 | default('', true) | length > 0
     - fab_check_result.errors | default([]) | length > 0
 
+# the node's ICMPv6 source gets a forward-confirmed name after the nodes are done (reverse_dns.yml)
+- name: "{{ bgw_node.name }}: remember the ICMPv6 source for its name"
+  ansible.builtin.set_fact:
+    cg_rdns_nodes: >-
+      {{ cg_rdns_nodes | default([]) + [{'node': bgw_node.name, 'address': fab_check_result.icmp6 | regex_replace('/.*$', '')}] }}
+  when:
+    - cg_ipv6_core | default(false) | bool
+    - fab_real.core.icmpSource6 | default('', true) | length > 0
+    - fab_check_result.icmp6 | default('', true) | length > 0
+
 # the core's IPv6 keys are empty strings on an IPv4-only core and until the fabric offers the IPv6 core;
 # loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges
 - name: "{{ bgw_node.name }}: gateway instance config"

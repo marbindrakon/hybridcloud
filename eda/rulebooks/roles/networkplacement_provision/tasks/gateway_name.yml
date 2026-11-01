@@ -1,0 +1,54 @@
+---
+# The placement's IPv6 gateway name (design/IPV6-PLAN.md §8.3): with reverse zones in the realization
+# (dns.reverse6.zones) and an IPv6 subnet, the gateway address of the placement's first IPv6 subnet (status.subnets)
+# gets the forward-confirmed name <network>.<gatewayLabel>.<environment zone>: an AAAA in the environment's zone (its
+# status.dns.zone; the zone must be in the DNSConfig's project, so a zone another site's DNS service holds gets a note)
+# and the PTR in the platform's reverse zone that covers the address, owner NetworkPlacement/<namespace>/<name>.
+# An environment without a zone gets a note, as does an address no reverse zone covers (provider or tenant space).
+# Never fails the placement: notes go to the status message (np_rdns_note). Recorded in
+# status.realization.reverseDns {dnsConfig, names [{name, address, zone}]}, which the teardown and a later run read
+# (a name no longer wanted, e.g. the IPv6 subnet went away, loses its PTR and its AAAA).
+# Inputs: fab_real, fab_st, fab_spec, fab_namespace, fab_name, np_backend, np_backend_kind, np_subnets, np_owner.
+# Sets np_rdns_note, np_rdns_record ({'reverseDns': …} or {} when there is nothing to record).
+- name: The gateway name the placement wants
+  vars:
+    _cfg: "{{ (fab_real.dns | default({}, true)).reverse6 | default({}, true) }}"
+    _dns: "{{ (np_backend.status | default({}, true)).dns | default({}, true) }}"
+    _zone: "{{ _dns.zone | default('', true) | string | trim | lower | regex_replace('\\.$', '') }}"
+    _row6: >-
+      {{ (np_subnets | default([], true) | selectattr('family', 'defined') | selectattr('family', 'equalto', 6)
+          | selectattr('gateway', 'defined') | list + [{}]) | first }}
+    _label: "{{ (fab_spec.network | lower | regex_replace('[^a-z0-9-]', '-'))[:63] | regex_replace('-+$', '') }}"
+    _prev: "{{ (fab_st.realization | default({}, true)).reverseDns | default({}, true) }}"
+  ansible.builtin.set_fact:
+    np_rdns_cfg: "{{ _cfg }}"
+    np_rdns_prev: "{{ _prev.names | default([], true) }}"
+    np_rdns_dnscfg: "{{ _prev.dnsConfig | default(_dns.dnsConfig | default('', true), true) }}"
+    np_rdns_want: >-
+      {{ [{'name': _label ~ '.' ~ (_cfg.gatewayLabel | default('gateways', true)) ~ '.' ~ _zone,
+           'address': _row6.gateway | string | trim | lower, 'zone': _zone}]
+         if (_cfg.zones | default([], true) | length > 0) and (_row6.gateway | default('', true) | length > 0)
+            and _zone | length > 0 else [] }}
+    np_rdns_pre_notes: >-
+      {{ ['no gateway name: the environment has no DNS zone']
+         if (_cfg.zones | default([], true) | length > 0) and (_row6.gateway | default('', true) | length > 0)
+            and _zone | length == 0 else [] }}
+
+- name: Publish the gateway name
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/reverse_dns.yml"
+  vars:
+    rdns_cfg: "{{ np_rdns_cfg }}"
+    rdns_owner: "{{ np_owner }}"
+    rdns_want: "{{ np_rdns_want }}"
+    rdns_prev: "{{ np_rdns_prev }}"
+    rdns_dnsconfig: "{{ np_rdns_dnscfg }}"
+    rdns_tag: "np-{{ fab_namespace }}-{{ fab_name }}"
+
+- name: Record the gateway name
+  vars:
+    _notes: "{{ np_rdns_pre_notes + rdns_notes | default([], true) }}"
+  ansible.builtin.set_fact:
+    np_rdns_note: "{{ ('; reverse DNS: ' ~ _notes | join('; ')) if _notes | length > 0 else '' }}"
+    np_rdns_record: >-
+      {{ {'reverseDns': {'dnsConfig': rdns_dnsconfig_name | default('', true), 'names': rdns_names | default([], true)}}
+         if (rdns_names | default([], true) | length > 0) or (np_rdns_prev | length > 0) else {} }}

@@ -436,7 +436,8 @@ def _family_resolvers(resolvers, family):
 def placement_network(req):
     """The cloud admin's own scope: a placement's network, subnets, EVPN router and share, in the platform project.
     prefixes carries both families (one subnet each); addressMode ("" = the site's default) is the IPv6 subnets' RA
-    and address mode; resolvers (addresses of either family) become each subnet's dns_nameservers by family."""
+    and address mode; resolvers (addresses of either family) become each subnet's dns_nameservers by family. The
+    result's gateways maps every subnet's prefix to its gateway_ip as the site reports it ("" when it has none)."""
     acct = Account(req)
     conn = acct.own_scope()
     dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
@@ -479,7 +480,7 @@ def placement_network(req):
         conn.network.set_tags(net, sorted(set((net.tags or []) + [tag])))
     have = {sn.cidr: sn for sn in conn.network.subnets(network_id=net.id)}
     mode, resolvers = req.get("addressMode") or "", req.get("resolvers") or []
-    subnets, applied_mode = {}, ""
+    subnets, gateways, applied_mode = {}, {}, ""
     for i, cidr in enumerate(req["prefixes"]):
         family = 6 if ":" in cidr else 4
         dns = _family_resolvers(resolvers, family)
@@ -496,6 +497,7 @@ def placement_network(req):
         if family == 6:
             applied_mode = getattr(sn, "ipv6_address_mode", None) or ""
         subnets[cidr] = sn.id
+        gateways[cidr] = getattr(sn, "gateway_ip", None) or ""
     if router is not None and str(req.get("recreateRouter", "")).lower() in ("true", "1", "yes"):
         _delete_router(conn, router)
         router = None
@@ -536,8 +538,8 @@ def placement_network(req):
                 changed.append(f"share to {rp.target_project_id} removed")
     evpn = conn.network.get(f"/routers/{router.id}").json()["router"].get("evpn_vni")
     return {"name": name, "projectId": proj.id, "networkId": net.id, "routerId": router.id, "subnets": subnets,
-            "addressMode": applied_mode, "evpnVni": evpn, "shareId": rbac.id if rbac else "", "mtu": net.mtu,
-            "created": created, "changed": changed}
+            "gateways": gateways, "addressMode": applied_mode, "evpnVni": evpn, "shareId": rbac.id if rbac else "",
+            "mtu": net.mtu, "created": created, "changed": changed}
 
 
 def platform_inventory(req):

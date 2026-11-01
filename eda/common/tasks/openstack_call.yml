@@ -2,7 +2,8 @@
 # shc (§11.6 phase C): run one files/shc_openstack.py action with the account from
 # openstack_account.yml (and its CA file, P7.1). Inputs: os_request (dict with `action`), os_helper (default
 # shc_openstack.py; shc_dns.py for tenant DNS), os_call_no_log (default true:
-# provision returns an application credential secret). Sets os_result; fails with the helper's error.
+# provision returns an application credential secret), os_call_soft (default false: true = never fail, the helper's
+# error stays in os_result.error). Sets os_result; fails with the helper's error unless soft.
 - name: "OpenStack {{ os_request.action }}"
   ansible.builtin.command:
     argv:
@@ -24,4 +25,13 @@
 - name: "OpenStack {{ os_request.action }}: fail on error"
   ansible.builtin.fail:
     msg: "OpenStack {{ os_request.action }} failed: {{ os_result.error | default('rc ' ~ _os_call.rc) }}"
-  when: _os_call.rc != 0
+  when:
+    - _os_call.rc != 0
+    - not (os_call_soft | default(false) | bool)
+
+- name: "OpenStack {{ os_request.action }}: keep the error (soft call)"
+  ansible.builtin.set_fact:
+    os_result: "{{ os_result | combine({'error': os_result.error | default('rc ' ~ _os_call.rc, true)}) }}"
+  when:
+    - _os_call.rc != 0
+    - os_call_soft | default(false) | bool
