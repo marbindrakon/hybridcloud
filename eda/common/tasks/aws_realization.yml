@@ -3,9 +3,25 @@
 # AWS_REALIZATION) and the job's AWS identity (the shc-aws container group). Optional inputs: aws_edge_site,
 # aws_edge_cidr, aws_edge_asn (a CloudGateway's edge site). Sets aws_real, and aws_edge_cfg when aws_edge_site is
 # given: the shc_aws_edge.py config of that site.
+# Generic defaults merged under an installation's edge section (the realization's own keys win):
+#   edge.ipv6.enabled          IPv6 on the edge routers (design/IPV6-PLAN.md §6.1-§6.2): every Connect peer gets an
+#                              IPv6 /125 next to its IPv4 /29, the routers carry the placements' IPv6 per network VRF.
+#                              Off: nothing IPv6 on the edge (the sites' ipv6 capability is switched separately, in
+#                              FABRIC_REALIZATION placement.ipFamiliesBySite).
+#   edge.ipv6.insideCidrPool6  the ULA network the /125s come from (a /64 from fd00::/8, one per transit gateway).
+#                              Keep it out of tenant space: list it in FABRIC_REALIZATION network.exclusiveRanges (a
+#                              range inside siteReserved.CloudAWS such as fd00::/16 is refused to tenants already).
+#                              Its ledger is the /125s the region's Connect peers hold; AWS reserves no IPv6 inside
+#                              range (the IPv4 insideCidrPool steps around AWS's reserved /29s, the /125s need none).
 - name: The installation's AWS realization
+  vars:
+    _aws_r: "{{ aws_realization | default({}, true) }}"
+    _aws_edge_defaults:
+      ipv6: {enabled: false, insideCidrPool6: ""}
   ansible.builtin.set_fact:
-    aws_real: "{{ aws_realization | default({}, true) }}"
+    aws_real: >-
+      {{ _aws_r | combine({'edge': _aws_edge_defaults | combine(_aws_r.edge, recursive=true)}
+                          if _aws_r.edge is defined and _aws_r.edge is mapping else {}) }}
 
 - name: Require the AWS realization and the job's AWS identity
   ansible.builtin.assert:

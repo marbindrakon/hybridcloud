@@ -388,14 +388,20 @@
         namespace: "{{ fabric_platform_namespace }}"
       register: _np_gw_again
 
+    # with IPv6 prefixes the gateway's VRF must carry family 6 as well: a gateway that took the placement up before
+    # its IPv6 subnet was known (a cloud provider's prefix is known only once the site side exists) is asked again
     - name: Does the gateway carry the placement
       vars:
         np_gateway: "{{ _np_gw_again.resources[0] }}"
-      ansible.builtin.set_fact:
-        np_gw_carries: >-
+        _np_gw_vrf: >-
           {{ ((np_gateway.status | default({}, true)).realization | default({}, true)).vrfs | default([], true)
              | selectattr('placement', 'equalto', fab_namespace ~ '/' ~ fab_name)
-             | selectattr('vni', 'equalto', np_l3vni | int) | list | length > 0 }}
+             | selectattr('vni', 'equalto', np_l3vni | int) | list }}
+      ansible.builtin.set_fact:
+        np_gw_carries: >-
+          {{ _np_gw_vrf | length > 0
+             and (np_prefixes_v6 | default([], true) | length == 0
+                  or 6 in ((_np_gw_vrf | first).families | default([4], true) | map('int') | list)) }}
 
     - name: Ask the gateway to carry the placement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
