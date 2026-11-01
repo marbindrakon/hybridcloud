@@ -279,6 +279,12 @@ spec:
   reaches a provider range on another cloud over the internet. Your own prefixes on an AWS environment travel through
   the platform with no internet path, and a prefix inside `fd00::/16` or `2001:db8::/32` is refused with
   `PrefixInvalid` ("the cloud reserves this range"); AWS environments don't offer IPv6-only placements.
+- **On a Google Cloud environment** the placement's subnet is dual-stack with a /64 Google assigns (source
+  `Provider`, the only one; leave `source` out or name it). The network's other sites reach it through the platform;
+  its internet path is Google's own, outbound only, and present only while the network's `egress.internet` is on. A
+  provider range on one cloud reaches a provider range on another cloud over the internet. Give your VMs a
+  dual-stack interface with an external IPv6 address to use it. Google Cloud environments don't offer IPv6-only
+  placements, and the range has no reverse names from the platform.
 - The placement reports one row per family in `status.subnets` (`family`, `prefix`, `source`, and the
   `gateway`: IPv4 always, IPv6 in VM and OpenStack environments); `status.prefixes` keeps listing the prefixes, IPv4
   first. `status.ipv6` shows how guests get their
