@@ -604,6 +604,17 @@ def check_gateway(req):
         except ValueError:
             pass
     cloud = (gw.get("cloudRef") or {}).get("name")
+    # a tunnel gateway's WireGuard socket is bound on the node itself (where the device was created), so two tunnel
+    # gateways of a fabric on the same nodes need different listen ports (the default is the realization's)
+    default_port = req.get("wireguardListenPort")
+
+    def wg_port(spec):
+        if (spec.get("transport") or "none") != "wireguard":
+            return None
+        p = (spec.get("wireguard") or {}).get("listenPort", default_port)
+        return int(p) if p not in (None, "") else None
+
+    port = wg_port(gw)
     for o in req.get("others") or []:
         ospec = o.get("spec") or {}
         o = {"name": o.get("name") or (o.get("metadata") or {}).get("name"), "spec": ospec}
@@ -616,6 +627,9 @@ def check_gateway(req):
         # a gateway over a tunnel has no VLAN on the trunk
         if under.get("vlan") is not None and ou.get("vlan") == under.get("vlan"):
             errors.append(f"VLAN {under.get('vlan')} is already used by CloudGateway {o.get('name')}")
+        if port is not None and wg_port(ospec) == port:
+            errors.append(f"WireGuard listen port {port} is already used by CloudGateway {o.get('name')} on the same "
+                          f"border gateway nodes; set spec.wireguard.listenPort to a free port")
         try:
             on = ipaddress.ip_network(str(ou.get("cidr")), strict=False)
             if overlaps(site, on):
