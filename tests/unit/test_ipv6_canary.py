@@ -70,7 +70,7 @@ class ScrapeScript(unittest.TestCase):
         env = jinja2.Environment(undefined=jinja2.StrictUndefined)
         env.filters["to_json"] = json.dumps
         return env.from_string(t["ansible.builtin.shell"]["cmd"]).render(
-            hf_canary_targets=self.TARGETS, hf_canary_cfg={"port": port})
+            hf_canary_read=self.TARGETS, hf_canary_cfg={"port": port})
 
     def execute(self, answers, port=9464):
         sh = self.render(port)
@@ -107,7 +107,7 @@ class ScrapeScript(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(sorted(rec), ["site-a", "site-b"])  # a target without an address is not read
         a, b = rec["site-a"], rec["site-b"]
-        self.assertEqual((a["healthy"], a["stale"], a["error"], a["address"]), (True, False, "", A1))
+        self.assertEqual((a["healthy"], a["stale"], a["error"], a["address"], a["retry"]), (True, False, "", A1, False))
         self.assertEqual(a["checks"], ALL_OK)
         self.assertEqual(a["at"], "2027-01-15T07:59:30Z")
         self.assertEqual((b["healthy"], b["stale"]), (False, False))
@@ -129,6 +129,8 @@ class ScrapeScript(unittest.TestCase):
         self.assertIn("400 s old", rec["site-a"]["error"])
         self.assertEqual((rec["site-b"]["stale"], rec["site-b"]["healthy"], rec["site-b"]["checks"]), (True, False, {}))
         self.assertIn("unreachable from gw-gw-b VRF t51002 (curl exit 7: curl: (7) Failed to connect)", rec["site-b"]["error"])
+        # a probe that did not answer is for another node to try; a stale one answered
+        self.assertEqual((rec["site-a"]["retry"], rec["site-b"]["retry"]), (False, True))
         # no timestamp; a page without checks
         answers = {"ip netns exec gw-gw-a": (0, metrics(None, **ALL_OK), ""),
                    "ip netns exec gw-gw-b": (0, metrics(NOW - 5), "")}
@@ -145,6 +147,7 @@ class ScrapeScript(unittest.TestCase):
         finally:
             self.TARGETS = old
         self.assertIn("not an IPv6 address", rec["site-a"]["error"])
+        self.assertFalse(rec["site-a"]["retry"])  # no other node would do better
         self.assertEqual([c for c in calls if "curl" in c], [])
 
     def test_port(self):
@@ -176,22 +179,28 @@ class FabricTargets(unittest.TestCase):
                         "fab_spec": {"borderGateway": {"nodes": [{"name": "bgw-1"}]}}})
         self.assertEqual(out, {"targets": [], "scrape": {}, "error": ""})
 
-    def test_scrape_runs_on_the_first_node_only(self):
-        """canary_scrape.yml in ansible-playbook, delegated to localhost: the gateway namespace does not exist there, so
-        every site reads unreachable; the first node's reading is kept and the second node is not asked."""
+    def test_scrape_on_the_nodes(self):
+        """canary_scrape.yml in ansible-playbook, delegated to localhost (as localhost and 127.0.0.1): the gateway
+        namespace does not exist there, so the site reads unreachable from both; the first node's reading is kept,
+        noting that no node reached the probe, and the site is left failed."""
         targets = [{"site": "site-a", "gateway": "gw-a", "netns": "gw-shc-test-none", "placement": "p/a", "vrf": "t51001",
                     "address": A1, "error": ""}]
         out = run_play([{"name": "initial facts", "ansible.builtin.set_fact": {"hf_canary_node": "", "hf_canary_scrape": {}}},
                         {"name": "the nodes", "ansible.builtin.include_tasks": os.path.join(HF, "canary_scrape.yml"),
-                         "loop": [{"name": "localhost"}, {"name": "never-asked.invalid"}],
+                         "loop": [{"name": "localhost"}, {"name": "127.0.0.1"}],
                          "loop_control": {"loop_var": "hf_canary_bgw"}},
-                        write_out("{'node': hf_canary_node, 'scrape': hf_canary_scrape}")],
+                        write_out("{'node': hf_canary_node, 'scrape': hf_canary_scrape, 'retry': hf_canary_retry, "
+                                  "'tried': hf_canary_tried}")],
                        {"hf_canary_targets": targets, "hf_canary_cfg": {"port": 9464},
                         "ansible_python_interpreter": sys.executable})
         self.assertEqual(out["node"], "localhost")
         r = out["scrape"]["site-a"]
-        self.assertEqual((r["healthy"], r["stale"], r["address"]), (False, True, A1))
+        self.assertEqual((r["healthy"], r["stale"], r["address"], r["node"]), (False, True, A1, "localhost"))
+        self.assertNotIn("retry", r)
         self.assertIn("unreachable from gw-shc-test-none VRF t51001", r["error"])
+        self.assertEqual(r["note"], "unreachable from every border gateway node that read it (localhost, 127.0.0.1)")
+        self.assertEqual(out["retry"], ["site-a"])
+        self.assertEqual([t["node"] for t in out["tried"]["site-a"]], ["localhost", "127.0.0.1"])
 
     def test_selection(self):
         gws = [self.gw("gw-a", "site-a"), self.gw("gw-b", "site-b"), self.gw("gw-c", "site-c"),
@@ -210,6 +219,105 @@ class FabricTargets(unittest.TestCase):
         self.assertEqual((out["site-b"]["address"], out["site-b"]["error"]), ("", "no server canary"))
         # an address without a VRF is not read
         self.assertEqual(out["site-e"]["address"], "")
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class NodeRetry(unittest.TestCase):
+    """canary.yml's node loop over canary_scrape.yml, with the node's script replaced by a stub that answers per node
+    (None: the script fails) for the sites the node was asked, then the fabric status: a probe the first node cannot
+    reach is read again from the other nodes, in node order; the site fails only when no node reaches it."""
+
+    TARGETS = [{"site": "site-a", "gateway": "gw-a", "netns": "gw-gw-a", "placement": "p/a", "vrf": "t51001",
+                "address": A1, "error": ""},
+               {"site": "site-b", "gateway": "gw-b", "netns": "gw-gw-b", "placement": "p/b", "vrf": "t51002",
+                "address": A2, "error": ""}]
+
+    def ok(self, address=A1, at="2027-01-15T07:59:30Z"):
+        return {"address": address, "at": at, "checks": dict(ALL_OK), "stale": False, "healthy": True, "error": "",
+                "retry": False}
+
+    def unreachable(self, address=A1, vrf="t51001", netns="gw-gw-a", code=28):
+        return {"address": address, "at": "", "checks": {}, "stale": True, "healthy": False, "retry": True,
+                "error": "unreachable from %s VRF %s (curl exit %d)" % (netns, vrf, code)}
+
+    def run_nodes(self, answers):
+        tasks = load(os.path.join(HF, "canary_scrape.yml"))
+        sh = by_name(tasks, "{{ hf_canary_bgw.name }}: read the canary metrics through the gateways")
+        sh["ansible.builtin.shell"] = {"cmd": (
+            "{% set a = hf_canary_answers[hf_canary_bgw.name] %}"
+            "{% if a is none %}exit 1{% else %}printf '%s\\n' {{ ('canary=' ~ (a | dict2items | selectattr('key', 'in', "
+            "hf_canary_read | selectattr('address') | map(attribute='site') | list) | items2dict | to_json)) | quote }}"
+            "{% endif %}"), "executable": "/bin/bash"}
+        sh["delegate_to"] = "localhost"
+        canary = load(os.path.join(HF, "canary.yml"))
+        play = [by_name(canary, n) for n in ("The translation canary's realization",
+                                             "Read the canaries from a border gateway node",
+                                             "Note that no border gateway node read the canaries")]
+        play.append(by_name(load(os.path.join(HF, "main.yml")), "Set the translation canary status"))
+        return run_play(play + [write_out("{'node': hf_canary_node, 'scrape': hf_canary_scrape, 'error': hf_canary_error, "
+                                          "'retry': hf_canary_retry, 'status': hf_canary_status, "
+                                          "'conditions': hf_canary_conditions}")],
+                        {"fab_real": {"canaries": {"ipv6Translation": {"network": "acme/canary", "alertMinutes": 5}}},
+                         "fab_spec": {"borderGateway": {"nodes": [{"name": n} for n in answers]}},
+                         "fab_st": {}, "hf_canary_targets": self.TARGETS, "hf_canary_answers": answers},
+                        files={"canary_scrape.yml": tasks})
+
+    def test_first_node_cannot_reach_the_second_reads(self):
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)},
+                              # asked only for site-a: its site-b answer must not replace bgw-1's reading
+                              "bgw-2": {"site-a": self.ok(), "site-b": self.ok(A2, at="2027-01-15T07:00:00Z")}})
+        self.assertEqual((out["node"], out["error"], out["retry"]), ("bgw-1", "", []))
+        a, b = out["status"]["site-a"], out["status"]["site-b"]
+        self.assertEqual((a["healthy"], a["stale"], a["error"], a["node"], a["failedSince"]), (True, False, "", "bgw-2", ""))
+        self.assertEqual(a["note"], "bgw-1: unreachable from gw-gw-a VRF t51001 (curl exit 28); read from bgw-2")
+        self.assertNotIn("retry", a)
+        self.assertEqual((b["node"], b["note"], b["at"]), ("bgw-1", "", "2027-01-15T07:59:30Z"))
+        self.assertEqual((out["conditions"][0]["status"], out["conditions"][0]["reason"]), ("True", "Ready"))
+
+    def test_the_third_node_reads_after_two_could_not(self):
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)},
+                              "bgw-2": {"site-a": self.unreachable(code=7)},
+                              "bgw-3": {"site-a": self.ok()}})
+        a = out["status"]["site-a"]
+        self.assertEqual((a["healthy"], a["node"]), (True, "bgw-3"))
+        self.assertEqual(a["note"], "bgw-1: unreachable from gw-gw-a VRF t51001 (curl exit 28); "
+                                    "bgw-2: unreachable from gw-gw-a VRF t51001 (curl exit 7); read from bgw-3")
+
+    def test_no_node_reaches_the_probe(self):
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)},
+                              "bgw-2": {"site-a": self.unreachable(code=7), "site-b": self.ok(A2)}})
+        a = out["status"]["site-a"]
+        # the first node's reading, failed, with every node that tried
+        self.assertEqual((a["healthy"], a["stale"], a["node"]), (False, True, "bgw-1"))
+        self.assertEqual(a["error"], "unreachable from gw-gw-a VRF t51001 (curl exit 28)")
+        self.assertEqual(a["note"], "unreachable from every border gateway node that read it (bgw-1, bgw-2)")
+        self.assertTrue(a["failedSince"])
+        self.assertEqual(out["retry"], ["site-a"])
+        self.assertEqual(out["status"]["site-b"]["healthy"], True)
+        c = out["conditions"][0]
+        self.assertEqual((c["status"], c["reason"]), ("False", "CanaryFailed"))
+        self.assertIn("site-a (unreachable from gw-gw-a VRF t51001 (curl exit 28)", c["message"])
+
+    def test_a_node_whose_script_fails(self):
+        """As before: a node whose script fails reads nothing and the next node reads every site; once every site is
+        read, no further node is asked (bgw-3's answers would replace the readings)."""
+        out = self.run_nodes({"bgw-1": None, "bgw-2": {"site-a": self.ok(), "site-b": self.ok(A2)},
+                              "bgw-3": {"site-a": self.unreachable(), "site-b": self.unreachable(A2)}})
+        self.assertEqual((out["node"], out["error"], out["retry"]), ("bgw-2", "", []))
+        for site in ("site-a", "site-b"):
+            r = out["status"][site]
+            self.assertEqual((r["healthy"], r["node"], r["note"]), (True, "bgw-2", ""))
+        # a node that fails after the first read leaves the unreached site to the next node
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)}, "bgw-2": None,
+                              "bgw-3": {"site-a": self.ok()}})
+        a = out["status"]["site-a"]
+        self.assertEqual((a["healthy"], a["node"]), (True, "bgw-3"))
+        self.assertEqual(a["note"], "bgw-1: unreachable from gw-gw-a VRF t51001 (curl exit 28); read from bgw-3")
+        # no node's script runs: nothing read, as before
+        out = self.run_nodes({"bgw-1": None, "bgw-2": None})
+        self.assertEqual((out["node"], out["error"]), ("", "no border gateway node could read the canaries"))
+        self.assertEqual(out["status"]["site-a"]["error"], "no border gateway node could read the canaries")
+        self.assertEqual((out["status"]["site-a"]["node"], out["status"]["site-a"]["note"]), ("", ""))
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -237,7 +345,13 @@ class FabricStatus(unittest.TestCase):
 
     def test_healthy(self):
         out = self.status({"site-a": self.ok(), "site-b": self.ok(A2)})
-        self.assertEqual(out["status"]["site-a"], dict(self.ok(), placement="p/a", failedSince=""))
+        self.assertEqual(out["status"]["site-a"], dict(self.ok(), placement="p/a", failedSince="", node="", note=""))
+        # the node that read it and the note are kept as read
+        out = self.status({"site-a": dict(self.ok(), node="bgw-2", note="bgw-1: unreachable; read from bgw-2"),
+                           "site-b": self.ok(A2)})
+        self.assertEqual((out["status"]["site-a"]["node"], out["status"]["site-a"]["note"]),
+                         ("bgw-2", "bgw-1: unreachable; read from bgw-2"))
+        self.assertEqual(out["conditions"][0]["status"], "True")
         self.assertEqual(out["alert"], [])
         self.assertEqual(out["conditions"], [{"type": "IPv6Translation", "status": "True", "reason": "Ready",
                                               "message": "the translation canary passes every check on site-a, site-b"}])
@@ -281,6 +395,8 @@ class FabricStatus(unittest.TestCase):
         for site in ("site-a", "site-b"):
             r = out["status"][site]
             self.assertEqual((r["healthy"], r["stale"], r["error"]), (False, True, "no border gateway node could read the canaries"))
+            # written empty, so a merge-patch clears an earlier read's node and note
+            self.assertEqual((r["node"], r["note"]), ("", ""))
         self.assertEqual(out["status"]["site-c"]["error"], "no VirtualMachineInstance canary in the site namespaces ns-1")
         self.assertEqual(out["status"]["site-c"]["address"], "")
         self.assertIn("site-c (no VirtualMachineInstance canary", out["conditions"][0]["message"])

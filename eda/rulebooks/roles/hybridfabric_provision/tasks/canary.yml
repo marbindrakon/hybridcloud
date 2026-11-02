@@ -3,18 +3,23 @@
 # on every site of the fabric that reports one. Runs in the node configuration block, while the SSH key is there.
 # The fabric's sites are the sites of its CloudGateways (spec.fabricRef, spec.cloudRef); a site reports where its probe
 # answers in status.realization.ipv6Canary {placement, vrf, address} (the site job), or why it found none (error).
-# One border gateway node, the first that answers, reads every probe from the site's gateway namespace in the
-# placement's VRF (canary_scrape.yml). Never fails the fabric job: a canary that could not be read says so in the
-# status (main.yml, "Set the translation canary status").
+# The first border gateway node that answers reads every probe from the site's gateway namespace in the placement's
+# VRF (canary_scrape.yml); a probe it could not reach is read again from each other node, in node order, until one
+# reaches it (the site may return the reply through the other node). Never fails the fabric job: a canary that could
+# not be read says so in the status (main.yml, "Set the translation canary status").
 # Sets hf_canary_cfg, hf_canary_targets [{site, gateway, netns, placement, vrf, address, error}], hf_canary_scrape
-# ({site: {address, at, checks, stale, healthy, error}} from the node), hf_canary_node (the node that read them),
-# hf_canary_error (why nothing could be read, '' otherwise), hf_canary_now (the run's time).
+# ({site: {address, at, checks, stale, healthy, error, node, note}}: node read it; note says which nodes could not),
+# hf_canary_node (the first node that read them), hf_canary_retry (the sites no node reached), hf_canary_tried ({site:
+# [{node, error}]} the nodes that could not reach it), hf_canary_error (why nothing could be read, '' otherwise),
+# hf_canary_now (the run's time).
 - name: The translation canary's realization
   ansible.builtin.set_fact:
     hf_canary_cfg: "{{ (fab_real.canaries | default({}, true)).ipv6Translation | default({}, true) }}"
     hf_canary_targets: []
     hf_canary_scrape: {}
     hf_canary_node: ""
+    hf_canary_retry: []
+    hf_canary_tried: {}
     hf_canary_error: ""
     # the run's time, once (failedSince and the alert compare against it)
     hf_canary_now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
@@ -58,6 +63,7 @@
           {%- endfor -%}
           {{ out }}
 
+    # the first node that answers reads every site; each node after it only the sites no node reached yet
     - name: Read the canaries from a border gateway node
       ansible.builtin.include_tasks: canary_scrape.yml
       loop: "{{ fab_spec.borderGateway.nodes }}"

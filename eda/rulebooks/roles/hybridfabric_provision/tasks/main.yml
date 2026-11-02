@@ -18,8 +18,9 @@
 #    attachmentsSkipped); the job wakes the circuits whose realization changed.
 # 6. Translation canary (realization canaries.ipv6Translation, canary.yml): on one node, the metrics of the platform's
 #    probe on every site of the fabric that reports one (CloudInfrastructure status.realization.ipv6Canary), read from
-#    the site's gateway namespace in the placement's VRF; status.realization.translation.canaries, condition
-#    IPv6Translation and, after alertMinutes of failure, a Warning event IPv6TranslationCanaryFailed. Never fails the job.
+#    the site's gateway namespace in the placement's VRF (a probe that node cannot reach, from the other nodes);
+#    status.realization.translation.canaries, condition IPv6Translation and, after alertMinutes of failure, a Warning
+#    event IPv6TranslationCanaryFailed. Never fails the job.
 # 7. Wakes from other jobs that came during the run waited for it (the controller does not let them supersede a job
 #    in flight): the job has the controller publish them once it has written its status (deferred_wakes.yml).
 - block:
@@ -453,7 +454,9 @@
 
     # the translation canary as read from the sites (canary.yml): per site that reports one, the probe's address, when
     # it last ran, its checks, stale (no run in the last three minutes, or not reachable) and healthy (reachable, not
-    # stale, every check 1); next to them (status write below) readAt (this read), alertMinutes and staleAfterMinutes
+    # stale, every check 1), the border gateway node that read it (node; '' when none did) and, when nodes before it
+    # could not reach the probe, which and why (note; '' otherwise; both always written, the status is merge-patched);
+    # next to them (status write below) readAt (this read), alertMinutes and staleAfterMinutes
     # (3 x alertMinutes): the operator re-runs a Ready fabric whose read is older than alertMinutes and marks every
     # reading stale and not healthy once it is older than staleAfterMinutes (operator role hybridfabric); failedSince is kept across runs (as degradedSince), and a site failed or stale for
     # canaries.ipv6Translation.alertMinutes is reported as an event below, every run while it lasts. Condition
@@ -478,7 +481,9 @@
             {%- endif -%}
             {%- set p = _prev[t.site] | default({}, true) -%}
             {%- set since = '' if r.healthy | bool else (p.failedSince | default('', true) or _now) -%}
-            {%- set _ = out.update({t.site: r | combine({'placement': t.placement | default('', true), 'failedSince': since})}) -%}
+            {%- set _ = out.update({t.site: r | combine({'placement': t.placement | default('', true), 'failedSince': since,
+                                                     'node': r.node | default('', true),
+                                                     'note': r.note | default('', true)})}) -%}
           {%- endfor -%}
           {{ out }}
         _summary: >-

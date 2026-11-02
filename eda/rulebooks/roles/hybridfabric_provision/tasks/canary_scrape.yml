@@ -1,15 +1,26 @@
 ---
-# One border gateway node (hf_canary_bgw) reads the translation canaries of hf_canary_targets (canary.yml), unless a
-# node before it already did (hf_canary_node). Per site with an address, from the site's gateway namespace in the
+# One border gateway node (hf_canary_bgw) reads translation canaries of hf_canary_targets (canary.yml): the first node
+# that answers reads every site with an address; each node after it reads again only the sites the nodes before it
+# could not reach (hf_canary_retry). The gateways announce the network's prefixes to the site, not each node's own
+# source address, so a site with more than one path to the gateway can return a reply to the other node, which drops
+# it: a site is unreachable only when no node reached it. Per site, from the site's gateway namespace in the
 # placement's VRF:
 #   ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 -s -f --max-time 5 [--interface <source>] http://[<address>]:<port>/metrics
 # where <source> is the VRF's own global IPv6 address (the ICMPv6 source /128 of the dual-stack core on the VRF
 # device; without one the kernel chooses). Parses `shc_ipv6_canary_check{check="<name>"} <0|1>` and
 # `shc_ipv6_canary_run_timestamp_seconds <epoch>`; a run older than three probe periods (180 s) is stale. Prints
-# canary=<json> {site: {address, at, checks {name: 0|1}, stale, healthy, error}} and always exits 0; an unreachable node
-# or a failed script leaves hf_canary_node empty, so the next node tries.
+# canary=<json> {site: {address, at, checks {name: 0|1}, stale, healthy, error, retry}} and always exits 0 (retry: the
+# probe did not answer; another node may reach it). An unreachable node or a failed script reads nothing, so the next
+# node tries. Each kept reading names the node that read it (node) and, when an earlier node could not reach the
+# probe, says so (note); hf_canary_tried keeps per site the nodes that could not reach it ({node, error}).
 - name: "{{ hf_canary_bgw.name }}: read the translation canaries"
-  when: hf_canary_node | length == 0
+  when: hf_canary_node | length == 0 or hf_canary_retry | default([]) | length > 0
+  vars:
+    # the sites this node reads: every site with an address on the first node that answers, then only the sites no
+    # node reached yet
+    hf_canary_read: >-
+      {{ hf_canary_targets | selectattr('address') | list if hf_canary_node | length == 0
+         else hf_canary_targets | selectattr('address') | selectattr('site', 'in', hf_canary_retry | default([])) | list }}
   block:
     - name: "{{ hf_canary_bgw.name }}: read the canary metrics through the gateways"
       ansible.builtin.shell:
@@ -48,7 +59,8 @@
 
 
           def read(run, t, port, now):
-              rec = {"address": t["address"], "at": "", "checks": {}, "stale": True, "healthy": False, "error": ""}
+              rec = {"address": t["address"], "at": "", "checks": {}, "stale": True, "healthy": False, "error": "",
+                     "retry": False}
               try:
                   addr = str(ipaddress.IPv6Address(t["address"]))
               except ValueError:
@@ -67,6 +79,7 @@
               if rc != 0:
                   rec["error"] = "unreachable from %s VRF %s (curl exit %d%s)" % (
                       t["netns"], t["vrf"], rc, (": " + err.strip().splitlines()[-1][:120]) if err.strip() else "")
+                  rec["retry"] = True
                   return rec
               checks, stamp = {}, None
               for line in text.splitlines():
@@ -100,7 +113,7 @@
 
 
           def main(run, now=None):
-              targets = json.loads({{ hf_canary_targets | selectattr('address') | list | to_json | to_json }})
+              targets = json.loads({{ hf_canary_read | selectattr('address') | list | to_json | to_json }})
               port = int({{ hf_canary_cfg.port | default(9464, true) | int }})
               now = time.time() if now is None else now
               out = {}
@@ -120,12 +133,44 @@
       failed_when: false
       ignore_unreachable: true
 
+    # one task: the block's condition and the sites to read change once hf_canary_node is set. A reading a node could
+    # not take (the probe did not answer) is kept only while no other node read the site; a later node's answer
+    # replaces it and notes the nodes that could not reach the probe
     - name: "{{ hf_canary_bgw.name }}: keep the canary readings"
       vars:
         _line: "{{ _hf_canary_run.stdout_lines | default([]) | select('match', '^canary=') | list | last | default('') }}"
+        _node: "{{ hf_canary_bgw.name }}"
+        _merged: >-
+          {%- set out = dict(hf_canary_scrape | default({}, true)) -%}
+          {%- set tried = dict(hf_canary_tried | default({}, true)) -%}
+          {%- set retry = [] -%}
+          {%- for site, rec in (_line.split('=', 1) | last | from_json) | dictsort -%}
+            {%- set r = rec | dict2items | rejectattr('key', 'equalto', 'retry') | items2dict
+                        | combine({'node': _node, 'note': ''}) -%}
+            {%- set before = tried[site] | default([]) -%}
+            {%- if rec.retry | default(false) | bool -%}
+              {%- set _ = retry.append(site) -%}
+              {%- set _ = tried.update({site: before + [{'node': _node, 'error': rec.error | default('', true)}]}) -%}
+              {%- if site not in out -%}
+                {%- set _ = out.update({site: r}) -%}
+              {%- else -%}
+                {%- set _ = out.update({site: out[site] | combine({'note': 'unreachable from every border gateway node '
+                    ~ 'that read it (' ~ (tried[site] | map(attribute='node') | join(', ')) ~ ')'})}) -%}
+              {%- endif -%}
+            {%- elif before | length > 0 -%}
+              {%- set why = [] -%}
+              {%- for b in before -%}{%- set _ = why.append(b.node ~ ': ' ~ b.error) -%}{%- endfor -%}
+              {%- set _ = out.update({site: r | combine({'note': why | join('; ') ~ '; read from ' ~ _node})}) -%}
+            {%- else -%}
+              {%- set _ = out.update({site: r}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ {'scrape': out, 'tried': tried, 'retry': retry} }}
       ansible.builtin.set_fact:
-        hf_canary_scrape: "{{ _line.split('=', 1) | last | from_json }}"
-        hf_canary_node: "{{ hf_canary_bgw.name }}"
+        hf_canary_scrape: "{{ _merged.scrape }}"
+        hf_canary_tried: "{{ _merged.tried }}"
+        hf_canary_retry: "{{ _merged.retry }}"
+        hf_canary_node: "{{ hf_canary_node or _node }}"
       when:
         - not (_hf_canary_run.unreachable | default(false) | bool)
         - _hf_canary_run.rc | default(1) | int == 0
