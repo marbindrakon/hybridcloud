@@ -28,6 +28,11 @@ COMMON = os.path.join(ROOT, "operator", "roles", "_common", "tasks")
 OPERATORS = ("namespace", "primary")
 # Entity records Creating in its own first write (entity_is_new) before the namespace operator deployment.
 OWN_FIRST_WRITE = {("primary", "entity")}
+# Status writes that may come before the acknowledgement because they only run on an object the job has written
+# already and touch none of the phase fields: the HybridFabric's stale mark of an old translation canary reading
+# (it needs readings in status.realization.translation, which only the fabric job writes).
+PRIOR_STATUS_WRITES = {("primary", "hybridfabric"): {"Mark an old translation canary reading stale"}}
+PHASE_FIELDS = {"phase", "phaseSince", "summary", "status", "ready", "observedGeneration"}
 MARK = re.compile(r"^Mark (\w+) as reconciling$")
 NOW_SINCE = "2026-10-22T09:00:00Z"
 
@@ -96,7 +101,12 @@ class Wiring(unittest.TestCase):
             with self.subTest(operator=op, role=role):
                 block = role_block(op, role)
                 names = [t.get("name") for t in block]
-                first = next(i for i, t in enumerate(block) if is_status_write(t))
+                prior = PRIOR_STATUS_WRITES.get((op, role), set())
+                for t in block:
+                    if t.get("name") in prior:
+                        self.assertTrue(is_status_write(t))
+                        self.assertEqual(set(t["operator_sdk.util.k8s_status"]["status"]) & PHASE_FIELDS, set())
+                first = next(i for i, t in enumerate(block) if is_status_write(t) and t.get("name") not in prior)
                 self.assertEqual(names[first], "Mark %s as reconciling" % Kind)
                 status = block[first]["operator_sdk.util.k8s_status"]["status"]
                 self.assertEqual(status["phase"], "{{ ack_phase.phase }}")

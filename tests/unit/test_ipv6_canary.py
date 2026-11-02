@@ -309,7 +309,9 @@ class FabricStatus(unittest.TestCase):
         self.assertEqual(ev["when"], "hf_canary_alert_sites | length > 0")
         fin = by_name(tasks, "Report the fabric ready")["vars"]
         self.assertIn("+ hf_canary_conditions | default([])", fin["fab_conditions"])
-        self.assertIn("'translation': {'canaries': hf_canary_patch | default({})}", fin["fab_status"])
+        self.assertIn("'translation': {'canaries': hf_canary_patch | default({}),", fin["fab_status"])
+        # with the read's time and pacing, which the operator uses to re-read and to mark a too-old reading stale
+        self.assertIn("'readAt': hf_canary_now | default('', true)", fin["fab_status"])
         # the canary is read inside the node block, while the SSH key is there
         block = by_name(tasks, "Configure the nodes, one at a time")
         self.assertEqual([t["name"] for t in block["block"]],
