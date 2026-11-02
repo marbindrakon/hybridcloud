@@ -38,7 +38,9 @@ spec:
             Routes inside the network's address space (HybridNetwork spec.prefixes) or the
             platform's ranges are never accepted, and an accept entry inside the address space is
             refused; a default route from the CE is accepted only while the network has no provider
-            internet egress.
+            internet egress of that address family. Accept entries may be IPv4 and IPv6: with at least
+            one IPv6 entry the circuit also gets an IPv6 link subnet and a second BGP session over
+            IPv6 from every node.
           type: object
           required:
             - spec
@@ -164,33 +166,40 @@ spec:
                     accept:
                       type: array
                       description: >-
-                        Routes accepted from the CE, as prefix-list entries "<IPv4 prefix>[ ge <n>][ le <n>]" (e.g.
-                        "10.50.0.0/16 le 24"). Everything else from the CE is dropped.
+                        Routes accepted from the CE, as prefix-list entries "<prefix>[ ge <n>][ le <n>]" of either
+                        address family (e.g. "10.50.0.0/16 le 24", "2001:db8:50::/48 le 64"); ge and le are at most
+                        32 for an IPv4 prefix and 128 for an IPv6 prefix. Everything else from the CE is dropped. With
+                        at least one IPv6 entry the circuit also carries IPv6: an IPv6 link subnet and a second BGP
+                        session over it (status.ceConfig address6 and neighbors6). That is refused
+                        (FamilyUnavailable) where the platform offers no IPv6 on edge connections or the network has
+                        no IPv6 address space. Removing every IPv6 entry removes the IPv6 session again.
                       maxItems: 64
                       items:
                         type: string
                         maxLength: 64
                         x-kubernetes-validations:
-                          - rule: "self.matches('^[0-9]{1,3}([.][0-9]{1,3}){3}/[0-9]{1,2}( ge [0-9]{1,2})?( le [0-9]{1,2})?$')"
-                            message: an entry is "<IPv4 prefix>[ ge <n>][ le <n>]"
+                          - rule: "self.matches('^[0-9A-Fa-f:.]+/[0-9]{1,3}( ge [0-9]{1,3})?( le [0-9]{1,3})?$')"
+                            message: an entry is "<prefix>[ ge <n>][ le <n>]"
                           - rule: >-
-                              isCIDR(self.split(' ')[0]) && cidr(self.split(' ')[0]).ip().family() == 4
+                              isCIDR(self.split(' ')[0])
                               && cidr(self.split(' ')[0]) == cidr(self.split(' ')[0]).masked()
-                            message: the entry must start with an IPv4 network prefix (host bits zero)
+                            message: the entry must start with an IPv4 or IPv6 network prefix (host bits zero)
                           - rule: >-
-                              !self.matches('^[0-9]{1,3}([.][0-9]{1,3}){3}/[0-9]{1,2}( ge [0-9]{1,2})?( le [0-9]{1,2})?$')
+                              !self.matches('^[0-9A-Fa-f:.]+/[0-9]{1,3}( ge [0-9]{1,3})?( le [0-9]{1,3})?$')
                               || !isCIDR(self.split(' ')[0]) || !self.contains(' ge ')
                               || (int(self.split(' ge ')[1].split(' ')[0]) > cidr(self.split(' ')[0]).prefixLength()
-                                  && int(self.split(' ge ')[1].split(' ')[0]) <= 32)
-                            message: ge must be longer than the prefix and at most 32
+                                  && int(self.split(' ge ')[1].split(' ')[0])
+                                     <= (cidr(self.split(' ')[0]).ip().family() == 4 ? 32 : 128))
+                            message: ge must be longer than the prefix and at most 32 (IPv4) or 128 (IPv6)
                           - rule: >-
-                              !self.matches('^[0-9]{1,3}([.][0-9]{1,3}){3}/[0-9]{1,2}( ge [0-9]{1,2})?( le [0-9]{1,2})?$')
+                              !self.matches('^[0-9A-Fa-f:.]+/[0-9]{1,3}( ge [0-9]{1,3})?( le [0-9]{1,3})?$')
                               || !isCIDR(self.split(' ')[0]) || !self.contains(' le ')
                               || (int(self.split(' le ')[1]) > cidr(self.split(' ')[0]).prefixLength()
-                                  && int(self.split(' le ')[1]) <= 32)
-                            message: le must be longer than the prefix and at most 32
+                                  && int(self.split(' le ')[1])
+                                     <= (cidr(self.split(' ')[0]).ip().family() == 4 ? 32 : 128))
+                            message: le must be longer than the prefix and at most 32 (IPv4) or 128 (IPv6)
                           - rule: >-
-                              !self.matches('^[0-9]{1,3}([.][0-9]{1,3}){3}/[0-9]{1,2} ge [0-9]{1,2} le [0-9]{1,2}$')
+                              !self.matches('^[0-9A-Fa-f:.]+/[0-9]{1,3} ge [0-9]{1,3} le [0-9]{1,3}$')
                               || int(self.split(' ge ')[1].split(' ')[0]) <= int(self.split(' le ')[1])
                             message: ge must not exceed le
                     advertise:
@@ -206,7 +215,8 @@ spec:
                           default: false
                           description: >-
                             A default route, while the network has provider internet egress (the CE's own traffic
-                            may then use it).
+                            may then use it); with IPv6 accept entries also ::/0 over the IPv6 session, while the
+                            network has IPv6 internet egress.
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -227,14 +237,23 @@ spec:
                   description: The autonomous system the CE peers with.
                 sessions:
                   type: array
-                  description: The session from each edge node.
+                  description: >-
+                    The sessions from each edge node, one per address family the circuit carries. The circuit is
+                    ready when every session is established.
                   items:
                     type: object
                     properties:
                       node:
                         type: string
+                      family:
+                        type: integer
+                        description: 4 or 6.
                       address:
                         type: string
+                        description: The node's address on the circuit's link of this family.
+                      peer:
+                        type: string
+                        description: The CE address the node peers with.
                       state:
                         type: string
                       accepted:
@@ -244,7 +263,22 @@ spec:
                     x-kubernetes-preserve-unknown-fields: true
                 ceConfig:
                   type: object
-                  description: What the CE needs to configure.
+                  description: >-
+                    What the CE needs to configure. With IPv6 accept entries also address6, secondAddress6 and
+                    neighbors6.
+                  properties:
+                    address6:
+                      type: string
+                      description: The CE's address on the circuit's IPv6 link subnet (with its length).
+                    secondAddress6:
+                      type: string
+                      description: The address for a second CE router on the IPv6 link subnet.
+                    neighbors6:
+                      type: array
+                      description: The edge nodes to peer with over IPv6 (one session each), with their AS number.
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                   x-kubernetes-preserve-unknown-fields: true
                 notes:
                   type: array
@@ -253,7 +287,10 @@ spec:
                     type: string
                 realization:
                   type: object
-                  description: How the platform realized the circuit (informational; depends on the platform).
+                  description: >-
+                    How the platform realized the circuit (informational; depends on the platform). With IPv6 accept
+                    entries it also holds the IPv6 link (link6), the CE's IPv6 address (ce6) and each node's
+                    (nodes[].address6).
                   x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string

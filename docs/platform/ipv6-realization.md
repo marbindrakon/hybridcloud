@@ -803,9 +803,53 @@ offered.
 ```yaml
 attachments:
   reservedAsns: []   # AS numbers a tenant's edge router may not use (the platform's own, e.g. its egress AS)
+  linkPool6: ""      # IPv6 on circuits: an IPv6 prefix of at least a /64 (e.g. a /56 of the platform's
+                     # infrastructure space); empty = circuits are IPv4 only
+  reserved6: []      # the platform's IPv6 infrastructure ranges a CE's routes never reach into (e.g. the part of the
+                     # routed space that holds linkPool6 and the core's IPv6 ranges)
 ```
-A circuit whose peer AS is listed fails with `PeerAsnReserved`. IPv6 entries in a circuit's accept list stay refused at
-admission.
+A circuit whose peer AS is listed fails with `PeerAsnReserved`.
+
+**IPv6 on a circuit.** A circuit's `spec.routing.accept` takes IPv4 and IPv6 entries (`<prefix>[ ge <n>][ le <n>]`, ge
+and le up to 32 or 128 by family; the CRD checks each entry per family). A circuit carries IPv6 exactly when it has at
+least one IPv6 entry; a circuit without one is realized as before (same revision, policy hash, FRR configuration,
+nftables and device settings). With IPv6 entries:
+
+- **Link.** The circuit job numbers an IPv6 link from `linkPool6`: the /64 at the circuit's link index (the same index
+  as its IPv4 link, no ledger entry of its own); node i (in `borderGateway.nodes` order) takes `::<i+1>`, the CE the
+  next address, a second CE router the one after. The circuit records `status.realization.link6`, `ce6` and each
+  node's `nodes[].address6`, and `status.ceConfig` gains `address6`, `secondAddress6` and `neighbors6` (the nodes'
+  IPv6 addresses with the fabric's AS). The IPv4 link and session always stay, also on an IPv6-only network (the IPv4
+  session then advertises nothing).
+- **Session.** Every node runs a second BGP session to the CE's IPv6 address in the network's root VRF: the same peer
+  AS, password, timers, BFD and `maximum-prefix` as the IPv4 session, IPv6 unicast only (no IPv6 routes over the IPv4
+  session). `status.sessions[]` lists one session per node and family (`family`, `peer`); the circuit is Ready when
+  every session of every family is established.
+- **Policy.** Accepted: the IPv6 accept entries. Never accepted: the network's IPv6 space (`spec.prefixes`,
+  `status.addressSpace`, the platform block) and its placements' IPv6 prefixes, the platform's IPv6 ranges (`linkPool6`,
+  `reserved6`, `core.loopbackPool6`, `core.icmpSource6` and every `translation.<site>.pref64`) and `::/0` (the
+  sites' gateways keep their own IPv6 default route, so a CE's would never be used). Advertised: the placements' IPv6 prefixes (with `advertise.networkPrefixes`) and
+  `::/0` when `advertise.default` is set and the network has IPv6 internet egress.
+- **Node.** The circuit's VLAN device gets IPv6 (no router advertisements or autoconfiguration taken from the CE) and
+  the node's /64 address; the nodes admit from the CE only sources inside the accepted prefixes, the link and
+  link-local addresses, and on the device only BGP, BFD, ICMPv6 errors, echo and neighbour discovery (an nftables
+  table of its own, loaded only on nodes with an IPv6 circuit). The CE's IPv6 reaches the internet only from inside the
+  network's platform block (the egress filter, [IPv6 internet egress](#ipv6-internet-egress-egressipv6)).
+
+Refusals (the circuit fails, nothing is allocated for the first two):
+
+| Situation | Reason | Message |
+|---|---|---|
+| IPv6 entries, `linkPool6` empty | `FamilyUnavailable` | IPv6 is not offered on attachment circuits of this fabric |
+| IPv6 entries, the network has no IPv6 address space | `FamilyUnavailable` | the network has no IPv6 address space |
+| an IPv6 entry inside the network's IPv6 space or a platform IPv6 range | `PolicyRefused` | accept entry '…' lies inside … |
+| the circuit's link index beyond `linkPool6` | `FamilyUnavailable` | no IPv6 link is left for this circuit |
+
+**Switching it on.** Set `attachments.linkPool6` (and `reserved6`) in `FABRIC_REALIZATION`, let the value reach the
+automation, and run the fabric job (Retry now on the `HybridFabric`): circuits without IPv6 entries do not change.
+**Rolling back** a circuit: remove its IPv6 accept entries; the next runs remove the IPv6 session, address and filter
+table, and the IPv4 side stays as it is. Emptying `linkPool6` while circuits still have IPv6 entries makes those
+circuits fail and the fabric stops realizing them (IPv4 included), so remove the entries first.
 
 ## Tenant reverse names
 

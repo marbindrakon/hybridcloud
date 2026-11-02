@@ -1,0 +1,28 @@
+# An edge connection (AttachmentCircuit) that carries IPv4 and IPv6: hands example-net-platform-ipv6 (a network with
+# IPv6 from the platform) to the tenant's own router on the bearer bearer-1 of the provider edge example-edge. The
+# IPv6 accept entry gives the circuit an IPv6 link next to its IPv4 one and a second BGP session over IPv6 from every
+# edge node (same AS, password, BFD and route limit). Configure the router from status.ceConfig: address and
+# neighbors for IPv4, address6 and neighbors6 for IPv6. Routes from the router are accepted only as listed under
+# accept; the router learns the network's placement prefixes of both families. Ask the platform team for the edge
+# and bearer names.
+---
+apiVersion: hybridsovereign.redhat/v1alpha1
+kind: AttachmentCircuit
+metadata:
+  name: example-edge-dual-stack
+  namespace: entity-example-corp
+spec:
+  network: example-net-platform-ipv6
+  edgeRef:
+    name: example-edge
+    bearer: bearer-1
+  routing:
+    protocol: bgp
+    bgp:
+      peerAsn: 64600
+      bfd: true
+      maxPrefixes:
+        limit: 20
+    accept:
+      - 172.30.0.0/16 le 24
+      - 2001:db8:50::/48 le 64

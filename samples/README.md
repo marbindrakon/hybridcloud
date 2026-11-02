@@ -31,6 +31,7 @@ groups need the matching role (see [Onboard a tenant](../docs/platform/onboard-a
 | [cloudgcp/example-gcp.yaml](cloudgcp/example-gcp.yaml) | CloudGCP | A Google Cloud environment (billable). |
 | [networkplacement/example-net-vms.yaml](networkplacement/example-net-vms.yaml) | NetworkPlacement | The network attached to the VM environment, with a /24. |
 | [attachmentcircuit/example-edge.yaml](attachmentcircuit/example-edge.yaml) | AttachmentCircuit | An edge connection to the tenant's own router. |
+| [attachmentcircuit/example-edge-dual-stack.yaml](attachmentcircuit/example-edge-dual-stack.yaml) | AttachmentCircuit | An edge connection that carries IPv6 too (an IPv6 accept entry: a second session over IPv6). |
 | [platformopenshift/example-cluster.yaml](platformopenshift/example-cluster.yaml) | PlatformOpenshift | An OpenShift cluster in the OpenStack environment. |
 | [team/example-team.yaml](team/example-team.yaml) | Team | A team setup, with access groups that may manage it (access fields: available with this release). |
 | [project/example-app.yaml](project/example-app.yaml) | Project | An app project, with its access fields (available with this release). |
