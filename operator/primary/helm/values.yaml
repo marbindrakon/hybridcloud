@@ -4,7 +4,7 @@ installCRDs: true
 
 image:
   repository: /hybrid-sovereign/hybridsovereign-primary-operator
-  tag: "img-0.1.39"
+  tag: "img-0.1.40"
   pullPolicy: Always
 
 imagePullSecrets:
