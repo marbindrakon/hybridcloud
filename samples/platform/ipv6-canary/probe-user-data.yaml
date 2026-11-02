@@ -205,18 +205,20 @@ write_files:
         # only a connection with resolvers of its own, so the guest is never left without one
         [ -n "$(nmcli -g ipv4.dns,ipv6.dns connection show "$con" | tr -d '[:space:]')" ] || { echo "$dev: no resolvers configured: nothing changed"; exit 0; }
         set --
-        for f in $FAMILIES; do set -- "$@" "$f.ignore-auto-dns" yes; done
+        for f in $FAMILIES; do
+          [ "$(nmcli -g "$f.ignore-auto-dns" connection show "$con")" = yes ] || set -- "$@" "$f.ignore-auto-dns" yes
+        done
+        [ $# -gt 0 ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
         nmcli connection modify "$con" "$@" || exit 1
         nmcli device reapply "$dev" || nmcli connection up "$con"
       elif command -v networkctl >/dev/null && networkctl status "$dev" >/dev/null 2>&1; then
         file=$(networkctl status "$dev" | sed -n 's/^ *Network File: *//p' | head -n 1)
         if [ -z "$file" ] || ! grep -q '^DNS=' "$file"; then echo "$dev: no resolvers configured: nothing changed"; exit 0; fi
         dir="/etc/systemd/network/$(basename "$file").d"
-        mkdir -p "$dir" || exit 1
-        {
-          printf '[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n'
-          case " $FAMILIES " in *" ipv4 "*) printf '\n[DHCPv4]\nUseDNS=false\n' ;; esac
-        } > "$dir/90-ignore-auto-dns.conf"
+        want=$(printf '[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n'
+          case " $FAMILIES " in *" ipv4 "*) printf '\n[DHCPv4]\nUseDNS=false\n' ;; esac)
+        [ "$(cat "$dir/90-ignore-auto-dns.conf" 2>/dev/null)" != "$want" ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
+        mkdir -p "$dir" && printf '%s\n' "$want" > "$dir/90-ignore-auto-dns.conf" || exit 1
         networkctl reload && networkctl reconfigure "$dev"
       else
         echo "$dev: managed by neither NetworkManager nor systemd-networkd: nothing changed"

@@ -727,9 +727,10 @@ class Sample(unittest.TestCase):
         '  "-g RUNNING general") echo running ;;',
         '  "-g GENERAL.CON-UUID device show enp1s0") echo 5f2b0c9e-0000-4000-8000-000000000001 ;;',
         '  "-g ipv4.dns,ipv6.dns connection show 5f2b0c9e-0000-4000-8000-000000000001") printf "\\n%s\\n" "$DNS" ;;',
+        '  "-g ipv"[46]".ignore-auto-dns connection show 5f2b0c9e-0000-4000-8000-000000000001") echo "$IGNORED" ;;',
         "esac"])
 
-    def run_ignore_auto_dns(self, nmcli, networkctl="exit 1", network_file=None):
+    def run_ignore_auto_dns(self, nmcli, networkctl="exit 1", network_file=None, existing=None):
         """The user data's ignore-auto-dns script with ip, sleep, nmcli and networkctl stubbed; returns its output, the
         stubs' calls and the drop-ins it wrote under a stand-in for /etc/systemd/network."""
         script = {f["path"]: f["content"] for f in self.user_data()["write_files"]}["/usr/local/sbin/ignore-auto-dns"]
@@ -749,6 +750,10 @@ class Sample(unittest.TestCase):
             if network_file is not None:
                 with open(netfile, "w") as f:
                     f.write(network_file)
+            if existing is not None:   # a drop-in an earlier boot wrote
+                os.makedirs(os.path.join(etc, "10-netplan-enp1s0.network.d"))
+                with open(os.path.join(etc, "10-netplan-enp1s0.network.d", "90-ignore-auto-dns.conf"), "w") as f:
+                    f.write(existing)
             path = os.path.join(tmp, "ignore-auto-dns")
             with open(path, "w") as f:
                 f.write(script.replace("/etc/systemd/network", etc))
@@ -770,12 +775,16 @@ class Sample(unittest.TestCase):
     def test_ignore_auto_dns_networkmanager(self):
         """NetworkManager: the connection on the IPv6 default route's device ignores the resolvers DHCP hands out (both
         families: the canary's placement is IPv6-only) and is re-applied; one without resolvers of its own is left."""
-        _, calls, drops = self.run_ignore_auto_dns("DNS='2001:db8::53,2001:db8::54'\n" + self.NM)
+        _, calls, drops = self.run_ignore_auto_dns("DNS='2001:db8::53,2001:db8::54'; IGNORED=no\n" + self.NM)
         self.assertIn("nmcli connection modify 5f2b0c9e-0000-4000-8000-000000000001 ipv6.ignore-auto-dns yes "
                       "ipv4.ignore-auto-dns yes", calls)
         self.assertEqual(calls[-1], "nmcli device reapply enp1s0")
         self.assertEqual(drops, {})
-        out, calls, _ = self.run_ignore_auto_dns("DNS=''\n" + self.NM)
+        # the next boot: already set, so the connection is not re-applied
+        out, calls, _ = self.run_ignore_auto_dns("DNS='2001:db8::53'; IGNORED=yes\n" + self.NM)
+        self.assertFalse([c for c in calls if " modify " in c or "reapply" in c])
+        self.assertIn("enp1s0: already ignores the resolvers handed out", out)
+        out, calls, _ = self.run_ignore_auto_dns("DNS=''; IGNORED=no\n" + self.NM)
         self.assertFalse([c for c in calls if " modify " in c or "reapply" in c])
         self.assertIn("enp1s0: no resolvers configured: nothing changed", out)
 
@@ -784,9 +793,13 @@ class Sample(unittest.TestCase):
         router advertisement resolvers off, then networkd reloads and reconfigures the device."""
         networkctl = 'case "$1" in status) echo "       Network File: $NETFILE" ;; esac'
         _, calls, drops = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDNS=2001:db8::53\n")
-        self.assertEqual(drops, {"10-netplan-enp1s0.network.d/90-ignore-auto-dns.conf":
-                                 "[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n\n[DHCPv4]\nUseDNS=false\n"})
+        want = "[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n\n[DHCPv4]\nUseDNS=false\n"
+        self.assertEqual(drops, {"10-netplan-enp1s0.network.d/90-ignore-auto-dns.conf": want})
         self.assertEqual(calls[-2:], ["networkctl reload", "networkctl reconfigure enp1s0"])
+        # the next boot: the drop-in is in place, networkd is not reloaded
+        out, calls, _ = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDNS=2001:db8::53\n", existing=want)
+        self.assertFalse([c for c in calls if "reload" in c or "reconfigure" in c])
+        self.assertIn("enp1s0: already ignores the resolvers handed out", out)
         # a .network file without resolvers of its own: nothing written
         _, _, drops = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDHCP=ipv6\n")
         self.assertEqual(drops, {})
