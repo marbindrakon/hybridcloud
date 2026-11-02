@@ -679,6 +679,19 @@ class Sample(unittest.TestCase):
 
     def test_check_script_output_parses_as_the_fabric_reads_it(self):
         """The script, with its network commands replaced by stubs, writes metrics the scrape script parses."""
+        page = self.run_check_script("2001:db8::54")
+        checks = dict(re.findall(r'^shc_ipv6_canary_check\{check="(\w+)"\} ([01])$', page, re.M))
+        self.assertEqual(checks, {k: "1" for k in ALL_OK})
+        self.assertRegex(page, r"(?m)^shc_ipv6_canary_run_timestamp_seconds \d+$")
+        # the resolver in use: an information metric, not a check (the fabric reads shc_ipv6_canary_check lines only)
+        self.assertIn('shc_ipv6_canary_resolver_info{server="2001:db8::54",translation="1"} 1', page.splitlines())
+
+    def test_the_resolver_in_use_after_the_guest_left_the_translation_resolvers(self):
+        page = self.run_check_script("2001:db8:ffff::3331%2")
+        self.assertIn('shc_ipv6_canary_resolver_info{server="2001:db8:ffff::3331",translation="0"} 1', page.splitlines())
+
+    def run_check_script(self, current_resolver):
+        """The check script with ip, dig, curl, ping and resolvectl stubbed; returns the metrics page it wrote."""
         files = {f["path"]: f["content"] for f in self.user_data()["write_files"]}
         script = files["/usr/local/bin/shc-ipv6-canary"].replace("DIR=/var/lib/shc-ipv6-canary", 'DIR="$CANARY_DIR"')
         import tempfile
@@ -689,7 +702,8 @@ class Sample(unittest.TestCase):
             stubs = {"ip": "echo '2: eth0    inet6 2001:db8:4005:4200::10/64 scope global dynamic'",
                      "dig": 'case "$*" in *AAAA*) echo 2001:db8:66::c000:aa;; *) echo 192.0.0.170;; esac',
                      "curl": 'case "$*" in *2001:db8:66::c633:6407*) exit 7;; *-w*) echo 200;; esac; exit 0',
-                     "ping": "exit 0"}
+                     "ping": "exit 0",
+                     "resolvectl": "printf 'Link 2 (eth0)\\nCurrent DNS Server: %s\\n' '" + current_resolver + "'"}
             for name, body in stubs.items():
                 with open(os.path.join(bindir, name), "w") as f:
                     f.write("#!/bin/bash\n" + body + "\n")
@@ -706,9 +720,86 @@ class Sample(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
-        checks = dict(re.findall(r'^shc_ipv6_canary_check\{check="(\w+)"\} ([01])$', page, re.M))
-        self.assertEqual(checks, {k: "1" for k in ALL_OK})
-        self.assertRegex(page, r"(?m)^shc_ipv6_canary_run_timestamp_seconds \d+$")
+        return page
+
+    NM = "\n".join([
+        'case "$*" in',
+        '  "-g RUNNING general") echo running ;;',
+        '  "-g GENERAL.CON-UUID device show enp1s0") echo 5f2b0c9e-0000-4000-8000-000000000001 ;;',
+        '  "-g ipv4.dns,ipv6.dns connection show 5f2b0c9e-0000-4000-8000-000000000001") printf "\\n%s\\n" "$DNS" ;;',
+        "esac"])
+
+    def run_ignore_auto_dns(self, nmcli, networkctl="exit 1", network_file=None):
+        """The user data's ignore-auto-dns script with ip, sleep, nmcli and networkctl stubbed; returns its output, the
+        stubs' calls and the drop-ins it wrote under a stand-in for /etc/systemd/network."""
+        script = {f["path"]: f["content"] for f in self.user_data()["write_files"]}["/usr/local/sbin/ignore-auto-dns"]
+        import shutil
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="shc-dns-")
+        try:
+            bindir, etc, log = os.path.join(tmp, "bin"), os.path.join(tmp, "etc-network"), os.path.join(tmp, "calls")
+            netfile = os.path.join(tmp, "10-netplan-enp1s0.network")
+            os.makedirs(bindir)
+            stubs = {"ip": "echo 'default via fe80::1 dev enp1s0 proto ra metric 100 expires 1798sec pref medium'",
+                     "sleep": "exit 0", "nmcli": nmcli, "networkctl": networkctl}
+            for name, body in stubs.items():
+                with open(os.path.join(bindir, name), "w") as f:
+                    f.write('#!/bin/bash\necho "%s $*" >> "$CALLS"\n%s\n' % (name, body))
+                os.chmod(os.path.join(bindir, name), 0o755)
+            if network_file is not None:
+                with open(netfile, "w") as f:
+                    f.write(network_file)
+            path = os.path.join(tmp, "ignore-auto-dns")
+            with open(path, "w") as f:
+                f.write(script.replace("/etc/systemd/network", etc))
+            env = dict(os.environ, PATH=bindir + ":" + os.environ["PATH"], CALLS=log, NETFILE=netfile)
+            out = subprocess.run(["bash", path], env=env, check=True, timeout=60, capture_output=True, text=True).stdout
+            calls = []
+            if os.path.exists(log):
+                with open(log) as f:
+                    calls = f.read().splitlines()
+            drops = {}
+            for root, _, names in os.walk(etc):
+                for n in names:
+                    with open(os.path.join(root, n)) as f:
+                        drops[os.path.relpath(os.path.join(root, n), etc)] = f.read()
+            return out, calls, drops
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_ignore_auto_dns_networkmanager(self):
+        """NetworkManager: the connection on the IPv6 default route's device ignores the resolvers DHCP hands out (both
+        families: the canary's placement is IPv6-only) and is re-applied; one without resolvers of its own is left."""
+        _, calls, drops = self.run_ignore_auto_dns("DNS='2001:db8::53,2001:db8::54'\n" + self.NM)
+        self.assertIn("nmcli connection modify 5f2b0c9e-0000-4000-8000-000000000001 ipv6.ignore-auto-dns yes "
+                      "ipv4.ignore-auto-dns yes", calls)
+        self.assertEqual(calls[-1], "nmcli device reapply enp1s0")
+        self.assertEqual(drops, {})
+        out, calls, _ = self.run_ignore_auto_dns("DNS=''\n" + self.NM)
+        self.assertFalse([c for c in calls if " modify " in c or "reapply" in c])
+        self.assertIn("enp1s0: no resolvers configured: nothing changed", out)
+
+    def test_ignore_auto_dns_networkd(self):
+        """systemd-networkd (NetworkManager not running): a drop-in for the device's .network file turns the DHCP and
+        router advertisement resolvers off, then networkd reloads and reconfigures the device."""
+        networkctl = 'case "$1" in status) echo "       Network File: $NETFILE" ;; esac'
+        _, calls, drops = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDNS=2001:db8::53\n")
+        self.assertEqual(drops, {"10-netplan-enp1s0.network.d/90-ignore-auto-dns.conf":
+                                 "[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n\n[DHCPv4]\nUseDNS=false\n"})
+        self.assertEqual(calls[-2:], ["networkctl reload", "networkctl reconfigure enp1s0"])
+        # a .network file without resolvers of its own: nothing written
+        _, _, drops = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDHCP=ipv6\n")
+        self.assertEqual(drops, {})
+
+    def test_ignore_auto_dns_unit(self):
+        ud = self.user_data()
+        files = {f["path"]: f["content"] for f in ud["write_files"]}
+        unit = files["/etc/systemd/system/ignore-auto-dns.service"]
+        for line in ("ExecStart=/usr/local/sbin/ignore-auto-dns", "After=network-online.target", "WantedBy=multi-user.target"):
+            self.assertIn(line, unit.splitlines())
+        subprocess.run(["bash", "-n"], input=files["/usr/local/sbin/ignore-auto-dns"], text=True, check=True)
+        # enabled (and run) right after the units are loaded, before clatd and the checks start
+        self.assertEqual(ud["runcmd"][:2], [["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", "ignore-auto-dns.service"]])
 
     def test_vm(self):
         vm = yaml.safe_load(self.text("vm-cloudvirt.yaml"))

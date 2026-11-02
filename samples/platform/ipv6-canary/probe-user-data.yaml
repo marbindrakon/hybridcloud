@@ -1,9 +1,9 @@
 #cloud-config
 # The translation canary probe (Fedora): a CLAT (clatd) for IPv4 literals, a check script run every minute by a
 # systemd timer, and a small HTTP server that serves the last run's results at http://[<address>]:__PORT__/metrics in
-# Prometheus text format. The platform's fabric job reads that page from the site's gateway. Replace every placeholder
-# first (README.md lists them); the file is the same for an OpenShift Virtualization VM and an OpenStack
-# server.
+# Prometheus text format. The platform's fabric job reads that page from the site's gateway. The guest uses only the
+# resolvers of its network configuration (ignore-auto-dns, at every boot). Replace every placeholder first (README.md
+# lists them); the file is the same for an OpenShift Virtualization VM and an OpenStack server.
 package_update: false
 packages:
   - clatd
@@ -88,6 +88,23 @@ write_files:
         ! curl -6 -s -o /dev/null --max-time 5 "http://[$t]/"
       }
 
+      # the resolver the guest's stub resolver uses at the end of the run (systemd-resolved's current server, else the
+      # first nameserver of /etc/resolv.conf), labelled translation="1" when it is one of RESOLVERS: an information
+      # metric, not a check, that tells why pref64 and name4 fail when the guest left the translation resolvers
+      resolver_info() {
+        local s r t=0
+        s=$(resolvectl status 2>/dev/null | sed -n 's/^ *Current DNS Server: *//p' | head -n 1)
+        [ -n "$s" ] || s=$(awk '$1 == "nameserver" {print $2; exit}' /etc/resolv.conf 2>/dev/null)
+        s=${s%%[%#]*}
+        s=${s//[^0-9A-Fa-f:.]/}
+        for r in ${RESOLVERS//,/ }; do
+          [ "${r,,}" = "${s,,}" ] && t=1
+        done
+        echo "# HELP shc_ipv6_canary_resolver_info The resolver the guest used at the end of the last run; translation 1 when it is a translation resolver"
+        echo "# TYPE shc_ipv6_canary_resolver_info gauge"
+        echo "shc_ipv6_canary_resolver_info{server=\"$s\",translation=\"$t\"} 1"
+      }
+
       result() {
         local name=$1
         shift
@@ -113,6 +130,7 @@ write_files:
           result name6 check_name6
           result mtu check_mtu
           result deny check_deny
+          resolver_info
           echo "# HELP shc_ipv6_canary_run_timestamp_seconds When the last run finished, in seconds since the epoch"
           echo "# TYPE shc_ipv6_canary_run_timestamp_seconds gauge"
           echo "shc_ipv6_canary_run_timestamp_seconds $(date +%s)"
@@ -163,8 +181,63 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
+  # only the network data's resolvers on the NIC: the resolvers the network hands out by DHCP (on an OpenShift
+  # Virtualization site, the cluster's DNS service, without DNS64) are ignored, so they never take over after a brief
+  # outage of the translation resolvers
+  - path: /usr/local/sbin/ignore-auto-dns
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Use only the resolvers of the guest's own network configuration (the cloud-init network data) on the NIC with the
+      # IPv6 default route: resolvers the network hands out (DHCP, router advertisements) are ignored, so a resolver the
+      # configuration does not name never takes over. NetworkManager or systemd-networkd; runs at every boot.
+      FAMILIES="ipv6 ipv4"
+      dev=""
+      for _ in $(seq 1 60); do
+        dev=$(ip -6 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+        [ -n "$dev" ] && break
+        sleep 2
+      done
+      [ -n "$dev" ] || { echo "no IPv6 default route: nothing changed"; exit 0; }
+      if command -v nmcli >/dev/null && [ "$(nmcli -g RUNNING general 2>/dev/null)" = running ]; then
+        con=$(nmcli -g GENERAL.CON-UUID device show "$dev")
+        [ -n "$con" ] || { echo "$dev: no NetworkManager connection: nothing changed"; exit 0; }
+        # only a connection with resolvers of its own, so the guest is never left without one
+        [ -n "$(nmcli -g ipv4.dns,ipv6.dns connection show "$con" | tr -d '[:space:]')" ] || { echo "$dev: no resolvers configured: nothing changed"; exit 0; }
+        set --
+        for f in $FAMILIES; do set -- "$@" "$f.ignore-auto-dns" yes; done
+        nmcli connection modify "$con" "$@" || exit 1
+        nmcli device reapply "$dev" || nmcli connection up "$con"
+      elif command -v networkctl >/dev/null && networkctl status "$dev" >/dev/null 2>&1; then
+        file=$(networkctl status "$dev" | sed -n 's/^ *Network File: *//p' | head -n 1)
+        if [ -z "$file" ] || ! grep -q '^DNS=' "$file"; then echo "$dev: no resolvers configured: nothing changed"; exit 0; fi
+        dir="/etc/systemd/network/$(basename "$file").d"
+        mkdir -p "$dir" || exit 1
+        {
+          printf '[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n'
+          case " $FAMILIES " in *" ipv4 "*) printf '\n[DHCPv4]\nUseDNS=false\n' ;; esac
+        } > "$dir/90-ignore-auto-dns.conf"
+        networkctl reload && networkctl reconfigure "$dev"
+      else
+        echo "$dev: managed by neither NetworkManager nor systemd-networkd: nothing changed"
+      fi
+  - path: /etc/systemd/system/ignore-auto-dns.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Use only the configured resolvers on the NIC with the default route
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/ignore-auto-dns
+
+      [Install]
+      WantedBy=multi-user.target
 runcmd:
   - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, ignore-auto-dns.service]
   - [systemctl, start, qemu-guest-agent.service]
   - [systemctl, enable, --now, clatd.service]
   - [systemctl, enable, --now, shc-ipv6-canary-http.service]
