@@ -1,7 +1,8 @@
 ---
 # one fabric's border gateway nodes, read only (no lease): the gw-* network namespaces and the VRFs in each, the
 # root's VRFs (key "root": the networks' VRFs e<vpnTarget>), the root's attachment circuit devices (VLAN devices in
-# a root VRF, or on a bearer interface with a VLAN in the attachment pool), and the IPv6 pieces shc-fabric-apply gives
+# a root VRF, or on a bearer interface with a VLAN in the attachment pool) with their global IPv6 addresses, whether
+# the circuits' IPv6 filter table is loaded, the root's BFD sessions, and the IPv6 pieces shc-fabric-apply gives
 # every VRF (the unreachable default of its table, the ICMPv6 source /128 on its device) that belong to no VRF device
 # of their namespace any more (ipv6Orphans: a VRF removed behind the apply script's back, or a table reused)
 - name: The platform's realization parameters
@@ -91,11 +92,19 @@
                 vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
                 if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
                     devices.append({"name": l["ifname"], "master": l.get("master") or ""})
+            # the global IPv6 addresses of each circuit device (not the link-local ones, which the kernel makes), and
+            # whether the IPv6 filter table of the circuits is loaded
+            for d in devices:
+                d["addrs6"] = sorted("%s/%s" % (a.get("local"), a.get("prefixlen"))
+                                     for l in loads(run(["ip", "-j", "-6", "addr", "show", "dev", d["name"]]))
+                                     for a in l.get("addr_info") or []
+                                     if not str(a.get("local") or "").lower().startswith("fe80:"))
+            attach6 = bool(run(["nft", "list", "table", "ip6", "shc_attach6"]).strip())
             # the root bfdd sessions: one whose VRF no longer exists outlived a circuit teardown
             peers = loads(run(["vtysh", "-c", "show bfd peers json"]))
             bfd = [{"peer": p.get("peer"), "vrf": p.get("vrf") or "default", "interface": p.get("interface") or "",
                     "status": p.get("status") or ""} for p in peers if isinstance(p, dict)]
-            return {"netns": out, "rootDevices": devices, "rootBfd": bfd, "ipv6Orphans": left}
+            return {"netns": out, "rootDevices": devices, "rootBfd": bfd, "rootAttach6": attach6, "ipv6Orphans": left}
 
 
         if __name__ == "__main__":
@@ -122,6 +131,7 @@
         {%- set n = r.stdout | from_json -%}
         {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': n.netns,
                                 'rootDevices': n.rootDevices, 'rootBfd': n.rootBfd | default([]),
+                                'rootAttach6': n.rootAttach6 | default(false),
                                 'ipv6Orphans': n.ipv6Orphans | default([]) | map('regex_replace', '^', 'node ' ~ r.item.name ~ ': ') | list}) -%}
       {%- endfor -%}
       {{ foc_nodes + out }}

@@ -67,6 +67,9 @@ ANSWERS = {
     "ip -j -d link show type vlan": json.dumps([{"ifname": "bond1.3001", "link": "bond1", "master": "e10001",
                                                  "linkinfo": {"info_kind": "vlan", "info_data": {"id": 3001}}}]),
     "vtysh -c show bfd peers json": json.dumps([{"peer": "10.255.128.3", "vrf": "e10001", "interface": "bond1.3001", "status": "up"}]),
+    # the circuit device: IPv6 off (no address at all); the circuits' IPv6 table not loaded (nft prints nothing)
+    "ip -j -6 addr show dev bond1.3001": json.dumps([]),
+    "nft list table ip6 shc_attach6": "",
 }
 
 
@@ -109,7 +112,8 @@ class NodeReadTest(unittest.TestCase):
     def test_vrfs_devices_and_bfd_as_before(self):
         out, _ = execute(ANSWERS)
         self.assertEqual(out["netns"], {"gw-iaas1": ["t51000"], "gw-atuin": [], "root": ["e10000", "egress"]})
-        self.assertEqual(out["rootDevices"], [{"name": "bond1.3001", "master": "e10001"}])
+        self.assertEqual(out["rootDevices"], [{"name": "bond1.3001", "master": "e10001", "addrs6": []}])
+        self.assertIs(out["rootAttach6"], False)
         self.assertEqual(out["rootBfd"], [{"peer": "10.255.128.3", "vrf": "e10001", "interface": "bond1.3001", "status": "up"}])
 
     def test_ipv6_leftovers_of_no_vrf(self):
@@ -141,7 +145,8 @@ class NodeReadTest(unittest.TestCase):
         v = {"foc_parents": [], "foc_pool": [1, 0], "fab_real": {"core": {"icmpSource6": ""}}}
         out, calls = execute(ANSWERS, v, pool="")
         self.assertNotIn(["ip", "-j", "-6", "addr", "show"], calls)
-        self.assertTrue(all("addr" not in c for c in calls), calls)
+        # only the circuit devices' own addresses are read (for their IPv6 side)
+        self.assertEqual([c for c in calls if "addr" in c], [["ip", "-j", "-6", "addr", "show", "dev", "bond1.3001"]])
         self.assertEqual(out["ipv6Orphans"], ["IPv6 unreachable default in table 51003 (gw-iaas1) belongs to no VRF",
                                               "IPv6 unreachable default in table 51002 (gw-atuin) belongs to no VRF"])
         # the rendered call carries the empty pool
