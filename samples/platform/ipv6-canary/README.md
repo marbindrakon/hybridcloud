@@ -1,10 +1,11 @@
 # Translation canary
 
-For the platform team. The translation canary tells the platform whether IPv6-only placements reach the IPv4
-internet on every OpenShift Virtualization and OpenStack site that offers them: one small probe VM per site, on an IPv6-only network of the platform team's
-own, runs the checks a tenant's guest depends on every minute and serves the results. The platform reads them from
-the site's gateway and reports them on the fabric (condition `IPv6Translation`, Warning event
-`IPv6TranslationCanaryFailed`); see [Translation canary](../../../docs/platform/ipv6-realization.md#translation-canary).
+For the platform team. The translation canary tells the platform whether IPv6-only placements reach the IPv4 internet
+on every OpenShift Virtualization and OpenStack site that offers them: one small probe VM per site, on an IPv6-only
+network of the platform team's own, runs the checks a tenant's guest depends on every minute and serves the results.
+The platform reads them from the site's gateway and reports them on the fabric (condition `IPv6Translation`, Warning
+event `IPv6TranslationCanaryFailed`); see
+[Translation canary](../../../docs/platform/ipv6-realization.md#translation-canary).
 
 The canary is a workload like a tenant's: nothing in it is special to the platform except the realization keys that
 name it. The platform never reads a probe it was not told about, and finds the probe's address itself (from the site,
@@ -18,9 +19,9 @@ not from labels on tenant objects).
 2. **The network, environments and placements** ([canary-objects.yaml](canary-objects.yaml)): an IPv6-only network
    with IPv6 from the platform (`platformPrefixes` with `family: 6`, no `prefixes`) and `egress.internet: true`; an
    environment on every OpenShift Virtualization and OpenStack site that offers IPv6-only placements with translation
-   (site capabilities `ipv6Only` and `ipv6Translation`; AWS and Google Cloud sites take no canary); one placement of the network per environment with only `ipv6`. Wait until the placements are
-   ready: their `status.ipv6.translation` names the site's translation prefix and resolvers, the values for
-   `__PREF64__` and `__RESOLVERS__` below.
+   (site capabilities `ipv6Only` and `ipv6Translation`; AWS and Google Cloud sites take no canary); one placement of
+   the network per environment with only `ipv6`. Wait until the placements are ready: their `status.ipv6.translation`
+   names the site's translation prefix and resolvers, the values for `__PREF64__` and `__RESOLVERS__` below.
 3. **The probe** on every placement, with the same name everywhere (here `canary`), from
    [probe-user-data.yaml](probe-user-data.yaml) with the placeholders replaced:
    - OpenShift Virtualization: [vm-cloudvirt.yaml](vm-cloudvirt.yaml), in the site namespace the placement serves
