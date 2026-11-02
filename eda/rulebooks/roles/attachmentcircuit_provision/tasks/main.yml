@@ -8,6 +8,10 @@
 # changes. Once the fabric reports this revision on its nodes (status.realization.attachments), the job reads the BGP
 # session from each node: ready when every session is established, else pending (realized; the operator runs the
 # job again on its reconcilePeriod).
+# IPv6 (design/IPV6-PLAN.md §3.7): a circuit with IPv6 accept entries also gets an IPv6 link (the /64 of the
+# realization's attachments.linkPool6 at the circuit's link index) and a second session over it per node; refused
+# with FamilyUnavailable when the fabric's circuits offer no IPv6 or the network has no IPv6 address space. A circuit
+# without IPv6 entries records exactly what it did before (same revision).
 - block:
     - name: Read the AttachmentCircuit
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -190,22 +194,49 @@
         msg: "{{ fab_fail_msg }}"
       when: fab_fail_reason | default('') == 'PeerAsnReserved'
 
-    # the network's address space (as asked for and as the IPAM holds it) is the tenant's own: no CE route in it
+    # the network's address space (as asked for and as the IPAM holds it) is the tenant's own: no CE route in it.
+    # IPv6 entries: the platform's IPv6 ranges come from the realization (attachments, core, translation); the
+    # network has IPv6 internet egress when it wants internet access, holds a platform block and the fabric offers
+    # IPv6 egress (only the notes depend on it)
     - name: Check the accept list
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
+        _st: "{{ ac_network.status | default({}, true) }}"
         fab_check:
           action: check-circuit
           accept: "{{ fab_spec.routing.accept | default([]) }}"
           space: >-
             {{ ((ac_network.spec | default({}, true)).prefixes | default([], true))
-               + ((ac_network.status | default({}, true)).addressSpace | default([], true) | map(attribute='prefix') | list) }}
+               + (_st.addressSpace | default([], true) | map(attribute='prefix') | list)
+               + ((_st.ipv6 | default({}, true)).prefixes | default([], true))
+               + ([((_st.ipv6 | default({}, true)).block | default({}, true)).prefix]
+                  if ((_st.ipv6 | default({}, true)).block | default({}, true)).prefix | default('', true) | length > 0
+                  else []) }}
           reserved: >-
             {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
                 fab_real.egress.linkPool | default('169.254.0.0/16')]
                + (fab_real.egress.platformSources | default([], true)) }}
           egressInternet: "{{ (ac_network.spec.egress | default({}, true)).internet | default(false) | bool }}"
           advertiseDefault: "{{ (fab_spec.routing.advertise | default({}, true)).default | default(false) | bool }}"
+          attachments: "{{ fab_real.attachments }}"
+          core: "{{ fab_real.core | default({}, true) }}"
+          translation: "{{ fab_real.translation | default({}, true) }}"
+          egressInternet6: >-
+            {{ (ac_network.spec.egress | default({}, true)).internet | default(false) | bool
+               and (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool
+               and (_st.ipv6 | default({}, true)).mode | default('') == 'Platform' }}
+
+    # IPv6 accept entries need IPv6 on the fabric's circuits and IPv6 address space on the network
+    - name: Refuse IPv6 the circuit can't have
+      ansible.builtin.set_fact:
+        fab_fail_reason: FamilyUnavailable
+        fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.familyErrors | join('; ') }}"
+      when: fab_check_result.familyErrors | default([]) | length > 0
+
+    - name: Stop on IPv6 the circuit can't have
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_check_result.familyErrors | default([]) | length > 0
 
     - name: Refuse an accept list that reaches into the network or the platform
       ansible.builtin.set_fact:
@@ -359,6 +390,7 @@
       ansible.builtin.set_fact:
         ac_link_index: "{{ fab_ledger_result.value | int }}"
 
+    # with IPv6 accept entries also the IPv6 link: the /64 of the IPv6 link pool at the same index
     - name: The circuit's link addresses
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
       vars:
@@ -367,10 +399,17 @@
           attachments: "{{ fab_real.attachments }}"
           nodes: "{{ (ac_fabric.spec.borderGateway | default({}, true)).nodes | default([], true) | map(attribute='name') | list }}"
           index: "{{ ac_link_index | int }}"
+          ipv6: "{{ ac_policy.ipv6 | default(false) | bool }}"
 
     - name: Refuse a link the platform can't number
+      ansible.builtin.set_fact:
+        fab_fail_reason: "{{ fab_check_result.reason | default('ProvisionFailed') }}"
+        fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Stop on a link the platform can't number
       ansible.builtin.fail:
-        msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+        msg: "{{ fab_fail_msg }}"
       when: fab_check_result.errors | length > 0
 
     - name: Keep the link plan
@@ -406,6 +445,25 @@
               'mtu': _mtu | int,
               'authentication': {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}),
               'bfd': ac_bgp.bfd | default(false) | bool} }}
+
+    # a circuit with IPv6 accept entries: the IPv6 link, the CE's and each node's address on it, and the second
+    # session the CE configures (nothing is added for a circuit without them, so its revision stays the same)
+    - name: The circuit's IPv6 link and the CE's IPv6 parameters
+      vars:
+        _p6: "{{ ac_plan.ipv6 }}"
+      ansible.builtin.set_fact:
+        ac_real: >-
+          {%- set nodes = [] -%}
+          {%- for n in ac_real.nodes -%}
+            {%- set _ = nodes.append(n | combine({'address6': (_p6.nodes | selectattr('name', 'equalto', n.name)
+                                                               | map(attribute='address') | list + [''])[0]})) -%}
+          {%- endfor -%}
+          {{ ac_real | combine({'link6': _p6.link, 'ce6': _p6.ce, 'nodes': nodes}) }}
+        ac_ce_config: >-
+          {{ ac_ce_config | combine({'address6': _p6.ce ~ '/' ~ _p6.prefixLength,
+                                     'secondAddress6': _p6.ceSecond ~ '/' ~ _p6.prefixLength,
+                                     'neighbors6': _p6.nodes | map('combine', {'asn': ac_asn | int}) | list}) }}
+      when: ac_plan.ipv6 is defined
 
     # the revision the fabric reports when it has realized exactly this
     - name: The realization's revision
@@ -458,7 +516,8 @@
         fab_reason: WaitingForFabric
         fab_message: >-
           VLAN {{ ac_vlan }} on {{ fab_spec.edgeRef.name }}/{{ fab_spec.edgeRef.bearer }}, link {{ ac_plan.link }}
-          (CE {{ ac_plan.ce }}); {{ ('HybridFabric ' ~ ac_fabric.metadata.name ~ ' does not realize the circuit: ' ~ ac_fabric_skip)
+          (CE {{ ac_plan.ce }}){{ (', IPv6 link ' ~ ac_real.link6 ~ ' (CE ' ~ ac_real.ce6 ~ ')') if ac_real.link6 is defined else '' }};
+          {{ ('HybridFabric ' ~ ac_fabric.metadata.name ~ ' does not realize the circuit: ' ~ ac_fabric_skip)
           if ac_fabric_skip | length > 0 and not ac_changed | bool
           else 'waiting for HybridFabric ' ~ ac_fabric.metadata.name ~ ' to realize the circuit' }}
         fab_waiting_for: ["HybridFabric {{ ac_fabric.metadata.name }} (circuit on VRF {{ ac_real.vrf }})"]
@@ -481,22 +540,28 @@
             bgw_fabric_spec: "{{ ac_fabric.spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
-        - name: The session from each node
+        # one session per family: the IPv4 one with the CE's IPv4 address, with IPv6 accept entries also the IPv6
+        # one with the CE's IPv6 address (arguments <family>=<CE address>)
+        - name: The sessions from each node
           ansible.builtin.shell:
             cmd: |
-              python3 - '{{ ac_real.vrf }}' '{{ ac_real.ce }}' <<'PY'
+              python3 - '{{ ac_real.vrf }}' '4={{ ac_real.ce }}' {{ ("'6=" ~ ac_real.ce6 ~ "'") if ac_real.ce6 is defined else '' }} <<'PY'
               import json, subprocess, sys
-              vrf, ce = sys.argv[1], sys.argv[2]
-              r = subprocess.run(["vtysh", "-c", f"show bgp vrf {vrf} neighbors {ce} json"], capture_output=True, text=True)
-              try:
-                  nb = json.loads(r.stdout or "{}").get(ce) or {}
-              except ValueError:
-                  nb = {}
-              af = (nb.get("addressFamilyInfo") or {}).get("ipv4Unicast") or {}
-              print(json.dumps({"state": nb.get("bgpState", "NotConfigured"), "established": nb.get("bgpTimerUpString"),
-                                "accepted": af.get("acceptedPrefixCounter", 0), "advertised": af.get("sentPrefixCounter", 0),
-                                "lastReset": nb.get("lastNotificationReason") or nb.get("lastResetDueTo") or "",
-                                "bfd": (nb.get("peerBfdInfo") or {}).get("status")}))
+              vrf, out = sys.argv[1], []
+              for arg in sys.argv[2:]:
+                  fam, ce = arg.split("=", 1)
+                  r = subprocess.run(["vtysh", "-c", f"show bgp vrf {vrf} neighbors {ce} json"], capture_output=True, text=True)
+                  try:
+                      nb = json.loads(r.stdout or "{}").get(ce) or {}
+                  except ValueError:
+                      nb = {}
+                  af = (nb.get("addressFamilyInfo") or {}).get("ipv4Unicast" if fam == "4" else "ipv6Unicast") or {}
+                  out.append({"family": int(fam), "peer": ce, "state": nb.get("bgpState", "NotConfigured"),
+                              "established": nb.get("bgpTimerUpString"),
+                              "accepted": af.get("acceptedPrefixCounter", 0), "advertised": af.get("sentPrefixCounter", 0),
+                              "lastReset": nb.get("lastNotificationReason") or nb.get("lastResetDueTo") or "",
+                              "bfd": (nb.get("peerBfdInfo") or {}).get("status")})
+              print(json.dumps(out))
               PY
             executable: /bin/bash
           register: _ac_sessions
@@ -510,39 +575,58 @@
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
 
+    # per node one session per family; a node that can't be read shows each of them as Unknown
     - name: Keep the sessions
+      vars:
+        _peers: "{{ [[4, ac_real.ce]] + ([[6, ac_real.ce6]] if ac_real.ce6 is defined else []) }}"
       ansible.builtin.set_fact:
         ac_sessions: >-
           {%- set out = [] -%}
           {%- for r in _ac_sessions.results | default([]) -%}
-            {%- set ok = (r.stdout | default('') | trim).startswith('{') -%}
-            {%- set s = (r.stdout | from_json) if ok else {'state': 'Unknown', 'lastReset': (r.msg | default('node unreachable', true) | string)[:200]} -%}
-            {%- set _ = out.append({'node': r.item,
-                                    'address': (ac_real.nodes | selectattr('name', 'equalto', r.item) | map(attribute='address') | list + [''])[0]}
-                                   | combine(s)) -%}
+            {%- set ok = (r.stdout | default('') | trim).startswith('[') -%}
+            {%- set node = (ac_real.nodes | selectattr('name', 'equalto', r.item) | list + [{}])[0] -%}
+            {%- set lst = (r.stdout | from_json) if ok else [] -%}
+            {%- if not ok -%}
+              {%- for p in _peers -%}
+                {%- set _ = lst.append({'family': p[0] | int, 'peer': p[1], 'state': 'Unknown',
+                                        'lastReset': (r.msg | default('node unreachable', true) | string)[:200]}) -%}
+              {%- endfor -%}
+            {%- endif -%}
+            {%- for s in lst -%}
+              {%- set _ = out.append({'node': r.item,
+                                      'address': node.address | default('') if s.family | int == 4
+                                                 else node.address6 | default('')}
+                                     | combine(s)) -%}
+            {%- endfor -%}
           {%- endfor -%}
           {{ out }}
 
+    # Ready needs every session of every family; the messages name an IPv6 session "<node> IPv6"
     - name: Report the circuit
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
         _up: "{{ ac_sessions | selectattr('state', 'equalto', 'Established') | list }}"
         _down: "{{ ac_sessions | rejectattr('state', 'equalto', 'Established') | list }}"
         _all_up: "{{ _up | length == ac_sessions | length and ac_sessions | length > 0 }}"
+        _up_names: >-
+          {%- set o = [] -%}{%- for s in _up -%}{%- set _ = o.append(s.node ~ (' IPv6' if s.family | default(4) | int == 6 else '')) -%}{%- endfor -%}{{ o }}
+        _down_names: >-
+          {%- set o = [] -%}{%- for s in _down -%}{%- set _ = o.append(s.node ~ (' IPv6' if s.family | default(4) | int == 6 else '')) -%}{%- endfor -%}{{ o }}
         fab_outcome: "{{ 'ready' if _all_up | bool else 'pending' }}"
         fab_reason: "{{ 'Ready' if _all_up | bool else ('PartiallyEstablished' if _up | length > 0 else 'WaitingForPeer') }}"
         fab_message: >-
-          {{ (('Established on ' ~ _up | map(attribute='node') | join(', ') ~ '; routes accepted '
+          {{ (('Established on ' ~ _up_names | join(', ') ~ '; routes accepted '
                ~ _up | map(attribute='accepted') | map('string') | join('/') ~ ', advertised '
                ~ _up | map(attribute='advertised') | map('string') | join('/')) if _up else
-              ('Realized on ' ~ ac_entry.nodes | join(', ') ~ ' (VLAN ' ~ ac_vlan ~ ', CE ' ~ ac_plan.ce ~ ')'))
-             ~ ((('; ' if _up else '; BGP ') ~ _down | map(attribute='node') | zip(_down | map(attribute='state'),
+              ('Realized on ' ~ ac_entry.nodes | join(', ') ~ ' (VLAN ' ~ ac_vlan ~ ', CE ' ~ ac_plan.ce
+               ~ ((', IPv6 CE ' ~ ac_real.ce6) if ac_real.ce6 is defined else '') ~ ')'))
+             ~ ((('; ' if _up else '; BGP ') ~ _down_names | zip(_down | map(attribute='state'),
                  _down | map(attribute='lastReset')) | map('join', ' ') | map('trim') | join(', ')
                  ~ ((': the CE sends more routes than routing.bgp.maxPrefixes allows (the session is tried again every '
                      ~ fab_real.attachments.maxPrefixRestart | default(2) ~ ' minutes)')
                     if _down | selectattr('lastReset', 'search', 'Maximum Number of Prefixes') | list
                     else ('' if _up else ': configure the CE from status.ceConfig'))) if _down else '') }}
-        fab_waiting_for: "{{ [] if _all_up | bool else ['the CE: BGP from ' ~ _down | map(attribute='node') | join(', ')] }}"
+        fab_waiting_for: "{{ [] if _all_up | bool else ['the CE: BGP from ' ~ _down_names | join(', ')] }}"
         fab_status: >-
           {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
                                   'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real,
