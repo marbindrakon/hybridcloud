@@ -115,13 +115,19 @@
       when: hybridfabric_skip_reconcile | bool
 
     # shc P7.3.2: no new event while the last one is in flight (operator/roles/_common/tasks/skip_if_event_in_flight.yml)
+    # A wake from another job (the legacy request "true" that nudge_cr writes) waits for the fabric job in flight
+    # instead of superseding it: a fabric job takes minutes, the circuits, placements and networks wake the fabric
+    # every few minutes while it has not realized them, and a superseded job writes no status, so superseding
+    # starved the fabric's status (V10 gate). The request stays on the object (it is removed only when published),
+    # the job in flight publishes it when it ends (hybridfabric_provision, "Run the wakes that came during this
+    # job"), else the next reconcile does. Retry now (a timestamp) still supersedes.
     - name: Skip while the last event is in flight
       ansible.builtin.include_role:
         name: _common
         tasks_from: skip_if_event_in_flight
       vars:
         in_flight_kind: HybridFabric
-        in_flight_force: "{{ reconcile_now | bool }}"
+        in_flight_force: "{{ reconcile_now | bool and not (reconcile_request_legacy | bool) }}"
 
     - name: Get current timestamp
       ansible.builtin.set_fact:

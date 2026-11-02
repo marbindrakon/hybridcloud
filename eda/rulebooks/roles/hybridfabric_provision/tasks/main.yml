@@ -20,6 +20,8 @@
 #    probe on every site of the fabric that reports one (CloudInfrastructure status.realization.ipv6Canary), read from
 #    the site's gateway namespace in the placement's VRF; status.realization.translation.canaries, condition
 #    IPv6Translation and, after alertMinutes of failure, a Warning event IPv6TranslationCanaryFailed. Never fails the job.
+# 7. Wakes from other jobs that came during the run waited for it (the controller does not let them supersede a job
+#    in flight): the job has the controller publish them once it has written its status (deferred_wakes.yml).
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -695,6 +697,10 @@
           {%- endfor -%}
           {{ out }}
 
+    # the wakes from other jobs that waited for this one (deferred_wakes.yml)
+    - name: Run the wakes that came during this job
+      ansible.builtin.include_tasks: deferred_wakes.yml
+
   rescue:
     - name: Remove the SSH key
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
@@ -710,6 +716,10 @@
         fab_status: "{{ {'nodes': hf_node_results} if hf_node_results | default([]) | length > 0 else {} }}"
       when: fab_name is defined and services_api_host is defined
       ignore_errors: true
+
+    - name: Run the wakes that came during the failed job
+      ansible.builtin.include_tasks: deferred_wakes.yml
+      when: fab_name is defined and services_api_host is defined
 
     - name: Re-raise
       ansible.builtin.fail:
