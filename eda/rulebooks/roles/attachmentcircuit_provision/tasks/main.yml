@@ -465,6 +465,16 @@
                                      'neighbors6': _p6.nodes | map('combine', {'asn': ac_asn | int}) | list}) }}
       when: ac_plan.ipv6 is defined
 
+    # what the status patch writes: the status is merged, so a circuit without IPv6 (or one whose IPv6 accept
+    # entries were removed) clears the IPv6 keys explicitly; the realization and its revision stay as they are
+    - name: The circuit's status parts
+      ansible.builtin.set_fact:
+        ac_ce_config_status: >-
+          {{ ac_ce_config if ac_plan.ipv6 is defined
+             else ac_ce_config | combine({'address6': none, 'secondAddress6': none, 'neighbors6': none}) }}
+        ac_real_status: >-
+          {{ ac_real if ac_plan.ipv6 is defined else ac_real | combine({'link6': none, 'ce6': none}) }}
+
     # the revision the fabric reports when it has realized exactly this
     - name: The realization's revision
       ansible.builtin.set_fact:
@@ -485,7 +495,7 @@
         patch_ignore_not_found: true
         cr_status_body: >-
           {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
-                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real}) }}
+                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config_status, 'realization': ac_real_status}) }}
 
     # ---- on the border nodes? ----
     - name: Does the fabric hold this revision on its nodes
@@ -523,7 +533,7 @@
         fab_waiting_for: ["HybridFabric {{ ac_fabric.metadata.name }} (circuit on VRF {{ ac_real.vrf }})"]
         fab_status: >-
           {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
-                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real,
+                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config_status, 'realization': ac_real_status,
                                   'sessions': []}) }}
       when: not (ac_on_nodes | bool)
 
@@ -629,7 +639,7 @@
         fab_waiting_for: "{{ [] if _all_up | bool else ['the CE: BGP from ' ~ _down_names | join(', ')] }}"
         fab_status: >-
           {{ ac_status | combine({'vlan': ac_vlan | int, 'link': ac_plan.link, 'peAsn': ac_asn | int,
-                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config, 'realization': ac_real,
+                                  'notes': ac_policy.notes, 'ceConfig': ac_ce_config_status, 'realization': ac_real_status,
                                   'sessions': ac_sessions, 'realized': true}) }}
 
   rescue:
