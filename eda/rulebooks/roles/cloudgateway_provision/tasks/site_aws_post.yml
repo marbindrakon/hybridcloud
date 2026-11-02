@@ -112,6 +112,22 @@
         msg: "CloudGateway {{ fab_name }}: the edge router ICMPv6 source of {{ cg_aws_icmp6_errors | join(', ') }}"
       when: cg_aws_icmp6_errors | length > 0
 
+    # like the border gateway nodes' (node_gateway.yml), the routers' sources get forward-confirmed names
+    # (reverse_dns.yml): only while the routers carry them (edge.ipv6 on, not while a
+    # configuration left over is being removed)
+    - name: Remember the routers' ICMPv6 sources for their names
+      ansible.builtin.set_fact:
+        cg_rdns_nodes: >-
+          {%- set out = [] + (cg_rdns_nodes | default([], true)) -%}
+          {%- for r in (_cg_aws_icmp6 | default({})).results | default([]) if not (r.skipped | default(false)) -%}
+            {%- set res = r.stdout | from_json -%}
+            {%- if res.errors | default([]) | length == 0 and res.icmp6 | default('', true) | length > 0 -%}
+              {%- set _ = out.append({'node': r.item.name, 'address': res.icmp6 | regex_replace('/.*$', '')}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      when: (aws_edge_cfg.ipv6 | default({}, true)).enabled | default(false) | bool
+
     - name: Hand the IPv6 settings to the routers
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
       vars:

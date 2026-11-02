@@ -3,8 +3,10 @@
 # how workloads get their addresses (the kind's placement.ipv6.addressMode: SLAAC for slaac or dhcpv6-stateless,
 # else DHCPv6) and its internet access with its path (internet.path):
 #   Fabric    (source Network, every kind): the network's IPv6 egress state (status.egress.families, family 6: the
-#             fabric realizes it; a network that asks for no internet has no row and gets none here) while the fabric
-#             offers IPv6 egress (egress.ipv6.enabled); until then unavailable, NotOffered
+#             fabric realizes it; a network that asks for no internet has no row and gets none here, written as null
+#             so an earlier state does not stay behind: status is merge-patched) while the fabric offers IPv6 egress
+#             (egress.ipv6.enabled); until then unavailable, NotOffered. The network wakes its placements when its
+#             IPv6 row changes (hybridnetwork_provision main.yml)
 #   Provider  (source Provider, a cloud's own path): ready while the network asks for internet access
 #             (spec.egress.internet; the site side then has the provider's outbound path: AWS's egress-only internet
 #             gateway, Google's IPv6 default route), else none (written as null: status is merge-patched)
@@ -45,7 +47,7 @@
                else ({'internet': {'state': _row6.state, 'path': 'Fabric'}
                                   | combine({'reason': _row6.reason} if _row6.reason is defined else {})
                                   | combine({'message': _row6.message} if _row6.message is defined else {})}
-                     if _row6 | length > 0 else {})) }}
+                     if _row6 | length > 0 else {'internet': none})) }}
     _tr: "{{ (fab_real.translation | default({}, true))[np_site | default('', true)] | default({}, true) }}"
     _net: "{{ np_network | default({}, true) }}"
     _tr_mode: >-

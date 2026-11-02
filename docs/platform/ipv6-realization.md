@@ -479,16 +479,20 @@ reported). Dual-stack placements never get the DNS64 resolvers: their workloads 
 otherwise send IPv4-only names through the translator.
 
 The network reports the translation in `status.egress.ipv4Translation` (only for a network without IPv4 that asks
-for internet access):
+for internet access), covering both paths: the fabric's path is usable while the fabric offers IPv6 egress and a
+site has a `translation` entry with a `pref64`; the provider's path is offered while a site has an entry with
+`provider: true`, and needs nothing of the network's own (each placement's site side builds it).
 
 | Network | `ipv4Translation` |
 |---|---|
-| mode `Tenant` | `{state: unavailable, reason: AddressChoice}` |
-| mode `Platform`, the fabric offers no IPv6 egress, or no site has a `translation` entry with a `pref64` | `{state: unavailable, reason: NotOffered}` |
-| mode `Platform` otherwise | the state of the network's IPv6 egress row (`pending`, then `ready`); each IPv6-only placement's status names its site's prefix and resolvers |
+| mode `Tenant` | `{state: unavailable, reason: AddressChoice}` (neither path serves tenant-provided prefixes) |
+| mode `Platform`, neither path offered | `{state: unavailable, reason: NotOffered}` |
+| mode `Platform`, the fabric's path only | the state of the network's IPv6 egress row (`pending`, then `ready`) |
+| mode `Platform`, the provider's path offered | `ready`; the message says which placements use which path, and whether placements with space from the network have translation (the fabric's path `ready`), will have it (`pending`) or have none (not offered) |
 
-This row describes the fabric's path. Placements on the provider's path report their translation in their own
-`status.ipv6.translation` whatever the network's row says.
+The row says what the network's placements can use; each IPv6-only placement's own `status.ipv6.translation` names
+the path it uses, its prefix and resolvers (a provider-path placement's block appears once its site side has built
+the translation).
 
 **The resolvers through the egress filter.** The IPv6 egress filter of every border gateway node admits the DNS64
 resolvers of every site's entry on port 53 (TCP and UDP), in addition to `egress.ipv6.resolverDestinations6`: the
@@ -582,7 +586,18 @@ status:
           healthy: true       # reachable, not stale, every check 1
           error: ""           # why not healthy, when that is not a failed check
           failedSince: ""     # since when it has not been healthy (kept across runs)
+      readAt: <when the fabric job read the canaries>
+      alertMinutes: 5
+      staleAfterMinutes: 15   # 3 x alertMinutes
 ```
+**How often it is read.** A Ready fabric runs again by itself only to read the canary: once the last read
+(`readAt`) is older than `alertMinutes` (at least 5 minutes), the next periodic check of the operator (every 5
+minutes) re-runs the fabric job, which reads every site again. When no re-run refreshed the reading for
+`staleAfterMinutes` (the automation is down, or the job keeps failing), the operator marks every site's reading
+`stale: true`, `healthy: false` (with the age in `error`) and the condition `IPv6Translation` `Unknown`
+(`CanaryStale`), so an old reading never reports a healthy canary; the next read replaces the mark. With a canary
+configured this costs one fabric job every 5 to 10 minutes.
+
 The condition `IPv6Translation` is `True` (`Ready`) while every site's canary is healthy and `False`
 (`CanaryFailed`) naming the failing sites, their failed checks and since when; it is absent while no canary is
 configured or no site reports one (the status library never removes a condition: after the canary is switched off the
@@ -651,9 +666,12 @@ sends Packet Too Big for larger packets bound for the internet.
 Status: `HybridFabric status.realization.egress.ipv6` holds per node the hand-off address, the upstream sessions'
 states and whether the default route is held; `status.realization.egress.networks[]` says per network whether its
 IPv6 egress is realized (`ipv6`), the prefixes announced (`prefixes6`) and its primary node. A network with IPv6
-egress reads `{family: 6, state: ready, mode: Routed}`, or `reason: Degraded` while a node's upstream sessions are
-all down; a node down for `sessionDownAlertMinutes` is reported as a Warning event on the HybridFabric. A placement
-with IPv6 copies the network's row into `status.ipv6.internet`.
+egress reads `{family: 6, state: ready, mode: Routed}`, or `reason: Degraded` while some node's upstream sessions
+are all down, and `state: unavailable, reason: UpstreamDown` while no node has an upstream session (translation to
+IPv4 on the fabric's path then reads `UpstreamDown` too); a node down for `sessionDownAlertMinutes` is reported as a
+Warning event on the HybridFabric. A placement with IPv6 from the network copies the network's row into
+`status.ipv6.internet` (null when the network has no row); the network wakes those placements whenever its row
+changes.
 
 The gateways announce covering routes into every site: the network's own IPv6 prefixes (its platform block, or the
 tenant's prefixes) and `routedPrefixes`, each backed by an unreachable route in the VRF table. A destination the
@@ -776,6 +794,7 @@ name and type with another marker is never changed or deleted ("held by another 
 |---|---|---|---|
 | A placement's IPv6 gateway (`status.subnets[family=6].gateway`: the first host on OpenShift Virtualization, the subnet's gateway from Neutron on OpenStack) | `<network>.<gatewayLabel>.<environment zone>` (the environment's zone, `status.dns.zone`) | `NetworkPlacement/<namespace>/<name>` | the placement job, recorded in `status.realization.reverseDns` |
 | A border gateway node's ICMPv6 source in a gateway namespace (`core.icmpSource6`) | `<node>.<gateway>.<gatewayLabel>.<global domain>` (the global zone) | `CloudGateway/<name>` | the gateway job, recorded in `status.realization.reverseDns` |
+| An AWS or Google Cloud edge router's ICMPv6 source (`core.icmpSource6`, while the realization's `edge.ipv6` is on) | `<router>.<gateway>.<gatewayLabel>.<global domain>` (the global zone; `<router>` is the router instance's name) | `CloudGateway/<name>` | the gateway job, with its nodes' names |
 | A tenant VM on OpenShift Virtualization that publishes an AAAA through the tenant DNS controller | the tenant's own name in its environment zone | the controller's marker | the tenant DNS controller, only for addresses inside the namespace's placement prefixes |
 
 The placement job also writes the annotation `hybridsovereign.redhat/ipv6-prefixes` (the placement's IPv6 subnets,

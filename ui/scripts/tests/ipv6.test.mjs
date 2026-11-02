@@ -207,6 +207,31 @@ test('cloud-init snippet: none without an IPv6 subnet; dual-stack DHCP; IPv6-onl
   assert.match(o.userData, /plat-prefix=64:ff9b::\/96/);
 });
 
+test('placement translation: path and the provider translator source when reported, nothing without a prefix', () => {
+  const at = (translation) => ({ metadata: { name: 'p' }, spec: { network: 'n' }, status: { ipv6: { translation } } });
+  assert.deepEqual(m.placementTranslation(at({ path: 'Fabric', pref64: '2001:db8:64::/96', resolvers: ['2001:db8::53'] })), {
+    path: 'Fabric',
+    pref64: '2001:db8:64::/96',
+    resolvers: ['2001:db8::53'],
+  });
+  assert.deepEqual(
+    m.placementTranslation(at({ path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253', ''], ipv4Source: ' 192.0.2.7 ' })),
+    { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'], ipv4Source: '192.0.2.7' },
+  );
+  // written before path existed: prefix and resolvers only
+  assert.deepEqual(m.placementTranslation(at({ pref64: '64:ff9b::/96' })), { pref64: '64:ff9b::/96', resolvers: [] });
+  assert.equal(m.placementTranslation(at(null)), null);
+  assert.equal(m.placementTranslation(at({ path: 'Provider', ipv4Source: '192.0.2.7' })), null);
+  assert.equal(m.placementTranslation(undefined), null);
+  // the path reads in display words in both catalogues
+  for (const l of ['en', 'fr']) {
+    const t = tOf(load(l));
+    for (const k of ['ipv6.path_Fabric', 'ipv6.path_Provider', 'ipv6.translationPrefix', 'ipv6.translationSource']) {
+      assert.notEqual(t(k), k, `${l}: ${k}`);
+    }
+  }
+});
+
 test('placement families: IPv4 stays unless the site offers IPv6-only; IPv6-only networks need such a site', () => {
   const hidden = m.placementIpv6Offer({ kind: 'CloudVirt', caps: m.NO_IPV6, networkMode: 'Tenant' });
   assert.deepEqual(m.placementFamilies({ offer: hidden, networkHasIpv4: true, includeIpv4: false, includeIpv6: true }), { ipv4: true, ipv6: false });

@@ -6,12 +6,15 @@
       and report it: labels (shc-managed must be true), the member account, the APIs the platform needs (enabled
       with --enable-apis), the region's instance quota. Changes nothing without --enable-apis.
 
-  shc_gcp_project.py external --project ID --key-file F --hub-project HUB --hub-number N [--member shc-automation]
-      From a workstation with the gcloud CLI, once per external project (e.g. an RHDP open environment) with the
-      project owner's initial credentials: creates the member account with roles/owner, lets the hub's automation
-      account mint its tokens (serviceAccountTokenCreator) and the hub's Hive pool impersonate it
-      (workloadIdentityUser), labels the project. The initial credentials are activated in gcloud for the run and
-      revoked at the end; they are never printed or stored by this script. Idempotent.
+  shc_gcp_project.py external --project ID (--key-file F | --active-account) --hub-project HUB --hub-number N
+                            [--member shc-automation]
+      From a workstation with the gcloud CLI, once per external project (e.g. an RHDP open environment, or a project
+      under the owner's own billing) with credentials that own the project: creates the member account with
+      roles/owner, lets the hub's automation account mint its tokens (serviceAccountTokenCreator) and the hub's Hive
+      pool impersonate it (workloadIdentityUser), labels the project. --key-file: the project owner's initial
+      credentials, activated in gcloud for the run and revoked at the end. --active-account: the account gcloud has
+      active (a project owner's own session), used as it is and left signed in. Credentials are never printed or
+      stored by this script. Idempotent.
 
 Both read the identity from the environment (shc_gcp_api.py).
 """
@@ -67,17 +70,34 @@ def gcloud(args, account, check=True):
     return json.loads(r.stdout) if r.stdout.strip() else None
 
 
+def active_account():
+    """The account gcloud has active, or fail (nothing is activated here)."""
+    r = subprocess.run(["gcloud", "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"],
+                       capture_output=True, text=True)
+    accounts = [x.strip() for x in r.stdout.splitlines() if x.strip()] if r.returncode == 0 else []
+    if len(accounts) != 1:
+        g.fail("--active-account: gcloud has %s active account; sign in as the project's owner first (gcloud auth login)"
+               % ("no" if not accounts else "more than one"))
+    return accounts[0]
+
+
 def external(a):
     out = {"ok": True, "project": a.project, "changed": []}
     sa_email = "%s@%s.iam.gserviceaccount.com" % (a.member, a.project)
     hub_sa = "%s@%s.iam.gserviceaccount.com" % (a.hub_automation, a.hub_project)
     hive_set = "principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/*" % (a.hub_number, a.hive_pool)
-    key = json.load(open(a.key_file))
-    account = key["client_email"]
-    r = subprocess.run(["gcloud", "auth", "activate-service-account", "--key-file", a.key_file, "--quiet"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        g.fail("could not activate the initial credentials: %s" % r.stderr.strip()[-300:])
+    if a.active_account:
+        # the owner's own session: used as it is, never activated or revoked here
+        account = active_account()
+    else:
+        with open(a.key_file) as fh:
+            key = json.load(fh)
+        account = key["client_email"]
+        r = subprocess.run(["gcloud", "auth", "activate-service-account", "--key-file", a.key_file, "--quiet"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            g.fail("could not activate the initial credentials: %s" % r.stderr.strip()[-300:])
+    out["account"] = "active" if a.active_account else "key file (revoked at the end)"
     try:
         p = gcloud(["projects", "describe", a.project], account)
         out["projectNumber"] = p.get("projectNumber")
@@ -120,7 +140,8 @@ def external(a):
     except (RuntimeError, g.GcpError, subprocess.CalledProcessError) as e:
         out = {"ok": False, "error": str(e)[-600:], "project": a.project}
     finally:
-        subprocess.run(["gcloud", "auth", "revoke", account, "--quiet"], capture_output=True)
+        if not a.active_account:
+            subprocess.run(["gcloud", "auth", "revoke", account, "--quiet"], capture_output=True)
     print(json.dumps(out))
     sys.exit(0 if out["ok"] else 1)
 
@@ -134,7 +155,10 @@ def main():
     c.add_argument("--region")
     e = sub.add_parser("external")
     e.add_argument("--project", required=True)
-    e.add_argument("--key-file", required=True)
+    who = e.add_mutually_exclusive_group(required=True)
+    who.add_argument("--key-file", help="the project owner's initial credentials (activated for the run, then revoked)")
+    who.add_argument("--active-account", action="store_true",
+                     help="use the account gcloud has active (a project owner's own session; left signed in)")
     e.add_argument("--hub-project", required=True)
     e.add_argument("--hub-number", required=True)
     e.add_argument("--member", default="shc-automation")

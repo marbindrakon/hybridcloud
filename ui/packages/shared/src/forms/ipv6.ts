@@ -23,6 +23,7 @@ import type {
   NetworkPlacementBackendKind,
   PlacementIpv6Source,
   PlacementSubnetStatus,
+  PlacementTranslationStatus,
   PlatformPrefixRequest,
   TenantProfile,
   TenantProfileSite,
@@ -417,6 +418,31 @@ export function placementSubnets(p: NetworkPlacement | undefined | null): Placem
 
 export function placementSubnet(p: NetworkPlacement | undefined | null, family: 4 | 6): PlacementSubnetStatus | undefined {
   return placementSubnets(p).find((s) => Number(s.family) === family && !!s.prefix);
+}
+
+/** A placement's translation to IPv4 as the page shows it: a prefix, the resolvers (maybe none), path and source if known */
+export type PlacementTranslation = PlacementTranslationStatus & { pref64: string; resolvers: string[] };
+
+/**
+ * The placement's translation to IPv4 (status.ipv6.translation) with empty fields left out; null when it has none.
+ * path: Fabric (the platform's translator) or Provider (the cloud provider's); ipv4Source: the provider translator's
+ * IPv4 address once the provider reports it.
+ */
+export function placementTranslation(p: NetworkPlacement | undefined | null): PlacementTranslation | null {
+  const tr = p?.status?.ipv6?.translation;
+  if (!tr || typeof tr !== 'object') return null;
+  const str = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim() : undefined);
+  const pref64 = str(tr.pref64);
+  if (!pref64) return null;
+  const out: PlacementTranslation = {
+    pref64,
+    resolvers: Array.isArray(tr.resolvers) ? tr.resolvers.map(str).filter((r): r is string => !!r) : [],
+  };
+  const path = str(tr.path);
+  if (path) out.path = path;
+  const source = str(tr.ipv4Source);
+  if (source) out.ipv4Source = source;
+  return out;
 }
 
 /** The reason of the placement's Ready condition when it is FamilyUnavailable (with the platform's message). */

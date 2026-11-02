@@ -202,6 +202,59 @@ class NetworkTranslation(unittest.TestCase):
         e = self.egress(hn_egress_want=False, hn_egress_want6=False)
         self.assertIsNone(e["ipv4Translation"])
 
+    # translation by path: a site's provider entry offers the cloud provider's translator, which needs nothing of the
+    # network's own (no fabric IPv6 egress), so the row is ready while it is offered and says which path serves whom
+    def test_provider_path_alone_is_ready_and_says_network_space_has_none(self):
+        for kw in ({"hn_egress_offered6": False}, {"hn_translation_offered": False},
+                   {"hn_egress_offered6": False, "hn_translation_offered": False}):
+            e = self.egress(hn_translation_provider_offered=True, **kw)
+            tr = e["ipv4Translation"]
+            self.assertEqual(tr["state"], "ready", kw)
+            self.assertNotIn("reason", tr)
+            self.assertIn("through the provider's translator", tr["message"])
+            self.assertIn("each placement's status names its path", tr["message"])
+            self.assertTrue(tr["message"].endswith(
+                "Placements with space from the network have none: the platform's translator is not offered on this "
+                "fabric yet"), tr["message"])
+
+    def test_both_paths_ready(self):
+        tr = self.egress(hn_translation_provider_offered=True)["ipv4Translation"]
+        self.assertEqual(tr["state"], "ready")
+        self.assertIn("with IPv6 space from the network through the platform's translator", tr["message"])
+        self.assertIn("with space from the cloud provider through the provider's translator", tr["message"])
+
+    def test_provider_path_ready_while_the_fabric_path_is_pending(self):
+        tr = self.egress(hn_translation_provider_offered=True,
+                         hn_egress_carried={"network": "acme/v6", "sourceAddresses": [], "internet": False,
+                                            "ipv6": False})["ipv4Translation"]
+        self.assertEqual(tr["state"], "ready")
+        self.assertTrue(tr["message"].endswith(
+            "Placements with space from the network get translation once the network's IPv6 internet access is ready"),
+            tr["message"])
+
+    def test_fabric_path_rows_unchanged_without_a_provider_entry(self):
+        for prov in (False, None, "false"):
+            self.assertEqual(self.egress(hn_translation_provider_offered=prov)["ipv4Translation"],
+                             {"state": "ready", "message": READY_MSG}, prov)
+
+    def test_provider_path_never_serves_tenant_prefixes_or_networks_with_ipv4_or_without_internet(self):
+        e = self.egress(hn_mode6="Tenant", hn_egress_want6=False, hn_translation_provider_offered=True)
+        self.assertEqual(e["ipv4Translation"]["reason"], "AddressChoice")
+        e = self.egress(hn_v4=["10.65.0.0/16"], hn_translation_provider_offered=True,
+                        hn_egress_carried={"network": "acme/v6", "sourceAddresses": ["198.51.100.64"], "ipv6": True})
+        self.assertIsNone(e["ipv4Translation"])
+        e = self.egress(hn_egress_want=False, hn_egress_want6=False, hn_translation_provider_offered=True)
+        self.assertIsNone(e["ipv4Translation"])
+
+    def test_provider_offered_input_from_the_realization(self):
+        task = by_name(load(os.path.join(HN, "main.yml")), "What the fabric realizes for the network's egress")
+        expr = task["ansible.builtin.set_fact"]["hn_translation_provider_offered"]
+        for tr, want in (({}, False), ({"s": {}}, False), ({"s": {"pref64": PREF64, "dns64Resolvers": DNS64}}, False),
+                         ({"s": {"provider": False}}, False), ({"s": None, "t": {"provider": True}}, True),
+                         ({"s": {"pref64": PREF64, "provider": True}}, True)):
+            out = run_play([{"ansible.builtin.set_fact": {"_o": expr}}, write_out("_o")], {"fab_real": {"translation": tr}})
+            self.assertEqual(out, want, tr)
+
     def test_offered_input_from_the_realization(self):
         task = by_name(load(os.path.join(HN, "main.yml")), "What the fabric realizes for the network's egress")
         expr = task["ansible.builtin.set_fact"]["hn_translation_offered"]

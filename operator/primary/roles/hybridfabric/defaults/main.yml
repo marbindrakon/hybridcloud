@@ -1,1 +1,10 @@
 ---
+# shc: the translation canary (status.realization.translation, written by the fabric job). A Ready fabric is otherwise
+# run only on a spec change or a wake, so the canary's reading would age without anyone noticing. The fabric job
+# writes the time of its read (readAt), alertMinutes and staleAfterMinutes (3 x alertMinutes) next to the readings:
+# - a read older than alertMinutes (at least hybridfabric_canary_reread_min_seconds) re-runs the fabric job on the
+#   next reconcile (the watch's reconcilePeriod, 300 s), as a CloudInfrastructure re-probes;
+# - a read older than staleAfterMinutes (the re-runs did not refresh it: EDA down, a job stuck or failing) is marked
+#   stale here and now: every site's reading stale and not healthy, condition IPv6Translation Unknown/CanaryStale.
+# An old read never reports healthy.
+hybridfabric_canary_reread_min_seconds: 300

@@ -1492,6 +1492,7 @@
       "AddressChoice": "Internet IPv6 : non proposé pour les préfixes fournis par le locataire.",
       "NotOffered": "L'accès Internet IPv6 n'est pas encore proposé sur cette fabric.",
       "Degraded": "Fonctionne avec une redondance réduite.",
+      "UpstreamDown": "L'accès Internet IPv6 est coupé : aucun nœud de la fabric n'a de session amont.",
       "WaitingForAddressSpace": "En attente d'espace IPv6 de la plateforme : aucun bloc libre dans le pool de la plateforme, quota du locataire atteint, ou bloc choisi utilisé ou libéré récemment.",
       "IPv6ModeInUse": "Le mode IPv6 du réseau ne peut pas changer tant qu'il a des placements ; supprimez-les ou créez un nouveau réseau.",
       "PrefixReserved": "Un préfixe chevauche un espace d'adresses que la plateforme garde pour elle.",
@@ -1505,7 +1506,8 @@
       },
       "translation": {
         "NotOffered": "La traduction vers IPv4 n'est pas encore proposée sur cette fabric.",
-        "AddressChoice": "La traduction vers IPv4 nécessite un espace IPv6 fourni par la plateforme."
+        "AddressChoice": "La traduction vers IPv4 nécessite un espace IPv6 fourni par la plateforme.",
+        "UpstreamDown": "La traduction vers IPv4 est coupée avec l'accès Internet IPv6."
       }
     },
     "subnetOfFamily": "Sous-réseau IPv{{family}}",
@@ -1517,6 +1519,7 @@
     "path_Provider": "à travers le fournisseur cloud",
     "translationPrefix": "Préfixe de traduction",
     "resolvers": "Résolveurs",
+    "translationSource": "Source IPv4 du trafic traduit",
     "familyUnavailableTitle": "Famille d'adresses non disponible",
     "familyUnavailableBody": "La plateforme n'a pas créé les sous-réseaux de ce placement : le site de l'environnement ou le réseau ne propose pas une famille d'adresses demandée par le placement.",
     "familyUnavailableFix": "Supprimez le placement et rattachez le réseau avec les familles que le site propose.",

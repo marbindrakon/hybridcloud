@@ -239,7 +239,8 @@ spec:
 - The path to the internet carries at most 1420-byte IPv6 packets; the platform tells larger packets so (Packet Too
   Big) and clamps TCP accordingly, so path MTU discovery works as usual.
 - When the platform moves IPv6 traffic to another path after a failure, the row may read `ready` with reason
-  `Degraded`; connections in progress may reset.
+  `Degraded`; connections in progress may reset. When no path is left it reads `unavailable` with reason
+  `UpstreamDown` until the platform restores one.
 - **Translation to IPv4.** A network with IPv6 from the platform, no IPv4 and internet access on reaches IPv4-only
   destinations by translation where the platform offers it (`status.egress.ipv4Translation`; on each placement
   `status.ipv6.translation` gives the translation prefix and the resolvers to use). Dual-stack networks never get
@@ -404,7 +405,9 @@ spec:
   ```
   Until then `status.ipv6.translation` is absent and the network's `status.egress.ipv4Translation` says why
   (`NotOffered`: the platform offers no translation yet; `AddressChoice`: the network uses your own IPv6 prefixes).
-  That network row describes the platform's path; a provider-path placement's own status is the one to read.
+  That network row covers both paths (the platform's translator for space from the network, the cloud provider's for
+  space from the provider) and its message says which applies to which placements; each placement's own status
+  names the path it uses.
 - **What reaches IPv4 how:** names of IPv4-only services through the DNS64 resolvers in the status, on either path;
   IPv4 literals only through a CLAT in the guest (below), which uses the status's `pref64`. On Google Cloud the
   resolver is the VM's metadata server, so names work with no setup in the guest.

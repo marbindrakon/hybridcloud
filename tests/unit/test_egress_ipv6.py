@@ -524,6 +524,39 @@ class NetworkStatus(unittest.TestCase):
         self.assertIn("bgw-2", r["message"])
         self.assertIn("degraded", note)
 
+    def test_degraded_wording_by_count(self):
+        r = self.row6(self.rows(hn_egress6_degraded=True, hn_egress6_degraded_nodes=["bgw-2"],
+                                hn_egress6_nodes=["bgw-1", "bgw-2"])[0])
+        self.assertIn("bgw-2 has no upstream session", r["message"])
+        r = self.row6(self.rows(hn_egress6_degraded=True, hn_egress6_degraded_nodes=["bgw-3", "bgw-2"],
+                                hn_egress6_nodes=["bgw-1", "bgw-2", "bgw-3"])[0])
+        self.assertEqual((r["state"], r["reason"]), ("ready", "Degraded"))
+        self.assertIn("bgw-2, bgw-3 have no upstream session", r["message"])
+        self.assertNotIn("one node", r["message"])
+
+    def test_every_node_down_is_unavailable(self):
+        e, note = self.rows(hn_v4=[], hn_egress6_degraded=True, hn_egress6_degraded_nodes=["bgw-2", "bgw-1"],
+                            hn_egress6_nodes=["bgw-1", "bgw-2"],
+                            hn_egress_carried={"network": "acme/g", "sourceAddresses": [], "internet": False, "ipv6": True})
+        r = self.row6(e)
+        self.assertEqual((r["state"], r["reason"]), ("unavailable", "UpstreamDown"))
+        self.assertEqual(r["message"], "IPv6 internet access is down: no node of the fabric has an upstream session "
+                                       "(bgw-1, bgw-2)")
+        self.assertEqual(e["internet"], "unavailable")
+        self.assertIn("down", note)
+        # without the node list (an older fabric status) it never concludes "every node down"
+        r = self.row6(self.rows(hn_egress6_degraded=True, hn_egress6_degraded_nodes=["bgw-1", "bgw-2"])[0])
+        self.assertEqual(r["reason"], "Degraded")
+
+    def test_nodes_input_from_the_fabric_status(self):
+        task = by_name(load(os.path.join(HN, "main.yml")), "What the fabric realizes for the network's egress")
+        expr = task["vars"]["_eg"]
+        self.assertIn("realization", expr)
+        out = run_play([{"ansible.builtin.set_fact": {"_o": task["ansible.builtin.set_fact"]["hn_egress6_nodes"]}},
+                        write_out("_o")],
+                       {"_eg": {"ipv6": {"nodes": {"bgw-1": {"healthy": True}, "bgw-2": {"healthy": False}}}}})
+        self.assertEqual(sorted(out), ["bgw-1", "bgw-2"])
+
     def test_pending_while_the_fabric_has_not_realized_it(self):
         e, note = self.rows(hn_egress_carried={"network": "acme/g", "sourceAddresses": ["198.51.100.64"], "ipv6": False})
         self.assertEqual(self.row6(e), {"family": 6, "state": "pending", "mode": "Routed"})
@@ -654,8 +687,9 @@ class PlacementStatus(unittest.TestCase):
         s = self.status(True, {"family": 6, "state": "ready", "mode": "Routed"})
         self.assertEqual(s["ipv6"]["internet"], {"state": "ready", "path": "Fabric"})
 
-    def test_no_row_no_internet_key(self):
-        self.assertEqual(self.status(True), {"ipv6": {"addressing": "DHCPv6", "translation": None}})
+    def test_no_row_internet_null(self):
+        # written as null (status is merge-patched): a row that went away takes the placement's copy with it
+        self.assertEqual(self.status(True), {"ipv6": {"addressing": "DHCPv6", "internet": None, "translation": None}})
 
     def test_not_offered_while_off(self):
         self.assertEqual(self.status(False)["ipv6"]["internet"]["reason"], "NotOffered")
