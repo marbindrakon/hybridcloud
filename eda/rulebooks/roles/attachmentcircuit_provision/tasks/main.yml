@@ -465,8 +465,13 @@
                                      'neighbors6': _p6.nodes | map('combine', {'asn': ac_asn | int}) | list}) }}
       when: ac_plan.ipv6 is defined
 
+    # the revision the fabric reports when it has realized exactly this
+    - name: The realization's revision
+      ansible.builtin.set_fact:
+        ac_real: "{{ ac_real | combine({'rev': (ac_real | to_json(sort_keys=True) | hash('sha1'))[:12]}) }}"
+
     # what the status patch writes: the status is merged, so a circuit without IPv6 (or one whose IPv6 accept
-    # entries were removed) clears the IPv6 keys explicitly; the realization and its revision stay as they are
+    # entries were removed) clears the IPv6 keys explicitly; after the revision, which they don't change
     - name: The circuit's status parts
       ansible.builtin.set_fact:
         ac_ce_config_status: >-
@@ -474,11 +479,6 @@
              else ac_ce_config | combine({'address6': none, 'secondAddress6': none, 'neighbors6': none}) }}
         ac_real_status: >-
           {{ ac_real if ac_plan.ipv6 is defined else ac_real | combine({'link6': none, 'ce6': none}) }}
-
-    # the revision the fabric reports when it has realized exactly this
-    - name: The realization's revision
-      ansible.builtin.set_fact:
-        ac_real: "{{ ac_real | combine({'rev': (ac_real | to_json(sort_keys=True) | hash('sha1'))[:12]}) }}"
 
     - name: Has the realization changed
       ansible.builtin.set_fact:
