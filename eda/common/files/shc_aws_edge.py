@@ -12,8 +12,9 @@ while it exists, so the site and its networks are brought up for use and removed
     down                          everything of the site (networks first)
     gateways --gateways '<json>'  the border gateway nodes [{name, publicKey, address}]; BGP password from env
                                   SHC_EDGE_BGP_PASSWORD (never argv)
-    net-up --vni N [--test] [--egress]   the network's route table, Connect attachment and peers; its VRF on the
-                                  routers; with --egress its NAT egress VPC (config egress), else none
+    net-up --vni N [--test] [--egress] [--nat64 '<json>']   the network's route table, Connect attachment and peers;
+                                  its VRF on the routers; with --egress its NAT egress VPC (config egress), else none;
+                                  --nat64 ["<IPv6 block>", ..] makes that VPC serve NAT64 for those blocks ([] removes it)
     net-attach --vni N --attachment ID   accept a tenant VPC attachment into the network's route table
     net-down --vni N              the network's egress VPC, Connect attachment, peers, route table; its VRF on the routers
     vrfs6 --vrfs6 '<json>'        the IPv6 side of the networks' VRFs (edge.ipv6 on): {"icmp6": {<instance-id>: "<a>/128"},
@@ -26,7 +27,7 @@ config: {"account", "region", "memberRole", "entry": "automation" | "org-access"
          "tgwCidr", "edgeSubnets": [names], "transportSubnets": [names], "instanceType", "ami": {"owner", "name"},
          "asn", "tunnel": {"cidr", "mtu", "listenPort", "nodeAddresses": [..]}, "wireguardSources": [cidrs],
          "insideCidrPool", "overlayMtu", "egress": {"cidrPool", "az"}, "shareName",
-         "ipv6": {"enabled", "insideCidrPool6"}}
+         "ipv6": {"enabled", "insideCidrPool6"}, "placeholderV4Pool"}
 IPv6 (design/IPV6-PLAN.md §6.1-§6.2; ipv6.enabled): every Connect peer gets an IPv6 /125 from ipv6.insideCidrPool6 (a
 ULA network inside fd00::/8, a /64 in practice) next to its IPv4 /29; the transit gateway then negotiates IPv6 unicast
 on the peer's IPv4 BGP sessions (it has no IPv6 BGP peering). The router takes the /125's first address on its GRE
@@ -41,6 +42,13 @@ A network's internet egress (net-up --egress): a NAT egress VPC of its own, shc-
 egress.cidrPool): an attachment /28 (0/0 -> NAT gateway) and a public /28 (NAT gateway, 0/0 -> internet gateway,
 RFC 1918 -> transit gateway), its attachment associated with the network's route table (no propagation) and a static
 0/0 there (a static route wins over the fabric's propagated default). Per network, so overlapping prefixes stay apart.
+NAT64 in that VPC (net-up --nat64 with the IPv6 blocks of IPv6-only provider-source VPCs): the VPC takes an Amazon /56,
+its two subnets a /64 each, its attachment IPv6 support; the attachment subnet routes 64:ff9b::/96 to the NAT gateway
+(which translates it to its Elastic IP), the NAT gateway's subnet routes the blocks back to the transit gateway, and
+the network's route table holds a static 64:ff9b::/96 to the egress attachment. An empty list removes those routes;
+the VPC's IPv6 block stays until the VPC goes.
+placeholderV4Pool (the tenant side's never-routed IPv4 range for IPv6-only VPCs): written to the routers' config by
+up, so every network VRF drops it from the transit gateway (shc_edge_agent.py); absent, the config has no such key.
 entry: automation = the job's identity assumes <memberRole> with external ID shc-<account> (AAP); org-access =
 the caller's management-account credentials assume OrganizationAccountAccessRole (one-off use by the owner).
 """
@@ -68,6 +76,8 @@ INSIDE6_RANGE = ipaddress.ip_network("fd00::/8")
 INSIDE6_PREFIXLEN = 125
 # a peer re-created to gain its /125 carries this tag, so a peer that still has none is not re-created again
 RECREATED_TAG = "shc-ipv6-recreated"
+# the well-known NAT64 prefix a NAT gateway translates (RFC 6052)
+NAT64_PREFIX = "64:ff9b::/96"
 
 
 def fail(msg, **extra):
@@ -102,6 +112,20 @@ def ipv6_settings(cfg):
         fail("edge.ipv6.insideCidrPool6 %s must be an IPv6 network inside %s holding at least one /%d"
              % (pool, INSIDE6_RANGE, INSIDE6_PREFIXLEN))
     return True, pool
+
+
+def placeholder_pool(cfg):
+    """The tenant side's placeholder IPv4 range (config placeholderV4Pool), canonical, or None when unset."""
+    raw = str(cfg.get("placeholderV4Pool") or "").strip()
+    if not raw:
+        return None
+    try:
+        n = ipaddress.ip_network(raw)
+    except ValueError:
+        n = None
+    if n is None or n.version != 4:
+        fail("placeholderV4Pool %r is not an IPv4 network" % raw)
+    return str(n)
 
 
 def inside_blocks(peer):
@@ -348,6 +372,7 @@ class Edge:
         conf.setdefault("nodes", {})
         conf.setdefault("gateways", [])
         conf.setdefault("vrfs", [])
+        self.placeholder_conf(conf)
 
         # the routers: one per edge subnet, each with an Elastic IP
         have = {tagmap(i)["Name"]: i for i in self.instances()}
@@ -422,6 +447,16 @@ class Edge:
             self.ec2.create_route(RouteTableId=rt_id, DestinationCidrBlock=c["tgwCidr"], TransitGatewayId=tgw_id)
         self.sync_nodes(wait=True)
         return self.status()
+
+    def placeholder_conf(self, conf):
+        """The tenant side's never-routed IPv4 range in the routers' config (every network VRF drops it from the
+        transit gateway); no key at all without one."""
+        pool4 = placeholder_pool(self.cfg)
+        if pool4:
+            conf["placeholderV4Pool"] = pool4
+        else:
+            conf.pop("placeholderV4Pool", None)
+        return conf
 
     def sync_nodes(self, wait=False, tries=24):
         """Put each router's published public key and VPC address into the site config (the mesh between them).
@@ -615,7 +650,7 @@ systemctl enable --now shc-edge-agent.timer
     def net_names(self, vni):
         return "shc-net-%d" % vni
 
-    def net_up(self, vni, test=False, egress=False, ipv6=None):
+    def net_up(self, vni, test=False, egress=False, ipv6=None, nat64=None):
         c = self.cfg
         tgw = self.tgw()
         tgw_id = tgw["TransitGatewayId"]
@@ -723,7 +758,12 @@ systemctl enable --now shc-edge-agent.timer
             compose_ipv6(vrf, conf, inside6)
         conf["vrfs"] = sorted([v for v in conf["vrfs"] if v["vni"] != vni] + [vrf], key=lambda v: v["vni"])
         self.write_config(conf)
-        eg = self.egress_up(vni, rt_id) if egress else self.egress_down(vni)
+        if not egress:
+            eg = self.egress_down(vni)
+        elif nat64 is None:
+            eg = self.egress_up(vni, rt_id)
+        else:
+            eg = self.egress_up(vni, rt_id, nat64=nat64)
         return {"vni": vni, "routeTable": rt_id, "connectAttachment": ca_id, "peers": connect, "egress": eg}
 
     def next6(self, pool6):
@@ -924,7 +964,9 @@ systemctl enable --now shc-edge-agent.timer
             if r["State"] not in ("deleting", "deleted")]
         return rts[0]["TransitGatewayRouteTableId"] if rts else None
 
-    def egress_up(self, vni, rt_id):
+    def egress_up(self, vni, rt_id, nat64=None):
+        """The network's NAT egress VPC. nat64: None leaves NAT64 as it is; a list of IPv6 blocks makes the VPC
+        translate 64:ff9b::/96 for them (see the module docstring); [] removes the NAT64 routes."""
         e = self.cfg.get("egress") or {}
         if not e.get("cidrPool"):
             fail("no egress settings (egress.cidrPool) for the NAT egress VPC")
@@ -953,6 +995,12 @@ systemctl enable --now shc-edge-agent.timer
                                                  TagSpecifications=tagspec("subnet", n, **extra))["Subnet"]
                 self.changed.append("subnet " + n)
             sn[role] = have[n]["SubnetId"]
+        block6 = None
+        if nat64:  # NAT64: the VPC's Amazon /56, a /64 on each subnet (the attachment's IPv6 support needs them)
+            block6 = self.egress_block6(vpc_id)
+            base = int(ipaddress.ip_network(block6).network_address)
+            for i, role in enumerate(("tgw", "public")):
+                self.egress_subnet6(have["%s-%s" % (name, role)], str(ipaddress.IPv6Network((base + (i << 64), 64))))
         igws = self.ec2.describe_internet_gateways(Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}])["InternetGateways"]
         if igws:
             igw_id = igws[0]["InternetGatewayId"]
@@ -995,14 +1043,24 @@ systemctl enable --now shc-edge-agent.timer
             self.changed.append("nat gateway " + nat["NatGatewayId"])
         self.ec2.get_waiter("nat_gateway_available").wait(NatGatewayIds=[nat["NatGatewayId"]])
         nat = self.ec2.describe_nat_gateways(NatGatewayIds=[nat["NatGatewayId"]])["NatGateways"][0]
-        route(table("tgw"), "0.0.0.0/0", NatGatewayId=nat["NatGatewayId"])
+        tgw_rt = table("tgw")
+        route(tgw_rt, "0.0.0.0/0", NatGatewayId=nat["NatGatewayId"])
         att = self.egress_attachments(vni)
         if att:
             att_id = att[0]["TransitGatewayAttachmentId"]
+            if nat64:
+                cur = self.ec2.describe_transit_gateway_vpc_attachments(
+                    TransitGatewayAttachmentIds=[att_id])["TransitGatewayVpcAttachments"]
+                if cur and (cur[0].get("Options") or {}).get("Ipv6Support") != "enable":
+                    self.wait_attachment(att_id)
+                    self.ec2.modify_transit_gateway_vpc_attachment(TransitGatewayAttachmentId=att_id,
+                                                                   Options={"Ipv6Support": "enable"})
+                    self.changed.append("egress attachment %s ipv6" % att_id)
         else:
             att_id = self.ec2.create_transit_gateway_vpc_attachment(
                 TransitGatewayId=tgw_id, VpcId=vpc_id, SubnetIds=[sn["tgw"]],
-                TagSpecifications=tagspec("transit-gateway-attachment", name, **extra))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
+                TagSpecifications=tagspec("transit-gateway-attachment", name, **extra),
+                **({"Options": {"Ipv6Support": "enable"}} if nat64 else {}))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
             self.changed.append("egress attachment " + att_id)
         self.wait_attachment(att_id)
         self.associate(rt_id, att_id, propagate=False)
@@ -1020,8 +1078,78 @@ systemctl enable --now shc-edge-agent.timer
                 self.ec2.create_transit_gateway_route(DestinationCidrBlock="0.0.0.0/0", TransitGatewayRouteTableId=rt_id,
                                                       TransitGatewayAttachmentId=att_id)
             self.changed.append("static 0/0 -> egress in " + rt_id)
-        return {"vpc": vpc_id, "cidr": vpc["CidrBlock"], "attachment": att_id, "natGateway": nat["NatGatewayId"],
-                "publicIp": (nat.get("NatGatewayAddresses") or [{}])[0].get("PublicIp")}
+        out = {"vpc": vpc_id, "cidr": vpc["CidrBlock"], "attachment": att_id, "natGateway": nat["NatGatewayId"],
+               "publicIp": (nat.get("NatGatewayAddresses") or [{}])[0].get("PublicIp")}
+        if nat64 is not None:
+            # NAT64: in through the attachment subnet to the NAT gateway, back from the NAT gateway's subnet to the
+            # transit gateway, and the network's 64:ff9b::/96 to this VPC
+            returns = sorted({str(ipaddress.ip_network(b)) for b in nat64})
+            self.vpc_routes6(tgw_rt["RouteTableId"], {NAT64_PREFIX: {"NatGatewayId": nat["NatGatewayId"]}} if nat64 else {})
+            self.vpc_routes6(pub["RouteTableId"], {b: {"TransitGatewayId": tgw_id} for b in returns})
+            self.static6(rt_id, att_id if nat64 else None)
+            out["nat64"] = {"prefix": NAT64_PREFIX, "block": block6, "returns": returns} if nat64 else None
+        return out
+
+    def egress_block6(self, vpc_id):
+        """The egress VPC's Amazon /56 (asked for once, then waited on)."""
+        asked = False
+        for _ in range(60):
+            vpc = self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]
+            live = [a for a in vpc.get("Ipv6CidrBlockAssociationSet") or []
+                    if a.get("Ipv6CidrBlockState", {}).get("State") in ("associated", "associating")]
+            if live and live[0]["Ipv6CidrBlockState"]["State"] == "associated" and live[0].get("Ipv6CidrBlock"):
+                return live[0]["Ipv6CidrBlock"]
+            if not live and not asked:
+                self.ec2.associate_vpc_cidr_block(VpcId=vpc_id, AmazonProvidedIpv6CidrBlock=True)
+                self.changed.append("egress vpc %s ipv6" % vpc_id)
+                asked = True
+            time.sleep(3)
+        fail("egress VPC %s: its IPv6 block never associated" % vpc_id)
+
+    def egress_subnet6(self, s, cidr6):
+        have6 = [a["Ipv6CidrBlock"] for a in s.get("Ipv6CidrBlockAssociationSet") or []
+                 if a.get("Ipv6CidrBlockState", {}).get("State") in ("associated", "associating")]
+        if have6 and cidr6 not in have6:
+            fail("egress subnet %s has IPv6 %s, want %s" % (s["SubnetId"], ", ".join(have6), cidr6))
+        if not have6:
+            self.ec2.associate_subnet_cidr_block(SubnetId=s["SubnetId"], Ipv6CidrBlock=cidr6)
+            self.changed.append("egress subnet %s ipv6 %s" % (s["SubnetId"], cidr6))
+
+    def vpc_routes6(self, rt_id, want):
+        """A VPC route table's IPv6 routes (other than the local one) become exactly want {destination: target}."""
+        rt = self.ec2.describe_route_tables(RouteTableIds=[rt_id])["RouteTables"][0]
+        have = {r["DestinationIpv6CidrBlock"]: r for r in rt.get("Routes", [])
+                if r.get("DestinationIpv6CidrBlock") and r.get("Origin") != "CreateRouteTable"}
+        for dest in sorted(want):
+            r = have.get(dest)
+            if r is None:
+                self.ec2.create_route(RouteTableId=rt_id, DestinationIpv6CidrBlock=dest, **want[dest])
+                self.changed.append("route %s %s" % (dest, list(want[dest].values())[0]))
+            elif any(r.get(k) != v for k, v in want[dest].items()) or r.get("State") == "blackhole":
+                self.ec2.replace_route(RouteTableId=rt_id, DestinationIpv6CidrBlock=dest, **want[dest])
+                self.changed.append("route %s %s replaced" % (dest, list(want[dest].values())[0]))
+        for dest in sorted(set(have) - set(want)):
+            self.ec2.delete_route(RouteTableId=rt_id, DestinationIpv6CidrBlock=dest)
+            self.changed.append("deleted route %s in %s" % (dest, rt_id))
+
+    def static6(self, rt_id, att_id):
+        """The network's static 64:ff9b::/96 to the egress attachment (att_id), or none (None)."""
+        static = self.ec2.search_transit_gateway_routes(
+            TransitGatewayRouteTableId=rt_id, Filters=[{"Name": "type", "Values": ["static"]},
+                                                       {"Name": "route-search.exact-match", "Values": [NAT64_PREFIX]}])["Routes"]
+        if att_id is None:
+            for _ in static:
+                self.ec2.delete_transit_gateway_route(TransitGatewayRouteTableId=rt_id, DestinationCidrBlock=NAT64_PREFIX)
+                self.changed.append("deleted static %s in %s" % (NAT64_PREFIX, rt_id))
+            return
+        if not any(a.get("TransitGatewayAttachmentId") == att_id for r in static for a in r.get("TransitGatewayAttachments", [])):
+            if static:
+                self.ec2.replace_transit_gateway_route(DestinationCidrBlock=NAT64_PREFIX, TransitGatewayRouteTableId=rt_id,
+                                                       TransitGatewayAttachmentId=att_id)
+            else:
+                self.ec2.create_transit_gateway_route(DestinationCidrBlock=NAT64_PREFIX, TransitGatewayRouteTableId=rt_id,
+                                                      TransitGatewayAttachmentId=att_id)
+            self.changed.append("static %s -> egress in %s" % (NAT64_PREFIX, rt_id))
 
     def egress_down(self, vni):
         vpc = self.egress_vpc(vni)
@@ -1032,6 +1160,8 @@ systemctl enable --now shc-edge-agent.timer
                                                                {"Name": "route-search.exact-match", "Values": ["0.0.0.0/0"]}])["Routes"]:
                 self.ec2.delete_transit_gateway_route(TransitGatewayRouteTableId=rt_id, DestinationCidrBlock="0.0.0.0/0")
                 self.changed.append("deleted static 0/0 in " + rt_id)
+            if vpc and vpc.get("Ipv6CidrBlockAssociationSet"):  # a VPC that served NAT64: its static 64:ff9b::/96
+                self.static6(rt_id, None)
         for a in self.egress_attachments(vni):
             self.ec2.delete_transit_gateway_vpc_attachment(TransitGatewayAttachmentId=a["TransitGatewayAttachmentId"])
             self.changed.append("deleted egress attachment " + a["TransitGatewayAttachmentId"])

@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import sys
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -512,6 +513,20 @@ IPV4_RENDER = (
     "  advertise ipv4 unicast\n exit-address-family\nexit\n!\n")
 
 
+def _with_default4(r):
+    """The IPv4 render with the deny of the transit gateway's IPv4 default ahead of each VRF's tgw-in permit."""
+    for vrf in ("t51000", "t51001"):
+        r = r.replace("route-map %s-tgw-in permit 10\n" % vrf,
+                      "ip prefix-list %s-default4 seq 5 permit 0.0.0.0/0\nroute-map %s-tgw-in deny 4\n"
+                      " match ip address prefix-list %s-default4\nexit\nroute-map %s-tgw-in permit 10\n" % (vrf, vrf, vrf, vrf))
+    return r
+
+
+# the release before denied nothing on the IPv4 sessions; every VRF now denies the transit gateway's IPv4 default
+IPV4_RENDER_BEFORE_DEFAULT4 = IPV4_RENDER
+IPV4_RENDER = _with_default4(IPV4_RENDER)
+
+
 def render(c, me="i-a"):
     return A.frr_conf(c, me, c["nodes"][me])
 
@@ -528,6 +543,15 @@ class AgentRender(unittest.TestCase):
         c = agent_cfg(six())
         c["vrfs"][0]["ipv6"]["inside6"] = {"i-b": c["vrfs"][0]["ipv6"]["inside6"]["i-a"]}
         self.assertEqual(render(c), IPV4_RENDER)
+
+    def test_ipv4_default_from_the_transit_gateway_is_denied(self):
+        out = render(agent_cfg())
+        for vrf in ("t51000", "t51001"):
+            block = ("ip prefix-list %s-default4 seq 5 permit 0.0.0.0/0\nroute-map %s-tgw-in deny 4\n"
+                     " match ip address prefix-list %s-default4\nexit\nroute-map %s-tgw-in permit 10\n" % (vrf, vrf, vrf, vrf))
+            self.assertIn(block, out)
+        # nothing else changed against the release before
+        self.assertEqual(out.replace(_with_default4(IPV4_RENDER_BEFORE_DEFAULT4), ""), "")
 
     def test_network_source_with_internet(self):
         out = render(agent_cfg(six(internet=True)))
@@ -692,9 +716,35 @@ class AgentState(unittest.TestCase):
                          {"169.254.100.2": "negotiated", "169.254.100.3": "NoNeg"})
         self.assertEqual(st["routes6"]["t51000"], {"2001:db8:100:10::/60": ["bgp"], "::/0": ["bgp"],
                                                    "fd00:db8:5c::/125": ["connected"]})
+        # the selected next hops and the kernel's IPv6 counters come with the IPv6 side
+        self.assertIn("t51000", st["nh6"])
+        self.assertIsInstance(st["fwd6"], dict)
         with mock.patch.object(A, "sh", self.vtysh(out)):
             st4 = A.state(agent_cfg(), "i-a")
         self.assertEqual(sorted(st4), ["bgp", "routes", "wg"])
+
+    def test_nexthops6_selected_only(self):
+        routes = {"2001:db8:100:10::/60": [{"protocol": "bgp", "selected": True, "nexthops": [
+                      {"ip": "fd00:db8:5c::2", "interfaceName": "gre51000", "active": True},
+                      {"ip": "fd00:db8:5c::3", "interfaceName": "gre51000", "active": True}]}],
+                  "::/0": [{"protocol": "bgp", "selected": True, "nexthops": [
+                               {"ip": "::ffff:10.240.1.1", "interfaceName": "br51000", "active": True},
+                               {"ip": "::ffff:10.240.1.2", "interfaceName": "br51000", "active": False}]},
+                           {"protocol": "kernel", "selected": False, "nexthops": [{"unreachable": True}]}],
+                  "fd00:db8:5c::/125": [{"protocol": "connected", "selected": True,
+                                         "nexthops": [{"directlyConnected": True, "interfaceName": "gre51000"}]}]}
+        self.assertEqual(A.nexthops6(routes), {
+            "2001:db8:100:10::/60": ["fd00:db8:5c::2@gre51000", "fd00:db8:5c::3@gre51000"],
+            "::/0": ["::ffff:10.240.1.1@br51000"], "fd00:db8:5c::/125": ["direct@gre51000"]})
+
+    def test_snmp6_counters(self):
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("Ip6InReceives                   \t120\nIp6OutForwDatagrams 7\nIcmp6OutTimeExcds 3\nUdp6InDatagrams 9\n")
+        try:
+            self.assertEqual(A.snmp6(f.name), {"Ip6InReceives": 120, "Ip6OutForwDatagrams": 7, "Icmp6OutTimeExcds": 3})
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(A.snmp6("/nonexistent/snmp6"), {})
 
 
 # ---- the gateway job

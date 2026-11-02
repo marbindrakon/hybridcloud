@@ -278,13 +278,18 @@ spec:
   gateway: outbound only, and present only while the network's `egress.internet` is on; a provider range on one cloud
   reaches a provider range on another cloud over the internet. Your own prefixes on an AWS environment travel through
   the platform with no internet path, and a prefix inside `fd00::/16` or `2001:db8::/32` is refused with
-  `PrefixInvalid` ("the cloud reserves this range"); AWS environments don't offer IPv6-only placements.
+  `PrefixInvalid` ("the cloud reserves this range"). An AWS site that offers IPv6-only placements builds the VPC with an IPv4 range that is never routed (AWS requires one); your workloads see only IPv6.
 - **On a Google Cloud environment** the placement's subnet is dual-stack with a /64 Google assigns (source
   `Provider`, the only one; leave `source` out or name it). The network's other sites reach it through the platform;
   its internet path is Google's own, outbound only, and present only while the network's `egress.internet` is on. A
   provider range on one cloud reaches a provider range on another cloud over the internet. Give your VMs a
-  dual-stack interface with an external IPv6 address to use it. Google Cloud environments don't offer IPv6-only
-  placements, and the range has no reverse names from the platform.
+  dual-stack interface with an external IPv6 address to use it. The range has no reverse names from the platform.
+- **IPv6-only on a Google Cloud environment** (leave `ipv4` out, where the site offers IPv6-only placements): the
+  subnet has no IPv4 range at all, only the /64 Google assigns. Create the VMs IPv6-only (stack type `IPV6_ONLY`,
+  an external IPv6 address) from a **Debian or Ubuntu image**: Google offers IPv6-only VMs with those images only. Such
+  a VM reaches its metadata server over IPv6 at `fd20:ce::254`; its DNS resolver is the metadata server at
+  `169.254.169.254` (Google gives the VM a link-local IPv4 address for it); nothing needs configuring. With internet access on, IPv4-only destinations are reached through Google's own DNS64 and NAT64 (see
+  below). A placement stays IPv6-only or dual-stack for its life.
 - The placement reports one row per family in `status.subnets` (`family`, `prefix`, `source`, and the
   `gateway`: IPv4 always, IPv6 in VM and OpenStack environments); `status.prefixes` keeps listing the prefixes, IPv4
   first. `status.ipv6` shows how guests get their
@@ -358,18 +363,39 @@ spec:
 
 **IPv6-only guests and translation**
 - **When a placement gets translation:** it has no IPv4 subnet, its network has IPv6 from the platform and
-  `egress.internet: true` (the translator is reached over the network's IPv6 internet path: without internet access
-  there is no translation), and its site offers translation. Its status then carries the translation prefix and
-  the resolvers to use:
+  `egress.internet: true` (without internet access there is no translation), and its site offers translation. The
+  path follows where the placement's IPv6 comes from:
+  - IPv6 from the network (source `Network`: VM, OpenStack and AWS environments): `path: Fabric`, the platform's
+    translator, reached through the platform's IPv6 internet access. Translated traffic leaves from the platform's
+    IPv4 addresses.
+  - IPv6 from the cloud provider (source `Provider`): `path: Provider`, the provider's own DNS64 and NAT64 with the
+    well-known prefix `64:ff9b::/96`. Translated traffic leaves from the provider translator's IPv4 address, which
+    the status names as `ipv4Source` once the provider has allocated it.
+
+  The status carries the path, the translation prefix and the resolvers to use:
   ```yaml
   status:
     ipv6:
       translation:
-        pref64: "2001:db8:64::/96"                      # example values
+        path: Fabric                                     # example values
+        pref64: "2001:db8:64::/96"
         resolvers: ["2001:db8:53::10", "2001:db8:53::11"]
+  ```
+  ```yaml
+  status:
+    ipv6:
+      translation:                                       # a Google Cloud IPv6-only placement
+        path: Provider
+        pref64: "64:ff9b::/96"
+        resolvers: ["169.254.169.254"]
+        ipv4Source: "203.0.113.46"                       # example value
   ```
   Until then `status.ipv6.translation` is absent and the network's `status.egress.ipv4Translation` says why
   (`NotOffered`: the platform offers no translation yet; `AddressChoice`: the network uses your own IPv6 prefixes).
+  That network row describes the platform's path; a provider-path placement's own status is the one to read.
+- **What reaches IPv4 how:** names of IPv4-only services through the DNS64 resolvers in the status, on either path;
+  IPv4 literals only through a CLAT in the guest (below), which uses the status's `pref64`. On Google Cloud the
+  resolver is the VM's metadata server, so names work with no setup in the guest.
 - Translation needs a CLAT in the guest: **clatd** (2.1 or later) with its default `clat-v6-addr=shared`, which needs
   no second address on the port (the network drops traffic from addresses it did not assign). Some distributions
   package it (Fedora, Debian); on others build it yourself. Windows guests are not covered.
@@ -558,7 +584,10 @@ For the platform team; tenants can skip the rest of this page. Onboarding a tena
   `status.wireguard`, and a node's tunnel shows `up`/`down` in `status.nodes`. A site whose network the platform
   doesn't run (a remote data center, a partner's EVPN fabric) is a `CloudInfrastructure` of type `external`; its
   own operator configures its VTEPs with the gateway's public keys and tunnel addresses. The tunnel's MTU (default
-  1420, for a 1500 path) caps what networks placed there can use.
+  1420, for a 1500 path) caps what networks placed there can use. The nodes' listen port
+  (`spec.wireguard.listenPort`, default 51820) is a port on the border gateway nodes themselves, so two tunnel
+  gateways of one fabric need different ports; a gateway whose port another gateway already uses is refused with
+  `InvalidSpec`, naming that gateway.
 - **Internet egress:** each border gateway node's root holds an egress VRF that hands traffic to the site network
   (a macvlan; default route via the network's router, whose own NAT reaches the internet). Per network with
   egress: a VRF `e<vpnTarget>` that imports the network's VPN routes and exports a default route into it, a veth

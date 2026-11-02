@@ -7,9 +7,10 @@
 #    router, subnets and network in the platform project (refused while the tenant's ports still use the network);
 #    CloudAWS = the VPC with its attachment (shc_aws_tenant.py place-down; with spec.ipv6 its IPv6 routes,
 #    egress-only gateway, IPv6 block and IPAM pool first and last; refused while instances remain); CloudGCP =
-#    the VPC with its tunnels, Cloud Router, HA VPN gateway, firewall rules (the IPv6 one too) and the IPv6 default
-#    route the platform put back, then the routers' VRF (shc_gcp_tenant.py place-down, shc_gcp_edge.py net-down; the
-#    external IPv6 /64 goes with the subnet; refused while instances remain);
+#    the VPC with its tunnels, Cloud Router (an IPv6-only placement's Cloud NAT for NAT64 with it), HA VPN gateway,
+#    firewall rules (the IPv6 one too), an IPv6-only placement's DNS64 server policy (detached, then deleted, before
+#    its subnet) and the default routes the platform put back, then the routers' VRF (shc_gcp_tenant.py place-down,
+#    shc_gcp_edge.py net-down; the external IPv6 /64 goes with the subnet; refused while instances remain);
 # 3. the forward-confirmed names of the placement's IPv6 gateway (status.realization.reverseDns, design/IPV6-PLAN.md
 #    §8.3): the PTR, then the AAAA, before the subnets go back (the deletion waits while a removal fails and the
 #    DNSConfig is usable; without one the platform can remove nothing and goes on);
@@ -325,11 +326,12 @@
                   edge: "{{ aws_edge_cfg }}"
                 # with spec.ipv6 the IPv6 side goes too (routes, egress-only gateway, the VPC's block, the
                 # placement's IPAM pool and the IPAM with its last pool); the source the site side recorded, else the
-                # spec's
+                # spec's; an IPv6-only placement (no spec.ipv4) also has its VPC's DHCP option set removed
                 _v6: >-
                   {{ {} if fab_spec.ipv6 is not defined
                      else {'source': (_site_st.ipv6 | default({}, true)).source | default(fab_spec.ipv6.source | default('Network', true), true)}
-                          | combine({'prefix': _site_st.ipv6.prefix} if (_site_st.ipv6 | default({}, true)).prefix is defined else {}) }}
+                          | combine({'prefix': _site_st.ipv6.prefix} if (_site_st.ipv6 | default({}, true)).prefix is defined else {})
+                          | combine({'only': true} if fab_spec.ipv4 is not defined else {}) }}
                 aws_args: >-
                   {{ ['place-down', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', npd_real.l3Vni | string]
                      + (['--ipv6', _v6 | to_json] if _v6 | length > 0 else []) }}

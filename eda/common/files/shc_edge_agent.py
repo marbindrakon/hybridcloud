@@ -6,7 +6,7 @@ public key and its state back, so the router needs no inbound management access 
   /shc/edge/<site>/config            SecureString JSON written by the automation (shc_aws_edge.py)
   /shc/edge/<site>/nodes/<instance>  String JSON written here: publicKey, tunnelAddress, applied, state
 
-config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?,
+config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?, "placeholderV4Pool"?,
          "nodes": {<instance-id>: {"name", "address"}},
          "gateways": [{"name", "publicKey", "address"}],
          "vrfs": [{"name", "vni", "mtu", "tgwAsn", "connect": {<instance-id>: {"local", "remote", "inside", "bgp": [..]}},
@@ -14,6 +14,17 @@ config: {"site", "asn", "tunnel": {"cidr", "mtu", "listenPort"}, "bgpPassword"?,
                    "ipv6"?: {"enabled", "prefixes6": [..], "network6": [..], "source": "Network" | "Provider",
                              "internet", "inside6": {<instance-id>: {"inside": "<a>/125", "tgw": [..]}},
                              "icmp6": {<instance-id>: "<a>/128"}}}]}
+
+placeholderV4Pool (the IPv4 range IPv6-only VPCs take their never-routed IPv4 CIDR from): every network VRF's IPv4
+route-map from the transit gateway denies it and everything inside it before its permit, so such a CIDR never
+enters the VRF nor becomes an EVPN Type-5 route. Without the key the render is as before.
+
+The transit gateway's IPv4 default (the static route toward the network's NAT egress VPC, present while the network
+has internet access) is denied the same way in every network VRF: it serves the VPCs behind the transit gateway, not
+the network's other sites, so it must not become a Type-5 route. It would also come and go with the network's
+internet access, and on the site gateway (FRR 8.5) the withdrawal of a VTEP's last IPv4 Type-5 route drops that
+VTEP's router MAC even while IPv6 Type-5 routes still use it, which blackholes the IPv6 traffic toward an IPv6-only
+VPC.
 
 IPv6 (design/IPV6-PLAN.md §6.1-§6.2), per VRF whose ipv6 block is enabled and names this router in inside6; a VRF
 without an ipv6 block is configured exactly as before IPv6 existed:
@@ -166,9 +177,24 @@ def frr_policy6(v, six, icmp):
     return out + ["!"]
 
 
+def default4(name):
+    """The deny of the transit gateway's IPv4 default ahead of a VRF's tgw-in permit (see the module docstring)."""
+    return ["ip prefix-list %s-default4 seq 5 permit 0.0.0.0/0" % name,
+            "route-map %s-tgw-in deny 4" % name, " match ip address prefix-list %s-default4" % name, "exit"]
+
+
+def placeholder4(name, pool):
+    """The deny of the placeholder IPv4 range ahead of a VRF's tgw-in permit (see the module docstring)."""
+    n = ipaddress.ip_network(pool)
+    more = "" if n.prefixlen == 32 else " le 32"
+    return ["ip prefix-list %s-placeholder4 seq 5 permit %s%s" % (name, n, more),
+            "route-map %s-tgw-in deny 5" % name, " match ip address prefix-list %s-placeholder4" % name, "exit"]
+
+
 def frr_conf(cfg, me, node):
     gws = cfg.get("gateways", [])
     pw = cfg.get("bgpPassword")
+    pool4 = cfg.get("placeholderV4Pool")
     out = ["frr defaults traditional", "hostname %s" % node["name"], "service integrated-vtysh-config", "!"]
     for v in cfg.get("vrfs", []):
         six = v6_of(v, me)
@@ -178,7 +204,11 @@ def frr_conf(cfg, me, node):
             out.append(" ipv6 protocol bgp route-map %s-src6" % v["name"])
         out += ["exit-vrf", "!"]
         # FRR 8.5 sends and accepts nothing on eBGP without policy (RFC 8212, also under "traditional"). The transit
-        # gateway's route table belongs to this network alone: take its routes, give it the network's
+        # gateway's route table belongs to this network alone: take its routes (an IPv6-only VPC's placeholder IPv4
+        # CIDR and the IPv4 default excepted), give it the network's
+        out += default4(v["name"])
+        if pool4:
+            out += placeholder4(v["name"], pool4)
         out += ["route-map %s-tgw-in permit 10" % v["name"], "exit", "route-map %s-tgw-out permit 10" % v["name"],
                 "exit", "!"]
         if six:
@@ -385,7 +415,49 @@ def state(cfg, me):
             continue
         st["routes6"][v["name"]] = {p: sorted({r.get("protocol", "?") for r in rs}) for p, rs in j.items()
                                     if isinstance(rs, list)}
+        # where each selected IPv6 route leads (next hop and device): toward the transit gateway (gre<vni>) or back
+        # into the fabric (br<vni>, the gateway's VTEP); kept compact, the report is one standard parameter
+        st.setdefault("nh6", {})[v["name"]] = nexthops6(j)
+    if six:
+        st["fwd6"] = snmp6()
     return st
+
+
+# the kernel's IPv6 forwarding and drop counters (/proc/net/snmp6), to tell where forwarded packets go
+SNMP6_KEYS = ("Ip6InReceives", "Ip6OutForwDatagrams", "Ip6InNoRoutes", "Ip6OutNoRoutes", "Ip6InDiscards",
+              "Ip6OutDiscards", "Ip6InHdrErrors", "Ip6InAddrErrors", "Icmp6OutTimeExcds", "Icmp6OutDestUnreachs",
+              "Icmp6OutPktTooBigs")
+
+
+def snmp6(path="/proc/net/snmp6"):
+    out = {}
+    try:
+        for line in open(path):
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in SNMP6_KEYS:
+                out[parts[0]] = int(parts[1])
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def nexthops6(routes):
+    """{prefix: ["<next hop>@<device>", ...]} of the selected route of each prefix in a 'show ipv6 route vrf .. json'."""
+    out = {}
+    for p, rs in routes.items():
+        if not isinstance(rs, list):
+            continue
+        for r in rs:
+            if not r.get("selected"):
+                continue
+            hops = []
+            for nh in r.get("nexthops") or []:
+                if nh.get("active") is False:
+                    continue
+                via = nh.get("ip") or ("unreachable" if nh.get("unreachable") else "direct")
+                hops.append("%s@%s" % (via, nh.get("interfaceName", "-")))
+            out[p] = sorted(hops)
+    return out
 
 
 def bgp6_peers(j):

@@ -97,6 +97,7 @@
           fabric: "{{ cg_fabric.spec | default({}) }}"
           core: "{{ fab_real.core }}"
           attachments: "{{ fab_real.attachments | default({}) }}"
+          wireguardListenPort: "{{ (fab_real.wireguard | default({}, true)).listenPort | default(none) }}"
           gateway: "{{ fab_spec }}"
           others: >-
             {{ _cg_all.resources | default([]) | rejectattr('metadata.name', 'equalto', fab_name)

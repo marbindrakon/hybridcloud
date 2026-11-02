@@ -3,8 +3,9 @@
 # (billed while it exists): `shc_aws_edge.py up` brings the routers (one per edge subnet, Elastic IPs, a mesh between
 # them), the transport attachment and the transit gateway's CIDR block, and waits for the routers' published keys.
 # The routers are the gateway's WireGuard peers: the border gateway nodes dial their Elastic IPs (they may sit behind
-# NAT). site_aws_post.yml then gives the routers the nodes' keys and the site's BGP key. Sets cg_site_extra,
-# cg_site_changed and the instance's peers.
+# NAT). site_aws_post.yml then gives the routers the nodes' keys and the site's BGP key. With AWS_REALIZATION
+# tenant.placeholderV4Pool, up also writes the pool to the routers' config (every network VRF drops it from the
+# transit gateway). Sets cg_site_extra, cg_site_changed and the instance's peers.
 - name: The installation's AWS realization and this site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
   vars:

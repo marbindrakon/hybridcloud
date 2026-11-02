@@ -6,8 +6,8 @@ the hub through shc_aws_edge.py for the network's transit gateway side. Idempote
   shc_aws_tenant.py --config '<json>' check
   shc_aws_tenant.py --config '<json>' zone-up --zone FQDN           the environment's Route53 public zone
   shc_aws_tenant.py --config '<json>' zone-down --zone FQDN
-  shc_aws_tenant.py --config '<json>' place-up --placement NS/NAME --vni N --prefix CIDR [--prefix CIDR ...] [--egress]
-                                                [--ipv6 '<json>']
+  shc_aws_tenant.py --config '<json>' place-up --placement NS/NAME --vni N [--prefix CIDR ...] [--egress]
+                                                [--ipv6 '<json>']        (no --prefix: IPv6-only, see below)
   shc_aws_tenant.py --config '<json>' place-down --placement NS/NAME --vni N [--ipv6 '<json>']
   shc_aws_tenant.py --config '<json>' place-public --placement NS/NAME --state up|down
       public /28s (one per AZ, below the attachment /28s) with an internet gateway, for internet-facing load
@@ -41,6 +41,20 @@ subnets, internet, path, pool, ipam, egressOnlyGateway, routes}. place-down with
 in reverse: the IPv6 routes, the egress-only gateway, the VPC's IPv6 block, the placement's pool (cascade: IPAM
 releases a VPC's allocation minutes after the VPC is gone, so a plain deprovision would wait that long) and the
 IPAM once it holds no other pool.
+
+IPv6-only (design/IPV6-PLAN.md §6.4; place-up without --prefix): --ipv6 adds "placeholderV4Pool" (the site's never-
+routed IPv4 range; without it an IPv6-only placement is refused), and optionally "resolvers" (source Network: the
+translation resolvers for the VPC's DHCP option set) and "nat64" (source Provider: translation qualifies). The VPC
+still needs an IPv4 CIDR and the attachment IPv4 subnets (AWS refuses an attachment on IPv6-only subnets): the VPC's
+IPv4 CIDR is a /26 of the pool chosen by the VNI (stable on re-run), holding only the attachment subnets (a /28 + a
+/64 per AZ); the workload subnets are IPv6-only (a /64 per AZ, resource-name hostnames with an AAAA record on launch).
+No IPv4 default route. Source Network: no DNS64; a DHCP option set shc-<placement> with the resolvers given (else
+AmazonProvidedDNS) on the VPC (the VPC holds only IPv6-only workload subnets, so an IPv6-only resolver list strands no
+dual-stack guest); internet as for dual-stack. Source Provider with nat64: DNS64 on the workload subnets, the VPC's
+64:ff9b::/96 to the transit gateway, and the network's NAT egress VPC (net-up --egress --nat64) translating it with
+its NAT gateway (needs --egress); without nat64 none of that (removed when present). place-up's ipv6 then also carries
+only, dns64, dhcpOptions and translation ({path: Provider, pref64, resolvers: [the VPC resolver], ipv4Source: the NAT
+gateway's Elastic IP} or None), the result placeholderV4. place-down also removes the DHCP option set.
 """
 import argparse
 import ipaddress
@@ -56,6 +70,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import shc_aws_edge  # noqa: E402
 
 TAGS = [{"Key": "shc-managed", "Value": "true"}]
+# IPv6-only VPCs: the slice of the placeholder pool per placement (room for four AZs' attachment /28s), the NAT64
+# prefix the NAT gateway translates, the VPC resolver's IPv6 address (DNS64 when the subnet asks for it)
+PLACEHOLDER_PREFIXLEN = 26
+NAT64_PREFIX = "64:ff9b::/96"
+VPC_RESOLVER6 = "fd00:ec2::253"
 
 
 def fail(msg, **extra):
@@ -116,6 +135,31 @@ def layout6(block, azs):
     return [{"az": az, "work": nth(i), "tgw": nth(count - len(azs) + i)} for i, az in enumerate(azs)]
 
 
+def placeholder_v4(pool, vni, azs):
+    """An IPv6-only placement's VPC IPv4 CIDR: the /26 of the placeholder pool at index VNI modulo the pool's /26s
+    (the same on every run). Two placements may share one: the CIDR never leaves its VPC."""
+    p = ipaddress.ip_network(pool)
+    if len(azs) > 1 << (28 - PLACEHOLDER_PREFIXLEN):
+        fail("an IPv6-only placement's /%d holds %d attachment /28s, not %d AZs"
+             % (PLACEHOLDER_PREFIXLEN, 1 << (28 - PLACEHOLDER_PREFIXLEN), len(azs)))
+    count = 1 << (PLACEHOLDER_PREFIXLEN - p.prefixlen)
+    base = int(p.network_address) + (int(vni) % count) * (1 << (32 - PLACEHOLDER_PREFIXLEN))
+    return str(ipaddress.IPv4Network((base, PLACEHOLDER_PREFIXLEN)))
+
+
+def layout_only(cidr, azs):
+    """An IPv6-only VPC's IPv4: an attachment /28 per AZ from the bottom of its placeholder CIDR, nothing else."""
+    tgw = list(ipaddress.ip_network(cidr).subnets(new_prefix=28))
+    return [{"az": az, "tgw": str(tgw[i])} for i, az in enumerate(azs)]
+
+
+def dhcp_servers(d):
+    for x in d.get("DhcpConfigurations") or []:
+        if x.get("Key") == "domain-name-servers":
+            return [v.get("Value") for v in x.get("Values") or []]
+    return []
+
+
 def ipv6_want(ipv6):
     """The --ipv6 request, canonical; None without one."""
     if not ipv6:
@@ -132,6 +176,23 @@ def ipv6_want(ipv6):
         if b.version != 6 or not 44 <= b.prefixlen <= 60 or b.prefixlen % 4:
             fail("IPv6 block %s: a VPC takes a /44 to /60 in steps of 4" % b)
         out["prefix"] = str(b)
+    # IPv6-only (place-up without an IPv4 prefix); absent keys leave a dual-stack request as it was
+    pool = str(ipv6.get("placeholderV4Pool") or "").strip()
+    if pool:
+        try:
+            p = ipaddress.ip_network(pool)
+        except ValueError:
+            p = None
+        if p is None or p.version != 4 or p.prefixlen > PLACEHOLDER_PREFIXLEN:
+            fail("placeholderV4Pool %s: an IPv4 network of /%d or larger" % (pool, PLACEHOLDER_PREFIXLEN))
+        out["placeholderV4Pool"] = str(p)
+    if "resolvers" in ipv6:
+        try:
+            out["resolvers"] = [str(ipaddress.ip_address(str(x).strip())) for x in ipv6.get("resolvers") or []]
+        except ValueError as e:
+            fail("resolvers: %s" % e)
+    if "nat64" in ipv6:
+        out["nat64"] = bool(ipv6.get("nat64"))
     return out
 
 
@@ -409,18 +470,78 @@ class Tenant:
                 out["ipamDeleted"] = True
         return out
 
+    # ---- IPv6-only: the VPC's DHCP option set, the workload subnets' DNS
+    def find_dhcp(self, placement):
+        return self.ec2.describe_dhcp_options(Filters=[{"Name": "tag:shc-placement", "Values": [placement]}])["DhcpOptions"]
+
+    def dhcp_up(self, vpc_id, placement, name, extra, servers):
+        """The VPC's option set shc-<placement> with these resolvers (option sets can't change: a new one replaces
+        it, the old one goes)."""
+        sets = self.find_dhcp(placement)
+        mine = next((d for d in sets if dhcp_servers(d) == servers), None)
+        if not mine:
+            region = self.cfg["region"]
+            conf = [{"Key": "domain-name-servers", "Values": list(servers)},
+                    {"Key": "domain-name", "Values": ["ec2.internal" if region == "us-east-1" else region + ".compute.internal"]}]
+            mine = self.ec2.create_dhcp_options(DhcpConfigurations=conf,
+                                                TagSpecifications=tagspec("dhcp-options", name, extra))["DhcpOptions"]
+            self.changed.append("dhcp options %s %s" % (name, ", ".join(servers)))
+        if self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0].get("DhcpOptionsId") != mine["DhcpOptionsId"]:
+            self.ec2.associate_dhcp_options(DhcpOptionsId=mine["DhcpOptionsId"], VpcId=vpc_id)
+            self.changed.append("vpc %s dhcp options %s" % (vpc_id, mine["DhcpOptionsId"]))
+        for d in sets:
+            if d["DhcpOptionsId"] != mine["DhcpOptionsId"]:
+                self.ec2.delete_dhcp_options(DhcpOptionsId=d["DhcpOptionsId"])
+                self.changed.append("deleted dhcp options " + d["DhcpOptionsId"])
+        return mine["DhcpOptionsId"]
+
+    def dhcp_down(self, vpc_id, placement):
+        """The placement's option sets: the VPC back on the default set, then deleted."""
+        sets = self.find_dhcp(placement)
+        if sets and vpc_id:
+            cur = self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0].get("DhcpOptionsId")
+            if cur in {d["DhcpOptionsId"] for d in sets}:
+                self.ec2.associate_dhcp_options(DhcpOptionsId="default", VpcId=vpc_id)
+        for d in sets:
+            self.ec2.delete_dhcp_options(DhcpOptionsId=d["DhcpOptionsId"])
+            self.changed.append("deleted dhcp options " + d["DhcpOptionsId"])
+
+    def subnet_v6only(self, s, sn_name, dns64):
+        """An IPv6-only workload subnet: resource-name hostnames (required there) with their AAAA record on launch,
+        and DNS64 as asked (one attribute per call)."""
+        sid = s["SubnetId"]
+        dns = s.get("PrivateDnsNameOptionsOnLaunch") or {}
+        if dns.get("HostnameType") != "resource-name":
+            self.ec2.modify_subnet_attribute(SubnetId=sid, PrivateDnsHostnameTypeOnLaunch="resource-name")
+            self.changed.append("subnet %s resource-name hostnames" % sn_name)
+        if not dns.get("EnableResourceNameDnsAAAARecord"):
+            self.ec2.modify_subnet_attribute(SubnetId=sid, EnableResourceNameDnsAAAARecordOnLaunch={"Value": True})
+            self.changed.append("subnet %s AAAA records" % sn_name)
+        if bool(s.get("EnableDns64")) != bool(dns64):
+            self.ec2.modify_subnet_attribute(SubnetId=sid, EnableDns64={"Value": bool(dns64)})
+            self.changed.append("subnet %s DNS64 %s" % (sn_name, "on" if dns64 else "off"))
+
     def place_up(self, placement, vni, prefixes, egress=False, ipv6=None):
         c = self.cfg
         v6 = ipv6_want(ipv6)
-        if not prefixes:
-            fail("an AWS placement needs an IPv4 prefix: a VPC keeps an IPv4 CIDR and the attachment needs IPv4")
+        only = not prefixes
+        if only and not (v6 and v6.get("placeholderV4Pool")):
+            fail("an AWS placement needs an IPv4 prefix: a VPC keeps an IPv4 CIDR and the attachment needs IPv4 "
+                 "(this site has no placeholder IPv4 for IPv6-only VPCs)", reason="FamilyUnavailable")
+        placeholder = placeholder_v4(v6["placeholderV4Pool"], vni, c["azs"]) if only else None
+        cidrs = [placeholder] if only else prefixes
+        provider = bool(v6) and v6["source"] == "Provider"
+        # source Provider, IPv6-only: NAT64 in the network's egress VPC while translation qualifies (needs that VPC)
+        nat64 = bool(only and provider and v6.get("nat64") and egress)
         edge = shc_aws_edge.Edge(c["edge"])
         tgw_id = edge.tgw()["TransitGatewayId"]
         if not self.tgw_visible(tgw_id):
             self.share_up(edge, tgw_id)
         extra = dict(c.get("tags", {}), **{"shc-placement": placement, "shc-vni": str(vni)})
+        if only:
+            extra["shc-ipv6-only"] = "true"
         name = "shc-" + placement.replace("/", "-")
-        lay = layout(prefixes, c["azs"])
+        lay = layout_only(placeholder, c["azs"]) if only else layout(prefixes, c["azs"])
         pool_id = ipam_id = None
         if v6 and v6["source"] == "Network":
             layout6(v6["prefix"], c["azs"])  # refuse a block too small before anything is made
@@ -428,8 +549,8 @@ class Tenant:
             ipam_id = ipam["IpamId"]
             pool_id = self.ensure_pool(ipam, placement, v6["prefix"], name, extra)
         vpc = self.find_vpc(placement)
-        if vpc and vpc["CidrBlock"] != prefixes[0]:
-            fail("VPC %s of %s has CIDR %s, want %s" % (vpc["VpcId"], placement, vpc["CidrBlock"], prefixes[0]))
+        if vpc and vpc["CidrBlock"] != cidrs[0]:
+            fail("VPC %s of %s has CIDR %s, want %s" % (vpc["VpcId"], placement, vpc["CidrBlock"], cidrs[0]))
         if not vpc:
             self.changed.append("vpc " + name)
             v6kw = {}
@@ -437,13 +558,13 @@ class Tenant:
                 v6kw = {"Ipv6IpamPoolId": pool_id, "Ipv6NetmaskLength": int(v6["prefix"].split("/")[1])}
             elif v6:
                 v6kw = {"AmazonProvidedIpv6CidrBlock": True}
-            vpc = self.ec2.create_vpc(CidrBlock=prefixes[0], TagSpecifications=tagspec("vpc", name, extra), **v6kw)["Vpc"]
+            vpc = self.ec2.create_vpc(CidrBlock=cidrs[0], TagSpecifications=tagspec("vpc", name, extra), **v6kw)["Vpc"]
             self.ec2.get_waiter("vpc_available").wait(VpcIds=[vpc["VpcId"]])
             self.ec2.modify_vpc_attribute(VpcId=vpc["VpcId"], EnableDnsHostnames={"Value": True})
         vpc_id = vpc["VpcId"]
         have_cidrs = {a["CidrBlock"] for a in self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]["CidrBlockAssociationSet"]
                       if a["CidrBlockState"]["State"] in ("associated", "associating")}
-        for p in prefixes[1:]:
+        for p in cidrs[1:]:
             if p not in have_cidrs:
                 self.changed.append("vpc cidr " + p)
                 self.ec2.associate_vpc_cidr_block(VpcId=vpc_id, CidrBlock=p)
@@ -451,19 +572,34 @@ class Tenant:
         if v6:
             block6 = self.vpc_block(vpc_id, v6.get("prefix"), pool_id)
             lay6 = {l["az"]: l for l in layout6(block6, c["azs"])}
+        # source Network, IPv6-only: the guests' resolvers from the VPC's option set (Provider keeps Amazon's)
+        dhcp_id = None
+        if only and not provider:
+            dhcp_id = self.dhcp_up(vpc_id, placement, name, extra, v6.get("resolvers") or ["AmazonProvidedDNS"])
+        elif only:
+            self.dhcp_down(vpc_id, placement)
         subnets = {tagmap(s).get("Name"): s for s in self.ec2.describe_subnets(
             Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
         work, tgw_subnets = [], []
         for l in lay:
-            for role, cidr in (("work", l["work"]), ("tgw", l["tgw"])):
+            for role, cidr in (("work", l.get("work")), ("tgw", l["tgw"])):
                 sn_name = "%s-%s-%s" % (name, role, l["az"][-1])
                 cidr6 = lay6[l["az"]][role] if v6 else None
+                native = only and role == "work"
                 s = subnets.get(sn_name)
-                if not s:
+                if not s and native:
+                    self.changed.append("subnet " + sn_name)
+                    s = self.ec2.create_subnet(VpcId=vpc_id, AvailabilityZone=l["az"], Ipv6Native=True,
+                                               Ipv6CidrBlock=cidr6,
+                                               TagSpecifications=tagspec("subnet", sn_name, dict(extra, **{"shc-role": role})))["Subnet"]
+                elif not s:
                     self.changed.append("subnet " + sn_name)
                     s = self.ec2.create_subnet(VpcId=vpc_id, CidrBlock=cidr, AvailabilityZone=l["az"],
                                                TagSpecifications=tagspec("subnet", sn_name, dict(extra, **{"shc-role": role})),
                                                **({"Ipv6CidrBlock": cidr6} if cidr6 else {}))["Subnet"]
+                if native and s.get("CidrBlock"):
+                    fail("subnet %s has IPv4 %s; an IPv6-only placement's workload subnets have none"
+                         % (s["SubnetId"], s["CidrBlock"]))
                 if cidr6:
                     have6 = [a["Ipv6CidrBlock"] for a in s.get("Ipv6CidrBlockAssociationSet") or []
                              if a.get("Ipv6CidrBlockState", {}).get("State") in ("associated", "associating")]
@@ -475,7 +611,9 @@ class Tenant:
                     if role == "work" and not s.get("AssignIpv6AddressOnCreation"):
                         self.ec2.modify_subnet_attribute(SubnetId=s["SubnetId"], AssignIpv6AddressOnCreation={"Value": True})
                         self.changed.append("subnet %s assigns IPv6" % sn_name)
-                row = {"id": s["SubnetId"], "cidr": cidr, "az": l["az"]}
+                if native:
+                    self.subnet_v6only(s, sn_name, dns64=nat64)
+                row = {"id": s["SubnetId"], "az": l["az"]} if native else {"id": s["SubnetId"], "cidr": cidr, "az": l["az"]}
                 if cidr6:
                     row["ipv6"] = cidr6
                 (work if role == "work" else tgw_subnets).append(row)
@@ -494,8 +632,12 @@ class Tenant:
                 TransitGatewayId=tgw_id, VpcId=vpc_id, SubnetIds=[s["id"] for s in tgw_subnets],
                 TagSpecifications=tagspec("transit-gateway-attachment", name, extra),
                 **({"Options": {"Ipv6Support": "enable"}} if v6 else {}))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
-        # the hub: the network's route table, Connect attachment and router VRF; accept the attachment into it
-        net = edge.net_up(vni, egress=egress)
+        # the hub: the network's route table, Connect attachment and router VRF; accept the attachment into it. An
+        # IPv6-only provider-source VPC also tells the network's egress VPC whether to translate for its block
+        if only and provider:
+            net = edge.net_up(vni, egress=egress, nat64=[block6] if nat64 else [])
+        else:
+            net = edge.net_up(vni, egress=egress)
         for _ in range(30):  # the attachment shows up on the hub side shortly after creation
             try:
                 edge.net_attach(vni, att_id)
@@ -507,12 +649,13 @@ class Tenant:
         else:
             fail("attachment %s never reached the hub" % att_id)
         self.changed += edge.changed
-        # the VPC's default route leaves through the network
-        main = self.main_table(vpc_id)
-        if not any(r.get("DestinationCidrBlock") == "0.0.0.0/0" for r in main["Routes"]):
-            self.route_retry(self.ec2.create_route, RouteTableId=main["RouteTableId"], DestinationCidrBlock="0.0.0.0/0",
-                             TransitGatewayId=tgw_id)
-            self.changed.append("default route")
+        # the VPC's default route leaves through the network (an IPv6-only VPC has no IPv4 workload: none)
+        if not only:
+            main = self.main_table(vpc_id)
+            if not any(r.get("DestinationCidrBlock") == "0.0.0.0/0" for r in main["Routes"]):
+                self.route_retry(self.ec2.create_route, RouteTableId=main["RouteTableId"], DestinationCidrBlock="0.0.0.0/0",
+                                 TransitGatewayId=tgw_id)
+                self.changed.append("default route")
         out6 = None
         if v6:
             # the network's IPv6 space through the network (not the VPC's own block: that route is local)
@@ -532,16 +675,29 @@ class Tenant:
                 want["::/0"] = {"EgressOnlyInternetGatewayId": eigw}
             elif v6["internet"]:
                 want["::/0"] = {"TransitGatewayId": tgw_id}
+            if nat64:  # the translator's prefix to the network's egress VPC (over the transit gateway)
+                want[NAT64_PREFIX] = {"TransitGatewayId": tgw_id}
             self.routes6(vpc_id, want)
             if not eigw:
                 self.eigw_down(vpc_id)
             out6 = {"source": v6["source"], "prefix": block6, "subnets": list(lay6.values()), "internet": v6["internet"],
                     "path": "Provider" if v6["source"] == "Provider" else "Fabric",
                     "pool": pool_id, "ipam": ipam_id, "egressOnlyGateway": eigw, "routes": sorted(want)}
-        return {"placement": placement, "account": c["account"], "vpcId": vpc_id, "prefixes": prefixes,
-                "subnets": work, "attachmentSubnets": tgw_subnets, "attachment": att_id,
-                "routeTable": net["routeTable"], "connectAttachment": net["connectAttachment"],
-                "egress": net.get("egress"), "ipv6": out6}
+            if only:
+                translation = None
+                if nat64:
+                    translation = {"path": "Provider", "pref64": NAT64_PREFIX, "resolvers": [VPC_RESOLVER6]}
+                    ip4 = (net.get("egress") or {}).get("publicIp")
+                    if ip4:
+                        translation["ipv4Source"] = ip4
+                out6.update({"only": True, "dns64": nat64, "dhcpOptions": dhcp_id, "translation": translation})
+        out = {"placement": placement, "account": c["account"], "vpcId": vpc_id, "prefixes": prefixes,
+               "subnets": work, "attachmentSubnets": tgw_subnets, "attachment": att_id,
+               "routeTable": net["routeTable"], "connectAttachment": net["connectAttachment"],
+               "egress": net.get("egress"), "ipv6": out6}
+        if only:
+            out["placeholderV4"] = placeholder
+        return out
 
     def place_public(self, placement, state):
         vpc = self.find_vpc(placement)
@@ -555,6 +711,8 @@ class Tenant:
         rts = [r for r in self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]},
                                                                   {"Name": "tag:Name", "Values": [rt_name]}])["RouteTables"]]
         igws = self.ec2.describe_internet_gateways(Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}])["InternetGateways"]
+        if state == "up" and tagmap(vpc).get("shc-ipv6-only") == "true":
+            fail("placement %s is IPv6-only: it has no IPv4 for public subnets" % placement)
         if state == "down":
             for sn_name, s in subnets.items():
                 if (sn_name or "").startswith(name + "-public-"):
@@ -607,6 +765,8 @@ class Tenant:
         edge = shc_aws_edge.Edge(c["edge"])
         vpc = self.find_vpc(placement)
         with6 = bool(ipv6) or bool(vpc and v6_assoc(vpc))
+        # IPv6-only (the request says so, or the VPC's tag): its DHCP option set goes too
+        only = bool((ipv6 or {}).get("only")) or bool(vpc and tagmap(vpc).get("shc-ipv6-only") == "true")
         out6 = {"pool": None, "ipamDeleted": False}
         if vpc:
             vpc_id = vpc["VpcId"]
@@ -641,6 +801,8 @@ class Tenant:
                         if "DependencyViolation" not in str(e):
                             raise
                         time.sleep(10)
+            if only:  # the VPC back on the default option set, ours deleted
+                self.dhcp_down(vpc_id, placement)
             if with6:  # the VPC's IPv6 block, once no subnet holds a /64 of it
                 for a in v6_assoc(self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]):
                     self.ec2.disassociate_vpc_cidr_block(AssociationId=a["AssociationId"])
@@ -650,11 +812,15 @@ class Tenant:
                     self.ec2.delete_security_group(GroupId=sg["GroupId"])
             self.ec2.delete_vpc(VpcId=vpc_id)
             self.changed.append("deleted vpc " + vpc_id)
+        elif only:  # a run that stopped before the VPC: an option set without one
+            self.dhcp_down(None, placement)
         if with6:  # the placement's pool and, with its last pool, the IPAM
             out6 = self.pool_down(placement)
         # the network's hub side goes with its last tenant attachment
         tgw_id = edge.tgw()["TransitGatewayId"]
-        others = [a for a in edge.attachments(tgw_id, **{"shc-vni": str(vni)}) if a["ResourceType"] == "vpc"]
+        # (the network's own NAT egress VPC carries the network's tag as well: it is not a tenant's)
+        others = [a for a in edge.attachments(tgw_id, **{"shc-vni": str(vni)}) if a["ResourceType"] == "vpc"
+                  and tagmap(a).get("shc-role") != "egress"]
         if not others:
             edge.net_down(vni)
             self.changed += edge.changed
@@ -688,8 +854,8 @@ def main():
         fail("--placement and --state are required")
     r = {"check": t.check,
          "zone-up": lambda: t.zone_up(a.zone), "zone-down": lambda: t.zone_down(a.zone),
-         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix or fail("--prefix is required"), a.egress,
-                                        a.ipv6),
+         # without --prefix: IPv6-only (place_up refuses it without the site's placeholder range)
+         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix, a.egress, a.ipv6),
          "place-down": lambda: t.place_down(a.placement, a.vni, a.ipv6),
          "place-public": lambda: t.place_public(a.placement, a.state),
          "share-down": t.share_down}[a.command]()

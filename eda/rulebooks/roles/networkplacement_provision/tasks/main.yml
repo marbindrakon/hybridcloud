@@ -313,7 +313,12 @@
 
     # the placement's IPv6 in plain words (status.ipv6): ipv6_status.yml; a provider-assigned block is known only
     # after the site side has run on the first pass, so backend_cloudaws.yml and backend_cloudgcp.yml describe it
-    # again then
+    # again then. So is a provider's translation (path Provider): np_translation is {path: Provider, pending: true}
+    # until the backend reports np_backend_translation and describes the placement again
+    - name: No provider translation reported yet
+      ansible.builtin.set_fact:
+        np_backend_translation: {}
+
     - name: The placement's IPv6 in status
       ansible.builtin.include_tasks: ipv6_status.yml
 
