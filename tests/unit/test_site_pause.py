@@ -263,15 +263,18 @@ class QuietWhilePausedWiring(unittest.TestCase):
         # after the site's own work: the wake, the canary and the DNS health ran first
         self.assertEqual(names[-1], fail)
         self.assertLess(names.index("Wake what waits for this site"), names.index(fail))
-        self.assertEqual(block[-1]["ansible.builtin.fail"]["msg"], "{{ ci_wake_error }}")
-        # the rescue tells it apart and leaves the ready site alone (no failed write, capabilities kept, no wake)
-        first = rescue[0]
-        self.assertEqual(first["name"], "Tell whether only the wake failed")
-        self.assertIn("'%s'" % fail, first["ansible.builtin.set_fact"]["ci_only_wake_failed"])
+        inner = block[-1]["block"]
+        self.assertEqual(inner[0]["ansible.builtin.set_fact"], {"ci_only_wake_failed": True})
+        self.assertEqual(inner[-1]["ansible.builtin.fail"]["msg"], "{{ ci_wake_error }}")
+        self.assertIn("ci_wake_error", block[-1]["when"])
+        # the rescue leaves the ready site alone (no failed write, capabilities kept, no wake); failed_capabilities
+        # stays its first task (tests/tenantprofile/site-summary.yml)
+        self.assertEqual(rescue[0].get("ansible.builtin.include_tasks"), "failed_capabilities.yml")
         for name in ("Every capability of the failed site is off", "Mark CloudInfrastructure failed",
                      "Refresh the tenants' view of the failed site", "Wake what the pause held on the failed site"):
             when = by_name(rescue, name)["when"]
-            self.assertIn("not (ci_only_wake_failed | bool)", when if isinstance(when, list) else [when], name)
+            self.assertIn("not (ci_only_wake_failed | default(false) | bool)",
+                          when if isinstance(when, list) else [when], name)
         self.assertIn("ci_wake_error", by_name(rescue, "Re-raise")["ansible.builtin.fail"]["msg"])
 
     def test_namespace_operators_may_read_the_sites(self):
