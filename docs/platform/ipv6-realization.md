@@ -780,6 +780,7 @@ name and type with another marker is never changed or deleted ("held by another 
 |---|---|---|---|
 | A placement's IPv6 gateway (`status.subnets[family=6].gateway`: the first host on OpenShift Virtualization, the subnet's gateway from Neutron on OpenStack) | `<network>.<gatewayLabel>.<environment zone>` (the environment's zone, `status.dns.zone`) | `NetworkPlacement/<namespace>/<name>` | the placement job, recorded in `status.realization.reverseDns` |
 | A border gateway node's ICMPv6 source in a gateway namespace (`core.icmpSource6`) | `<node>.<gateway>.<gatewayLabel>.<global domain>` (the global zone) | `CloudGateway/<name>` | the gateway job, recorded in `status.realization.reverseDns` |
+| An AWS or Google Cloud edge router's ICMPv6 source (`core.icmpSource6`, while the realization's `edge.ipv6` is on) | `<router>.<gateway>.<gatewayLabel>.<global domain>` (the global zone; `<router>` is the router instance's name) | `CloudGateway/<name>` | the gateway job, with its nodes' names |
 | A tenant VM on OpenShift Virtualization that publishes an AAAA through the tenant DNS controller | the tenant's own name in its environment zone | the controller's marker | the tenant DNS controller, only for addresses inside the namespace's placement prefixes |
 
 The placement job also writes the annotation `hybridsovereign.redhat/ipv6-prefixes` (the placement's IPv6 subnets,
