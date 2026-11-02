@@ -303,7 +303,8 @@ spec:
   - "IPv6-only placements are not offered on this site";
   - "the network has no IPv6 address space" (an `ipv6` placement of a network in mode `None`);
   - "this site can't carry tenant-provided IPv6 prefixes", or "this site offers IPv6 only from the cloud provider;
-    use source Provider".
+    use source Provider";
+  - "IPv6 source Provider is not offered on this site" (or `Network`): the site offers the other source only.
 
   `source: Provider` on a network with your own prefixes is refused with `PrefixInvalid` ("provider IPv6 needs a
   network with IPv6 from the platform").

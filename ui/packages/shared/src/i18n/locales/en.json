@@ -634,7 +634,7 @@
     "editRbac": "VM editors (access groups)",
     "editRbacHelp": "Access groups that can create, change and delete VMs and their disks and use the VM consoles. They cannot change the namespaces' network attachment.",
     "egressInternet": "Internet egress",
-    "egressInternetHelp": "Outbound internet access through the platform: the platform advertises a default route into the network. IPv4 leaves with platform source addresses; IPv6 from the platform's space leaves unchanged through a filter that admits only replies to connections opened from inside; your own IPv6 prefixes have no internet access. The platform's private ranges are not reachable this way. Leave it off when the default route comes from your own edge router. Can be changed at any time.",
+    "egressInternetHelp": "Outbound internet access through the platform: the platform advertises a default route into the network. IPv4 leaves with platform source addresses; IPv6 from the platform's space leaves unchanged through a filter that admits only replies to connections opened from inside; your own IPv6 prefixes have no internet access. A network without IPv4 reaches IPv4-only destinations by translation where the platform offers it. The platform's private ranges are not reachable this way. Leave it off when the default route comes from your own edge router. Can be changed at any time.",
     "externalEvpn": "EVPN-VXLAN",
     "externalEvpnHelp": "The site's VTEPs speak EVPN-VXLAN to the gateway. The site's own operator runs them; the platform only attaches the site through a Cloud Gateway.",
     "sitePaused": "Paused",
