@@ -91,6 +91,34 @@ class Decisions(unittest.TestCase):
         stalled = dict(self._running(), jobStartedAt="2020-01-01T00:00:00Z", publishedAt="2020-01-01T00:00:00Z")
         self.assertEqual(self._skip("true", stalled), {"skip": False, "force": False})
 
+    def test_a_periodic_canary_rerun_never_supersedes_the_job_in_flight(self):
+        """The canary's re-read is a plain periodic reconcile (no request): it waits for the job in flight."""
+        self.assertEqual(self._skip(None, self._running()), {"skip": True, "force": False})
+
+    def _canary_due(self, read_min, completed_min):
+        from datetime import datetime, timedelta, timezone
+
+        def ago(m):
+            return (datetime.now(timezone.utc) - timedelta(minutes=m)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        role = os.path.join(ROOT, "operator/primary/roles/hybridfabric")
+        tasks = load(os.path.join(role, "tasks/main.yml"))
+        defaults = load(os.path.join(role, "defaults/main.yml"))
+        cr = {"metadata": {"name": "lab"},
+              "status": {"delivery": {"completedAt": ago(completed_min)},
+                         "realization": {"translation": {"readAt": ago(read_min), "alertMinutes": 5,
+                                                         "canaries": {"site-a": {"healthy": True, "stale": False}}}}}}
+        steps = [by_name(tasks, n) for n in ("Age of the translation canary's last read",
+                                             "Decide whether the canary is due or stale")]
+        return run_play(steps + [write_out("hybridfabric_canary_due | bool")],
+                        dict(defaults, _hybridsovereign_redhat_hybridfabric=cr))
+
+    def test_canary_reruns_leave_the_fabric_idle_between_runs(self):
+        """A fabric job reads the canary near its end: the next canary run counts from the job's completion and waits
+        the interval (900 s by default), so the fabric-config lease is free for the gateway jobs in between."""
+        self.assertFalse(self._canary_due(read_min=9, completed_min=5))
+        self.assertFalse(self._canary_due(read_min=20, completed_min=14))
+        self.assertTrue(self._canary_due(read_min=20, completed_min=16))
+
     def _deferred(self, annotations):
         step = by_name(load(os.path.join(FABRIC_JOB, "deferred_wakes.yml")), "Run the wakes that came during this job")
         return run_play([{"ansible.builtin.set_fact": {"_due": "{{ %s }}" % step["when"].strip()}}, write_out("_due | bool")],
