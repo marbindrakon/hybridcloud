@@ -931,6 +931,16 @@ inside it ahead of its permit (prefix list `<vrf>-placeholder4`), so an IPv6-onl
 VRF ([AWS: IPv6-only placements](#aws-ipv6-only-placements)). Without a pool the routers' configuration and FRR
 render are as before.
 
+**The transit gateway's IPv4 default.** Every network VRF's IPv4 route-map from the transit gateway also denies
+`0.0.0.0/0` (prefix list `<vrf>-default4`). The transit gateway holds that default while the network's NAT egress VPC
+exists (for the VPCs behind it); it is not a route for the network's other sites and never becomes a Type-5 route.
+It also comes and goes with the network's internet access, and the site gateway (FRR 8.5) drops a VTEP's router MAC
+when that VTEP's last IPv4 Type-5 route is withdrawn, even while IPv6 Type-5 routes still use it: an IPv6-only VPC
+would then lose its path from the fabric. Routers created before this rule need a `replace` (the agent renders it).
+If a site gateway ever shows a router's IPv6 Type-5 routes without a router MAC (`show evpn rmac vni <vni>` empty,
+no `extern_learn` entry for it in `bridge fdb show dev vx<vni>`), resetting that router's EVPN session on the
+gateway re-learns them.
+
 **ICMPv6 source.** Each router gets a /128 on `lo<vni>` in every IPv6 VRF, from the fabric's `core.icmpSource6`: the
 same formula as the border gateway nodes (network address + (node ordinal << 16) + the gateway's provider-edge
 index), at node ordinal 100 + the router's position by name (100 for the first router, 101 for the second). The

@@ -19,6 +19,13 @@ placeholderV4Pool (the IPv4 range IPv6-only VPCs take their never-routed IPv4 CI
 route-map from the transit gateway denies it and everything inside it before its permit, so such a CIDR never
 enters the VRF nor becomes an EVPN Type-5 route. Without the key the render is as before.
 
+The transit gateway's IPv4 default (the static route toward the network's NAT egress VPC, present while the network
+has internet access) is denied the same way in every network VRF: it serves the VPCs behind the transit gateway, not
+the network's other sites, so it must not become a Type-5 route. It would also come and go with the network's
+internet access, and on the site gateway (FRR 8.5) the withdrawal of a VTEP's last IPv4 Type-5 route drops that
+VTEP's router MAC even while IPv6 Type-5 routes still use it, which blackholes the IPv6 traffic toward an IPv6-only
+VPC.
+
 IPv6 (design/IPV6-PLAN.md §6.1-§6.2), per VRF whose ipv6 block is enabled and names this router in inside6; a VRF
 without an ipv6 block is configured exactly as before IPv6 existed:
 - kernel: IPv6 forwarding; the GRE device takes the peer's /125 address (FRR's IPv6 next hop toward the transit
@@ -170,6 +177,12 @@ def frr_policy6(v, six, icmp):
     return out + ["!"]
 
 
+def default4(name):
+    """The deny of the transit gateway's IPv4 default ahead of a VRF's tgw-in permit (see the module docstring)."""
+    return ["ip prefix-list %s-default4 seq 5 permit 0.0.0.0/0" % name,
+            "route-map %s-tgw-in deny 4" % name, " match ip address prefix-list %s-default4" % name, "exit"]
+
+
 def placeholder4(name, pool):
     """The deny of the placeholder IPv4 range ahead of a VRF's tgw-in permit (see the module docstring)."""
     n = ipaddress.ip_network(pool)
@@ -192,7 +205,8 @@ def frr_conf(cfg, me, node):
         out += ["exit-vrf", "!"]
         # FRR 8.5 sends and accepts nothing on eBGP without policy (RFC 8212, also under "traditional"). The transit
         # gateway's route table belongs to this network alone: take its routes (an IPv6-only VPC's placeholder IPv4
-        # CIDR excepted), give it the network's
+        # CIDR and the IPv4 default excepted), give it the network's
+        out += default4(v["name"])
         if pool4:
             out += placeholder4(v["name"], pool4)
         out += ["route-map %s-tgw-in permit 10" % v["name"], "exit", "route-map %s-tgw-out permit 10" % v["name"],

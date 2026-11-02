@@ -513,6 +513,20 @@ IPV4_RENDER = (
     "  advertise ipv4 unicast\n exit-address-family\nexit\n!\n")
 
 
+def _with_default4(r):
+    """The IPv4 render with the deny of the transit gateway's IPv4 default ahead of each VRF's tgw-in permit."""
+    for vrf in ("t51000", "t51001"):
+        r = r.replace("route-map %s-tgw-in permit 10\n" % vrf,
+                      "ip prefix-list %s-default4 seq 5 permit 0.0.0.0/0\nroute-map %s-tgw-in deny 4\n"
+                      " match ip address prefix-list %s-default4\nexit\nroute-map %s-tgw-in permit 10\n" % (vrf, vrf, vrf, vrf))
+    return r
+
+
+# the release before denied nothing on the IPv4 sessions; every VRF now denies the transit gateway's IPv4 default
+IPV4_RENDER_BEFORE_DEFAULT4 = IPV4_RENDER
+IPV4_RENDER = _with_default4(IPV4_RENDER)
+
+
 def render(c, me="i-a"):
     return A.frr_conf(c, me, c["nodes"][me])
 
@@ -529,6 +543,15 @@ class AgentRender(unittest.TestCase):
         c = agent_cfg(six())
         c["vrfs"][0]["ipv6"]["inside6"] = {"i-b": c["vrfs"][0]["ipv6"]["inside6"]["i-a"]}
         self.assertEqual(render(c), IPV4_RENDER)
+
+    def test_ipv4_default_from_the_transit_gateway_is_denied(self):
+        out = render(agent_cfg())
+        for vrf in ("t51000", "t51001"):
+            block = ("ip prefix-list %s-default4 seq 5 permit 0.0.0.0/0\nroute-map %s-tgw-in deny 4\n"
+                     " match ip address prefix-list %s-default4\nexit\nroute-map %s-tgw-in permit 10\n" % (vrf, vrf, vrf, vrf))
+            self.assertIn(block, out)
+        # nothing else changed against the release before
+        self.assertEqual(out.replace(_with_default4(IPV4_RENDER_BEFORE_DEFAULT4), ""), "")
 
     def test_network_source_with_internet(self):
         out = render(agent_cfg(six(internet=True)))
