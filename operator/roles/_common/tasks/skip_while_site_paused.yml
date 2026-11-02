@@ -1,0 +1,33 @@
+---
+# A paused site (CloudInfrastructure spec.paused) is neither probed nor realized: its job records it Ready=False/Paused,
+# and what is on it (its CloudGateway, the environments and placements on it) waits with Ready=False/SitePaused and
+# keeps its last state. Publishing such an object again on its reconcilePeriod only starts a job that finds the site
+# still paused and writes the same status. This ends the reconcile, without touching status, while a paused site
+# holds the object's processed spec:
+#   - no Retry-now request (paused_hold_force, the role's reconcile_now; a wake from another job is one too),
+#   - its current spec was processed (status.observedGeneration >= metadata.generation; a spec change publishes,
+#     also the pause switch itself),
+#   - its Ready condition says SitePaused, or Paused on a CloudInfrastructure whose spec.paused is still set.
+# A delete runs the kind's finalizer role, not this. What resumes a held object: the site's job wakes everything held
+# on it once the resumed site is probed ready (cloudinfrastructure_provision, "Wake the ones pending on it"); a held
+# deletion is woken the same way (publish_operator_event does not publish it again while the site holds it).
+# Vars: paused_hold_cr (the role's CR), paused_hold_force (the role's reconcile_now).
+- name: Decide whether a paused site holds this object
+  ansible.builtin.set_fact:
+    _paused_hold: >-
+      {%- set obj = paused_hold_cr | default({}, true) -%}
+      {%- set meta = obj.metadata | default({}, true) -%}
+      {%- set st = obj.status | default({}, true) -%}
+      {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
+      {%- set reason = ready.reason | default('', true) | string -%}
+      {%- set generation = meta.generation | default(0, true) | int -%}
+      {%- set observed = st.observedGeneration | default(0, true) | int -%}
+      {%- set site_paused = (obj.spec | default({}, true)).paused | default(false, true) | bool -%}
+      {{ not (paused_hold_force | default(false) | bool)
+         and meta.deletionTimestamp is not defined
+         and generation > 0 and observed >= generation
+         and (reason == 'SitePaused' or (reason == 'Paused' and site_paused)) }}
+
+- name: End the reconcile while a paused site holds this object (no new event, status untouched)
+  ansible.builtin.meta: end_host
+  when: _paused_hold | bool

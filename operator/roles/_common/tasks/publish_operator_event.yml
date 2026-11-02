@@ -10,7 +10,10 @@
 # when the re-drive CronJob set the hybridsovereign.redhat/redeliver annotation, or on a new Retry-now request
 # (reconcileNow differs from status.lastHandledReconcileRequest; see reconcile_request.yml), which also resets
 # status.retry. After repeated failed teardown jobs (Stalled=True/TeardownFailed, counted by the status
-# library) the delete event is not published again until one of those two.
+# library) the delete event is not published again until one of those two. A teardown its paused site holds
+# (its last delete job finished with Ready=False/SitePaused and a deletionBlockedBy entry "... (paused)") is not
+# published again either: the site's job wakes it (a Retry-now request) once the site is resumed
+# (cloudinfrastructure_provision, "Wake the ones pending on it").
 - name: Read the CR before publishing a delete event
   kubernetes.core.k8s_info:
     api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -56,8 +59,14 @@
         {%- set gave_up = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Stalled')
                            | selectattr('status', 'equalto', 'True') | selectattr('reason', 'equalto', 'TeardownFailed')
                            | list | length) > 0 -%}
+        {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
+        {%- set held = (ready.reason | default('', true)) == 'SitePaused'
+                       and (st.deletionBlockedBy | default([], true) | select('search', '\\(paused\\)$') | list | length) > 0
+                       and (d.reason | default('')) == operator_event_reason
+                       and (d.completedEventId | default('')) == (d.eventId | default('-')) -%}
         {{ (st.deletionComplete | default(false) | bool)
            or ((not redeliver) and gave_up)
+           or ((not redeliver) and held)
            or ((not redeliver) and (d.reason | default('')) == operator_event_reason
                and (d.publishedAt | default('', true)) != ''
                and (d.completedEventId | default('')) != (d.eventId | default('-'))) }}

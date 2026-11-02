@@ -46,6 +46,16 @@
       ansible.builtin.meta: end_host
       when: cloudinfrastructure_skip_reconcile | bool
 
+    # a paused site (spec.paused, recorded Paused): no event on the reconcile period; resuming it (a spec change) or
+    # Retry now still publishes (operator/roles/_common/tasks/skip_while_site_paused.yml)
+    - name: Skip while the site is paused
+      ansible.builtin.include_role:
+        name: _common
+        tasks_from: skip_while_site_paused
+      vars:
+        paused_hold_cr: "{{ _hybridsovereign_redhat_cloudinfrastructure }}"
+        paused_hold_force: "{{ reconcile_now | bool }}"
+
     # shc P7.3.2: no new event while the last one is in flight (operator/roles/_common/tasks/skip_if_event_in_flight.yml)
     - name: Skip while the last event is in flight
       ansible.builtin.include_role:

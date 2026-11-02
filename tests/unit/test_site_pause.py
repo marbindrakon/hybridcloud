@@ -193,5 +193,183 @@ class Resolver(unittest.TestCase):
         self.assertEqual(f["error"], "")
 
 
+OPERATOR_COMMON = os.path.join(ROOT, "operator/roles/_common/tasks")
+HOLD_ROLES = {
+    "operator/primary/roles/cloudinfrastructure/tasks/main.yml": "cloudinfrastructure",
+    "operator/primary/roles/cloudgateway/tasks/main.yml": "cloudgateway",
+    "operator/namespace/roles/networkplacement/tasks/main.yml": "networkplacement",
+    "operator/namespace/roles/cloudvirt/tasks/main.yml": "cloudvirt",
+    "operator/namespace/roles/cloudaws/tasks/main.yml": "cloudaws",
+    "operator/namespace/roles/cloudgcp/tasks/main.yml": "cloudgcp",
+    "operator/namespace/roles/cloudoso/tasks/main.yml": "cloudoso",
+}
+
+
+def _obj(reason, generation=2, observed=2, paused=None, deleting=False, status="pending"):
+    meta = {"name": "o", "generation": generation}
+    if deleting:
+        meta["deletionTimestamp"] = "2026-11-02T10:00:00Z"
+    spec = {} if paused is None else {"paused": paused}
+    return {"metadata": meta, "spec": spec,
+            "status": {"status": status, "observedGeneration": observed,
+                       "conditions": [{"type": "Ready", "status": "False", "reason": reason, "message": "m"}]}}
+
+
+@unittest.skipIf(yaml is None, "PyYAML not installed")
+class QuietWhilePausedWiring(unittest.TestCase):
+    """A paused site's objects publish no event on their reconcile period (V11 stream H, issue 1)."""
+
+    def test_every_held_kind_skips_before_the_in_flight_check(self):
+        for path, kind in HOLD_ROLES.items():
+            tasks = load(os.path.join(ROOT, path))
+            names = [t.get("name", "") for t in tasks[0]["block"]]
+            hold = [t for t in tasks[0]["block"]
+                    if (t.get("ansible.builtin.include_role") or {}).get("tasks_from") == "skip_while_site_paused"]
+            self.assertEqual(len(hold), 1, path)
+            i = names.index(hold[0]["name"])
+            skip = next(n for n in names if n.startswith("Skip when already processed"))
+            self.assertLess(names.index(skip), i, path)
+            self.assertLess(i, names.index("Skip while the last event is in flight"), path)
+            self.assertEqual(hold[0]["vars"]["paused_hold_cr"], "{{ _hybridsovereign_redhat_%s }}" % kind, path)
+            self.assertEqual(hold[0]["vars"]["paused_hold_force"], "{{ reconcile_now | bool }}", path)
+
+    def test_the_site_job_wakes_what_the_pause_held(self):
+        tasks = load(os.path.join(ROLES, "cloudinfrastructure_provision/tasks/main.yml"))
+        wakes = [t for t in walk(tasks) if t.get("ansible.builtin.include_tasks") == "wake_dependents.yml"]
+        self.assertEqual(len(wakes), 2)
+        ready, failed = wakes
+        self.assertTrue(ready["vars"]["ciw_pending"])
+        self.assertFalse(failed["vars"]["ciw_pending"])
+        self.assertIn("not (ci_cr_spec.paused | default(false) | bool)", failed["when"])
+        self.assertIn(failed, tasks[0]["rescue"])
+        # the paused path ends before the wake
+        names = [t.get("name", "") for t in tasks[0]["block"]]
+        self.assertLess(names.index("A paused site is recorded as paused and left alone"), names.index(ready["name"]))
+        wake = load(os.path.join(ROLES, "cloudinfrastructure_provision/tasks/wake_dependents.yml"))
+        listing = by_name(wake, "List what may wait for this site")
+        self.assertEqual(set(listing["loop"]), {"CloudGateway", "CloudAWS", "CloudVirt", "CloudGCP", "CloudOSO",
+                                                "NetworkPlacement"})
+        self.assertFalse(listing["failed_when"])
+
+    def test_hold_comment_names_the_wake(self):
+        with open(os.path.join(COMMON, "site_paused_hold.yml")) as fh:
+            text = fh.read()
+        self.assertIn("wake_dependents.yml", text)
+        self.assertNotIn("The operator's requeue\n# retries", text)
+
+
+@unittest.skipIf(not HAVE_ANSIBLE, "ansible-playbook not installed")
+class QuietWhilePaused(unittest.TestCase):
+    """The decisions in ansible-playbook: the operator's hold, the held deletion and the site job's wake."""
+
+    def _hold(self, obj, force=False):
+        tasks = load(os.path.join(OPERATOR_COMMON, "skip_while_site_paused.yml"))
+        decide = by_name(tasks, "Decide whether a paused site holds this object")
+        return run_play([decide, write_out("_paused_hold | bool")],
+                        {"paused_hold_cr": obj, "paused_hold_force": force})
+
+    def test_held_dependant_is_quiet(self):
+        self.assertTrue(self._hold(_obj("SitePaused")))
+
+    def test_paused_site_is_quiet(self):
+        self.assertTrue(self._hold(_obj("Paused", paused=True, status="paused")))
+
+    def test_spec_change_retry_now_and_delete_still_publish(self):
+        self.assertFalse(self._hold(_obj("SitePaused", generation=3, observed=2)), "spec change")
+        self.assertFalse(self._hold(_obj("SitePaused"), force=True), "Retry now / a wake")
+        self.assertFalse(self._hold(_obj("SitePaused", deleting=True)), "delete")
+        # resuming the site is a spec change; a Paused record without spec.paused never holds
+        self.assertFalse(self._hold(_obj("Paused", generation=5, observed=4, paused=False, status="paused")))
+        self.assertFalse(self._hold(_obj("Paused", paused=False, status="paused")))
+
+    def test_other_waits_and_ready_objects_are_not_held(self):
+        for reason in ("WaitingForDependencies", "WaitingForGateway", "Ready", "EDAFailed", ""):
+            self.assertFalse(self._hold(_obj(reason)), reason)
+        self.assertFalse(self._hold({}), "empty")
+        self.assertFalse(self._hold(_obj("SitePaused", generation=0, observed=0)), "no generation")
+
+    def _publish_skip(self, status, annotations=None, reason="NetworkPlacementDeleteRequested", reconcile_now=False):
+        tasks = load(os.path.join(OPERATOR_COMMON, "publish_operator_event.yml"))
+        decide = by_name(tasks, "Decide whether to publish")
+        cr = {"metadata": {"name": "p", "annotations": annotations or {}, "deletionTimestamp": "2026-11-02T10:00:00Z"},
+              "status": status}
+        return run_play([decide, write_out("_publish_skip | bool")],
+                        {"operator_event_reason": reason, "_publish_cr": {"resources": [cr]},
+                         "reconcile_now": reconcile_now})
+
+    def _held_delete(self, event="e2", completed="e2", reason="SitePaused",
+                     blocker="CloudInfrastructure edge1 (paused)"):
+        return {"delivery": {"eventId": event, "reason": "NetworkPlacementDeleteRequested",
+                             "publishedAt": "2026-11-02T10:00:01Z", "completedEventId": completed},
+                "deletionBlockedBy": [blocker] if blocker else [],
+                "conditions": [{"type": "Ready", "status": "False", "reason": reason, "message": "m"}]}
+
+    def test_held_deletion_is_not_published_again(self):
+        self.assertTrue(self._publish_skip(self._held_delete()))
+
+    def test_held_deletion_resumes_on_a_wake(self):
+        self.assertFalse(self._publish_skip(self._held_delete(), reconcile_now=True))
+        self.assertFalse(self._publish_skip(self._held_delete(), annotations={"hybridsovereign.redhat/redeliver": "true"}))
+
+    def test_other_finished_deletions_are_published_again(self):
+        self.assertFalse(self._publish_skip(self._held_delete(reason="EDAFailed", blocker="")), "a failed teardown")
+        self.assertFalse(self._publish_skip(self._held_delete(blocker="NetworkPlacement x")), "another blocker")
+        # a create event never takes the delete branch
+        self.assertFalse(self._publish_skip(self._held_delete(), reason="NetworkPlacementCreateRequested"))
+
+    def _wake(self, results, pending=True, site="edge1"):
+        tasks = load(os.path.join(ROLES, "cloudinfrastructure_provision/tasks/wake_dependents.yml"))
+        template = by_name(tasks, "Wake the ones pending on it")["vars"]["nudge_crs"]
+        out = run_play([{"ansible.builtin.set_fact": {"_sel": template}}, write_out("_sel")],
+                       {"_ci_dependents": {"results": [{"item": k, "resources": v} for k, v in results.items()]},
+                        "cloudinfrastructure_cr_name": site, "ciw_pending": pending})
+        return sorted("%s/%s" % (o["kind"], o["name"]) for o in out)
+
+    def _dep(self, name, reason, site=None, status="pending", deleting=False, status_site=None, oso_site=None):
+        o = _obj(reason, status=status, deleting=deleting)
+        o["metadata"].update({"name": name, "namespace": "entity-a"})
+        if site:
+            o["spec"]["cloudRef"] = {"name": site}
+        if status_site:
+            o["status"]["site"] = status_site
+        if oso_site:
+            o["status"]["cloudInfrastructure"] = oso_site
+        return o
+
+    def test_wake_after_a_ready_probe(self):
+        results = {
+            "CloudGateway": [self._dep("edge1", "SitePaused", site="edge1"),
+                             self._dep("other", "SitePaused", site="iaas1"),
+                             self._dep("ready", "Ready", site="edge1", status="ready")],
+            "CloudVirt": [self._dep("waits", "WaitingForDependencies", site="edge1"),
+                          self._dep("gone", "SitePaused", site="edge1", deleting=True)],
+            "CloudAWS": [self._dep("leaving", "WaitingForDependencies", site="edge1", deleting=True)],
+            "CloudGCP": [self._dep("g", "SitePaused", site="edge1"),
+                         self._dep("gw", "WaitingForDependencies", site="edge1")],
+            "CloudOSO": [self._dep("by-ref", "SitePaused", site="edge1", status="failed"),
+                         self._dep("by-default", "SitePaused", status="failed", oso_site="edge1"),
+                         self._dep("failed", "EDAFailed", site="edge1", status="failed")],
+            "NetworkPlacement": [self._dep("core-edge1", "SitePaused", status_site="edge1"),
+                                 self._dep("core-iaas1", "SitePaused", status_site="iaas1"),
+                                 self._dep("waits", "WaitingForGateway", status_site="edge1")],
+        }
+        self.assertEqual(self._wake(results), [
+            "CloudGCP/g", "CloudGateway/edge1", "CloudOSO/by-default", "CloudOSO/by-ref", "CloudVirt/gone",
+            "CloudVirt/waits", "NetworkPlacement/core-edge1"])
+        # after a failed probe only what the pause held
+        self.assertEqual(self._wake(results, pending=False), [
+            "CloudGCP/g", "CloudGateway/edge1", "CloudOSO/by-default", "CloudOSO/by-ref", "CloudVirt/gone",
+            "NetworkPlacement/core-edge1"])
+
+    def test_wake_tolerates_a_failed_listing(self):
+        self.assertEqual(self._wake({"CloudGateway": [], "NetworkPlacement": []}), [])
+        out = run_play([{"ansible.builtin.set_fact": {"_sel": by_name(
+            load(os.path.join(ROLES, "cloudinfrastructure_provision/tasks/wake_dependents.yml")),
+            "Wake the ones pending on it")["vars"]["nudge_crs"]}}, write_out("_sel")],
+            {"_ci_dependents": {"results": [{"item": "CloudGateway", "failed": True, "msg": "boom"}]},
+             "cloudinfrastructure_cr_name": "edge1", "ciw_pending": True})
+        self.assertEqual(out, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,9 @@
 ---
 # A teardown whose site is paused (CloudInfrastructure spec.paused) holds: the site side is not touched, the object
-# keeps its finalizer and reads Ready=False/SitePaused with a deletion blocker naming the site. The operator's requeue
-# retries; once the site is resumed the teardown runs to the end. Included from a role (paths are role_path-relative).
+# keeps its finalizer and reads Ready=False/SitePaused with a deletion blocker naming the site. The controller does not
+# publish the deletion again while the site holds it (publish_operator_event); the site's job wakes it once the site is
+# resumed (cloudinfrastructure_provision wake_dependents.yml) and the teardown runs to the end. Included from a role
+# (paths are role_path-relative).
 # inputs: sph_plural (cloudvirts, networkplacements, cloudgateways, cloudosos), sph_name, sph_namespace, sph_site
 - name: "Hold the deletion of {{ sph_plural }}/{{ sph_name }}: site {{ sph_site }} is paused"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
