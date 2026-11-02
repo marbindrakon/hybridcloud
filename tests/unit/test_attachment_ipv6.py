@@ -538,6 +538,21 @@ class RecordTest(unittest.TestCase):
         self.assertNotIn("link6", new["real"])
         self.assertNotIn("address6", new["ce"])
 
+    def test_status_clears_ipv6_without_it(self):
+        # the status is merged: a circuit whose IPv6 accept entries were removed must null the IPv6 keys
+        from play_helper import walk
+        picked = [copy.deepcopy(t) for t in walk(ac_tasks()) if t.get("name") in RECORD + ["The circuit's status parts"]]
+        plan = shc_fabric.circuit_plan({"attachments": AT, "nodes": NODES, "index": 0})
+        out = run_play(picked + [write_out("{'real': ac_real_status, 'ce': ac_ce_config_status, 'r': ac_real}")],
+                       job_vars(plan))
+        self.assertEqual({k: out["ce"][k] for k in ("address6", "secondAddress6", "neighbors6")},
+                         {"address6": None, "secondAddress6": None, "neighbors6": None})
+        self.assertEqual((out["real"]["link6"], out["real"]["ce6"]), (None, None))
+        self.assertNotIn("link6", out["r"])                    # the realization (and its revision) unchanged
+        plan6 = shc_fabric.circuit_plan({"attachments": AT, "nodes": NODES, "index": 0, "ipv6": True})
+        out6 = run_play(picked + [write_out("{'ce': ac_ce_config_status}")], job_vars(plan6, V6_ACCEPT))
+        self.assertEqual(out6["ce"]["address6"], "2001:db8:4005:100::3/64")
+
     def test_ipv6_fields(self):
         from play_helper import walk
         plan = shc_fabric.circuit_plan({"attachments": AT, "nodes": NODES, "index": 0, "ipv6": True})
