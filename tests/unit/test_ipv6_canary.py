@@ -730,7 +730,7 @@ class Sample(unittest.TestCase):
         '  "-g ipv"[46]".ignore-auto-dns connection show 5f2b0c9e-0000-4000-8000-000000000001") echo "$IGNORED" ;;',
         "esac"])
 
-    def run_ignore_auto_dns(self, nmcli, networkctl="exit 1", network_file=None, existing=None):
+    def run_ignore_auto_dns(self, nmcli, networkctl="exit 1", network_file=None, existing=None, rc=0):
         """The user data's ignore-auto-dns script with ip, sleep, nmcli and networkctl stubbed; returns its output, the
         stubs' calls and the drop-ins it wrote under a stand-in for /etc/systemd/network."""
         script = {f["path"]: f["content"] for f in self.user_data()["write_files"]}["/usr/local/sbin/ignore-auto-dns"]
@@ -742,7 +742,8 @@ class Sample(unittest.TestCase):
             netfile = os.path.join(tmp, "10-netplan-enp1s0.network")
             os.makedirs(bindir)
             stubs = {"ip": "echo 'default via fe80::1 dev enp1s0 proto ra metric 100 expires 1798sec pref medium'",
-                     "sleep": "exit 0", "nmcli": nmcli, "networkctl": networkctl}
+                     "sleep": "exit 0", "nmcli": nmcli, "networkctl": networkctl,
+                     "resolvectl": "echo 'Link 2 (enp1s0): 2001:db8::53'"}
             for name, body in stubs.items():
                 with open(os.path.join(bindir, name), "w") as f:
                     f.write('#!/bin/bash\necho "%s $*" >> "$CALLS"\n%s\n' % (name, body))
@@ -758,7 +759,9 @@ class Sample(unittest.TestCase):
             with open(path, "w") as f:
                 f.write(script.replace("/etc/systemd/network", etc))
             env = dict(os.environ, PATH=bindir + ":" + os.environ["PATH"], CALLS=log, NETFILE=netfile)
-            out = subprocess.run(["bash", path], env=env, check=True, timeout=60, capture_output=True, text=True).stdout
+            done = subprocess.run(["bash", path], env=env, timeout=60, capture_output=True, text=True)
+            self.assertEqual(done.returncode, rc, done.stderr)
+            out = done.stdout
             calls = []
             if os.path.exists(log):
                 with open(log) as f:
@@ -774,12 +777,22 @@ class Sample(unittest.TestCase):
 
     def test_ignore_auto_dns_networkmanager(self):
         """NetworkManager: the connection on the IPv6 default route's device ignores the resolvers DHCP hands out (both
-        families: the canary's placement is IPv6-only) and is re-applied; one without resolvers of its own is left."""
-        _, calls, drops = self.run_ignore_auto_dns("DNS='2001:db8::53,2001:db8::54'; IGNORED=no\n" + self.NM)
-        self.assertIn("nmcli connection modify 5f2b0c9e-0000-4000-8000-000000000001 ipv6.ignore-auto-dns yes "
-                      "ipv4.ignore-auto-dns yes", calls)
-        self.assertEqual(calls[-1], "nmcli device reapply enp1s0")
+        families: the canary's placement is IPv6-only) and is re-activated; one without resolvers of its own is left.
+        The link's resolvers are logged last (the unit writes to the console)."""
+        out, calls, drops = self.run_ignore_auto_dns("DNS='2001:db8::53,2001:db8::54'; IGNORED=no\n" + self.NM)
+        uuid = "5f2b0c9e-0000-4000-8000-000000000001"
+        self.assertIn("nmcli connection modify %s ipv6.ignore-auto-dns yes ipv4.ignore-auto-dns yes" % uuid, calls)
+        # a full reactivation: NetworkManager before 1.58 keeps a running DHCPv6 lease's DNS on "device reapply"
+        # (iaas1 canary, 2026-11-02: the unit succeeded and fd02::3331 stayed on the link)
+        self.assertEqual(calls[-2:], ["nmcli connection up %s" % uuid, "resolvectl dns enp1s0"])
+        self.assertFalse([c for c in calls if "reapply" in c])
+        self.assertIn("enp1s0: ignores the resolvers handed out from now on", out)
+        self.assertIn("Link 2 (enp1s0): 2001:db8::53", out)
         self.assertEqual(drops, {})
+        # the reactivation fails: the unit fails, so the console shows it
+        _, calls, _ = self.run_ignore_auto_dns(
+            "DNS='2001:db8::53'; IGNORED=no\n" + self.NM.replace("esac", '  "connection up "*) exit 4 ;;\nesac'), rc=1)
+        self.assertNotIn("resolvectl dns enp1s0", calls)
         # the next boot: already set, so the connection is not re-applied
         out, calls, _ = self.run_ignore_auto_dns("DNS='2001:db8::53'; IGNORED=yes\n" + self.NM)
         self.assertFalse([c for c in calls if " modify " in c or "reapply" in c])
@@ -795,7 +808,7 @@ class Sample(unittest.TestCase):
         _, calls, drops = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDNS=2001:db8::53\n")
         want = "[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n\n[DHCPv4]\nUseDNS=false\n"
         self.assertEqual(drops, {"10-netplan-enp1s0.network.d/90-ignore-auto-dns.conf": want})
-        self.assertEqual(calls[-2:], ["networkctl reload", "networkctl reconfigure enp1s0"])
+        self.assertEqual(calls[-3:], ["networkctl reload", "networkctl reconfigure enp1s0", "resolvectl dns enp1s0"])
         # the next boot: the drop-in is in place, networkd is not reloaded
         out, calls, _ = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDNS=2001:db8::53\n", existing=want)
         self.assertFalse([c for c in calls if "reload" in c or "reconfigure" in c])
@@ -808,7 +821,8 @@ class Sample(unittest.TestCase):
         ud = self.user_data()
         files = {f["path"]: f["content"] for f in ud["write_files"]}
         unit = files["/etc/systemd/system/ignore-auto-dns.service"]
-        for line in ("ExecStart=/usr/local/sbin/ignore-auto-dns", "After=network-online.target", "WantedBy=multi-user.target"):
+        for line in ("ExecStart=/usr/local/sbin/ignore-auto-dns", "After=network-online.target", "WantedBy=multi-user.target",
+                     "StandardOutput=journal+console"):
             self.assertIn(line, unit.splitlines())
         subprocess.run(["bash", "-n"], input=files["/usr/local/sbin/ignore-auto-dns"], text=True, check=True)
         # enabled (and run) right after the units are loaded, before clatd and the checks start

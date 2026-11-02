@@ -523,7 +523,10 @@ Run the fabric job (Retry now on the HybridFabric) after changing an entry.
   names stop working while the guest's explicit resolver checks still pass. The snippet's user data therefore
   installs `ignore-auto-dns`, a boot-time unit that sets NetworkManager's `ipv6.ignore-auto-dns` and
   `ipv4.ignore-auto-dns` (or systemd-networkd's `UseDNS=false` in a drop-in) on the connection of the NIC with the
-  IPv6 default route, provided that connection has resolvers of its own. cloud-init can't do this from `networkData`:
+  IPv6 default route, provided that connection has resolvers of its own, and re-activates the connection (a reapply
+  is not enough before NetworkManager 1.58: the running DHCPv6 lease keeps its resolvers). It writes what it did and
+  the link's resolvers to the guest console (on OpenShift Virtualization, the virt-launcher pod's
+  `guest-console-log` container). cloud-init can't do this from `networkData`:
   its NetworkManager renderer ignores `dhcp6-overrides: {use-dns: false}`. A guest's resolvers read with
   `resolvectl status`: the translation resolvers only, none of the cluster's service addresses.
 

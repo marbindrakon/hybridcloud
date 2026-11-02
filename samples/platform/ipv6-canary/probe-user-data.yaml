@@ -210,7 +210,10 @@ write_files:
         done
         [ $# -gt 0 ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
         nmcli connection modify "$con" "$@" || exit 1
-        nmcli device reapply "$dev" || nmcli connection up "$con"
+        # a full reactivation, not "nmcli device reapply": before NetworkManager 1.58 a reapply keeps the DNS of a running
+        # DHCPv6 lease
+        nmcli connection up "$con" || exit 1
+        echo "$dev: ignores the resolvers handed out from now on"
       elif command -v networkctl >/dev/null && networkctl status "$dev" >/dev/null 2>&1; then
         file=$(networkctl status "$dev" | sed -n 's/^ *Network File: *//p' | head -n 1)
         if [ -z "$file" ] || ! grep -q '^DNS=' "$file"; then echo "$dev: no resolvers configured: nothing changed"; exit 0; fi
@@ -219,10 +222,13 @@ write_files:
           case " $FAMILIES " in *" ipv4 "*) printf '\n[DHCPv4]\nUseDNS=false\n' ;; esac)
         [ "$(cat "$dir/90-ignore-auto-dns.conf" 2>/dev/null)" != "$want" ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
         mkdir -p "$dir" && printf '%s\n' "$want" > "$dir/90-ignore-auto-dns.conf" || exit 1
-        networkctl reload && networkctl reconfigure "$dev"
+        networkctl reload && networkctl reconfigure "$dev" || exit 1
+        echo "$dev: ignores the resolvers handed out from now on"
       else
         echo "$dev: managed by neither NetworkManager nor systemd-networkd: nothing changed"
       fi
+      command -v resolvectl >/dev/null && resolvectl dns "$dev"
+      exit 0
   - path: /etc/systemd/system/ignore-auto-dns.service
     permissions: "0644"
     content: |
@@ -234,6 +240,7 @@ write_files:
       [Service]
       Type=oneshot
       ExecStart=/usr/local/sbin/ignore-auto-dns
+      StandardOutput=journal+console
 
       [Install]
       WantedBy=multi-user.target

@@ -51,7 +51,8 @@ handed out by DHCP (NetworkManager `ipv6.ignore-auto-dns` and `ipv4.ignore-auto-
 `UseDNS=false`) while its connection has resolvers of its own from the network data. On OpenShift Virtualization
 DHCPv6 also hands out the cluster's DNS service, which does no DNS64: without the unit, one brief outage of the
 translation resolvers moves the guest to that server for good, and `pref64` and `name4` fail while `resolver` still
-passes. `resolvectl status` in the guest lists the translation resolvers only.
+passes. `resolvectl status` in the guest lists the translation resolvers only. The unit writes what it did and the
+link's resolvers to the console (OpenShift Virtualization: `oc logs <virt-launcher pod> -c guest-console-log`).
 
 ## Placeholders
 

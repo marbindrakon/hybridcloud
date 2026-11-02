@@ -228,6 +228,10 @@ test('cloud-init snippet: with resolvers the guest ignores the resolvers DHCP ha
   assert.match(script, /^#!\/bin\/bash\n/);
   assert.match(script, /^FAMILIES="ipv6 ipv4"$/m);
   assert.match(script, /nmcli connection modify "\$con" "\$@"/);
+  // a full reactivation: before NetworkManager 1.58 "device reapply" keeps a running DHCPv6 lease's DNS
+  assert.match(script, /\n {2}nmcli connection up "\$con" \|\| exit 1\n/);
+  assert.doesNotMatch(script, /^[^#]*device reapply/m);
+  assert.match(ud, /\n {6}StandardOutput=journal\+console\n/);
   assert.match(script, /\[DHCPv6\]\\nUseDNS=false/);
   // the canary sample ships the same script
   const sample = fs.readFileSync(path.join(process.env.UI_ROOT, '..', 'samples/platform/ipv6-canary/probe-user-data.yaml'), 'utf8');
