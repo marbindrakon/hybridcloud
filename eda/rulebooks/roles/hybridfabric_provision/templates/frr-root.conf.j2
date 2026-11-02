@@ -223,6 +223,37 @@ route-map {{ c.id }}-OUT deny 10
 exit
 {% endif %}
 !
+{% if c.ipv6 is defined %}
+! AttachmentCircuit {{ c.circuit }} over IPv6 (link {{ c.ipv6.link }}, CE {{ c.ipv6.ce }}): the same rules from the
+! IPv6 lists; to the CE the network's IPv6 placement prefixes{{ ' and the default route' if c.ipv6.advertiseDefault else '' }}
+{% for e in c.ipv6.accept %}
+ipv6 prefix-list {{ c.id }}-ACCEPT6 seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+{% for e in c.ipv6.deny %}
+ipv6 prefix-list {{ c.id }}-DENY6 seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+{% for e in c.ipv6.advertise %}
+ipv6 prefix-list {{ c.id }}-OUT6 seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+!
+route-map {{ c.id }}-IN6 deny 10
+ match ipv6 address prefix-list {{ c.id }}-DENY6
+exit
+!
+route-map {{ c.id }}-IN6 permit 20
+ match ipv6 address prefix-list {{ c.id }}-ACCEPT6
+exit
+!
+{% if c.ipv6.advertise %}
+route-map {{ c.id }}-OUT6 permit 10
+ match ipv6 address prefix-list {{ c.id }}-OUT6
+exit
+{% else %}
+route-map {{ c.id }}-OUT6 deny 10
+exit
+{% endif %}
+!
+{% endif %}
 {% endfor %}
 {% endfor %}
 {% for n in hf_node_vrfs %}
@@ -246,6 +277,19 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  neighbor {{ c.ce }} timers 10 30
 {% if c.bfd %}
  neighbor {{ c.ce }} bfd
+{% endif %}
+{% if c.ipv6 is defined %}
+{# the circuit's IPv6 session: a neighbour of its own on the IPv6 link with the same AS, password, timers and BFD. It
+   carries only IPv6 routes, as the IPv4 neighbour carries only IPv4 routes: each is activated in its own family #}
+ neighbor {{ c.ipv6.ce }} remote-as {{ c.peerAsn }}
+ neighbor {{ c.ipv6.ce }} description {{ c.id }}6 {{ c.circuit }}
+{% if c.authentication == 'md5' %}
+ neighbor {{ c.ipv6.ce }} password {{ hf_circuit_passwords[c.circuit] }}
+{% endif %}
+ neighbor {{ c.ipv6.ce }} timers 10 30
+{% if c.bfd %}
+ neighbor {{ c.ipv6.ce }} bfd
+{% endif %}
 {% endif %}
 {% endfor %}
 {% if 4 in _fam %}
@@ -274,12 +318,20 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   import vpn
  exit-address-family
 {% endif %}
-{% if _e6 and n.ipv6 is defined %}
+{% set _eg6 = (_e6 and n.ipv6 is defined) | bool %}
+{% set _c6 = n.circuits | selectattr('ipv6', 'defined') | list %}
+{% if _eg6 or _c6 %}
  !
+{% if _eg6 %}
 {# the network's IPv6 side: the default route from the egress VRF over the veth (into the VPN with the IPv6 loopback
    as next hop, as the gateways do), and toward the egress VRF exactly the placement prefixes, each originated here as
    an aggregate of the routes the sites send (active only while a route inside it exists) #}
+{% else %}
+{# the network's IPv6 side for its circuits alone (no IPv6 egress): the CEs' routes into the network's VPN and the
+   VPN's routes to the CEs, through the circuits' route-maps #}
+{% endif %}
  address-family ipv6 unicast
+{% if _eg6 %}
 {% for p in n.ipv6.prefixes %}
   aggregate-address {{ p }}
 {% endfor %}
@@ -287,12 +339,32 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   neighbor {{ n.xe }} route-map E{{ n.vpnTarget }}-FROM-EG6 in
   neighbor {{ n.xe }} route-map E{{ n.vpnTarget }}-TO-EG6 out
   neighbor {{ n.xe }} maximum-prefix {{ _e6.maxPrefixesUpstream }}
+{% endif %}
+{% for c in _c6 %}
+  neighbor {{ c.ipv6.ce }} activate
+  neighbor {{ c.ipv6.ce }} route-map {{ c.id }}-IN6 in
+  neighbor {{ c.ipv6.ce }} route-map {{ c.id }}-OUT6 out
+  neighbor {{ c.ipv6.ce }} maximum-prefix {{ c.maxPrefixes }}{{ ' warning-only' if c.maxPrefixAction == 'warning' else (' restart ' ~ hf_attach_restart if hf_attach_restart | int > 0 else '') }}
+{% endfor %}
   label vpn export auto
   rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
   rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
+{# no nexthop vpn export once a CE's IPv6 routes are in the VRF (the IPv4 rule above, for the same reason): with
+   it set, FRR 8.5 resolves that next hop inside the VRF, where the loopback is no route (a circuit-only network's
+   VRF holds nothing that covers it), and the CE's routes stay invalid in the VPN table. Without it every route is
+   exported with the node itself as next hop, which FRR announces as the global IPv6 address of the sessions'
+   update source lo: the IPv6 loopback. Spike S1 case C ran exactly this VRF (CE and egress veth, no nexthop vpn
+   export, dual-stack core) on FRR 8.5.3 and 10.4: the CE's routes reached the far PE valid, with the loopback as
+   next hop and a labelled kernel route, and so did the egress default. An IPv4 next hop would be wrong (no
+   labelled IPv6 route over an IPv4 next hop, and it invalidated the default learned over the veth). Without
+   circuits the IPv6 egress keeps its explicit next hop, unchanged #}
+{% if not _c6 %}
   nexthop vpn export {{ hf_pe.loopbackIp6 }}
+{% endif %}
+{% if _eg6 %}
   route-map vpn export E{{ n.vpnTarget }}-VPN6
   route-map vpn import E{{ n.vpnTarget }}-IMPORT6
+{% endif %}
   export vpn
   import vpn
  exit-address-family
