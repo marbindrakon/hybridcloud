@@ -1492,6 +1492,7 @@
       "AddressChoice": "IPv6 internet: not offered for tenant-provided prefixes.",
       "NotOffered": "IPv6 internet access is not offered on this fabric yet.",
       "Degraded": "Works with reduced redundancy.",
+      "UpstreamDown": "IPv6 internet access is down: no node of the fabric has an upstream session.",
       "WaitingForAddressSpace": "Waiting for platform IPv6 space: no free block in the platform's pool, the tenant's allowance used, or the chosen block in use or recently released.",
       "IPv6ModeInUse": "The network's IPv6 mode can't change while it has placements; remove them or create a new network.",
       "PrefixReserved": "A prefix overlaps address space the platform keeps for itself.",
@@ -1505,7 +1506,8 @@
       },
       "translation": {
         "NotOffered": "Translation to IPv4 is not offered on this fabric yet.",
-        "AddressChoice": "Translation to IPv4 needs IPv6 address space from the platform."
+        "AddressChoice": "Translation to IPv4 needs IPv6 address space from the platform.",
+        "UpstreamDown": "Translation to IPv4 is down with the IPv6 internet access."
       }
     },
     "subnetOfFamily": "IPv{{family}} subnet",

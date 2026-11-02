@@ -2,15 +2,16 @@
 # status.egress of the network, per family (status is merge-patched: a field left out keeps its old value, so
 # fields that don't apply are written as null).
 #   IPv4 (the network has IPv4 prefixes): source NAT on the fabric's egress: pending | ready | removing | unavailable
-#   IPv6: mode Platform = routed from the assigned block: pending | ready (reason Degraded while a node of the fabric
-#         has no upstream session) | removing, or unavailable while the fabric offers no IPv6 egress (NotOffered);
+#   IPv6: mode Platform = routed from the assigned block: pending | ready (reason Degraded while some node of the
+#         fabric has no upstream session) | removing, unavailable (reason UpstreamDown) while no node of the fabric
+#         has one, or unavailable while the fabric offers no IPv6 egress (NotOffered);
 #         mode Tenant = no internet access for tenant-provided prefixes (AddressChoice); mode None = no row
 #   internet (overall) = the IPv4 state when the network has IPv4, else the IPv6 state
 #   ipv4Translation: for a network without IPv4 that wants internet access, by path (each IPv6-only placement's
 #         status.ipv6.translation names the path it uses, its prefix and resolvers):
 #           Fabric   (IPv6 space from the network, the platform's translator): usable while the fabric offers IPv6
 #                    egress and a site of the realization has a translation entry with a prefix; its state is the
-#                    state of the IPv6 row (pending | ready)
+#                    state of the IPv6 row (pending | ready; unavailable, UpstreamDown while that row is down)
 #           Provider (IPv6 space from a cloud provider, the provider's translator): offered while a site of the
 #                    realization has a translation entry with provider: true; nothing of the network's own is
 #                    involved (the placement's site side builds it), so it is ready while offered
@@ -20,7 +21,8 @@
 # Written while spec.egress.internet is on, or while the fabric still removes an egress; {} otherwise.
 # Inputs: hn_v4, hn_mode6, hn_egress_want, hn_egress_want6, hn_egress_offered, hn_egress_offered6, hn_egress_carried
 # (the fabric's entry for the network: ipv6 true while its IPv6 egress is realized), hn_egress6_degraded,
-# hn_egress6_degraded_nodes, hn_fabric_name, hn_translation_offered (a site of the fabric's realization has a
+# hn_egress6_degraded_nodes, hn_egress6_nodes (the fabric's nodes that report an IPv6 egress; default none: then
+# "every node down" is never concluded), hn_fabric_name, hn_translation_offered (a site of the fabric's realization has a
 # translation entry with a prefix; default false), hn_translation_provider_offered (a site of the fabric's realization
 # has a translation entry with provider: true; default false).
 # Sets hn_egress, hn_egress_note.
@@ -33,6 +35,11 @@
     # network without IPv4), ipv6 = the IPv6 egress
     _carried4: "{{ _carried | bool and ((hn_egress_carried | default({}, true)).internet | default(true) | bool) }}"
     _carried6: "{{ (hn_egress_carried | default({}, true)).ipv6 | default(false) | bool }}"
+    # the IPv6 egress's nodes without an upstream session: some (Degraded, still ready) or every one (down)
+    _down6: "{{ hn_egress6_degraded_nodes | default([], true) | sort }}"
+    _all_down6: >-
+      {{ (hn_egress6_degraded | default(false) | bool) and (hn_egress6_nodes | default([], true) | length > 0)
+         and (hn_egress6_nodes | default([], true) | difference(_down6) | length == 0) }}
     _want4: "{{ _want | bool and _v4 | bool }}"
     _want6: "{{ hn_egress_want6 | default(false) | bool }}"
     _state4: >-
@@ -56,17 +63,26 @@
                 'message': 'IPv6 internet: not offered for tenant-provided prefixes'} if _state6 | trim == 'choice'
          else ({'family': 6, 'state': 'unavailable', 'mode': 'Routed', 'reason': 'NotOffered',
                 'message': 'IPv6 internet access is not offered on this fabric yet'} if _state6 | trim == 'unavailable'
+         else ({'family': 6, 'state': 'unavailable', 'mode': 'Routed', 'reason': 'UpstreamDown',
+                'message': 'IPv6 internet access is down: no node of the fabric has an upstream session ('
+                           ~ (_down6 | join(', ')) ~ ')'}
+               if (_state6 | trim == 'ready' and _all_down6 | bool)
          else ({'family': 6, 'state': _state6 | trim, 'mode': 'Routed'}
                | combine({'reason': 'Degraded',
-                          'message': 'IPv6 internet works through one node of the fabric: '
-                                     ~ (hn_egress6_degraded_nodes | default([]) | join(', ')) ~ ' has no upstream session; '
+                          'message': 'IPv6 internet works through part of the fabric: '
+                                     ~ (_down6 | join(', '))
+                                     ~ (' has' if _down6 | length == 1 else ' have') ~ ' no upstream session; '
                                      ~ 'connections that only receive data may have reset'}
-                         if (_state6 | trim == 'ready' and hn_egress6_degraded | default(false) | bool) else {})))) }}
+                         if (_state6 | trim == 'ready' and hn_egress6_degraded | default(false) | bool) else {}))))) }}
     # translation by path: the fabric's (its state follows the IPv6 row; '' = not usable) and the provider's
     _tr_fabric: >-
       {{ _row6.state if (hn_egress_offered6 | default(false) | bool and hn_translation_offered | default(false) | bool
                          and _row6.state | default('') in ['pending', 'ready', 'removing'])
          else '' }}
+    # the fabric's translator is offered but the IPv6 internet access it rides is down
+    _tr_fabric_down: >-
+      {{ hn_egress_offered6 | default(false) | bool and hn_translation_offered | default(false) | bool
+         and _row6.reason | default('') == 'UpstreamDown' }}
     _tr_provider: "{{ hn_translation_provider_offered | default(false) | bool }}"
     # (a var can't hold null on every Ansible version: empty means "does not apply", written as null below)
     _translation: >-
@@ -74,6 +90,10 @@
          else ({'state': 'unavailable', 'reason': 'AddressChoice',
                 'message': 'translation to IPv4 needs IPv6 address space from the platform'}
                if hn_mode6 != 'Platform'
+         else ({'state': 'unavailable', 'reason': 'UpstreamDown',
+                'message': "translation to IPv4 is down with the network's IPv6 internet access: no node of the "
+                           ~ 'fabric has an upstream session'}
+               if (_tr_fabric_down | bool and not _tr_provider | bool)
          else ({'state': 'unavailable', 'reason': 'NotOffered',
                 'message': 'translation to IPv4 is not offered on this fabric yet'}
                if (_tr_fabric | trim == '' and not _tr_provider | bool)
@@ -95,7 +115,9 @@
                           ~ 'names its path, translation prefix and resolvers. Placements with space from the network '
                           ~ ("get translation once the network's IPv6 internet access is ready"
                              if _tr_fabric | trim != ''
-                             else "have none: the platform's translator is not offered on this fabric yet")})))) }}
+                             else ("have none while the network's IPv6 internet access is down"
+                                   if _tr_fabric_down | bool
+                                   else "have none: the platform's translator is not offered on this fabric yet"))}))))) }}
     _rows: "{{ ([_row4] if _row4 | length > 0 else []) + ([_row6] if _row6 | length > 0 else []) }}"
     _overall: "{{ _row4.state if _row4 | length > 0 else (_row6.state | default('')) }}"
   ansible.builtin.set_fact:
@@ -114,6 +136,7 @@
          ~ ('; IPv6 internet: not offered for tenant-provided prefixes' if _row6.reason | default('') == 'AddressChoice'
             else ('; IPv6 internet not offered yet' if _row6.reason | default('') == 'NotOffered'
             else ('; IPv6 internet egress degraded' if _row6.reason | default('') == 'Degraded'
+            else ('; IPv6 internet egress down (no upstream session)' if _row6.reason | default('') == 'UpstreamDown'
             else {'ready': '; IPv6 internet egress',
                   'pending': '; IPv6 internet egress being added',
-                  'removing': '; IPv6 internet egress being removed'}.get(_row6.state | default(''), '')))) }}
+                  'removing': '; IPv6 internet egress being removed'}.get(_row6.state | default(''), ''))))) }}

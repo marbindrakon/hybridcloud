@@ -239,7 +239,8 @@ spec:
 - The path to the internet carries at most 1420-byte IPv6 packets; the platform tells larger packets so (Packet Too
   Big) and clamps TCP accordingly, so path MTU discovery works as usual.
 - When the platform moves IPv6 traffic to another path after a failure, the row may read `ready` with reason
-  `Degraded`; connections in progress may reset.
+  `Degraded`; connections in progress may reset. When no path is left it reads `unavailable` with reason
+  `UpstreamDown` until the platform restores one.
 - **Translation to IPv4.** A network with IPv6 from the platform, no IPv4 and internet access on reaches IPv4-only
   destinations by translation where the platform offers it (`status.egress.ipv4Translation`; on each placement
   `status.ipv6.translation` gives the translation prefix and the resolvers to use). Dual-stack networks never get

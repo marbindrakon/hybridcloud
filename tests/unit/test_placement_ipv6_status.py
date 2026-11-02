@@ -82,8 +82,10 @@ class StatusIPv6Test(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
     def test_with_ipv6_egress_the_internet_state_is_left_to_the_egress(self):
+        # no network row (the network asks for no internet, or its row went away): written as null, so an earlier
+        # ready/removing/Degraded does not stay behind (status is merge-patched)
         st = self.run_task(fab_real=real(**{"egress.ipv6.enabled": True}))
-        self.assertEqual(st["ipv6"], {"addressing": "DHCPv6", "translation": None})
+        self.assertEqual(st["ipv6"], {"addressing": "DHCPv6", "internet": None, "translation": None})
 
     @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
     def test_no_ipv6_subnet_writes_nothing(self):

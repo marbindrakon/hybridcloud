@@ -655,9 +655,12 @@ sends Packet Too Big for larger packets bound for the internet.
 Status: `HybridFabric status.realization.egress.ipv6` holds per node the hand-off address, the upstream sessions'
 states and whether the default route is held; `status.realization.egress.networks[]` says per network whether its
 IPv6 egress is realized (`ipv6`), the prefixes announced (`prefixes6`) and its primary node. A network with IPv6
-egress reads `{family: 6, state: ready, mode: Routed}`, or `reason: Degraded` while a node's upstream sessions are
-all down; a node down for `sessionDownAlertMinutes` is reported as a Warning event on the HybridFabric. A placement
-with IPv6 copies the network's row into `status.ipv6.internet`.
+egress reads `{family: 6, state: ready, mode: Routed}`, or `reason: Degraded` while some node's upstream sessions
+are all down, and `state: unavailable, reason: UpstreamDown` while no node has an upstream session (translation to
+IPv4 on the fabric's path then reads `UpstreamDown` too); a node down for `sessionDownAlertMinutes` is reported as a
+Warning event on the HybridFabric. A placement with IPv6 from the network copies the network's row into
+`status.ipv6.internet` (null when the network has no row); the network wakes those placements whenever its row
+changes.
 
 The gateways announce covering routes into every site: the network's own IPv6 prefixes (its platform block, or the
 tenant's prefixes) and `routedPrefixes`, each backed by an unreachable route in the VRF table. A destination the
