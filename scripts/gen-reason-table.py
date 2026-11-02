@@ -20,7 +20,7 @@ SOURCE = (ROOT / "eda/rulebooks/collections/ansible_collections/hybridsovereign/
 GUIDE = ROOT / "docs/tenant/status-reasons.md"
 BEGIN, END = "<!-- reasons:begin -->", "<!-- reasons:end -->"
 CLASSES = [("progress", "Working on it"), ("waiting", "Waiting"), ("blocked", "Blocked"),
-           ("failed", "Failed")]
+           ("paused", "Paused"), ("failed", "Failed")]
 ACTORS = {"A": "Nobody: it continues by itself", "T": "You (the tenant)",
           "P": "The platform team"}
 

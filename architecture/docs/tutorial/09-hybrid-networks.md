@@ -522,7 +522,7 @@ Platform team (**Fabric and sites**):
 
 ## Status
 
-Each object shows a state (Waiting, Creating, Updating, Ready, Degraded, Failed, Deleting), a one-line summary and
+Each object shows a state (Waiting, Creating, Updating, Ready, Degraded, Paused, Failed, Deleting), a one-line summary and
 the reason of its `Ready` condition; [Status reasons](../../../docs/tenant/status-reasons.md) lists every reason and
 who acts on it. The reasons you meet most with networks:
 
