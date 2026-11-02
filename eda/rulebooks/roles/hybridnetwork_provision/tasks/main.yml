@@ -391,6 +391,10 @@
         hn_translation_offered: >-
           {{ (fab_real.translation | default({}, true)).values() | select('mapping') | selectattr('pref64', 'defined')
              | map(attribute='pref64') | select | list | length > 0 }}
+        # and the cloud provider's own translator: some site of the realization says provider: true
+        hn_translation_provider_offered: >-
+          {{ (fab_real.translation | default({}, true)).values() | select('mapping') | selectattr('provider', 'defined')
+             | map(attribute='provider') | map('bool') | select | list | length > 0 }}
         hn_egress6_degraded: "{{ (_eg.ipv6 | default({}, true)).degraded | default(false) | bool }}"
         hn_egress6_degraded_nodes: "{{ (_eg.ipv6 | default({}, true)).degradedNodes | default([], true) }}"
         hn_egress_carried: >-

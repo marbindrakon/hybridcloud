@@ -392,7 +392,9 @@ spec:
   ```
   Until then `status.ipv6.translation` is absent and the network's `status.egress.ipv4Translation` says why
   (`NotOffered`: the platform offers no translation yet; `AddressChoice`: the network uses your own IPv6 prefixes).
-  That network row describes the platform's path; a provider-path placement's own status is the one to read.
+  That network row covers both paths (the platform's translator for space from the network, the cloud provider's for
+  space from the provider) and its message says which applies to which placements; each placement's own status
+  names the path it uses.
 - **What reaches IPv4 how:** names of IPv4-only services through the DNS64 resolvers in the status, on either path;
   IPv4 literals only through a CLAT in the guest (below), which uses the status's `pref64`. On Google Cloud the
   resolver is the VM's metadata server, so names work with no setup in the guest.

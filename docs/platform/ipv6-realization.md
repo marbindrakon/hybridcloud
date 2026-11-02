@@ -479,16 +479,20 @@ reported). Dual-stack placements never get the DNS64 resolvers: their workloads 
 otherwise send IPv4-only names through the translator.
 
 The network reports the translation in `status.egress.ipv4Translation` (only for a network without IPv4 that asks
-for internet access):
+for internet access), covering both paths: the fabric's path is usable while the fabric offers IPv6 egress and a
+site has a `translation` entry with a `pref64`; the provider's path is offered while a site has an entry with
+`provider: true`, and needs nothing of the network's own (each placement's site side builds it).
 
 | Network | `ipv4Translation` |
 |---|---|
-| mode `Tenant` | `{state: unavailable, reason: AddressChoice}` |
-| mode `Platform`, the fabric offers no IPv6 egress, or no site has a `translation` entry with a `pref64` | `{state: unavailable, reason: NotOffered}` |
-| mode `Platform` otherwise | the state of the network's IPv6 egress row (`pending`, then `ready`); each IPv6-only placement's status names its site's prefix and resolvers |
+| mode `Tenant` | `{state: unavailable, reason: AddressChoice}` (neither path serves tenant-provided prefixes) |
+| mode `Platform`, neither path offered | `{state: unavailable, reason: NotOffered}` |
+| mode `Platform`, the fabric's path only | the state of the network's IPv6 egress row (`pending`, then `ready`) |
+| mode `Platform`, the provider's path offered | `ready`; the message says which placements use which path, and whether placements with space from the network have translation (the fabric's path `ready`), will have it (`pending`) or have none (not offered) |
 
-This row describes the fabric's path. Placements on the provider's path report their translation in their own
-`status.ipv6.translation` whatever the network's row says.
+The row says what the network's placements can use; each IPv6-only placement's own `status.ipv6.translation` names
+the path it uses, its prefix and resolvers (a provider-path placement's block appears once its site side has built
+the translation).
 
 **The resolvers through the egress filter.** The IPv6 egress filter of every border gateway node admits the DNS64
 resolvers of every site's entry on port 53 (TCP and UDP), in addition to `egress.ipv6.resolverDestinations6`: the
