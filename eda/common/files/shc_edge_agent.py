@@ -401,7 +401,49 @@ def state(cfg, me):
             continue
         st["routes6"][v["name"]] = {p: sorted({r.get("protocol", "?") for r in rs}) for p, rs in j.items()
                                     if isinstance(rs, list)}
+        # where each selected IPv6 route leads (next hop and device): toward the transit gateway (gre<vni>) or back
+        # into the fabric (br<vni>, the gateway's VTEP); kept compact, the report is one standard parameter
+        st.setdefault("nh6", {})[v["name"]] = nexthops6(j)
+    if six:
+        st["fwd6"] = snmp6()
     return st
+
+
+# the kernel's IPv6 forwarding and drop counters (/proc/net/snmp6), to tell where forwarded packets go
+SNMP6_KEYS = ("Ip6InReceives", "Ip6OutForwDatagrams", "Ip6InNoRoutes", "Ip6OutNoRoutes", "Ip6InDiscards",
+              "Ip6OutDiscards", "Ip6InHdrErrors", "Ip6InAddrErrors", "Icmp6OutTimeExcds", "Icmp6OutDestUnreachs",
+              "Icmp6OutPktTooBigs")
+
+
+def snmp6(path="/proc/net/snmp6"):
+    out = {}
+    try:
+        for line in open(path):
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in SNMP6_KEYS:
+                out[parts[0]] = int(parts[1])
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def nexthops6(routes):
+    """{prefix: ["<next hop>@<device>", ...]} of the selected route of each prefix in a 'show ipv6 route vrf .. json'."""
+    out = {}
+    for p, rs in routes.items():
+        if not isinstance(rs, list):
+            continue
+        for r in rs:
+            if not r.get("selected"):
+                continue
+            hops = []
+            for nh in r.get("nexthops") or []:
+                if nh.get("active") is False:
+                    continue
+                via = nh.get("ip") or ("unreachable" if nh.get("unreachable") else "direct")
+                hops.append("%s@%s" % (via, nh.get("interfaceName", "-")))
+            out[p] = sorted(hops)
+    return out
 
 
 def bgp6_peers(j):

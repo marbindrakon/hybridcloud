@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import sys
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -692,9 +693,35 @@ class AgentState(unittest.TestCase):
                          {"169.254.100.2": "negotiated", "169.254.100.3": "NoNeg"})
         self.assertEqual(st["routes6"]["t51000"], {"2001:db8:100:10::/60": ["bgp"], "::/0": ["bgp"],
                                                    "fd00:db8:5c::/125": ["connected"]})
+        # the selected next hops and the kernel's IPv6 counters come with the IPv6 side
+        self.assertIn("t51000", st["nh6"])
+        self.assertIsInstance(st["fwd6"], dict)
         with mock.patch.object(A, "sh", self.vtysh(out)):
             st4 = A.state(agent_cfg(), "i-a")
         self.assertEqual(sorted(st4), ["bgp", "routes", "wg"])
+
+    def test_nexthops6_selected_only(self):
+        routes = {"2001:db8:100:10::/60": [{"protocol": "bgp", "selected": True, "nexthops": [
+                      {"ip": "fd00:db8:5c::2", "interfaceName": "gre51000", "active": True},
+                      {"ip": "fd00:db8:5c::3", "interfaceName": "gre51000", "active": True}]}],
+                  "::/0": [{"protocol": "bgp", "selected": True, "nexthops": [
+                               {"ip": "::ffff:10.240.1.1", "interfaceName": "br51000", "active": True},
+                               {"ip": "::ffff:10.240.1.2", "interfaceName": "br51000", "active": False}]},
+                           {"protocol": "kernel", "selected": False, "nexthops": [{"unreachable": True}]}],
+                  "fd00:db8:5c::/125": [{"protocol": "connected", "selected": True,
+                                         "nexthops": [{"directlyConnected": True, "interfaceName": "gre51000"}]}]}
+        self.assertEqual(A.nexthops6(routes), {
+            "2001:db8:100:10::/60": ["fd00:db8:5c::2@gre51000", "fd00:db8:5c::3@gre51000"],
+            "::/0": ["::ffff:10.240.1.1@br51000"], "fd00:db8:5c::/125": ["direct@gre51000"]})
+
+    def test_snmp6_counters(self):
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("Ip6InReceives                   \t120\nIp6OutForwDatagrams 7\nIcmp6OutTimeExcds 3\nUdp6InDatagrams 9\n")
+        try:
+            self.assertEqual(A.snmp6(f.name), {"Ip6InReceives": 120, "Ip6OutForwDatagrams": 7, "Icmp6OutTimeExcds": 3})
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(A.snmp6("/nonexistent/snmp6"), {})
 
 
 # ---- the gateway job
