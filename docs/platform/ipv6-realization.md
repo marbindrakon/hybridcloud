@@ -621,8 +621,10 @@ never follow each other back to back: with a canary configured this costs one fa
 the job's own time, and a reading is at most about 30 minutes old in the steady state. When no re-run refreshed the
 reading for `staleAfterMinutes`, three re-read intervals (the automation is down, or the job keeps failing), the
 operator marks every site's reading `stale: true`, `healthy: false` (with the age in `error`) and the condition
-`IPv6Translation` `Unknown` (`CanaryStale`), so an old reading never reports a healthy canary; the next read
-replaces the mark. Because a re-read comes every 15 minutes or more, a failing canary reaches the
+`IPv6Translation` `Unknown` (`CanaryStale`), so an old reading never reports a healthy canary; a site that read
+healthy until then gets `failedSince` the moment its reading became overdue (`readAt` + `staleAfterMinutes`). The
+operator reads the fabric again just before the mark and leaves it out when a job recorded a newer read meanwhile;
+the next read replaces the mark. Because a re-read comes every 15 minutes or more, a failing canary reaches the
 `alertMinutes` event on the read after the first failed one.
 
 The condition `IPv6Translation` is `True` (`Ready`) while every site's canary is healthy and `False`

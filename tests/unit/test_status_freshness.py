@@ -165,25 +165,53 @@ class OperatorCanary(unittest.TestCase):
     def test_no_canary_no_rerun(self):
         self.assertEqual(self.decide(self.fabric(ago(600), sites={})), {"due": False, "stale": False, "marked": False})
 
-    def test_the_mark_never_leaves_a_healthy_site(self):
+    def _mark(self, cr, fresh_read_at="same"):
+        """The re-read before the mark (a stub answering the fresh fabric) and the mark (its status as a fact)."""
         tasks = load(os.path.join(OP, "tasks", "main.yml"))
+        reread = dict(by_name(tasks, "Read the fabric again before marking its canary stale"))
+        reread.pop("kubernetes.core.k8s_info")
+        reread.pop("failed_when")
+        tr = cr["status"]["realization"]["translation"]
+        if fresh_read_at is None:
+            answer = {"failed": True, "msg": "boom"}
+        else:
+            fresh = {"status": {"realization": {"translation": dict(
+                tr, readAt=tr.get("readAt", "") if fresh_read_at == "same" else fresh_read_at)}}}
+            answer = {"resources": [fresh]}
+        reread["ansible.builtin.set_fact"] = {"_hybridfabric_fresh": answer}
+        reread.pop("register")
         mark = dict(by_name(tasks, "Mark an old translation canary reading stale"))
         status = mark.pop("operator_sdk.util.k8s_status")["status"]
         mark.pop("failed_when", None)
         mark["ansible.builtin.set_fact"] = {"written": status}
-        cr = self.fabric(ago(50), sites={"site-a": {"stale": False, "healthy": True, "error": "", "failedSince": ""},
+        return self.decide(cr, [reread, mark], out="written | default(none)")
+
+    def test_the_mark_never_leaves_a_healthy_site(self):
+        read_at = ago(50)
+        cr = self.fabric(read_at, sites={"site-a": {"stale": False, "healthy": True, "error": "", "failedSince": ""},
                                          "site-b": {"stale": True, "healthy": False, "error": "x",
                                                     "failedSince": "2026-01-01T00:00:00Z"}})
-        out = self.decide(cr, [mark], out="written")
+        out = self._mark(cr)
         sites = out["realization"]["translation"]["canaries"]
         self.assertEqual(sorted(sites), ["site-a", "site-b"])
         for s in sites.values():
             self.assertEqual((s["stale"], s["healthy"]), (True, False))
             self.assertIn("the reading is stale", s["error"])
-        self.assertEqual(sites["site-a"]["failedSince"], cr["status"]["realization"]["translation"]["readAt"])
+        # a site that read healthy: failed since the read became overdue (readAt + staleAfterMinutes), not the read
+        overdue = (datetime.datetime.strptime(read_at, "%Y-%m-%dT%H:%M:%SZ")
+                   + datetime.timedelta(minutes=45)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.assertEqual(sites["site-a"]["failedSince"], overdue)
+        self.assertIn("the reading is stale since " + overdue, sites["site-a"]["error"])
         self.assertEqual(sites["site-b"]["failedSince"], "2026-01-01T00:00:00Z")
         cond = out["conditions"][0]
         self.assertEqual((cond["type"], cond["status"], cond["reason"]), ("IPv6Translation", "Unknown", "CanaryStale"))
+
+    def test_the_mark_never_overwrites_a_newer_read(self):
+        """The job wrote a fresh read after the reconcile's snapshot: no mark; a failed re-read marks nothing either."""
+        cr = self.fabric(ago(50))
+        self.assertIsNone(self._mark(cr, fresh_read_at=ago(0)))
+        self.assertIsNone(self._mark(cr, fresh_read_at=None))
+        self.assertIsNotNone(self._mark(cr))
 
     def test_marked_once(self):
         stale_sites = {"site-a": {"stale": True, "healthy": False, "error": "x", "failedSince": ago(60)}}
@@ -196,6 +224,7 @@ class OperatorCanary(unittest.TestCase):
         tasks = load(os.path.join(OP, "tasks", "main.yml"))
         names = [t.get("name") for t in walk(tasks)]
         mark = names.index("Mark an old translation canary reading stale")
+        self.assertEqual(names.index("Read the fabric again before marking its canary stale"), mark - 1)
         self.assertLess(names.index("Read the Retry-now request"), names.index(self.TASKS[0]))
         self.assertLess(mark, names.index("Skip when already processed"))
         self.assertLess(mark, names.index("Skip while the last event is in flight"))

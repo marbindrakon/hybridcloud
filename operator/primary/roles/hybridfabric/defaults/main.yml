@@ -9,7 +9,9 @@
 #   own time (one fabric job, and its fabric-config lease, per run);
 # - a read older than staleAfterMinutes, three re-read intervals (45 min with the defaults; the re-runs did not
 #   refresh it: EDA down, a job stuck or failing) is marked stale here and now: every site's reading stale and not
-#   healthy, condition IPv6Translation Unknown/CanaryStale. In the steady state a read is at most interval +
+#   healthy, condition IPv6Translation Unknown/CanaryStale, failedSince (of a site that read healthy) the moment
+#   the read became overdue, readAt + staleAfterMinutes. The fabric is read again just before the mark, which is
+#   left out when a job recorded a newer read meanwhile. In the steady state a read is at most interval +
 #   reconcilePeriod + one job old (about 30 min), well below it.
 # An old read never reports healthy. The fabric job's role default hf_canary_reread_min_minutes
 # (hybridfabric_provision) must say the same interval in minutes: the job writes staleAfterMinutes from it, and this
