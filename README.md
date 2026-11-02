@@ -18,7 +18,7 @@ status. Argo CD on the central cluster deploys the whole platform from this repo
 - [Getting started](docs/tenant/getting-started.md): sign in, find your tenant, create a network
   and a VM environment, attach them, reach your VM.
 - [Hybrid networks tutorial](architecture/docs/tutorial/09-hybrid-networks.md): networks across
-  sites, placements, internet egress.
+  sites, placements, internet egress, IPv6.
 - [Glossary](docs/tenant/glossary.md), [Access and delegation](docs/tenant/access-and-delegation.md)
   and [Status reasons](docs/tenant/status-reasons.md): the words, who may do what, and what a state
   or reason means.
@@ -29,6 +29,8 @@ status. Argo CD on the central cluster deploys the whole platform from this repo
 
 - [Onboard a tenant](docs/platform/onboard-a-tenant.md): sites, the tenant, access groups,
   roles, sign-in.
+- [IPv6 realization](docs/platform/ipv6-realization.md): platform IPv6 pools, per-site switches,
+  translation, IPv6 egress, reverse DNS, the cloud edges.
 - [Bootstrap](bootstrap/README.md): build the charts and seed Argo CD on a new installation.
 - [Disconnected deploy](docs/disconnected-deploy.md): what a disconnected installation needs.
 - [Architecture](architecture/README.md) and its [index](architecture/docs/architecture.md).

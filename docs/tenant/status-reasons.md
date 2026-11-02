@@ -14,6 +14,7 @@ the platform to try again, and how deleting works.
 | **Updating** | The platform is applying your latest change. |
 | **Ready** | Done; the object is usable. A routine re-check keeps it Ready. |
 | **Degraded** | Usable, with reduced health. The summary says what is wrong. |
+| **Paused** | The platform team has paused the object's site (for maintenance, or while the site is powered off). The object keeps its last state; nothing on the site changes until it is resumed, and a deletion waits until then. |
 | **Failed** | It could not be completed. The reason says who has to act. |
 | **Deleting** | It is being deleted, or its deletion waits for something. |
 
@@ -139,6 +140,13 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NoJobStarted` | Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost. | The platform team |
 | `ProtectedChildren` | Deletion waits: some objects have deletion protection turned on. | You (the tenant) |
 | `UnknownKind` | Deletion waits: an object of an unknown kind is in the tenant. The platform team is looking at it. | The platform team |
+
+**Paused**
+
+| Reason | What it means | Who acts |
+|---|---|---|
+| `Paused` | Paused by the platform team; nothing changes on this site until it is resumed. | The platform team |
+| `SitePaused` | Held: its site is paused. It keeps its last state until the site is resumed. | Nobody: it continues by itself |
 
 **Failed**
 

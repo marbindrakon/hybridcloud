@@ -7,8 +7,8 @@ tenant `example-corp` (namespace `entity-example-corp`) and the sites `site-vm` 
 
 A **network** (`HybridNetwork`) is a tenant's routed private network that spans cloud sites, with its own address
 space. Each **network placement** (`NetworkPlacement`) puts the network on one cloud environment: a VM environment
-(`CloudVirt`) on an OpenShift Virtualization site, an OpenStack environment (`CloudOSO`) or an AWS environment
-(`CloudAWS`). The platform
+(`CloudVirt`) on an OpenShift Virtualization site, an OpenStack environment (`CloudOSO`), an AWS environment
+(`CloudAWS`) or a Google Cloud environment (`CloudGCP`). The platform
 gives each placement a subnet from the network's address space, of the size the tenant asks for (or a pinned
 prefix). Every placement's subnets reach every other placement's subnets of the same network, and nothing else.
 Two tenants can use the same prefixes, even the same addresses, without seeing each other.
@@ -22,7 +22,7 @@ touch it.
 |---|---|---|---|
 | `HybridFabric` | platform (`sovereign-cloud`) | platform | ASN, overlay MTU, VNI pools, border gateway nodes and credentials |
 | `CloudGateway` | platform | platform | attaches one site (a `CloudInfrastructure` with `evpn: true`) to the fabric |
-| `CloudVirt`, `CloudOSO` | tenant (`entity-<tenant>`) | tenant | VM environment on an OpenShift Virtualization site (its namespaces); OpenStack environment |
+| `CloudVirt`, `CloudOSO`, `CloudAWS`, `CloudGCP` | tenant (`entity-<tenant>`) | tenant | VM environment on an OpenShift Virtualization site (its namespaces); OpenStack environment; AWS environment; Google Cloud environment |
 | `HybridNetwork` | tenant | tenant | the network: address space, MTU (default and maximum: the fabric's `overlayMtu`) |
 | `NetworkPlacement` | tenant | tenant | network × environment × subnet size (or pinned prefix) |
 
@@ -225,7 +225,7 @@ spec:
 |---|---|---|
 | has IPv4 | `{family: 4, state: ready, mode: SourceNAT}` | IPv4 leaves through source address translation ([Internet egress](#internet-egress)). |
 | mode `Platform` | `{family: 6, state: ready, mode: Routed}` | IPv6 leaves unchanged from your platform addresses through a filter that admits only replies to connections opened from inside. |
-| mode `Platform`, where the platform doesn't offer IPv6 internet | `{family: 6, state: unavailable, reason: NotOffered}` | The network is Ready; IPv6 stays inside the network until the platform offers IPv6 internet. |
+| mode `Platform`, where the platform doesn't offer IPv6 internet | `{family: 6, state: unavailable, mode: Routed, reason: NotOffered}` | The network is Ready; IPv6 stays inside the network until the platform offers IPv6 internet. |
 | mode `Tenant` | `{family: 6, state: unavailable, reason: AddressChoice}` | Your own prefixes have no internet access. Use a network with IPv6 from the platform for that. |
 | mode `None` | no IPv6 row | |
 
@@ -307,7 +307,8 @@ spec:
   `gateway`: IPv4 always, IPv6 in VM and OpenStack environments); `status.prefixes` keeps listing the prefixes, IPv4
   first. `status.ipv6` shows how guests get their
   address (`addressing`: `DHCPv6` or `SLAAC`), the internet path (`internet.path`: `Fabric` or `Provider`) and, for
-  IPv6-only placements with translation, `translation`.
+  IPv6-only placements with translation, `translation`. With path `Fabric`, `internet` is the network's IPv6 row of
+  `status.egress.families` as it was at the placement's last run; the network's row is the current one.
 - **Where IPv6 is offered:** a site offers IPv6 placements only once the platform team has turned IPv6 on for it,
   and some sites offer IPv6-only placements or only some sources. Elsewhere the placement fails with
   `FamilyUnavailable` before anything is allocated, and the message names what is missing:
@@ -315,7 +316,8 @@ spec:
   - "IPv6-only placements are not offered on this site";
   - "the network has no IPv6 address space" (an `ipv6` placement of a network in mode `None`);
   - "this site can't carry tenant-provided IPv6 prefixes", or "this site offers IPv6 only from the cloud provider;
-    use source Provider".
+    use source Provider";
+  - "IPv6 source Provider is not offered on this site" (or `Network`): the site offers the other source only.
 
   `source: Provider` on a network with your own prefixes is refused with `PrefixInvalid` ("provider IPv6 needs a
   network with IPv6 from the platform").
@@ -343,8 +345,9 @@ spec:
   Name the interface by its MAC address or its exact name, never by a pattern such as `en*`: on RHEL images
   cloud-init writes sysconfig profiles, and a profile matched by a pattern binds to no device, so NetworkManager's
   own default profile takes the interface with a stable-privacy link-local address and the guest gets no IPv6
-  address (Fedora's NetworkManager renderer takes the pattern). The placement page offers a snippet of this form,
-  built from the placement's status.
+  address (Fedora's NetworkManager renderer takes the pattern). The placement page offers a snippet built from the
+  placement's status; it names the interface `eth0`, so replace that with a `match` on the VM's MAC address, or with
+  the interface's exact name, before you use it.
 - **RHEL images:** also switch the interface's profile to EUI-64 at first boot. NetworkManager's default profile
   may take the interface whatever `networkData` says, and a `NetworkManager.conf` default for `ipv6.addr-gen-mode`
   is not enough on these images; the profile itself has to change. The DHCPv6 lease arrives as soon as the profile
@@ -518,8 +521,9 @@ Tenants:
   network, or from the cloud provider) with the site's default preselected. Options a site lacks are greyed out
   with the reason.
 - **A placement's page** shows each family's subnet and source, how guests get their IPv6 address, the internet
-  path and, on IPv6-only placements with translation, the translation prefix and resolvers with a cloud-init
-  snippet to copy.
+  path and, on IPv6-only placements with translation, the translation prefix and resolvers. Placements with an IPv6
+  subnet also offer a cloud-init snippet to copy ([Guests on IPv6](#guests-on-ipv6)), with clatd user data on
+  IPv6-only placements with translation.
 - **Environments → OpenShift Virtualization:** environments with their site, VM namespaces (network, ready), quota,
   DNS zone and API endpoint. The site picker offers the sites of the tenant profile.
 - Platform objects aren't shown to tenants.
@@ -534,9 +538,9 @@ Platform team (**Fabric and sites**):
 
 ## Status
 
-Each object shows a state (Waiting, Creating, Updating, Ready, Degraded, Failed, Deleting), a one-line summary and
-the reason of its `Ready` condition; [Status reasons](../../../docs/tenant/status-reasons.md) lists every reason and
-who acts on it. The reasons you meet most with networks:
+Each object shows a state (Waiting, Creating, Updating, Ready, Degraded, Paused, Failed, Deleting), a one-line summary
+and the reason of its `Ready` condition; [Status reasons](../../../docs/tenant/status-reasons.md) lists every reason
+and who acts on it. The reasons you meet most with networks:
 
 | State | Common reasons |
 |---|---|
