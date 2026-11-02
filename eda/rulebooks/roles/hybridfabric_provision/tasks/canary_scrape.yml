@@ -20,7 +20,8 @@
     # node reached yet
     hf_canary_read: >-
       {{ hf_canary_targets | selectattr('address') | list if hf_canary_node | length == 0
-         else hf_canary_targets | selectattr('address') | selectattr('site', 'in', hf_canary_retry | default([])) | list }}
+         else hf_canary_targets | selectattr('address')
+              | selectattr('site', 'in', hf_canary_retry | default([])) | list }}
   block:
     - name: "{{ hf_canary_bgw.name }}: read the canary metrics through the gateways"
       ansible.builtin.shell:
