@@ -196,8 +196,12 @@ exit
 {% for c in v.circuits %}
 ! AttachmentCircuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): routes from the CE in the
 ! accept list and outside the deny list; to the CE the network's placement prefixes{{ ' and the default route' if c.advertiseDefault else '' }}
+{# an accept list without IPv4 entries (all of them IPv6) admits nothing, explicitly: a route-map entry that names a
+   missing prefix-list must never be read as "permit" #}
 {% for e in c.accept %}
 ip prefix-list {{ c.id }}-ACCEPT seq {{ loop.index * 5 }} permit {{ e }}
+{% else %}
+ip prefix-list {{ c.id }}-ACCEPT seq 5 deny 0.0.0.0/0 le 32
 {% endfor %}
 {% for e in c.deny %}
 ip prefix-list {{ c.id }}-DENY seq {{ loop.index * 5 }} permit {{ e }}
@@ -228,6 +232,8 @@ exit
 ! IPv6 lists; to the CE the network's IPv6 placement prefixes{{ ' and the default route' if c.ipv6.advertiseDefault else '' }}
 {% for e in c.ipv6.accept %}
 ipv6 prefix-list {{ c.id }}-ACCEPT6 seq {{ loop.index * 5 }} permit {{ e }}
+{% else %}
+ipv6 prefix-list {{ c.id }}-ACCEPT6 seq 5 deny ::/0 le 128
 {% endfor %}
 {% for e in c.ipv6.deny %}
 ipv6 prefix-list {{ c.id }}-DENY6 seq {{ loop.index * 5 }} permit {{ e }}

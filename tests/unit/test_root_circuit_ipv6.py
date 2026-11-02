@@ -97,7 +97,7 @@ def af(text, vrf, fam):
 
 
 # the lines a circuit's IPv6 side may add to the release's render (and the VRF comment on the IPv6 family)
-ADDED = [r"^!", r"^ !$", r"^ipv6 prefix-list AC\d+-(ACCEPT6|DENY6|OUT6) seq \d+ permit ", r"^route-map AC\d+-(IN6|OUT6) (permit|deny) \d+$",
+ADDED = [r"^!", r"^ !$", r"^\{#", r"^ipv6 prefix-list AC\d+-(ACCEPT6|DENY6|OUT6) seq \d+ permit ", r"^route-map AC\d+-(IN6|OUT6) (permit|deny) \d+$",
          r"^ match ipv6 address prefix-list AC\d+-(DENY6|ACCEPT6|OUT6)$", r"^exit$",
          r"^ neighbor 2001:db8:4005:100::3 (remote-as \d+|description AC\d+6 \S+|password \S+|timers 10 30|bfd)$",
          r"^ address-family ipv6 unicast$", r"^ exit-address-family$",
@@ -207,6 +207,18 @@ class TemplateCircuitIPv6(unittest.TestCase):
         v["hf_attach_restart"] = 0
         v["hf_node_vrfs"][1]["circuits"][0]["maxPrefixAction"] = "teardown"
         self.assertIn(f"  neighbor {CE6} maximum-prefix 100\n", T.render(T.RT, v))
+
+    def test_ipv6_only_accept_list_admits_no_ipv4(self):
+        """Every accept entry IPv6: the IPv4 session stays and its accept list denies everything, explicitly."""
+        v = circuit_only()
+        v["hf_node_vrfs"][1]["circuits"][0]["accept"] = []
+        out = T.render(T.RT, v)
+        self.assertIn("ip prefix-list AC1-ACCEPT seq 5 deny 0.0.0.0/0 le 32\n", out)
+        self.assertEqual(len(re.findall(r"^ip prefix-list AC1-ACCEPT ", out, re.M)), 1)
+        self.assertIn("route-map AC1-IN permit 20\n match ip address prefix-list AC1-ACCEPT\nexit\n", out)
+        # the same guard on the IPv6 list (the planner gives a circuit IPv6 only with IPv6 entries)
+        v["hf_node_vrfs"][1]["circuits"][0]["ipv6"]["accept"] = []
+        self.assertIn("ipv6 prefix-list AC1-ACCEPT6 seq 5 deny ::/0 le 128\n", T.render(T.RT, v))
 
     def test_a_second_circuit_without_ipv6_stays_ipv4(self):
         v = circuit_only()
@@ -402,6 +414,13 @@ class ApplyCircuitIPv6(ApplyCase):
         self.assertNotIn('oifname "xe*"', nft)
         # the /64 inside the /48 is merged (an interval set refuses overlapping elements)
         self.assertIn("elements = { ::, 2001:db8:50::/48, 2001:db8:4005:100::/64, fe80::/10 }", nft)
+        self.assertIsNone(nft_check(nft))
+
+    def test_sources_any(self):
+        """An accept entry ::/0 le 128 collapses sources6 to ::/0 (the planner's form): the set is just that."""
+        self.up(dict(CIRCUIT6, sources6=["::/0"]))
+        nft = self.h.get_state()["ns"][""]["nft"]["ip6 shc_attach6"]
+        self.assertIn("set src_3001 { type ipv6_addr; flags interval; elements = { ::/0 }; }", nft)
         self.assertIsNone(nft_check(nft))
 
     def test_address_change_and_rollback(self):
