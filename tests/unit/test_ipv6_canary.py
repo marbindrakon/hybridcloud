@@ -243,9 +243,10 @@ class FabricStatus(unittest.TestCase):
                                               "message": "the translation canary passes every check on site-a, site-b"}])
 
     def test_failed_keeps_since_and_alerts_after_the_minutes(self):
-        out = self.status({"site-a": self.ok(), "site-b": self.bad(deny=0, resolver=0)})
+        # the run's time pinned: without hf_canary_now the fallback lookup is evaluated per use and can cross a second
+        out = self.status({"site-a": self.ok(), "site-b": self.bad(deny=0, resolver=0)}, now="2027-01-15T08:00:00Z")
         b = out["status"]["site-b"]
-        self.assertTrue(b["failedSince"])
+        self.assertEqual(b["failedSince"], "2027-01-15T08:00:00Z")
         self.assertEqual(out["alert"], [])
         c = out["conditions"][0]
         self.assertEqual((c["type"], c["status"], c["reason"]), ("IPv6Translation", "False", "CanaryFailed"))
