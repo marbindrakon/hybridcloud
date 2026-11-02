@@ -154,6 +154,59 @@ class ScrapeScript(unittest.TestCase):
         _, _, calls = self.execute({"ip netns exec": (0, metrics(NOW, **ALL_OK), "")}, port=19464)
         self.assertTrue(all(c[-1].endswith(":19464/metrics") for c in calls if "curl" in c))
 
+    def run_script(self, curl, clock=None):
+        """The script with a run() whose curl answers come from curl(netns, attempt) and a fake clock."""
+        code = textwrap.dedent(re.search(r"python3 - <<'PY'\n(.*?)\nPY\s*$", self.render(), re.S).group(1))
+        ns = {"__name__": "canary_under_test"}
+        exec(compile(code, "<canary>", "exec"), ns)
+        tries = {}
+
+        def run(cmd):
+            if "curl" not in cmd:
+                return (0, "[]", "")
+            netns = cmd[3]
+            tries[netns] = tries.get(netns, 0) + 1
+            return curl(netns, tries[netns])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ns["main"](run, now=NOW, **({"clock": clock} if clock else {}))
+        line = [ln for ln in out.getvalue().splitlines() if ln.startswith("canary=")][-1]
+        return json.loads(line.split("=", 1)[1]), tries
+
+    def test_a_probe_is_tried_again_from_the_same_node(self):
+        """Each try is a new curl (a new connection): a reply the site sent to the other node on the first try comes
+        back on a later one; a probe that never answers is tried three times, then left to the next node."""
+        ok = (0, metrics(NOW - 30, **ALL_OK), "")
+        timeout = (28, "", "curl: (28) Connection timed out after 5001 milliseconds\n")
+        rec, tries = self.run_script(lambda netns, n: ok if (netns == "gw-gw-a" and n == 2) else
+                                     (ok if netns == "gw-gw-b" else timeout))
+        self.assertEqual(tries, {"gw-gw-a": 2, "gw-gw-b": 1})
+        a = rec["site-a"]
+        self.assertEqual((a["healthy"], a["retry"], a["error"]), (True, False, ""))
+        rec, tries = self.run_script(lambda netns, n: ok if netns == "gw-gw-b" else timeout)
+        self.assertEqual(tries, {"gw-gw-a": 3, "gw-gw-b": 1})
+        a = rec["site-a"]
+        self.assertEqual((a["healthy"], a["retry"]), (False, True))
+        self.assertEqual(a["error"], "unreachable from gw-gw-a VRF t51001 (curl exit 28: curl: (28) Connection timed out "
+                                     "after 5001 milliseconds) in 3 tries")
+
+    def test_the_tries_are_bounded_by_the_nodes_budget(self):
+        """Past the node's budget (60 s) a failed site gets no further try; every site still gets its first one."""
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        def curl(netns, n):
+            t[0] += 50  # each try takes 50 s of the budget (a curl never takes more than 5 s; the clock is fake)
+            return (28, "", "")
+        rec, tries = self.run_script(curl, clock=clock)
+        # site-a: 50 s, then a second try (still within 60 s) ends at 100 s; site-b: its first try only
+        self.assertEqual(tries, {"gw-gw-a": 2, "gw-gw-b": 1})
+        self.assertTrue(rec["site-a"]["error"].endswith(") in 2 tries"))
+        self.assertTrue(rec["site-b"]["error"].endswith("(curl exit 28)"))
+        self.assertEqual((rec["site-a"]["retry"], rec["site-b"]["retry"]), (True, True))
+
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class FabricTargets(unittest.TestCase):

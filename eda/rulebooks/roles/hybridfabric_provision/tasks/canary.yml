@@ -4,8 +4,9 @@
 # The fabric's sites are the sites of its CloudGateways (spec.fabricRef, spec.cloudRef); a site reports where its probe
 # answers in status.realization.ipv6Canary {placement, vrf, address} (the site job), or why it found none (error).
 # The first border gateway node that answers reads every probe from the site's gateway namespace in the placement's
-# VRF (canary_scrape.yml); a probe it could not reach is read again from each other node, in node order, until one
-# reaches it (the site may return the reply through the other node). Never fails the fabric job: a canary that could
+# VRF (canary_scrape.yml; up to three tries per probe and node, each a new connection); a probe it could not reach is
+# read again from each other node, in node order, until one reaches it (the site may return the reply through the
+# other node). Never fails the fabric job: a canary that could
 # not be read says so in the status (main.yml, "Set the translation canary status").
 # Sets hf_canary_cfg, hf_canary_targets [{site, gateway, netns, placement, vrf, address, error}], hf_canary_scrape
 # ({site: {address, at, checks, stale, healthy, error, node, note}}: node read it; note says which nodes could not),

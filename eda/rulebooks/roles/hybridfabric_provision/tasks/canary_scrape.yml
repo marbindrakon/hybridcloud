@@ -8,7 +8,10 @@
 #   ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 -s -f --max-time 5 [--interface <source>] http://[<address>]:<port>/metrics
 # where <source> is the VRF's own global IPv6 address (the ICMPv6 source /128 of the dual-stack core on the VRF
 # device; without one the kernel chooses). Parses `shc_ipv6_canary_check{check="<name>"} <0|1>` and
-# `shc_ipv6_canary_run_timestamp_seconds <epoch>`; a run older than three probe periods (180 s) is stale. Prints
+# `shc_ipv6_canary_run_timestamp_seconds <epoch>`; a run older than three probe periods (180 s) is stale. A probe that
+# does not answer is tried up to three times from the node, each a new curl (a new connection, so a new source port: a
+# site that spreads flows over the gateway nodes by their 5-tuple sends each reply to a node of its own choosing), while
+# the node's time budget (60 s of reads; the first try of every site always runs) lasts. Prints
 # canary=<json> {site: {address, at, checks {name: 0|1}, stale, healthy, error, retry}} and always exits 0 (retry: the
 # probe did not answer; another node may reach it). An unreachable node or a failed script reads nothing, so the next
 # node tries. Each kept reading names the node that read it (node) and, when an earlier node could not reach the
@@ -33,6 +36,9 @@
           STAMP = re.compile(r'^shc_ipv6_canary_run_timestamp_seconds\s+(\S+)$')
           NAME = re.compile(r'^[A-Za-z0-9_.-]{1,64}$')
           STALE_AFTER = 180
+          # tries per site on this node (each a new connection) and the node's budget for further tries, in seconds
+          ATTEMPTS = 3
+          BUDGET = 60
 
 
           def run(cmd):
@@ -59,7 +65,8 @@
               return ""
 
 
-          def read(run, t, port, now):
+          def read(run, t, port, now, more=lambda: False):
+              """One site's reading; more() says whether time is left for another try after a failed one."""
               rec = {"address": t["address"], "at": "", "checks": {}, "stale": True, "healthy": False, "error": "",
                      "retry": False}
               try:
@@ -76,10 +83,16 @@
               if src:
                   cmd += ["--interface", src]
               cmd.append("http://[%s]:%d/metrics" % (addr, port))
-              rc, text, err = run(cmd)
+              tries = 0
+              while True:
+                  tries += 1
+                  rc, text, err = run(cmd)
+                  if rc == 0 or tries >= ATTEMPTS or not more():
+                      break
               if rc != 0:
-                  rec["error"] = "unreachable from %s VRF %s (curl exit %d%s)" % (
-                      t["netns"], t["vrf"], rc, (": " + err.strip().splitlines()[-1][:120]) if err.strip() else "")
+                  rec["error"] = "unreachable from %s VRF %s (curl exit %d%s)%s" % (
+                      t["netns"], t["vrf"], rc, (": " + err.strip().splitlines()[-1][:120]) if err.strip() else "",
+                      (" in %d tries" % tries) if tries > 1 else "")
                   rec["retry"] = True
                   return rec
               checks, stamp = {}, None
@@ -113,13 +126,14 @@
               return rec
 
 
-          def main(run, now=None):
+          def main(run, now=None, clock=time.monotonic):
               targets = json.loads({{ hf_canary_read | selectattr('address') | list | to_json | to_json }})
               port = int({{ hf_canary_cfg.port | default(9464, true) | int }})
               now = time.time() if now is None else now
+              start = clock()
               out = {}
               for t in targets:
-                  out[t["site"]] = read(run, t, port, now)
+                  out[t["site"]] = read(run, t, port, now, lambda: clock() - start < BUDGET)
               print("canary=" + json.dumps(out, sort_keys=True))
               return 0
 
