@@ -301,9 +301,8 @@ class CheckCircuitTest(unittest.TestCase):
         r = self.check(["::/0", "10.50.0.0/16"])
         self.assertTrue(r["acceptsDefault6"])
         self.assertFalse(r["acceptsDefault"])
-        self.assertIn("::/0 is not accepted from the CE while the network has IPv6 internet egress", r["notes"])
-        self.assertNotIn("::/0 is not accepted from the CE while the network has IPv6 internet egress",
-                         self.check(["::/0"], egress6=False)["notes"])
+        self.assertIn("::/0 is never accepted from the CE", r["notes"])
+        self.assertIn("::/0 is never accepted from the CE", self.check(["::/0"], egress6=False)["notes"])
         note = "no IPv6 default route is advertised: the network has no IPv6 internet egress"
         self.assertIn(note, self.check(V6_ACCEPT, adv=True, egress6=False)["notes"])
         self.assertNotIn(note, self.check(V6_ACCEPT, adv=True)["notes"])
@@ -387,8 +386,8 @@ class AttachmentsPlanTest(unittest.TestCase):
         p6 = shc_fabric.attachments_plan(plan_req([circuit("c1", r)], egress=eg))["circuits"][0]
         self.assertTrue(p6["advertiseDefault"])           # IPv4 still has its default
         self.assertEqual(p6["ipv6"]["advertise"], ["2001:db8:4005:4000::/64 le 128"])
-        self.assertNotIn("::/0", p6["ipv6"]["deny"])
-        self.assertFalse(p6["ipv6"]["denyDefault"])
+        self.assertIn("::/0", p6["ipv6"]["deny"])             # never accepted, with or without egress
+        self.assertTrue(p6["ipv6"]["denyDefault"])
         self.assertFalse(p6["ipv6"]["advertiseDefault"])
 
     def test_ipv6_only_accept_list(self):

@@ -252,9 +252,10 @@ spec:
   each address in `neighbors6`; `status.sessions` lists every session per node with its `family`, and the circuit is
   Ready when all of them are established. Your router learns the network's IPv6 placement prefixes (and `::/0` when
   `advertise.default` is set and the network has IPv6 internet access); routes inside the network's own IPv6 space or
-  the platform's ranges are never accepted, nor `::/0` while the network has IPv6 internet access. Traffic from your
-  router reaches the IPv6 internet only from addresses inside the network's platform block. Where the platform
-  doesn't offer IPv6 on edge connections, or the network has no IPv6, the circuit fails with `FamilyUnavailable`.
+  the platform's ranges are never accepted, nor `::/0` (the network's sites keep their own IPv6 default route).
+  Traffic from your router reaches the IPv6 internet only from addresses inside the network's platform block. Where
+  the platform doesn't offer IPv6 on edge connections, or the network has no IPv6, the circuit fails with
+  `FamilyUnavailable`.
   Removing the IPv6 entries removes the IPv6 session again; the IPv4 session is not touched.
 
 ### A placement's IPv6 subnet

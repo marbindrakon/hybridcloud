@@ -69,9 +69,9 @@ actions:
                   0.0.0.0/0 while the network wants internet egress; advertise = the placement prefixes and 0.0.0.0/0
                   when asked for and the network has internet egress). A circuit with IPv6 accept entries also gets
                   ipv6 {link, prefixLength, ce, nodes, accept, deny, advertise, denyDefault, advertiseDefault,
-                  sources}: deny = the network's IPv6 space and placement prefixes, platform_ranges6 and ::/0 while
-                  the network has IPv6 internet egress; advertise = the IPv6 placement prefixes and ::/0 when asked
-                  for and the network has IPv6 internet egress; sources = the accepted prefixes and the link (what the
+                  sources}: deny = the network's IPv6 space and placement prefixes, platform_ranges6 and ::/0
+                  (always: the site gateways keep their own IPv6 default); advertise = the IPv6 placement prefixes
+                  and ::/0 when asked for and the network has IPv6 internet egress; sources = the accepted prefixes and the link (what the
                   nodes admit as source from the CE). A circuit without IPv6 entries plans exactly as before. Per
                   node the root's attachments (root.json); circuits it can't realize under skipped; vrfs: per node
                   the networks with a root VRF (egress entry and/or circuits), for the node's FRR configuration
@@ -881,8 +881,10 @@ def check_circuit(req):
     if req.get("advertiseDefault") and not egress:
         notes.append("no default route is advertised: the network has no provider internet egress")
     egress6 = bool(req.get("egressInternet6"))
-    if accepts_default6 and egress6:
-        notes.append("::/0 is not accepted from the CE while the network has IPv6 internet egress")
+    if accepts_default6:
+        # the site gateways keep their own IPv6 default route (the egress default, or the fail-fast one without
+        # egress), so a CE's would never be used: never accepted
+        notes.append("::/0 is never accepted from the CE")
     if ipv6 and req.get("advertiseDefault") and not egress6:
         notes.append("no IPv6 default route is advertised: the network has no IPv6 internet egress")
     return {"errors": errors, "familyErrors": family_errors, "notes": sorted(set(notes)),
@@ -1080,15 +1082,13 @@ def attachments_plan(req):
                            key=lambda n: (int(n.network_address), n.prefixlen))
             own6 = sorted(collapse(space.get(net_key, []) + mine6, 6),
                           key=lambda n: (int(n.network_address), n.prefixlen))
-            deny6 = [entry_text(n, le=128) if n.prefixlen < 128 else str(n) for n in own6 + reserved6]
-            if egress6:
-                deny6.append("::/0")
+            deny6 = [entry_text(n, le=128) if n.prefixlen < 128 else str(n) for n in own6 + reserved6] + ["::/0"]
             nat6 = bool(r.get("advertiseDefault")) and egress6
             advertise6 = ([entry_text(n, le=128) if n.prefixlen < 128 else str(n) for n in mine6]
                           if r.get("advertiseNetworkPrefixes", True) else []) + (["::/0"] if nat6 else [])
             plan["ipv6"] = {"link": str(link6), "prefixLength": 64, "ce": str(ce6),
                             "nodes": {n: str(addrs6[n]) for n in plan["nodes"]},
-                            "accept": accept6, "deny": deny6, "advertise": advertise6, "denyDefault": egress6,
+                            "accept": accept6, "deny": deny6, "advertise": advertise6, "denyDefault": True,
                             "advertiseDefault": nat6,
                             # what a node admits as source from the CE: the accepted prefixes and the link
                             "sources": [str(n) for n in sorted(collapse(nets6 + [link6], 6),

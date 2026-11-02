@@ -827,8 +827,8 @@ nftables and device settings). With IPv6 entries:
   every session of every family is established.
 - **Policy.** Accepted: the IPv6 accept entries. Never accepted: the network's IPv6 space (`spec.prefixes`,
   `status.addressSpace`, the platform block) and its placements' IPv6 prefixes, the platform's IPv6 ranges (`linkPool6`,
-  `reserved6`, `core.loopbackPool6`, `core.icmpSource6` and every `translation.<site>.pref64`) and `::/0` while the
-  network has IPv6 internet egress. Advertised: the placements' IPv6 prefixes (with `advertise.networkPrefixes`) and
+  `reserved6`, `core.loopbackPool6`, `core.icmpSource6` and every `translation.<site>.pref64`) and `::/0` (the
+  sites' gateways keep their own IPv6 default route, so a CE's would never be used). Advertised: the placements' IPv6 prefixes (with `advertise.networkPrefixes`) and
   `::/0` when `advertise.default` is set and the network has IPv6 internet egress.
 - **Node.** The circuit's VLAN device gets IPv6 (no router advertisements or autoconfiguration taken from the CE) and
   the node's /64 address; the nodes admit from the CE only sources inside the accepted prefixes, the link and
