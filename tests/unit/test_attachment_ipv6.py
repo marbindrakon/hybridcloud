@@ -549,6 +549,7 @@ class RecordTest(unittest.TestCase):
                          {"address6": None, "secondAddress6": None, "neighbors6": None})
         self.assertEqual((out["real"]["link6"], out["real"]["ce6"]), (None, None))
         self.assertNotIn("link6", out["r"])                    # the realization (and its revision) unchanged
+        self.assertEqual(out["real"]["rev"], out["r"]["rev"])  # the patch carries the revision
         plan6 = shc_fabric.circuit_plan({"attachments": AT, "nodes": NODES, "index": 0, "ipv6": True})
         out6 = run_play(picked + [write_out("{'ce': ac_ce_config_status}")], job_vars(plan6, V6_ACCEPT))
         self.assertEqual(out6["ce"]["address6"], "2001:db8:4005:100::3/64")
