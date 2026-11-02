@@ -584,8 +584,9 @@ No placement of the canary network on the site: no `ipv6Canary`. A lookup that f
 recorded as `error`.
 
 **The fabric job**, after the nodes are configured, reads the canary of every site of the fabric (the sites of its
-gateways) that reports one, on one border gateway node (the first that answers): from the site's gateway namespace in
-the placement's VRF, `ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 http://[<address>]:<port>/metrics`, with
+gateways) that reports one, on one border gateway node (the first that answers; a probe that node cannot reach is read
+again from each other node in turn, because the site may return the reply through another node, and the site fails
+only when no node reaches it): from the site's gateway namespace in the placement's VRF, `ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 http://[<address>]:<port>/metrics`, with
 the VRF's own global IPv6 address as source (the ICMPv6 source of the dual-stack core, `core.icmpSource6`; the probe's
 replies must route back to it). It records on the HybridFabric:
 
@@ -603,6 +604,8 @@ status:
           healthy: true       # reachable, not stale, every check 1
           error: ""           # why not healthy, when that is not a failed check
           failedSince: ""     # since when it has not been healthy (kept across runs)
+          node: bgw-1         # the border gateway node that read it
+          note: ""            # which nodes could not reach the probe, when another node read it or none did
       readAt: <when the fabric job read the canaries>
       alertMinutes: 5
       staleAfterMinutes: 15   # 3 x alertMinutes
