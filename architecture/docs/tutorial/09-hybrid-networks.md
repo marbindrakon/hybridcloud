@@ -244,7 +244,18 @@ spec:
   destinations by translation where the platform offers it (`status.egress.ipv4Translation`; on each placement
   `status.ipv6.translation` gives the translation prefix and the resolvers to use). Dual-stack networks never get
   translation: they use their own IPv4. There is no switch for it.
-- Your own edge: edge connections carry IPv4 only; they don't accept IPv6 routes from your router yet.
+- **Your own edge.** An edge connection (`AttachmentCircuit`) carries IPv6 once its `spec.routing.accept` has an IPv6
+  entry, for example `[10.50.0.0/16 le 32, "2001:db8:50::/48 le 64"]`
+  ([sample](../../../samples/attachmentcircuit/example-edge-dual-stack.yaml)). The circuit then gets an IPv6 /64 next
+  to its IPv4 link and a second BGP session over IPv6 from every edge node, with the same AS, password, BFD and
+  route limit. Configure your router from `status.ceConfig`: `address6` on the circuit's VLAN and one IPv6 session to
+  each address in `neighbors6`; `status.sessions` lists every session per node with its `family`, and the circuit is
+  Ready when all of them are established. Your router learns the network's IPv6 placement prefixes (and `::/0` when
+  `advertise.default` is set and the network has IPv6 internet access); routes inside the network's own IPv6 space or
+  the platform's ranges are never accepted, nor `::/0` while the network has IPv6 internet access. Traffic from your
+  router reaches the IPv6 internet only from addresses inside the network's platform block. Where the platform
+  doesn't offer IPv6 on edge connections, or the network has no IPv6, the circuit fails with `FamilyUnavailable`.
+  Removing the IPv6 entries removes the IPv6 session again; the IPv4 session is not touched.
 
 ### A placement's IPv6 subnet
 
