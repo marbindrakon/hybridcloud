@@ -5264,7 +5264,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.3.9"  # img-2.3.9: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-2.3.8: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-2.3.7: site pause (phase Paused badge, the site form paused switch, 10-29)
+      tag: "img-2.3.10"  # img-2.3.10: the snippet re-activates the connection so DHCP-supplied DNS goes (NetworkManager before 1.58 keeps it on a reapply) (IPv6 V11); img-2.3.9: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-2.3.8: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-2.3.7: site pause (phase Paused badge, the site form paused switch, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5304,7 +5304,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.3.9"  # img-5.3.9: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-5.3.8: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-5.3.7: site pause (phase Paused badge, 10-29)
+      tag: "img-5.3.10"  # img-5.3.10: the snippet re-activates the connection so DHCP-supplied DNS goes (NetworkManager before 1.58 keeps it on a reapply) (IPv6 V11); img-5.3.9: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-5.3.8: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-5.3.7: site pause (phase Paused badge, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5338,7 +5338,7 @@ sovereignAdminPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.4.10"  # img-1.4.10: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-1.4.9: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-1.4.8: site pause (phase Paused badge, the site form paused switch, 10-29)
+      tag: "img-1.4.11"  # img-1.4.11: the snippet re-activates the connection so DHCP-supplied DNS goes (NetworkManager before 1.58 keeps it on a reapply) (IPv6 V11); img-1.4.10: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-1.4.9: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-1.4.8: site pause (phase Paused badge, the site form paused switch, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5363,7 +5363,7 @@ sovereignTenantPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.5.10"  # img-1.5.10: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-1.5.9: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-1.5.8: site pause (phase Paused badge, 10-29)
+      tag: "img-1.5.11"  # img-1.5.11: the snippet re-activates the connection so DHCP-supplied DNS goes (NetworkManager before 1.58 keeps it on a reapply) (IPv6 V11); img-1.5.10: the cloud-init snippet keeps IPv6-only guests on the translation resolvers (ignores DHCP-supplied DNS) (IPv6 V11); img-1.5.9: placement translation path and IPv4 source, reasons UpstreamDown and CanaryStale (IPv6 V11); img-1.5.8: site pause (phase Paused badge, 10-29)
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
