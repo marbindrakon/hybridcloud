@@ -31,6 +31,13 @@
 #   egress) holding the node's address on the circuit's link, with strict reverse path filtering and no IPv6; the
 #   nftables table ip shc_attach: the network's conntrack zone on the device, nothing to the node itself from it but
 #   BGP from the link, BFD and ICMP, nothing to the platform's sources and, unless nat, nothing into the egress veth.
+#   A circuit with address6 (and link6, sources6, egress6; absent = IPv4 only, as above) also carries IPv6: the device
+#   takes no router advertisements or SLAAC, keeps its link-local and holds address6 (nodad), and the nftables table
+#   ip6 shc_attach6 (IPv6 rules only; the IPv4 table above is untouched; loaded before IPv6 comes on at any device,
+#   fail closed): the zone as above, a packet from the device whose source is outside sources6, the link and
+#   link-local dropped, nothing to the node from it but BGP from the link, BFD, ICMPv6 (echo, errors, MLD) and
+#   neighbour discovery from the link or link-local, and unless egress6 nothing into the egress veth. The table goes
+#   when no circuit has address6 (a run that never had one issues no IPv6 command), and the device's IPv6 goes off.
 #   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed.
 #   Root VRFs e<digits> that neither the egress nor a circuit lists are removed with their devices.
 # instance type "gateway" (a CloudGateway, network namespace <netns>):
@@ -83,6 +90,8 @@ ICMP6RATE=$(opt .icmp6RateLimitMs)
 POOLS6=/etc/shc-fabric/$I.pools6; POOLS6_USED=""
 # the IPv6 egress was applied (egress6_up): a run without egress.ipv6 removes it
 MARK6=/etc/shc-fabric/$I.egress6
+# the circuits' IPv6 filter table was loaded (attach_up): a run without a circuit with address6 removes it
+MARKA6=/etc/shc-fabric/$I.attach6
 if [ -z "$LOPOOL6$ICMPPOOL6" ] && [ -r "$POOLS6" ]; then
   { read -r LOPOOL6 || true; read -r ICMPPOOL6 || true; } < "$POOLS6"
   POOLS6_USED=1
@@ -521,19 +530,39 @@ for l in json.load(sys.stdin):
     "$(jq -r '.attachments.vlanPool[0] // 1' "$CONF")" "$(jq -r '.attachments.vlanPool[1] // 0' "$CONF")"
 }
 
-# devices, addresses, filters and the nftables table (no counters)
+# a circuit asks for IPv6, or the IPv6 table was loaded (no IPv6 command otherwise)
+attach6_known() {
+  [ -e "$MARKA6" ] || jq -e '[.attachments.circuits // [] | .[] | select((.address6 // "") != "")] | length > 0' \
+    "$CONF" >/dev/null 2>&1
+}
+
+# devices, addresses, filters and the nftables tables (no counters)
 attach_state() {
-  local d
+  local d k6=""
+  ! attach6_known || k6=1
   for d in $(attach_devices); do
     ip -o link show dev "$d" | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|master [a-z0-9-]*\|state [A-Z]*'
     ip -br -4 addr show dev "$d"
     cat "/proc/sys/net/ipv4/conf/$d/rp_filter" "/proc/sys/net/ipv6/conf/$d/disable_ipv6" 2>/dev/null || true
+    if [ -n "$k6" ]; then
+      ip -br -6 addr show dev "$d"
+      cat "/proc/sys/net/ipv6/conf/$d/accept_ra" "/proc/sys/net/ipv6/conf/$d/autoconf" 2>/dev/null || true
+    fi
   done
   nft -s list table ip shc_attach 2>/dev/null || true
+  [ -z "$k6" ] || nft -s list table ip6 shc_attach6 2>/dev/null || true
+}
+
+# no circuit with IPv6 any more: the IPv6 table goes (the devices' IPv6 goes off in attach_up)
+attach6_down() {
+  [ -e "$MARKA6" ] || return 0
+  nft delete table ip6 shc_attach6 2>/dev/null || true
+  rm -f "$MARKA6"
 }
 
 attach_down() {
   local d
+  attach6_down
   nft delete table ip shc_attach 2>/dev/null || true
   for d in $(attach_devices); do ip link del "$d"; done
 }
@@ -583,24 +612,106 @@ print("\n".join(out))
 PY
 }
 
+# the IPv6 table for the circuits with address6 (replaced as a whole; only called when there is one)
+attach6_nft() {
+  python3 - "$CONF" <<'PY'
+import ipaddress, json, sys
+a = json.load(open(sys.argv[1]))["attachments"]
+cs = [c for c in a.get("circuits") or [] if c.get("address6")]
+for c in cs:  # the link as a network (the form nft prints)
+    c["link6"] = str(ipaddress.ip_network(str(c.get("link6") or c["address6"]), strict=False))
+def devs(xs):
+    return "{ " + ", ".join(f'"{c["device"]}"' for c in xs) + " }"
+def sources(c):
+    """The sources a packet from the circuit may carry: the CE's accepted prefixes (their covering nets), the link,
+    link-local and the unspecified address (duplicate address detection); overlapping entries merged (an interval
+    set refuses overlaps)"""
+    nets = [ipaddress.ip_network(str(x), strict=False) for x in list(c.get("sources6") or []) + [c["link6"]]]
+    nets += [ipaddress.ip_network("fe80::/10"), ipaddress.ip_network("::/128")]
+    return ", ".join(str(n.network_address) if n.prefixlen == 128 else str(n)
+                     for n in ipaddress.collapse_addresses(n for n in nets if n.version == 6))
+nd = "{ nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert }"
+out = ["table ip6 shc_attach6", "delete table ip6 shc_attach6", "table ip6 shc_attach6 {"]
+for c in cs:
+    out.append(f"  set src_{c['vlan']} {{ type ipv6_addr; flags interval; elements = {{ {sources(c)} }}; }}")
+zones = ", ".join(f'"{c["device"]}" : {c["zone"]}' for c in cs)
+# the node's own packets in a VRF pass output first with the VRF as their output interface (as in shc_attach)
+vrfs = {c["vrf"]: c["zone"] for c in cs}
+zones_out = zones + "".join(f', "{v}" : {z}' for v, z in sorted(vrfs.items()))
+out += ["  chain zone_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
+        f"    ct zone set iifname map {{ {zones} }}", "  }",
+        "  chain zone_output {", "    type filter hook output priority raw; policy accept;",
+        f"    ct zone set oifname map {{ {zones_out} }}", "  }"]
+# before routing the device is still the input interface: everything the CE sends, to the node or through it
+out += ["  chain spoof {", "    type filter hook prerouting priority filter; policy accept;"]
+for c in cs:
+    out.append(f'    iifname "{c["device"]}" ip6 saddr != @src_{c["vlan"]} counter drop comment "source outside the circuit\'s prefixes"')
+out.append("  }")
+# past prerouting a VRF slave's packets show the VRF as their input interface (meta sdifname is the device), except
+# neighbour discovery: the kernel keeps the device as its input interface (and no slave); its rules match both ways
+out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
+for c in cs:
+    for by in ("iifname", "meta sdifname"):
+        out.append(f'    {by} "{c["device"]}" ip6 saddr {{ ::, fe80::/10, {c["link6"]} }} icmpv6 type {nd} accept')
+out.append(f'    iifname {devs(cs)} icmpv6 type {nd} counter drop comment "neighbour discovery from outside the link"')
+# BGP from the CE's link either way, whatever conntrack knows (see shc_attach)
+for c in cs:
+    out.append(f'    meta sdifname "{c["device"]}" ip6 saddr {c["link6"]} tcp dport 179 accept')
+    out.append(f'    meta sdifname "{c["device"]}" ip6 saddr {c["link6"]} tcp sport 179 accept')
+out += [f"    meta sdifname {devs(cs)} ct state established,related accept",
+        f"    meta sdifname {devs(cs)} udp dport {{ 3784, 3785 }} accept",
+        f"    meta sdifname {devs(cs)} icmpv6 type {{ echo-request, echo-reply, destination-unreachable, packet-too-big, time-exceeded, parameter-problem }} accept",
+        f"    meta sdifname {devs(cs)} ip6 saddr fe80::/10 icmpv6 type {{ mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report }} accept",
+        f'    meta sdifname {devs(cs)} counter drop comment "only BGP, BFD and ICMPv6 from a circuit to the node"', "  }"]
+out += ["  chain forward {", "    type filter hook forward priority filter; policy accept;"]
+closed = [c for c in cs if not c.get("egress6")]
+if closed:
+    out.append(f'    meta sdifname {devs(closed)} oifname "xe*" counter drop comment "no provider egress for this circuit"')
+out.append("  }")
+out.append("}")
+print("\n".join(out))
+PY
+}
+
 attach_up() {
-  local c dev par vlan mtu v t addr a want
+  local c dev par vlan mtu v t addr a a6 want want6
   modprobe vrf; modprobe 8021q
   want=$(jq -r '.attachments.circuits // [] | .[].device' "$CONF")
+  want6=$(jq -r '.attachments.circuits // [] | .[] | select((.address6 // "") != "") | .device' "$CONF")
+  # the IPv6 filter before IPv6 comes on at any circuit device; a failure fails the apply
+  if [ -n "$want6" ]; then
+    attach6_nft | nft -f -
+    [ -e "$MARKA6" ] || : > "$MARKA6"
+  fi
   for c in $(jq -r '.attachments.circuits // [] | .[] | [.device, .parent, .vlan, .mtu, .vrf, .table, .address] | join(":")' "$CONF"); do
     IFS=: read -r dev par vlan mtu v t addr <<<"$c"
+    a6=$(jq -r --arg d "$dev" '.attachments.circuits[] | select(.device == $d) | .address6 // empty' "$CONF" | head -n 1)
     wait_link "$par" "$mtu" || { echo "bearer interface $par missing or below MTU $mtu" >&2; exit 3; }
     root_vrf "$v" "$t"
     ip link show "$dev" >/dev/null 2>&1 || ip link add link "$par" name "$dev" type vlan id "$vlan"
     # sysctl names with "/": the device name holds a dot
-    sysctl -qw "net/ipv6/conf/$dev/disable_ipv6=1" "net/ipv4/conf/$dev/rp_filter=1"
+    if [ -n "$a6" ]; then
+      # IPv6 on the circuit: never router advertisements or SLAAC (set before IPv6 comes on), the link-local kept
+      sysctl_ensure "net/ipv6/conf/$dev/accept_ra=0" "net/ipv6/conf/$dev/autoconf=0" "net/ipv6/conf/$dev/disable_ipv6=0" \
+        "net/ipv6/conf/$v/disable_ipv6=0"
+      sysctl -qw "net/ipv4/conf/$dev/rp_filter=1"
+    else
+      sysctl -qw "net/ipv6/conf/$dev/disable_ipv6=1" "net/ipv4/conf/$dev/rp_filter=1"
+    fi
     [ "$(ip -j link show dev "$dev" | jq -r '.[0].master // empty')" = "$v" ] || ip link set "$dev" master "$v"
     ip link set "$dev" mtu "$mtu" up
     for a in $(stray "$dev" 0.0.0.0/0 "$addr"); do ip addr del "$a" dev "$dev"; done
     ip addr show dev "$dev" | grep -q " ${addr} " || ip addr add "$addr" dev "$dev"
+    if [ -n "$a6" ]; then
+      # nodad: the link is the circuit's alone (the node, the other node and the CE hold fixed addresses)
+      a6=$(canon "$a6")
+      for a in $(stray "$dev" ::/0 "$a6" 6); do ip addr del "$a" dev "$dev"; done
+      addr_ensure "$dev" "$a6" nodad
+    fi
   done
   for dev in $(attach_devices); do echo "$want" | grep -qx "$dev" || ip link del "$dev"; done
   if [ -n "$want" ]; then attach_nft | nft -f -; else nft delete table ip shc_attach 2>/dev/null || true; fi
+  [ -n "$want6" ] || attach6_down
 }
 
 # After the gateway's FRR starts with VRFs in its configuration, zebra's VRF setup can recreate bgpd's listen
