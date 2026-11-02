@@ -383,6 +383,48 @@ CASES += [
 ]
 
 
+# ─── AttachmentCircuit accept entries per family ─────────────────────────────
+AC = "attachment"
+
+
+def acirc(accept, name="c"):
+    return {"apiVersion": API, "kind": "AttachmentCircuit", "metadata": {"name": name},
+            "spec": {"network": "n", "edgeRef": {"name": "edge", "bearer": "b1"},
+                     "routing": {"protocol": "bgp", "bgp": {"peerAsn": 65012}, "accept": accept}}}
+
+
+LEN = "at most 32 (IPv4) or 128 (IPv6)"
+CASES += [
+    C("ACC-01", AC, "IPv4 entry accepted", [("create", acirc(["10.50.0.0/16 le 24"]), "ok")]),
+    C("ACC-02", AC, "IPv4 ge and le accepted", [("create", acirc(["10.50.0.0/16 ge 20 le 32"]), "ok")]),
+    C("ACC-03", AC, "IPv6 entry accepted", [("create", acirc(["2001:db8:50::/48 le 64"]), "ok")]),
+    C("ACC-04", AC, "IPv6 ge and le up to 128 accepted", [("create", acirc(["2001:db8:50::/48 ge 56 le 128"]), "ok")]),
+    C("ACC-05", AC, "IPv6 exact prefix and ::/0 accepted", [("create", acirc(["2001:db8:50:1::1/128", "::/0"]), "ok")]),
+    C("ACC-06", AC, "both families in one list accepted", [("create", acirc(["10.50.0.0/16 le 32", "2001:db8:50::/48 le 64"]), "ok")]),
+    C("ACC-07", AC, "IPv6 le 129 refused", [("create", acirc(["2001:db8:50::/48 le 129"]), f"deny:le must be longer than the prefix and {LEN}")]),
+    C("ACC-08", AC, "IPv6 ge not longer than the prefix refused", [("create", acirc(["2001:db8:50::/48 ge 48"]), f"deny:ge must be longer than the prefix and {LEN}")]),
+    C("ACC-09", AC, "IPv6 ge above le refused", [("create", acirc(["2001:db8:50::/48 ge 64 le 56"]), "deny:ge must not exceed le")]),
+    C("ACC-10", AC, "IPv6 host bits refused", [("create", acirc(["2001:db8:50::1/48 le 64"]), "deny:host bits zero")]),
+    C("ACC-11", AC, "IPv4 le 33 refused", [("create", acirc(["10.50.0.0/16 le 33"]), f"deny:le must be longer than the prefix and {LEN}")]),
+    C("ACC-12", AC, "IPv4 ge 64 refused (IPv6 bound not applied)", [("create", acirc(["10.50.0.0/16 ge 64"]), f"deny:ge must be longer than the prefix and {LEN}")]),
+    C("ACC-13", AC, "IPv4 host bits refused", [("create", acirc(["10.50.0.1/16"]), "deny:host bits zero")]),
+    C("ACC-14", AC, "zone index refused", [("create", acirc(["fe80::%eth0/64"]), 'deny:an entry is "<prefix>[ ge <n>][ le <n>]"')]),
+    C("ACC-15", AC, "le before ge refused", [("create", acirc(["2001:db8:50::/48 le 64 ge 56"]), 'deny:an entry is "<prefix>[ ge <n>][ le <n>]"')]),
+    C("ACC-16", AC, "not a prefix refused", [("create", acirc(["2001:db8:50::"]), 'deny:an entry is "<prefix>[ ge <n>][ le <n>]"')]),
+    C("ACC-17", AC, "IPv6 status fields survive (sessions per family, ceConfig, realization)",
+      [("create", acirc(["10.50.0.0/16 le 32", "2001:db8:50::/48 le 64"]), "ok")]
+      + status_roundtrip("attachmentcircuits", "c", {
+          "sessions": [{"node": "n1", "family": 4, "address": "10.255.128.1", "peer": "10.255.128.3", "state": "Established"},
+                       {"node": "n1", "family": 6, "address": "2001:db8:4005:100::1", "peer": "2001:db8:4005:100::3",
+                        "state": "Established", "accepted": 1, "advertised": 1}],
+          "ceConfig": {"address": "10.255.128.3/29", "address6": "2001:db8:4005:100::3/64",
+                       "secondAddress6": "2001:db8:4005:100::4/64",
+                       "neighbors6": [{"name": "n1", "address": "2001:db8:4005:100::1", "asn": 65010}]},
+          "realization": {"link": "10.255.128.0/29", "link6": "2001:db8:4005:100::/64", "ce6": "2001:db8:4005:100::3",
+                          "nodes": [{"name": "n1", "address": "10.255.128.1", "address6": "2001:db8:4005:100::1"}]}})),
+]
+
+
 # ─── runner ──────────────────────────────────────────────────────────────────
 
 def expectation(exp, mode):
