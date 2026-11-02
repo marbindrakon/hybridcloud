@@ -611,15 +611,19 @@ status:
           note: ""            # which nodes could not reach the probe, when another node read it or none did
       readAt: <when the fabric job read the canaries>
       alertMinutes: 5
-      staleAfterMinutes: 15   # 3 x alertMinutes
+      staleAfterMinutes: 45   # 3 x the re-read interval (max(alertMinutes, 15 min))
 ```
-**How often it is read.** A Ready fabric runs again by itself only to read the canary: once the last read
-(`readAt`) is older than `alertMinutes` (at least 5 minutes), the next periodic check of the operator (every 5
-minutes) re-runs the fabric job, which reads every site again. When no re-run refreshed the reading for
-`staleAfterMinutes` (the automation is down, or the job keeps failing), the operator marks every site's reading
-`stale: true`, `healthy: false` (with the age in `error`) and the condition `IPv6Translation` `Unknown`
-(`CanaryStale`), so an old reading never reports a healthy canary; the next read replaces the mark. With a canary
-configured this costs one fabric job every 5 to 10 minutes.
+**How often it is read.** A Ready fabric runs again by itself only to read the canary. The re-read interval is
+`alertMinutes`, at least 15 minutes (the operator default `hybridfabric_canary_reread_min_seconds`, 900), and it is
+counted from the end of the last fabric job (`status.delivery.completedAt`), not from the read: once it has passed,
+the next periodic check of the operator (every 5 minutes) re-runs the fabric job, which reads every site again. Runs
+never follow each other back to back: with a canary configured this costs one fabric job every 15 to 20 minutes plus
+the job's own time, and a reading is at most about 30 minutes old in the steady state. When no re-run refreshed the
+reading for `staleAfterMinutes`, three re-read intervals (the automation is down, or the job keeps failing), the
+operator marks every site's reading `stale: true`, `healthy: false` (with the age in `error`) and the condition
+`IPv6Translation` `Unknown` (`CanaryStale`), so an old reading never reports a healthy canary; the next read
+replaces the mark. Because a re-read comes every 15 minutes or more, a failing canary reaches the
+`alertMinutes` event on the read after the first failed one.
 
 The condition `IPv6Translation` is `True` (`Ready`) while every site's canary is healthy and `False`
 (`CanaryFailed`) naming the failing sites, their failed checks and since when; it is absent while no canary is

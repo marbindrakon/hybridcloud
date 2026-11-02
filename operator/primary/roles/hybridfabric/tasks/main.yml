@@ -18,10 +18,17 @@
     # the translation canary's last read (defaults/main.yml): due for a re-read, or stale
     - name: Age of the translation canary's last read
       vars:
+        _st: "{{ _hybridsovereign_redhat_hybridfabric.status | default({}, true) }}"
         _tr: >-
-          {{ (((_hybridsovereign_redhat_hybridfabric.status | default({}, true)).realization | default({}, true))
-              .translation | default({}, true)) }}
+          {{ (((_st.realization | default({}, true)).translation | default({}, true))) }}
         _alert: "{{ _tr.alertMinutes | default(5, true) | int }}"
+        _reread: "{{ [_alert | int * 60, hybridfabric_canary_reread_min_seconds | default(900) | int] | max }}"
+        # the last fabric job's end: its completion (status.delivery.completedAt), or the read when that is later;
+        # none without a read (a status from before readAt existed is read again at once)
+        _read19: "{{ (_tr.readAt | default('', true) | string)[:19] }}"
+        _ended: >-
+          {{ ([_read19, ((_st.delivery | default({}, true)).completedAt | default('', true) | string)[:19]] | max)
+             if _read19 | length == 19 else '' }}
       ansible.builtin.set_fact:
         hybridfabric_canary_sites: >-
           {{ (_tr.canaries | default({}, true)) | dict2items | selectattr('value', 'mapping') | map(attribute='key') | sort | list }}
@@ -29,9 +36,15 @@
         hybridfabric_canary_age: >-
           {{ ((now(utc=True) - ((_tr.readAt | string)[:19] | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds() | int)
              if (_tr.readAt | default('', true) | string | length >= 19) else 999999999 }}
-        hybridfabric_canary_reread_seconds: >-
-          {{ [_alert | int * 60, hybridfabric_canary_reread_min_seconds | default(300) | int] | max }}
-        hybridfabric_canary_stale_minutes: "{{ _tr.staleAfterMinutes | default(_alert | int * 3, true) | int }}"
+        # seconds since the last fabric job ended: the re-read waits for the interval after it, so runs never chain
+        hybridfabric_canary_idle: >-
+          {{ ((now(utc=True) - (_ended | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds() | int)
+             if (_ended | length == 19) else 999999999 }}
+        hybridfabric_canary_reread_seconds: "{{ _reread }}"
+        # three re-read intervals (the job writes the same, 3 x max(alertMinutes, the minimum interval)); never less
+        # here, so a healthy fabric's reading never reads stale between two re-reads
+        hybridfabric_canary_stale_minutes: >-
+          {{ [_tr.staleAfterMinutes | default(_alert | int * 3, true) | int, (_reread | int * 3 + 59) // 60] | max }}
 
     - name: Decide whether the canary is due or stale
       vars:
@@ -41,7 +54,7 @@
       ansible.builtin.set_fact:
         hybridfabric_canary_due: >-
           {{ hybridfabric_canary_sites | length > 0
-             and hybridfabric_canary_age | int >= hybridfabric_canary_reread_seconds | int }}
+             and hybridfabric_canary_idle | int >= hybridfabric_canary_reread_seconds | int }}
         hybridfabric_canary_stale: >-
           {{ hybridfabric_canary_sites | length > 0
              and hybridfabric_canary_age | int >= hybridfabric_canary_stale_minutes | int * 60 }}

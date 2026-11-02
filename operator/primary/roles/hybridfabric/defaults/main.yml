@@ -1,10 +1,18 @@
 ---
 # shc: the translation canary (status.realization.translation, written by the fabric job). A Ready fabric is otherwise
 # run only on a spec change or a wake, so the canary's reading would age without anyone noticing. The fabric job
-# writes the time of its read (readAt), alertMinutes and staleAfterMinutes (3 x alertMinutes) next to the readings:
-# - a read older than alertMinutes (at least hybridfabric_canary_reread_min_seconds) re-runs the fabric job on the
-#   next reconcile (the watch's reconcilePeriod, 300 s), as a CloudInfrastructure re-probes;
-# - a read older than staleAfterMinutes (the re-runs did not refresh it: EDA down, a job stuck or failing) is marked
-#   stale here and now: every site's reading stale and not healthy, condition IPv6Translation Unknown/CanaryStale.
-# An old read never reports healthy.
-hybridfabric_canary_reread_min_seconds: 300
+# writes the time of its read (readAt), alertMinutes and staleAfterMinutes next to the readings:
+# - the re-read interval is max(alertMinutes, hybridfabric_canary_reread_min_seconds), measured from the end of the
+#   last fabric job (status.delivery.completedAt, or readAt when later), not from the read: once it has passed, the
+#   next reconcile (the watch's reconcilePeriod, 300 s) re-runs the fabric job, as a CloudInfrastructure re-probes.
+#   Runs never chain: with the defaults a Ready fabric with a canary runs about every 15 to 20 minutes plus the job's
+#   own time (one fabric job, and its fabric-config lease, per run);
+# - a read older than staleAfterMinutes, three re-read intervals (45 min with the defaults; the re-runs did not
+#   refresh it: EDA down, a job stuck or failing) is marked stale here and now: every site's reading stale and not
+#   healthy, condition IPv6Translation Unknown/CanaryStale. In the steady state a read is at most interval +
+#   reconcilePeriod + one job old (about 30 min), well below it.
+# An old read never reports healthy. The fabric job's role default hf_canary_reread_min_minutes
+# (hybridfabric_provision) must say the same interval in minutes: the job writes staleAfterMinutes from it, and this
+# role never marks a reading stale before three of its own intervals, whatever the job wrote.
+# Realization-free: an operator default, not a FABRIC_REALIZATION key.
+hybridfabric_canary_reread_min_seconds: 900

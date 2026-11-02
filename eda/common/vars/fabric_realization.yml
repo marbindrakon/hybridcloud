@@ -158,9 +158,10 @@ fabric_realization_defaults:
       # the TCP port the probe serves its metrics on
       port: 9464
       # how long a site's canary may fail, be stale or be unreachable before the fabric reports it as an event (and
-      # every run while it lasts). It also paces the reads: a Ready fabric whose last read is older than alertMinutes
-      # (at least 5 min) runs again to read the canary, and a read older than 3 x alertMinutes (no re-run refreshed
-      # it) is marked stale, not healthy (status.realization.translation readAt, staleAfterMinutes)
+      # every run while it lasts). It also paces the reads: a Ready fabric runs again to read the canary once
+      # alertMinutes (at least 15 min, an operator default) have passed since its last job ended, and a read older than
+      # three such intervals (no re-run refreshed it) is marked stale, not healthy (status.realization.translation
+      # readAt, staleAfterMinutes)
       alertMinutes: 5
   # tenant DNS of the platform's own records
   dns:

@@ -456,12 +456,13 @@
     # it last ran, its checks, stale (no run in the last three minutes, or not reachable) and healthy (reachable, not
     # stale, every check 1), the border gateway node that read it (node; '' when none did) and, when nodes before it
     # could not reach the probe, which and why (note; '' otherwise; both always written, the status is merge-patched);
-    # next to them (status write below) readAt (this read), alertMinutes and staleAfterMinutes
-    # (3 x alertMinutes): the operator re-runs a Ready fabric whose read is older than alertMinutes and marks every
-    # reading stale and not healthy once it is older than staleAfterMinutes (operator role hybridfabric); failedSince is kept across runs (as degradedSince), and a site failed or stale for
-    # canaries.ipv6Translation.alertMinutes is reported as an event below, every run while it lasts. Condition
-    # IPv6Translation: True/Ready while every site's canary is healthy, False/CanaryFailed naming the sites and their
-    # failed checks; none while no canary is configured or no site reports one.
+    # next to them (status write below) readAt (this read), alertMinutes and staleAfterMinutes (3 x the re-read
+    # interval, max(alertMinutes, hf_canary_reread_min_minutes)): the operator re-runs a Ready fabric once that interval
+    # has passed since its last job ended and marks every reading stale and not healthy once it is older than
+    # staleAfterMinutes (operator role hybridfabric); failedSince is kept across runs (as degradedSince), and a site
+    # failed or stale for canaries.ipv6Translation.alertMinutes is reported as an event below, every run while it
+    # lasts. Condition IPv6Translation: True/Ready while every site's canary is healthy, False/CanaryFailed naming the
+    # sites and their failed checks; none while no canary is configured or no site reports one.
     - name: Set the translation canary status
       vars:
         _on: "{{ (hf_canary_cfg | default({}, true)).network | default('', true) | length > 0 }}"
@@ -636,7 +637,9 @@
                               'translation': {'canaries': hf_canary_patch | default({}),
                                               'readAt': hf_canary_now | default('', true),
                                               'alertMinutes': hf_canary_cfg.alertMinutes | default(5, true) | int,
-                                              'staleAfterMinutes': (hf_canary_cfg.alertMinutes | default(5, true) | int) * 3}
+                                              'staleAfterMinutes': ([hf_canary_cfg.alertMinutes | default(5, true) | int,
+                                                                     hf_canary_reread_min_minutes | default(15) | int]
+                                                                    | max) * 3}
                                              if hf_canary_status | default({}) | length > 0 else none}} }}
 
     # the networks this run added to or removed from the egress (or whose IPv6 egress came or went) wait for it: wake

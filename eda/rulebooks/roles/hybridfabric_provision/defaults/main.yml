@@ -2,3 +2,8 @@
 # namespace of the platform objects (HybridFabric, CloudGateway, CloudInfrastructure); the fabric IPAM tasks
 # (fabric_ipam.yml, through fabric_ipam_pools.yml) pass it to the ledger
 fabric_platform_namespace: sovereign-cloud
+
+# the translation canary's minimum re-read interval, in minutes: the operator re-runs a Ready fabric to read the canary
+# no sooner than max(alertMinutes, this) after its last job ended (operator/primary/roles/hybridfabric defaults,
+# hybridfabric_canary_reread_min_seconds; keep the two equal). The job records staleAfterMinutes = 3 x that interval.
+hf_canary_reread_min_minutes: 15
