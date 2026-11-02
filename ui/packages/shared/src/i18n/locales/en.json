@@ -1530,7 +1530,8 @@
       "title": "Guest network configuration (cloud-init)",
       "help": "Network configuration for a VM on this placement's subnets, built from the placement's status. Use it as the VM's cloud-init network data.",
       "networkData": "Network data",
-      "userData": "User data: IPv4 by translation",
+      "userData": "User data",
+      "userDataDns": "Keeps the guest on the resolvers in the network data: resolvers handed out by DHCP are ignored, because they need not translate IPv4-only names. Names internal to the site are then not resolved.",
       "userDataHelp": "This placement has no IPv4: a CLAT in the guest reaches IPv4-only destinations through the translation prefix.",
       "copy": "Copy",
       "copied": "Copied"

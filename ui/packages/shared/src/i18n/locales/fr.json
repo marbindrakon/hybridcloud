@@ -1530,7 +1530,8 @@
       "title": "Configuration réseau de l'invité (cloud-init)",
       "help": "Configuration réseau d'une VM sur les sous-réseaux de ce placement, construite à partir de l'état du placement. Utilisez-la comme données réseau cloud-init de la VM.",
       "networkData": "Données réseau",
-      "userData": "Données utilisateur : IPv4 par traduction",
+      "userData": "Données utilisateur",
+      "userDataDns": "Maintient l'invité sur les résolveurs des données réseau : les résolveurs fournis par DHCP sont ignorés, car ils ne traduisent pas forcément les noms uniquement IPv4. Les noms internes au site ne sont alors pas résolus.",
       "userDataHelp": "Ce placement n'a pas d'IPv4 : un CLAT dans l'invité joint les destinations uniquement IPv4 par le préfixe de traduction.",
       "copy": "Copier",
       "copied": "Copié"
