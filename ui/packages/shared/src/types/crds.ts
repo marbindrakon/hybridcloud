@@ -780,11 +780,23 @@ export interface PlacementSubnetStatus {
   source?: PlacementIpv6Source | string;
 }
 
+/** How an IPv6-only placement reaches IPv4-only destinations (absent or null: no translation) */
+export interface PlacementTranslationStatus {
+  /** Fabric (the platform's translator, IPv6 space from the network) or Provider (the cloud provider's translator) */
+  path?: 'Fabric' | 'Provider' | string;
+  /** The NAT64 prefix IPv4 destinations are embedded in */
+  pref64?: string;
+  /** DNS64 resolvers */
+  resolvers?: string[];
+  /** The provider translator's IPv4 address, once the provider reports it (path Provider) */
+  ipv4Source?: string;
+}
+
 export interface PlacementIpv6Status {
   /** DHCPv6 or SLAAC (informational) */
   addressing?: string;
   internet?: { state?: string; path?: 'Fabric' | 'Provider' | string; reason?: string; message?: string };
-  translation?: { pref64?: string; resolvers?: string[] };
+  translation?: PlacementTranslationStatus | null;
 }
 
 /** NetworkPlacement — puts a HybridNetwork on one cloud environment (all of spec is immutable) */

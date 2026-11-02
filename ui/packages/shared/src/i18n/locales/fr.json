@@ -1517,6 +1517,7 @@
     "path_Provider": "à travers le fournisseur cloud",
     "translationPrefix": "Préfixe de traduction",
     "resolvers": "Résolveurs",
+    "translationSource": "Source IPv4 du trafic traduit",
     "familyUnavailableTitle": "Famille d'adresses non disponible",
     "familyUnavailableBody": "La plateforme n'a pas créé les sous-réseaux de ce placement : le site de l'environnement ou le réseau ne propose pas une famille d'adresses demandée par le placement.",
     "familyUnavailableFix": "Supprimez le placement et rattachez le réseau avec les familles que le site propose.",

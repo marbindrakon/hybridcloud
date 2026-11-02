@@ -29,7 +29,7 @@ import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHid
 import { ToolSignInPanel } from './ToolSignInPanel';
 import { Ipv6CloudInitSnippet } from './Ipv6CloudInitSnippet';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
-import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, placementSubnets } from '../forms/ipv6';
+import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, placementSubnets, placementTranslation } from '../forms/ipv6';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -834,6 +834,7 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
   const subnets = placementSubnets(item);
   const refused = familyUnavailableText(t, item);
   const v6 = st.ipv6;
+  const translation = placementTranslation(item);
   const siteCaps = useSiteIpv6Caps(item.metadata?.namespace, { enabled: subnets.some((x) => Number(x.family) === 6) });
   return (
     <>
@@ -866,16 +867,22 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
             {ipv6ReasonText(t, v6.internet.reason, v6.internet.message)}
           </Fact>
         )}
-        {v6?.translation?.pref64 && (
+        {translation && (
           <Fact label={t('ipv6.translationPrefix')}>
-            <Mono>{v6.translation.pref64}</Mono>
+            <Mono>{translation.pref64}</Mono>
+            {translation.path ? ` (${t(`ipv6.path_${translation.path}`, { defaultValue: translation.path })})` : ''}
           </Fact>
         )}
-        {v6?.translation?.resolvers?.length ? (
+        {translation?.resolvers.length ? (
           <Fact label={t('ipv6.resolvers')}>
-            <List items={v6.translation.resolvers} />
+            <List items={translation.resolvers} />
           </Fact>
         ) : null}
+        {translation?.ipv4Source && (
+          <Fact label={t('ipv6.translationSource')}>
+            <Mono>{translation.ipv4Source}</Mono>
+          </Fact>
+        )}
         <Fact label={t('fields.site')}>{st.site}</Fact>
         <Fact label={t('detail.cloudGateway')}>{st.cloudGateway}</Fact>
         <Fact label={t('detail.l3Vni')}>{vnis.l3}</Fact>
