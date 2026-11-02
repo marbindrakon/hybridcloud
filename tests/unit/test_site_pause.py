@@ -473,6 +473,24 @@ class QuietWhilePaused(unittest.TestCase):
                        {"_ci_dependents": {"results": [results[1]]}, "cloudinfrastructure_cr_name": "edge1"})
         self.assertEqual(out, "")
 
+    def test_cloudoso_held_write_carries_its_generation(self):
+        """The CloudOSO holds through its failure write: with SitePaused it records the generation it holds (so the
+        controller's hold engages, as for the other kinds), with any other failure it leaves the field alone."""
+        tasks = load(os.path.join(ROLES, "cloudoso_provision/tasks/main.yml"))
+        body = by_name(tasks[0]["rescue"], "Mark CloudOSO as failed on services cluster")["vars"]["cr_status_body"]
+        expr = body["observedGeneration"]
+        for reason, want in (("SitePaused", "4"), ("EDAFailed", ""), (None, "")):
+            extra = {"cloudoso_generation": 4}
+            if reason:
+                extra["cloudoso_failure_reason"] = reason
+            got = run_play([{"ansible.builtin.set_fact": {"_g": expr}}, write_out("_g | string")], extra)
+            self.assertEqual(str(got).strip(), want, reason)
+        # the status library keeps a generation and drops ''
+        for value, kept in (("4", 4), ("", None)):
+            patch, _ = S.compute_status_patch({"metadata": {"resourceVersion": "1", "generation": 4}, "status": {}},
+                                              {"status": "failed", "observedGeneration": value})
+            self.assertEqual(patch["status"].get("observedGeneration"), kept)
+
 
 if __name__ == "__main__":
     unittest.main()
