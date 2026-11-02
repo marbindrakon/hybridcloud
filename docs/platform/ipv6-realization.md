@@ -161,7 +161,8 @@ placement:
   site not listed gets an empty list (enforced on existing subnets too), so its workloads fall back to the site's
   default, usually the site's own resolver, which a placement's workloads may not reach through the fabric; list
   resolvers the network's egress can reach. OpenShift sites take
-  no resolvers from here (the cluster's DNS serves the VMs).
+  no resolvers from here (the cluster's DNS serves the VMs; guests on IPv6-only placements with translation use the
+  translation resolvers instead, see [Translation](#translation-translation), "What each site does").
 - **OpenStack placements** (CloudOSO): the placement's network holds one subnet per allocated prefix, IPv4 first,
   on one EVPN router whose VNI is the placement's. The first subnet attached to the router carries the site's host
   advertisement flag and the others attach plainly: the site's EVPN plugin accepts one advertised interface per
@@ -512,11 +513,19 @@ Run the fabric job (Retry now on the HybridFabric) after changing an entry.
   list differs is updated on the next run of the placement job.
 - **OpenShift Virtualization sites (CloudVirt):** the platform changes nothing on the site. The resolvers reach the
   guests through the placement's status and the console's cloud-init snippet (the placement page builds `networkData`
-  with `dhcp4: false` and the resolvers as `nameservers`, and clatd user data with the placement's `pref64` as
-  `plat-prefix`), which the tenant copies into the VM. Cluster-internal names (services, other VMs by name) reach a
-  guest over DHCPv6 only when the cluster's DNS service (`dns-default` in `openshift-dns`) is dual-stack; on a
-  cluster where it has only an IPv4 address, DHCPv6 hands out no cluster resolver and an IPv6-only guest resolves
-  through the DNS64 resolvers alone.
+  with `dhcp4: false` and the resolvers as `nameservers`, and user data that configures clatd with the placement's
+  `pref64` as `plat-prefix` and keeps the guest on those resolvers), which the tenant copies into the VM. Guests on
+  IPv6-only placements use the translation resolvers only; cluster-internal names (services, other VMs by name) are
+  not resolved there. OVN-Kubernetes also hands every guest the cluster's DNS service (`dns-default` in
+  `openshift-dns`) over DHCPv6 once that service is dual-stack, and that resolver does no DNS64. A guest that keeps
+  it next to the translation resolvers falls over to it after any brief outage of the translation resolvers
+  (systemd-resolved stays on the server that last answered) and from then on gets no synthesized addresses: IPv4-only
+  names stop working while the guest's explicit resolver checks still pass. The snippet's user data therefore
+  installs `ignore-auto-dns`, a boot-time unit that sets NetworkManager's `ipv6.ignore-auto-dns` and
+  `ipv4.ignore-auto-dns` (or systemd-networkd's `UseDNS=false` in a drop-in) on the connection of the NIC with the
+  IPv6 default route, provided that connection has resolvers of its own. cloud-init can't do this from `networkData`:
+  its NetworkManager renderer ignores `dhcp6-overrides: {use-dns: false}`. A guest's resolvers read with
+  `resolvectl status`: the translation resolvers only, none of the cluster's service addresses.
 
 - **Google Cloud sites (CloudGCP):** source `Provider` only, so the provider's path: the VPC's DNS64 server policy and
   the Cloud NAT for NAT64 ([Google Cloud: IPv6-only placements](#google-cloud-ipv6-only-placements)); the resolver is
@@ -546,7 +555,10 @@ translation resolver, that `ipv4only.arpa` resolves inside the site's translatio
 and an IPv4 literal through its CLAT, a native IPv6 name, a 1400-byte path with "don't fragment", and that a denied
 IPv4 destination embedded in the translation prefix stays refused. It serves the results in Prometheus text format at
 `http://[<address>]:<port>/metrics` (`shc_ipv6_canary_check{check="<name>"} 0|1`,
-`shc_ipv6_canary_run_timestamp_seconds`). Deploy it from
+`shc_ipv6_canary_run_timestamp_seconds`, and the information metric
+`shc_ipv6_canary_resolver_info{server="<address>",translation="0|1"} 1`: the resolver the guest used at the end of
+the run and whether it is a translation resolver; the fabric reads only the checks and the time). Like a tenant's
+guest, the probe uses only the translation resolvers (`ignore-auto-dns`, above). Deploy it from
 [samples/platform/ipv6-canary](../../samples/platform/ipv6-canary/README.md), then set the realization keys. With
 `network` empty nothing below is written. AWS and Google Cloud sites have no canary: the site job looks for the probe
 on OpenShift Virtualization and OpenStack sites only.
@@ -612,8 +624,8 @@ A canary that could not be read at all (no node answered) reads `stale` with the
 itself never fails because of the canary.
 
 **Testing the alert:** on one site, replace the probe with a copy whose user data names a resolver address where no
-resolver answers (same probe name). Its `resolver` check reads 0 within a minute, the condition turns `False` on the
-next fabric run, and the event follows after `alertMinutes`. Put the original user data back to clear it.
+resolver answers (same probe name). Its `resolver` check reads 0 within a minute (with the checks that need a name:
+the probe has no other resolver), the condition turns `False` on the next fabric run, and the event follows after `alertMinutes`. Put the original user data back to clear it.
 
 ## IPv6 internet egress (`egress.ipv6`)
 

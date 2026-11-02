@@ -361,6 +361,18 @@ spec:
       done
   ```
 - DHCPv6 gives no DNS search domain; set it in cloud-init.
+- **Resolvers on IPv6-only placements:** the guest must use only the translation resolvers of
+  `status.ipv6.translation`. The cluster network also hands every guest the cluster's own DNS service over DHCPv6,
+  and that resolver does no DNS64. A guest that keeps it next to the translation resolvers switches to it after any
+  brief outage of the translation resolvers and stays there: IPv4-only names stop resolving while the translation
+  resolvers themselves still answer. The user data on the placement page installs `ignore-auto-dns`, a boot-time
+  unit that makes the guest ignore resolvers handed out by DHCP on the NIC with the IPv6 default route
+  (NetworkManager `ipv6.ignore-auto-dns` and `ipv4.ignore-auto-dns`, or systemd-networkd `UseDNS=false` in a
+  drop-in), as long as that NIC has resolvers of its own from the network data. `dhcp6-overrides: {use-dns: false}`
+  in `networkData` is not enough: cloud-init's NetworkManager renderer ignores it. Names inside the cluster
+  (services, other VMs) are therefore not resolved on IPv6-only placements; publish names in the
+  [environment zone](#dns-names-in-the-environment-zone) instead. Check a guest with `resolvectl status`: its NIC
+  lists the translation resolvers only.
 
 **OpenStack environments**
 - Subnets are DHCPv6-stateful: the address, the default route and the resolvers reach the guest by DHCPv6 and in
@@ -435,9 +447,10 @@ spec:
   those fragments are lost on the way into the CLAT: with a larger MTU, IPv4 datagrams that must not be fragmented
   are lost above 1232 bytes of payload. TCP is not affected.
 - On OpenStack the placement's IPv6 subnet hands the resolvers out (DHCPv6 and the config drive). On OpenShift
-  Virtualization they come from the placement's status: the placement page offers a cloud-init `networkData` and
-  clatd snippet built from it, to copy into the VM. Names inside the cluster (services, other VMs) resolve over
-  DHCPv6 only where the platform team runs the cluster's DNS service dual-stack.
+  Virtualization they come from the placement's status: the placement page offers cloud-init `networkData` and user
+  data built from it (clatd, and the guest kept on the translation resolvers, see
+  [Guests on IPv6](#guests-on-ipv6)), to copy into the VM. Names inside the cluster (services, other VMs) are not
+  resolved on IPv6-only placements.
 - A guest that validates DNSSEC itself gets no translated addresses for signed IPv4-only names. Reach those by an
   IPv4 address through the CLAT, or let the resolver validate.
 
@@ -522,8 +535,8 @@ Tenants:
   with the reason.
 - **A placement's page** shows each family's subnet and source, how guests get their IPv6 address, the internet
   path and, on IPv6-only placements with translation, the translation prefix and resolvers. Placements with an IPv6
-  subnet also offer a cloud-init snippet to copy ([Guests on IPv6](#guests-on-ipv6)), with clatd user data on
-  IPv6-only placements with translation.
+  subnet also offer a cloud-init snippet to copy ([Guests on IPv6](#guests-on-ipv6)), with user data on IPv6-only
+  placements with translation: clatd, and the guest kept on the translation resolvers (`ignore-auto-dns`).
 - **Environments → OpenShift Virtualization:** environments with their site, VM namespaces (network, ready), quota,
   DNS zone and API endpoint. The site picker offers the sites of the tenant profile.
 - Platform objects aren't shown to tenants.
