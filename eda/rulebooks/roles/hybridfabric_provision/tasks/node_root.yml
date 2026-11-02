@@ -1,7 +1,8 @@
 ---
 # shc (design/P7-PLAN.md P7.3.4): the border gateway root instance on one node (delegated over SSH, become).
 # Input: bgw_node {name, address}, hf_root (instance config), hf_pe (provider-edge addresses), fab_spec, hf_egress,
-# hf_attach (attachments-plan), hf_circuit_passwords.
+# hf_attach (attachments-plan; a node's circuit with IPv6 carries address6, link6, sources6 and egress6 into the apply
+# JSON as they are), hf_circuit_passwords.
 # Appends {name, ready, message, lastAppliedAt} to hf_node_results and the node's name to hf_changed_nodes when
 # anything on it changed.
 - name: "{{ bgw_node.name }}: the node's egress plan and attachment circuits"
@@ -9,6 +10,18 @@
     hf_node_egress: "{{ (hf_egress.nodes | default({})).get(bgw_node.name, {}) }}"
     hf_node_attach: "{{ (hf_attach.nodes | default({})).get(bgw_node.name, {}) }}"
     hf_node_vrfs: "{{ (hf_attach.vrfs | default({})).get(bgw_node.name, []) }}"
+
+# a circuit's IPv6 routes reach the sites only as IPv6 VPN routes, which need the dual-stack core (the IPv6 loopback
+# is their next hop); the planner offers IPv6 on circuits only with it, so this is a guard, not a policy
+- name: "{{ bgw_node.name }}: IPv6 on attachment circuits needs the IPv6 core"
+  ansible.builtin.fail:
+    msg: >-
+      HybridFabric {{ fab_name }} on {{ bgw_node.name }}: attachment circuit(s)
+      {{ hf_node_attach.circuits | selectattr('address6', 'defined') | map(attribute='circuit') | join(', ') }}
+      carry IPv6, but the core has no IPv6 loopback for this node
+  when:
+    - hf_node_attach.circuits | default([]) | selectattr('address6', 'defined') | list | length > 0
+    - hf_pe.loopback6 | default('') | length == 0
 
 - name: "{{ bgw_node.name }}: require FRR"
   ansible.builtin.command: rpm -q frr
@@ -316,6 +329,15 @@
       {% if c.bfd %}
       pgrep -x bfdd >/dev/null
       {% endif %}
+      {% if c.ipv6 is defined %}
+      # its IPv6 side: the node's address on the link (no longer tentative), the IPv6 filter table, the node routing
+      # IPv6, the CE's IPv6 address configured as a peer
+      ip -br -6 addr show dev {{ c.device }} | grep -q ' {{ c.ipv6.nodes[bgw_node.name] }}/'
+      ! ip -6 addr show dev {{ c.device }} tentative | grep -q inet6
+      nft list table ip6 shc_attach6 >/dev/null
+      [ "$(sysctl -n net.ipv6.conf.all.forwarding)" = 1 ]
+      vtysh -c 'show bgp vrf {{ v.vrf }} neighbors {{ c.ipv6.ce }} json' | grep -q '"remoteAs":{{ c.peerAsn }}'
+      {% endif %}
       {% endfor %}
       {% endfor %}
       {% if hf_pe.loopback6 | default('') | length > 0 %}
@@ -568,7 +590,9 @@
                           ~ '/' ~ (_eg6.upstream | default([]) | length) ~ ' upstream sessions up) for '
                           ~ (_eg6.networks | default(0)) ~ ' network(s)') if hf_node_egress.ipv6 is defined else '')
                       ~ ((', ' ~ hf_node_attach.circuits | length ~ ' attachment circuit(s)')
-                         if hf_node_attach.circuits | default([]) | length > 0 else ''),
+                         if hf_node_attach.circuits | default([]) | length > 0 else '')
+                      ~ ((' (' ~ (hf_node_attach.circuits | selectattr('address6', 'defined') | list | length) ~ ' with IPv6)')
+                         if hf_node_attach.circuits | default([]) | selectattr('address6', 'defined') | list | length > 0 else ''),
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
            | combine({'egressIpv6': _eg6} if hf_node_egress.ipv6 is defined else {})] }}
     hf_changed_nodes: >-

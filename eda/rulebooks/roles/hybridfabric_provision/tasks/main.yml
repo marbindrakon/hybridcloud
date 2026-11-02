@@ -319,7 +319,8 @@
           translation: "{{ fab_real.translation | default({}, true) }}"
 
     # the address families of each root VRF (its FRR VRF's unicast families): IPv4, and IPv6 for a network with IPv6
-    # egress (its default route into the VPN; circuits are IPv4 only)
+    # egress (its default route into the VPN) or a circuit with IPv6. A node's circuit with IPv6 also learns whether
+    # its IPv6 traffic may leave through the network's egress (egress6: the CE is given the IPv6 default route)
     - name: Keep the attachment plan
       ansible.builtin.set_fact:
         hf_attach: >-
@@ -327,11 +328,24 @@
           {%- for node, vs in (fab_check_result.vrfs | default({})).items() -%}
             {%- set lst = [] -%}
             {%- for v in vs -%}
-              {%- set _ = lst.append(v | combine({'families': [4, 6] if v.ipv6 is defined else [4]})) -%}
+              {%- set v6 = v.ipv6 is defined or (v.circuits | default([]) | selectattr('ipv6', 'defined') | list | length > 0) -%}
+              {%- set _ = lst.append(v | combine({'families': [4, 6] if v6 else [4]})) -%}
             {%- endfor -%}
             {%- set _ = vrfs.update({node: lst}) -%}
           {%- endfor -%}
-          {{ fab_check_result | combine({'vrfs': vrfs}) }}
+          {%- set open6 = {} -%}
+          {%- for c in fab_check_result.circuits | default([]) if c.ipv6 is defined -%}
+            {%- set _ = open6.update({c.circuit: c.ipv6.advertiseDefault | default(false) | bool}) -%}
+          {%- endfor -%}
+          {%- set nodes = {} -%}
+          {%- for node, n in (fab_check_result.nodes | default({})).items() -%}
+            {%- set lst = [] -%}
+            {%- for c in n.circuits | default([]) -%}
+              {%- set _ = lst.append(c | combine({'egress6': open6.get(c.circuit, false)}) if c.address6 | default('') else c) -%}
+            {%- endfor -%}
+            {%- set _ = nodes.update({node: n | combine({'circuits': lst})}) -%}
+          {%- endfor -%}
+          {{ fab_check_result | combine({'vrfs': vrfs, 'nodes': nodes}) }}
         hf_attach_restart: "{{ fab_real.attachments.maxPrefixRestart | default(2) }}"
         hf_attach_before: >-
           {{ ((fab_st.realization | default({}, true)).attachments | default([], true)) }}

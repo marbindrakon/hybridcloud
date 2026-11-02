@@ -1201,9 +1201,10 @@ def orphan_report(req):
     the ledger does not back. Input: crs {fabrics, gateways, networks, placements, cloudvirts, circuits} (CR objects),
     ledgers {fabric: ledger} (with its IPAM section), sites [{gateway, type, cudns: [{name, l3vni}], routeAdvertisements: [...],
     namespaces: [{name, labels}], networks: [{name, sharedTo}], routers: [{name, evpnVni}]}],
-    nodes [{fabric, node, netns: {name: [vrf]}, rootDevices: [{name, master}] (the root's VLAN devices in root VRFs
-    or on a bearer interface within the attachment VLAN pool), rootBfd: [{peer, vrf, interface, status}] (the root
-    bfdd's sessions)}]. Returns {findings: [str], counts}."""
+    nodes [{fabric, node, netns: {name: [vrf]}, rootDevices: [{name, master, addrs6}] (the root's VLAN devices in root
+    VRFs or on a bearer interface within the attachment VLAN pool, with their global IPv6 addresses), rootBfd: [{peer,
+    vrf, interface, status}] (the root bfdd's sessions), rootAttach6 (the circuits' IPv6 filter table is loaded)}].
+    A circuit has an IPv6 session when its realization entry lists family 6. Returns {findings: [str], counts}."""
     crs, findings = req.get("crs") or {}, []
 
     def key(o):
@@ -1307,10 +1308,19 @@ def orphan_report(req):
                         findings.append(f"node {n['node']}: root VRF {v} belongs to no network with internet egress "
                                         "or attachment circuit")
                 devs = {a.get("device") for a in att}
+                # the circuits on this node with an IPv6 session (families 4 and 6): their devices and VRFs
+                att6 = [a for a in att if 6 in (a.get("families") or [4])]
+                devs6, vrfs6 = {a.get("device") for a in att6}, {a.get("vrf") for a in att6}
                 for d in n.get("rootDevices") or []:
                     if d.get("name") not in devs:
                         findings.append(f"node {n['node']}: circuit device {d.get('name')} (VRF {d.get('master') or 'none'}) "
                                         "belongs to no attachment circuit")
+                    elif d.get("addrs6") and d.get("name") not in devs6:
+                        findings.append(f"node {n['node']}: circuit device {d.get('name')} holds IPv6 address(es) "
+                                        f"{', '.join(d['addrs6'])}, but its circuit has no IPv6 session")
+                if n.get("rootAttach6") and not att6:
+                    findings.append(f"node {n['node']}: the attachment circuits' IPv6 filter table (ip6 shc_attach6) is "
+                                    "loaded, but no circuit on the node has an IPv6 session")
                 # a BFD session in a VRF the kernel no longer has outlived its circuit (bgpd only deregisters it while
                 # the VRF exists); it stays in bfdd until bfdd restarts
                 for b in n.get("rootBfd") or []:
@@ -1318,6 +1328,11 @@ def orphan_report(req):
                         findings.append(f"node {n['node']}: BFD session to {b.get('peer')} in VRF {b.get('vrf')} "
                                         f"({b.get('interface') or 'no interface'}, {b.get('status') or 'unknown'}) "
                                         "outlives its VRF")
+                    elif ":" in str(b.get("peer") or "") and b.get("vrf") not in vrfs6:
+                        # an IPv6 peer in a VRF none of whose circuits on this node runs an IPv6 session (any more)
+                        findings.append(f"node {n['node']}: BFD session to {b.get('peer')} in VRF {b.get('vrf')} "
+                                        f"({b.get('interface') or 'no interface'}, {b.get('status') or 'unknown'}) "
+                                        "belongs to no IPv6 circuit session")
                 continue
             g = gws.get(ns[3:]) if ns.startswith("gw-") else None
             if g is None:
