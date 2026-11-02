@@ -45,23 +45,36 @@ actions:
                   and per network with ipv6 (its platform block and the placement prefixes inside it, all inside
                   egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes and whether the
                   node is the network's standby (index mod nodes); errors for an unusable configuration
-  circuit-plan    {attachments: realization attachments, nodes: [node names], index}  an attachment circuit's link
-                  subnet (the index-th of attachments.linkPool), each node's address and the CE's
+  circuit-plan    {attachments: realization attachments, nodes: [node names], index, ipv6?}  an attachment circuit's
+                  link subnet (the index-th of attachments.linkPool), each node's address and the CE's; with ipv6 (the
+                  circuit has IPv6 accept entries) also its IPv6 link under ipv6 (the index-th /64 of
+                  attachments.linkPool6, the same host numbers), an error with reason FamilyUnavailable when there is
+                  none
   check-circuit   {accept: [prefix-list entries], space: [the network's prefixes], reserved: [cidr], egressInternet,
-                  advertiseDefault}  entries inside the network's address space or a reserved range are refused;
-                  notes for policy that doesn't apply now; acceptsDefault
-  (check-fabric also validates the realization's attachments: poolSize.attachVlanPool, poolSize.attachLinks)
+                  advertiseDefault, attachments?, core?, translation?, egressInternet6?}  entries of either family
+                  inside the network's address space or a platform range (reserved; IPv6: platform_ranges6) are
+                  refused (errors); IPv6 entries on a fabric without attachments.linkPool6 or on a network without
+                  IPv6 address space are refused (familyErrors); notes for policy that doesn't apply now;
+                  acceptsDefault (0.0.0.0/0), acceptsDefault6 (::/0), ipv6 (the list has IPv6 entries)
+  (check-fabric also validates the realization's attachments: poolSize.attachVlanPool, poolSize.attachLinks, and
+  the optional linkPool6 and reserved6)
   attachments-plan {fabric, attachments: realization attachments, nodes: [node names], tableBase, domainAsn,
                   circuits, networks, placements: [CR objects], ledger: alloc, egress: egress-plan networks,
                   egressNodes: egress-plan nodes, reserved: [cidr], platformSources: [cidr], passwords: [circuits
-                  (namespace/name) whose BGP password the job holds]}  the circuits the fabric's nodes realize: per circuit its VRF (the
+                  (namespace/name) whose BGP password the job holds], core?, translation?}  the circuits the fabric's
+                  nodes realize: per circuit its VRF (the
                   network's root VRF e<vpnTarget>), VLAN device, conntrack zone (the network's egress zone, else its
                   VPN target) and routing policy (accept list; deny = the network's address space (spec.prefixes and
                   status.addressSpace) and its placements' prefixes (status.prefixes), the reserved ranges and
                   0.0.0.0/0 while the network wants internet egress; advertise = the placement prefixes and 0.0.0.0/0
-                  when asked for and the network has internet egress; IPv4 only); per node the root's attachments
-                  (root.json); circuits it can't realize under skipped; vrfs: per node the networks with a root
-                  VRF (egress entry and/or circuits), for the node's FRR configuration
+                  when asked for and the network has internet egress). A circuit with IPv6 accept entries also gets
+                  ipv6 {link, prefixLength, ce, nodes, accept, deny, advertise, denyDefault, advertiseDefault,
+                  sources}: deny = the network's IPv6 space and placement prefixes, platform_ranges6 and ::/0 while
+                  the network has IPv6 internet egress; advertise = the IPv6 placement prefixes and ::/0 when asked
+                  for and the network has IPv6 internet egress; sources = the accepted prefixes and the link (what the
+                  nodes admit as source from the CE). A circuit without IPv6 entries plans exactly as before. Per
+                  node the root's attachments (root.json); circuits it can't realize under skipped; vrfs: per node
+                  the networks with a root VRF (egress entry and/or circuits), for the node's FRR configuration
 """
 import hashlib
 import ipaddress
@@ -711,6 +724,31 @@ def attachments_check(at, node_names, core=None):
                 pass
     except ValueError as e:
         errors.append(f"realization attachments.linkPool: {e}")
+    # IPv6 on circuits (optional): a /64 per circuit by its link index, so the pool is at least a /64; it and the
+    # platform's own IPv6 ranges (reserved6) are IPv6 networks, and the pool stays clear of the core's IPv6 ranges
+    if str(at.get("linkPool6") or "").strip():
+        try:
+            pool6 = ipaddress.ip_network(str(at.get("linkPool6")), strict=True)
+            if pool6.version != 6:
+                errors.append(f"realization attachments.linkPool6 {pool6} is not an IPv6 network")
+            elif pool6.prefixlen > 64:
+                errors.append(f"realization attachments.linkPool6 {pool6} is too small (at least a /64)")
+            else:
+                for k in ("loopbackPool6", "icmpSource6"):
+                    try:
+                        c = core6(core or {}, k, 128)
+                    except ValueError:
+                        continue
+                    if c is not None and pool6.overlaps(c):
+                        errors.append(f"realization attachments.linkPool6 {pool6} overlaps core.{k} {c}")
+        except ValueError as e:
+            errors.append(f"realization attachments.linkPool6: {e}")
+    for c in at.get("reserved6") or []:
+        try:
+            if ipaddress.ip_network(str(c), strict=True).version != 6:
+                errors.append(f"realization attachments.reserved6: {c} is not an IPv6 network")
+        except ValueError as e:
+            errors.append(f"realization attachments.reserved6: {e}")
     for pe, p in (at.get("providerEdges") or {}).items():
         for b, bearer in ((p or {}).get("bearers") or {}).items():
             if not (bearer or {}).get("interface"):
@@ -734,26 +772,68 @@ def circuit_plan(req):
     hosts = list(link.hosts())
     if len(hosts) < len(names) + 2:
         return {"errors": [f"link {link} has too few addresses for {len(names)} nodes and the CE"]}
-    return {"errors": [], "link": str(link), "prefixLength": plen,
-            "nodes": [{"name": n, "address": str(hosts[i])} for i, n in enumerate(names)],
-            "ce": str(hosts[len(names)]), "ceSecond": str(hosts[len(names) + 1])}
+    out = {"errors": [], "link": str(link), "prefixLength": plen,
+           "nodes": [{"name": n, "address": str(hosts[i])} for i, n in enumerate(names)],
+           "ce": str(hosts[len(names)]), "ceSecond": str(hosts[len(names) + 1])}
+    if req.get("ipv6"):
+        # the IPv6 link: the index-th /64 of linkPool6 (a /64 keeps neighbour discovery plain on CE gear), the same
+        # host numbers as the IPv4 link; no ledger entry of its own
+        try:
+            pool6 = ipaddress.ip_network(str(at.get("linkPool6") or ""), strict=True)
+        except ValueError:
+            pool6 = None
+        if pool6 is None or pool6.version != 6 or pool6.prefixlen > 64:
+            return {"errors": [NO_CIRCUIT_IPV6], "reason": "FamilyUnavailable"}
+        if index >= 2 ** (64 - pool6.prefixlen):
+            return {"errors": ["no IPv6 link is left for this circuit"], "reason": "FamilyUnavailable"}
+        link6 = ipaddress.ip_network((int(pool6.network_address) + (index << 64), 64))
+        a6 = link6.network_address
+        out["ipv6"] = {"link": str(link6), "prefixLength": 64,
+                       "nodes": [{"name": n, "address": str(a6 + i + 1)} for i, n in enumerate(names)],
+                       "ce": str(a6 + len(names) + 1), "ceSecond": str(a6 + len(names) + 2)}
+    return out
 
 
 ACCEPT_RE = re.compile(r"^(\S+)(?: ge (\d+))?(?: le (\d+))?$")
+NO_CIRCUIT_IPV6 = "IPv6 is not offered on attachment circuits of this fabric"
+
+
+def platform_ranges6(at, core, translation):
+    """The platform's own IPv6 ranges a CE's routes never reach into: the circuits' IPv6 link pool
+    (attachments.linkPool6), the installation's IPv6 infrastructure ranges (attachments.reserved6), the core's IPv6
+    loopbacks and ICMPv6 sources (core.loopbackPool6, core.icmpSource6) and every site's translation prefix
+    (translation.<site>.pref64). Without those inside another one, in address order; unusable values are left out
+    (the realization check names them)."""
+    given = [(at or {}).get("linkPool6")] + list((at or {}).get("reserved6") or []) + [
+        (core or {}).get("loopbackPool6"), (core or {}).get("icmpSource6")]
+    given += [((translation or {}).get(s) or {}).get("pref64") for s in sorted((translation or {}).keys())]
+    out = []
+    for c in given:
+        if not str(c or "").strip():
+            continue
+        try:
+            n = ipaddress.ip_network(str(c), strict=True)
+        except ValueError:
+            continue
+        if n.version == 6:
+            out.append(n)
+    return sorted(collapse(out, 6), key=lambda n: (int(n.network_address), n.prefixlen))
 
 
 def check_circuit(req):
-    """A circuit's accept list against the network's address space and the platform's ranges (reserved). An entry
-    inside the space or a reserved range is refused; an entry that covers part of one only gets a note (the edge
-    drops overlapping routes regardless). acceptsDefault: an entry matches 0.0.0.0/0."""
-    errors, notes, accepts_default = [], [], False
+    """A circuit's accept list against the network's address space and the platform's ranges (reserved, and for IPv6
+    platform_ranges6). An entry inside the space or a platform range is refused; an entry that covers part of one
+    only gets a note (the edge drops overlapping routes regardless). IPv6 entries also need IPv6 on the fabric's
+    circuits (attachments.linkPool6) and IPv6 address space on the network (familyErrors). acceptsDefault /
+    acceptsDefault6: an entry matches 0.0.0.0/0 / ::/0; ipv6: the list has IPv6 entries."""
+    errors, family_errors, notes, accepts_default, accepts_default6 = [], [], [], False, False
     space = []
     for p in req.get("space") or []:
         try:
             n = ipaddress.ip_network(str(p), strict=True)
         except ValueError:
             continue
-        if n.version == 4 and n not in space:
+        if n not in space:
             space.append(n)
     reserved = []
     for r in req.get("reserved") or []:
@@ -761,24 +841,36 @@ def check_circuit(req):
             reserved.append(ipaddress.ip_network(str(r), strict=False))
         except ValueError:
             continue
+    at = req.get("attachments") or {}
+    reserved += platform_ranges6(at, req.get("core"), req.get("translation"))
+    entries = []
     for e in req.get("accept") or []:
-        m = ACCEPT_RE.match(str(e).strip())
-        try:
-            net = ipaddress.ip_network(m.group(1), strict=True) if m else None
-        except ValueError:
-            net = None
-        if net is None or net.version != 4:
-            errors.append(f"accept entry '{e}' is not '<IPv4 prefix>[ ge <n>][ le <n>]'")
+        a = accept_entry(e)
+        if a is None:
+            errors.append(f"accept entry '{e}' is not '<prefix>[ ge <n>][ le <n>]'")
             continue
-        ge = int(m.group(2)) if m.group(2) else None
+        entries.append((e, a))
+    ipv6 = any(a[0].version == 6 for _, a in entries)
+    if ipv6 and not str(at.get("linkPool6") or "").strip():
+        family_errors.append(NO_CIRCUIT_IPV6)
+    elif ipv6 and not any(q.version == 6 for q in space):
+        family_errors.append("the network has no IPv6 address space")
+    for e, (net, ge, le) in entries:
         if net.prefixlen == 0 and ge is None:
-            accepts_default = True
+            if net.version == 4:
+                accepts_default = True
+            else:
+                accepts_default6 = True
         for q in space:
+            if q.version != net.version:
+                continue
             if net.subnet_of(q):
                 errors.append(f"accept entry '{e}' lies inside the network's address space {q}")
             elif q.subnet_of(net):
                 notes.append(f"routes overlapping the network's address space {q} are never accepted from the CE")
         for q in reserved:
+            if q.version != net.version:
+                continue
             if net.subnet_of(q):
                 errors.append(f"accept entry '{e}' lies inside the platform range {q}")
             elif q.subnet_of(net) and net.prefixlen > 0:
@@ -788,30 +880,39 @@ def check_circuit(req):
         notes.append("0.0.0.0/0 is not accepted from the CE while the network has provider internet egress")
     if req.get("advertiseDefault") and not egress:
         notes.append("no default route is advertised: the network has no provider internet egress")
-    return {"errors": errors, "notes": sorted(set(notes)), "acceptsDefault": accepts_default}
+    egress6 = bool(req.get("egressInternet6"))
+    if accepts_default6 and egress6:
+        notes.append("::/0 is not accepted from the CE while the network has IPv6 internet egress")
+    if ipv6 and req.get("advertiseDefault") and not egress6:
+        notes.append("no IPv6 default route is advertised: the network has no IPv6 internet egress")
+    return {"errors": errors, "familyErrors": family_errors, "notes": sorted(set(notes)),
+            "acceptsDefault": accepts_default, "acceptsDefault6": accepts_default6, "ipv6": ipv6}
 
 
 def accept_entry(e):
-    """A prefix-list entry "<prefix>[ ge <n>][ le <n>]" as (network, ge, le), or None when malformed."""
+    """A prefix-list entry "<prefix>[ ge <n>][ le <n>]" of either family as (network, ge, le), or None when malformed
+    (ge and le longer than the prefix and at most 32 or 128, ge not above le)."""
     m = ACCEPT_RE.match(str(e).strip())
     try:
         net = ipaddress.ip_network(m.group(1), strict=True) if m else None
     except ValueError:
         return None
-    if net is None or net.version != 4:
+    if net is None or "%" in m.group(1):
         return None
+    top = net.max_prefixlen
     ge, le = (int(m.group(2)) if m.group(2) else None), (int(m.group(3)) if m.group(3) else None)
-    if (ge is not None and not net.prefixlen < ge <= 32) or (le is not None and not net.prefixlen < le <= 32) \
+    if (ge is not None and not net.prefixlen < ge <= top) or (le is not None and not net.prefixlen < le <= top) \
             or (ge is not None and le is not None and ge > le):
         return None
     return net, ge, le
 
 
-def collapse(networks):
-    """The IPv4 networks without those inside another one (duplicates once)."""
-    v4 = sorted({n for n in networks if n.version == 4}, key=lambda n: n.prefixlen)
+def collapse(networks, version=4):
+    """The networks of one family (IPv4 unless version says otherwise) without those inside another one (duplicates
+    once)."""
+    fam = sorted({n for n in networks if n.version == version}, key=lambda n: n.prefixlen)
     out = []
-    for n in v4:
+    for n in fam:
         if not any(n.subnet_of(o) for o in out):
             out.append(n)
     return out
@@ -843,14 +944,24 @@ def attachments_plan(req):
         except ValueError as e:
             errors.append(f"reserved range {r}: {e}")
     sources = [str(ipaddress.ip_network(str(c), strict=True)) for c in req.get("platformSources") or []]
+    reserved6 = platform_ranges6(at, req.get("core"), req.get("translation"))
+    try:
+        pool6 = ipaddress.ip_network(str(at.get("linkPool6") or ""), strict=True)
+    except ValueError:
+        pool6 = None
     nets_by_key, space = {}, {}
     for n in req.get("networks") or []:
         md = n.get("metadata") or {}
         k = f"{md.get('namespace')}/{md.get('name')}"
         nets_by_key[k] = n
-        # the space as asked for and as the IPAM holds it (they differ while an edit is refused)
+        # the space as asked for and as the IPAM holds it (they differ while an edit is refused); IPv6 also the
+        # network's IPv6 space in effect and its platform block
+        v6 = (n.get("status") or {}).get("ipv6") or {}
         for c in ((n.get("spec") or {}).get("prefixes") or []) + [
-                a.get("prefix") for a in (n.get("status") or {}).get("addressSpace") or []]:
+                a.get("prefix") for a in (n.get("status") or {}).get("addressSpace") or []] + list(
+                v6.get("prefixes") or []) + [(v6.get("block") or {}).get("prefix")]:
+            if c is None:
+                continue
             try:
                 space.setdefault(k, []).append(ipaddress.ip_network(str(c), strict=True))
             except ValueError:
@@ -901,13 +1012,34 @@ def attachments_plan(req):
         if not parent or len(device) > 15 or not link.subnet_of(pool):
             skip(f"no usable interface ({device}) or link {link} outside {pool}")
             continue
-        accept, bad = [], []
+        accept, accept6, nets6, bad = [], [], [], []
         for e in r.get("accept") or []:
             a = accept_entry(e)
-            (accept.append(entry_text(*a)) if a else bad.append(str(e)))
+            if a is None:
+                bad.append(str(e))
+            elif a[0].version == 6:
+                accept6.append(entry_text(*a))
+                nets6.append(a[0])
+            else:
+                accept.append(entry_text(*a))
         if bad:
             skip(f"malformed accept entries: {', '.join(bad)}")
             continue
+        # IPv6 accept entries: the circuit's IPv6 link (the circuit job numbers it from linkPool6) and every node's
+        # address on it
+        if accept6:
+            try:
+                link6 = ipaddress.ip_network(str(r.get("link6")), strict=True)
+                ce6 = ipaddress.ip_address(str(r.get("ce6")))
+                addrs6 = {n.get("name"): ipaddress.ip_address(str(n.get("address6")))
+                          for n in r.get("nodes") or [] if n.get("address6")}
+            except ValueError:
+                link6 = None
+            if link6 is None or pool6 is None or link6.version != 6 or not link6.subnet_of(pool6) \
+                    or link6.prefixlen != 64 or ce6 not in link6 or not all(a in link6 for a in addrs6.values()):
+                skip(f"IPv6 accept entries without a usable IPv6 link ({r.get('link6') or 'none'}) in the IPv6 link "
+                     f"pool ({at.get('linkPool6') or 'none'})")
+                continue
         if (r.get("authentication") or "md5") == "md5" and key not in passwords:
             skip("no usable BGP password in the platform's secret store")
             continue
@@ -928,6 +1060,9 @@ def attachments_plan(req):
         advertise = ([entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in mine]
                      if r.get("advertiseNetworkPrefixes", True) else []) + (["0.0.0.0/0"] if nat else [])
         addrs = {n.get("name"): n.get("address") for n in r.get("nodes") or []}
+        if accept6 and any(n not in addrs6 for n in node_names if addrs.get(n)):
+            skip("no IPv6 address for every node on the IPv6 link")
+            continue
         plan = {"circuit": key, "network": net_key, "id": f"AC{vlan}", "vrf": f"e{t}", "table": base + t,
                 "vpnTarget": t, "zone": zone, "vlan": vlan, "device": device, "parent": parent,
                 "mtu": int(r.get("mtu") or 1500), "link": str(link), "ce": str(r.get("ce")),
@@ -937,16 +1072,43 @@ def attachments_plan(req):
                 "accept": accept, "deny": deny, "advertise": advertise, "denyDefault": internet_intent,
                 "advertiseDefault": nat, "nat": nat, "rev": str(r.get("rev") or ""),
                 "nodes": {n: addrs[n] for n in node_names if addrs.get(n)}}
-        policy = hashlib.sha1(json.dumps([deny, accept, advertise, nat], sort_keys=True).encode()).hexdigest()[:12]
+        hashed = [deny, accept, advertise, nat]
+        if accept6:
+            # IPv6: the same policy per family; the default route only where the network has IPv6 internet egress
+            egress6 = bool(eg.get("ipv6"))
+            mine6 = sorted({n for n in prefixes.get(net_key, []) if n.version == 6},
+                           key=lambda n: (int(n.network_address), n.prefixlen))
+            own6 = sorted(collapse(space.get(net_key, []) + mine6, 6),
+                          key=lambda n: (int(n.network_address), n.prefixlen))
+            deny6 = [entry_text(n, le=128) if n.prefixlen < 128 else str(n) for n in own6 + reserved6]
+            if egress6:
+                deny6.append("::/0")
+            nat6 = bool(r.get("advertiseDefault")) and egress6
+            advertise6 = ([entry_text(n, le=128) if n.prefixlen < 128 else str(n) for n in mine6]
+                          if r.get("advertiseNetworkPrefixes", True) else []) + (["::/0"] if nat6 else [])
+            plan["ipv6"] = {"link": str(link6), "prefixLength": 64, "ce": str(ce6),
+                            "nodes": {n: str(addrs6[n]) for n in plan["nodes"]},
+                            "accept": accept6, "deny": deny6, "advertise": advertise6, "denyDefault": egress6,
+                            "advertiseDefault": nat6,
+                            # what a node admits as source from the CE: the accepted prefixes and the link
+                            "sources": [str(n) for n in sorted(collapse(nets6 + [link6], 6),
+                                                               key=lambda n: (int(n.network_address), n.prefixlen))]}
+            hashed += [deny6, accept6, advertise6, nat6]
+        policy = hashlib.sha1(json.dumps(hashed, sort_keys=True).encode()).hexdigest()[:12]
         circuits.append(plan)
         status.append({"circuit": key, "network": net_key, "rev": plan["rev"], "policy": policy, "vlan": vlan,
                        "vrf": plan["vrf"], "device": device, "link": str(link),
                        "nodes": sorted(plan["nodes"].keys())})
+        if accept6:
+            status[-1]["families"] = [4, 6]
         for n, a in plan["nodes"].items():
             nodes[n]["circuits"].append({"circuit": key, "device": device, "parent": parent, "vlan": vlan,
                                          "mtu": plan["mtu"], "vrf": plan["vrf"], "table": plan["table"],
                                          "zone": zone, "address": f"{a}/{link.prefixlen}", "link": str(link),
                                          "nat": nat})
+            if accept6:
+                nodes[n]["circuits"][-1].update({"address6": f"{plan['ipv6']['nodes'][n]}/64", "link6": str(link6),
+                                                 "sources6": plan["ipv6"]["sources"]})
     for n in nodes.values():
         n.update({"vlanPool": [int(vp.get("start", 1)), int(vp.get("end", 0))],
                   "parents": sorted(parents | {str(b.get("interface")) for p in (at.get("providerEdges") or {}).values()
@@ -959,7 +1121,8 @@ def attachments_plan(req):
 
 def root_vrfs(req, circuits):
     """Per node, the networks with a root VRF in vpnTarget order: the node's egress entry (egress-plan nodes) for a
-    network with egress, plus the network's circuits on the node (a circuit-only network gets a bare entry)."""
+    network with egress, plus the network's circuits on the node (a circuit-only network gets a bare entry); a
+    circuit with IPv6 carries its ipv6 plan and the node's address6 (<address>/64)."""
     asn = int(req.get("domainAsn") or 0)
     out = {}
     for name in req.get("nodes") or []:
@@ -974,6 +1137,8 @@ def root_vrfs(req, circuits):
                                              "rd": f"{asn}:{c['vpnTarget']}" if 0 < asn <= 65535 else "",
                                              "circuits": []})
             v["circuits"].append(dict({k: x for k, x in c.items() if k != "nodes"}, address=c["nodes"][name]))
+            if "ipv6" in c:
+                v["circuits"][-1]["address6"] = f"{c['ipv6']['nodes'][name]}/64"
         out[name] = sorted(by_vrf.values(), key=lambda v: int(v["vpnTarget"]))
     return out
 

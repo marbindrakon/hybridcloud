@@ -191,6 +191,14 @@ fabric_realization_defaults:
     vlanPool: {start: 3000, end: 3099}
     linkPool: 10.255.128.0/20
     linkPrefixLength: 29
+    # IPv6 on circuits: empty = circuits are IPv4 only (IPv6 accept entries are refused with FamilyUnavailable). An
+    # IPv6 prefix of at least a /64: a circuit with IPv6 accept entries gets the /64 at its link index (node i
+    # ::<i+1>, the CE the next) and a second BGP session over it
+    linkPool6: ""
+    # the platform's own IPv6 infrastructure ranges (e.g. the part of its routed space that holds linkPool6 and the
+    # core's IPv6 ranges): a CE's IPv6 routes never reach into them, like linkPool6, core.loopbackPool6,
+    # core.icmpSource6 and the translation prefixes
+    reserved6: []
     # central Vault KV path (mount central) for each circuit's BGP password
     secretPath: "fabric/circuits/{entity}/{name}"
     # minutes before a session closed for too many prefixes (maxPrefixes action teardown) is tried again; 0 = it

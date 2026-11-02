@@ -312,6 +312,11 @@
                 + (fab_real.egress.platformSources | default([], true))) if fab_real.attachments.enabled | default(false) | bool
                else [] }}
           platformSources: "{{ fab_real.egress.platformSources | default([], true) }}"
+          # circuits with IPv6: the helper derives the platform's IPv6 ranges (attachments.linkPool6 and reserved6,
+          # the core's IPv6 loopbacks and ICMPv6 sources, the translation prefixes); egress[].ipv6 says which
+          # networks have IPv6 internet egress
+          core: "{{ fab_real.core | default({}, true) }}"
+          translation: "{{ fab_real.translation | default({}, true) }}"
 
     # the address families of each root VRF (its FRR VRF's unicast families): IPv4, and IPv6 for a network with IPv6
     # egress (its default route into the VPN; circuits are IPv4 only)
