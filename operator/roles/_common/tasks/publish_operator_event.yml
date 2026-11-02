@@ -12,8 +12,9 @@
 # status.retry. After repeated failed teardown jobs (Stalled=True/TeardownFailed, counted by the status
 # library) the delete event is not published again until one of those two. A teardown its paused site holds
 # (its last delete job finished with Ready=False/SitePaused and a deletionBlockedBy entry "... (paused)") is not
-# published again either: the site's job wakes it (a Retry-now request) once the site is resumed
-# (cloudinfrastructure_provision, "Wake the ones pending on it").
+# published again either while that site's spec.paused, read on each requeue, is still set: the site's job wakes it
+# (a Retry-now request) once the site is resumed (cloudinfrastructure_provision, "Wake the ones pending on it"), and
+# without that wake the first requeue after the resume publishes it.
 - name: Read the CR before publishing a delete event
   kubernetes.core.k8s_info:
     api_version: "{{ operator_event_regarding.apiVersion }}"
@@ -44,6 +45,30 @@
          else lookup('ansible.builtin.vars', '_hybridsovereign_redhat_' ~ (operator_event_regarding.kind | lower), default={}) }}
   when: amq_kafka_enabled | default(true) | bool
 
+# a teardown its last delete job held for a paused site (Ready=False/SitePaused, a "... (paused)" blocker, that job
+# finished): held only while the site is still paused, read now (site_paused_now.yml), so a resume publishes it on
+# the next requeue even when the site job's wake was lost
+- name: Tell whether the deletion reports a hold by a paused site
+  ansible.builtin.set_fact:
+    _publish_held_reported: >-
+      {%- if operator_event_reason is search('DeleteRequested$') and (_publish_cr.resources | default([]) | length > 0) -%}
+        {%- set st = _publish_cr.resources[0].status | default({}, true) -%}
+        {%- set d = st.delivery | default({}, true) -%}
+        {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
+        {{ (ready.reason | default('', true)) == 'SitePaused'
+           and (st.deletionBlockedBy | default([], true) | select('search', '[(]paused[)]$') | list | length) > 0
+           and (d.reason | default('')) == operator_event_reason
+           and (d.completedEventId | default('')) == (d.eventId | default('-')) }}
+      {%- else -%}False{%- endif -%}
+
+- name: Read whether the held deletion's site is paused now
+  ansible.builtin.include_tasks: site_paused_now.yml
+  vars:
+    site_paused_cr: "{{ _publish_cr.resources[0] }}"
+  when:
+    - _publish_held_reported | bool
+    - not (reconcile_now | default(false) | bool)
+
 - name: Decide whether to publish
   ansible.builtin.set_fact:
     _publish_redeliver: >-
@@ -59,11 +84,7 @@
         {%- set gave_up = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Stalled')
                            | selectattr('status', 'equalto', 'True') | selectattr('reason', 'equalto', 'TeardownFailed')
                            | list | length) > 0 -%}
-        {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
-        {%- set held = (ready.reason | default('', true)) == 'SitePaused'
-                       and (st.deletionBlockedBy | default([], true) | select('search', '\\(paused\\)$') | list | length) > 0
-                       and (d.reason | default('')) == operator_event_reason
-                       and (d.completedEventId | default('')) == (d.eventId | default('-')) -%}
+        {%- set held = (_publish_held_reported | default(false) | bool) and (site_paused_now | default(false) | bool) -%}
         {{ (st.deletionComplete | default(false) | bool)
            or ((not redeliver) and gave_up)
            or ((not redeliver) and held)

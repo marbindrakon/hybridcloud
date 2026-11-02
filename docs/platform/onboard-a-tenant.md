@@ -28,7 +28,9 @@ it keep their last state and read **Paused** (reason `SitePaused`) instead of fa
 wait (the object names the paused site as its blocker) and finish once the site is resumed. While the site is
 paused the platform runs no periodic jobs for it or for what it holds; a change to one of those objects, or a
 reconcile request, still runs its job (which finds the site paused). Clear the field to resume: the site is probed
-at once, and when it reads Ready everything the pause held runs again. The switch is meant
+at once, and when it reads Ready everything the pause held runs again. Each held object also checks its site on
+its own periodic reconcile (every 5 minutes), so it resumes, a held deletion included, even if it missed that
+wake. The switch is meant
 to be flipped live, also on a site whose record is managed in Git: the GitOps admission rule allows a change
 that touches nothing but `spec.paused`, and the sync leaves the field alone.
 
