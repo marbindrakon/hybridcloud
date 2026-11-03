@@ -2453,15 +2453,18 @@ spec:
                 capabilities:
                   type: object
                   description: >-
-                    What the site offers, as probed by the provision job. Keys: evpn (the site can attach to a
-                    HybridFabric: openstack = Neutron's evpn extension is loaded; openshift = CNO FRR provider,
-                    routeAdvertisements Enabled and fabric BGP sessions Established), api (the credential
-                    authenticates), virtualization (OpenShift Virtualization Available), dns (environment zones can be created
-                    on this site), ipv6 (placements on the site can have an IPv6 subnet), ipv6Only (placements without
-                    IPv4 are offered), ipv6NetworkSource (IPv6 subnets can come from the network's address space),
-                    ipv6ProviderSource (IPv6 subnets can come from the cloud provider), ipv6Translation (placements
-                    without IPv4 reach IPv4-only destinations by translation). A key that is absent or false is not
-                    offered.
+                    What the site offers, as probed by the provision job. Keys: evpn (the site can
+                    attach to a HybridFabric: openstack = Neutron's evpn extension is loaded;
+                    openshift = CNO FRR provider, routeAdvertisements Enabled and fabric BGP
+                    sessions Established), frrK8s (openshift: CNO FRR provider and
+                    routeAdvertisements Enabled, whether or not a fabric BGP session is up), api
+                    (the credential authenticates), virtualization (OpenShift Virtualization
+                    Available), dns (environment zones can be created on this site), ipv6
+                    (placements on the site can have an IPv6 subnet), ipv6Only (placements without
+                    IPv4 are offered), ipv6NetworkSource (IPv6 subnets can come from the network's
+                    address space), ipv6ProviderSource (IPv6 subnets can come from the cloud
+                    provider), ipv6Translation (placements without IPv4 reach IPv4-only destinations
+                    by translation). A key that is absent or false is not offered.
                   additionalProperties:
                     type: boolean
                 site:
@@ -5349,17 +5352,21 @@ spec:
                       description: How workloads get IPv6 addresses, DHCPv6 or SLAAC (informational).
                     internet:
                       type: object
-                      description: IPv6 internet access of the placement.
+                      description: >-
+                        IPv6 internet access of the placement. With path Fabric it is the network's
+                        IPv6 row of status.egress.families as of the placement's last run.
                       properties:
                         state:
                           type: string
-                          description: ready, pending or unavailable.
+                          description: ready, pending, removing or unavailable.
                         path:
                           type: string
                           description: Fabric (through the platform) or Provider (the cloud provider's own path).
                         reason:
                           type: string
-                          description: One-word reason when not ready.
+                          description: >-
+                            One-word reason when not ready, or Degraded while ready with reduced
+                            redundancy.
                         message:
                           type: string
                           description: What the reason means for this placement, in plain words.
@@ -6264,7 +6271,11 @@ spec:
                       description: Name of the AWS environment (CloudAWS) in this namespace.
                     network:
                       type: string
-                      description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a network of its own"
+                      description: >-
+                        HybridNetwork (same namespace) whose NetworkPlacement in the environment
+                        hosts the cluster's machines; the placement needs an IPv4 subnet (the
+                        platform reaches clusters over IPv4); unset: the cluster gets a network of
+                        its own
                     publish:
                       type: string
                       description: "How the cluster's API and ingress are published: External (internet-facing load balancers) or Internal (reachable only from the cluster's network)"
@@ -6305,7 +6316,11 @@ spec:
                         Name of the Google Cloud environment (CloudGCP) in this namespace.
                     network:
                       type: string
-                      description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a VPC of its own"
+                      description: >-
+                        HybridNetwork (same namespace) whose NetworkPlacement in the environment
+                        hosts the cluster's machines; the placement needs an IPv4 subnet (the
+                        platform reaches clusters over IPv4); unset: the cluster gets a VPC of its
+                        own
                     publish:
                       type: string
                       description: "How the cluster's API and ingress are published: External (internet-facing load balancers) or Internal (reachable only from the cluster's network)"

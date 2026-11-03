@@ -1,0 +1,38 @@
+---
+# Whether the site an object reports as paused is paused now: reads the site's CloudInfrastructure at the moment of
+# the decision, so a hold never outlives the pause because the site job's wake was lost or came too early
+# (skip_while_site_paused.yml, and the held deletion in publish_operator_event.yml). The site: spec.cloudRef.name,
+# else status.site (a placement), else status.cloudInfrastructure (a CloudOSO on the installation default), else the
+# deletion blocker "CloudInfrastructure <site> (paused)" (site_paused_hold.yml). Not paused when the site is unknown,
+# not found or cannot be read: the object is published and its job decides (it holds again while the site is paused).
+# Vars: site_paused_cr (the object), site_paused_namespace (the sites' namespace, default sovereign-cloud).
+# Sets site_paused_site (the site's name, '' when unknown) and site_paused_now (bool).
+- name: Name the site of the held object
+  ansible.builtin.set_fact:
+    site_paused_now: false
+    site_paused_site: >-
+      {%- set obj = site_paused_cr | default({}, true) -%}
+      {%- set st = obj.status | default({}, true) -%}
+      {%- set ref = ((obj.spec | default({}, true)).cloudRef | default({}, true)).name | default('', true) -%}
+      {%- set placed = st.site | default('', true) -%}
+      {%- set blocked = st.deletionBlockedBy | default([], true)
+                        | select('match', '^CloudInfrastructure [^ ]+ [(]paused[)]$') | list -%}
+      {{ ref or (placed if placed is string else '') or st.cloudInfrastructure | default('', true)
+         or ((blocked | first).split(' ')[1] if blocked | length > 0 else '') }}
+
+- name: Read the site's CloudInfrastructure
+  kubernetes.core.k8s_info:
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: CloudInfrastructure
+    name: "{{ site_paused_site }}"
+    namespace: "{{ site_paused_namespace | default('sovereign-cloud', true) }}"
+  register: _site_paused_ci
+  # a read that fails (the API, RBAC) holds nothing: publishing is the safe side
+  failed_when: false
+  when: site_paused_site | length > 0
+
+- name: Decide whether the site is paused now
+  ansible.builtin.set_fact:
+    site_paused_now: >-
+      {{ (((_site_paused_ci.resources | default([], true) | first | default({}, true)).spec | default({}, true))
+          .paused | default(false, true) | bool) if site_paused_site | length > 0 else false }}

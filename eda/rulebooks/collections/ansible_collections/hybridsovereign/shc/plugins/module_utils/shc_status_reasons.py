@@ -142,11 +142,13 @@ PART_REASONS = {
     "NotOffered": _r("A", READY, "Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4."),
     "AddressChoice": _r("T", READY, "Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4."),
     "Degraded": _r("A", READY, "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path."),
+    "UpstreamDown": _r("P", READY, "IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted."),
     # the HybridFabric's IPv6EgressUpstream condition and its Warning event: a node without an upstream session
     "IPv6EgressUpstreamDown": _r("P", READY, "IPv6 internet access works through the other node; a node's upstream sessions are down."),
     # the HybridFabric's IPv6Translation condition and its Warning event: the platform's translation canary on a site
     # fails one of its checks, has not run for a while or cannot be reached
     "CanaryFailed": _r("P", READY, "The platform's translation canary on a site fails or is stale; the platform team is looking at it."),
+    "CanaryStale": _r("P", READY, "The platform's translation canary has not been read for too long; its last reading is no longer trusted."),
     "IPv6TranslationCanaryFailed": _r("P", READY, "Translation to IPv4 may not work on a site: the platform's canary there has failed for several minutes; the platform team is alerted."),
     # the CloudInfrastructure's TenantDns condition: the site's tenant DNS controller reports a failed reconcile newer
     # than its last success, or no success for dns.reverse6.staleMinutes

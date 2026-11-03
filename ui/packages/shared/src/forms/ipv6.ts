@@ -23,6 +23,7 @@ import type {
   NetworkPlacementBackendKind,
   PlacementIpv6Source,
   PlacementSubnetStatus,
+  PlacementTranslationStatus,
   PlatformPrefixRequest,
   TenantProfile,
   TenantProfileSite,
@@ -419,6 +420,31 @@ export function placementSubnet(p: NetworkPlacement | undefined | null, family: 
   return placementSubnets(p).find((s) => Number(s.family) === family && !!s.prefix);
 }
 
+/** A placement's translation to IPv4 as the page shows it: a prefix, the resolvers (maybe none), path and source if known */
+export type PlacementTranslation = PlacementTranslationStatus & { pref64: string; resolvers: string[] };
+
+/**
+ * The placement's translation to IPv4 (status.ipv6.translation) with empty fields left out; null when it has none.
+ * path: Fabric (the platform's translator) or Provider (the cloud provider's); ipv4Source: the provider translator's
+ * IPv4 address once the provider reports it.
+ */
+export function placementTranslation(p: NetworkPlacement | undefined | null): PlacementTranslation | null {
+  const tr = p?.status?.ipv6?.translation;
+  if (!tr || typeof tr !== 'object') return null;
+  const str = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim() : undefined);
+  const pref64 = str(tr.pref64);
+  if (!pref64) return null;
+  const out: PlacementTranslation = {
+    pref64,
+    resolvers: Array.isArray(tr.resolvers) ? tr.resolvers.map(str).filter((r): r is string => !!r) : [],
+  };
+  const path = str(tr.path);
+  if (path) out.path = path;
+  const source = str(tr.ipv4Source);
+  if (source) out.ipv4Source = source;
+  return out;
+}
+
 /** The reason of the placement's Ready condition when it is FamilyUnavailable (with the platform's message). */
 export function familyUnavailable(p: { status?: { conditions?: Array<{ type?: string; reason?: string; message?: string }> } } | undefined | null):
   | { message?: string }
@@ -479,15 +505,101 @@ export function ipv6ReasonText(
 export interface CloudInitSnippet {
   /** cloud-init network configuration, version 2 (the NoCloud / config drive networkData) */
   networkData: string;
-  /** cloud-config user data for a CLAT in the guest; only for an IPv6-only placement with translation */
+  /**
+   * cloud-config user data: keep the guest on the reported resolvers (any but the provider's path) and, for an
+   * IPv6-only placement with translation, a CLAT; null when neither applies
+   */
   userData: string | null;
+  /** whether userData configures a CLAT */
+  clat: boolean;
+  /** whether userData keeps the guest on the reported resolvers (ignoring those handed out by DHCP) */
+  ignoreAutoDns: boolean;
+}
+
+/**
+ * The guest script of the user data: on the NIC with the IPv6 default route, ignore the resolvers the network hands
+ * out (DHCP, router advertisements) and keep those of the network data, for the families given ("ipv6", or "ipv6
+ * ipv4" on an IPv6-only placement). NetworkManager or systemd-networkd; a connection without resolvers of its own is
+ * left alone. The translation canary sample (samples/platform/ipv6-canary/probe-user-data.yaml) ships the same
+ * script with "ipv6 ipv4".
+ */
+export function ignoreAutoDnsScript(families: string): string {
+  return String.raw`#!/bin/bash
+# Use only the resolvers of the guest's own network configuration (the cloud-init network data) on the NIC with the
+# IPv6 default route: resolvers the network hands out (DHCP, router advertisements) are ignored, so a resolver the
+# configuration does not name never takes over. NetworkManager or systemd-networkd; runs at every boot.
+FAMILIES="${families}"
+dev=""
+for _ in $(seq 1 60); do
+  dev=$(ip -6 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
+  [ -n "$dev" ] && break
+  sleep 2
+done
+[ -n "$dev" ] || { echo "no IPv6 default route: nothing changed"; exit 0; }
+if command -v nmcli >/dev/null && [ "$(nmcli -g RUNNING general 2>/dev/null)" = running ]; then
+  con=$(nmcli -g GENERAL.CON-UUID device show "$dev")
+  [ -n "$con" ] || { echo "$dev: no NetworkManager connection: nothing changed"; exit 0; }
+  # only a connection with resolvers of its own, so the guest is never left without one
+  [ -n "$(nmcli -g ipv4.dns,ipv6.dns connection show "$con" | tr -d '[:space:]')" ] || { echo "$dev: no resolvers configured: nothing changed"; exit 0; }
+  set --
+  for f in $FAMILIES; do
+    [ "$(nmcli -g "$f.ignore-auto-dns" connection show "$con")" = yes ] || set -- "$@" "$f.ignore-auto-dns" yes
+  done
+  [ $# -gt 0 ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
+  nmcli connection modify "$con" "$@" || exit 1
+  # a full reactivation, not "nmcli device reapply": before NetworkManager 1.58 a reapply keeps the DNS of a running
+  # DHCPv6 lease
+  nmcli connection up "$con" || exit 1
+  echo "$dev: ignores the resolvers handed out from now on"
+elif command -v networkctl >/dev/null && networkctl status "$dev" >/dev/null 2>&1; then
+  file=$(networkctl status "$dev" | sed -n 's/^ *Network File: *//p' | head -n 1)
+  if [ -z "$file" ] || ! grep -q '^DNS=' "$file"; then echo "$dev: no resolvers configured: nothing changed"; exit 0; fi
+  dir="/etc/systemd/network/$(basename "$file").d"
+  want=$(printf '[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n'
+    case " $FAMILIES " in *" ipv4 "*) printf '\n[DHCPv4]\nUseDNS=false\n' ;; esac)
+  [ "$(cat "$dir/90-ignore-auto-dns.conf" 2>/dev/null)" != "$want" ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
+  mkdir -p "$dir" && printf '%s\n' "$want" > "$dir/90-ignore-auto-dns.conf" || exit 1
+  networkctl reload && networkctl reconfigure "$dev" || exit 1
+  echo "$dev: ignores the resolvers handed out from now on"
+else
+  echo "$dev: managed by neither NetworkManager nor systemd-networkd: nothing changed"
+fi
+command -v resolvectl >/dev/null && resolvectl dns "$dev"
+exit 0
+`;
+}
+
+const IGNORE_AUTO_DNS_UNIT = [
+  '[Unit]',
+  'Description=Use only the configured resolvers on the NIC with the default route',
+  'Wants=network-online.target',
+  'After=network-online.target',
+  '',
+  '[Service]',
+  'Type=oneshot',
+  'ExecStart=/usr/local/sbin/ignore-auto-dns',
+  'StandardOutput=journal+console',
+  '',
+  '[Install]',
+  'WantedBy=multi-user.target',
+  '',
+].join('\n');
+
+/** A file's content as a literal block of a write_files entry (six spaces deep, blank lines left empty). */
+function contentBlock(text: string): string[] {
+  return text
+    .replace(/\n$/, '')
+    .split('\n')
+    .map((l) => (l ? `      ${l}` : ''));
 }
 
 /**
  * Guest network configuration for a VM on the placement's subnet, built from status only: DHCPv4 when the
- * placement has IPv4, DHCPv6 and router advertisements for IPv6, the resolvers the platform reports. For an
- * IPv6-only placement with translation it adds user data that configures a CLAT (clatd) with the
- * translation prefix. Null when the placement has no IPv6 subnet yet.
+ * placement has IPv4, DHCPv6 and router advertisements for IPv6, the resolvers the platform reports. With
+ * the platform's resolvers, user data makes the guest ignore resolvers handed out by DHCP (they need not translate:
+ * on an OpenShift Virtualization site DHCPv6 hands out the cluster's DNS service, without DNS64); for an
+ * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix. Null when
+ * the placement has no IPv6 subnet yet.
  */
 export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: { interfaceName?: string } = {}): CloudInitSnippet | null {
   const v6 = placementSubnet(p, 6);
@@ -505,21 +617,32 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
     '    accept-ra: true',
   ];
   if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.join(', ')}]`);
+  const clat = !v4?.prefix && !!tr?.pref64;
+  // the platform's resolvers only: on the provider's path the provider's DHCP already hands out its DNS64 resolver
+  const keepResolvers = resolvers.length > 0 && tr?.path !== 'Provider';
   let userData: string | null = null;
-  if (!v4?.prefix && tr?.pref64) {
-    userData = [
-      '#cloud-config',
-      'packages: [clatd]',
-      'write_files:',
-      '  - path: /etc/clatd.conf',
-      '    content: |',
-      `      plat-prefix=${tr.pref64}`,
-      'runcmd:',
-      '  - [systemctl, enable, --now, clatd]',
-      '',
-    ].join('\n');
+  if (clat || keepResolvers) {
+    const ud = ['#cloud-config'];
+    const runcmd: string[] = [];
+    if (clat) ud.push('packages: [clatd]');
+    ud.push('write_files:');
+    if (clat) ud.push('  - path: /etc/clatd.conf', '    content: |', `      plat-prefix=${tr?.pref64}`);
+    if (keepResolvers) {
+      ud.push(
+        '  - path: /usr/local/sbin/ignore-auto-dns',
+        '    permissions: "0755"',
+        '    content: |',
+        ...contentBlock(ignoreAutoDnsScript(v4?.prefix ? 'ipv6' : 'ipv6 ipv4')),
+        '  - path: /etc/systemd/system/ignore-auto-dns.service',
+        '    content: |',
+        ...contentBlock(IGNORE_AUTO_DNS_UNIT),
+      );
+      runcmd.push('  - [systemctl, daemon-reload]', '  - [systemctl, enable, --now, ignore-auto-dns.service]');
+    }
+    if (clat) runcmd.push('  - [systemctl, enable, --now, clatd]');
+    userData = [...ud, 'runcmd:', ...runcmd, ''].join('\n');
   }
-  return { networkData: `${net.join('\n')}\n`, userData };
+  return { networkData: `${net.join('\n')}\n`, userData, clat, ignoreAutoDns: keepResolvers };
 }
 
 /** Whether the placement page shows the snippet: an IPv6 subnet in status and a site that reports IPv6. */

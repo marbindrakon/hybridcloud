@@ -70,7 +70,7 @@ class ScrapeScript(unittest.TestCase):
         env = jinja2.Environment(undefined=jinja2.StrictUndefined)
         env.filters["to_json"] = json.dumps
         return env.from_string(t["ansible.builtin.shell"]["cmd"]).render(
-            hf_canary_targets=self.TARGETS, hf_canary_cfg={"port": port})
+            hf_canary_read=self.TARGETS, hf_canary_cfg={"port": port})
 
     def execute(self, answers, port=9464):
         sh = self.render(port)
@@ -107,7 +107,7 @@ class ScrapeScript(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(sorted(rec), ["site-a", "site-b"])  # a target without an address is not read
         a, b = rec["site-a"], rec["site-b"]
-        self.assertEqual((a["healthy"], a["stale"], a["error"], a["address"]), (True, False, "", A1))
+        self.assertEqual((a["healthy"], a["stale"], a["error"], a["address"], a["retry"]), (True, False, "", A1, False))
         self.assertEqual(a["checks"], ALL_OK)
         self.assertEqual(a["at"], "2027-01-15T07:59:30Z")
         self.assertEqual((b["healthy"], b["stale"]), (False, False))
@@ -129,6 +129,8 @@ class ScrapeScript(unittest.TestCase):
         self.assertIn("400 s old", rec["site-a"]["error"])
         self.assertEqual((rec["site-b"]["stale"], rec["site-b"]["healthy"], rec["site-b"]["checks"]), (True, False, {}))
         self.assertIn("unreachable from gw-gw-b VRF t51002 (curl exit 7: curl: (7) Failed to connect)", rec["site-b"]["error"])
+        # a probe that did not answer is for another node to try; a stale one answered
+        self.assertEqual((rec["site-a"]["retry"], rec["site-b"]["retry"]), (False, True))
         # no timestamp; a page without checks
         answers = {"ip netns exec gw-gw-a": (0, metrics(None, **ALL_OK), ""),
                    "ip netns exec gw-gw-b": (0, metrics(NOW - 5), "")}
@@ -145,11 +147,65 @@ class ScrapeScript(unittest.TestCase):
         finally:
             self.TARGETS = old
         self.assertIn("not an IPv6 address", rec["site-a"]["error"])
+        self.assertFalse(rec["site-a"]["retry"])  # no other node would do better
         self.assertEqual([c for c in calls if "curl" in c], [])
 
     def test_port(self):
         _, _, calls = self.execute({"ip netns exec": (0, metrics(NOW, **ALL_OK), "")}, port=19464)
         self.assertTrue(all(c[-1].endswith(":19464/metrics") for c in calls if "curl" in c))
+
+    def run_script(self, curl, clock=None):
+        """The script with a run() whose curl answers come from curl(netns, attempt) and a fake clock."""
+        code = textwrap.dedent(re.search(r"python3 - <<'PY'\n(.*?)\nPY\s*$", self.render(), re.S).group(1))
+        ns = {"__name__": "canary_under_test"}
+        exec(compile(code, "<canary>", "exec"), ns)
+        tries = {}
+
+        def run(cmd):
+            if "curl" not in cmd:
+                return (0, "[]", "")
+            netns = cmd[3]
+            tries[netns] = tries.get(netns, 0) + 1
+            return curl(netns, tries[netns])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ns["main"](run, now=NOW, **({"clock": clock} if clock else {}))
+        line = [ln for ln in out.getvalue().splitlines() if ln.startswith("canary=")][-1]
+        return json.loads(line.split("=", 1)[1]), tries
+
+    def test_a_probe_is_tried_again_from_the_same_node(self):
+        """Each try is a new curl (a new connection): a reply the site sent to the other node on the first try comes
+        back on a later one; a probe that never answers is tried three times, then left to the next node."""
+        ok = (0, metrics(NOW - 30, **ALL_OK), "")
+        timeout = (28, "", "curl: (28) Connection timed out after 5001 milliseconds\n")
+        rec, tries = self.run_script(lambda netns, n: ok if (netns == "gw-gw-a" and n == 2) else
+                                     (ok if netns == "gw-gw-b" else timeout))
+        self.assertEqual(tries, {"gw-gw-a": 2, "gw-gw-b": 1})
+        a = rec["site-a"]
+        self.assertEqual((a["healthy"], a["retry"], a["error"]), (True, False, ""))
+        rec, tries = self.run_script(lambda netns, n: ok if netns == "gw-gw-b" else timeout)
+        self.assertEqual(tries, {"gw-gw-a": 3, "gw-gw-b": 1})
+        a = rec["site-a"]
+        self.assertEqual((a["healthy"], a["retry"]), (False, True))
+        self.assertEqual(a["error"], "unreachable from gw-gw-a VRF t51001 (curl exit 28: curl: (28) Connection timed out "
+                                     "after 5001 milliseconds) in 3 tries")
+
+    def test_the_tries_are_bounded_by_the_nodes_budget(self):
+        """Past the node's budget (60 s) a failed site gets no further try; every site still gets its first one."""
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        def curl(netns, n):
+            t[0] += 50  # each try takes 50 s of the budget (a curl never takes more than 5 s; the clock is fake)
+            return (28, "", "")
+        rec, tries = self.run_script(curl, clock=clock)
+        # site-a: 50 s, then a second try (still within 60 s) ends at 100 s; site-b: its first try only
+        self.assertEqual(tries, {"gw-gw-a": 2, "gw-gw-b": 1})
+        self.assertTrue(rec["site-a"]["error"].endswith(") in 2 tries"))
+        self.assertTrue(rec["site-b"]["error"].endswith("(curl exit 28)"))
+        self.assertEqual((rec["site-a"]["retry"], rec["site-b"]["retry"]), (True, True))
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -176,22 +232,28 @@ class FabricTargets(unittest.TestCase):
                         "fab_spec": {"borderGateway": {"nodes": [{"name": "bgw-1"}]}}})
         self.assertEqual(out, {"targets": [], "scrape": {}, "error": ""})
 
-    def test_scrape_runs_on_the_first_node_only(self):
-        """canary_scrape.yml in ansible-playbook, delegated to localhost: the gateway namespace does not exist there, so
-        every site reads unreachable; the first node's reading is kept and the second node is not asked."""
+    def test_scrape_on_the_nodes(self):
+        """canary_scrape.yml in ansible-playbook, delegated to localhost (as localhost and 127.0.0.1): the gateway
+        namespace does not exist there, so the site reads unreachable from both; the first node's reading is kept,
+        noting that no node reached the probe, and the site is left failed."""
         targets = [{"site": "site-a", "gateway": "gw-a", "netns": "gw-shc-test-none", "placement": "p/a", "vrf": "t51001",
                     "address": A1, "error": ""}]
         out = run_play([{"name": "initial facts", "ansible.builtin.set_fact": {"hf_canary_node": "", "hf_canary_scrape": {}}},
                         {"name": "the nodes", "ansible.builtin.include_tasks": os.path.join(HF, "canary_scrape.yml"),
-                         "loop": [{"name": "localhost"}, {"name": "never-asked.invalid"}],
+                         "loop": [{"name": "localhost"}, {"name": "127.0.0.1"}],
                          "loop_control": {"loop_var": "hf_canary_bgw"}},
-                        write_out("{'node': hf_canary_node, 'scrape': hf_canary_scrape}")],
+                        write_out("{'node': hf_canary_node, 'scrape': hf_canary_scrape, 'retry': hf_canary_retry, "
+                                  "'tried': hf_canary_tried}")],
                        {"hf_canary_targets": targets, "hf_canary_cfg": {"port": 9464},
                         "ansible_python_interpreter": sys.executable})
         self.assertEqual(out["node"], "localhost")
         r = out["scrape"]["site-a"]
-        self.assertEqual((r["healthy"], r["stale"], r["address"]), (False, True, A1))
+        self.assertEqual((r["healthy"], r["stale"], r["address"], r["node"]), (False, True, A1, "localhost"))
+        self.assertNotIn("retry", r)
         self.assertIn("unreachable from gw-shc-test-none VRF t51001", r["error"])
+        self.assertEqual(r["note"], "unreachable from every border gateway node that read it (localhost, 127.0.0.1)")
+        self.assertEqual(out["retry"], ["site-a"])
+        self.assertEqual([t["node"] for t in out["tried"]["site-a"]], ["localhost", "127.0.0.1"])
 
     def test_selection(self):
         gws = [self.gw("gw-a", "site-a"), self.gw("gw-b", "site-b"), self.gw("gw-c", "site-c"),
@@ -210,6 +272,105 @@ class FabricTargets(unittest.TestCase):
         self.assertEqual((out["site-b"]["address"], out["site-b"]["error"]), ("", "no server canary"))
         # an address without a VRF is not read
         self.assertEqual(out["site-e"]["address"], "")
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class NodeRetry(unittest.TestCase):
+    """canary.yml's node loop over canary_scrape.yml, with the node's script replaced by a stub that answers per node
+    (None: the script fails) for the sites the node was asked, then the fabric status: a probe the first node cannot
+    reach is read again from the other nodes, in node order; the site fails only when no node reaches it."""
+
+    TARGETS = [{"site": "site-a", "gateway": "gw-a", "netns": "gw-gw-a", "placement": "p/a", "vrf": "t51001",
+                "address": A1, "error": ""},
+               {"site": "site-b", "gateway": "gw-b", "netns": "gw-gw-b", "placement": "p/b", "vrf": "t51002",
+                "address": A2, "error": ""}]
+
+    def ok(self, address=A1, at="2027-01-15T07:59:30Z"):
+        return {"address": address, "at": at, "checks": dict(ALL_OK), "stale": False, "healthy": True, "error": "",
+                "retry": False}
+
+    def unreachable(self, address=A1, vrf="t51001", netns="gw-gw-a", code=28):
+        return {"address": address, "at": "", "checks": {}, "stale": True, "healthy": False, "retry": True,
+                "error": "unreachable from %s VRF %s (curl exit %d)" % (netns, vrf, code)}
+
+    def run_nodes(self, answers):
+        tasks = load(os.path.join(HF, "canary_scrape.yml"))
+        sh = by_name(tasks, "{{ hf_canary_bgw.name }}: read the canary metrics through the gateways")
+        sh["ansible.builtin.shell"] = {"cmd": (
+            "{% set a = hf_canary_answers[hf_canary_bgw.name] %}"
+            "{% if a is none %}exit 1{% else %}printf '%s\\n' {{ ('canary=' ~ (a | dict2items | selectattr('key', 'in', "
+            "hf_canary_read | selectattr('address') | map(attribute='site') | list) | items2dict | to_json)) | quote }}"
+            "{% endif %}"), "executable": "/bin/bash"}
+        sh["delegate_to"] = "localhost"
+        canary = load(os.path.join(HF, "canary.yml"))
+        play = [by_name(canary, n) for n in ("The translation canary's realization",
+                                             "Read the canaries from a border gateway node",
+                                             "Note that no border gateway node read the canaries")]
+        play.append(by_name(load(os.path.join(HF, "main.yml")), "Set the translation canary status"))
+        return run_play(play + [write_out("{'node': hf_canary_node, 'scrape': hf_canary_scrape, 'error': hf_canary_error, "
+                                          "'retry': hf_canary_retry, 'status': hf_canary_status, "
+                                          "'conditions': hf_canary_conditions}")],
+                        {"fab_real": {"canaries": {"ipv6Translation": {"network": "acme/canary", "alertMinutes": 5}}},
+                         "fab_spec": {"borderGateway": {"nodes": [{"name": n} for n in answers]}},
+                         "fab_st": {}, "hf_canary_targets": self.TARGETS, "hf_canary_answers": answers},
+                        files={"canary_scrape.yml": tasks})
+
+    def test_first_node_cannot_reach_the_second_reads(self):
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)},
+                              # asked only for site-a: its site-b answer must not replace bgw-1's reading
+                              "bgw-2": {"site-a": self.ok(), "site-b": self.ok(A2, at="2027-01-15T07:00:00Z")}})
+        self.assertEqual((out["node"], out["error"], out["retry"]), ("bgw-1", "", []))
+        a, b = out["status"]["site-a"], out["status"]["site-b"]
+        self.assertEqual((a["healthy"], a["stale"], a["error"], a["node"], a["failedSince"]), (True, False, "", "bgw-2", ""))
+        self.assertEqual(a["note"], "bgw-1: unreachable from gw-gw-a VRF t51001 (curl exit 28); read from bgw-2")
+        self.assertNotIn("retry", a)
+        self.assertEqual((b["node"], b["note"], b["at"]), ("bgw-1", "", "2027-01-15T07:59:30Z"))
+        self.assertEqual((out["conditions"][0]["status"], out["conditions"][0]["reason"]), ("True", "Ready"))
+
+    def test_the_third_node_reads_after_two_could_not(self):
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)},
+                              "bgw-2": {"site-a": self.unreachable(code=7)},
+                              "bgw-3": {"site-a": self.ok()}})
+        a = out["status"]["site-a"]
+        self.assertEqual((a["healthy"], a["node"]), (True, "bgw-3"))
+        self.assertEqual(a["note"], "bgw-1: unreachable from gw-gw-a VRF t51001 (curl exit 28); "
+                                    "bgw-2: unreachable from gw-gw-a VRF t51001 (curl exit 7); read from bgw-3")
+
+    def test_no_node_reaches_the_probe(self):
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)},
+                              "bgw-2": {"site-a": self.unreachable(code=7), "site-b": self.ok(A2)}})
+        a = out["status"]["site-a"]
+        # the first node's reading, failed, with every node that tried
+        self.assertEqual((a["healthy"], a["stale"], a["node"]), (False, True, "bgw-1"))
+        self.assertEqual(a["error"], "unreachable from gw-gw-a VRF t51001 (curl exit 28)")
+        self.assertEqual(a["note"], "unreachable from every border gateway node that read it (bgw-1, bgw-2)")
+        self.assertTrue(a["failedSince"])
+        self.assertEqual(out["retry"], ["site-a"])
+        self.assertEqual(out["status"]["site-b"]["healthy"], True)
+        c = out["conditions"][0]
+        self.assertEqual((c["status"], c["reason"]), ("False", "CanaryFailed"))
+        self.assertIn("site-a (unreachable from gw-gw-a VRF t51001 (curl exit 28)", c["message"])
+
+    def test_a_node_whose_script_fails(self):
+        """As before: a node whose script fails reads nothing and the next node reads every site; once every site is
+        read, no further node is asked (bgw-3's answers would replace the readings)."""
+        out = self.run_nodes({"bgw-1": None, "bgw-2": {"site-a": self.ok(), "site-b": self.ok(A2)},
+                              "bgw-3": {"site-a": self.unreachable(), "site-b": self.unreachable(A2)}})
+        self.assertEqual((out["node"], out["error"], out["retry"]), ("bgw-2", "", []))
+        for site in ("site-a", "site-b"):
+            r = out["status"][site]
+            self.assertEqual((r["healthy"], r["node"], r["note"]), (True, "bgw-2", ""))
+        # a node that fails after the first read leaves the unreached site to the next node
+        out = self.run_nodes({"bgw-1": {"site-a": self.unreachable(), "site-b": self.ok(A2)}, "bgw-2": None,
+                              "bgw-3": {"site-a": self.ok()}})
+        a = out["status"]["site-a"]
+        self.assertEqual((a["healthy"], a["node"]), (True, "bgw-3"))
+        self.assertEqual(a["note"], "bgw-1: unreachable from gw-gw-a VRF t51001 (curl exit 28); read from bgw-3")
+        # no node's script runs: nothing read, as before
+        out = self.run_nodes({"bgw-1": None, "bgw-2": None})
+        self.assertEqual((out["node"], out["error"]), ("", "no border gateway node could read the canaries"))
+        self.assertEqual(out["status"]["site-a"]["error"], "no border gateway node could read the canaries")
+        self.assertEqual((out["status"]["site-a"]["node"], out["status"]["site-a"]["note"]), ("", ""))
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -237,15 +398,22 @@ class FabricStatus(unittest.TestCase):
 
     def test_healthy(self):
         out = self.status({"site-a": self.ok(), "site-b": self.ok(A2)})
-        self.assertEqual(out["status"]["site-a"], dict(self.ok(), placement="p/a", failedSince=""))
+        self.assertEqual(out["status"]["site-a"], dict(self.ok(), placement="p/a", failedSince="", node="", note=""))
+        # the node that read it and the note are kept as read
+        out = self.status({"site-a": dict(self.ok(), node="bgw-2", note="bgw-1: unreachable; read from bgw-2"),
+                           "site-b": self.ok(A2)})
+        self.assertEqual((out["status"]["site-a"]["node"], out["status"]["site-a"]["note"]),
+                         ("bgw-2", "bgw-1: unreachable; read from bgw-2"))
+        self.assertEqual(out["conditions"][0]["status"], "True")
         self.assertEqual(out["alert"], [])
         self.assertEqual(out["conditions"], [{"type": "IPv6Translation", "status": "True", "reason": "Ready",
                                               "message": "the translation canary passes every check on site-a, site-b"}])
 
     def test_failed_keeps_since_and_alerts_after_the_minutes(self):
-        out = self.status({"site-a": self.ok(), "site-b": self.bad(deny=0, resolver=0)})
+        # the run's time pinned: without hf_canary_now the fallback lookup is evaluated per use and can cross a second
+        out = self.status({"site-a": self.ok(), "site-b": self.bad(deny=0, resolver=0)}, now="2027-01-15T08:00:00Z")
         b = out["status"]["site-b"]
-        self.assertTrue(b["failedSince"])
+        self.assertEqual(b["failedSince"], "2027-01-15T08:00:00Z")
         self.assertEqual(out["alert"], [])
         c = out["conditions"][0]
         self.assertEqual((c["type"], c["status"], c["reason"]), ("IPv6Translation", "False", "CanaryFailed"))
@@ -280,6 +448,8 @@ class FabricStatus(unittest.TestCase):
         for site in ("site-a", "site-b"):
             r = out["status"][site]
             self.assertEqual((r["healthy"], r["stale"], r["error"]), (False, True, "no border gateway node could read the canaries"))
+            # written empty, so a merge-patch clears an earlier read's node and note
+            self.assertEqual((r["node"], r["note"]), ("", ""))
         self.assertEqual(out["status"]["site-c"]["error"], "no VirtualMachineInstance canary in the site namespaces ns-1")
         self.assertEqual(out["status"]["site-c"]["address"], "")
         self.assertIn("site-c (no VirtualMachineInstance canary", out["conditions"][0]["message"])
@@ -309,7 +479,9 @@ class FabricStatus(unittest.TestCase):
         self.assertEqual(ev["when"], "hf_canary_alert_sites | length > 0")
         fin = by_name(tasks, "Report the fabric ready")["vars"]
         self.assertIn("+ hf_canary_conditions | default([])", fin["fab_conditions"])
-        self.assertIn("'translation': {'canaries': hf_canary_patch | default({})}", fin["fab_status"])
+        self.assertIn("'translation': {'canaries': hf_canary_patch | default({}),", fin["fab_status"])
+        # with the read's time and pacing, which the operator uses to re-read and to mark a too-old reading stale
+        self.assertIn("'readAt': hf_canary_now | default('', true)", fin["fab_status"])
         # the canary is read inside the node block, while the SSH key is there
         block = by_name(tasks, "Configure the nodes, one at a time")
         self.assertEqual([t["name"] for t in block["block"]],
@@ -560,6 +732,19 @@ class Sample(unittest.TestCase):
 
     def test_check_script_output_parses_as_the_fabric_reads_it(self):
         """The script, with its network commands replaced by stubs, writes metrics the scrape script parses."""
+        page = self.run_check_script("2001:db8::54")
+        checks = dict(re.findall(r'^shc_ipv6_canary_check\{check="(\w+)"\} ([01])$', page, re.M))
+        self.assertEqual(checks, {k: "1" for k in ALL_OK})
+        self.assertRegex(page, r"(?m)^shc_ipv6_canary_run_timestamp_seconds \d+$")
+        # the resolver in use: an information metric, not a check (the fabric reads shc_ipv6_canary_check lines only)
+        self.assertIn('shc_ipv6_canary_resolver_info{server="2001:db8::54",translation="1"} 1', page.splitlines())
+
+    def test_the_resolver_in_use_after_the_guest_left_the_translation_resolvers(self):
+        page = self.run_check_script("2001:db8:ffff::3331%2")
+        self.assertIn('shc_ipv6_canary_resolver_info{server="2001:db8:ffff::3331",translation="0"} 1', page.splitlines())
+
+    def run_check_script(self, current_resolver):
+        """The check script with ip, dig, curl, ping and resolvectl stubbed; returns the metrics page it wrote."""
         files = {f["path"]: f["content"] for f in self.user_data()["write_files"]}
         script = files["/usr/local/bin/shc-ipv6-canary"].replace("DIR=/var/lib/shc-ipv6-canary", 'DIR="$CANARY_DIR"')
         import tempfile
@@ -570,7 +755,8 @@ class Sample(unittest.TestCase):
             stubs = {"ip": "echo '2: eth0    inet6 2001:db8:4005:4200::10/64 scope global dynamic'",
                      "dig": 'case "$*" in *AAAA*) echo 2001:db8:66::c000:aa;; *) echo 192.0.0.170;; esac',
                      "curl": 'case "$*" in *2001:db8:66::c633:6407*) exit 7;; *-w*) echo 200;; esac; exit 0',
-                     "ping": "exit 0"}
+                     "ping": "exit 0",
+                     "resolvectl": "printf 'Link 2 (eth0)\\nCurrent DNS Server: %s\\n' '" + current_resolver + "'"}
             for name, body in stubs.items():
                 with open(os.path.join(bindir, name), "w") as f:
                     f.write("#!/bin/bash\n" + body + "\n")
@@ -587,9 +773,113 @@ class Sample(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
-        checks = dict(re.findall(r'^shc_ipv6_canary_check\{check="(\w+)"\} ([01])$', page, re.M))
-        self.assertEqual(checks, {k: "1" for k in ALL_OK})
-        self.assertRegex(page, r"(?m)^shc_ipv6_canary_run_timestamp_seconds \d+$")
+        return page
+
+    NM = "\n".join([
+        'case "$*" in',
+        '  "-g RUNNING general") echo running ;;',
+        '  "-g GENERAL.CON-UUID device show enp1s0") echo 5f2b0c9e-0000-4000-8000-000000000001 ;;',
+        '  "-g ipv4.dns,ipv6.dns connection show 5f2b0c9e-0000-4000-8000-000000000001") printf "\\n%s\\n" "$DNS" ;;',
+        '  "-g ipv"[46]".ignore-auto-dns connection show 5f2b0c9e-0000-4000-8000-000000000001") echo "$IGNORED" ;;',
+        "esac"])
+
+    def run_ignore_auto_dns(self, nmcli, networkctl="exit 1", network_file=None, existing=None, rc=0):
+        """The user data's ignore-auto-dns script with ip, sleep, nmcli and networkctl stubbed; returns its output, the
+        stubs' calls and the drop-ins it wrote under a stand-in for /etc/systemd/network."""
+        script = {f["path"]: f["content"] for f in self.user_data()["write_files"]}["/usr/local/sbin/ignore-auto-dns"]
+        import shutil
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="shc-dns-")
+        try:
+            bindir, etc, log = os.path.join(tmp, "bin"), os.path.join(tmp, "etc-network"), os.path.join(tmp, "calls")
+            netfile = os.path.join(tmp, "10-netplan-enp1s0.network")
+            os.makedirs(bindir)
+            stubs = {"ip": "echo 'default via fe80::1 dev enp1s0 proto ra metric 100 expires 1798sec pref medium'",
+                     "sleep": "exit 0", "nmcli": nmcli, "networkctl": networkctl,
+                     "resolvectl": "echo 'Link 2 (enp1s0): 2001:db8::53'"}
+            for name, body in stubs.items():
+                with open(os.path.join(bindir, name), "w") as f:
+                    f.write('#!/bin/bash\necho "%s $*" >> "$CALLS"\n%s\n' % (name, body))
+                os.chmod(os.path.join(bindir, name), 0o755)
+            if network_file is not None:
+                with open(netfile, "w") as f:
+                    f.write(network_file)
+            if existing is not None:   # a drop-in an earlier boot wrote
+                os.makedirs(os.path.join(etc, "10-netplan-enp1s0.network.d"))
+                with open(os.path.join(etc, "10-netplan-enp1s0.network.d", "90-ignore-auto-dns.conf"), "w") as f:
+                    f.write(existing)
+            path = os.path.join(tmp, "ignore-auto-dns")
+            with open(path, "w") as f:
+                f.write(script.replace("/etc/systemd/network", etc))
+            env = dict(os.environ, PATH=bindir + ":" + os.environ["PATH"], CALLS=log, NETFILE=netfile)
+            done = subprocess.run(["bash", path], env=env, timeout=60, capture_output=True, text=True)
+            self.assertEqual(done.returncode, rc, done.stderr)
+            out = done.stdout
+            calls = []
+            if os.path.exists(log):
+                with open(log) as f:
+                    calls = f.read().splitlines()
+            drops = {}
+            for root, _, names in os.walk(etc):
+                for n in names:
+                    with open(os.path.join(root, n)) as f:
+                        drops[os.path.relpath(os.path.join(root, n), etc)] = f.read()
+            return out, calls, drops
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_ignore_auto_dns_networkmanager(self):
+        """NetworkManager: the connection on the IPv6 default route's device ignores the resolvers DHCP hands out (both
+        families: the canary's placement is IPv6-only) and is re-activated; one without resolvers of its own is left.
+        The link's resolvers are logged last (the unit writes to the console)."""
+        out, calls, drops = self.run_ignore_auto_dns("DNS='2001:db8::53,2001:db8::54'; IGNORED=no\n" + self.NM)
+        uuid = "5f2b0c9e-0000-4000-8000-000000000001"
+        self.assertIn("nmcli connection modify %s ipv6.ignore-auto-dns yes ipv4.ignore-auto-dns yes" % uuid, calls)
+        # a full reactivation: NetworkManager before 1.58 keeps a running DHCPv6 lease's DNS on "device reapply"
+        # (iaas1 canary, 2026-11-02: the unit succeeded and fd02::3331 stayed on the link)
+        self.assertEqual(calls[-2:], ["nmcli connection up %s" % uuid, "resolvectl dns enp1s0"])
+        self.assertFalse([c for c in calls if "reapply" in c])
+        self.assertIn("enp1s0: ignores the resolvers handed out from now on", out)
+        self.assertIn("Link 2 (enp1s0): 2001:db8::53", out)
+        self.assertEqual(drops, {})
+        # the reactivation fails: the unit fails, so the console shows it
+        _, calls, _ = self.run_ignore_auto_dns(
+            "DNS='2001:db8::53'; IGNORED=no\n" + self.NM.replace("esac", '  "connection up "*) exit 4 ;;\nesac'), rc=1)
+        self.assertNotIn("resolvectl dns enp1s0", calls)
+        # the next boot: already set, so the connection is not re-applied
+        out, calls, _ = self.run_ignore_auto_dns("DNS='2001:db8::53'; IGNORED=yes\n" + self.NM)
+        self.assertFalse([c for c in calls if " modify " in c or "reapply" in c])
+        self.assertIn("enp1s0: already ignores the resolvers handed out", out)
+        out, calls, _ = self.run_ignore_auto_dns("DNS=''; IGNORED=no\n" + self.NM)
+        self.assertFalse([c for c in calls if " modify " in c or "reapply" in c])
+        self.assertIn("enp1s0: no resolvers configured: nothing changed", out)
+
+    def test_ignore_auto_dns_networkd(self):
+        """systemd-networkd (NetworkManager not running): a drop-in for the device's .network file turns the DHCP and
+        router advertisement resolvers off, then networkd reloads and reconfigures the device."""
+        networkctl = 'case "$1" in status) echo "       Network File: $NETFILE" ;; esac'
+        _, calls, drops = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDNS=2001:db8::53\n")
+        want = "[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n\n[DHCPv4]\nUseDNS=false\n"
+        self.assertEqual(drops, {"10-netplan-enp1s0.network.d/90-ignore-auto-dns.conf": want})
+        self.assertEqual(calls[-3:], ["networkctl reload", "networkctl reconfigure enp1s0", "resolvectl dns enp1s0"])
+        # the next boot: the drop-in is in place, networkd is not reloaded
+        out, calls, _ = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDNS=2001:db8::53\n", existing=want)
+        self.assertFalse([c for c in calls if "reload" in c or "reconfigure" in c])
+        self.assertIn("enp1s0: already ignores the resolvers handed out", out)
+        # a .network file without resolvers of its own: nothing written
+        _, _, drops = self.run_ignore_auto_dns("exit 0", networkctl, "[Network]\nDHCP=ipv6\n")
+        self.assertEqual(drops, {})
+
+    def test_ignore_auto_dns_unit(self):
+        ud = self.user_data()
+        files = {f["path"]: f["content"] for f in ud["write_files"]}
+        unit = files["/etc/systemd/system/ignore-auto-dns.service"]
+        for line in ("ExecStart=/usr/local/sbin/ignore-auto-dns", "After=network-online.target", "WantedBy=multi-user.target",
+                     "StandardOutput=journal+console"):
+            self.assertIn(line, unit.splitlines())
+        subprocess.run(["bash", "-n"], input=files["/usr/local/sbin/ignore-auto-dns"], text=True, check=True)
+        # enabled (and run) right after the units are loaded, before clatd and the checks start
+        self.assertEqual(ud["runcmd"][:2], [["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", "ignore-auto-dns.service"]])
 
     def test_vm(self):
         vm = yaml.safe_load(self.text("vm-cloudvirt.yaml"))

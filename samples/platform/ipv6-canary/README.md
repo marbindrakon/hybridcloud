@@ -1,10 +1,11 @@
 # Translation canary
 
-For the platform team. The translation canary tells the platform whether IPv6-only placements reach the IPv4
-internet on every site that offers them: one small probe VM per site, on an IPv6-only network of the platform team's
-own, runs the checks a tenant's guest depends on every minute and serves the results. The platform reads them from
-the site's gateway and reports them on the fabric (condition `IPv6Translation`, Warning event
-`IPv6TranslationCanaryFailed`); see [Translation canary](../../../docs/platform/ipv6-realization.md#translation-canary).
+For the platform team. The translation canary tells the platform whether IPv6-only placements reach the IPv4 internet
+on every OpenShift Virtualization and OpenStack site that offers them: one small probe VM per site, on an IPv6-only
+network of the platform team's own, runs the checks a tenant's guest depends on every minute and serves the results.
+The platform reads them from the site's gateway and reports them on the fabric (condition `IPv6Translation`, Warning
+event `IPv6TranslationCanaryFailed`); see
+[Translation canary](../../../docs/platform/ipv6-realization.md#translation-canary).
 
 The canary is a workload like a tenant's: nothing in it is special to the platform except the realization keys that
 name it. The platform never reads a probe it was not told about, and finds the probe's address itself (from the site,
@@ -17,10 +18,10 @@ not from labels on tenant objects).
    ([entity/example-corp.yaml](../../entity/example-corp.yaml)).
 2. **The network, environments and placements** ([canary-objects.yaml](canary-objects.yaml)): an IPv6-only network
    with IPv6 from the platform (`platformPrefixes` with `family: 6`, no `prefixes`) and `egress.internet: true`; an
-   environment on every site that offers IPv6-only placements with translation (site capabilities `ipv6Only` and
-   `ipv6Translation`); one placement of the network per environment with only `ipv6`. Wait until the placements are
-   ready: their `status.ipv6.translation` names the site's translation prefix and resolvers, the values for
-   `__PREF64__` and `__RESOLVERS__` below.
+   environment on every OpenShift Virtualization and OpenStack site that offers IPv6-only placements with translation
+   (site capabilities `ipv6Only` and `ipv6Translation`; AWS and Google Cloud sites take no canary); one placement of
+   the network per environment with only `ipv6`. Wait until the placements are ready: their `status.ipv6.translation`
+   names the site's translation prefix and resolvers, the values for `__PREF64__` and `__RESOLVERS__` below.
 3. **The probe** on every placement, with the same name everywhere (here `canary`), from
    [probe-user-data.yaml](probe-user-data.yaml) with the placeholders replaced:
    - OpenShift Virtualization: [vm-cloudvirt.yaml](vm-cloudvirt.yaml), in the site namespace the placement serves
@@ -43,6 +44,15 @@ The probe's metrics port must be reachable from the site's gateway: on OpenStack
 (the platform team knows the gateway's source range); on OpenShift Virtualization allow it in any network policy of the
 namespace. The probe's clock must be right (Fedora keeps it with chrony): the fabric compares the time of the probe's
 last run with its own.
+
+Like a tenant's guest on an IPv6-only placement, the probe uses only the translation resolvers: its user data installs
+`ignore-auto-dns`, a unit that runs at every boot and makes the NIC with the IPv6 default route ignore resolvers
+handed out by DHCP (NetworkManager `ipv6.ignore-auto-dns` and `ipv4.ignore-auto-dns`, or systemd-networkd
+`UseDNS=false`) while its connection has resolvers of its own from the network data. On OpenShift Virtualization
+DHCPv6 also hands out the cluster's DNS service, which does no DNS64: without the unit, one brief outage of the
+translation resolvers moves the guest to that server for good, and `pref64` and `name4` fail while `resolver` still
+passes. `resolvectl status` in the guest lists the translation resolvers only. The unit writes what it did and the
+link's resolvers to the console (OpenShift Virtualization: `oc logs <virt-launcher pod> -c guest-console-log`).
 
 ## Placeholders
 
@@ -80,6 +90,11 @@ Each run writes `shc_ipv6_canary_check{check="<name>"}` 1 (passed) or 0 (failed)
 | `mtu` | A ping of 1400 bytes on the wire with "don't fragment" reaches `__IPV6_PING_TARGET__`. |
 | `deny` | `__DENIED_IPV4__` embedded in `__PREF64__` is refused (the check passes when the connection fails). |
 
+Each run also writes the information metric `shc_ipv6_canary_resolver_info{server="<address>",translation="0|1"} 1`:
+the resolver the guest's stub resolver used at the end of the run (systemd-resolved's current server) and whether it is
+one of `__RESOLVERS__`. It is not a check; when `pref64` and `name4` fail, `translation="0"` says the guest has left
+the translation resolvers.
+
 A canary is **healthy** when the fabric reached it, its last run is at most three minutes old and every check is 1;
 **stale** when the last run is older or the probe could not be reached. A site failed or stale for `alertMinutes` gets
 a Warning event on the fabric on every fabric run while it lasts.
@@ -88,7 +103,8 @@ a Warning event on the fabric on every fabric run while it lasts.
 
 On one site, replace the probe with a copy whose user data names, among `__RESOLVERS__`, an address where no resolver
 answers; keep the probe's name, so the realization still names it (OpenShift Virtualization: change the Secret and
-restart the VM; OpenStack: delete the server and create it again). Its `resolver` check reads 0 within a minute. On
+restart the VM; OpenStack: delete the server and create it again). Its `resolver` check reads 0 within a minute, with
+the checks that need a name (the probe has no other resolver). On
 the next fabric run the fabric's `IPv6Translation` condition turns False with reason `CanaryFailed`, naming the site
 and the `resolver` check; once the site has been failing for `alertMinutes`, every fabric run adds a Warning event
 `IPv6TranslationCanaryFailed` on the fabric. Put the original user data back; the next runs report the site healthy

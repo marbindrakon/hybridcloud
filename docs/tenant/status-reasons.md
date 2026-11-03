@@ -14,6 +14,7 @@ the platform to try again, and how deleting works.
 | **Updating** | The platform is applying your latest change. |
 | **Ready** | Done; the object is usable. A routine re-check keeps it Ready. |
 | **Degraded** | Usable, with reduced health. The summary says what is wrong. |
+| **Paused** | The platform team has paused the object's site (for maintenance, or while the site is powered off). The object keeps its last state; nothing on the site changes until it is resumed, and a deletion waits until then. |
 | **Failed** | It could not be completed. The reason says who has to act. |
 | **Deleting** | It is being deleted, or its deletion waits for something. |
 
@@ -140,6 +141,13 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `ProtectedChildren` | Deletion waits: some objects have deletion protection turned on. | You (the tenant) |
 | `UnknownKind` | Deletion waits: an object of an unknown kind is in the tenant. The platform team is looking at it. | The platform team |
 
+**Paused**
+
+| Reason | What it means | Who acts |
+|---|---|---|
+| `Paused` | Paused by the platform team; nothing changes on this site until it is resumed. | The platform team |
+| `SitePaused` | Held: its site is paused. It keeps its last state until the site is resumed. | Nobody: it continues by itself |
+
 **Failed**
 
 | Reason | What it means | Who acts |
@@ -202,10 +210,12 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 |---|---|---|
 | `AddressChoice` | Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4. | You (the tenant) |
 | `CanaryFailed` | The platform's translation canary on a site fails or is stale; the platform team is looking at it. | The platform team |
+| `CanaryStale` | The platform's translation canary has not been read for too long; its last reading is no longer trusted. | The platform team |
 | `DNSReconcileFailed` | The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it. | The platform team |
 | `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
 | `IPv6EgressUpstreamDown` | IPv6 internet access works through the other node; a node's upstream sessions are down. | The platform team |
 | `IPv6TranslationCanaryFailed` | Translation to IPv4 may not work on a site: the platform's canary there has failed for several minutes; the platform team is alerted. | The platform team |
 | `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 | `NotReported` | The site does not report this health check. | Nobody: it continues by itself |
+| `UpstreamDown` | IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted. | The platform team |
 <!-- reasons:end -->

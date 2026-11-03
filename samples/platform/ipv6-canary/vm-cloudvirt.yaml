@@ -4,8 +4,9 @@
 # replaced, kept in a Secret of the same namespace:
 #   oc create secret generic __WORKLOAD__-user-data -n __NAMESPACE__ --from-file=userdata=probe-user-data.yaml
 # The network data configures the NIC (matched by its MAC address) by DHCPv6 and router advertisements, without DHCPv4,
-# with the translation resolvers of the placement (status.ipv6.translation.resolvers). Replace every placeholder
-# (README.md lists them).
+# with the translation resolvers of the placement (status.ipv6.translation.resolvers). DHCPv6 also hands out the
+# cluster's DNS service, which has no DNS64: the user data's ignore-auto-dns step makes the guest ignore it, so only
+# the translation resolvers remain. Replace every placeholder (README.md lists them).
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:

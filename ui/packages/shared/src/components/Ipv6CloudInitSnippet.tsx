@@ -34,7 +34,11 @@ export function Ipv6CloudInitSnippet({
           <p style={{ marginTop: '0.75rem' }}>
             <strong>{t('ipv6.cloudInit.userData')}</strong>
           </p>
-          <p className="sc-text-muted">{t('ipv6.cloudInit.userDataHelp')}</p>
+          <p className="sc-text-muted">
+            {[snippet.ignoreAutoDns ? t('ipv6.cloudInit.userDataDns') : '', snippet.clat ? t('ipv6.cloudInit.userDataHelp') : '']
+              .filter(Boolean)
+              .join(' ')}
+          </p>
           <ClipboardCopy isCode isReadOnly variant="expansion" hoverTip={t('ipv6.cloudInit.copy')} clickTip={t('ipv6.cloudInit.copied')}>
             {snippet.userData}
           </ClipboardCopy>

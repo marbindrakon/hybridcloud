@@ -67,9 +67,15 @@ import time
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.urls import open_url
-from ansible.module_utils.six.moves.urllib.error import HTTPError
+from ansible.module_utils.six.moves.urllib.error import HTTPError, URLError
 
 from ansible_collections.hybridsovereign.shc.plugins.module_utils.shc_status import compute_status_patch
+
+
+# A request that could not reach the API (name resolution, connection refused or reset) is sent again after these
+# pauses: a blip must not leave a job's status unwritten. The write is a merge patch guarded by the resourceVersion
+# read just before, so repeating it is safe (a conflict reads the object again).
+RETRY_PAUSES = (1, 2, 4, 8)
 
 
 def _request(module, method, url, data=None, content_type=None):
@@ -77,19 +83,25 @@ def _request(module, method, url, data=None, content_type=None):
     headers = {"Authorization": "Bearer %s" % p["api_key"], "Accept": "application/json"}
     if content_type:
         headers["Content-Type"] = content_type
-    try:
-        resp = open_url(url, method=method, data=data, headers=headers,
-                        validate_certs=p["validate_certs"], ca_path=p.get("ca_path"),
-                        timeout=p["timeout"])
-        raw = resp.read()
-        return getattr(resp, "status", None) or resp.getcode(), json.loads(raw) if raw else {}
-    except HTTPError as e:
+    for pause in RETRY_PAUSES + (None,):
         try:
-            raw = e.read()
-            payload = json.loads(raw) if raw else {}
-        except Exception:
-            payload = {}
-        return e.code, payload
+            resp = open_url(url, method=method, data=data, headers=headers,
+                            validate_certs=p["validate_certs"], ca_path=p.get("ca_path"),
+                            timeout=p["timeout"])
+            raw = resp.read()
+            return getattr(resp, "status", None) or resp.getcode(), json.loads(raw) if raw else {}
+        except HTTPError as e:
+            try:
+                raw = e.read()
+                payload = json.loads(raw) if raw else {}
+            except Exception:
+                payload = {}
+            return e.code, payload
+        except (URLError, ConnectionError) as e:
+            if pause is None:
+                module.fail_json(msg="%s %s: the API could not be reached: %s" % (method, url, getattr(e, "reason", e)),
+                                 superseded=False, stdout=json.dumps({"http": None}))
+            time.sleep(pause)
 
 
 def main():

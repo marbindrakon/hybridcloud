@@ -58,6 +58,9 @@ fabric_realization_defaults:
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric
+    # the Keystone domain of that project on every OpenStack site; "" = the site's own openstack.projectDomain
+    # (CloudInfrastructure spec)
+    projectDomain: ""
   openshift:
     # OpenShift sites: the FRRConfigurations (labels) whose BGP sessions to the site's gateway carry the placements'
     # routes; empty selects every FRRConfiguration of the site
@@ -155,7 +158,10 @@ fabric_realization_defaults:
       # the TCP port the probe serves its metrics on
       port: 9464
       # how long a site's canary may fail, be stale or be unreachable before the fabric reports it as an event (and
-      # every run while it lasts)
+      # every run while it lasts). It also paces the reads: a Ready fabric runs again to read the canary once
+      # alertMinutes (at least 15 min, an operator default) have passed since its last job ended, and a read older than
+      # three such intervals (no re-run refreshed it) is marked stale, not healthy (status.realization.translation
+      # readAt, staleAfterMinutes)
       alertMinutes: 5
   # tenant DNS of the platform's own records
   dns:
@@ -228,6 +234,12 @@ fabric_realization_defaults:
     denyDestinations: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12,
                        192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3]
     allowDestinations: []
+    # platform reach (a network annotated shc.signal9.gg/platform-reach): the platform's own source ranges (e.g. the
+    # network its automation runs from) that may open connections into such a network's platform prefixes, on
+    # platformPorts only (TCP), through the egress VRF; the circuits' and the networks' address checks also keep
+    # these ranges out of tenant space. [] = no platform reach (a network that asks for it is refused)
+    platformSources: []
+    platformPorts: [6443, 443]
     # IPv6 internet egress (routed, platform-assigned space only); off: the networks' IPv6 egress reads NotOffered.
     # On: the egress VRF of every node speaks eBGP (asn) with the upstream routers on the hand-off network, sends them
     # the placement prefixes of the networks with internet egress (IPv6 from the platform) and takes their default

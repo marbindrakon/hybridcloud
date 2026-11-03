@@ -161,7 +161,8 @@ placement:
   site not listed gets an empty list (enforced on existing subnets too), so its workloads fall back to the site's
   default, usually the site's own resolver, which a placement's workloads may not reach through the fabric; list
   resolvers the network's egress can reach. OpenShift sites take
-  no resolvers from here (the cluster's DNS serves the VMs).
+  no resolvers from here (the cluster's DNS serves the VMs; guests on IPv6-only placements with translation use the
+  translation resolvers instead, see [Translation](#translation-translation), "What each site does").
 - **OpenStack placements** (CloudOSO): the placement's network holds one subnet per allocated prefix, IPv4 first,
   on one EVPN router whose VNI is the placement's. The first subnet attached to the router carries the site's host
   advertisement flag and the others attach plainly: the site's EVPN plugin accepts one advertised interface per
@@ -212,13 +213,15 @@ EVPN). A switch turned on before that makes placements that cannot carry traffic
    follow.
 
 **What tenants see.** The capabilities reach the tenant profile's site list (`IPv6`, `IPv6Only`, `IPv6NetworkSource`,
-`IPv6ProviderSource`, `IPv6Translation`), so the forms show the IPv6 inputs only where a site offers them; the
-command line is not gated, the job's `FamilyUnavailable` stays the authority. On a switched site a placement with
-`ipv6` is realized with a family-6 row in `status.subnets` and a `status.ipv6` block: `addressing` (how workloads get
-their addresses, `DHCPv6` or `SLAAC`, from `placement.ipv6.addressMode` of the environment type) and `internet`
-(`{state: unavailable, reason: NotOffered}` while `egress.ipv6.enabled` is off; the egress realization fills the
-ready case). On a site not switched, or for a request the site does not offer (IPv6-only, a source), the placement
-fails with `FamilyUnavailable` and a message naming the site and the missing piece, before anything is allocated.
+`IPv6ProviderSource`, `IPv6Translation`), so the forms show the IPv6 inputs only where a site offers them; the command
+line is not gated, the job's `FamilyUnavailable` stays the authority. On a switched site a placement with `ipv6` is
+realized with a family-6 row in `status.subnets` and a `status.ipv6` block: `addressing` (how workloads get their
+addresses, `DHCPv6` or `SLAAC`, from `placement.ipv6.addressMode` of the environment type) and `internet` (`{state:
+unavailable, path: Fabric, reason: NotOffered}` while `egress.ipv6.enabled` is off, then the network's IPv6 egress
+row, see [IPv6 internet egress](#ipv6-internet-egress-egressipv6); a cloud placement with source `Provider` reads
+`{state: ready, path: Provider}` while the network asks for internet access). On a site not switched, or for a request
+the site does not offer (IPv6-only, a source), the placement fails with `FamilyUnavailable` and a message naming the
+site and the missing piece, before anything is allocated.
 
 **Switching a site off.** Take the site out of `placement.ipFamiliesBySite` (or set it to `[4]`) and run the site
 job again: new IPv6 placements are refused. Existing placements keep their IPv6 subnet (a placement's families are
@@ -242,12 +245,13 @@ always keeps its IPv4 CIDR, and the IPv6 block comes from one of two sources (`s
 **What the fabric sees.** The edge routers learn the VPC's IPv6 block from the transit gateway (the placement's
 attachment propagates into the network's route table there) and announce it to the site gateway as an EVPN Type-5
 route in the placement's VRF, like the IPv4 prefix ([Transport](#transport-dual-stack-core); the routers' IPv6 is the
-AWS realization's `edge.ipv6`). A provider-assigned block is also recorded in the network's address space as a
-provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`): the placement's `status.subnets`
-then carries it with `source: Provider`, the gateway's route check waits for it like for an allocated prefix, and the
-network's placements in VM and OpenStack environments reach it through the fabric. A cloud edge router never
-announces another cloud site's provider-assigned block toward its own cloud, so two provider-source placements of one
-network on different cloud sites reach each other over the internet, in both directions.
+AWS realization's `edge.ipv6`). A provider-assigned block is also recorded in the network's IPAM state in the fabric's
+ledger as a provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`; the network's
+`status.addressSpace` does not list it): the placement's `status.subnets` then carries it with `source: Provider`, the
+gateway's route check waits for it like for an allocated prefix, and the network's placements in VM and OpenStack
+environments reach it through the fabric. A cloud edge router never announces another cloud site's provider-assigned
+block toward its own cloud, so two provider-source placements of one network on different cloud sites reach each other
+over the internet, in both directions.
 
 **What the tenant sees.** `status.subnets` has a family-6 row `{family: 6, prefix, source}` (no gateway: AWS keeps
 the subnet's router addresses); `status.ipv6` has `addressing` and `internet` with its `path`;
@@ -363,13 +367,13 @@ is the only one offered (`placement.ipv6.sources.CloudGCP`) and the default (`pl
 | `status.ipv6.internet` | `{state: ready, path: Provider}` while `spec.egress.internet` is on, otherwise none |
 
 **What the fabric sees.** The edge routers learn the /64 from the Cloud Router and announce it to the site gateway as
-an EVPN Type-5 route in the placement's VRF, like the IPv4 prefix. The /64 is recorded in the network's address space
-as a provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`): the placement's
-`status.subnets` then carries it with `source: Provider`, the gateway's route check waits for it like for an
-allocated prefix, and the network's placements in VM and OpenStack environments reach it through the fabric. The
-routers announce the network's IPv6 space toward the VPC, never a default route, and never another cloud site's
-provider-assigned range: two provider-source placements of one network on different cloud sites reach each other over
-the internet, in both directions.
+an EVPN Type-5 route in the placement's VRF, like the IPv4 prefix. The /64 is recorded in the network's IPAM state in
+the fabric's ledger as a provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`; the
+network's `status.addressSpace` does not list it): the placement's `status.subnets` then carries it with `source:
+Provider`, the gateway's route check waits for it like for an allocated prefix, and the network's placements in VM and
+OpenStack environments reach it through the fabric. The routers announce the network's IPv6 space toward the VPC,
+never a default route, and never another cloud site's provider-assigned range: two provider-source placements of one
+network on different cloud sites reach each other over the internet, in both directions.
 
 **What the tenant sees.** `status.subnets` has a family-6 row `{family: 6, prefix, source: Provider}` (no gateway:
 Google's subnet router answers); `status.ipv6` has `addressing` (`DHCPv6`) and `internet` with its `path`;
@@ -479,16 +483,20 @@ reported). Dual-stack placements never get the DNS64 resolvers: their workloads 
 otherwise send IPv4-only names through the translator.
 
 The network reports the translation in `status.egress.ipv4Translation` (only for a network without IPv4 that asks
-for internet access):
+for internet access), covering both paths: the fabric's path is usable while the fabric offers IPv6 egress and a
+site has a `translation` entry with a `pref64`; the provider's path is offered while a site has an entry with
+`provider: true`, and needs nothing of the network's own (each placement's site side builds it).
 
 | Network | `ipv4Translation` |
 |---|---|
-| mode `Tenant` | `{state: unavailable, reason: AddressChoice}` |
-| mode `Platform`, the fabric offers no IPv6 egress, or no site has a `translation` entry with a `pref64` | `{state: unavailable, reason: NotOffered}` |
-| mode `Platform` otherwise | the state of the network's IPv6 egress row (`pending`, then `ready`); each IPv6-only placement's status names its site's prefix and resolvers |
+| mode `Tenant` | `{state: unavailable, reason: AddressChoice}` (neither path serves tenant-provided prefixes) |
+| mode `Platform`, neither path offered | `{state: unavailable, reason: NotOffered}` |
+| mode `Platform`, the fabric's path only | the state of the network's IPv6 egress row (`pending`, then `ready`) |
+| mode `Platform`, the provider's path offered | `ready`; the message says which placements use which path, and whether placements with space from the network have translation (the fabric's path `ready`), will have it (`pending`) or have none (not offered) |
 
-This row describes the fabric's path. Placements on the provider's path report their translation in their own
-`status.ipv6.translation` whatever the network's row says.
+The row says what the network's placements can use; each IPv6-only placement's own `status.ipv6.translation` names
+the path it uses, its prefix and resolvers (a provider-path placement's block appears once its site side has built
+the translation).
 
 **The resolvers through the egress filter.** The IPv6 egress filter of every border gateway node admits the DNS64
 resolvers of every site's entry on port 53 (TCP and UDP), in addition to `egress.ipv6.resolverDestinations6`: the
@@ -505,11 +513,22 @@ Run the fabric job (Retry now on the HybridFabric) after changing an entry.
   list differs is updated on the next run of the placement job.
 - **OpenShift Virtualization sites (CloudVirt):** the platform changes nothing on the site. The resolvers reach the
   guests through the placement's status and the console's cloud-init snippet (the placement page builds `networkData`
-  with `dhcp4: false` and the resolvers as `nameservers`, and clatd user data with the placement's `pref64` as
-  `plat-prefix`), which the tenant copies into the VM. Cluster-internal names (services, other VMs by name) reach a
-  guest over DHCPv6 only when the cluster's DNS service (`dns-default` in `openshift-dns`) is dual-stack; on a
-  cluster where it has only an IPv4 address, DHCPv6 hands out no cluster resolver and an IPv6-only guest resolves
-  through the DNS64 resolvers alone.
+  with `dhcp4: false` and the resolvers as `nameservers`, and user data that configures clatd with the placement's
+  `pref64` as `plat-prefix` and keeps the guest on those resolvers), which the tenant copies into the VM. Guests on
+  IPv6-only placements use the translation resolvers only; cluster-internal names (services, other VMs by name) are
+  not resolved there. OVN-Kubernetes also hands every guest the cluster's DNS service (`dns-default` in
+  `openshift-dns`) over DHCPv6 once that service is dual-stack, and that resolver does no DNS64. A guest that keeps
+  it next to the translation resolvers falls over to it after any brief outage of the translation resolvers
+  (systemd-resolved stays on the server that last answered) and from then on gets no synthesized addresses: IPv4-only
+  names stop working while the guest's explicit resolver checks still pass. The snippet's user data therefore
+  installs `ignore-auto-dns`, a boot-time unit that sets NetworkManager's `ipv6.ignore-auto-dns` and
+  `ipv4.ignore-auto-dns` (or systemd-networkd's `UseDNS=false` in a drop-in) on the connection of the NIC with the
+  IPv6 default route, provided that connection has resolvers of its own, and re-activates the connection (a reapply
+  is not enough before NetworkManager 1.58: the running DHCPv6 lease keeps its resolvers). It writes what it did and
+  the link's resolvers to the guest console (on OpenShift Virtualization, the virt-launcher pod's
+  `guest-console-log` container). cloud-init can't do this from `networkData`:
+  its NetworkManager renderer ignores `dhcp6-overrides: {use-dns: false}`. A guest's resolvers read with
+  `resolvectl status`: the translation resolvers only, none of the cluster's service addresses.
 
 - **Google Cloud sites (CloudGCP):** source `Provider` only, so the provider's path: the VPC's DNS64 server policy and
   the Cloud NAT for NAT64 ([Google Cloud: IPv6-only placements](#google-cloud-ipv6-only-placements)); the resolver is
@@ -532,15 +551,20 @@ canaries:
     port: 9464         # the probe's metrics port
     alertMinutes: 5    # a site failed or stale this long is reported as a Warning event on the fabric
 ```
-The translation canary is a probe VM the platform team runs on every site that offers IPv6-only placements with
-translation, on an IPv6-only network of its own tenant (IPv6 from the platform, internet access on). Every minute it
-checks what a tenant's IPv6-only guest depends on: its global address, every translation resolver, that
-`ipv4only.arpa` resolves inside the site's translation prefix, an IPv4-only name by name and an IPv4 literal through
-its CLAT, a native IPv6 name, a 1400-byte path with "don't fragment", and that a denied IPv4 destination embedded in
-the translation prefix stays refused. It serves the results in Prometheus text format at
+The translation canary is a probe VM the platform team runs on every OpenShift Virtualization and OpenStack site that
+offers IPv6-only placements with translation, on an IPv6-only network of its own tenant (IPv6 from the platform,
+internet access on). Every minute it checks what a tenant's IPv6-only guest depends on: its global address, every
+translation resolver, that `ipv4only.arpa` resolves inside the site's translation prefix, an IPv4-only name by name
+and an IPv4 literal through its CLAT, a native IPv6 name, a 1400-byte path with "don't fragment", and that a denied
+IPv4 destination embedded in the translation prefix stays refused. It serves the results in Prometheus text format at
 `http://[<address>]:<port>/metrics` (`shc_ipv6_canary_check{check="<name>"} 0|1`,
-`shc_ipv6_canary_run_timestamp_seconds`). Deploy it from [samples/platform/ipv6-canary](../../samples/platform/ipv6-canary/README.md),
-then set the realization keys. With `network` empty nothing below is written.
+`shc_ipv6_canary_run_timestamp_seconds`, and the information metric
+`shc_ipv6_canary_resolver_info{server="<address>",translation="0|1"} 1`: the resolver the guest used at the end of
+the run and whether it is a translation resolver; the fabric reads only the checks and the time). Like a tenant's
+guest, the probe uses only the translation resolvers (`ignore-auto-dns`, above). Deploy it from
+[samples/platform/ipv6-canary](../../samples/platform/ipv6-canary/README.md), then set the realization keys. With
+`network` empty nothing below is written. AWS and Google Cloud sites have no canary: the site job looks for the probe
+on OpenShift Virtualization and OpenStack sites only.
 
 **The site job** finds the probe: the canary network's placement on the site (a NetworkPlacement in the network's
 namespace whose `status.site` is the site, of the site type's backend kind), then on OpenShift Virtualization the
@@ -563,8 +587,10 @@ No placement of the canary network on the site: no `ipv6Canary`. A lookup that f
 recorded as `error`.
 
 **The fabric job**, after the nodes are configured, reads the canary of every site of the fabric (the sites of its
-gateways) that reports one, on one border gateway node (the first that answers): from the site's gateway namespace in
-the placement's VRF, `ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 http://[<address>]:<port>/metrics`, with
+gateways) that reports one, on one border gateway node (the first that answers; a probe that node cannot reach is
+tried again up to three times from it, a new connection each time, within a 60 s budget per node, then read from
+each other node in turn, because the site may return the reply through another node, and the site fails only when no
+node reaches it): from the site's gateway namespace in the placement's VRF, `ip netns exec gw-<gateway> ip vrf exec <vrf> curl -6 http://[<address>]:<port>/metrics`, with
 the VRF's own global IPv6 address as source (the ICMPv6 source of the dual-stack core, `core.icmpSource6`; the probe's
 replies must route back to it). It records on the HybridFabric:
 
@@ -582,7 +608,26 @@ status:
           healthy: true       # reachable, not stale, every check 1
           error: ""           # why not healthy, when that is not a failed check
           failedSince: ""     # since when it has not been healthy (kept across runs)
+          node: bgw-1         # the border gateway node that read it
+          note: ""            # which nodes could not reach the probe, when another node read it or none did
+      readAt: <when the fabric job read the canaries>
+      alertMinutes: 5
+      staleAfterMinutes: 45   # 3 x the re-read interval (max(alertMinutes, 15 min))
 ```
+**How often it is read.** A Ready fabric runs again by itself only to read the canary. The re-read interval is
+`alertMinutes`, at least 15 minutes (the operator default `hybridfabric_canary_reread_min_seconds`, 900), and it is
+counted from the end of the last fabric job (`status.delivery.completedAt`), not from the read: once it has passed,
+the next periodic check of the operator (every 5 minutes) re-runs the fabric job, which reads every site again. Runs
+never follow each other back to back: with a canary configured this costs one fabric job every 15 to 20 minutes plus
+the job's own time, and a reading is at most about 30 minutes old in the steady state. When no re-run refreshed the
+reading for `staleAfterMinutes`, three re-read intervals (the automation is down, or the job keeps failing), the
+operator marks every site's reading `stale: true`, `healthy: false` (with the age in `error`) and the condition
+`IPv6Translation` `Unknown` (`CanaryStale`), so an old reading never reports a healthy canary; a site that read
+healthy until then gets `failedSince` the moment its reading became overdue (`readAt` + `staleAfterMinutes`). The
+operator reads the fabric again just before the mark and leaves it out when a job recorded a newer read meanwhile;
+the next read replaces the mark. Because a re-read comes every 15 minutes or more, a failing canary reaches the
+`alertMinutes` event on the read after the first failed one.
+
 The condition `IPv6Translation` is `True` (`Ready`) while every site's canary is healthy and `False`
 (`CanaryFailed`) naming the failing sites, their failed checks and since when; it is absent while no canary is
 configured or no site reports one (the status library never removes a condition: after the canary is switched off the
@@ -592,8 +637,8 @@ A canary that could not be read at all (no node answered) reads `stale` with the
 itself never fails because of the canary.
 
 **Testing the alert:** on one site, replace the probe with a copy whose user data names a resolver address where no
-resolver answers (same probe name). Its `resolver` check reads 0 within a minute, the condition turns `False` on the
-next fabric run, and the event follows after `alertMinutes`. Put the original user data back to clear it.
+resolver answers (same probe name). Its `resolver` check reads 0 within a minute (with the checks that need a name:
+the probe has no other resolver), the condition turns `False` on the next fabric run, and the event follows after `alertMinutes`. Put the original user data back to clear it.
 
 ## IPv6 internet egress (`egress.ipv6`)
 
@@ -618,10 +663,10 @@ egress:
     externalSitePrefixes: {}  # per network: routed sources that legitimately arrive from upstream
 ```
 IPv6 egress is routed, not translated: a network's platform block leaves unchanged through a stateful filter on the
-border gateway nodes that admits only replies to connections opened from inside. Tenant-provided prefixes never get
-an internet path. While `enabled` is false every network in mode `Platform` reports
-`{family: 6, state: unavailable, reason: NotOffered}` in `status.egress.families`, and `status.egress.internet`
-keeps reporting the IPv4 state of networks with IPv4.
+border gateway nodes that admits only replies to connections opened from inside. Tenant-provided prefixes never get an
+internet path. While `enabled` is false every network in mode `Platform` reports `{family: 6, state: unavailable,
+mode: Routed, reason: NotOffered}` in `status.egress.families`, and `status.egress.internet` keeps reporting the IPv4
+state of networks with IPv4.
 
 With `enabled` the fabric job gives the egress VRF of every border gateway node its address on the hand-off network
 and one eBGP session (AS `asn`, timers 10/30, no BFD, no password) to each upstream router: in, the default route
@@ -648,12 +693,19 @@ table is loaded before FRR takes the sessions' configuration, and the timer unit
 sessions whenever the table is missing (fail closed). The hand-off device's IPv6 MTU is `wanMtu`, so the node itself
 sends Packet Too Big for larger packets bound for the internet.
 
-Status: `HybridFabric status.realization.egress.ipv6` holds per node the hand-off address, the upstream sessions'
-states and whether the default route is held; `status.realization.egress.networks[]` says per network whether its
-IPv6 egress is realized (`ipv6`), the prefixes announced (`prefixes6`) and its primary node. A network with IPv6
-egress reads `{family: 6, state: ready, mode: Routed}`, or `reason: Degraded` while a node's upstream sessions are
-all down; a node down for `sessionDownAlertMinutes` is reported as a Warning event on the HybridFabric. A placement
-with IPv6 copies the network's row into `status.ipv6.internet`.
+Status: `HybridFabric status.realization.egress.ipv6` holds `enabled` and per node (`nodes.<node>`) the hand-off
+address, the upstream sessions with their states, whether the default route is held (`default`), whether the table is
+loaded (`table`), the number of networks and `healthy`; `degraded`, `degradedNodes` and `degradedSince` name the nodes
+without an upstream session or the default route. The condition `IPv6EgressUpstream` is `True` (`Ready`) while every
+node is healthy and `False` (`Degraded`) naming the nodes that are not; it is present only while `enabled` is on.
+`status.realization.egress.networks[]` says per network whether its IPv6 egress is realized (`ipv6`), the prefixes
+announced (`prefixes6`) and its primary node. A network with IPv6 egress reads `{family: 6, state: ready, mode:
+Routed}`, or `reason: Degraded` while some node's upstream sessions are all down, and `state: unavailable, reason:
+UpstreamDown` while no node has an upstream session (translation to IPv4 on the fabric's path then reads
+`UpstreamDown` too); a node down for `sessionDownAlertMinutes` is reported as a Warning event `IPv6EgressUpstreamDown`
+on the HybridFabric, on every fabric run while it lasts. A placement with IPv6 from the network copies the network's
+row into `status.ipv6.internet` (null when the network has no row); the network wakes those placements whenever its
+row changes.
 
 The gateways announce covering routes into every site: the network's own IPv6 prefixes (its platform block, or the
 tenant's prefixes) and `routedPrefixes`, each backed by an unreachable route in the VRF table. A destination the
@@ -733,11 +785,12 @@ away, which resets the sessions as many times again. Emptying the pools removes 
 addresses (each node remembers the pools of its last run until a run without them removed their addresses); the
 IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
 
-- **`gateway.icmp6RateLimitMs`** (default 0): milliseconds between the ICMPv6 error messages a gateway namespace
-  sends to one destination; 0 means no per-destination limit (the kernel's global limit still applies). While the fabric offers no IPv6 internet access, a site's off-network IPv6 traffic ends
-  at the gateway VRF's unreachable default and is answered with "destination unreachable"; the kernel's default of
-  one message per second per destination (even one every 20 ms) leaves a guest connecting to a name with many
-  addresses waiting a full retransmit for the answers that were limited. Empty keeps the kernel default.
+- **`gateway.icmp6RateLimitMs`** (default 0): milliseconds between the ICMPv6 error messages a gateway namespace sends
+  to one destination; 0 means no per-destination limit (the kernel's global limit still applies). While the fabric
+  offers no IPv6 internet access, a site's off-network IPv6 traffic ends at the gateway VRF's unreachable default and
+  is answered with "destination unreachable"; the kernel's default of one message per second per destination (even one
+  every 20 ms) leaves a guest connecting to a name with many addresses waiting a full retransmit for the answers that
+  were limited. Empty keeps the kernel default.
 
 ## Reverse DNS (`dns.reverse6`)
 
@@ -776,6 +829,7 @@ name and type with another marker is never changed or deleted ("held by another 
 |---|---|---|---|
 | A placement's IPv6 gateway (`status.subnets[family=6].gateway`: the first host on OpenShift Virtualization, the subnet's gateway from Neutron on OpenStack) | `<network>.<gatewayLabel>.<environment zone>` (the environment's zone, `status.dns.zone`) | `NetworkPlacement/<namespace>/<name>` | the placement job, recorded in `status.realization.reverseDns` |
 | A border gateway node's ICMPv6 source in a gateway namespace (`core.icmpSource6`) | `<node>.<gateway>.<gatewayLabel>.<global domain>` (the global zone) | `CloudGateway/<name>` | the gateway job, recorded in `status.realization.reverseDns` |
+| An AWS or Google Cloud edge router's ICMPv6 source (`core.icmpSource6`, while the realization's `edge.ipv6` is on) | `<router>.<gateway>.<gatewayLabel>.<global domain>` (the global zone; `<router>` is the router instance's name) | `CloudGateway/<name>` | the gateway job, with its nodes' names |
 | A tenant VM on OpenShift Virtualization that publishes an AAAA through the tenant DNS controller | the tenant's own name in its environment zone | the controller's marker | the tenant DNS controller, only for addresses inside the namespace's placement prefixes |
 
 The placement job also writes the annotation `hybridsovereign.redhat/ipv6-prefixes` (the placement's IPv6 subnets,

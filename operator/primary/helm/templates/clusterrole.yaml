@@ -51,6 +51,12 @@ rules:
   - apiGroups: ["hybridsovereign.redhat"]
     resources: ["rbacconfigs", "aapconfigs", "quayconfigs"]
     verbs: ["get", "list", "watch"]
+  # An environment or placement held by a paused site reads that site's CloudInfrastructure (sovereign-cloud)
+  # before skipping its reconcile, so a resume releases it even when the site's wake was lost
+  # (roles/_common/tasks/site_paused_now.yml). Get only: no list, no watch.
+  - apiGroups: ["hybridsovereign.redhat"]
+    resources: ["cloudinfrastructures"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

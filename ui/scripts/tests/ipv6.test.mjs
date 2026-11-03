@@ -191,6 +191,7 @@ test('cloud-init snippet: none without an IPv6 subnet; dual-stack DHCP; IPv6-onl
   assert.match(d.networkData, /dhcp4: true/);
   assert.match(d.networkData, /dhcp6: true/);
   assert.equal(d.userData, null);
+  assert.deepEqual([d.clat, d.ignoreAutoDns], [false, false]);
   const only = {
     metadata: { name: 'p' },
     spec: { network: 'n' },
@@ -205,6 +206,88 @@ test('cloud-init snippet: none without an IPv6 subnet; dual-stack DHCP; IPv6-onl
   assert.match(o.networkData, /addresses: \[2001:db8::53\]/);
   assert.match(o.userData, /^#cloud-config\n/);
   assert.match(o.userData, /plat-prefix=64:ff9b::\/96/);
+  assert.equal(o.clat, true);
+});
+
+test('cloud-init snippet: with resolvers the guest ignores the resolvers DHCP hands out', () => {
+  const at = (subnets, translation) => ({ metadata: { name: 'p' }, spec: { network: 'n' }, status: { subnets, ipv6: { translation } } });
+  const only = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:2::/64' }], { pref64: '64:ff9b::/96', resolvers: ['2001:db8::53', '2001:db8::54'] }));
+  assert.equal(only.ignoreAutoDns, true);
+  const ud = only.userData;
+  // one write_files list: clatd.conf, the script, its unit; runcmd enables the unit before clatd
+  assert.deepEqual(ud.match(/^ {2}- path: .*$/gm), [
+    '  - path: /etc/clatd.conf',
+    '  - path: /usr/local/sbin/ignore-auto-dns',
+    '  - path: /etc/systemd/system/ignore-auto-dns.service',
+  ]);
+  assert.equal(ud.split('\n').filter((l) => /^\S/.test(l)).join('|'), '#cloud-config|packages: [clatd]|write_files:|runcmd:');
+  assert.match(ud, /runcmd:\n {2}- \[systemctl, daemon-reload\]\n {2}- \[systemctl, enable, --now, ignore-auto-dns.service\]\n {2}- \[systemctl, enable, --now, clatd\]\n$/);
+  // every line of a literal block is indented six spaces or empty (no tabs, no stray indentation)
+  const script = m.ignoreAutoDnsScript('ipv6 ipv4');
+  for (const l of script.replace(/\n$/, '').split('\n')) assert.ok(ud.includes(l ? `\n      ${l}\n` : '\n\n'), l);
+  assert.match(script, /^#!\/bin\/bash\n/);
+  assert.match(script, /^FAMILIES="ipv6 ipv4"$/m);
+  assert.match(script, /nmcli connection modify "\$con" "\$@"/);
+  // a full reactivation: before NetworkManager 1.58 "device reapply" keeps a running DHCPv6 lease's DNS
+  assert.match(script, /\n {2}nmcli connection up "\$con" \|\| exit 1\n/);
+  assert.doesNotMatch(script, /^[^#]*device reapply/m);
+  assert.match(ud, /\n {6}StandardOutput=journal\+console\n/);
+  assert.match(script, /\[DHCPv6\]\\nUseDNS=false/);
+  // the canary sample ships the same script
+  const sample = fs.readFileSync(path.join(process.env.UI_ROOT, '..', 'samples/platform/ipv6-canary/probe-user-data.yaml'), 'utf8');
+  const from = sample.indexOf('  - path: /usr/local/sbin/ignore-auto-dns\n');
+  assert.ok(from > 0);
+  const lines = sample.slice(from).split('\n').slice(3);
+  const body = [];
+  for (const l of lines) {
+    if (l && !l.startsWith('      ')) break;
+    body.push(l.slice(6));
+  }
+  assert.equal(`${body.join('\n').replace(/\n+$/, '')}\n`, script);
+  // an IPv6-only placement without translation resolvers: nothing to keep, no user data
+  const bare = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:3::/64' }], null));
+  assert.deepEqual([bare.userData, bare.clat, bare.ignoreAutoDns], [null, false, false]);
+  // dual-stack with resolvers: only the IPv6 resolvers handed out are ignored, no CLAT
+  const dual = m.cloudInitSnippet(at([{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }], { resolvers: ['2001:db8::53'] }));
+  assert.deepEqual([dual.clat, dual.ignoreAutoDns], [false, true]);
+  assert.match(dual.userData, /\n {6}FAMILIES="ipv6"\n/);
+  assert.doesNotMatch(dual.userData, /clatd/);
+  // the provider's path: its DHCP hands out the provider's own DNS64 resolver; only the CLAT
+  const prov = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:4::/64' }], { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'] }));
+  assert.deepEqual([prov.clat, prov.ignoreAutoDns], [true, false]);
+  assert.doesNotMatch(prov.userData, /ignore-auto-dns/);
+  assert.match(prov.networkData, /addresses: \[fd00:db8::253\]/);
+  // the help reads in both catalogues
+  for (const l of ['en', 'fr']) {
+    const t = tOf(load(l));
+    for (const k of ['ipv6.cloudInit.userData', 'ipv6.cloudInit.userDataDns', 'ipv6.cloudInit.userDataHelp']) assert.notEqual(t(k), k, `${l}: ${k}`);
+    assert.doesNotMatch(t('ipv6.cloudInit.userDataDns'), KIND_NAME);
+  }
+});
+
+test('placement translation: path and the provider translator source when reported, nothing without a prefix', () => {
+  const at = (translation) => ({ metadata: { name: 'p' }, spec: { network: 'n' }, status: { ipv6: { translation } } });
+  assert.deepEqual(m.placementTranslation(at({ path: 'Fabric', pref64: '2001:db8:64::/96', resolvers: ['2001:db8::53'] })), {
+    path: 'Fabric',
+    pref64: '2001:db8:64::/96',
+    resolvers: ['2001:db8::53'],
+  });
+  assert.deepEqual(
+    m.placementTranslation(at({ path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253', ''], ipv4Source: ' 192.0.2.7 ' })),
+    { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'], ipv4Source: '192.0.2.7' },
+  );
+  // written before path existed: prefix and resolvers only
+  assert.deepEqual(m.placementTranslation(at({ pref64: '64:ff9b::/96' })), { pref64: '64:ff9b::/96', resolvers: [] });
+  assert.equal(m.placementTranslation(at(null)), null);
+  assert.equal(m.placementTranslation(at({ path: 'Provider', ipv4Source: '192.0.2.7' })), null);
+  assert.equal(m.placementTranslation(undefined), null);
+  // the path reads in display words in both catalogues
+  for (const l of ['en', 'fr']) {
+    const t = tOf(load(l));
+    for (const k of ['ipv6.path_Fabric', 'ipv6.path_Provider', 'ipv6.translationPrefix', 'ipv6.translationSource']) {
+      assert.notEqual(t(k), k, `${l}: ${k}`);
+    }
+  }
 });
 
 test('placement families: IPv4 stays unless the site offers IPv6-only; IPv6-only networks need such a site', () => {

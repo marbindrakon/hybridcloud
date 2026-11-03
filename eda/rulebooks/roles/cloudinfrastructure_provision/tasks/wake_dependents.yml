@@ -1,0 +1,61 @@
+---
+# Wake what waits for this site, so it runs now instead of on its reconcile period:
+#   - everything a pause held on it (Ready=False/SitePaused), a held deletion too: while the site was paused their
+#     controllers published nothing (operator/roles/_common/tasks/skip_while_site_paused.yml, and
+#     publish_operator_event for a held deletion), so this wake is what resumes them;
+#   - with ciw_pending (the site was probed ready): a gateway or an environment (CloudAWS, CloudVirt) pending or
+#     failed on it.
+# The site of a placement is its status.site, of a CloudOSO its spec.cloudRef or status.cloudInfrastructure (the
+# installation default), of the others their spec.cloudRef. A kind that cannot be listed is tried again (an API
+# blip); the kinds that still cannot be listed are named in ci_wake_error, and the job fails on it once the site's
+# own work is done (main.yml, "Fail the job: what waits for this site could not be listed"), without marking the
+# site failed: the wake is not lost without a word. A held object does not depend on this wake alone: its controller
+# reads the site before holding it (operator/roles/_common/tasks/skip_while_site_paused.yml, site_paused_now.yml),
+# so it resumes on its own next reconcile.
+# Inputs: cloudinfrastructure_cr_name, ciw_pending (bool). Sets ci_wake_error ('' when every kind was listed).
+- name: List what may wait for this site
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ item }}"
+  loop: [CloudGateway, CloudAWS, CloudVirt, CloudGCP, CloudOSO, NetworkPlacement]
+  register: _ci_dependents
+  retries: 3
+  delay: 5
+  until: _ci_dependents is not failed
+  # the kinds that listed are still woken; the others fail the job afterwards (ci_wake_error)
+  ignore_errors: true
+
+- name: Name the kinds that could not be listed
+  ansible.builtin.set_fact:
+    ci_wake_error: >-
+      {%- set bad = _ci_dependents.results | default([]) | selectattr('failed', 'defined') | selectattr('failed')
+                    | list -%}
+      {{ ('could not list ' ~ (bad | map(attribute='item') | join(', ')) ~ ' to wake what waits for site '
+          ~ cloudinfrastructure_cr_name ~ ': ' ~ ((bad | first).msg | default('failed', true) | string)[:200])
+         if bad | length > 0 else '' }}
+
+- name: Wake the ones pending on it
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: >-
+      {%- set out = [] -%}
+      {%- for r in _ci_dependents.results | default([]) -%}
+        {%- for o in r.resources | default([]) -%}
+          {%- set st = o.status | default({}, true) -%}
+          {%- set ref = ((o.spec | default({}, true)).cloudRef | default({}, true)).name | default('', true) -%}
+          {%- set site = st.site | default('', true) if r.item == 'NetworkPlacement'
+                         else ((ref or st.cloudInfrastructure | default('', true)) if r.item == 'CloudOSO' else ref) -%}
+          {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
+          {%- set held = (ready.reason | default('', true)) == 'SitePaused' -%}
+          {%- set pending = (ciw_pending | default(false) | bool) and r.item in ['CloudGateway', 'CloudAWS', 'CloudVirt']
+                            and st.status | default('') in ['pending', 'failed', '']
+                            and o.metadata.deletionTimestamp is not defined -%}
+          {%- if site is string and site == cloudinfrastructure_cr_name and (held or pending) -%}
+            {%- set _ = out.append({'kind': r.item, 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}

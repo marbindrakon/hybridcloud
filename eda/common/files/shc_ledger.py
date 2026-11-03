@@ -37,15 +37,29 @@ KINDS = ("vni", "l2vni", "vpnTarget", "peIndex", "egress", "attachVlan", "attach
 
 
 class Api:
+    # A request that could not reach the API (its name did not resolve, the connection was refused or reset, the
+    # connect timed out) is sent again after these pauses (30 s in all): a blip must not end a job with the border
+    # gateway lease still held (the next job waited 20 minutes for it) or between the steps of a ledger change.
+    # Every write here is safe to repeat: ledger writes carry the resourceVersion they read and a lease conflict
+    # reads the lease again.
+    RETRY_PAUSES = (1, 2, 4, 8, 15)
+
     def __init__(self, req):
         self.base = req["api"].rstrip("/")
         self.h = {"Authorization": f"Bearer {req['token']}", "Content-Type": "application/json"}
 
     def call(self, method, path, body=None, content_type=None):
         h = {**self.h, "Content-Type": content_type} if content_type else self.h
-        r = requests.request(method, self.base + path, headers=h, data=json.dumps(body) if body else None,
-                             verify=False, timeout=30)
-        return r.status_code, (r.json() if r.text.startswith("{") else {"message": r.text[:300]})
+        for pause in self.RETRY_PAUSES + (None,):
+            try:
+                r = requests.request(method, self.base + path, headers=h, data=json.dumps(body) if body else None,
+                                     verify=False, timeout=30)
+            except requests.exceptions.ConnectionError:
+                if pause is None:
+                    raise
+                time.sleep(pause)
+                continue
+            return r.status_code, (r.json() if r.text.startswith("{") else {"message": r.text[:300]})
 
 
 def cm_path(ns, fabric=None):

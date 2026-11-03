@@ -1256,7 +1256,11 @@ def orphan_report(req):
     net_fabric = {f"HybridNetwork/{n['metadata']['namespace']}/{n['metadata']['name']}": (n.get("status") or {}).get("fabric")
                   for n in crs.get("networks") or []}
     for p in placements:
-        mine = (p.get("status") or {}).get("prefixes") or []
+        st = p.get("status") or {}
+        # status.prefixes are the allocated prefixes; a provider-assigned subnet is only in status.subnets, and the
+        # ledger records it for the placement as external
+        mine = list(dict.fromkeys((st.get("prefixes") or []) + [
+            s.get("prefix") for s in st.get("subnets") or [] if s.get("source") == "Provider" and s.get("prefix")]))
         network = f"HybridNetwork/{p['metadata']['namespace']}/{(p.get('spec') or {}).get('network')}"
         led = (req.get("ledgers") or {}).get(net_fabric.get(network) or "")
         if not mine or led is None:

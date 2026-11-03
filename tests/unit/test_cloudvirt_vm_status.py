@@ -44,7 +44,7 @@ class Wiring(unittest.TestCase):
         step = by_name(main, "Refresh the VirtualMachine lists of the environments on this site")
         self.assertEqual(step["when"], "ci_cr_type == 'openshift'")
         names = [t.get("name") for t in main[0]["block"]]
-        self.assertLess(names.index("Wake the ones pending on it"), names.index(step["name"]))
+        self.assertLess(names.index("Wake what waits for this site"), names.index(step["name"]))
         vms = load(os.path.join(CI_TASKS, "cloudvirt_vms.yml"))
         block = by_name(vms, "Refresh their VirtualMachine lists")
         self.assertTrue(block["rescue"])

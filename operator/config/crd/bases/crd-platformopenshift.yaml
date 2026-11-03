@@ -130,7 +130,11 @@ spec:
                       description: Name of the AWS environment (CloudAWS) in this namespace.
                     network:
                       type: string
-                      description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a network of its own"
+                      description: >-
+                        HybridNetwork (same namespace) whose NetworkPlacement in the environment
+                        hosts the cluster's machines; the placement needs an IPv4 subnet (the
+                        platform reaches clusters over IPv4); unset: the cluster gets a network of
+                        its own
                     publish:
                       type: string
                       description: "How the cluster's API and ingress are published: External (internet-facing load balancers) or Internal (reachable only from the cluster's network)"
@@ -171,7 +175,11 @@ spec:
                         Name of the Google Cloud environment (CloudGCP) in this namespace.
                     network:
                       type: string
-                      description: "HybridNetwork (same namespace) whose NetworkPlacement in the environment hosts the cluster's machines; unset: the cluster gets a VPC of its own"
+                      description: >-
+                        HybridNetwork (same namespace) whose NetworkPlacement in the environment
+                        hosts the cluster's machines; the placement needs an IPv4 subnet (the
+                        platform reaches clusters over IPv4); unset: the cluster gets a VPC of its
+                        own
                     publish:
                       type: string
                       description: "How the cluster's API and ingress are published: External (internet-facing load balancers) or Internal (reachable only from the cluster's network)"

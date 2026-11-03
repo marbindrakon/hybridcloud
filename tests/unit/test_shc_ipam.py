@@ -740,6 +740,16 @@ class OrphanCheck(unittest.TestCase):
         led = {"alloc": {}, "ipam": {hn("a"): {"prefixes": ["10.0.0.0/16"], "alloc": {OWN + "aws": ["10.0.0.0/24"]},
                                                "external": {OWN + "aws": ["2001:db8:aaaa::/56"]}}}}
         self.assertEqual(self.report(led, networks=("a",), placements=(p,)), [])
+        # the live shape: status.prefixes holds the allocated prefixes only, the provider subnet is in status.subnets
+        p2 = {"kind": "NetworkPlacement", "metadata": {"namespace": "entity-acme", "name": "aws"},
+              "spec": {"network": "a"},
+              "status": {"prefixes": ["10.0.0.0/24"],
+                         "subnets": [{"family": 4, "prefix": "10.0.0.0/24", "source": "Network"},
+                                     {"family": 6, "prefix": "2001:db8:aaaa::/56", "source": "Provider"}]}}
+        self.assertEqual(self.report(led, networks=("a",), placements=(p2,)), [])
+        # a provider subnet the ledger does not hold is still a finding
+        led2 = {"alloc": {}, "ipam": {hn("a"): {"prefixes": ["10.0.0.0/16"], "alloc": {OWN + "aws": ["10.0.0.0/24"]}}}}
+        self.assertEqual(len(self.report(led2, networks=("a",), placements=(p2,))), 1)
 
 
 if __name__ == "__main__":

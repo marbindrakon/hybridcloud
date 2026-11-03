@@ -634,7 +634,7 @@
     "editRbac": "VM editors (access groups)",
     "editRbacHelp": "Access groups that can create, change and delete VMs and their disks and use the VM consoles. They cannot change the namespaces' network attachment.",
     "egressInternet": "Internet egress",
-    "egressInternetHelp": "Outbound internet access through the platform: the platform advertises a default route into the network. IPv4 leaves with platform source addresses; IPv6 from the platform's space leaves unchanged through a filter that admits only replies to connections opened from inside; your own IPv6 prefixes have no internet access. The platform's private ranges are not reachable this way. Leave it off when the default route comes from your own edge router. Can be changed at any time.",
+    "egressInternetHelp": "Outbound internet access through the platform: the platform advertises a default route into the network. IPv4 leaves with platform source addresses; IPv6 from the platform's space leaves unchanged through a filter that admits only replies to connections opened from inside; your own IPv6 prefixes have no internet access. A network without IPv4 reaches IPv4-only destinations by translation where the platform offers it. The platform's private ranges are not reachable this way. Leave it off when the default route comes from your own edge router. Can be changed at any time.",
     "externalEvpn": "EVPN-VXLAN",
     "externalEvpnHelp": "The site's VTEPs speak EVPN-VXLAN to the gateway. The site's own operator runs them; the platform only attaches the site through a Cloud Gateway.",
     "sitePaused": "Paused",
@@ -1492,6 +1492,7 @@
       "AddressChoice": "IPv6 internet: not offered for tenant-provided prefixes.",
       "NotOffered": "IPv6 internet access is not offered on this fabric yet.",
       "Degraded": "Works with reduced redundancy.",
+      "UpstreamDown": "IPv6 internet access is down: no node of the fabric has an upstream session.",
       "WaitingForAddressSpace": "Waiting for platform IPv6 space: no free block in the platform's pool, the tenant's allowance used, or the chosen block in use or recently released.",
       "IPv6ModeInUse": "The network's IPv6 mode can't change while it has placements; remove them or create a new network.",
       "PrefixReserved": "A prefix overlaps address space the platform keeps for itself.",
@@ -1505,7 +1506,8 @@
       },
       "translation": {
         "NotOffered": "Translation to IPv4 is not offered on this fabric yet.",
-        "AddressChoice": "Translation to IPv4 needs IPv6 address space from the platform."
+        "AddressChoice": "Translation to IPv4 needs IPv6 address space from the platform.",
+        "UpstreamDown": "Translation to IPv4 is down with the IPv6 internet access."
       }
     },
     "subnetOfFamily": "IPv{{family}} subnet",
@@ -1517,6 +1519,7 @@
     "path_Provider": "through the cloud provider",
     "translationPrefix": "Translation prefix",
     "resolvers": "Resolvers",
+    "translationSource": "IPv4 source of translated traffic",
     "familyUnavailableTitle": "Address family not available",
     "familyUnavailableBody": "The platform did not create this placement's subnets: the environment's site or the network does not offer an address family the placement asks for.",
     "familyUnavailableFix": "Delete the placement and attach the network again with the families the site offers.",
@@ -1527,7 +1530,8 @@
       "title": "Guest network configuration (cloud-init)",
       "help": "Network configuration for a VM on this placement's subnets, built from the placement's status. Use it as the VM's cloud-init network data.",
       "networkData": "Network data",
-      "userData": "User data: IPv4 by translation",
+      "userData": "User data",
+      "userDataDns": "Keeps the guest on the resolvers in the network data: resolvers handed out by DHCP are ignored, because they need not translate IPv4-only names. Names internal to the site are then not resolved.",
       "userDataHelp": "This placement has no IPv4: a CLAT in the guest reaches IPv4-only destinations through the translation prefix.",
       "copy": "Copy",
       "copied": "Copied"

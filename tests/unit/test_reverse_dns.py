@@ -645,6 +645,36 @@ class GatewayNames(unittest.TestCase):
         inc = by_name(load(os.path.join(CG, "reverse_dns.yml")), "Publish the names")
         self.assertEqual(inc["vars"]["rdns_owner"], "CloudGateway/{{ fab_name }}")
 
+    def test_cloud_routers_sources_join_the_nodes(self):
+        # the AWS and Google Cloud routers' ICMPv6 sources (site_*_post.yml) are named like the nodes' sources
+        nodes = [{"node": "n1", "address": "2001:db8:ffff:1::1:2"}]
+        reg = {"results": [
+            {"item": {"name": "shc-edge-site-a", "instance": "i-1"}, "stdout": json.dumps({"icmp6": "2001:db8:ffff:1::64:2/128"})},
+            {"item": {"name": "shc-edge-site-b", "instance": "i-2"}, "stdout": json.dumps({"errors": ["does not fit"]})},
+            {"item": {"name": "shc-edge-site-c"}, "skipped": True}]}
+        for f, var, extra in (("site_aws_post.yml", "_cg_aws_icmp6", {"aws_edge_cfg": {"ipv6": {"enabled": True}}}),
+                              ("site_gcp_post.yml", "_cg_gcp_icmp6", {})):
+            t = by_name(load(os.path.join(CG, f)), "Remember the routers' ICMPv6 sources for their names")
+            # (an extra var can't be overridden by set_fact: the nodes so far come in through a set_fact)
+            init = {"ansible.builtin.set_fact": {"cg_rdns_nodes": "{{ _nodes }}"}}
+            out = run_play([init, t, write_out("cg_rdns_nodes")], dict({"_nodes": nodes, var: reg}, **extra))
+            self.assertEqual(out, nodes + [{"node": "shc-edge-site-a", "address": "2001:db8:ffff:1::64:2"}], f)
+            # named as the nodes are
+            want = self.names(out)["want"]
+            self.assertEqual(want[-1]["name"], "shc-edge-site-a.gw-site-a.gateways.tenants.example.test")
+        # AWS: not while the routers' IPv6 side is only being removed
+        t = by_name(load(os.path.join(CG, "site_aws_post.yml")), "Remember the routers' ICMPv6 sources for their names")
+        init = {"ansible.builtin.set_fact": {"cg_rdns_nodes": "{{ _nodes }}"}}
+        out = run_play([init, t, write_out("cg_rdns_nodes")], {"_nodes": nodes, "_cg_aws_icmp6": reg,
+                                                                 "aws_edge_cfg": {"ipv6": {"enabled": False}}})
+        self.assertEqual(out, nodes)
+        # the routers are named after the nodes are known and before the names are published
+        main = [t.get("name") for t in walk(load(os.path.join(CG, "main.yml")))]
+        for post in ("Give the platform-run edge the nodes' keys and the site key (aws)",
+                     "Give the platform-run edge the nodes' keys and the site key (gcp)"):
+            self.assertLess(main.index("Configure the gateway instance on each node"), main.index(post))
+            self.assertLess(main.index(post), main.index("Name the nodes' ICMPv6 sources"))
+
 
 # ---- the site job's reverse zones ----
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")

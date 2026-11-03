@@ -192,32 +192,11 @@
           capabilities: "{{ ci_capabilities_out }}"
           site: "{{ ci_site_out }}"
 
-    # what waited for this site (pending on it) runs now instead of on its reconcile period
-    - name: List what may wait for this site
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: "{{ item }}"
-      loop: [CloudGateway, CloudAWS, CloudVirt]
-      register: _ci_dependents
-
-    - name: Wake the ones pending on it
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+    # what waited for this site runs now instead of on its reconcile period; what a pause held on it resumes
+    - name: Wake what waits for this site
+      ansible.builtin.include_tasks: wake_dependents.yml
       vars:
-        nudge_crs: >-
-          {%- set out = [] -%}
-          {%- for r in _ci_dependents.results | default([]) -%}
-            {%- for o in r.resources | default([]) -%}
-              {%- if (o.spec.cloudRef | default({})).name | default('') == cloudinfrastructure_cr_name
-                    and (o.status | default({}, true)).status | default('') in ['pending', 'failed', '']
-                    and o.metadata.deletionTimestamp is not defined -%}
-                {%- set _ = out.append({'kind': r.item, 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
-              {%- endif -%}
-            {%- endfor -%}
-          {%- endfor -%}
-          {{ out }}
+        ciw_pending: true
 
     # the environments on this site: what their namespaces hold now (the delete preview lists the VMs)
     - name: Refresh the VirtualMachine lists of the environments on this site
@@ -236,10 +215,25 @@
       ansible.builtin.include_tasks: tenant_dns_health.yml
       when: ci_cr_type == 'openshift'
 
+    # the wake could not list some kinds (wake_dependents.yml): the job fails so it shows, after the site's own work
+    # and without marking the site failed (the site is ready; what waits for it resumes on its own reconcile)
+    - name: "Fail the job: what waits for this site could not be listed"
+      when: ci_wake_error | default('', true) | length > 0
+      block:
+        # the last task of the block: the rescue reads this as "only the wake failed"
+        - name: Tell the rescue that only the wake failed
+          ansible.builtin.set_fact:
+            ci_only_wake_failed: true
+
+        - name: Fail on the wake's listing error
+          ansible.builtin.fail:
+            msg: "{{ ci_wake_error }}"
+
   rescue:
     # a key left out of the merge-patch keeps its last value: switch every stored capability off
     - name: Every capability of the failed site is off
       ansible.builtin.include_tasks: failed_capabilities.yml
+      when: not (ci_only_wake_failed | default(false) | bool)
 
     - name: Mark CloudInfrastructure failed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -262,7 +256,9 @@
               reason: "{{ cloudinfrastructure_fail_reason if (cloudinfrastructure_fail_reason | default('') | length > 0) else 'EDAFailed' }}"
               message: "{{ _msg }}"
       ignore_errors: true
-      when: services_api_host is defined and services_bearer_token is defined
+      when:
+        - services_api_host is defined and services_bearer_token is defined
+        - not (ci_only_wake_failed | default(false) | bool)
 
     - name: Refresh the tenants' view of the failed site
       ansible.builtin.include_tasks: tenant_view.yml
@@ -275,10 +271,25 @@
       when:
         - services_api_host is defined and services_bearer_token is defined
         - (shc_live_cr | default({}, true)) | length > 0 or (cloudinfrastructure_cr_lookup.resources | default([])) | length > 0
+        - not (ci_only_wake_failed | default(false) | bool)
+
+    # a resumed site whose probe failed: what its pause held reads the failure now (their jobs report the site as
+    # unusable), instead of saying SitePaused until the site is probed ready
+    - name: Wake what the pause held on the failed site
+      ansible.builtin.include_tasks: wake_dependents.yml
+      vars:
+        ciw_pending: false
+      when:
+        - services_api_host is defined and services_bearer_token is defined
+        - ci_cr_spec is defined
+        - not (ci_cr_spec.paused | default(false) | bool)
+        - not (ci_only_wake_failed | default(false) | bool)
 
     - name: Re-raise
       ansible.builtin.fail:
-        msg: "CloudInfrastructure {{ cloudinfrastructure_cr_name | default('unknown') }} provision failed"
+        msg: >-
+          CloudInfrastructure {{ cloudinfrastructure_cr_name | default('unknown') }}
+          {{ ('is ready, but ' ~ ci_wake_error) if (ci_only_wake_failed | default(false) | bool) else 'provision failed' }}
 
   always:
     - name: Remove the probe's temp files

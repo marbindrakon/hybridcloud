@@ -1,7 +1,7 @@
 # The translation canary's objects, in the platform team's own tenant (here entity-example-platform): an IPv6-only
 # network with IPv6 from the platform and internet access, an OpenShift Virtualization environment and an OpenStack
-# environment, and one placement of the network per site that offers IPv6-only placements with translation. Then one
-# probe per placement (vm-cloudvirt.yaml, server-cloudoso.md), and the realization names the network and the probe:
+# environment, and one placement of the network per OpenShift Virtualization or OpenStack site that offers IPv6-only
+# placements with translation (AWS and Google Cloud sites take no canary). Then one probe per placement (vm-cloudvirt.yaml, server-cloudoso.md), and the realization names the network and the probe:
 #   canaries.ipv6Translation: {network: entity-example-platform/ipv6-canary, workload: canary}
 # Site names (site-vm, site-osp) are placeholders for the sites that offer IPv6-only placements.
 ---

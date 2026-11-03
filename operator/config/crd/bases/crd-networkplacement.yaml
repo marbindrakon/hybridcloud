@@ -246,17 +246,21 @@ spec:
                       description: How workloads get IPv6 addresses, DHCPv6 or SLAAC (informational).
                     internet:
                       type: object
-                      description: IPv6 internet access of the placement.
+                      description: >-
+                        IPv6 internet access of the placement. With path Fabric it is the network's
+                        IPv6 row of status.egress.families as of the placement's last run.
                       properties:
                         state:
                           type: string
-                          description: ready, pending or unavailable.
+                          description: ready, pending, removing or unavailable.
                         path:
                           type: string
                           description: Fabric (through the platform) or Provider (the cloud provider's own path).
                         reason:
                           type: string
-                          description: One-word reason when not ready.
+                          description: >-
+                            One-word reason when not ready, or Degraded while ready with reduced
+                            redundancy.
                         message:
                           type: string
                           description: What the reason means for this placement, in plain words.

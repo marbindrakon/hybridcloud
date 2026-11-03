@@ -391,8 +391,14 @@
         hn_translation_offered: >-
           {{ (fab_real.translation | default({}, true)).values() | select('mapping') | selectattr('pref64', 'defined')
              | map(attribute='pref64') | select | list | length > 0 }}
+        # and the cloud provider's own translator: some site of the realization says provider: true
+        hn_translation_provider_offered: >-
+          {{ (fab_real.translation | default({}, true)).values() | select('mapping') | selectattr('provider', 'defined')
+             | map(attribute='provider') | map('bool') | select | list | length > 0 }}
         hn_egress6_degraded: "{{ (_eg.ipv6 | default({}, true)).degraded | default(false) | bool }}"
         hn_egress6_degraded_nodes: "{{ (_eg.ipv6 | default({}, true)).degradedNodes | default([], true) }}"
+        # the nodes that report an IPv6 egress (every one degraded = the IPv6 internet access is down)
+        hn_egress6_nodes: "{{ (_eg.ipv6 | default({}, true)).nodes | default({}, true) | list }}"
         hn_egress_carried: >-
           {{ (_eg.networks | default([], true) | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list
               + [{}]) | first }}
@@ -464,6 +470,34 @@
                                   'realization': {'vpnTarget': hn_vpn_target | int,
                                                   'routeTarget': hn_fabric.spec.domainAsn ~ ':' ~ hn_vpn_target}})
              | combine({'egress': hn_egress if hn_egress | length > 0 else none}) }}
+
+    # the placements on the fabric's path copy the network's IPv6 row into status.ipv6.internet when they run
+    # (networkplacement_provision ipv6_status.yml); nothing else runs them while Ready, so when the row changed
+    # (state, reason or message; the row came or went) the placements with a network-sourced IPv6 subnet are woken,
+    # after the network's status is written so they read the new row
+    - name: Wake the placements whose IPv6 internet row changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        _before6: >-
+          {{ ((((fab_st | default({}, true)).egress | default({}, true)).families | default([], true)
+              | selectattr('family', 'defined') | selectattr('family', 'equalto', 6) | list) + [{}]) | first }}
+        _after6: >-
+          {{ (((hn_egress | default({}, true)).families | default([], true)
+              | selectattr('family', 'defined') | selectattr('family', 'equalto', 6) | list) + [{}]) | first }}
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- for p in _hn_placements.resources | default([]) -%}
+            {%- set sn6 = (p.status | default({}, true)).subnets | default([], true) | selectattr('family', 'defined')
+                          | selectattr('family', 'equalto', 6) | list -%}
+            {%- if p.spec.network == fab_name and p.metadata.deletionTimestamp is not defined
+                  and sn6 | length > 0 and (sn6 | first).source | default('Network', true) != 'Provider' -%}
+              {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': fab_namespace, 'name': p.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+      when: >-
+        [_before6.state | default(''), _before6.reason | default(''), _before6.message | default('')]
+        != [_after6.state | default(''), _after6.reason | default(''), _after6.message | default('')]
 
   rescue:
     - name: Mark the HybridNetwork failed

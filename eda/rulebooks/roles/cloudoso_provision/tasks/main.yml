@@ -169,6 +169,12 @@
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
           # shc (P7.1): a failed provision may have created the project; its site must not be deleted under it
           cloudInfrastructure: "{{ oso_cloudinfra_name | default('') }}"
+          # held by its paused site: the spec it holds counts as processed, so the controller stops publishing it on
+          # its reconcilePeriod while the site stays paused (operator/roles/_common/tasks/skip_while_site_paused.yml,
+          # as the other kinds' SitePaused writes); '' leaves the field alone (the status library drops it)
+          observedGeneration: >-
+            {{ cloudoso_generation | default('', true)
+               if (cloudoso_failure_reason | default('')) == 'SitePaused' else '' }}
           conditions:
             - type: Ready
               status: "False"

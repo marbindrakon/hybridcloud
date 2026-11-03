@@ -1,0 +1,26 @@
+---
+# The wakes that came from other jobs while this job ran waited for it: the fabric's controller does not let a wake
+# (the legacy request "true" that nudge_cr writes) supersede the job in flight, and keeps the request on the object
+# until it publishes it (operator roles/hybridfabric). Once this job has written its status the event is no longer in
+# flight: touch the request so the controller publishes it now, instead of on its next reconcile. One follow-up run
+# however many wakes came. Never fails the job. Input: fab_name, fab_namespace.
+- name: Read the fabric's pending wake
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridFabric
+    name: "{{ fab_name }}"
+    namespace: "{{ fab_namespace }}"
+  register: _hf_deferred
+  failed_when: false
+
+- name: Run the wakes that came during this job
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: HybridFabric, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
+  when: >-
+    ((((_hf_deferred.resources | default([], true) | first | default({}, true)).metadata | default({}, true))
+      .annotations | default({}, true)).get('ansible.sdk.operatorframework.io/reconcileNow', '')
+     | default('', true) | string | trim | lower) == 'true'
