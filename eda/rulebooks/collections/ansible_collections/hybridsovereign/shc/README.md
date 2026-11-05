@@ -11,7 +11,8 @@ Status contract of the `hybridsovereign.redhat` API.
 - Filters `shc_merge_conditions`, `shc_phase`, `shc_summary`.
 
 `status.phase` is one of `Waiting`, `Creating`, `Updating`, `Ready`, `Degraded`, `Paused`, `Failed`,
-`Deleting`. It is derived, never read by a controller. `status.summary` is a short sentence safe to show
+`Deleting`. It is derived from the conditions; a controller reads the stored value only to keep
+`status.phaseSince` and to tell a first run from an update. `status.summary` is a short sentence safe to show
 to the tenant; the condition `message` carries the detail. The CRD schemas declare `status.phase`,
 `status.phaseSince` and `status.summary` and, on the kinds that write them, `status.realized` and
 `status.lastHandledReconcileRequest`, so `oc explain <kind>.status` shows them.

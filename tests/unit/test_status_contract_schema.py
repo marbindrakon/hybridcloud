@@ -1,6 +1,6 @@
 """The status contract fields are declared in the CRD schemas.
 
-Every controller writes phase, phaseSince and summary; the Retry-now bookkeeping writes
+The controllers write phase, phaseSince and summary; the Retry-now bookkeeping writes
 lastHandledReconcileRequest; the fabric jobs write realized. The status schemas keep
 x-kubernetes-preserve-unknown-fields, so a declaration can only add `oc explain` text and a type check: a field
 declared with the wrong type, or with an enum, a format, a pattern, `required` or `nullable`, would make the
@@ -60,7 +60,8 @@ class StatusContractSchema(unittest.TestCase):
 
     def test_kinds_that_carry_the_contract(self):
         # TenantProfile is written by the Entity job and has no Ready condition or phase of its own
-        # (teardown-tier "skip"); every other kind has a controller and the Summary column.
+        # (teardown-tier "skip"); every other kind has the Summary column. Iaac has no controller: nothing writes
+        # its three fields, so declaring them there is harmless.
         want = set(self.crds) - {"TenantProfile"}
         for field in PLAIN:
             self.assertEqual(self.declared(field), want, field)
