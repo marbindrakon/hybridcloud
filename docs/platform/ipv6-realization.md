@@ -736,9 +736,17 @@ IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
     bytes of headers (at most 1280 bytes), a reset is no larger than the request, and both go only toward addresses
     routed in that VRF.
   - **Turning it on or off.** Change the realization, then run the site's CloudGateway (Retry now). The job
-    configures one node at a time: the filter is in place before the route is announced, and the routing change adds
-    or removes one line per IPv6 VRF (no session resets). `status.realization.icmpSource6Announced` of the
-    CloudGateway says whether its nodes announce their addresses.
+    configures one node at a time. Turning it on, the filter is in place before the route is announced; turning it
+    off, the filter stays until the node's routing configuration no longer announces the route, and goes after that.
+    A run that stops in between leaves the filter in place (with the route or without it), and the next run finishes
+    the change. The routing change adds or removes one line per IPv6 VRF (no session resets).
+    `status.realization.icmpSource6Announced` of the CloudGateway says whether its nodes announce their addresses.
+  - **While the nodes are switched one after the other**, the node not yet switched has no range entry in
+    `FROM-SITE`. If the site sends the first node's address back with the gateways' communities stripped and
+    `gateway.siteImportFilter.ipv6` is off, that node takes the route and puts it into the network's VPN until its own
+    turn (in a run that turns the switch on, and the same in reverse when it turns it off), for as long as the job
+    spends on the nodes before it. Keep the IPv6 site-import filter on while switching (the default): it refuses the
+    range as long as no placement prefix covers `core.icmpSource6`.
 
 ## Reverse DNS (`dns.reverse6`)
 
