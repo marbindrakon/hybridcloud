@@ -460,7 +460,9 @@
 
     # the fabric adds or removes the network's egress (either family) and wakes it again when it did; with the IPv6
     # egress realized, the fabric announces exactly the placements' IPv6 subnets upstream, so a placement that came or
-    # went since the fabric's last run wakes it too (its /64 has no return path from the internet until then)
+    # went since the fabric's last run wakes it too (its /64 has no return path from the internet until then). Like the
+    # fabric's announced set, only subnets from the network's space count: a provider-assigned subnet is never
+    # announced (its internet path is the provider's), so counting it would wake the fabric on every run
     - name: Wake the fabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
@@ -470,7 +472,8 @@
           {%- for p in _hn_placements.resources | default([]) -%}
             {%- if p.spec.network == fab_name and p.metadata.deletionTimestamp is not defined -%}
               {%- for sn in (p.status | default({}, true)).subnets | default([], true) -%}
-                {%- if sn.family | default(0) | int == 6 and sn.prefix | default('') | length > 0 -%}
+                {%- if sn.family | default(0) | int == 6 and sn.prefix | default('') | length > 0
+                      and sn.source | default('Network', true) != 'Provider' -%}
                   {%- set _ = out.append(sn.prefix) -%}
                 {%- endif -%}
               {%- endfor -%}
