@@ -710,6 +710,37 @@ class HolderWiring(unittest.TestCase):
                         self.assertTrue(_renew(tasks[i - 1]) or str(tasks[i - 1].get("ansible.builtin.include_tasks", ""))
                                         .endswith("fabric_lease_ensure.yml"), tasks[i - 1].get("name"))
 
+    def test_retried_node_writes_stay_within_the_lease(self):
+        # the step limit is evaluated per task and loop item, not per retry: a retried task keeps its first attempt's
+        # limit. A retried step that only reads (changed_when: false) may run past the lease: the next write step gets a
+        # fresh limit and does not start without enough lease. A retried write must be a systemd step (each attempt
+        # ends within its unit's TimeoutSec=2m), all its attempts and delays within systemdJobSeconds, and come right
+        # after a renew-if-short check (which guarantees systemdJobSeconds + margin left)
+        unit_attempt = 120
+        real = load(os.path.join(ROOT, "eda/common/vars/fabric_realization.yml"))["fabric_realization_defaults"]
+        job = real["nodes"]["configLease"]["systemdJobSeconds"]
+
+        def lists(tasks):
+            yield tasks
+            for t in tasks:
+                for key in ("block", "rescue", "always"):
+                    if t.get(key):
+                        yield from lists(t[key])
+        writes = []
+        for role, (_, _, node_file, _, _) in HOLDERS.items():
+            for tasks in lists(load(os.path.join(ROLES, role, "tasks", node_file))):
+                for i, t in enumerate(tasks):
+                    if "retries" not in t or t.get("changed_when") is False:
+                        continue
+                    writes.append(t["name"])
+                    with self.subTest(role=role, task=t["name"]):
+                        self.assertIn("ansible.builtin.systemd", t)
+                        n, delay = int(t["retries"]), int(t.get("delay", 5))
+                        self.assertLessEqual((n + 1) * unit_attempt + n * delay, job)
+                        self.assertTrue(str(tasks[i - 1].get("ansible.builtin.include_tasks", ""))
+                                        .endswith("fabric_lease_ensure.yml"), tasks[i - 1].get("name"))
+        self.assertEqual(writes, ["{{ bgw_node.name }}: reload the FRR configuration"])
+
     def test_the_applies_end_on_the_node_before_the_step(self):
         found = []
         for role, node_file in (("hybridfabric_provision", "node_root.yml"), ("cloudgateway_provision", "node_gateway.yml")):

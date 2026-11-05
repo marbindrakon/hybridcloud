@@ -11,7 +11,10 @@ fab_lease_margin: 60
 # the least a step is given; with less left the step does not start
 fab_lease_min_step: 30
 # The timeout of every node step: a block keyword around the holders' node loops, so it is evaluated again for each
-# task, loop item and retry. The step timeout, cut to what the lease has left less the margin. With less than
+# task and loop item. Not for each retry: a retried task keeps the limit of its first attempt for all of them, so a
+# node step that writes and retries must be bounded otherwise (the gateway's reload: each attempt by its unit's own
+# TimeoutSec, all of them within systemdJobSeconds, and it starts only with fab_lease_need left; a test holds every
+# retried write to that). The step timeout, cut to what the lease has left less the margin. With less than
 # fab_lease_min_step left, a text that is no number: the step fails before it starts, as for a lost lease (the
 # renewals and the lease tasks set their own timeout, so they still run).
 fab_lease_step_timeout: >-
