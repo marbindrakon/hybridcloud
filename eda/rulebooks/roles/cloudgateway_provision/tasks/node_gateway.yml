@@ -143,6 +143,22 @@
     mode: "0640"
   delegate_to: "{{ bgw_node.name }}"
 
+# The instance runs what its last start or reload loaded from frr.conf.shc. A job that wrote the file and stopped
+# before the reload (it failed, crashed, timed out or lost the lease) leaves a file the next job finds unchanged, so
+# the reload is also due while the file differs from what was last loaded: its digest, recorded in
+# /etc/shc-fabric/gw-<gateway>.frr-loaded after the instance took it (frr.conf itself is FRR's own copy). An instance
+# without that record (the first run with it) records the file as it is, before this run writes it: the assumption
+# every run made before, so the upgrade alone reloads nothing
+- name: "{{ bgw_node.name }}: what the instance last loaded (without the record: the file as it is)"
+  ansible.builtin.shell: |
+    f=/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded
+    [ -s "$f" ] && exit 0
+    cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1 > "$f.new" && mv "$f.new" "$f"
+    echo recorded
+  register: _cg_frr_seen
+  changed_when: "'recorded' in _cg_frr_seen.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
 # the file holds the BGP session password: never shown. The desired configuration (frr.conf.shc): FRR rewrites its
 # frr.conf after every reload, so comparing against that would always see a change
 - name: "{{ bgw_node.name }}: FRR configuration"
@@ -155,6 +171,15 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_frrconf
   no_log: true
+
+- name: "{{ bgw_node.name }}: is a reload due (the file differs from what the instance last loaded)"
+  ansible.builtin.shell: |
+    now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
+    was=$(cat /etc/shc-fabric/gw-{{ fab_name }}.frr-loaded 2>/dev/null)
+    if [ "$now" = "$was" ]; then echo reload=no; else echo reload=due; fi
+  register: _cg_frr_due
+  changed_when: false
+  delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: is the gateway instance running"
   ansible.builtin.command: "systemctl is-active shc-gw@{{ fab_name }}"
@@ -183,12 +208,25 @@
   when:
     - _cg_active.stdout == 'active'
     - _cg_daemons is not changed and not (_cg_unit_changed | bool)
-    - _cg_frrconf is changed
+    - _cg_frrconf is changed or 'reload=due' in _cg_frr_due.stdout
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_reload
   retries: 1
   delay: 5
   until: _cg_reload is succeeded
+
+# the instance now runs the file (started, restarted or reloaded above, or nothing was due); a step above that failed
+# ended the job before this, so the next job still finds the reload due
+- name: "{{ bgw_node.name }}: record what the instance loaded"
+  ansible.builtin.shell: |
+    f=/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded
+    now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    echo "$now" > "$f.new" && mv "$f.new" "$f"
+    echo recorded
+  register: _cg_frr_recorded
+  changed_when: "'recorded' in _cg_frr_recorded.stdout"
+  delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: renew the lease before the wait for the core"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"

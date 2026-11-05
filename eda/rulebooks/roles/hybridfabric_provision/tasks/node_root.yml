@@ -140,6 +140,21 @@
   failed_when: _hf_apply.rc != 0 or 'IPv6 core not applied' in _hf_apply.stdout
   delegate_to: "{{ bgw_node.name }}"
 
+# FRR runs what its last start or reload loaded. A job that wrote frr.conf or daemons and stopped before the reload
+# (it failed, crashed, timed out or lost the lease) leaves files the next job finds unchanged, so the reload is also
+# due while the files differ from what FRR last loaded: their digest, recorded in /etc/shc-fabric/root.frr-loaded
+# after FRR took them. A node without that record (the first run with it) records the files as they are, before this
+# run writes them: the assumption every run made before, so the upgrade alone reloads nothing
+- name: "{{ bgw_node.name }}: what FRR last loaded (a node without the record: the files as they are)"
+  ansible.builtin.shell: |
+    f=/etc/shc-fabric/root.frr-loaded
+    [ -s "$f" ] && exit 0
+    cat /etc/frr/frr.conf /etc/frr/daemons 2>/dev/null | sha256sum | cut -d' ' -f1 > "$f.new" && mv "$f.new" "$f"
+    echo recorded
+  register: _hf_frr_seen
+  changed_when: "'recorded' in _hf_frr_seen.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: FRR daemons"
   ansible.builtin.lineinfile:
     path: /etc/frr/daemons
@@ -161,6 +176,15 @@
   register: _hf_frrconf
   # the circuits' BGP passwords are in the file: no diff, no content in the log
   no_log: "{{ hf_circuit_passwords | default({}) | length > 0 }}"
+
+- name: "{{ bgw_node.name }}: is a reload due (the files differ from what FRR last loaded)"
+  ansible.builtin.shell: |
+    now=$(cat /etc/frr/frr.conf /etc/frr/daemons 2>/dev/null | sha256sum | cut -d' ' -f1)
+    was=$(cat /etc/shc-fabric/root.frr-loaded 2>/dev/null)
+    if [ "$now" = "$was" ]; then echo reload=no; else echo reload=due; fi
+  register: _hf_frr_due
+  changed_when: false
+  delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: is FRR running"
   ansible.builtin.command: systemctl is-active frr
@@ -190,7 +214,20 @@
   when:
     - _hf_frr_active.stdout == 'active'
     - "'bridge-mac=changed' not in _hf_apply.stdout"
-    - _hf_frrconf is changed or _hf_daemons is changed
+    - _hf_frrconf is changed or _hf_daemons is changed or 'reload=due' in _hf_frr_due.stdout
+  delegate_to: "{{ bgw_node.name }}"
+
+# FRR now runs the files (started, restarted or reloaded above, or nothing was due); a step above that failed ended
+# the job before this, so the next job still finds the reload due
+- name: "{{ bgw_node.name }}: record what FRR loaded"
+  ansible.builtin.shell: |
+    f=/etc/shc-fabric/root.frr-loaded
+    now=$(cat /etc/frr/frr.conf /etc/frr/daemons 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    echo "$now" > "$f.new" && mv "$f.new" "$f"
+    echo recorded
+  register: _hf_frr_recorded
+  changed_when: "'recorded' in _hf_frr_recorded.stdout"
   delegate_to: "{{ bgw_node.name }}"
 
 # the fail-closed rule of the IPv6 egress (after the configuration reload: the filter table is loaded by the apply

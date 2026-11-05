@@ -57,5 +57,5 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
-  loop: [/etc/shc-fabric/root.json, /etc/modules-load.d/shc-fabric.conf]
+  loop: [/etc/shc-fabric/root.json, /etc/shc-fabric/root.frr-loaded, /etc/modules-load.d/shc-fabric.conf]
   delegate_to: "{{ bgw_node.name }}"
