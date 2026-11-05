@@ -9,11 +9,13 @@ gateway.announceIcmpSource6BySite) and the input filter that comes with it.
   route-maps shows where the route can go: never into the network's VPN (so never to another site, a circuit's CE
   or the IPv6 egress upstreams, which are all behind it), to the site as Type-5 with the gateways' community, and
   never back in at the other node, even from a site that strips communities and with the site-import filter off.
-- The apply loads table ip6 shc_gw_in6 (input hook, IPv6 to the node from a VRF: ICMPv6 and TCP that opens no
-  connection pass, the rest is dropped) before the VRFs take the ICMP source, removes it with the key, and keeps it
-  after a failed IPv6 step. The same ruleset is loaded into a real kernel (an unprivileged user and network
-  namespace; skipped where that is not possible) and probed with packets: echo and the replies of a connection the
-  node opened pass, a connection request and UDP to the node are dropped, forwarded traffic is untouched.
+- The apply loads table ip6 shc_gw_in6 (input hook, stateless, IPv6 to the node from a VRF: ICMPv6 and TCP that
+  opens no connection pass, a TCP connection request is reset, UDP refused with a port unreachable, the rest
+  dropped) before the VRFs take the ICMP source, removes it with the key, and keeps it after a failed IPv6 step. The
+  same ruleset is loaded into a real kernel (an unprivileged user and network namespace; skipped where that is not
+  possible) and probed with packets: echo and the replies of a connection the node opened pass, a connection request
+  to a listening port is reset and UDP to an open port refused, another protocol gets no answer, every answer is
+  routed back in the VRF (a decoy route in the main table stays unused), forwarded traffic is untouched.
 
 Documentation and private ranges only."""
 import collections
@@ -406,7 +408,9 @@ class ApplyFilter(A.ApplyCase):
             "    type filter hook input priority filter; policy accept;",
             '    iifname { "t51000", "t51002" } meta l4proto ipv6-icmp accept',
             '    iifname { "t51000", "t51002" } tcp flags & (syn | ack) != syn accept',
-            '    iifname { "t51000", "t51002" } counter drop comment "only ICMPv6 and TCP that opens no connection to the node"',
+            '    iifname { "t51000", "t51002" } tcp flags & (syn | ack) == syn counter reject with tcp reset comment "TCP connection request: reset"',
+            '    iifname { "t51000", "t51002" } udp dport 0-65535 counter reject with icmpv6 type port-unreachable comment "UDP: port unreachable"',
+            '    iifname { "t51000", "t51002" } counter drop comment "other protocols and fragments without a transport header"',
             "  }", "}"])
         # no connection tracking anywhere in it (the namespace would then track all forwarded IPv6)
         self.assertNotRegex(text, r"\bct\b|notrack|fib")
@@ -519,7 +523,8 @@ PROBE = textwrap.dedent(r'''
     """Runs as root of a new user and network namespace. A gateway VRF t51000 with the node's ICMP source on its device
     and a bridge br51000 (the site leg's bridge); a site host in VRF site behind it (veth vs/vg, the gateway's bridge
     MAC as its next hop, as an EVPN router MAC); a far host in VRF far behind another slave of t51000 (forwarded
-    traffic). Probes from the site host, before and after the ruleset (argv[1]) is loaded."""
+    traffic). A decoy route in the main table toward the site host (dummy0): an answer routed outside the VRF would
+    leave there. Probes from the site host, before and after the ruleset (argv[1]) is loaded."""
     import json, os, socket, struct, subprocess, sys, time
 
     ICMP6, SITE, FAR = "2001:db8:4005:1::1:2", "2001:db8:100:1::5", "2001:db8:200::5"
@@ -566,6 +571,14 @@ PROBE = textwrap.dedent(r'''
     # the far host returns to the site through the gateway
     sh("ip", "-6", "route", "add", "2001:db8:100:1::/64", "dev", "xs", "table", "200")
     sh("ip", "-6", "neigh", "replace", SITE, "lladdr", mac("xg"), "dev", "xs", "nud", "permanent")
+    # the decoy: the main table (no VRF) sends the site's prefix into a dummy device
+    sh("ip", "link", "add", "dummy0", "type", "dummy")
+    sh("ip", "link", "set", "dummy0", "up")
+    sh("ip", "-6", "route", "add", "2001:db8:100:1::/64", "dev", "dummy0")
+
+    def decoy_tx():
+        return json.loads(subprocess.run(["ip", "-s", "-j", "link", "show", "dummy0"], capture_output=True, text=True,
+                                         check=True).stdout)[0]["stats64"]["tx"]["packets"]
 
     def sock(family, kind, vrf, proto=0):
         s = socket.socket(family, kind, proto)
@@ -595,10 +608,39 @@ PROBE = textwrap.dedent(r'''
             return "connected"
         except socket.timeout:
             return "timeout"
+        except ConnectionRefusedError:
+            return "reset"
         except OSError as e:
             return "error %d" % e.errno
         finally:
             s.close()
+
+    def icmp_from_node(send, want_type):
+        """send() from the site host, then wait for an ICMPv6 message of want_type from the node's address"""
+        s = sock(socket.AF_INET6, socket.SOCK_RAW, "site", socket.IPPROTO_ICMPV6)
+        s.bind((SITE, 0))
+        s.settimeout(1.5)
+        send()
+        end = time.time() + 1.5
+        try:
+            while time.time() < end:
+                data, peer = s.recvfrom(2048)
+                if data[0] == want_type and peer[0] == ICMP6:
+                    return data
+        except socket.timeout:
+            pass
+        finally:
+            s.close()
+        return None
+
+    def other_protocol():
+        """next header 253 (experimental) to the node: the kernel answers parameter problem (unrecognised next header)"""
+        def send():
+            r = sock(socket.AF_INET6, socket.SOCK_RAW, "site", 253)
+            r.bind((SITE, 0))
+            r.sendto(b"probe-payload", (ICMP6, 0))
+            r.close()
+        return "parameter-problem" if icmp_from_node(send, 4) else "timeout"
 
     def echo():
         s = sock(socket.AF_INET6, socket.SOCK_RAW, "site", socket.IPPROTO_ICMPV6)
@@ -619,38 +661,44 @@ PROBE = textwrap.dedent(r'''
         return "timeout"
 
     def udp(port):
-        """a datagram to the node: did the node's socket get it (3784, open) or did the node refuse it (closed)"""
+        """a datagram to the node: refused (port unreachable from the node), delivered to the node's socket (3784 is
+        open), or nothing"""
         s = sock(socket.AF_INET6, socket.SOCK_DGRAM, "site")
         s.settimeout(1.5)
-        node_udp.settimeout(1.5)
+        node_udp.setblocking(False)
         try:
             s.bind((SITE, 0))
             s.connect((ICMP6, port))
             s.send(b"probe")
-            if port == 3784:
-                try:
-                    node_udp.recv(64)
-                    return "delivered"
-                except socket.timeout:
-                    return "timeout"
-            s.recv(64)
-            return "answer"
-        except socket.timeout:
-            return "timeout"
-        except ConnectionRefusedError:
-            return "refused"
+            try:
+                s.recv(64)
+                result = "answer"
+            except socket.timeout:
+                result = "timeout"
+            except ConnectionRefusedError:
+                result = "refused"
+            try:
+                node_udp.recv(64)
+                result = "delivered" if result == "timeout" else result + "+delivered"
+            except BlockingIOError:
+                pass
+            return result
         finally:
             s.close()
 
     def probe():
-        return {"echo": echo(), "tcp_to_node": connect("site", SITE, ICMP6, 179), "udp_to_node": udp(3784),
-                "udp_closed": udp(3785),
-                "tcp_from_node": connect("t51000", ICMP6, SITE, 8080), "forwarded": connect("site", SITE, FAR, 8081)}
+        before = decoy_tx()
+        r = {"echo": echo(), "tcp_to_node": connect("site", SITE, ICMP6, 179), "udp_to_node": udp(3784),
+             "udp_closed": udp(3785), "other_protocol": other_protocol(),
+             "tcp_from_node": connect("t51000", ICMP6, SITE, 8080), "forwarded": connect("site", SITE, FAR, 8081)}
+        r["decoy_tx"] = decoy_tx() - before
+        return r
 
     out = {"before": probe()}
     subprocess.run(["nft", "-f", sys.argv[1]], check=True, capture_output=True)
     out["after"] = probe()
     out["ruleset"] = subprocess.run(["nft", "list", "table", "ip6", "shc_gw_in6"], capture_output=True, text=True).stdout
+    out["kernel"] = os.uname().release
     print(json.dumps(out))
 ''')
 
@@ -689,15 +737,22 @@ class RealKernel(A.ApplyCase):
         if self.evidence:
             with open(os.path.join(self.evidence, "real-kernel-probes.json"), "w") as f:
                 json.dump(r, f, indent=1)
-        # today (no filter): everything reaches the node
+        # today (no filter): everything reaches the node, its listeners included
         self.assertEqual(r["before"], {"echo": "reply", "tcp_to_node": "connected", "udp_to_node": "delivered",
-                                       "udp_closed": "refused", "tcp_from_node": "connected", "forwarded": "connected"})
-        # with the filter: echo and the node's own connection pass, a connection request and UDP to the node are
-        # dropped without an answer, forwarded traffic is untouched
-        self.assertEqual(r["after"], {"echo": "reply", "tcp_to_node": "timeout", "udp_to_node": "timeout",
-                                      "udp_closed": "timeout", "tcp_from_node": "connected", "forwarded": "connected"})
-        m = re.search(r"counter packets (\d+)", r["ruleset"])
-        self.assertTrue(m and int(m.group(1)) >= 2, r["ruleset"])
+                                       "udp_closed": "refused", "other_protocol": "parameter-problem",
+                                       "tcp_from_node": "connected", "forwarded": "connected", "decoy_tx": 0})
+        # with the filter the node answers like a host with no open port: echo replied, a connection request reset
+        # (although a listener is there), UDP refused with port unreachable (never delivered, open port or not), another
+        # protocol dropped; the reply to the node's own connection and forwarded traffic pass. Every answer reached the
+        # site host, i.e. was routed in the VRF it came from (none left through the main table's decoy route)
+        self.assertEqual(r["after"], {"echo": "reply", "tcp_to_node": "reset", "udp_to_node": "refused",
+                                      "udp_closed": "refused", "other_protocol": "timeout",
+                                      "tcp_from_node": "connected", "forwarded": "connected", "decoy_tx": 0})
+        counts = {c: int(n) for n, c in re.findall(r'counter packets (\d+) bytes \d+ \S+(?: with [^"]*)? comment "([^"]+)"',
+                                                    r["ruleset"])}
+        self.assertGreaterEqual(counts.get("TCP connection request: reset", 0), 1, r["ruleset"])
+        self.assertGreaterEqual(counts.get("UDP: port unreachable", 0), 2, r["ruleset"])
+        self.assertGreaterEqual(counts.get("other protocols and fragments without a transport header", 0), 1, r["ruleset"])
 
 
 if __name__ == "__main__":
