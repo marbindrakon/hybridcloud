@@ -22,7 +22,10 @@
       vars:
         fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hft_holder }}"}
 
+    # every step on a node runs within the lease (common/vars/fabric_lease.yml): a block keyword, evaluated again for
+    # each step; the includes set their own timeout, so the renewals and the SSH cleanup run even when it is short
     - name: Remove the root instance, one node at a time
+      timeout: "{{ fab_lease_step_timeout }}"
       block:
         - name: Connect to the border gateway nodes
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
@@ -30,27 +33,18 @@
             bgw_fabric_spec: "{{ fab_spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
-        # node_root_down.yml renews the lease before each node; every step on a node runs within the lease
-        # (common/vars/fabric_lease.yml): a block keyword, evaluated again for each step; the include is exempt, so the
-        # renewals inside run even when the lease is short
-        - name: The steps on the nodes, within the lease
-          timeout: "{{ fab_lease_step_timeout }}"
-          block:
-            - name: Remove the root instance from each node
-              ansible.builtin.include_tasks: node_root_down.yml
-              timeout: 0
-              loop: "{{ fab_spec.borderGateway.nodes }}"
-              loop_control:
-                loop_var: bgw_node
-                label: "{{ bgw_node.name }}"
+        # node_root_down.yml renews the lease before each node
+        - name: Remove the root instance from each node
+          ansible.builtin.include_tasks: node_root_down.yml
+          timeout: 0
+          loop: "{{ fab_spec.borderGateway.nodes }}"
+          loop_control:
+            loop_var: bgw_node
+            label: "{{ bgw_node.name }}"
       always:
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
-      # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the release in the
-      # role's rescue is skipped; any other failure releases it there at once
-      rescue:
-        - name: Keep the lease while a step may still run on a node
-          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
+          timeout: 0
 
     - name: Delete the configuration lease
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
@@ -80,6 +74,14 @@
         we_namespace: "{{ fab_namespace }}"
 
   rescue:
+    # a node step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml sets fab_lease_keep;
+    # the release below is then skipped, and the message says until when); any other failure releases it here at once
+    - name: Keep the lease while a step may still run on a node
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
+      vars:
+        fab_lease_keep_raise: false
+      when: fab_lease is defined
+
     - name: Release the lease
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
       vars:
@@ -99,7 +101,7 @@
           status: failed
           reason: TeardownFailed
           ready: false
-          message: "{{ ansible_failed_result.msg | default('HybridFabric teardown failed') }}"
+          message: "{{ fab_lease_keep_msg | default(ansible_failed_result.msg | default('HybridFabric teardown failed'), true) }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
       when: fab_name is defined and services_api_host is defined
       ignore_errors: true

@@ -355,27 +355,28 @@
       vars:
         fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}"}
 
+    # every step on a node runs within the lease (common/vars/fabric_lease.yml): a block keyword, evaluated again for
+    # each step; the includes and the lease tasks set their own timeout, so the renewals, the SSH cleanup and the
+    # release run even when the lease is short
     - name: Configure the nodes, one at a time
+      timeout: "{{ fab_lease_step_timeout }}"
       block:
-        # every step on a node runs within the lease (common/vars/fabric_lease.yml): a block keyword, evaluated again
-        # for each step; the include is exempt, so the renewals inside run even when the lease is short
-        - name: The steps on the nodes, within the lease
-          timeout: "{{ fab_lease_step_timeout }}"
-          block:
-            - name: Configure the root instance on each node
-              ansible.builtin.include_tasks: node_root.yml
-              timeout: 0
-              loop: "{{ fab_spec.borderGateway.nodes }}"
-              loop_control:
-                loop_var: bgw_node
-                label: "{{ bgw_node.name }}"
+        - name: Configure the root instance on each node
+          ansible.builtin.include_tasks: node_root.yml
+          timeout: 0
+          loop: "{{ fab_spec.borderGateway.nodes }}"
+          loop_control:
+            loop_var: bgw_node
+            label: "{{ bgw_node.name }}"
 
       always:
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+          timeout: 0
 
         - name: Release the lease
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+          timeout: 0
           vars:
             fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}"}
       # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the always block
@@ -383,6 +384,7 @@
       rescue:
         - name: Keep the lease while a step may still run on a node
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
+          timeout: 0
 
     - name: Set the egress status
       ansible.builtin.set_fact:

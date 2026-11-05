@@ -350,7 +350,11 @@
       vars:
         fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}"}
 
+    # every step on a node runs within the lease (common/vars/fabric_lease.yml): a block keyword, evaluated again for
+    # each step; the includes and the lease tasks set their own timeout, so the renewals, the SSH cleanup and the
+    # release run even when the lease is short
     - name: Configure the gateway on the nodes, one at a time
+      timeout: "{{ fab_lease_step_timeout }}"
       block:
         - name: Connect to the border gateway nodes
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
@@ -358,25 +362,22 @@
             bgw_fabric_spec: "{{ cg_fabric.spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
-        # node_gateway.yml renews the lease before each node, around the wait for the core and before its long steps;
-        # every step on a node runs within the lease (common/vars/fabric_lease.yml): a block keyword, evaluated again
-        # for each step; the include is exempt, so the renewals inside run even when the lease is short
-        - name: The steps on the nodes, within the lease
-          timeout: "{{ fab_lease_step_timeout }}"
-          block:
-            - name: Configure the gateway instance on each node
-              ansible.builtin.include_tasks: node_gateway.yml
-              timeout: 0
-              loop: "{{ cg_fabric.spec.borderGateway.nodes }}"
-              loop_control:
-                loop_var: bgw_node
-                label: "{{ bgw_node.name }}"
+        # node_gateway.yml renews the lease before each node, around the wait for the core and before its long steps
+        - name: Configure the gateway instance on each node
+          ansible.builtin.include_tasks: node_gateway.yml
+          timeout: 0
+          loop: "{{ cg_fabric.spec.borderGateway.nodes }}"
+          loop_control:
+            loop_var: bgw_node
+            label: "{{ bgw_node.name }}"
       always:
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+          timeout: 0
 
         - name: Release the lease
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+          timeout: 0
           vars:
             fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}"}
       # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the always block
@@ -384,6 +385,7 @@
       rescue:
         - name: Keep the lease while a step may still run on a node
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
+          timeout: 0
 
     - name: Give the platform-run edge the nodes' keys and the site key (aws)
       ansible.builtin.include_tasks: site_aws_post.yml

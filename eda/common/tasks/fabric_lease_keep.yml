@@ -13,7 +13,8 @@
 # - anything else (a step that returned an error, a step the lease was too short to start, a renewal that found the
 #   lease lost or could not reach the API): the step ended or never began, so the release goes ahead (it frees only a
 #   lease this job still holds).
-# Re-raises with the reason; the role's rescue reports it.
+# Sets fab_lease_keep_msg (the failure, and when the lease is kept, until when) and re-raises with it; with
+# fab_lease_keep_raise false (a role rescue that releases and reports itself) it only sets the facts.
 - name: Keep the lease while a timed-out step may still run on a node
   ansible.builtin.set_fact:
     fab_lease_keep: true
@@ -22,13 +23,19 @@
     or (ansible_failed_result.msg | default('') | string) is search('failed to execute in the expected time frame')
   timeout: 0
 
-- name: Stop the job
-  ansible.builtin.fail:
-    msg: >-
+- name: The reason
+  ansible.builtin.set_fact:
+    fab_lease_keep_msg: >-
       {{ ansible_failed_task.name | default('a node step') }}: {{ ansible_failed_result.msg | default('failed') }}{{
       ('. The step may still be running there: the border gateway configuration lease fabric-config-'
        ~ fab_lease.fabric ~ ' is kept until it runs out at '
        ~ ('%Y-%m-%dT%H:%M:%SZ' | strftime(fab_lease.until | float | int, utc=true))
        ~ ', so no other job changes the nodes before then')
       if fab_lease_keep | default(false) | bool and fab_lease is defined else '' }}
+  timeout: 0
+
+- name: Stop the job
+  ansible.builtin.fail:
+    msg: "{{ fab_lease_keep_msg }}"
+  when: fab_lease_keep_raise | default(true) | bool
   timeout: 0

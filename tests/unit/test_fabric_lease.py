@@ -588,6 +588,11 @@ HOLDERS = {
     "hybridfabric_teardown": ("main.yml", "Remove the root instance from each node", "node_root_down.yml",
                               "hft_holder", "fab_name"),
 }
+# the block around each holder's node loop, which carries the step limit
+LOOP_BLOCKS = {"hybridfabric_provision": "Configure the nodes, one at a time",
+               "cloudgateway_provision": "Configure the gateway on the nodes, one at a time",
+               "cloudgateway_teardown": "One node at a time",
+               "hybridfabric_teardown": "Remove the root instance, one node at a time"}
 # the long waits inside a node: a renewal right before and right after each
 LONG_WAITS = {
     "node_root.yml": "wait for BGP and IS-IS",
@@ -636,29 +641,37 @@ class HolderWiring(unittest.TestCase):
 
     def test_each_node_loop_runs_within_the_lease(self):
         # the step limit is a keyword of the block around the loop (evaluated for every step on both ansible-core
-        # 2.16 and later; an include's apply is templated once on later versions), the include itself exempt
+        # 2.16 and later; an include's apply is templated once on later versions); the include and every task of the
+        # block's rescue and always set their own timeout, so the renewals, the SSH cleanup and the release still run
         for role, (main, loop, node_file, _, _) in HOLDERS.items():
             with self.subTest(role=role):
                 tasks = load(os.path.join(ROLES, role, "tasks", main))
-                guard = by_name(tasks, "The steps on the nodes, within the lease")
-                self.assertEqual(guard["timeout"], STEP_TIMEOUT)
-                self.assertEqual([t.get("name") for t in guard["block"]], [loop])
-                inc = guard["block"][0]
+                block = by_name(tasks, LOOP_BLOCKS[role])
+                self.assertEqual(block["timeout"], STEP_TIMEOUT)
+                inc = by_name(block["block"], loop)
                 self.assertEqual(inc["ansible.builtin.include_tasks"], node_file)
                 self.assertEqual(inc["timeout"], 0)
                 self.assertEqual(inc["loop_control"]["loop_var"], "bgw_node")
-                self.assertNotIn("rescue", guard)
-                self.assertNotIn("always", guard)
+                for t in (block.get("rescue") or []) + block["always"]:
+                    self.assertEqual(t.get("timeout"), 0, t.get("name"))
 
     def test_a_timed_out_step_keeps_the_lease(self):
+        keep = "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
         for role in HOLDERS:
             with self.subTest(role=role):
                 tasks = load(os.path.join(ROLES, role, "tasks/main.yml"))
-                loop = next(t for t in walk(tasks) if any(x.get("name") == "The steps on the nodes, within the lease"
-                                                          for x in t.get("block") or []))
-                self.assertEqual([x.get("ansible.builtin.include_tasks") for x in loop["rescue"]],
-                                 ["{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"])
-                self.assertIn("Remove the SSH key", [x.get("name") for x in loop["always"]])
+                block = by_name(tasks, LOOP_BLOCKS[role])
+                self.assertIn("Remove the SSH key", [x.get("name") for x in block["always"]])
+                if role == "hybridfabric_teardown":
+                    # the release is in the role's rescue: the keep decision comes first there, without re-raising
+                    rescue = [x for x in tasks[0]["rescue"]]
+                    names = [x.get("name") for x in rescue]
+                    self.assertEqual(rescue[0]["ansible.builtin.include_tasks"], keep)
+                    self.assertIs(rescue[0]["vars"]["fab_lease_keep_raise"], False)
+                    self.assertLess(0, names.index("Release the lease"))
+                    self.assertNotIn("rescue", block)
+                else:
+                    self.assertEqual([x.get("ansible.builtin.include_tasks") for x in block["rescue"]], [keep])
 
     def test_the_renewals_set_their_own_timeout(self):
         # inside the node loops every task inherits the step limit; the renewals must still run when it is short
@@ -983,11 +996,11 @@ class FailureClasses(_Ledger):
                                                             "until": "{{ now().timestamp() + %d }}" % left},
                                               "bgw_keydir": {"path": keydir}}},
                 {"name": "the job", "block": [
-                    {"name": "Configure the nodes, one at a time",
-                     "block": [{"name": "The steps on the nodes, within the lease", "timeout": "{{ fab_lease_step_timeout }}",
-                                "block": [dict(step, name="bgw-1: the step")]}],
-                     "rescue": [self.include("fabric_lease_keep.yml")],
-                     "always": [self.include("bgw_disconnect.yml"), self.include("fabric_ledger.yml", fab_ledger=release)]}],
+                    {"name": "Configure the nodes, one at a time", "timeout": "{{ fab_lease_step_timeout }}",
+                     "block": [dict(step, name="bgw-1: the step")],
+                     "rescue": [dict(self.include("fabric_lease_keep.yml"), timeout=0)],
+                     "always": [dict(self.include("bgw_disconnect.yml"), timeout=0),
+                                dict(self.include("fabric_ledger.yml", fab_ledger=release), timeout=0)]}],
                  "rescue": [{"ansible.builtin.set_fact": {"_why": "{{ ansible_failed_result.msg }}"}}]},
                 write_out("{'why': _why | default(''), 'kept': fab_lease_keep | default(false), "
                           "'result': fab_ledger_result | default({})}")]
@@ -1032,6 +1045,33 @@ class FailureClasses(_Ledger):
         self.assertFalse(out["kept"])
         self.assertEqual(self.calls(), ["lease-release"])
         self.assertIn("too little for this step", out["why"])
+
+    def test_the_fabric_teardown_keeps_the_lease_from_its_role_rescue(self):
+        # the HybridFabric teardown releases in its role's rescue: the keep decision runs there first, without
+        # re-raising, and the status message carries its reason
+        release = {"action": "lease-release", "namespace": NS, "fabric": "lab", "holder": "A"}
+        for step, kept in (({"ansible.builtin.command": "sleep 10"}, True), ({"ansible.builtin.command": "false"}, False)):
+            with self.subTest(kept=kept):
+                if os.path.exists(self.helper + ".calls"):
+                    os.remove(self.helper + ".calls")
+                play = [{"ansible.builtin.include_vars": os.path.join(self.tmp, "common/vars/fabric_lease.yml")},
+                        {"ansible.builtin.set_fact": {"fab_lease": {"namespace": NS, "fabric": "lab", "holder": "A",
+                                                                    "until": "{{ now().timestamp() + 600 }}"}}},
+                        {"name": "the teardown", "block": [
+                            {"name": "Remove the root instance, one node at a time", "timeout": "{{ fab_lease_step_timeout }}",
+                             "block": [dict(step, name="bgw-1: the step")]}],
+                         "rescue": [dict(self.include("fabric_lease_keep.yml"), vars={"fab_lease_keep_raise": False}),
+                                    self.include("fabric_ledger.yml", fab_ledger=release),
+                                    {"ansible.builtin.set_fact": {"_status": "{{ fab_lease_keep_msg | default("
+                                                                  "ansible_failed_result.msg, true) }}"}}]},
+                        write_out("{'kept': fab_lease_keep | default(false), 'status': _status}")]
+                real = dict(self.real, nodes=dict(self.real["nodes"], configLease=dict(
+                    self.real["nodes"]["configLease"], stepTimeoutSeconds=2)))
+                out = self.run_tasks(play, {"fab_real": real})
+                self.assertEqual(out["kept"], kept)
+                self.assertEqual(self.calls(), [] if kept else ["lease-release"])
+                self.assertEqual("is kept until it runs out at " in out["status"], kept)
+                self.assertIn("bgw-1: the step: ", out["status"])
 
     def test_a_job_that_succeeds_releases(self):
         out = self.loop({"ansible.builtin.command": "true"})
