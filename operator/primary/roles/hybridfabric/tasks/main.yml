@@ -24,7 +24,7 @@
         hybridfabric_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (hybridfabric_observed_generation >= hybridfabric_generation)
+            and (hybridfabric_observed_generation | int >= hybridfabric_generation | int)
             and (hybridfabric_status == 'ready')
             and (hybridfabric_ready | bool)
           }}

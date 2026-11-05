@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from play_helper import HAVE_ANSIBLE, ROOT, by_name, load, run_play, walk, write_out  # noqa: E402
+from play_helper import HAVE_ANSIBLE, ROOT, by_name, load, run_cases, run_play, walk, write_out  # noqa: E402
 
 OPERATOR_COMMON = os.path.join(ROOT, "operator/roles/_common/tasks")
 FABRIC_ROLE = os.path.join(ROOT, "operator/primary/roles/hybridfabric/tasks/main.yml")
@@ -120,6 +120,44 @@ class Decisions(unittest.TestCase):
         self.assertFalse(self._ready_skip(annotation="true"))
         self.assertFalse(self._ready_skip(annotation="2026-11-04T17:00:00Z"))
         self.assertFalse(self._ready_skip(generation=2))
+
+    def _ready_skips(self, pairs, facts_as_text):
+        """The role's decision for a Ready fabric per (generation, observedGeneration), in one run.
+
+        facts_as_text: the CR facts as the operator's ansible-core (2.18, no native Jinja types) leaves them, the
+        generations as text. The local ansible-core keeps numbers, so the text is made explicitly after the role's
+        own fact step.
+        """
+        tasks = load(FABRIC_ROLE)
+        rr = load(os.path.join(OPERATOR_COMMON, "reconcile_request.yml"))
+        steps = [{"ansible.builtin.set_fact": {"reconcile_request_cr": "{{ case }}",
+                                               "_hybridsovereign_redhat_hybridfabric": "{{ case }}"}},
+                 by_name(tasks, "Set HybridFabric CR facts")] + rr
+        if facts_as_text:
+            steps.append({"ansible.builtin.set_fact": {
+                "hybridfabric_generation": "{{ hybridfabric_generation | string }}",
+                "hybridfabric_observed_generation": "{{ hybridfabric_observed_generation | string }}"}})
+        steps.append(by_name(tasks, "Set event action and reason"))
+        crs = [{"metadata": {"name": "lab", "generation": generation, "annotations": {}},
+                "status": {"observedGeneration": observed, "status": "ready", "ready": True,
+                           "lastHandledReconcileRequest": "2026-11-02T10:00:00Z"}}
+               for generation, observed in pairs]
+        skips = run_cases(steps, crs, "hybridfabric_skip_reconcile | bool")
+        return dict(zip(pairs, skips))
+
+    def test_a_spec_change_runs_across_a_digit_boundary(self):
+        """The generations compare as numbers. As text, observed 9 is not below generation 10 ("9" >= "10"), so a
+        Ready fabric skipped a spec change from 9 to 10 (also 99 to 100, and 9 to anything up to 89) and stayed
+        unprocessed until a wake. The operator's ansible-core makes the facts text; a spec change runs, the same
+        generation does not."""
+        changed = [(2, 1), (10, 9), (12, 9), (100, 99), (11, 10), (20, 3)]
+        unchanged = [(1, 1), (9, 9), (10, 10), (100, 100)]
+        for as_text in (False, True):
+            skips = self._ready_skips(changed + unchanged, as_text)
+            for pair in changed:
+                self.assertFalse(skips[pair], "generation %s, observed %s, facts as text %s" % (pair + (as_text,)))
+            for pair in unchanged:
+                self.assertTrue(skips[pair], "generation %s, observed %s, facts as text %s" % (pair + (as_text,)))
 
     def _deferred(self, annotations):
         step = by_name(load(os.path.join(FABRIC_JOB, "deferred_wakes.yml")), "Run the wakes that came during this job")
