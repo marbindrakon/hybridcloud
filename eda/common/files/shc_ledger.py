@@ -20,8 +20,14 @@ Ledger: ConfigMap fabric-ledger-<fabric> (key ledger.json) in the fabric's names
   whose label is not "0".
   ledger-get      {fabric}
 Lease: coordination.k8s.io Lease fabric-config-<fabric>, serializing the jobs that change the border gateway nodes.
+  The holder renews it before each node and around its long steps; a renewal that finds the lease no longer this
+  job's stops the job before it changes a node again.
   lease-acquire   {fabric, holder, duration (s, default 1800), wait (s, default 1200)}
-  lease-release   {fabric, holder}
+  lease-renew     {fabric, holder, step (what the job does next, for the message)}: renewTime = now, by the holder
+                  only, at the resourceVersion read; {"error": ...} when the lease is no longer this job's (taken over,
+                  released or deleted) or the API did not answer within RENEW_BUDGET s: the job must stop there
+  lease-release   {fabric, holder, delete (bool)}: frees the lease (delete: deletes it, at the resourceVersion read)
+                  only while this job holds it
 """
 import datetime
 import json
@@ -47,15 +53,22 @@ class Api:
     def __init__(self, req):
         self.base = req["api"].rstrip("/")
         self.h = {"Authorization": f"Bearer {req['token']}", "Content-Type": "application/json"}
+        # time.time() after which no request is sent or repeated (a lease renewal's budget); None: no limit
+        self.deadline = None
 
     def call(self, method, path, body=None, content_type=None):
         h = {**self.h, "Content-Type": content_type} if content_type else self.h
         for pause in self.RETRY_PAUSES + (None,):
+            timeout = 30
+            if self.deadline is not None:
+                timeout = min(30.0, self.deadline - time.time())
+                if timeout <= 0:
+                    raise requests.exceptions.Timeout("no answer within the time allowed")
             try:
                 r = requests.request(method, self.base + path, headers=h, data=json.dumps(body) if body else None,
-                                     verify=False, timeout=30)
+                                     verify=False, timeout=timeout)
             except requests.exceptions.ConnectionError:
-                if pause is None:
+                if pause is None or (self.deadline is not None and time.time() + pause >= self.deadline):
                     raise
                 time.sleep(pause)
                 continue
@@ -236,16 +249,41 @@ def ledger_get(api, req):
 
 
 def now():
-    return datetime.datetime.now(datetime.timezone.utc)
+    # from time.time(), so one clock drives the lease times and the waits (the tests replace it)
+    return datetime.datetime.fromtimestamp(time.time(), datetime.timezone.utc)
 
 
 def ts(t):
     return t.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def parse_ts(v):
+    """A Lease time (RFC 3339 MicroTime, also without the fraction) as an aware datetime."""
+    v = str(v).replace("Z", "+0000")
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return datetime.datetime.strptime(v, fmt)
+        except ValueError:
+            pass
+    raise ValueError(f"unreadable lease time {v!r}")
+
+
 def lease_path(ns, name=None):
     p = f"/apis/coordination.k8s.io/v1/namespaces/{ns}/leases"
     return p + (f"/{name}" if name else "")
+
+
+# s a lease renewal may take, its retries included; past that it fails and the job stops before its next step
+RENEW_BUDGET = 60
+
+
+class LeaseLost(RuntimeError):
+    """The lease is no longer this job's: it must not change the border gateway nodes again."""
+
+
+def lease_age(spec):
+    """Seconds since the lease was last renewed; None when it carries no renewTime."""
+    return (now() - parse_ts(spec["renewTime"])).total_seconds() if spec.get("renewTime") else None
 
 
 def lease_acquire(api, req):
@@ -285,18 +323,77 @@ def lease_acquire(api, req):
         time.sleep(15)
 
 
+def lease_lost(name, spec, stop):
+    cur = spec.get("holderIdentity") or ""
+    if cur:
+        return (f"the border gateway configuration lease {name} was taken over by {cur} at "
+                f"{spec.get('acquireTime') or 'an unknown time'}: this job had not renewed it within its duration. {stop}")
+    return (f"the border gateway configuration lease {name} is no longer held by this job: another job took it over "
+            f"after this job's renewals stopped, and has released it since. {stop}")
+
+
+def lease_renew(api, req):
+    """renewTime = now on the lease this job holds, at the resourceVersion read. Raises when the lease is no longer
+    this job's or the API does not answer within RENEW_BUDGET s: the job then stops before its next step on the nodes.
+    A lease that went past its duration but is still this job's is renewed: nobody took it in between (a takeover
+    writes another holder, and only a release clears it), so this job still is the only one on the nodes."""
+    name, holder = f"fabric-config-{req['fabric']}", req["holder"]
+    stop = (f"Stopped before {req.get('step') or 'its next step on the nodes'} so that two jobs never change the "
+            "border gateway nodes at the same time; the next run repeats this job's work.")
+    api.deadline = time.time() + RENEW_BUDGET
+    try:
+        for _ in range(5):
+            code, lease = api.call("GET", lease_path(req["namespace"], name))
+            if code == 404:
+                raise LeaseLost(f"the border gateway configuration lease {name} no longer exists: it was deleted while "
+                                f"this job held it. {stop}")
+            if code != 200:
+                raise RuntimeError(f"reading lease {name}: HTTP {code} {lease.get('message', '')}")
+            s = lease.get("spec") or {}
+            if (s.get("holderIdentity") or "") != holder:
+                raise LeaseLost(lease_lost(name, s, stop))
+            lasts = int(s.get("leaseDurationSeconds") or 1800)
+            age = lease_age(s)
+            s["renewTime"] = ts(now())
+            lease["spec"] = s
+            code, out = api.call("PUT", lease_path(req["namespace"], name), lease)
+            if code == 200:
+                return {"renewed": True, "lease": name, "sinceLastRenewal": None if age is None else round(age),
+                        "lapsed": age is not None and age > lasts}
+            # 409: the lease changed since the read (a takeover, or this job's own renewal sent twice): read it again
+            if code != 409:
+                raise RuntimeError(f"renewing lease {name}: HTTP {code} {out.get('message', '')}")
+        raise RuntimeError(f"lease {name} kept changing underneath (5 conflicts)")
+    except LeaseLost:
+        raise
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"could not renew the border gateway configuration lease {name}: the API did not answer "
+                           f"within {RENEW_BUDGET} s ({e}). {stop}") from e
+    except Exception as e:  # noqa: BLE001 - an unconfirmed lease stops the job like a lost one
+        raise RuntimeError(f"could not renew the border gateway configuration lease {name}: {e}. {stop}") from e
+    finally:
+        api.deadline = None
+
+
 def lease_release(api, req):
     name, holder = f"fabric-config-{req['fabric']}", req["holder"]
     code, lease = api.call("GET", lease_path(req["namespace"], name))
     if code != 200 or (lease.get("spec") or {}).get("holderIdentity") != holder:
         return {"released": False}
+    if req.get("delete"):
+        md = lease.get("metadata") or {}
+        pre = {k: md[k] for k in ("uid", "resourceVersion") if md.get(k)}
+        code, out = api.call("DELETE", lease_path(req["namespace"], name),
+                             {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": pre})
+        return {"released": code in (200, 202), "deleted": code in (200, 202)}
     lease["spec"]["holderIdentity"] = None
     code, out = api.call("PUT", lease_path(req["namespace"], name), lease)
     return {"released": code == 200}
 
 
 ACTIONS = {"ledger-ensure": ledger_ensure, "ledger-allocate": ledger_allocate, "ledger-release": ledger_release,
-           "ledger-get": ledger_get, "lease-acquire": lease_acquire, "lease-release": lease_release}
+           "ledger-get": ledger_get, "lease-acquire": lease_acquire, "lease-renew": lease_renew,
+           "lease-release": lease_release}
 
 
 def main():
