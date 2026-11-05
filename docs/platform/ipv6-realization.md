@@ -524,7 +524,9 @@ Run the fabric job (Retry now on the HybridFabric) after changing an entry.
   guests through the placement's status and the console's cloud-init snippet (the placement page builds `networkData`
   that finds the VM's NIC by the MAC address the tenant gives the VM's interface, which the page proposes, with
   `dhcp4: false` and the resolvers as `nameservers`, and user data that configures clatd with the placement's
-  `pref64` as `plat-prefix` and keeps the guest on those resolvers), which the tenant copies into the VM. Guests on
+  `pref64` as `plat-prefix` and keeps the guest on those resolvers), which the tenant copies into the VM: the network
+  data inline in the VM's cloud-init volume, the user data in a Secret that the volume references (`secretRef`), as
+  KubeVirt refuses more than 2048 bytes of user data inline and this user data is about 3.6 KB. Guests on
   IPv6-only placements use the translation resolvers only; cluster-internal names (services, other VMs by name) are
   not resolved there. OVN-Kubernetes also hands every guest the cluster's DNS service (`dns-default` in
   `openshift-dns`) over DHCPv6 once that service is dual-stack, and that resolver does no DNS64. A guest that keeps

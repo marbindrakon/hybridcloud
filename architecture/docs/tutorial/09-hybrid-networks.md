@@ -344,7 +344,8 @@ spec:
   interface identifiers gets no IPv6 address. Some images do that by default (RHEL with NetworkManager, Windows).
 - Always give cloud-init `networkData` with `dhcp6: true` (without it, cloud-init may leave IPv6 off), and let it
   find the VM's NIC by its MAC address. Give the VM's interface an address of your own, so that it is known when you
-  write the network data (cloud-init applies `networkData` at the first boot), and match that address:
+  write the network data (cloud-init applies `networkData` at the first boot), and match that address in the network
+  data of the VM's cloud-init volume:
   ```yaml
   # in the VM, under spec.template.spec
   domain:
@@ -353,19 +354,27 @@ spec:
         - name: default
           binding: {name: l2bridge}
           macAddress: "02:00:00:00:00:01"           # locally administered, a different one for every VM
+      disks:
+        - name: cloudinitdisk
+          disk: {bus: virtio}
   networks:
     - name: default
       pod: {}
+  volumes:
+    - name: cloudinitdisk
+      cloudInitNoCloud:
+        secretRef:
+          name: core-virt1-cloud-init               # the user data, in a Secret (below)
+        networkData: |
+          version: 2
+          ethernets:
+            primary:
+              match: {macaddress: "02:00:00:00:00:01"}
+              dhcp4: true
+              dhcp6: true
   ```
-  ```yaml
-  # the VM's networkData
-  version: 2
-  ethernets:
-    primary:
-      match: {macaddress: "02:00:00:00:00:01"}     # the same address, lowercase and quoted
-      dhcp4: true                                   # false on an IPv6-only placement
-      dhcp6: true
-  ```
+  The network data's MAC address is the interface's, lowercase and quoted; `dhcp4` is `false` on an IPv6-only
+  placement.
   Don't name the interface: images name it differently (`eth0` on some, `enp1s0` on others). cloud-init's
   NetworkManager and sysconfig renderers (Fedora, RHEL) bind an entry to its MAC address, or else to the interface
   whose name is exactly the entry's key; they ignore `match: {name: ...}`, a pattern or not. An entry that binds to
@@ -374,6 +383,33 @@ spec:
   Leave out `set-name`: the match alone binds, and the guest keeps its own name for the NIC. A VM with more than one
   NIC needs one entry per NIC, each with that NIC's MAC address. The placement page offers this snippet built from
   the placement's status, with a MAC address it proposes (a new one on each visit) or one you enter.
+- **Put the user data in a Secret.** KubeVirt refuses a VM whose cloud-init volume carries more than 2048 bytes of
+  user data inline (`userData`, or `userDataBase64` once decoded), and the same for network data. The user data the
+  placement page offers on IPv6-only placements with translation is larger (clatd and the `ignore-auto-dns` step,
+  below), so keep it in a Secret in the VM's namespace under the key `userdata` and reference it with `secretRef`, as
+  above; the network data stays inline (it is far smaller). One Secret serves every VM on the placement, since the
+  user data is the same for all of them. The placement page shows the Secret ready to apply
+  (`oc apply -n <namespace> -f <file>` before you start the VM):
+  ```yaml
+  apiVersion: v1
+  kind: Secret
+  metadata:
+    name: core-virt1-cloud-init
+    namespace: example-corp-virt1-vms
+  type: Opaque
+  stringData:
+    userdata: |
+      #cloud-config
+      packages: [clatd]
+      write_files:
+        - path: /etc/clatd.conf
+          content: |
+            plat-prefix=2001:db8:64::/96
+      runcmd:
+        - [systemctl, enable, --now, clatd]
+  ```
+  This example has clatd only; the page's user data adds the `ignore-auto-dns` script and unit. Network data over
+  the limit would go into the same Secret under `networkdata`, referenced with `networkDataSecretRef`.
 - **RHEL images:** also switch the interface's profile to EUI-64 at first boot, in case NetworkManager's default
   profile has taken the interface (no network data, or none that matches the NIC); a `NetworkManager.conf` default
   for `ipv6.addr-gen-mode` is not enough on these images, the profile itself has to change. The DHCPv6 lease arrives
@@ -475,8 +511,8 @@ spec:
 - On OpenStack the placement's IPv6 subnet hands the resolvers out (DHCPv6 and the config drive). On OpenShift
   Virtualization they come from the placement's status: the placement page offers cloud-init `networkData` (matched
   to the VM's interface by its MAC address) and user data built from it (clatd, and the guest kept on the translation
-  resolvers, see [Guests on IPv6](#guests-on-ipv6)), to copy into the VM. Names inside the cluster (services, other
-  VMs) are not resolved on IPv6-only placements.
+  resolvers, see [Guests on IPv6](#guests-on-ipv6)), to copy into the VM, the user data in a Secret. Names inside the
+  cluster (services, other VMs) are not resolved on IPv6-only placements.
 - A guest that validates DNSSEC itself gets no translated addresses for signed IPv4-only names. Reach those by an
   IPv4 address through the CLAT, or let the resolver validate.
 
@@ -563,8 +599,10 @@ Tenants:
   path and, on IPv6-only placements with translation, the translation prefix and resolvers. Placements with an IPv6
   subnet also offer a cloud-init snippet to copy ([Guests on IPv6](#guests-on-ipv6)). On OpenShift Virtualization
   placements it has a MAC address for the VM's interface (proposed anew on each visit, or one you enter), the VM
-  interface with that address and the network data that matches it. On IPv6-only placements with translation it
-  also has user data: clatd, and the guest kept on the translation resolvers (`ignore-auto-dns`). On OpenStack, AWS and
+  interface with that address and the VM's cloud-init volume with the network data that matches it. On IPv6-only
+  placements with translation it also has user data, clatd and the guest kept on the translation resolvers
+  (`ignore-auto-dns`), as a Secret ready to apply that the volume references (KubeVirt takes at most 2048 bytes of
+  user data inline). On OpenStack, AWS and
   Google Cloud placements the cloud provides the guest's network configuration and its resolvers (on OpenStack, the
   placement's subnet by DHCPv6 and the config drive; on AWS, the VPC's DHCP options), so the snippet has only user
   data for clatd and is not shown when there is none.
