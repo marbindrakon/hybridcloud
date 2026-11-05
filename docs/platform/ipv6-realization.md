@@ -247,17 +247,23 @@ attachment propagates into the network's route table there) and announce it to t
 route in the placement's VRF, like the IPv4 prefix ([Transport](#transport-dual-stack-core); the routers' IPv6 is the
 AWS realization's `edge.ipv6`). A provider-assigned block is also recorded in the network's IPAM state in the fabric's
 ledger as a provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`; the network's
-`status.addressSpace` does not list it): the placement's `status.subnets` then carries it with `source: Provider`, the
-gateway's route check waits for it like for an allocated prefix, and the network's placements in VM and OpenStack
-environments reach it through the fabric. A cloud edge router never announces another cloud site's provider-assigned
-block toward its own cloud, so two provider-source placements of one network on different cloud sites reach each other
-over the internet, in both directions.
+`status.addressSpace` does not list it, its read-only `status.ipv6.providerPrefixes` does): the placement's
+`status.subnets` then carries it with `source: Provider`, the gateway's route check waits for it like for an allocated
+prefix, and the network's placements in VM and OpenStack environments reach it through the fabric. A cloud edge
+router never announces another cloud site's provider-assigned block toward its own cloud, so two provider-source
+placements of one network on different cloud sites reach each other over the internet, in both directions.
 
 **What the tenant sees.** `status.subnets` has a family-6 row `{family: 6, prefix, source}` (no gateway: AWS keeps
 the subnet's router addresses); `status.ipv6` has `addressing` and `internet` with its `path`;
 `status.realization.site.ipv6` records `source`, `prefix`, the /64s per zone, the pool and IPAM (source `Network`) or
 the egress-only internet gateway (source `Provider`), and the IPv6 routes of the VPC. A re-run creates nothing: the
 VPC, its block and the routes are kept, and the VPC's IPv6 routes are set back to exactly the set above.
+On the network, `status.ipv6.providerPrefixes` lists the /56 of each placement with source `Provider` as
+`{prefix, placement, site}` (the /64s per zone stay on the placement): for reading only, it is not part of
+`status.addressSpace`, and neither the IPAM's allocations, the attachment circuits' address check nor the fabric's
+announcements and egress filters read it. The network job writes it from its placements' `status.subnets`; a
+placement whose provider subnet came, went or changed wakes the network, and so does a completed placement teardown.
+The field is absent while no placement has a provider subnet.
 
 **Costs.** IPAM Free Tier is free, private GUA included. Source `Network` sends the placement's internet and
 inter-site traffic through the fabric: the round trip to the site gateway adds latency, and AWS charges data
@@ -369,11 +375,12 @@ is the only one offered (`placement.ipv6.sources.CloudGCP`) and the default (`pl
 **What the fabric sees.** The edge routers learn the /64 from the Cloud Router and announce it to the site gateway as
 an EVPN Type-5 route in the placement's VRF, like the IPv4 prefix. The /64 is recorded in the network's IPAM state in
 the fabric's ledger as a provider-assigned subnet (the IPAM's `external` entries, action `ipam-external`; the
-network's `status.addressSpace` does not list it): the placement's `status.subnets` then carries it with `source:
-Provider`, the gateway's route check waits for it like for an allocated prefix, and the network's placements in VM and
-OpenStack environments reach it through the fabric. The routers announce the network's IPv6 space toward the VPC,
-never a default route, and never another cloud site's provider-assigned range: two provider-source placements of one
-network on different cloud sites reach each other over the internet, in both directions.
+network's `status.addressSpace` does not list it, its read-only `status.ipv6.providerPrefixes` does, as for AWS):
+the placement's `status.subnets` then carries it with `source: Provider`, the gateway's route check waits for it like
+for an allocated prefix, and the network's placements in VM and OpenStack environments reach it through the fabric.
+The routers announce the network's IPv6 space toward the VPC, never a default route, and never another cloud site's
+provider-assigned range: two provider-source placements of one network on different cloud sites reach each other over
+the internet, in both directions.
 
 **What the tenant sees.** `status.subnets` has a family-6 row `{family: 6, prefix, source: Provider}` (no gateway:
 Google's subnet router answers); `status.ipv6` has `addressing` (`DHCPv6`) and `internet` with its `path`;

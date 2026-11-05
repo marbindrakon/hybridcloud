@@ -309,6 +309,12 @@ spec:
   address (`addressing`: `DHCPv6` or `SLAAC`), the internet path (`internet.path`: `Fabric` or `Provider`) and, for
   IPv6-only placements with translation, `translation`. With path `Fabric`, `internet` is the network's IPv6 row of
   `status.egress.families` as it was at the placement's last run; the network's row is the current one.
+- The network lists the IPv6 subnets the cloud providers assigned to its placements (source `Provider`) in
+  `status.ipv6.providerPrefixes`, one entry per subnet with its `prefix`, `placement` and `site`: an AWS placement's
+  /56 (its /64 per zone stays on the placement), a Google Cloud placement's /64. The list is for reading: those
+  subnets are not part of the network's address space (`status.addressSpace`) and nothing is allocated from them.
+  It follows the placements (a new provider subnet appears at the latest when its placement is ready, an entry goes
+  once its placement's deletion is complete) and is absent while no placement has one.
 - **Where IPv6 is offered:** a site offers IPv6 placements only once the platform team has turned IPv6 on for it,
   and some sites offer IPv6-only placements or only some sources. Elsewhere the placement fails with
   `FamilyUnavailable` before anything is allocated, and the message names what is missing:
@@ -524,7 +530,7 @@ Tenants:
   specific block), **My own prefixes** (your GUA or ULA prefixes) and **None**. **From the platform** is preselected
   when the form can tell that the fabric offers platform IPv6, otherwise **None**; no prefix is filled in for you. Once the network has
   placements the choice is locked, with the reason. The detail page shows the IPv6 mode in the form's words
-  (**From the platform**, **My own prefixes** or **None**), the address space in use with a source column (yours or the platform's), the effective MTU, placements ready, internet egress per family
+  (**From the platform**, **My own prefixes** or **None**), the address space in use with a source column (yours or the platform's), below it the IPv6 from the cloud provider per network placement and site (read-only), the effective MTU, placements ready, internet egress per family
   with its reason (for example "IPv6 internet: not offered for tenant-provided prefixes") and, collapsed, the
   realization (platform detail).
 - **Networks → Network placements**, or **Attach network** on an environment or network page: create (network,
