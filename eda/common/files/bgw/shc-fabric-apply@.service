@@ -11,6 +11,9 @@ Before=frr.service network.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/shc-fabric-apply %i up
+# a oneshot start has no time limit by default: bound it (its waits for interfaces take up to 90 s each), so a start
+# the platform's jobs begin ends within the time their lease allows for a systemd job (nodes.configLease)
+TimeoutStartSec=5min
 
 [Install]
 WantedBy=multi-user.target

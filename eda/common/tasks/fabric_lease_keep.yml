@@ -1,0 +1,34 @@
+---
+# shc: the rescue of a holder's node loop (the lease fabric-config-<fabric>), before its always block releases the
+# lease. Which failures leave the nodes quiet decides whether the lease may go at once:
+# - a step that ran past its timeout: ansible stops waiting but not the work (ansible-core 2.19 and later mark it with
+#   ansible_failed_result.timedout; 2.16 only says so in the message, "failed to execute in the expected time frame"). The
+#   command goes on until this job ends its SSH sessions (bgw_disconnect.yml, first thing in the always block), and a
+#   systemd job it started runs on until its unit's own limit. The lease is kept (fab_lease_keep: the release is
+#   skipped) and runs out by itself at fab_lease.until; every step starts only with enough of the lease left for all
+#   it can still do on the node (common/vars/fabric_lease.yml, fabric_lease_ensure.yml), so nothing of it outlives
+#   the lease.
+# - a node that stopped answering mid-step: ansible ends the job there (no rescue, no always), so the lease is kept
+#   the same way, and the operator's in-flight limit runs the object again.
+# - anything else (a step that returned an error, a step the lease was too short to start, a renewal that found the
+#   lease lost or could not reach the API): the step ended or never began, so the release goes ahead (it frees only a
+#   lease this job still holds).
+# Re-raises with the reason; the role's rescue reports it.
+- name: Keep the lease while a timed-out step may still run on a node
+  ansible.builtin.set_fact:
+    fab_lease_keep: true
+  when: >-
+    ansible_failed_result.timedout is defined
+    or (ansible_failed_result.msg | default('') | string) is search('failed to execute in the expected time frame')
+  timeout: 0
+
+- name: Stop the job
+  ansible.builtin.fail:
+    msg: >-
+      {{ ansible_failed_task.name | default('a node step') }}: {{ ansible_failed_result.msg | default('failed') }}{{
+      ('. The step may still be running there: the border gateway configuration lease fabric-config-'
+       ~ fab_lease.fabric ~ ' is kept until it runs out at '
+       ~ ('%Y-%m-%dT%H:%M:%SZ' | strftime(fab_lease.until | float | int, utc=true))
+       ~ ', so no other job changes the nodes before then')
+      if fab_lease_keep | default(false) | bool and fab_lease is defined else '' }}
+  timeout: 0

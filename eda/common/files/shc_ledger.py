@@ -24,19 +24,26 @@ Lease: coordination.k8s.io Lease fabric-config-<fabric>, serializing the jobs th
   crashed or hangs) is taken over by a job waiting for it; the former holder then stops at its next renewal, before
   it changes a node again. Expiry is judged by the duration the lease itself carries, so a lease written with another
   duration (an older job, another installation's value) keeps its own.
-  lease-acquire   {fabric, holder, duration (s, default 600), wait (s, default 1200), stepTimeout (s, default 180)}
-                  refused unless wait > duration and duration >= stepTimeout + 2 x RENEW_BUDGET + LEASE_SEGMENT: the
-                  longest time a live holder can go between two renewals (the node steps between them, one step that
-                  hangs until its timeout, the two renewals) must stay below the duration
+  lease-acquire   {fabric, holder, duration (s, default 600), wait (s, default 1200), stepTimeout (s, default 180),
+                  systemdJob (s, default 360)}: each a positive whole number of seconds (an explicit null, 0 or text is
+                  refused, never replaced by the default). Refused unless wait > duration + LEASE_POLL and duration >=
+                  max(stepTimeout, systemdJob) + LEASE_MARGIN + RENEW_BUDGET: right after a renewal (which may take
+                  RENEW_BUDGET), the lease must still outlast the longest a node step's work can run on the node (its
+                  timeout, or a systemd job it started) plus the margin. Returns renewedAt (epoch s, this host's clock)
+                  and duration, from which the job tracks how much of its lease is left
   lease-renew     {fabric, holder, step (what the job does next, for the message)}: renewTime = now, by the holder
                   only, at the resourceVersion read; {"error": ...} when the lease is no longer this job's (taken over,
-                  released or deleted) or the API did not answer within RENEW_BUDGET s: the job must stop there
+                  released or deleted) or the API did not answer within RENEW_BUDGET s (a hard limit: an interval timer
+                  ends the renewal however the requests stall): the job must stop there. Returns renewedAt and
+                  duration like lease-acquire, and lapsed: true when the lease had run past its duration (still this
+                  job's, so nobody else held it; it means the job went longer than the duration without a renewal)
   lease-release   {fabric, holder, delete (bool)}: frees the lease (delete: deletes it, at the resourceVersion read)
                   only while this job holds it
 """
 import datetime
 import json
 import random
+import signal
 import sys
 import time
 
@@ -279,14 +286,21 @@ def lease_path(ns, name=None):
 
 
 # The border gateway lease. The defaults are the realization's nodes.configLease, which every holder passes in; the
-# numbers rest on the holders' recorded step times (a node's steps between two renewals took at most 46 s, the
-# longest wait between two renewals 201 s, a single step at most 19 s).
+# numbers rest on the holders' recorded step times (a single step at most 19 s, a node's steps between two renewals
+# at most 46 s, the longest wait between two renewals 201 s) and on the node units' own limits.
 LEASE_DURATION = 600      # s without a renewal before a waiting job may take the lease over
 LEASE_WAIT = 1200         # s a job waits for the lease before it gives up: longer than the duration
-LEASE_STEP_TIMEOUT = 180  # s one step on a node may take: the holders run their node tasks with this timeout
+LEASE_STEP_TIMEOUT = 180  # s one attempt of a node step may take (the holders' step timeout, cut to the lease's life)
+LEASE_SYSTEMD_JOB = 360   # s a systemd job a node step starts can run on the node (TimeoutSec=2m units: a restart's
+#                           stop up to 2 x 2 min before SIGKILL, then its start up to 2 min)
 RENEW_BUDGET = 60         # s a renewal may take, its retries included; past that it fails and the job stops
-LEASE_SEGMENT = 60        # s the node steps between two renewals may take when none of them hangs
+LEASE_MARGIN = 60         # s kept between a step's last possible work on a node and the lease's end: this job ending
+#                           its SSH sessions after a timeout (15 s) and the clocks of two pods disagreeing (45 s)
 LEASE_POLL = 15           # s between two looks at a busy lease
+# the realization keys of the request's numbers, for the messages
+LEASE_KEYS = {"duration": ("durationSeconds", LEASE_DURATION), "wait": ("waitSeconds", LEASE_WAIT),
+              "stepTimeout": ("stepTimeoutSeconds", LEASE_STEP_TIMEOUT),
+              "systemdJob": ("systemdJobSeconds", LEASE_SYSTEMD_JOB)}
 
 
 class LeaseLost(RuntimeError):
@@ -298,21 +312,37 @@ def lease_age(spec):
     return (now() - parse_ts(spec["renewTime"])).total_seconds() if spec.get("renewTime") else None
 
 
+def lease_number(req, arg):
+    """A request's lease number: a positive whole number of seconds; absent: the default. An explicit null, 0, a
+    fraction or text is refused (never quietly replaced by the default, which the step timeout would not follow)."""
+    key, default = LEASE_KEYS[arg]
+    if arg not in req:
+        return default
+    v = req[arg]
+    if isinstance(v, str) and v.strip().isdigit():
+        v = int(v.strip())
+    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+        raise RuntimeError(f"nodes.configLease.{key} must be a positive whole number of seconds, not {v!r}")
+    return v
+
+
 def lease_limits(req):
-    """(duration, wait) of an acquire, refused when a live holder could lose the lease or a waiter outlast it."""
-    dur = int(req.get("duration") or LEASE_DURATION)
-    wait = int(req.get("wait") or LEASE_WAIT)
-    step = int(req.get("stepTimeout") or LEASE_STEP_TIMEOUT)
-    floor = step + 2 * RENEW_BUDGET + LEASE_SEGMENT
+    """(duration, wait) of an acquire, refused when a node step's work could outlive the lease or a waiter could
+    give up before a dead holder's lease runs out."""
+    dur, wait = lease_number(req, "duration"), lease_number(req, "wait")
+    step, job = lease_number(req, "stepTimeout"), lease_number(req, "systemdJob")
+    floor = max(step, job) + LEASE_MARGIN + RENEW_BUDGET
     if dur < floor:
         raise RuntimeError(
-            f"the border gateway lease duration {dur} s is too short: a job holding it may go {floor} s between two "
-            f"renewals (one step until its {step} s timeout, {LEASE_SEGMENT} s of other steps, two renewals of up to "
-            f"{RENEW_BUDGET} s); set nodes.configLease.durationSeconds to at least {floor}")
-    if wait <= dur:
+            f"the border gateway lease duration {dur} s is too short: right after a renewal (up to {RENEW_BUDGET} s) "
+            f"it must still outlast the longest a node step's work can run on a node (a {step} s step timeout, a "
+            f"{job} s systemd job) plus a {LEASE_MARGIN} s margin; set nodes.configLease.durationSeconds to at least "
+            f"{floor}")
+    if wait <= dur + LEASE_POLL:
         raise RuntimeError(
-            f"the border gateway lease wait {wait} s must be longer than its duration {dur} s, or a job waiting behind "
-            "a holder that crashed gives up before the lease runs out; raise nodes.configLease.waitSeconds")
+            f"the border gateway lease wait {wait} s must be longer than its duration {dur} s and one {LEASE_POLL} s "
+            "look, or a job waiting behind a holder that crashed gives up before the lease runs out; raise "
+            "nodes.configLease.waitSeconds")
     return dur, wait
 
 
@@ -322,14 +352,16 @@ def lease_acquire(api, req):
     deadline = time.time() + wait
     while True:
         code, lease = api.call("GET", lease_path(req["namespace"], name))
-        stamp = ts(now())
+        at = now()
+        stamp = ts(at)
         spec = {"holderIdentity": holder, "leaseDurationSeconds": dur, "acquireTime": stamp, "renewTime": stamp}
+        held = {"renewedAt": at.timestamp(), "duration": dur}
         if code == 404:
             code, out = api.call("POST", lease_path(req["namespace"]), {
                 "apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
                 "metadata": {"name": name, "namespace": req["namespace"]}, "spec": spec})
             if code in (200, 201):
-                return {"acquired": True, "lease": name}
+                return {"acquired": True, "lease": name, **held}
             if code != 409:
                 raise RuntimeError(f"creating lease {name}: HTTP {code} {out.get('message', '')}")
             continue
@@ -346,7 +378,7 @@ def lease_acquire(api, req):
             code, out = api.call("PUT", lease_path(req["namespace"], name), lease)
             if code == 200:
                 took = cur if cur and cur != holder else ""
-                return {"acquired": True, "lease": name, "tookOverFrom": took,
+                return {"acquired": True, "lease": name, "tookOverFrom": took, **held,
                         **({"notRenewedFor": round(age)} if took and age is not None else {})}
             if code != 409:
                 raise RuntimeError(f"taking lease {name}: HTTP {code} {out.get('message', '')}")
@@ -367,6 +399,14 @@ def lease_lost(name, spec, stop):
             f"after this job's renewals stopped, and has released it since. {stop}")
 
 
+class RenewOverdue(requests.exceptions.Timeout):
+    """The renewal ran out of its budget (the interval timer fired)."""
+
+
+def _renew_overdue(signum, frame):
+    raise RenewOverdue(f"no answer within the {RENEW_BUDGET} s a renewal may take")
+
+
 def lease_renew(api, req):
     """renewTime = now on the lease this job holds, at the resourceVersion read. Raises when the lease is no longer
     this job's or the API does not answer within RENEW_BUDGET s: the job then stops before its next step on the nodes.
@@ -376,6 +416,10 @@ def lease_renew(api, req):
     stop = (f"Stopped before {req.get('step') or 'its next step on the nodes'} so that two jobs never change the "
             "border gateway nodes at the same time; the next run repeats this job's work.")
     api.deadline = time.time() + RENEW_BUDGET
+    # the hard limit: requests applies its timeout to the connect and to each read on its own, so the deadline alone
+    # bounds a renewal only to about twice what is left of it
+    signal.signal(signal.SIGALRM, _renew_overdue)
+    signal.setitimer(signal.ITIMER_REAL, RENEW_BUDGET)
     try:
         for _ in range(5):
             code, lease = api.call("GET", lease_path(req["namespace"], name))
@@ -389,12 +433,13 @@ def lease_renew(api, req):
                 raise LeaseLost(lease_lost(name, s, stop))
             lasts = int(s.get("leaseDurationSeconds") or LEASE_DURATION)
             age = lease_age(s)
-            s["renewTime"] = ts(now())
+            at = now()
+            s["renewTime"] = ts(at)
             lease["spec"] = s
             code, out = api.call("PUT", lease_path(req["namespace"], name), lease)
             if code == 200:
                 return {"renewed": True, "lease": name, "sinceLastRenewal": None if age is None else round(age),
-                        "lapsed": age is not None and age > lasts}
+                        "lapsed": age is not None and age > lasts, "renewedAt": at.timestamp(), "duration": lasts}
             # 409: the lease changed since the read (a takeover, or this job's own renewal sent twice): read it again
             if code != 409:
                 raise RuntimeError(f"renewing lease {name}: HTTP {code} {out.get('message', '')}")
@@ -407,6 +452,7 @@ def lease_renew(api, req):
     except Exception as e:  # noqa: BLE001 - an unconfirmed lease stops the job like a lost one
         raise RuntimeError(f"could not renew the border gateway configuration lease {name}: {e}. {stop}") from e
     finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
         api.deadline = None
 
 

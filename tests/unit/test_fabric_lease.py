@@ -241,7 +241,8 @@ class Renew(_Case):
         self.w.put_lease("A", 600, renewed_ago=100, acquired_ago=300)
         before = json.loads(json.dumps(self.w.lease))
         out = self.renew("A")
-        self.assertEqual(out, {"renewed": True, "lease": NAME, "sinceLastRenewal": 100, "lapsed": False})
+        self.assertEqual(out, {"renewed": True, "lease": NAME, "sinceLastRenewal": 100, "lapsed": False,
+                               "renewedAt": T0, "duration": 600})
         self.assertEqual(self.w.renew_time(), T0)
         spec, old = self.w.lease["spec"], before["spec"]
         self.assertEqual((spec["holderIdentity"], spec["leaseDurationSeconds"], spec["acquireTime"]),
@@ -339,6 +340,29 @@ class Renew(_Case):
         self.assertLessEqual(self.w.t - T0, self.mod.RENEW_BUDGET)
         self.assertTrue(all(c[2] <= 30 for c in self.w.calls))
         self.assertTrue(all(c[0] + c[2] <= T0 + self.mod.RENEW_BUDGET + 1e-6 for c in self.w.calls))
+
+    def test_the_renewal_budget_is_a_hard_limit(self):
+        # requests applies its timeout to the connect and to each read separately; the interval timer ends a
+        # renewal at its budget however the requests stall (real time here, the budget cut to 1 s)
+        import time as real_time
+        self.w.stop()
+        self.w.put_lease("A", 600, renewed_ago=50)
+        stalls = []
+
+        def stall(method, url, **kw):
+            stalls.append(kw.get("timeout"))
+            t = real_time.monotonic()
+            while real_time.monotonic() - t < 5:      # a read that keeps trickling: no single socket timeout fires
+                real_time.sleep(0.05)
+            return _Resp(200, {})
+        with mock.patch.object(self.mod, "RENEW_BUDGET", 1), mock.patch.object(self.mod.requests, "request", stall):
+            start = real_time.monotonic()
+            with self.assertRaises(RuntimeError) as cm:
+                self.mod.lease_renew(self.mod.Api({"api": "https://a", "token": "t"}), self.req("A", step="s"))
+            took = real_time.monotonic() - start
+        self.assertLess(took, 2.0)
+        self.assertIn("did not answer within 1 s", str(cm.exception))
+        self.assertEqual(self.mod.signal.getitimer(self.mod.signal.ITIMER_REAL), (0.0, 0.0))
 
     def test_a_read_timeout_is_not_repeated(self):
         self.w.put_lease("A", 600, renewed_ago=50)
@@ -440,17 +464,40 @@ class Limits(_Case):
         self.acquire("A")
         self.assertEqual(self.w.lease["spec"]["leaseDurationSeconds"], 600)
 
-    def test_a_duration_a_live_holder_could_outlast_is_refused(self):
+    def test_a_duration_a_node_step_could_outlive_is_refused(self):
+        # right after a renewal (up to the budget), the lease must outlast the longest work of one step on a node
+        # (the step timeout or a systemd job it starts) plus the margin: max(180, 360) + 60 + 60 = 480
         with self.assertRaises(RuntimeError) as cm:
-            self.acquire("A", duration=300, stepTimeout=180)
-        self.assertIn("at least 360", str(cm.exception))
+            self.acquire("A", duration=479)
+        self.assertIn("at least 480", str(cm.exception))
         self.assertIsNone(self.w.lease)
-        self.assertEqual(self.mod.lease_limits({"duration": 360, "stepTimeout": 180, "wait": 400}), (360, 400))
+        self.assertEqual(self.mod.lease_limits({"duration": 480, "wait": 496}), (480, 496))
+        with self.assertRaises(RuntimeError) as cm:
+            self.mod.lease_limits({"duration": 600, "stepTimeout": 500, "wait": 1200})
+        self.assertIn("at least 620", str(cm.exception))
 
     def test_a_wait_that_ends_before_the_duration_is_refused(self):
-        with self.assertRaises(RuntimeError) as cm:
-            self.acquire("A", duration=900, wait=900)
-        self.assertIn("must be longer than its duration", str(cm.exception))
+        for wait in (900, 915):
+            with self.subTest(wait=wait), self.assertRaises(RuntimeError) as cm:
+                self.acquire("A", duration=900, wait=wait)
+            self.assertIn("must be longer than its duration", str(cm.exception))
+
+    def test_only_positive_whole_seconds_are_accepted(self):
+        # 0, null, a fraction or text would turn the step timeout off (or quietly into the default): refused
+        for key, value in (("stepTimeout", 0), ("stepTimeout", None), ("stepTimeout", "3m"), ("stepTimeout", 1.5),
+                           ("stepTimeout", True), ("duration", 0), ("wait", 0), ("systemdJob", -1), ("duration", None)):
+            with self.subTest(key=key, value=value), self.assertRaises(RuntimeError) as cm:
+                self.mod.lease_limits({key: value})
+            self.assertIn("must be a positive whole number of seconds", str(cm.exception))
+            self.assertIn(self.mod.LEASE_KEYS[key][0], str(cm.exception))
+        self.assertEqual(self.mod.lease_limits({"duration": "700", "wait": 1300}), (700, 1300))
+
+    def test_acquire_and_renew_report_when_they_renewed(self):
+        out = self.acquire("A")
+        self.assertEqual((out["renewedAt"], out["duration"]), (T0, 600))
+        self.w.sleep(100)
+        out = self.renew("A")
+        self.assertEqual((out["renewedAt"], out["duration"]), (T0 + 100, 600))
 
 
 class Upgrade(_Case):
@@ -548,7 +595,7 @@ LONG_WAITS = {
 }
 # roles that reach the nodes outside the lease: reads only
 READ_ONLY = {"attachmentcircuit_provision", "networkplacement_provision", "fabric_orphan_check"}
-STEP_TIMEOUT = "{{ fab_real.nodes.configLease.stepTimeoutSeconds | int }}"
+STEP_TIMEOUT = "{{ fab_lease_step_timeout }}"
 
 
 def _yaml_files(base):
@@ -587,14 +634,69 @@ class HolderWiring(unittest.TestCase):
                     found.add(os.path.relpath(path, ROLES).split(os.sep)[0])
         self.assertEqual(found, set(HOLDERS))
 
-    def test_each_node_loop_runs_with_the_step_timeout(self):
+    def test_each_node_loop_runs_within_the_lease(self):
+        # the step limit is a keyword of the block around the loop (evaluated for every step on both ansible-core
+        # 2.16 and later; an include's apply is templated once on later versions), the include itself exempt
         for role, (main, loop, node_file, _, _) in HOLDERS.items():
             with self.subTest(role=role):
-                task = by_name(load(os.path.join(ROLES, role, "tasks", main)), loop)
-                inc = task["ansible.builtin.include_tasks"]
-                self.assertEqual(inc["file"], node_file)
-                self.assertEqual(inc["apply"], {"timeout": STEP_TIMEOUT})
-                self.assertEqual(task["loop_control"]["loop_var"], "bgw_node")
+                tasks = load(os.path.join(ROLES, role, "tasks", main))
+                guard = by_name(tasks, "The steps on the nodes, within the lease")
+                self.assertEqual(guard["timeout"], STEP_TIMEOUT)
+                self.assertEqual([t.get("name") for t in guard["block"]], [loop])
+                inc = guard["block"][0]
+                self.assertEqual(inc["ansible.builtin.include_tasks"], node_file)
+                self.assertEqual(inc["timeout"], 0)
+                self.assertEqual(inc["loop_control"]["loop_var"], "bgw_node")
+                self.assertNotIn("rescue", guard)
+                self.assertNotIn("always", guard)
+
+    def test_a_timed_out_step_keeps_the_lease(self):
+        for role in HOLDERS:
+            with self.subTest(role=role):
+                tasks = load(os.path.join(ROLES, role, "tasks/main.yml"))
+                loop = next(t for t in walk(tasks) if any(x.get("name") == "The steps on the nodes, within the lease"
+                                                          for x in t.get("block") or []))
+                self.assertEqual([x.get("ansible.builtin.include_tasks") for x in loop["rescue"]],
+                                 ["{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"])
+                self.assertIn("Remove the SSH key", [x.get("name") for x in loop["always"]])
+
+    def test_the_renewals_set_their_own_timeout(self):
+        # inside the node loops every task inherits the step limit; the renewals must still run when it is short
+        for role, (_, _, node_file, _, _) in HOLDERS.items():
+            tasks = load(os.path.join(ROLES, role, "tasks", node_file))
+            for t in tasks:
+                inc = str(t.get("ansible.builtin.include_tasks") or "")
+                if inc.endswith(("fabric_ledger.yml", "fabric_lease_ensure.yml")):
+                    with self.subTest(role=role, task=t["name"]):
+                        self.assertEqual(t.get("timeout"), 0)
+        for common in ("fabric_ledger.yml", "fabric_lease_keep.yml", "fabric_lease_ensure.yml", "bgw_disconnect.yml"):
+            for t in load(os.path.join(ROOT, "eda/common/tasks", common)):
+                with self.subTest(file=common, task=t.get("name")):
+                    self.assertIn("timeout", t)
+
+    def test_long_steps_renew_first_when_the_lease_is_short(self):
+        # every systemd start, restart or reload (not a timer, not enable/disable alone) and every apply up comes right
+        # after a renewal or a renew-if-short check
+        for role, (_, _, node_file, _, _) in HOLDERS.items():
+            tasks = load(os.path.join(ROLES, role, "tasks", node_file))
+            for i, t in enumerate(tasks):
+                sd = t.get("ansible.builtin.systemd") or {}
+                cmd = str(t.get("ansible.builtin.command") or "")
+                long_step = (sd.get("state") and not str(sd.get("name", "")).endswith(".timer")) or \
+                    re.search(r"shc-fabric-apply \S+ up", cmd)
+                if not long_step:
+                    continue
+                with self.subTest(role=role, task=t["name"]):
+                    self.assertTrue(_renew(tasks[i - 1]) or str(tasks[i - 1].get("ansible.builtin.include_tasks", ""))
+                                    .endswith("fabric_lease_ensure.yml"), tasks[i - 1].get("name"))
+
+    def test_the_applies_end_on_the_node_before_the_step(self):
+        for role, node_file in (("hybridfabric_provision", "node_root.yml"), ("cloudgateway_provision", "node_gateway.yml")):
+            for t in load(os.path.join(ROLES, role, "tasks", node_file)):
+                cmd = str(t.get("ansible.builtin.command") or "")
+                if re.search(r"shc-fabric-apply \S+ up", cmd):
+                    with self.subTest(task=t["name"]):
+                        self.assertTrue(cmd.startswith("timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} "))
 
     def test_each_node_starts_with_a_renewal_by_its_holder(self):
         for role, (_, _, node_file, holder, fabric) in HOLDERS.items():
@@ -663,25 +765,28 @@ class Numbers(unittest.TestCase):
         self.mod = load_ledger()
         real = load(os.path.join(ROOT, "eda/common/vars/fabric_realization.yml"))["fabric_realization_defaults"]
         self.cfg = real["nodes"]["configLease"]
+        self.limits = load(os.path.join(ROOT, "eda/common/vars/fabric_lease.yml"))
 
     def test_the_realization_and_the_helper_agree(self):
         self.assertEqual(self.cfg, {"durationSeconds": self.mod.LEASE_DURATION, "waitSeconds": self.mod.LEASE_WAIT,
-                                    "stepTimeoutSeconds": self.mod.LEASE_STEP_TIMEOUT})
+                                    "stepTimeoutSeconds": self.mod.LEASE_STEP_TIMEOUT,
+                                    "systemdJobSeconds": self.mod.LEASE_SYSTEMD_JOB})
+        self.assertEqual(self.limits["fab_lease_margin"], self.mod.LEASE_MARGIN)
+        self.mod.lease_limits({k: self.cfg[v[0]] for k, v in self.mod.LEASE_KEYS.items()})
 
-    def test_the_longest_gap_between_renewals_stays_below_the_duration(self):
-        d, t, b = self.cfg["durationSeconds"], self.cfg["stepTimeoutSeconds"], self.mod.RENEW_BUDGET
-        # a stretch of writes between two renewals (46 s recorded) with one step hanging until its timeout
-        self.assertLess(self.mod.LEASE_SEGMENT + t + 2 * b, d)
-        self.assertGreaterEqual(self.mod.LEASE_SEGMENT, 46)
-        # a long wait between two renewals: its retry schedule, one hung attempt, two slow renewals
-        for role, node_file in (("hybridfabric_provision", "node_root.yml"), ("cloudgateway_provision", "node_gateway.yml")):
-            with self.subTest(wait=node_file):
-                tasks = load(os.path.join(ROLES, role, "tasks", node_file))
-                wait = next(x for x in tasks if _node_name(x) == LONG_WAITS[node_file])
-                schedule = int(wait["retries"]) * int(wait["delay"])
-                self.assertLess(schedule + t + 2 * b, d)
-        # a single step: the longest internal wait a step does (the apply script waits up to 90 s for an interface)
-        self.assertGreaterEqual(t, 2 * 90)
+    def test_a_long_step_right_after_a_renewal_never_needs_another(self):
+        # renew-if-short asks for max(step, systemd job) + margin; a renewal (up to its budget) leaves duration - budget
+        d, t, u = self.cfg["durationSeconds"], self.cfg["stepTimeoutSeconds"], self.cfg["systemdJobSeconds"]
+        self.assertLessEqual(max(t, u) + self.mod.LEASE_MARGIN, d - self.mod.RENEW_BUDGET)
+
+    def test_the_systemd_job_bound_covers_the_units(self):
+        # TimeoutSec=2m: a restart's stop up to 2 x 2 min (the stop command, then SIGTERM before SIGKILL) and its start
+        # 2 min; a gateway reload with its one retry 2 x 2 min + 5 s; the root unit's oneshot start 5 min
+        unit = _read(os.path.join(ROOT, "eda/common/files/bgw/shc-gw@.service"))
+        self.assertIn("TimeoutSec=2m", unit)
+        root = _read(os.path.join(ROOT, "eda/common/files/bgw/shc-fabric-apply@.service"))
+        self.assertIn("TimeoutStartSec=5min", root)
+        self.assertGreaterEqual(self.cfg["systemdJobSeconds"], max(2 * 120 + 120, 2 * 120 + 5, 300))
 
     def test_the_wait_outlasts_the_duration(self):
         self.assertGreater(self.cfg["waitSeconds"], self.cfg["durationSeconds"] + self.mod.LEASE_POLL)
@@ -701,61 +806,227 @@ class Numbers(unittest.TestCase):
         self.assertLessEqual(self.cfg["waitSeconds"] + 600, limit)
 
 
-@unittest.skipIf(not HAVE_ANSIBLE, "ansible-playbook not installed")
-class LedgerTask(unittest.TestCase):
-    """fabric_ledger.yml with the helper replaced by one that answers with the request it got."""
+FAKE_LEDGER = textwrap.dedent('''\
+    import json, sys, time
+    req = json.load(sys.stdin)
+    req.pop("token", None)
+    with open(__file__ + ".calls", "a") as f:
+        f.write(req["action"] + "\\n")
+    if req["action"] == "lease-renew" and req["holder"] == "lost":
+        print(json.dumps({"error": "the border gateway configuration lease fabric-config-lab was taken over by B"}))
+        sys.exit(1)
+    out = {"echo": req}
+    if req["action"] in ("lease-acquire", "lease-renew"):
+        out.update(renewedAt=time.time(), duration=req.get("duration", 600) if req["action"] == "lease-acquire" else 600)
+        if req["holder"] == "lapsed":
+            out.update(lapsed=True, sinceLastRenewal=700)
+    if req["action"] == "lease-release":
+        out["released"] = True
+    print(json.dumps(out))
+    ''')
 
-    FAKE = textwrap.dedent('''\
-        import json, sys
-        req = json.load(sys.stdin)
-        req.pop("token", None)
-        if req["action"] == "lease-renew" and req["holder"] == "lost":
-            print(json.dumps({"error": "the border gateway configuration lease fabric-config-lab was taken over by B"}))
-            sys.exit(1)
-        print(json.dumps({"echo": req}))
-        ''')
 
-    def _run(self, fab_ledger, fab_real=None):
+class _Ledger(unittest.TestCase):
+    """fabric_ledger.yml and the lease task files in ansible-playbook, with the helper replaced by one that logs the
+    actions it got (to <helper>.calls) and answers with the request."""
+
+    def setUp(self):
         import shutil
         import tempfile
-        tmp = tempfile.mkdtemp(prefix="shc-lease-")
-        self.addCleanup(shutil.rmtree, tmp, True)
-        os.makedirs(os.path.join(tmp, "common/files"))
-        os.makedirs(os.path.join(tmp, "r/o/l"))
-        with open(os.path.join(tmp, "common/files/shc_ledger.py"), "w") as f:
-            f.write(self.FAKE)
-        tasks = load(os.path.join(ROOT, "eda/common/tasks/fabric_ledger.yml"))
-        extra = {"role_path": os.path.join(tmp, "r/o/l"), "fab_ledger": fab_ledger,
-                 "services_api_host": "https://api.example:6443", "services_bearer_token": "t"}
-        if fab_real is not None:
-            extra["fab_real"] = fab_real
-        play = [{"name": "the ledger task", "block": tasks,
+        self.tmp = tempfile.mkdtemp(prefix="shc-lease-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        os.makedirs(os.path.join(self.tmp, "common/files"))
+        os.makedirs(os.path.join(self.tmp, "r/o/l"))
+        # the lease task files and vars as they are, the helper replaced
+        shutil.copytree(os.path.join(ROOT, "eda/common/tasks"), os.path.join(self.tmp, "common/tasks"))
+        shutil.copytree(os.path.join(ROOT, "eda/common/vars"), os.path.join(self.tmp, "common/vars"))
+        self.helper = os.path.join(self.tmp, "common/files/shc_ledger.py")
+        with open(self.helper, "w") as f:
+            f.write(FAKE_LEDGER)
+        self.real = load(os.path.join(ROOT, "eda/common/vars/fabric_realization.yml"))["fabric_realization_defaults"]
+
+    def calls(self):
+        return _read(self.helper + ".calls").split() if os.path.exists(self.helper + ".calls") else []
+
+    def include(self, name, **vars_):
+        t = {"name": name, "ansible.builtin.include_tasks": os.path.join(self.tmp, "common/tasks", name)}
+        if vars_:
+            t["vars"] = vars_
+        return t
+
+    def run_tasks(self, tasks, extra=None):
+        v = {"role_path": os.path.join(self.tmp, "r/o/l"), "services_api_host": "https://api.example:6443",
+             "services_bearer_token": "t", "fab_real": self.real, "fab_namespace": NS}
+        v.update(extra or {})
+        return run_play(tasks, v)
+
+
+@unittest.skipIf(not HAVE_ANSIBLE, "ansible-playbook not installed")
+class LedgerTask(_Ledger):
+    def ledger(self, fab_ledger, fab_real=None, then="fab_ledger_result"):
+        play = [{"name": "the ledger task", "block": [self.include("fabric_ledger.yml", fab_ledger=fab_ledger)],
                  "rescue": [{"ansible.builtin.set_fact": {"fab_ledger_result": {"failed": "{{ ansible_failed_result.msg }}"}}}]},
-                write_out("fab_ledger_result")]
-        return run_play(play, extra)
+                write_out(then)]
+        return self.run_tasks(play, None if fab_real is None else {"fab_real": fab_real})
 
     def test_an_acquire_carries_the_realizations_lease(self):
-        real = load(os.path.join(ROOT, "eda/common/vars/fabric_realization.yml"))["fabric_realization_defaults"]
-        out = self._run({"action": "lease-acquire", "namespace": NS, "fabric": "lab", "holder": "A"}, real)
-        self.assertEqual({k: out["echo"].get(k) for k in ("duration", "wait", "stepTimeout")},
-                         {"duration": 600, "wait": 1200, "stepTimeout": 180})
+        out = self.ledger({"action": "lease-acquire", "namespace": NS, "fabric": "lab", "holder": "A"})
+        self.assertEqual({k: out["echo"].get(k) for k in ("duration", "wait", "stepTimeout", "systemdJob")},
+                         {"duration": 600, "wait": 1200, "stepTimeout": 180, "systemdJob": 360})
 
-    def test_an_installations_value_is_passed_and_explicit_keys_win(self):
-        real = {"nodes": {"configLease": {"durationSeconds": 900, "waitSeconds": 1500, "stepTimeoutSeconds": 300}}}
-        out = self._run({"action": "lease-acquire", "namespace": NS, "fabric": "lab", "holder": "A", "wait": 1600}, real)
-        self.assertEqual((out["echo"]["duration"], out["echo"]["wait"], out["echo"]["stepTimeout"]), (900, 1600, 300))
+    def test_an_installations_value_is_passed_as_it_stands_and_explicit_keys_win(self):
+        # passed raw, so the helper refuses what the step limit could not use (0, null, text), never a default
+        real = {"nodes": {"configLease": {"durationSeconds": 900, "waitSeconds": 1500, "stepTimeoutSeconds": None,
+                                          "systemdJobSeconds": "3m"}}}
+        out = self.ledger({"action": "lease-acquire", "namespace": NS, "fabric": "lab", "holder": "A", "wait": 1600}, real)
+        self.assertEqual({k: out["echo"].get(k, "absent") for k in ("duration", "wait", "stepTimeout", "systemdJob")},
+                         {"duration": 900, "wait": 1600, "stepTimeout": None, "systemdJob": "3m"})
 
     def test_other_actions_carry_no_lease_numbers(self):
-        real = load(os.path.join(ROOT, "eda/common/vars/fabric_realization.yml"))["fabric_realization_defaults"]
-        out = self._run({"action": "lease-renew", "namespace": NS, "fabric": "lab", "holder": "A", "step": "s"}, real)
-        self.assertFalse({"duration", "wait", "stepTimeout"} & set(out["echo"]))
-        out = self._run({"action": "lease-acquire", "namespace": NS, "fabric": "lab", "holder": "A"})
-        self.assertFalse({"duration", "wait", "stepTimeout"} & set(out["echo"]))
+        out = self.ledger({"action": "lease-renew", "namespace": NS, "fabric": "lab", "holder": "A", "step": "s"})
+        self.assertFalse({"duration", "wait", "stepTimeout", "systemdJob"} & set(out["echo"]))
 
     def test_a_lost_lease_fails_the_task_with_the_helpers_reason(self):
-        out = self._run({"action": "lease-renew", "namespace": NS, "fabric": "lab", "holder": "lost", "step": "s"})
+        out = self.ledger({"action": "lease-renew", "namespace": NS, "fabric": "lab", "holder": "lost", "step": "s"})
         self.assertEqual(out["failed"], "Fabric lease-renew failed: the border gateway configuration lease "
                                         "fabric-config-lab was taken over by B")
+
+    def test_the_job_tracks_its_lease_from_each_renewal(self):
+        import time
+        before = time.time()
+        out = self.ledger({"action": "lease-acquire", "namespace": NS, "fabric": "lab", "holder": "A"},
+                          then="{'lease': fab_lease, 'left': fab_lease_left | int, 'step': fab_lease_step_timeout | int, "
+                               "'need': fab_lease_need | int}")
+        # 2.16 keeps a templated value inside a dict as text: every use converts it (| int, | float)
+        self.assertEqual((out["lease"]["fabric"], out["lease"]["holder"], int(out["lease"]["duration"])), ("lab", "A", 600))
+        self.assertGreaterEqual(float(out["lease"]["until"]), before + 600)
+        self.assertGreater(out["left"], 590)
+        self.assertEqual((out["step"], out["need"]), (180, 420))
+
+    def test_a_kept_lease_is_not_released(self):
+        play = [{"ansible.builtin.set_fact": {"fab_lease_keep": True}},
+                self.include("fabric_ledger.yml", fab_ledger={"action": "lease-release", "namespace": NS,
+                                                              "fabric": "lab", "holder": "A"}),
+                write_out("fab_ledger_result")]
+        self.assertEqual(self.run_tasks(play), {"released": False, "kept": True})
+        self.assertEqual(self.calls(), [])
+
+    def test_a_lapsed_renewal_is_shown(self):
+        play = [self.include("fabric_ledger.yml", fab_ledger={"action": "lease-renew", "namespace": NS, "fabric": "lab",
+                                                              "holder": "lapsed", "step": "s"}),
+                write_out("_fab_lease_lapsed_note.msg")]
+        self.assertIn("[WARNING] lease fabric-config-lab was renewed 700 s after its previous renewal, longer than its "
+                      "600 s; nobody had taken it over", self.run_tasks(play))
+
+
+@unittest.skipIf(not HAVE_ANSIBLE, "ansible-playbook not installed")
+class StepLimit(_Ledger):
+    """common/vars/fabric_lease.yml: every node step's timeout is the step timeout cut to what the lease has left less
+    the margin, and a step with less than the minimum left does not start; a block keyword, evaluated per step."""
+
+    def limits(self, left):
+        play = [{"ansible.builtin.include_vars": os.path.join(self.tmp, "common/vars/fabric_lease.yml")},
+                {"ansible.builtin.set_fact": {"fab_lease": {"fabric": "lab", "until": "{{ now().timestamp() + %d }}" % left}}},
+                write_out("{'step': fab_lease_step_timeout, 'need': fab_lease_need | int}")]
+        return self.run_tasks(play)
+
+    def test_the_step_timeout_follows_the_lease(self):
+        self.assertEqual(str(self.limits(600)["step"]), "180")
+        self.assertIn(str(self.limits(200)["step"]), ("139", "140"))   # 200 - 60, the template runs a moment later
+        self.assertIn(str(self.limits(95)["step"]), ("34", "35"))
+        self.assertIn("too little for this step", str(self.limits(85)["step"]))
+        self.assertEqual(self.limits(600)["need"], 420)
+
+    def test_a_step_with_too_little_lease_does_not_start(self):
+        marker = os.path.join(self.tmp, "ran")
+        play = [{"ansible.builtin.include_vars": os.path.join(self.tmp, "common/vars/fabric_lease.yml")},
+                {"ansible.builtin.set_fact": {"fab_lease": {"fabric": "lab", "until": "{{ now().timestamp() + 80 }}"}}},
+                {"name": "a node loop", "block": [{"name": "the steps", "timeout": "{{ fab_lease_step_timeout }}",
+                                                   "block": [{"name": "a node step",
+                                                              "ansible.builtin.command": "touch %s" % marker}]}],
+                 "rescue": [{"ansible.builtin.set_fact": {"_why": "{{ ansible_failed_result.msg }}"}}]},
+                write_out("_why")]
+        why = self.run_tasks(play)
+        self.assertFalse(os.path.exists(marker))
+        self.assertIn("too little for this step", why)
+
+
+@unittest.skipIf(not HAVE_ANSIBLE, "ansible-playbook not installed")
+class FailureClasses(_Ledger):
+    """A holder's node loop as the four holders have it (guarded steps, the keep-lease rescue, the always block that
+    ends the SSH sessions and releases): which failures release the lease at once, and which keep it."""
+
+    def loop(self, step, left=600):
+        import subprocess
+        keydir = os.path.join(self.tmp, "keys.bgw")
+        os.makedirs(keydir)
+        fake = os.path.join(self.tmp, "ssh")
+        with open(fake, "w") as f:
+            f.write('#!/bin/sh\ntrap "exit 0" TERM\nwhile :; do sleep 1; done\n')
+        os.chmod(fake, 0o755)
+        # this job's ssh client of a step that timed out, still running: its command line names the key directory
+        ssh = subprocess.Popen([fake, "-o", "UserKnownHostsFile=%s/known_hosts" % keydir])
+        self.addCleanup(lambda: ssh.poll() is None and ssh.kill())
+        release = {"action": "lease-release", "namespace": NS, "fabric": "lab", "holder": "A"}
+        play = [{"ansible.builtin.include_vars": os.path.join(self.tmp, "common/vars/fabric_lease.yml")},
+                {"ansible.builtin.set_fact": {"fab_lease": {"namespace": NS, "fabric": "lab", "holder": "A",
+                                                            "until": "{{ now().timestamp() + %d }}" % left},
+                                              "bgw_keydir": {"path": keydir}}},
+                {"name": "the job", "block": [
+                    {"name": "Configure the nodes, one at a time",
+                     "block": [{"name": "The steps on the nodes, within the lease", "timeout": "{{ fab_lease_step_timeout }}",
+                                "block": [dict(step, name="bgw-1: the step")]}],
+                     "rescue": [self.include("fabric_lease_keep.yml")],
+                     "always": [self.include("bgw_disconnect.yml"), self.include("fabric_ledger.yml", fab_ledger=release)]}],
+                 "rescue": [{"ansible.builtin.set_fact": {"_why": "{{ ansible_failed_result.msg }}"}}]},
+                write_out("{'why': _why | default(''), 'kept': fab_lease_keep | default(false), "
+                          "'result': fab_ledger_result | default({})}")]
+        out = self.run_tasks(play, {"fab_real": dict(self.real, nodes=dict(self.real["nodes"],
+                                                                     configLease=dict(self.real["nodes"]["configLease"],
+                                                                                      stepTimeoutSeconds=2)))})
+        ssh.wait(timeout=10)
+        out["sshEnded"] = ssh.returncode is not None
+        out["keydirGone"] = not os.path.exists(keydir)
+        return out
+
+    def test_a_timed_out_step_keeps_the_lease(self):
+        out = self.loop({"ansible.builtin.command": "sleep 10"})
+        self.assertTrue(out["kept"])
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(out["result"], {"released": False, "kept": True})
+        self.assertIn("bgw-1: the step: ", out["why"])
+        self.assertIn("The step may still be running there: the border gateway configuration lease "
+                      "fabric-config-lab is kept until it runs out at ", out["why"])
+        self.assertTrue(out["sshEnded"])
+        self.assertTrue(out["keydirGone"])
+
+    def test_a_timeout_is_recognised_as_each_ansible_core_reports_it(self):
+        # 2.19 and later: result.timedout; 2.16: only the message (no timedout key)
+        for msg in ("The ansible.builtin.shell action failed to execute in the expected time frame (5) and was terminated",):
+            with self.subTest(msg=msg):
+                out = self.loop({"ansible.builtin.fail": {"msg": msg}})
+                self.assertTrue(out["kept"])
+                self.assertIn("is kept until it runs out at ", out["why"])
+        self.assertEqual(self.calls(), [])
+
+    def test_a_step_that_returned_an_error_releases_at_once(self):
+        out = self.loop({"ansible.builtin.command": "false"})
+        self.assertFalse(out["kept"])
+        self.assertEqual(self.calls(), ["lease-release"])
+        self.assertTrue(out["result"]["released"])
+        self.assertNotIn("kept until", out["why"])
+        self.assertTrue(out["sshEnded"])
+
+    def test_a_step_the_lease_was_too_short_for_releases_at_once(self):
+        out = self.loop({"ansible.builtin.command": "true"}, left=80)
+        self.assertFalse(out["kept"])
+        self.assertEqual(self.calls(), ["lease-release"])
+        self.assertIn("too little for this step", out["why"])
+
+    def test_a_job_that_succeeds_releases(self):
+        out = self.loop({"ansible.builtin.command": "true"})
+        self.assertEqual((out["kept"], out["why"]), (False, ""))
+        self.assertEqual(self.calls(), ["lease-release"])
 
 
 if __name__ == "__main__":

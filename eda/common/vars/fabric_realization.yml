@@ -66,17 +66,24 @@ fabric_realization_defaults:
     trunkInterface: bond1
     sshUser: root
     # the lease fabric-config-<fabric> (coordination.k8s.io, in the fabric's namespace) that lets one job at a time
-    # change the border gateway nodes: the fabric's job, its gateways' jobs and their teardowns. The holder renews it
-    # before each node and before and after its long waits. A lease not renewed for durationSeconds (its holder
-    # crashed) is taken over by a job waiting for it; a job waits at most waitSeconds, which must be longer. Every
-    # step on a node ends after stepTimeoutSeconds (a step that hangs fails its job, which then frees the lease), so
-    # a live holder goes at most one step timeout, 60 s of other steps and two renewals of up to 60 s each between
-    # two renewals: the lease is refused when durationSeconds is below stepTimeoutSeconds + 180. Raise the three
-    # together on nodes where a single step takes minutes (an FRR reload of a very large configuration).
+    # change the border gateway nodes: the fabric's job, its gateways' jobs and their teardowns. A lease not renewed
+    # for durationSeconds (its holder crashed) is taken over by a job waiting for it; a job waits at most waitSeconds,
+    # which must be longer. The holder renews it before each node, before and after its long waits, and before a step
+    # that can run for minutes when less is left than that step may need. Every attempt of a node step ends after
+    # stepTimeoutSeconds, cut to what the lease has left less a 60 s margin, and a step does not start with less than
+    # 30 s of that: so a step's work, which goes on after a timeout until the job ends its SSH sessions, and a systemd
+    # job it starts (systemdJobSeconds: the longest a start, stop, restart or reload of the node's FRR or a gateway
+    # instance can take under the units' own limits, a restart's stop up to twice TimeoutSec=2m), ends before the
+    # lease does. After a step timed out the job keeps the lease and lets it run out; other failures release it at
+    # once. Each a positive whole number of seconds; the lease is refused when durationSeconds is below
+    # max(stepTimeoutSeconds, systemdJobSeconds) + 120 or waitSeconds is not longer than durationSeconds + 15. Raise
+    # them together on nodes where a single step takes minutes (an FRR reload of a very large configuration, a VPN
+    # label check over very large VPN tables).
     configLease:
       durationSeconds: 600
       waitSeconds: 1200
       stepTimeoutSeconds: 180
+      systemdJobSeconds: 360
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric

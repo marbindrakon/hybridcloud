@@ -1,0 +1,29 @@
+---
+# shc: the step limits of the border gateway lease this job holds (loaded by fabric_ledger.yml when it takes the
+# lease; fab_lease is set after every acquire and renewal). These are templated when used, so each step sees the time
+# left at its own start.
+#
+# seconds left of this job's lease, by this job's clock, as it last renewed it
+fab_lease_left: "{{ (((fab_lease.until | float) - now().timestamp()) | int) if fab_lease is defined else 0 }}"
+# kept between the last moment a step's work can run on a node and the lease's end (shc_ledger.py LEASE_MARGIN):
+# this job ending its SSH sessions after a step timed out, and the clocks of two pods disagreeing
+fab_lease_margin: 60
+# the least a step is given; with less left the step does not start
+fab_lease_min_step: 30
+# The timeout of every node step: a block keyword around the holders' node loops, so it is evaluated again for each
+# task, loop item and retry. The step timeout, cut to what the lease has left less the margin. With less than
+# fab_lease_min_step left, a text that is no number: the step fails before it starts, as for a lost lease (the
+# renewals and the lease tasks set their own timeout, so they still run).
+fab_lease_step_timeout: >-
+  {%- set allowed = fab_lease_left | int - fab_lease_margin | int -%}
+  {%- if allowed >= fab_lease_min_step | int -%}
+  {{ [fab_real.nodes.configLease.stepTimeoutSeconds | int, allowed] | min }}
+  {%- else -%}
+  the border gateway lease fabric-config-{{ fab_lease.fabric | default('') }} has {{ fab_lease_left }} s left, too little for this step: stopped before it
+  {%- endif -%}
+# what a step that can run for minutes (a systemd start, restart or reload; an apply) needs left before it starts: the
+# longest its work can run on a node (its step timeout, or a systemd job it starts) plus the margin; with less, the job
+# renews first (fabric_lease_ensure.yml)
+fab_lease_need: >-
+  {{ [fab_real.nodes.configLease.stepTimeoutSeconds | int, fab_real.nodes.configLease.systemdJobSeconds | int] | max
+     + fab_lease_margin | int }}

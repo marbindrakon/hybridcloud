@@ -3,12 +3,15 @@
 # Inputs: bgw_node, cg_instance (apply config), cg_pe, cg_root_pe, cg_fabric, fab_spec, cg_bgp_password.
 # Appends the node's state to cg_node_results (and its name to cg_changed_nodes when anything changed).
 # Runs under the fabric's lease fabric-config-<fabric>, renewed here before the node and before and after the wait for
-# the core (realization nodes.configLease); a renewal that finds the lease lost fails the job before the next step.
+# the core (realization nodes.configLease), and before the apply and the instance's start and reload when less is left
+# than they may need (fabric_lease_ensure.yml); a renewal that finds the lease lost fails the job before the next
+# step. The renewals set their own timeout: the node loop's step limit (common/vars/fabric_lease.yml) never stops them.
 - name: "{{ bgw_node.name }}: renew the border gateway configuration lease"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
   vars:
     fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
                  step: "the gateway instance on {{ bgw_node.name }}"}
+  timeout: 0
 
 - name: "{{ bgw_node.name }}: the gateway's site address"
   ansible.builtin.set_fact:
@@ -117,10 +120,18 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf
 
+- name: "{{ bgw_node.name }}: the lease lasts for the apply"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+  vars:
+    fab_lease_step: "the apply on {{ bgw_node.name }}"
+  timeout: 0
+
 # an IPv6 step that fails leaves IPv6 out and the IPv4 side as always (exit 0, so a boot keeps the gateway), and
-# prints the marker the job fails on
+# prints the marker the job fails on. The apply runs under a limit on the node 15 s below the step's own: past it,
+# timeout ends the apply and what it started (rc 124), an ordinary failure on a quiet node
 - name: "{{ bgw_node.name }}: apply the gateway instance (namespace, site leg, core leg)"
-  ansible.builtin.command: "/usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up"
+  ansible.builtin.command: >-
+    timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} /usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up
   register: _cg_apply
   changed_when: "'changed=yes' in _cg_apply.stdout"
   failed_when: _cg_apply.rc != 0 or 'IPv6 core not applied' in _cg_apply.stdout
@@ -202,6 +213,12 @@
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+- name: "{{ bgw_node.name }}: the lease lasts for the instance's start"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+  vars:
+    fab_lease_step: "the instance's start on {{ bgw_node.name }}"
+  timeout: 0
+
 - name: "{{ bgw_node.name }}: start the gateway instance (enabled at boot)"
   ansible.builtin.systemd:
     name: "shc-gw@{{ fab_name }}.service"
@@ -212,6 +229,12 @@
          else ('restarted' if (_cg_daemons is changed or _cg_unit_changed | bool) else omit) }}
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_state
+
+- name: "{{ bgw_node.name }}: the lease lasts for the FRR reload"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+  vars:
+    fab_lease_step: "the FRR reload on {{ bgw_node.name }}"
+  timeout: 0
 
 # one retry: some changes take two passes (FRR 8.5 refuses `bgp graceful-restart` -> `bgp graceful-restart-disable` in
 # one reload, "not valid at this moment", yet ends in the new state; the second reload has nothing left to change)
@@ -247,6 +270,7 @@
   vars:
     fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
                  step: "the wait for the core on {{ bgw_node.name }}"}
+  timeout: 0
 
 # the core side must come up: IS-IS adjacency with the root and the VPNv4 session to the route reflector; with the
 # IPv6 core (cg_pe.loopback6) also IPv6 forwarding in the namespace, VPNv6 negotiated with the route reflector and its
@@ -322,6 +346,7 @@
   vars:
     fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
                  step: "the VPN label check on {{ bgw_node.name }}"}
+  timeout: 0
 
 # FRR 8.5: a VRF deleted and created again under the same name (a placement's VNI used again) can keep zebra's old binding of
 # its VPN label: bgpd exports the label, but zebra never installs it into the kernel, so traffic from the core for the

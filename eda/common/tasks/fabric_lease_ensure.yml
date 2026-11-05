@@ -1,0 +1,11 @@
+---
+# shc: before a node step that can run for minutes (a systemd start, restart or reload; an apply), renew the lease
+# first when, as this job last renewed it, less than fab_lease_need is left (common/vars/fabric_lease.yml). A renewal
+# that fails stops the job as for a lost lease. Input: fab_lease_step (what comes next, for the messages).
+- name: "Renew the lease before {{ fab_lease_step }} when it is short"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_lease.namespace }}", fabric: "{{ fab_lease.fabric }}",
+                 holder: "{{ fab_lease.holder }}", step: "{{ fab_lease_step }}"}
+  when: fab_lease_left | int < fab_lease_need | int
+  timeout: 0

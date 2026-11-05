@@ -12,6 +12,7 @@ FRR then runs is kept next to them). A crash is the job ending after a given ste
 """
 import copy
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -29,14 +30,18 @@ ROOT_STEPS = ["what FRR last loaded (a node without the record: the files as the
               "FRR configuration",
               "is a reload due (the files differ from what FRR last loaded)",
               "is FRR running",
+              "the lease lasts for the FRR start",
               "start FRR (enabled at boot)",
+              "the lease lasts for the FRR reload",
               "reload the FRR configuration",
               "record what FRR loaded"]
 GW_STEPS = ["what the instance last loaded (without the record: the file as it is)",
             "FRR configuration",
             "is a reload due (the file differs from what the instance last loaded)",
             "is the gateway instance running",
+            "the lease lasts for the instance's start",
             "start the gateway instance (enabled at boot)",
+            "the lease lasts for the FRR reload",
             "reload the FRR configuration",
             "record what the instance loaded"]
 
@@ -97,15 +102,30 @@ class _Node:
 
 
 def stub(task, node):
-    """The task for localhost: paths under the node's root, the template writes {{ desired }}, systemd is a stub (a
-    state that renders as omit asks for nothing: ansible-core 2.16 renders the placeholder, 2.19 and later "")."""
+    """The task for localhost: paths under the node's root, the template writes {{ desired }}, systemd is a stub that
+    keeps the unit's state in <root>/state (active, inactive, failed, activating, reloading) and a queued job in
+    <root>/job.
+
+    The start task behaves as the systemd module does: "started" leaves an active or activating unit alone (the module
+    counts both as running), runs `systemctl start` otherwise, which on a reloading unit only waits for that reload (no
+    new load) and on an inactive or failed one starts it (it loads the files, or fails with <root>/start_rc 1).
+    "restarted" loads the files. A state that renders as omit asks for nothing (ansible-core 2.16 renders the
+    placeholder, 2.19 and later ""). The reload loads the files, or fails with <root>/reload_rc 1."""
     t = copy.deepcopy(task)
     t.pop("delegate_to", None)
     t.pop("no_log", None)
     load_files = " ".join(node.files())
     swap = lambda s: s.replace("/etc/frr/", node.r + "/etc/frr/").replace("/etc/shc-fabric/", node.r + "/etc/shc-fabric/")  # noqa: E731
+    if str(t.get("ansible.builtin.include_tasks", "")).endswith("fabric_lease_ensure.yml"):
+        return {"name": t["name"], "ansible.builtin.debug": {"msg": "the lease lasts"}}
+    if "ansible.builtin.set_fact" in t:
+        return t
     if "ansible.builtin.shell" in t:
-        t["ansible.builtin.shell"] = swap(t["ansible.builtin.shell"])
+        sh = swap(t["ansible.builtin.shell"])
+        sh = re.sub(r'systemctl is-active "?\$?[\w@.{} -]+?"?\)', "cat %s)" % node.p("state"), sh)
+        sh = re.sub(r'systemctl show -p Job --value "?\$?[\w@.{} -]+?"?\)', "cat %s 2>/dev/null)" % node.p("job"), sh)
+        assert "systemctl" not in sh, sh
+        t["ansible.builtin.shell"] = sh
     elif "ansible.builtin.lineinfile" in t:
         t["ansible.builtin.lineinfile"]["path"] = swap(t["ansible.builtin.lineinfile"]["path"])
     elif "ansible.builtin.template" in t:
@@ -126,9 +146,16 @@ def stub(task, node):
         else:
             t.setdefault("vars", {})["_state"] = sd["state"]
             t["ansible.builtin.shell"] = (
-                "s='{{{{ _state }}}}'; case \"$s\" in ''|*omit_place_holder*) exit 0 ;; esac; echo \"$s\" >> {log}; "
-                "cat {files} > {loaded}; echo active > {state}".format(log=node.p("actions"), files=load_files,
-                                                                      loaded=node.p("loaded"), state=node.p("state")))
+                "s='{{{{ _state }}}}'; now=$(cat {state}); case \"$s\" in ''|*omit_place_holder*) exit 0 ;; esac; "
+                "if [ \"$s\" = started ]; then case \"$now\" in active|activating) exit 0 ;; reloading) "
+                "echo waited >> {log}; echo changed; exit 0 ;; esac; fi; "
+                "echo \"$s\" >> {log}; [ \"$(cat {rc} 2>/dev/null || echo 0)\" = 0 ] || exit 1; "
+                "cat {files} > {loaded}; echo active > {state}; echo changed".format(
+                    log=node.p("actions"), files=load_files, loaded=node.p("loaded"), state=node.p("state"),
+                    rc=node.p("start_rc")))
+            t["changed_when"] = "'changed' in _stub_out.stdout"
+            t["register"] = t.get("register", "_stub_out")
+            t["changed_when"] = "'changed' in %s.stdout" % t["register"]
     else:
         raise AssertionError("no stub for %s" % t.get("name"))
     return t
@@ -142,10 +169,12 @@ class _Case(unittest.TestCase):
         self.node = _Node(self, self.GATEWAY)
         self.steps = section(CG if self.GATEWAY else HF, GW_STEPS if self.GATEWAY else ROOT_STEPS)
 
-    def job(self, desired, crash_after=None, reload_rc=0, **extra):
-        """One job's FRR steps on the node; returns (what systemd was asked, whether the job failed)."""
+    def job(self, desired, crash_after=None, reload_rc=0, start_rc=0, probe=None, **extra):
+        """One job's FRR steps on the node; returns (what systemd was asked, whether the job failed), or with probe
+        (an expression) also its value at the end."""
         n = self.node
         n.put("reload_rc", "%d\n" % reload_rc)
+        n.put("start_rc", "%d\n" % start_rc)
         if os.path.exists(n.p("actions")):
             os.remove(n.p("actions"))
         tasks = [stub(t, n) for t in self.steps]
@@ -162,10 +191,10 @@ class _Case(unittest.TestCase):
         variables.update(extra)
         play = [{"name": "the node's FRR steps", "block": tasks,
                  "rescue": [{"ansible.builtin.set_fact": {"_job_failed": True}}]},
-                write_out("_job_failed | default(false)")]
-        failed = run_play(play, variables)
+                write_out("[_job_failed | default(false), %s]" % (probe or "none"))]
+        failed, value = run_play(play, variables)
         actions = (n.get("actions") or "").split()
-        return actions, failed
+        return (actions, failed, value) if probe else (actions, failed)
 
     def loaded_digest_matches(self):
         import hashlib

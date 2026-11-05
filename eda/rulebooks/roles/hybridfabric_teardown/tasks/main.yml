@@ -30,20 +30,27 @@
             bgw_fabric_spec: "{{ fab_spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
-        # node_root_down.yml renews the lease before each node; a step that hangs fails the job (which frees the
-        # lease) instead of outliving the lease it renews
-        - name: Remove the root instance from each node
-          ansible.builtin.include_tasks:
-            file: node_root_down.yml
-            apply:
-              timeout: "{{ fab_real.nodes.configLease.stepTimeoutSeconds | int }}"
-          loop: "{{ fab_spec.borderGateway.nodes }}"
-          loop_control:
-            loop_var: bgw_node
-            label: "{{ bgw_node.name }}"
+        # node_root_down.yml renews the lease before each node; every step on a node runs within the lease
+        # (common/vars/fabric_lease.yml): a block keyword, evaluated again for each step; the include is exempt, so the
+        # renewals inside run even when the lease is short
+        - name: The steps on the nodes, within the lease
+          timeout: "{{ fab_lease_step_timeout }}"
+          block:
+            - name: Remove the root instance from each node
+              ansible.builtin.include_tasks: node_root_down.yml
+              timeout: 0
+              loop: "{{ fab_spec.borderGateway.nodes }}"
+              loop_control:
+                loop_var: bgw_node
+                label: "{{ bgw_node.name }}"
       always:
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+      # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the release in the
+      # role's rescue is skipped; any other failure releases it there at once
+      rescue:
+        - name: Keep the lease while a step may still run on a node
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
 
     - name: Delete the configuration lease
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
