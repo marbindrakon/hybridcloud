@@ -18,7 +18,8 @@
 # prefix may not overlap another network of the same tenant (PrefixInUse, in the IPAM); mode Platform takes a block
 # from the fabric's public pool (pending WaitingForAddressSpace while none is free, the tenant's allowance is used
 # or the pinned block is held back), given back when the mode changes or the network goes (hold-down); status.ipv6
-# and the per-family status.egress (egress_status.yml).
+# and the per-family status.egress (egress_status.yml). status.ipv6.providerPrefixes lists the IPv6 subnets cloud
+# providers assigned to the placements (read-only, outside the address space).
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -140,6 +141,30 @@
               'placementsReady': _mine | selectattr('status.ready', 'defined') | selectattr('status.ready') | list | length}
              | combine({'fabric': hn_fabric_name} if hn_fabric | length > 0 else {})
              | combine({'mtu': (fab_spec.mtu | default(hn_fabric.spec.overlayMtu)) | int} if hn_fabric | length > 0 else {}) }}
+
+    # the IPv6 subnets cloud providers assigned to the network's placements (their status.subnets rows with source
+    # Provider), one entry per row as the placement reports it, ordered by placement: status.ipv6.providerPrefixes.
+    # Read-only: never allocated and not part of status.addressSpace (the IPAM, the circuits, the fabric's
+    # announcements and egress filters don't read it). Absent (null) when there is none, like block and holdDownUntil.
+    # A placement whose teardown finished (deletionComplete: it only waits for its finalizer) is left out. The
+    # placement wakes the network when its provider subnet came, went or changed since the network listed it, and
+    # its teardown wakes it once it is complete (networkplacement_provision, networkplacement_teardown).
+    - name: The placements' provider-assigned IPv6 subnets
+      ansible.builtin.set_fact:
+        hn_provider6: >-
+          {%- set out = [] -%}
+          {%- for p in _hn_placements.resources | default([]) -%}
+            {%- set st = p.status | default({}, true) -%}
+            {%- if p.spec.network == fab_name and not (st.deletionComplete | default(false, true) | bool) -%}
+              {%- for sn in st.subnets | default([], true) -%}
+                {%- if sn.source | default('', true) == 'Provider' and ':' in sn.prefix | default('', true) -%}
+                  {%- set _ = out.append({'prefix': sn.prefix, 'placement': p.metadata.name}
+                                         | combine({'site': st.site} if st.site | default('', true) | length > 0 else {})) -%}
+                {%- endif -%}
+              {%- endfor -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out | sort(attribute='prefix') | sort(attribute='placement') }}
 
     - name: Report what the network waits for
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
@@ -306,7 +331,8 @@
               'block': {'prefix': hn_block, 'prefixLength': hn_block.split('/')[1] | int,
                         'source': 'Pinned' if hn_platform6.prefix | default('', true) | length > 0 else 'Allocated'}
                        if hn_block | length > 0 else none,
-              'holdDownUntil': none} }}
+              'holdDownUntil': none,
+              'providerPrefixes': hn_provider6 if hn_provider6 | length > 0 else none} }}
 
     # not mode Platform (any more): a block the network still holds goes back to the pool (held down there, with the
     # hold-down realization has now)

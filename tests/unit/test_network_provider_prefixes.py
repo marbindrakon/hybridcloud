@@ -1,0 +1,200 @@
+"""The HybridNetwork's status.ipv6.providerPrefixes: the network job lists the IPv6 subnets cloud providers assigned
+to its placements (their status.subnets rows with source Provider) as {prefix, placement, site}, read-only next to the
+address space; absent when there is none. The row shapes follow the
+recorded gate evidence: an AWS placement reports the Amazon /56 (dual-stack and IPv6-only alike; the per-zone /64s
+stay in status.realization.site.ipv6.subnets), a Google Cloud placement the subnet's external /64. The plays run in
+ansible-playbook (skipped without it); the wiring checks always run. Documentation prefixes only."""
+import itertools
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from play_helper import HAVE_ANSIBLE, ROOT, by_name, load, run_play, walk, write_out  # noqa: E402
+
+sys.path.insert(0, os.path.join(ROOT, "eda", "rulebooks", "collections", "ansible_collections", "hybridsovereign",
+                                "shc", "plugins", "module_utils"))
+import shc_status as S  # noqa: E402
+
+ROLES = os.path.join(ROOT, "eda", "rulebooks", "roles")
+HN = os.path.join(ROLES, "hybridnetwork_provision", "tasks")
+CRD = os.path.join(ROOT, "operator", "config", "crd", "bases", "crd-hybridnetwork.yaml")
+
+AWS56 = "2001:db8:0:5800::/56"          # what an AWS placement reports (the VPC's Amazon block)
+AWS56_B = "2001:db8:0:7700::/56"
+GCP64 = "2001:db8:4090:c74::/64"        # what a Google Cloud placement reports (the subnet's external /64)
+NET64 = "2001:db8:4005:4900::/64"       # a placement subnet from the network's own space
+
+
+def row(prefix, source):
+    return {"family": 6 if ":" in prefix else 4, "prefix": prefix, "source": source}
+
+
+def pl(name, subnets, network="net", site="site-a", deleting=False, complete=False):
+    md = {"name": name, "namespace": "entity-a"}
+    if deleting or complete:
+        md["deletionTimestamp"] = "2001-01-01T00:00:00Z"
+    st = {"subnets": subnets}
+    if site:
+        st["site"] = site
+    if complete:
+        st["deletionComplete"] = True
+    return {"metadata": md, "spec": {"network": network}, "status": st}
+
+
+AWS_DUAL = pl("web-aws", [row("10.70.1.0/24", "Network"), row(AWS56, "Provider")], site="aws-1")
+AWS_ONLY = pl("v6-aws", [row(AWS56_B, "Provider")], site="aws-1")
+GCP_DUAL = pl("web-gcp", [row("10.70.2.0/24", "Network"), row(GCP64, "Provider")], site="gcp-1")
+METAL = pl("web-vms", [row("10.70.0.0/24", "Network"), row(NET64, "Network")], site="metal-1")
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ProviderPrefixList(unittest.TestCase):
+    def listed(self, placements, name="net"):
+        t = by_name(load(os.path.join(HN, "main.yml")), "The placements' provider-assigned IPv6 subnets")
+        return run_play([t, write_out("hn_provider6")], {"fab_name": name, "_hn_placements": {"resources": placements}})
+
+    def test_aws_dual_stack_lists_the_amazon_block_only(self):
+        self.assertEqual(self.listed([AWS_DUAL]), [{"prefix": AWS56, "placement": "web-aws", "site": "aws-1"}])
+
+    def test_aws_ipv6_only_lists_the_amazon_block(self):
+        self.assertEqual(self.listed([AWS_ONLY]), [{"prefix": AWS56_B, "placement": "v6-aws", "site": "aws-1"}])
+
+    def test_gcp_lists_the_external_64(self):
+        self.assertEqual(self.listed([GCP_DUAL]), [{"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}])
+        only = pl("v6-gcp", [row(GCP64, "Provider")], site="gcp-1")
+        self.assertEqual(self.listed([only]), [{"prefix": GCP64, "placement": "v6-gcp", "site": "gcp-1"}])
+
+    def test_mixed_with_network_sourced_and_other_networks(self):
+        other = pl("x-aws", [row("2001:db8:0:9900::/56", "Provider")], network="other", site="aws-1")
+        out = self.listed([METAL, GCP_DUAL, other, AWS_ONLY, AWS_DUAL])
+        self.assertEqual(out, [{"prefix": AWS56_B, "placement": "v6-aws", "site": "aws-1"},
+                               {"prefix": AWS56, "placement": "web-aws", "site": "aws-1"},
+                               {"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}])
+
+    def test_the_order_does_not_follow_the_listing(self):
+        pls = [METAL, GCP_DUAL, AWS_ONLY, AWS_DUAL]
+        outs = [self.listed(list(p)) for p in itertools.islice(itertools.permutations(pls), 0, 24, 5)]
+        for o in outs[1:]:
+            self.assertEqual(o, outs[0])
+
+    def test_no_ipv4_and_no_network_rows(self):
+        odd = pl("odd", [row("192.0.2.0/24", "Provider"), {"family": 6, "prefix": "2001:db8:0:1::/64"},
+                         row(NET64, "Network")])
+        self.assertEqual(self.listed([odd, METAL]), [])
+
+    def test_nothing_without_provider_subnets(self):
+        self.assertEqual(self.listed([]), [])
+        self.assertEqual(self.listed([METAL]), [])
+        self.assertEqual(self.listed([pl("bare", [])]), [])
+        self.assertEqual(self.listed([{"metadata": {"name": "new"}, "spec": {"network": "net"}}]), [])
+
+    def test_a_placement_counts_until_its_teardown_is_complete(self):
+        tearing = pl("web-aws", AWS_DUAL["status"]["subnets"], site="aws-1", deleting=True)
+        self.assertEqual(self.listed([tearing]), [{"prefix": AWS56, "placement": "web-aws", "site": "aws-1"}])
+        done = pl("web-aws", AWS_DUAL["status"]["subnets"], site="aws-1", complete=True)
+        self.assertEqual(self.listed([done, GCP_DUAL]), [{"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}])
+        # a placement that is gone is simply not listed
+        self.assertEqual(self.listed([GCP_DUAL]), [{"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}])
+
+    def test_an_entry_without_a_known_site_has_no_site(self):
+        self.assertEqual(self.listed([pl("p", [row(GCP64, "Provider")], site="")]), [{"prefix": GCP64, "placement": "p"}])
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ProviderPrefixStatus(unittest.TestCase):
+    def ipv6_status(self, provider6):
+        t = by_name(load(os.path.join(HN, "main.yml")), "Keep the address space")
+        return run_play([t, write_out("hn_ipv6_status")],
+                        {"fab_ipam_result": {"addressSpace": [], "changed": False}, "hn_block": "2001:db8:4005:4900::/56",
+                         "hn_tenant6": [], "hn_platform6": {"family": 6}, "hn_mode6": "Platform", "hn_provider6": provider6})
+
+    def test_absent_when_empty_like_block_and_hold_down(self):
+        self.assertIsNone(self.ipv6_status([])["providerPrefixes"])
+
+    def test_the_list_as_computed(self):
+        lst = [{"prefix": AWS56, "placement": "web-aws", "site": "aws-1"}]
+        self.assertEqual(self.ipv6_status(lst)["providerPrefixes"], lst)
+
+    def test_the_wait_for_platform_space_writes_it_too(self):
+        t = by_name(load(os.path.join(HN, "platform_block.yml")), "Report the network waiting for platform address space")
+        expr = t["vars"]["fab_status"]
+        tasks = [{"ansible.builtin.set_fact": {"st": expr}}, write_out("st.ipv6")]
+        base = {"hn_status": {"entity": "a"}, "fab_ipam_result": {"waiting": "x"}}
+        self.assertIsNone(run_play(tasks, dict(base, hn_provider6=[]))["providerPrefixes"])
+        lst = [{"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}]
+        self.assertEqual(run_play(tasks, dict(base, hn_provider6=lst))["providerPrefixes"], lst)
+
+
+class ProviderPrefixMerge(unittest.TestCase):
+    """status keeps unknown fields and is merge-patched: the job's null removes the list, a shorter list replaces it."""
+
+    def obj(self, lst):
+        return {"metadata": {"resourceVersion": "1", "generation": 1},
+                "status": {"status": "ready", "ipv6": {"mode": "Platform", "providerPrefixes": lst}}}
+
+    def write(self, before, after):
+        o = self.obj(before)
+        patch, _ = S.compute_status_patch(o, {"status": "ready", "ready": True, "ipv6": {"mode": "Platform",
+                                                                                      "providerPrefixes": after}})
+        return S._merge_patch(o["status"], patch["status"])["ipv6"]
+
+    def test_null_removes_the_list(self):
+        two = [{"prefix": AWS56, "placement": "a"}, {"prefix": GCP64, "placement": "b"}]
+        self.assertNotIn("providerPrefixes", self.write(two, None))
+
+    def test_a_shorter_list_replaces_the_longer(self):
+        two = [{"prefix": AWS56, "placement": "a"}, {"prefix": GCP64, "placement": "b"}]
+        self.assertEqual(self.write(two, two[1:])["providerPrefixes"], two[1:])
+
+
+class Wiring(unittest.TestCase):
+    def names(self, path):
+        return [t.get("name") for t in walk(load(path))]
+
+    def test_the_list_is_computed_before_any_status_write_that_carries_it(self):
+        names = self.names(os.path.join(HN, "main.yml"))
+        i = names.index("The placements' provider-assigned IPv6 subnets")
+        self.assertLess(names.index("Set the network status"), i)
+        self.assertLess(i, names.index("The network's platform IPv6 block"))
+        self.assertLess(i, names.index("Keep the address space"))
+        with open(os.path.join(HN, "main.yml")) as f:
+            self.assertIn("'ipv6': hn_ipv6_status", f.read())
+
+    def test_the_network_never_wakes_a_ready_provider_placement(self):
+        # no loop: the network's IPv6 row wake skips placements whose IPv6 subnet comes from the provider, and its other
+        # placement wakes are for pending placements only
+        t = by_name(load(os.path.join(HN, "main.yml")), "Wake the placements whose IPv6 internet row changed")
+        self.assertIn("!= 'Provider'", t["vars"]["nudge_crs"])
+        t = by_name(load(os.path.join(HN, "main.yml")), "Wake the placements waiting for address space")
+        self.assertIn("== 'pending'", t["vars"]["nudge_crs"])
+
+    def test_no_consumer_of_the_address_space_reads_the_list(self):
+        readers = []
+        for base, _dirs, files in os.walk(os.path.join(ROOT, "eda")):
+            for f in files:
+                if f.endswith((".yml", ".yaml", ".py", ".j2")):
+                    with open(os.path.join(base, f)) as fh:
+                        if "providerPrefixes" in fh.read():
+                            readers.append(os.path.relpath(os.path.join(base, f), ROOT))
+        self.assertEqual(sorted(readers), [
+            "eda/rulebooks/roles/hybridnetwork_provision/tasks/main.yml",
+            "eda/rulebooks/roles/hybridnetwork_provision/tasks/platform_block.yml",
+        ])
+
+    def test_crd_schema(self):
+        crd = load(CRD)
+        st = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["status"]["properties"]
+        pp = st["ipv6"]["properties"]["providerPrefixes"]
+        self.assertEqual(pp["type"], "array")
+        self.assertEqual(sorted(pp["items"]["properties"]), ["placement", "prefix", "site"])
+        for p in pp["items"]["properties"].values():
+            self.assertEqual(p["type"], "string")
+            self.assertTrue(p["description"])
+        self.assertNotIn("providerPrefixes", st["addressSpace"]["items"]["properties"])
+        self.assertEqual(sorted(st["addressSpace"]["items"]["properties"]),
+                         ["allocations", "family", "largestFree", "prefix", "source"])
+
+
+if __name__ == "__main__":
+    unittest.main()

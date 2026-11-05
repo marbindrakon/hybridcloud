@@ -5,7 +5,7 @@
 # blocks apply. Refused: FamilyUnavailable (the fabric has no pool), PrefixInvalid (a size the pool doesn't offer, a
 # pinned block outside it). Pending WaitingForAddressSpace while no block can be given (the job ends; a release
 # wakes the network, a hold-down ends on its reconcile period).
-# Inputs: hn_platform6, hn_fabric_name, hn_status, fab_entity. Sets hn_block, hn_pool, hn_block_new.
+# Inputs: hn_platform6, hn_fabric_name, hn_status, hn_provider6, fab_entity. Sets hn_block, hn_pool, hn_block_new.
 - name: The fabric's public pools
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam_pools.yml"
   vars:
@@ -54,7 +54,8 @@
     fab_waiting_for: ["platform IPv6 address space ({{ fab_ipam_result.waiting }})"]
     fab_status: >-
       {{ hn_status | combine({'ipv6': {'mode': 'Platform', 'prefixes': [], 'block': none,
-                                       'holdDownUntil': fab_ipam_result.holdDownUntil | default(none, true)}}) }}
+                                       'holdDownUntil': fab_ipam_result.holdDownUntil | default(none, true),
+                                       'providerPrefixes': hn_provider6 if hn_provider6 | length > 0 else none}}) }}
   when: fab_ipam_result.waiting is defined
 
 - name: End the job while waiting for platform address space
