@@ -313,8 +313,11 @@ spec:
   `status.ipv6.providerPrefixes`, one entry per subnet with its `prefix`, `placement` and `site`: an AWS placement's
   /56 (its /64 per zone stays on the placement), a Google Cloud placement's /64. The list is for reading: those
   subnets are not part of the network's address space (`status.addressSpace`) and nothing is allocated from them.
-  It follows the placements (a new provider subnet appears at the latest when its placement is ready, an entry goes
-  once its placement's deletion is complete) and is absent while no placement has one.
+  The network updates it on every run of its own, also while it waits or has failed, and its placements wake it when
+  they become ready, when their provider subnet comes, goes or changes, and when their deletion is complete: an entry
+  appears on the network's next run after its placement reports the subnet and goes on the next run after the
+  placement's deletion is complete. **Retry now** on the network brings it up to date at any time. The list is
+  absent while no placement has one.
 - **Where IPv6 is offered:** a site offers IPv6 placements only once the platform team has turned IPv6 on for it,
   and some sites offer IPv6-only placements or only some sources. Elsewhere the placement fails with
   `FamilyUnavailable` before anything is allocated, and the message names what is missing:

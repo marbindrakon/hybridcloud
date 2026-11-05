@@ -261,9 +261,11 @@ VPC, its block and the routes are kept, and the VPC's IPv6 routes are set back t
 On the network, `status.ipv6.providerPrefixes` lists the /56 of each placement with source `Provider` as
 `{prefix, placement, site}` (the /64s per zone stay on the placement): for reading only, it is not part of
 `status.addressSpace`, and neither the IPAM's allocations, the attachment circuits' address check nor the fabric's
-announcements and egress filters read it. The network job writes it from its placements' `status.subnets`; a
-placement whose provider subnet came, went or changed wakes the network, and so does a completed placement teardown.
-The field is absent while no placement has a provider subnet.
+announcements and egress filters read it. Every network job writes it from its placements' `status.subnets`, also a
+run that waits for the fabric or fails (as a merge patch of `status.ipv6` that leaves its other keys as they are); a
+placement whose provider subnet came, went or changed wakes the network, and so does every completed placement
+deletion (not while the network itself is being deleted). Retry now on the network refreshes it. The field is absent
+while no placement has a provider subnet.
 
 **Costs.** IPAM Free Tier is free, private GUA included. Source `Network` sends the placement's internet and
 inter-site traffic through the fabric: the round trip to the site gateway adds latency, and AWS charges data

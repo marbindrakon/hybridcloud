@@ -140,7 +140,8 @@ class ProviderPrefixStatus(unittest.TestCase):
 
 
 class ProviderPrefixMerge(unittest.TestCase):
-    """status keeps unknown fields and is merge-patched: the job's null removes the list, a shorter list replaces it."""
+    """status keeps unknown fields and is merge-patched: the job's null removes the list, a shorter list replaces it.
+    A write that carries only status.ipv6.providerPrefixes leaves the other keys of status.ipv6 as they are."""
 
     def obj(self, lst):
         return {"metadata": {"resourceVersion": "1", "generation": 1},
@@ -159,6 +160,67 @@ class ProviderPrefixMerge(unittest.TestCase):
     def test_a_shorter_list_replaces_the_longer(self):
         two = [{"prefix": AWS56, "placement": "a"}, {"prefix": GCP64, "placement": "b"}]
         self.assertEqual(self.write(two, two[1:])["providerPrefixes"], two[1:])
+
+    FULL = {"mode": "Platform", "prefixes": ["2001:db8:4005:4900::/56"],
+            "block": {"prefix": "2001:db8:4005:4900::/56", "prefixLength": 56, "source": "Allocated"}}
+
+    def written(self, body, ipv6_before):
+        o = {"metadata": {"resourceVersion": "1", "generation": 1},
+             "status": {"status": "ready", "ready": True} | ({"ipv6": ipv6_before} if ipv6_before is not None else {})}
+        patch, _ = S.compute_status_patch(o, body)
+        return S._merge_patch(o["status"], patch["status"])
+
+    def test_the_wait_for_the_fabric_removes_the_list_and_keeps_the_rest(self):
+        before = dict(self.FULL, providerPrefixes=[{"prefix": AWS56, "placement": "a"}])
+        body = {"status": "pending", "ready": False, "message": "Waiting for HybridFabric f (failed)",
+                "waitingFor": ["HybridFabric f (failed)"], "placementCount": 0, "ipv6": {"providerPrefixes": None}}
+        self.assertEqual(self.written(body, before)["ipv6"], self.FULL)
+
+    def test_a_failure_replaces_the_list_and_keeps_the_rest(self):
+        two = [{"prefix": AWS56, "placement": "a"}, {"prefix": GCP64, "placement": "b"}]
+        body = {"status": "failed", "ready": False, "message": "HybridNetwork n: x", "ipv6": {"providerPrefixes": two[1:]}}
+        self.assertEqual(self.written(body, dict(self.FULL, providerPrefixes=two))["ipv6"], dict(self.FULL, providerPrefixes=two[1:]))
+
+    def test_a_write_without_the_patch_leaves_status_ipv6_alone(self):
+        self.assertNotIn("ipv6", self.written({"status": "pending", "ready": False, "message": "m"}, None))
+        self.assertEqual(self.written({"status": "failed", "ready": False, "message": "m"}, self.FULL)["ipv6"], self.FULL)
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ProviderPrefixOtherWrites(unittest.TestCase):
+    """The wait for the fabric and a failure carry the list too (hn_provider6_patch), so it never goes stale there and
+    a ready provider placement's comparison clears after one network run."""
+
+    def patch(self, provider6, fab_st):
+        t = by_name(load(os.path.join(HN, "main.yml")), "The provider-assigned subnets for the writes without the network's IPv6 status")
+        return run_play([t, write_out("hn_provider6_patch")], {"hn_provider6": provider6, "fab_st": fab_st})
+
+    def test_the_patch(self):
+        lst = [{"prefix": AWS56, "placement": "web-aws", "site": "aws-1"}]
+        with_ipv6 = {"ipv6": {"mode": "Platform"}}
+        self.assertEqual(self.patch(lst, with_ipv6), {"ipv6": {"providerPrefixes": lst}})
+        self.assertEqual(self.patch([], with_ipv6), {"ipv6": {"providerPrefixes": None}})
+        self.assertEqual(self.patch(lst, {}), {"ipv6": {"providerPrefixes": lst}})
+        # a network that has no status.ipv6 yet and nothing to list gets no ipv6 key at all
+        self.assertEqual(self.patch([], {}), {})
+        self.assertEqual(self.patch([], {"ipv6": None}), {})
+
+    def expr(self, task_name, extra):
+        t = by_name(load(os.path.join(HN, "main.yml")), task_name)
+        return run_play([{"ansible.builtin.set_fact": {"st": t["vars"]["fab_status"]}}, write_out("st")], extra)
+
+    def test_the_wait_for_the_fabric_carries_it(self):
+        patch = {"ipv6": {"providerPrefixes": None}}
+        st = self.expr("Report what the network waits for", {"hn_status": {"entity": "a", "placementCount": 1},
+                                                           "hn_provider6_patch": patch})
+        self.assertEqual(st, {"entity": "a", "placementCount": 1, "ipv6": {"providerPrefixes": None}})
+        st = self.expr("Report what the network waits for", {"hn_status": {"entity": "a"}, "hn_provider6_patch": {}})
+        self.assertEqual(st, {"entity": "a"})
+
+    def test_a_failure_carries_it_when_the_job_got_that_far(self):
+        lst = {"ipv6": {"providerPrefixes": [{"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}]}}
+        self.assertEqual(self.expr("Mark the HybridNetwork failed", {"hn_provider6_patch": lst}), lst)
+        self.assertEqual(self.expr("Mark the HybridNetwork failed", {}), {})
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -269,7 +331,14 @@ class Wiring(unittest.TestCase):
     def test_the_list_is_computed_before_any_status_write_that_carries_it(self):
         names = self.names(os.path.join(HN, "main.yml"))
         i = names.index("The placements' provider-assigned IPv6 subnets")
-        self.assertLess(names.index("Set the network status"), i)
+        j = names.index("The provider-assigned subnets for the writes without the network's IPv6 status")
+        self.assertLess(names.index("Read the HybridNetwork"), names.index("List the network's placements"))
+        self.assertLess(names.index("List the network's placements"), i)
+        self.assertLess(i, j)
+        # before the first refusal of the spec, so a failure carries it too
+        self.assertLess(j, names.index("List the platform's fabrics"))
+        self.assertLess(j, names.index("Refuse a fabric change"))
+        self.assertLess(j, names.index("Report what the network waits for"))
         self.assertLess(i, names.index("The network's platform IPv6 block"))
         self.assertLess(i, names.index("Keep the address space"))
         with open(os.path.join(HN, "main.yml")) as f:
