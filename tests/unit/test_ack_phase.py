@@ -29,9 +29,8 @@ OPERATORS = ("namespace", "primary")
 # Entity records Creating in its own first write (entity_is_new) before the namespace operator deployment.
 OWN_FIRST_WRITE = {("primary", "entity")}
 # Status writes that may come before the acknowledgement because they only run on an object the job has written
-# already and touch none of the phase fields: the HybridFabric's stale mark of an old translation canary reading
-# (it needs readings in status.realization.translation, which only the fabric job writes).
-PRIOR_STATUS_WRITES = {("primary", "hybridfabric"): {"Mark an old translation canary reading stale"}}
+# already and touch none of the phase fields: none at present ({(operator, role): {task name}}).
+PRIOR_STATUS_WRITES = {}
 PHASE_FIELDS = {"phase", "phaseSince", "summary", "status", "ready", "observedGeneration"}
 MARK = re.compile(r"^Mark (\w+) as reconciling$")
 NOW_SINCE = "2026-10-22T09:00:00Z"
