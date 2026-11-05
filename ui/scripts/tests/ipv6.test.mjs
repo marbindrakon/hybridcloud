@@ -242,7 +242,15 @@ test('cloud-init snippet: the network data matches the NIC by the MAC address th
   // OpenStack: the config drive carries the network configuration; only the user data, whatever MAC address is given
   const oso = m.cloudInitSnippet(p('CloudOSO', only6, tr), { macAddress: '02:00:00:00:00:01' });
   assert.deepEqual([oso.tenantNetworkData, oso.macAddress, oso.networkData, oso.vmInterface], [false, null, null, null]);
-  assert.deepEqual([oso.clat, oso.ignoreAutoDns], [true, true]);
+  // the placement's subnet hands out the translation resolvers by DHCPv6 and in the config drive: the CLAT only
+  assert.deepEqual([oso.clat, oso.ignoreAutoDns], [true, false]);
+  assert.doesNotMatch(oso.userData, /ignore-auto-dns/);
+  // AWS, the platform's translation: the VPC's DHCP option set hands out the resolvers; the CLAT only
+  const aws = m.cloudInitSnippet(p('CloudAWS', only6, tr));
+  assert.deepEqual([aws.networkData, aws.clat, aws.ignoreAutoDns], [null, true, false]);
+  assert.equal(aws.userData, '#cloud-config\npackages: [clatd]\nwrite_files:\n  - path: /etc/clatd.conf\n    content: |\n      plat-prefix=64:ff9b::/96\nruncmd:\n  - [systemctl, enable, --now, clatd]\n');
+  // OpenShift Virtualization keeps the step: DHCPv6 there also hands out the cluster's DNS service
+  assert.equal(m.cloudInitSnippet(p('CloudVirt', only6, tr), { macAddress: '02:00:00:00:00:01' }).ignoreAutoDns, true);
   // ... and nothing to show where there is no user data either
   assert.equal(m.cloudInitSnippet(p('CloudOSO', dual, null), { macAddress: '02:00:00:00:00:01' }), null);
   assert.equal(m.cloudInitSnippet(p('CloudAWS', dual, null)), null);

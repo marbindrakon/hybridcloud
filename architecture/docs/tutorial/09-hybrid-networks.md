@@ -562,8 +562,9 @@ Tenants:
   placements it has a MAC address for the VM's interface (proposed anew on each visit, or one you enter), the VM
   interface with that address and the network data that matches it. On IPv6-only placements with translation it
   also has user data: clatd, and the guest kept on the translation resolvers (`ignore-auto-dns`). On OpenStack, AWS and
-  Google Cloud placements the cloud provides the guest's network configuration (on OpenStack, the config drive), so
-  the snippet has the user data only and is not shown when there is none.
+  Google Cloud placements the cloud provides the guest's network configuration and its resolvers (on OpenStack, the
+  placement's subnet by DHCPv6 and the config drive; on AWS, the VPC's DHCP options), so the snippet has only user
+  data for clatd and is not shown when there is none.
 - **Environments → OpenShift Virtualization:** environments with their site, VM namespaces (network, ready), quota,
   DNS zone and API endpoint. The site picker offers the sites of the tenant profile.
 - Platform objects aren't shown to tenants.

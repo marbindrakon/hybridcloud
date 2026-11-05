@@ -539,13 +539,14 @@ export interface CloudInitSnippet {
    */
   networkData: string | null;
   /**
-   * cloud-config user data: keep the guest on the reported resolvers (any but the provider's path) and, for an
-   * IPv6-only placement with translation, a CLAT; null when neither applies
+   * cloud-config user data: keep the guest on the network data's resolvers (where the snippet gives network data and
+   * the platform reports resolvers of its own) and, for an IPv6-only placement with translation, a CLAT; null when
+   * neither applies
    */
   userData: string | null;
   /** whether userData configures a CLAT */
   clat: boolean;
-  /** whether userData keeps the guest on the reported resolvers (ignoring those handed out by DHCP) */
+  /** whether userData keeps the guest on the network data's resolvers (ignoring those handed out by DHCP) */
   ignoreAutoDns: boolean;
 }
 
@@ -661,8 +662,9 @@ export function proposeMacAddress(randomOctets?: (n: number) => ArrayLike<number
 /**
  * Guest network configuration for a VM on the placement's subnet, built from status only: DHCPv4 when the
  * placement has IPv4, DHCPv6 and router advertisements for IPv6, the resolvers the platform reports. With
- * the platform's resolvers, user data makes the guest ignore resolvers handed out by DHCP (they need not translate:
- * on an OpenShift Virtualization site DHCPv6 hands out the cluster's DNS service, without DNS64); for an
+ * the platform's resolvers in the network data, user data makes the guest ignore resolvers handed out by DHCP (they
+ * need not translate: on an OpenShift Virtualization site DHCPv6 hands out the cluster's DNS service, without
+ * DNS64); for an
  * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix.
  *
  * The network data matches the VM's NIC by `macAddress`, the address the VM's interface is given (the guest's own
@@ -702,8 +704,12 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
   }
   // the prefix is the one line of a literal block (clatd.conf), so a single token
   const clat = !v4?.prefix && /^\S+$/.test(pref64);
-  // the platform's resolvers only: on the provider's path the provider's DHCP already hands out its DNS64 resolver
-  const keepResolvers = resolvers.length > 0 && tr?.path !== 'Provider';
+  // Only where the snippet's network data names the resolvers (OpenShift Virtualization: DHCPv6 also hands out the
+  // cluster's DNS service, without DNS64). Elsewhere the cloud's own DHCP hands out the translation resolvers and
+  // the guest's connection has none of its own: the placement's subnet on OpenStack (the config drive carries the
+  // same list, so the step would only pin the guest to the list it booted with), the VPC's DHCP option set on AWS,
+  // the provider's resolver on the provider's path.
+  const keepResolvers = tenantNetworkData && resolvers.length > 0 && tr?.path !== 'Provider';
   let userData: string | null = null;
   if (clat || keepResolvers) {
     const ud = ['#cloud-config'];
