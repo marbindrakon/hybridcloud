@@ -74,6 +74,13 @@
     - fab_real.core.icmpSource6 | default('', true) | length > 0
     - fab_check_result.icmp6 | default('', true) | length > 0
 
+# with the announcement on (cg_icmp6_announce, main.yml) the node announces its own ICMPv6 source to the site in every
+# IPv6 VRF (frr-gateway.conf.j2) and the apply loads the input filter of the VRFs (icmp6Announced) before FRR takes it
+- name: "{{ bgw_node.name }}: the ICMPv6 source this node announces to the site"
+  ansible.builtin.set_fact:
+    cg_node_icmp6_announce: >-
+      {{ (fab_check_result.icmp6 | default('', true)) if cg_icmp6_announce | default(false) | bool else '' }}
+
 # the core's IPv6 keys are empty strings on an IPv4-only core and until the fabric offers the IPv6 core;
 # loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges
 - name: "{{ bgw_node.name }}: gateway instance config"
@@ -89,7 +96,9 @@
                                 'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
                                 'icmpSource6': fab_real.core.icmpSource6 | default('', true),
                                 'icmp6RateLimitMs': ('' if (fab_real.gateway | default({}, true)).icmp6RateLimitMs | default(none) is none
-                                                     else (fab_real.gateway.icmp6RateLimitMs | string))}) | to_nice_json }}
+                                                     else (fab_real.gateway.icmp6RateLimitMs | string))})
+         | combine({'icmp6Announced': true} if cg_node_icmp6_announce | default('', true) | length > 0 else {})
+         | to_nice_json }}
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf

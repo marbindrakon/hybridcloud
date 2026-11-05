@@ -33,6 +33,14 @@ fabric_realization_defaults:
     # by the gateway, and a guest connecting to a name with many addresses sends its attempts milliseconds apart:
     # every one must get its answer, or the guest waits a full retransmit
     icmp6RateLimitMs: 0
+    # announce each border gateway node's ICMPv6 source (core.icmpSource6) to the site in every VRF with IPv6: a /128
+    # route that stays out of the network's VPN, so the site returns traffic for a node's own address to that node
+    # rather than to whichever node its ECMP picks (ping and traceroute from a gateway node, ping to a node's ICMPv6
+    # source name). With it, IPv6 to the node itself from a VRF is filtered: ICMPv6 and TCP segments that open no
+    # connection pass, the rest is dropped. Only with the IPv6 core and core.icmpSource6; off: nothing of it exists
+    announceIcmpSource6: false
+    # per site (CloudInfrastructure name: true or false): overrides announceIcmpSource6 for that site's gateway
+    announceIcmpSource6BySite: {}
   core:
     bridge: br-core
     loopbackPool: 10.255.0.0/24
@@ -49,8 +57,8 @@ fabric_realization_defaults:
     # inside the SRGB
     sidOffset6: 1000
     # source of the ICMPv6 errors a VRF sends (Packet Too Big, Time Exceeded, Unreachable): a /128 per namespace
-    # per node on every VRF device (network address + (node position << 16) + provider-edge index); never
-    # announced. At least a /96, clear of loopbackPool6. Empty = none
+    # per node on every VRF device (network address + (node position << 16) + provider-edge index); not
+    # announced unless gateway.announceIcmpSource6. At least a /96, clear of loopbackPool6. Empty = none
     icmpSource6: ""
   nodes:
     trunkInterface: bond1
