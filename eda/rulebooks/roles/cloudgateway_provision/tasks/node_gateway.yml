@@ -554,6 +554,13 @@
       changed_when: false
       delegate_to: "{{ bgw_node.name }}"
 
+    - name: "{{ bgw_node.name }}: the lease lasts for the FRR reload (it still announces)"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+      vars:
+        fab_lease_step: "the FRR reload on {{ bgw_node.name }}"
+      when: "'announced=yes' in _cg_in6_ann.stdout"
+      timeout: 0
+
     - name: "{{ bgw_node.name }}: reload the FRR configuration (it still announces)"
       ansible.builtin.systemd:
         name: "shc-gw@{{ fab_name }}.service"
@@ -589,8 +596,16 @@
         mode: "0644"
       delegate_to: "{{ bgw_node.name }}"
 
+    - name: "{{ bgw_node.name }}: the lease lasts for the apply without the filter"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+      vars:
+        fab_lease_step: "the apply on {{ bgw_node.name }}"
+      timeout: 0
+
+    # under the same limit on the node as the first apply (15 s below the step's own)
     - name: "{{ bgw_node.name }}: apply the gateway instance without the filter"
-      ansible.builtin.command: "/usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up"
+      ansible.builtin.command: >-
+        timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} /usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up
       register: _cg_in6_off
       changed_when: "'changed=yes' in _cg_in6_off.stdout"
       failed_when: _cg_in6_off.rc != 0 or 'IPv6 core not applied' in _cg_in6_off.stdout

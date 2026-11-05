@@ -394,10 +394,14 @@ class TurnOffOrder(unittest.TestCase):
         self.assertLess(at("every VRF's VPN label leads into it"), at("remove the VRFs' input filter once"))
         block = [b["name"] for b in by_name(self.tasks(), "{{ bgw_node.name }}: remove the VRFs' input filter once the "
                                                           "announcement is withdrawn")["block"]]
+        # each long step (the reload, the apply) is preceded by the lease check that renews when little is left
         self.assertEqual([x.split(": ", 1)[1] for x in block], [
-            "does the instance still announce an ICMPv6 source", "reload the FRR configuration (it still announces)",
+            "does the instance still announce an ICMPv6 source",
+            "the lease lasts for the FRR reload (it still announces)",
+            "reload the FRR configuration (it still announces)",
             "the instance announces no ICMPv6 source", "the apply configuration as it was written",
-            "gateway instance config without the filter", "apply the gateway instance without the filter"])
+            "gateway instance config without the filter", "the lease lasts for the apply without the filter",
+            "apply the gateway instance without the filter"])
 
     def test_guards(self):
         tasks = self.tasks()
@@ -417,8 +421,9 @@ class TurnOffOrder(unittest.TestCase):
     def check_script(self, vtysh_body):
         """the withdrawal check (the block's first and third task share it) against a stand-in vtysh"""
         t = by_name(self.tasks(), "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn")
-        script = t["block"][0]["ansible.builtin.shell"]
-        self.assertEqual(script, t["block"][2]["ansible.builtin.shell"])
+        b = {x["name"].split(": ", 1)[1]: x for x in t["block"]}
+        script = b["does the instance still announce an ICMPv6 source"]["ansible.builtin.shell"]
+        self.assertEqual(script, b["the instance announces no ICMPv6 source"]["ansible.builtin.shell"])
         tmp = tempfile.mkdtemp(prefix="shc-in6-check-")
         self.addCleanup(shutil.rmtree, tmp, True)
         with open(os.path.join(tmp, "vtysh"), "w") as f:
