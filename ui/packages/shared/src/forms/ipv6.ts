@@ -520,8 +520,8 @@ export interface CloudInitSnippet {
  * The guest script of the user data: on the NIC with the IPv6 default route, ignore the resolvers the network hands
  * out (DHCP, router advertisements) and keep those of the network data, for the families given ("ipv6", or "ipv6
  * ipv4" on an IPv6-only placement). NetworkManager or systemd-networkd; a connection without resolvers of its own is
- * left alone. The translation canary sample (samples/platform/ipv6-canary/probe-user-data.yaml) ships the same
- * script with "ipv6 ipv4".
+ * left alone. The IPv6 translation probe (tests/connectivity/ipv6-translation-probe/probe-user-data.yaml) ships the
+ * same script with "ipv6 ipv4".
  */
 export function ignoreAutoDnsScript(families: string): string {
   return String.raw`#!/bin/bash

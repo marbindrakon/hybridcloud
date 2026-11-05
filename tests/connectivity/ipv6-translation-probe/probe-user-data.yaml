@@ -1,7 +1,7 @@
 #cloud-config
-# The translation canary probe (Fedora): a CLAT (clatd) for IPv4 literals, a check script run every minute by a
-# systemd timer, and a small HTTP server that serves the last run's results at http://[<address>]:__PORT__/metrics in
-# Prometheus text format. The platform's fabric job reads that page from the site's gateway. The guest uses only the
+# The IPv6 translation probe (Fedora): a CLAT (clatd) for IPv4 literals, a check script run every minute by a systemd
+# timer, and a small HTTP server that serves the last run's results at http://[<address>]:__PORT__/metrics in
+# Prometheus text format. A tester reads that page (README.md, "Reading the result"). The guest uses only the
 # resolvers of its network configuration (ignore-auto-dns, at every boot). Replace every placeholder first (README.md
 # lists them); the file is the same for an OpenShift Virtualization VM and an OpenStack server.
 package_update: false
@@ -11,7 +11,7 @@ packages:
   - bind-utils
   - iputils
   - curl
-  # reports the VM's addresses to OpenShift Virtualization (the site job reads the probe's address there)
+  # reports the VM's addresses to OpenShift Virtualization (the VirtualMachineInstance's status then lists them)
   - qemu-guest-agent
 write_files:
   # the CLAT: IPv4 literals leave as IPv6 through the site's translation prefix
@@ -19,13 +19,13 @@ write_files:
     permissions: "0644"
     content: |
       plat-prefix=__PREF64__
-  - path: /usr/local/bin/shc-ipv6-canary
+  - path: /usr/local/bin/shc-ipv6-probe
     permissions: "0755"
     content: |
       #!/bin/bash
-      # Translation canary: run every check once and write the results atomically to /var/lib/shc-ipv6-canary/metrics
-      # (Prometheus text format): shc_ipv6_canary_check{check="<name>"} 1 when the check passed, 0 when it failed,
-      # and shc_ipv6_canary_run_timestamp_seconds, the time the run finished.
+      # IPv6 translation probe: run every check once and write the results atomically to /var/lib/shc-ipv6-probe/metrics
+      # (Prometheus text format): shc_ipv6_probe_check{check="<name>"} 1 when the check passed, 0 when it failed,
+      # and shc_ipv6_probe_run_timestamp_seconds, the time the run finished.
       PREF64="__PREF64__"
       RESOLVERS="__RESOLVERS__"
       IPV4_ONLY_NAME="__IPV4_ONLY_NAME__"
@@ -33,7 +33,7 @@ write_files:
       IPV6_NAME="__IPV6_NAME__"
       IPV6_PING_TARGET="__IPV6_PING_TARGET__"
       DENIED_IPV4="__DENIED_IPV4__"
-      DIR=/var/lib/shc-ipv6-canary
+      DIR=/var/lib/shc-ipv6-probe
 
       # address: a global IPv6 address on the NIC (not unique local, past duplicate address detection)
       check_address() {
@@ -100,18 +100,18 @@ write_files:
         for r in ${RESOLVERS//,/ }; do
           [ "${r,,}" = "${s,,}" ] && t=1
         done
-        echo "# HELP shc_ipv6_canary_resolver_info The resolver the guest used at the end of the last run; translation 1 when it is a translation resolver"
-        echo "# TYPE shc_ipv6_canary_resolver_info gauge"
-        echo "shc_ipv6_canary_resolver_info{server=\"$s\",translation=\"$t\"} 1"
+        echo "# HELP shc_ipv6_probe_resolver_info The resolver the guest used at the end of the last run; translation 1 when it is a translation resolver"
+        echo "# TYPE shc_ipv6_probe_resolver_info gauge"
+        echo "shc_ipv6_probe_resolver_info{server=\"$s\",translation=\"$t\"} 1"
       }
 
       result() {
         local name=$1
         shift
         if "$@" >/dev/null 2>&1; then
-          echo "shc_ipv6_canary_check{check=\"$name\"} 1"
+          echo "shc_ipv6_probe_check{check=\"$name\"} 1"
         else
-          echo "shc_ipv6_canary_check{check=\"$name\"} 0"
+          echo "shc_ipv6_probe_check{check=\"$name\"} 0"
         fi
       }
 
@@ -120,8 +120,8 @@ write_files:
         mkdir -p "$DIR" && chmod 0755 "$DIR" || exit 1
         tmp=$(mktemp "$DIR/.metrics.XXXXXX") || exit 1
         {
-          echo "# HELP shc_ipv6_canary_check 1 when the check passed in the last run, 0 when it failed"
-          echo "# TYPE shc_ipv6_canary_check gauge"
+          echo "# HELP shc_ipv6_probe_check 1 when the check passed in the last run, 0 when it failed"
+          echo "# TYPE shc_ipv6_probe_check gauge"
           result address check_address
           result resolver check_resolver
           result pref64 check_pref64
@@ -131,31 +131,31 @@ write_files:
           result mtu check_mtu
           result deny check_deny
           resolver_info
-          echo "# HELP shc_ipv6_canary_run_timestamp_seconds When the last run finished, in seconds since the epoch"
-          echo "# TYPE shc_ipv6_canary_run_timestamp_seconds gauge"
-          echo "shc_ipv6_canary_run_timestamp_seconds $(date +%s)"
+          echo "# HELP shc_ipv6_probe_run_timestamp_seconds When the last run finished, in seconds since the epoch"
+          echo "# TYPE shc_ipv6_probe_run_timestamp_seconds gauge"
+          echo "shc_ipv6_probe_run_timestamp_seconds $(date +%s)"
         } > "$tmp"
         chmod 0644 "$tmp"
         mv -f "$tmp" "$DIR/metrics"
       }
 
       main "$@"
-  - path: /etc/systemd/system/shc-ipv6-canary.service
+  - path: /etc/systemd/system/shc-ipv6-probe.service
     permissions: "0644"
     content: |
       [Unit]
-      Description=Translation canary: run the checks once
+      Description=IPv6 translation probe: run the checks once
       Wants=network-online.target
       After=network-online.target clatd.service
 
       [Service]
       Type=oneshot
-      ExecStart=/usr/local/bin/shc-ipv6-canary
-  - path: /etc/systemd/system/shc-ipv6-canary.timer
+      ExecStart=/usr/local/bin/shc-ipv6-probe
+  - path: /etc/systemd/system/shc-ipv6-probe.timer
     permissions: "0644"
     content: |
       [Unit]
-      Description=Translation canary: run the checks every minute
+      Description=IPv6 translation probe: run the checks every minute
 
       [Timer]
       OnBootSec=30s
@@ -164,17 +164,17 @@ write_files:
 
       [Install]
       WantedBy=timers.target
-  - path: /etc/systemd/system/shc-ipv6-canary-http.service
+  - path: /etc/systemd/system/shc-ipv6-probe-http.service
     permissions: "0644"
     content: |
       [Unit]
-      Description=Translation canary: serve the last results at /metrics
+      Description=IPv6 translation probe: serve the last results at /metrics
       Wants=network-online.target
       After=network-online.target
 
       [Service]
-      ExecStartPre=+/usr/bin/install -d -m 0755 /var/lib/shc-ipv6-canary
-      ExecStart=/usr/bin/python3 -m http.server __PORT__ --bind :: --directory /var/lib/shc-ipv6-canary
+      ExecStartPre=+/usr/bin/install -d -m 0755 /var/lib/shc-ipv6-probe
+      ExecStart=/usr/bin/python3 -m http.server __PORT__ --bind :: --directory /var/lib/shc-ipv6-probe
       User=nobody
       Restart=always
       RestartSec=5
@@ -249,5 +249,5 @@ runcmd:
   - [systemctl, enable, --now, ignore-auto-dns.service]
   - [systemctl, start, qemu-guest-agent.service]
   - [systemctl, enable, --now, clatd.service]
-  - [systemctl, enable, --now, shc-ipv6-canary-http.service]
-  - [systemctl, enable, --now, shc-ipv6-canary.timer]
+  - [systemctl, enable, --now, shc-ipv6-probe-http.service]
+  - [systemctl, enable, --now, shc-ipv6-probe.timer]

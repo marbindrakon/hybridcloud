@@ -1,7 +1,7 @@
-# The translation canary probe on an OpenShift Virtualization site: one Fedora VM in the canary environment's site
-# namespace on the canary network's placement (the namespace's primary network), with the l2bridge binding. Its name
-# is the realization's canaries.ipv6Translation.workload. The user data is probe-user-data.yaml with its placeholders
-# replaced, kept in a Secret of the same namespace:
+# The IPv6 translation probe on an OpenShift Virtualization site: one Fedora VM in the probe environment's site
+# namespace on the probe network's placement (the namespace's primary network), with the l2bridge binding, named
+# __WORKLOAD__. The user data is probe-user-data.yaml with its placeholders replaced, kept in a Secret of the same
+# namespace:
 #   oc create secret generic __WORKLOAD__-user-data -n __NAMESPACE__ --from-file=userdata=probe-user-data.yaml
 # The network data configures the NIC (matched by its MAC address) by DHCPv6 and router advertisements, without DHCPv4,
 # with the translation resolvers of the placement (status.ipv6.translation.resolvers). DHCPv6 also hands out the
@@ -12,12 +12,12 @@ kind: VirtualMachine
 metadata:
   name: __WORKLOAD__
   namespace: __NAMESPACE__
-  labels: {app: shc-ipv6-canary}
+  labels: {app: shc-ipv6-probe}
 spec:
   runStrategy: Always
   template:
     metadata:
-      labels: {app: shc-ipv6-canary}
+      labels: {app: shc-ipv6-probe}
     spec:
       evictionStrategy: LiveMigrate
       domain:

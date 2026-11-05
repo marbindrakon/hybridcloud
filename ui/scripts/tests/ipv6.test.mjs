@@ -233,8 +233,8 @@ test('cloud-init snippet: with resolvers the guest ignores the resolvers DHCP ha
   assert.doesNotMatch(script, /^[^#]*device reapply/m);
   assert.match(ud, /\n {6}StandardOutput=journal\+console\n/);
   assert.match(script, /\[DHCPv6\]\\nUseDNS=false/);
-  // the canary sample ships the same script
-  const sample = fs.readFileSync(path.join(process.env.UI_ROOT, '..', 'samples/platform/ipv6-canary/probe-user-data.yaml'), 'utf8');
+  // the IPv6 translation probe (a test tool) ships the same script
+  const sample = fs.readFileSync(path.join(process.env.UI_ROOT, '..', 'tests/connectivity/ipv6-translation-probe/probe-user-data.yaml'), 'utf8');
   const from = sample.indexOf('  - path: /usr/local/sbin/ignore-auto-dns\n');
   assert.ok(from > 0);
   const lines = sample.slice(from).split('\n').slice(3);

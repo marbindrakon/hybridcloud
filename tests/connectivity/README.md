@@ -1,6 +1,7 @@
 # Cluster Connectivity Tests
 
-**Scope**: Network and API connectivity between central cluster, services cluster, and platform dependencies  
+**Scope**: Network and API connectivity between central cluster, services cluster, and platform dependencies; the
+IPv6-only path of a site with the translation probe ([ipv6-translation-probe/](ipv6-translation-probe/README.md))  
 **Prerequisites**: Mega-Phase A (foundation) complete; RHACM imported services cluster
 
 ---
@@ -147,6 +148,15 @@ oc get policy -n sovereign-cloud --context=central-admin
 
 **Expected**: Services API reachable with scoped token
 
+### TC-CONN-016: IPv6-only Placement Reaches IPv4 by Translation
+
+Per OpenShift Virtualization or OpenStack site that offers IPv6-only placements with translation: deploy the probe of
+[ipv6-translation-probe/](ipv6-translation-probe/README.md) on a tenant of the tester's own, then read it from the
+guest and through the site's gateway on each border gateway node ("Reading the result" there).
+
+**Expected**: every `shc_ipv6_probe_check` is 1, the last run at most 180 s old, `shc_ipv6_probe_resolver_info`
+with `translation="1"`; the probe reached from at least one border gateway node
+
 ---
 
 ## Network Path Diagram
@@ -179,6 +189,7 @@ flowchart TB
 ## Pass Criteria
 
 - TC-CONN-001 through TC-CONN-015 PASS (skip TC-CONN-010/011 if Mega-Phase D not complete)
+- TC-CONN-016 PASS on every site that offers IPv6-only placements with translation (skip when none does)
 - No TLS certificate errors in platform pod logs
 - Cross-cluster latency < 500ms for API calls (informational)
 
@@ -190,3 +201,5 @@ flowchart TB
 | Vault connection refused | Pod not ready / sealed | `oc get pods -n sovereign-cloud` |
 | Kafka auth failure | ExternalSecret not synced | `oc get externalsecret -n sovereign-cloud-jobs` |
 | Quay pull ImagePullBackOff | Missing pull secret | `oc get secret -n sovereign-cloud` |
+| Translation probe: `pref64`/`name4` 0, `resolver` 1 | Guest left the translation resolvers | `resolver_info` `translation="0"`; the probe's `ignore-auto-dns` unit on the console |
+| Translation probe unreachable from one node only | Reply returned through the other node | Read again from the other node (probe README, "Through the gateway") |
