@@ -10,7 +10,7 @@ module: cr_status
 short_description: Write the status of a hybridsovereign.redhat object
 description:
   - Reads the object, merges the given status fields with the status contract of the API
-    (conditions merged by type, legacy condition types dropped, delivery bookkeeping,
+    (conditions merged by type, legacy and retired condition types dropped, delivery bookkeeping,
     teardown retry counting, derived C(status.phase) and C(status.summary)) and writes the
     C(/status) subresource with a JSON merge patch guarded by C(metadata.resourceVersion).
   - On a conflict the object is read again and the patch recomputed.

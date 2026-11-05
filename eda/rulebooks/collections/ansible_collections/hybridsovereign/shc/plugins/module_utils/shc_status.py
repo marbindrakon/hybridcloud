@@ -20,6 +20,10 @@ except ImportError:  # plain copy next to this file (CronJob, scripts)
     import shc_status_reasons as _reasons  # type: ignore
 
 LEGACY_TYPES = ("Running", "Successful", "Failure")
+# Condition types nothing writes any more (status keeps unknown fields, so a stored one would stay for good): every
+# status write of a job drops them, like the legacy types. IPv6Translation: a HybridFabric condition.
+RETIRED_TYPES = ("IPv6Translation",)
+DROPPED_TYPES = LEGACY_TYPES + RETIRED_TYPES
 PHASES = ("Waiting", "Creating", "Updating", "Ready", "Degraded", "Failed", "Deleting", "Paused")
 SUMMARY_MAX = 140
 DEFAULT_GIVE_UP_ATTEMPTS = 10
@@ -84,21 +88,21 @@ def _default_reason(status):
 def merge_conditions(old, new, now=None):
     """Merge `new` conditions into `old` by type.
 
-    Keeps every other type, drops the legacy operator types, keeps lastTransitionTime when the
-    status did not change, coerces status to a string and fills an empty reason.
+    Keeps every other type, drops the legacy operator types and the retired types, keeps lastTransitionTime when
+    the status did not change, coerces status to a string and fills an empty reason.
     """
     now = now or utcnow()
     out = []
     index = {}
     for cond in old or []:
-        if not isinstance(cond, dict) or not cond.get("type") or cond.get("type") in LEGACY_TYPES:
+        if not isinstance(cond, dict) or not cond.get("type") or cond.get("type") in DROPPED_TYPES:
             continue
         if cond["type"] in index:
             continue
         index[cond["type"]] = len(out)
         out.append(dict(cond))
     for cond in new or []:
-        if not isinstance(cond, dict) or not cond.get("type") or cond.get("type") in LEGACY_TYPES:
+        if not isinstance(cond, dict) or not cond.get("type") or cond.get("type") in DROPPED_TYPES:
             continue
         item = dict(cond)
         item["status"] = _cond_status(item.get("status"))
@@ -403,7 +407,7 @@ def compute_status_patch(obj, body, opts=None, now=None):
     if stalled is not None:
         new_conds.append(stalled)
     merged = merge_conditions(old_conds, new_conds, now)
-    legacy_present = any(isinstance(c, dict) and c.get("type") in LEGACY_TYPES for c in old_conds)
+    legacy_present = any(isinstance(c, dict) and c.get("type") in DROPPED_TYPES for c in old_conds)
     if new_conds or legacy_present or merged != old_conds:
         body["conditions"] = merged
 
