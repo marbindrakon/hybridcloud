@@ -5,6 +5,14 @@
 # JSON as they are), hf_circuit_passwords.
 # Appends {name, ready, message, lastAppliedAt} to hf_node_results and the node's name to hf_changed_nodes when
 # anything on it changed.
+# Runs under the lease fabric-config-<fabric>, renewed here before the node and before and after the wait for BGP and
+# IS-IS (realization nodes.configLease); a renewal that finds the lease lost fails the job before the next step.
+- name: "{{ bgw_node.name }}: renew the border gateway configuration lease"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}",
+                 step: "the root instance on {{ bgw_node.name }}"}
+
 - name: "{{ bgw_node.name }}: the node's egress plan and attachment circuits"
   ansible.builtin.set_fact:
     hf_node_egress: "{{ (hf_egress.nodes | default({})).get(bgw_node.name, {}) }}"
@@ -233,6 +241,12 @@
   changed_when: "'changed=yes' in _hf_guard_gone.stdout"
   when: hf_node_egress.ipv6 is not defined
 
+- name: "{{ bgw_node.name }}: renew the lease before the wait for BGP and IS-IS"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}",
+                 step: "the wait for BGP and IS-IS on {{ bgw_node.name }}"}
+
 - name: "{{ bgw_node.name }}: wait for BGP and IS-IS"
   ansible.builtin.shell:
     cmd: |
@@ -399,6 +413,12 @@
   until: _hf_verify.rc == 0
   changed_when: false
   delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: renew the lease after the wait for BGP and IS-IS"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hf_holder }}",
+                 step: "the VPN label check on {{ bgw_node.name }}"}
 
 # FRR 8.5: a VRF deleted and created again under the same name (a network's VPN target used again) can keep zebra's old binding of
 # its VPN label: bgpd exports the label, but zebra never installs it into the kernel, so traffic from the core for the

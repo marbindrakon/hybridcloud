@@ -2,6 +2,14 @@
 # shc (design/P7-PLAN.md P7.3.5): the gateway instance on one border gateway node (delegated over SSH, become).
 # Inputs: bgw_node, cg_instance (apply config), cg_pe, cg_root_pe, cg_fabric, fab_spec, cg_bgp_password.
 # Appends the node's state to cg_node_results (and its name to cg_changed_nodes when anything changed).
+# Runs under the fabric's lease fabric-config-<fabric>, renewed here before the node and before and after the wait for
+# the core (realization nodes.configLease); a renewal that finds the lease lost fails the job before the next step.
+- name: "{{ bgw_node.name }}: renew the border gateway configuration lease"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
+                 step: "the gateway instance on {{ bgw_node.name }}"}
+
 - name: "{{ bgw_node.name }}: the gateway's site address"
   ansible.builtin.set_fact:
     cg_node_addr: "{{ (fab_spec.siteUnderlay.addresses | selectattr('node', 'equalto', bgw_node.name) | first).address }}"
@@ -173,6 +181,12 @@
   delay: 5
   until: _cg_reload is succeeded
 
+- name: "{{ bgw_node.name }}: renew the lease before the wait for the core"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
+                 step: "the wait for the core on {{ bgw_node.name }}"}
+
 # the core side must come up: IS-IS adjacency with the root and the VPNv4 session to the route reflector; with the
 # IPv6 core (cg_pe.loopback6) also IPv6 forwarding in the namespace, VPNv6 negotiated with the route reflector and its
 # IPv6 loopback installed from IS-IS (prints ipv6Vpn=<state> for the node record)
@@ -241,6 +255,12 @@
   until: _cg_verify.rc == 0
   changed_when: false
   delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: renew the lease after the wait for the core"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
+                 step: "the VPN label check on {{ bgw_node.name }}"}
 
 # FRR 8.5: a VRF deleted and created again under the same name (a placement's VNI used again) can keep zebra's old binding of
 # its VPN label: bgpd exports the label, but zebra never installs it into the kernel, so traffic from the core for the

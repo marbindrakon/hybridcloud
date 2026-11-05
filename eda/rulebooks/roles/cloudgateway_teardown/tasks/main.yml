@@ -49,8 +49,13 @@
                 bgw_fabric_spec: "{{ cg_fabric.spec }}"
                 bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
+            # node_gateway_down.yml renews the lease before each node; a step that hangs fails the job (which frees
+            # the lease) instead of outliving the lease it renews
             - name: Remove the gateway instance from each node
-              ansible.builtin.include_tasks: node_gateway_down.yml
+              ansible.builtin.include_tasks:
+                file: node_gateway_down.yml
+                apply:
+                  timeout: "{{ fab_real.nodes.configLease.stepTimeoutSeconds | int }}"
               loop: "{{ cg_fabric.spec.borderGateway.nodes }}"
               loop_control:
                 loop_var: bgw_node

@@ -2,7 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.4): HybridFabric teardown. The operator's finalizer waited for the fabric's
 # CloudGateways and HybridNetworks. Under the configuration lease, one node at a time: the root instance comes off
 # (FRR stopped and disabled, the core bridge and loopback removed). The ledger ConfigMap goes with the HybridFabric
-# (owner reference); the lease is deleted here.
+# (owner reference); the lease is deleted here, and only while this job still holds it (a job that took it over keeps
+# it until it is done).
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -29,8 +30,13 @@
             bgw_fabric_spec: "{{ fab_spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
+        # node_root_down.yml renews the lease before each node; a step that hangs fails the job (which frees the
+        # lease) instead of outliving the lease it renews
         - name: Remove the root instance from each node
-          ansible.builtin.include_tasks: node_root_down.yml
+          ansible.builtin.include_tasks:
+            file: node_root_down.yml
+            apply:
+              timeout: "{{ fab_real.nodes.configLease.stepTimeoutSeconds | int }}"
           loop: "{{ fab_spec.borderGateway.nodes }}"
           loop_control:
             loop_var: bgw_node
@@ -40,15 +46,10 @@
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
 
     - name: Delete the configuration lease
-      kubernetes.core.k8s:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: coordination.k8s.io/v1
-        kind: Lease
-        name: "fabric-config-{{ fab_name }}"
-        namespace: "{{ fab_namespace }}"
-        state: absent
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hft_holder }}",
+                     delete: true}
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

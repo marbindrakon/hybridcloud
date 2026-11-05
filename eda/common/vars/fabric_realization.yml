@@ -55,6 +55,12 @@ fabric_realization_defaults:
   nodes:
     trunkInterface: bond1
     sshUser: root
+    # the lease fabric-config-<fabric> (coordination.k8s.io, in the fabric's namespace) that lets one job at a time
+    # change the border gateway nodes: the fabric's job, its gateways' jobs and their teardowns. The holder renews it
+    # before each node and before and after its long waits, and every step on a node ends after stepTimeoutSeconds:
+    # a step that hangs fails its job, which then frees the lease, instead of outliving the lease it renews.
+    configLease:
+      stepTimeoutSeconds: 180
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric

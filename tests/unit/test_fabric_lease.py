@@ -3,6 +3,7 @@
 - shc_ledger.py lease-renew: only the holder renews (renewTime, at the resourceVersion read); a lease taken over,
   released or deleted, or an API that does not answer within the renewal budget, stops the job before its next step.
   lease-release with delete (the fabric's teardown) removes the lease only while the job holds it.
+- Every holder renews before each node and around its long waits, and runs its node steps with the step timeout.
 The API and the clock are fakes.
 """
 import datetime
@@ -316,6 +317,136 @@ class Release(_Case):
             out = self.mod.lease_release(self.w.api(), self.req("A", delete=True))
         self.assertFalse(out["released"])
         self.assertEqual(self.w.holder(), "B")
+
+
+# ---- the holders' task files ----
+
+HOLDERS = {
+    # role: (the file the lease is taken in, the node loop's task name, its node file, the holder variable, the fabric)
+    "hybridfabric_provision": ("main.yml", "Configure the root instance on each node", "node_root.yml",
+                               "hf_holder", "fab_name"),
+    "cloudgateway_provision": ("main.yml", "Configure the gateway instance on each node", "node_gateway.yml",
+                               "cg_holder", "cg_fabric_name"),
+    "cloudgateway_teardown": ("main.yml", "Remove the gateway instance from each node", "node_gateway_down.yml",
+                              "cgt_holder", "cg_fabric_name"),
+    "hybridfabric_teardown": ("main.yml", "Remove the root instance from each node", "node_root_down.yml",
+                              "hft_holder", "fab_name"),
+}
+# the long waits inside a node: a renewal right before and right after each
+LONG_WAITS = {
+    "node_root.yml": "wait for BGP and IS-IS",
+    "node_gateway.yml": "wait for the core (IS-IS, VPNv4 and VPNv6) and the upstream route reflectors",
+}
+# roles that reach the nodes outside the lease: reads only
+READ_ONLY = {"attachmentcircuit_provision", "networkplacement_provision", "fabric_orphan_check"}
+STEP_TIMEOUT = "{{ fab_real.nodes.configLease.stepTimeoutSeconds | int }}"
+
+
+def _yaml_files(base):
+    for d, _, files in os.walk(base):
+        for f in files:
+            if f.endswith((".yml", ".yaml")):
+                yield os.path.join(d, f)
+
+
+def _tasks(path):
+    """Every task of a task file (nothing for a file that is no task list)."""
+    try:
+        doc = load(path)
+    except Exception:  # noqa: BLE001 - not a single YAML document: no task list
+        return []
+    return list(walk(doc)) if isinstance(doc, list) else []
+
+
+def _renew(task):
+    inc = task.get("ansible.builtin.include_tasks")
+    return (isinstance(inc, str) and inc.endswith("common/tasks/fabric_ledger.yml")
+            and ((task.get("vars") or {}).get("fab_ledger") or {}).get("action") == "lease-renew")
+
+
+def _node_name(task):
+    return re.sub(r"^\{\{ bgw_node\.name \}\}: ", "", task.get("name", ""))
+
+
+class HolderWiring(unittest.TestCase):
+    def test_the_holders_are_the_ones_that_take_the_lease(self):
+        found = set()
+        for path in _yaml_files(os.path.join(ROOT, "eda")):
+            for t in _tasks(path):
+                led = (t.get("vars") or {}).get("fab_ledger") or {}
+                if isinstance(led, dict) and led.get("action") == "lease-acquire":
+                    found.add(os.path.relpath(path, ROLES).split(os.sep)[0])
+        self.assertEqual(found, set(HOLDERS))
+
+    def test_each_node_loop_runs_with_the_step_timeout(self):
+        for role, (main, loop, node_file, _, _) in HOLDERS.items():
+            with self.subTest(role=role):
+                task = by_name(load(os.path.join(ROLES, role, "tasks", main)), loop)
+                inc = task["ansible.builtin.include_tasks"]
+                self.assertEqual(inc["file"], node_file)
+                self.assertEqual(inc["apply"], {"timeout": STEP_TIMEOUT})
+                self.assertEqual(task["loop_control"]["loop_var"], "bgw_node")
+
+    def test_each_node_starts_with_a_renewal_by_its_holder(self):
+        for role, (_, _, node_file, holder, fabric) in HOLDERS.items():
+            with self.subTest(role=role):
+                tasks = load(os.path.join(ROLES, role, "tasks", node_file))
+                first = tasks[0]
+                self.assertTrue(_renew(first), first)
+                led = first["vars"]["fab_ledger"]
+                self.assertEqual(led["holder"], "{{ %s }}" % holder)
+                self.assertEqual(led["fabric"], "{{ %s }}" % fabric)
+                self.assertEqual(led["namespace"], "{{ fab_namespace }}")
+                self.assertIn("{{ bgw_node.name }}", led["step"])
+
+    def test_the_long_waits_are_renewed_before_and_after(self):
+        for role, (_, _, node_file, holder, _) in HOLDERS.items():
+            tasks = load(os.path.join(ROLES, role, "tasks", node_file))
+            names = [_node_name(t) for t in tasks]
+            renews = [i for i, t in enumerate(tasks) if _renew(t)]
+            wait = LONG_WAITS.get(node_file)
+            with self.subTest(role=role):
+                if wait is None:
+                    self.assertEqual(renews, [0])
+                    continue
+                i = names.index(wait)
+                self.assertEqual(renews, [0, i - 1, i + 1])
+                self.assertTrue(all(tasks[j]["vars"]["fab_ledger"]["holder"] == "{{ %s }}" % holder for j in renews))
+                self.assertGreater(int(tasks[i]["retries"]), 0)
+
+    def test_the_lease_is_still_released_in_always(self):
+        for role in ("hybridfabric_provision", "cloudgateway_provision", "cloudgateway_teardown"):
+            with self.subTest(role=role):
+                tasks = load(os.path.join(ROLES, role, "tasks/main.yml"))
+                blocks = [t for t in walk(tasks) if t.get("always")
+                          and any(_t.get("name") == HOLDERS[role][1] for _t in walk(t.get("block")))]
+                self.assertEqual(len(blocks), 1)
+                self.assertIn("Release the lease", [t.get("name") for t in blocks[0]["always"]])
+
+    def test_the_fabric_teardown_deletes_only_a_lease_it_holds(self):
+        tasks = load(os.path.join(ROLES, "hybridfabric_teardown/tasks/main.yml"))
+        step = by_name(tasks, "Delete the configuration lease")
+        self.assertEqual(step["vars"]["fab_ledger"]["action"], "lease-release")
+        self.assertIs(step["vars"]["fab_ledger"]["delete"], True)
+        for path in _yaml_files(os.path.join(ROOT, "eda")):
+            for t in _tasks(path):
+                k8s = t.get("kubernetes.core.k8s") or {}
+                self.assertNotEqual(k8s.get("kind"), "Lease", path)
+
+    def test_only_reads_reach_the_nodes_outside_the_lease(self):
+        connect = set()
+        for path in _yaml_files(ROLES):
+            text = _read(path)
+            if "common/tasks/bgw_connect.yml" in text:
+                connect.add(os.path.relpath(path, ROLES).split(os.sep)[0])
+        self.assertEqual(connect - set(HOLDERS), READ_ONLY)
+        for role in READ_ONLY:
+            for path in _yaml_files(os.path.join(ROLES, role)):
+                for t in _tasks(path):
+                    if t.get("delegate_to") and not str(t.get("delegate_to")).startswith("localhost"):
+                        with self.subTest(path=os.path.relpath(path, ROOT), task=t.get("name")):
+                            self.assertIs(t.get("changed_when"), False)
+                            self.assertTrue(set(t) & {"ansible.builtin.shell", "ansible.builtin.command"})
 
 
 if __name__ == "__main__":

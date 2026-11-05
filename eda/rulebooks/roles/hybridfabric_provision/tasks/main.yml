@@ -6,7 +6,8 @@
 #    reported in status.realization.ipam.pools; a pool change wakes the networks waiting for platform address space.
 # 3. Under the lease fabric-config-<fabric>, one node at a time: the root instance (shc-fabric-apply root: MPLS,
 #    the node-local core bridge, the loopback; FRR: VPNv4 route reflector for the core's loopback range, IS-IS
-#    with segment routing). A failure stops before the next node.
+#    with segment routing). A failure stops before the next node. The job renews the lease before each node and
+#    around its long wait, and every step on a node ends after nodes.configLease.stepTimeoutSeconds (node_root.yml).
 # 4. Provider internet egress (realization egress.enabled): the HybridNetworks holding an egress index in the
 #    ledger that still want it (spec.egress.internet, not being deleted) get a VRF on every node's root with a
 #    default route into their VPN and source NAT (status.realization.egress); the job is the only writer of it and
@@ -356,7 +357,11 @@
     - name: Configure the nodes, one at a time
       block:
         - name: Configure the root instance on each node
-          ansible.builtin.include_tasks: node_root.yml
+          ansible.builtin.include_tasks:
+            file: node_root.yml
+            # a step that hangs fails the job (which frees the lease) instead of outliving the lease it renews
+            apply:
+              timeout: "{{ fab_real.nodes.configLease.stepTimeoutSeconds | int }}"
           loop: "{{ fab_spec.borderGateway.nodes }}"
           loop_control:
             loop_var: bgw_node
