@@ -339,25 +339,42 @@ spec:
 - **The guest's IPv6 link-local address must be the EUI-64 one** (derived from the MAC address). The network drops
   DHCPv6 and neighbour discovery from any other link-local address, so a guest that uses stable-privacy or random
   interface identifiers gets no IPv6 address. Some images do that by default (RHEL with NetworkManager, Windows).
-- Always give cloud-init `networkData` with `dhcp6: true` (without it, cloud-init may leave IPv6 off):
+- Always give cloud-init `networkData` with `dhcp6: true` (without it, cloud-init may leave IPv6 off), and let it
+  find the VM's NIC by its MAC address. Give the VM's interface an address of your own, so that it is known when you
+  write the network data (cloud-init applies `networkData` at the first boot), and match that address:
   ```yaml
+  # in the VM, under spec.template.spec
+  domain:
+    devices:
+      interfaces:
+        - name: default
+          binding: {name: l2bridge}
+          macAddress: "02:00:00:00:00:01"           # locally administered, a different one for every VM
+  networks:
+    - name: default
+      pod: {}
+  ```
+  ```yaml
+  # the VM's networkData
   version: 2
   ethernets:
     primary:
-      match: {macaddress: "0a:58:0a:6e:09:04"}   # the VM's MAC address, or the exact name: {name: eth0}
-      dhcp4: true                                 # false on an IPv6-only placement
+      match: {macaddress: "02:00:00:00:00:01"}     # the same address, lowercase and quoted
+      dhcp4: true                                   # false on an IPv6-only placement
       dhcp6: true
   ```
-  Name the interface by its MAC address or its exact name, never by a pattern such as `en*`: on RHEL images
-  cloud-init writes sysconfig profiles, and a profile matched by a pattern binds to no device, so NetworkManager's
-  own default profile takes the interface with a stable-privacy link-local address and the guest gets no IPv6
-  address (Fedora's NetworkManager renderer takes the pattern). The placement page offers a snippet built from the
-  placement's status; it names the interface `eth0`, so replace that with a `match` on the VM's MAC address, or with
-  the interface's exact name, before you use it.
-- **RHEL images:** also switch the interface's profile to EUI-64 at first boot. NetworkManager's default profile
-  may take the interface whatever `networkData` says, and a `NetworkManager.conf` default for `ipv6.addr-gen-mode`
-  is not enough on these images; the profile itself has to change. The DHCPv6 lease arrives as soon as the profile
-  comes up again, and the setting stays across reboots:
+  Don't name the interface: images name it differently (`eth0` on some, `enp1s0` on others). cloud-init's
+  NetworkManager and sysconfig renderers (Fedora, RHEL) bind an entry to its MAC address, or else to the interface
+  whose name is exactly the entry's key; they ignore `match: {name: ...}`, a pattern or not. An entry that binds to
+  no interface is ignored without an error: NetworkManager's own default profile takes the interface, without the
+  network data's resolvers and, on some RHEL images, with a stable-privacy link-local address (no IPv6 address).
+  Leave out `set-name`: the match alone binds, and the guest keeps its own name for the NIC. A VM with more than one
+  NIC needs one entry per NIC, each with that NIC's MAC address. The placement page offers this snippet built from
+  the placement's status, with a MAC address it proposes (a new one on each visit) or one you enter.
+- **RHEL images:** also switch the interface's profile to EUI-64 at first boot, in case NetworkManager's default
+  profile has taken the interface (no network data, or none that matches the NIC); a `NetworkManager.conf` default
+  for `ipv6.addr-gen-mode` is not enough on these images, the profile itself has to change. The DHCPv6 lease arrives
+  as soon as the profile comes up again, and the setting stays across reboots:
   ```yaml
   #cloud-config
   runcmd:
@@ -453,10 +470,10 @@ spec:
   those fragments are lost on the way into the CLAT: with a larger MTU, IPv4 datagrams that must not be fragmented
   are lost above 1232 bytes of payload. TCP is not affected.
 - On OpenStack the placement's IPv6 subnet hands the resolvers out (DHCPv6 and the config drive). On OpenShift
-  Virtualization they come from the placement's status: the placement page offers cloud-init `networkData` and user
-  data built from it (clatd, and the guest kept on the translation resolvers, see
-  [Guests on IPv6](#guests-on-ipv6)), to copy into the VM. Names inside the cluster (services, other VMs) are not
-  resolved on IPv6-only placements.
+  Virtualization they come from the placement's status: the placement page offers cloud-init `networkData` (matched
+  to the VM's interface by its MAC address) and user data built from it (clatd, and the guest kept on the translation
+  resolvers, see [Guests on IPv6](#guests-on-ipv6)), to copy into the VM. Names inside the cluster (services, other
+  VMs) are not resolved on IPv6-only placements.
 - A guest that validates DNSSEC itself gets no translated addresses for signed IPv4-only names. Reach those by an
   IPv4 address through the CLAT, or let the resolver validate.
 
@@ -541,8 +558,12 @@ Tenants:
   with the reason.
 - **A placement's page** shows each family's subnet and source, how guests get their IPv6 address, the internet
   path and, on IPv6-only placements with translation, the translation prefix and resolvers. Placements with an IPv6
-  subnet also offer a cloud-init snippet to copy ([Guests on IPv6](#guests-on-ipv6)), with user data on IPv6-only
-  placements with translation: clatd, and the guest kept on the translation resolvers (`ignore-auto-dns`).
+  subnet also offer a cloud-init snippet to copy ([Guests on IPv6](#guests-on-ipv6)). On OpenShift Virtualization
+  placements it has a MAC address for the VM's interface (proposed anew on each visit, or one you enter), the VM
+  interface with that address and the network data that matches it. On IPv6-only placements with translation it
+  also has user data: clatd, and the guest kept on the translation resolvers (`ignore-auto-dns`). On OpenStack, AWS and
+  Google Cloud placements the cloud provides the guest's network configuration (on OpenStack, the config drive), so
+  the snippet has the user data only and is not shown when there is none.
 - **Environments → OpenShift Virtualization:** environments with their site, VM namespaces (network, ready), quota,
   DNS zone and API endpoint. The site picker offers the sites of the tenant profile.
 - Platform objects aren't shown to tenants.

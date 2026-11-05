@@ -520,7 +520,8 @@ Run the fabric job (Retry now on the HybridFabric) after changing an entry.
   list differs is updated on the next run of the placement job.
 - **OpenShift Virtualization sites (CloudVirt):** the platform changes nothing on the site. The resolvers reach the
   guests through the placement's status and the console's cloud-init snippet (the placement page builds `networkData`
-  with `dhcp4: false` and the resolvers as `nameservers`, and user data that configures clatd with the placement's
+  that finds the VM's NIC by the MAC address the tenant gives the VM's interface, which the page proposes, with
+  `dhcp4: false` and the resolvers as `nameservers`, and user data that configures clatd with the placement's
   `pref64` as `plat-prefix` and keeps the guest on those resolvers), which the tenant copies into the VM. Guests on
   IPv6-only placements use the translation resolvers only; cluster-internal names (services, other VMs by name) are
   not resolved there. OVN-Kubernetes also hands every guest the cluster's DNS service (`dns-default` in
