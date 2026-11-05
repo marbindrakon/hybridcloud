@@ -522,8 +522,15 @@ export function ipv6ReasonText(
 /* ------------------------------------------------------------------ cloud-init */
 
 export interface CloudInitSnippet {
-  /** cloud-init network configuration, version 2 (the NoCloud / config drive networkData) */
-  networkData: string;
+  /** The MAC address the network data matches, lowercase; null when none was given or it is not a unicast address */
+  macAddress: string | null;
+  /** The VM's interface on the pod network with that MAC address (the VM's domain.devices.interfaces); null without */
+  vmInterface: string | null;
+  /**
+   * cloud-init network configuration, version 2, matching the VM's NIC by its MAC address (every renderer binds by
+   * MAC; a name match is ignored by the NetworkManager, sysconfig and networkd renderers); null without a MAC address
+   */
+  networkData: string | null;
   /**
    * cloud-config user data: keep the guest on the reported resolvers (any but the provider's path) and, for an
    * IPv6-only placement with translation, a CLAT; null when neither applies
@@ -613,29 +620,69 @@ function contentBlock(text: string): string[] {
 }
 
 /**
+ * A MAC address as cloud-init and the VM spec take it (six colon-separated pairs, lowercase as netplan requires),
+ * from the tenant's text (colons or hyphens, any case); null unless it is a unicast address other than all zeros.
+ */
+export function normalizeMacAddress(text: string | undefined | null): string | null {
+  const m = String(text ?? '')
+    .trim()
+    .toLowerCase()
+    .match(/^([0-9a-f]{2})([:-])([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})$/);
+  if (!m) return null;
+  const octets = [m[1], m[3], m[4], m[5], m[6], m[7]];
+  if (parseInt(octets[0], 16) & 1) return null; // a group address
+  if (octets.every((o) => o === '00')) return null;
+  return octets.join(':');
+}
+
+/**
+ * A locally administered unicast MAC address for a new VM: 02 and five random octets. Two VMs with the same address on
+ * one network break each other, so the page proposes a new one each time. `randomOctets` is for tests.
+ */
+export function proposeMacAddress(randomOctets?: (n: number) => ArrayLike<number>): string {
+  const octets =
+    randomOctets?.(5) ??
+    (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+      ? crypto.getRandomValues(new Uint8Array(5))
+      : Uint8Array.from({ length: 5 }, () => Math.floor(Math.random() * 256)));
+  return ['02', ...Array.from(octets, (o) => (o & 255).toString(16).padStart(2, '0'))].join(':');
+}
+
+/**
  * Guest network configuration for a VM on the placement's subnet, built from status only: DHCPv4 when the
  * placement has IPv4, DHCPv6 and router advertisements for IPv6, the resolvers the platform reports. With
  * the platform's resolvers, user data makes the guest ignore resolvers handed out by DHCP (they need not translate:
  * on an OpenShift Virtualization site DHCPv6 hands out the cluster's DNS service, without DNS64); for an
- * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix. Null when
- * the placement has no IPv6 subnet yet.
+ * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix.
+ *
+ * The network data matches the VM's NIC by `macAddress`, the address the VM's interface is given (the guest's own
+ * name for the NIC differs between images: eth0, enp1s0, ...); without a valid one there is no network data. Null
+ * when the placement has no IPv6 subnet yet.
  */
-export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: { interfaceName?: string } = {}): CloudInitSnippet | null {
+export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: { macAddress?: string } = {}): CloudInitSnippet | null {
   const v6 = placementSubnet(p, 6);
   if (!v6?.prefix) return null;
   const v4 = placementSubnet(p, 4);
-  const nic = opts.interfaceName || 'eth0';
+  const mac = normalizeMacAddress(opts.macAddress);
   const tr = p?.status?.ipv6?.translation;
   const resolvers = Array.isArray(tr?.resolvers) ? (tr?.resolvers ?? []).filter((r) => typeof r === 'string' && !!r) : [];
-  const net = [
-    'version: 2',
-    'ethernets:',
-    `  ${nic}:`,
-    `    dhcp4: ${v4?.prefix ? 'true' : 'false'}`,
-    '    dhcp6: true',
-    '    accept-ra: true',
-  ];
-  if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.join(', ')}]`);
+  let networkData: string | null = null;
+  let vmInterface: string | null = null;
+  if (mac) {
+    // no set-name: every renderer binds the entry by the MAC address, and the guest keeps its own name for the NIC
+    const net = [
+      'version: 2',
+      'ethernets:',
+      '  primary:',
+      `    match: {macaddress: "${mac}"}`,
+      `    dhcp4: ${v4?.prefix ? 'true' : 'false'}`,
+      '    dhcp6: true',
+      '    accept-ra: true',
+    ];
+    if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.join(', ')}]`);
+    networkData = `${net.join('\n')}\n`;
+    vmInterface = ['interfaces:', '  - name: default', '    binding: {name: l2bridge}', `    macAddress: "${mac}"`, ''].join('\n');
+  }
   const clat = !v4?.prefix && !!tr?.pref64;
   // the platform's resolvers only: on the provider's path the provider's DHCP already hands out its DNS64 resolver
   const keepResolvers = resolvers.length > 0 && tr?.path !== 'Provider';
@@ -661,7 +708,7 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
     if (clat) runcmd.push('  - [systemctl, enable, --now, clatd]');
     userData = [...ud, 'runcmd:', ...runcmd, ''].join('\n');
   }
-  return { networkData: `${net.join('\n')}\n`, userData, clat, ignoreAutoDns: keepResolvers };
+  return { macAddress: mac, vmInterface, networkData, userData, clat, ignoreAutoDns: keepResolvers };
 }
 
 /** Whether the placement page shows the snippet: an IPv6 subnet in status and a site that reports IPv6. */

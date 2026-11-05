@@ -179,34 +179,88 @@ test('placement subnets: status.subnets, else status.prefixes', () => {
 });
 
 test('cloud-init snippet: none without an IPv6 subnet; dual-stack DHCP; IPv6-only adds a CLAT', () => {
+  const mac = '02:5c:12:34:56:78';
   const v4only = { metadata: { name: 'p' }, spec: { network: 'n' }, status: { subnets: [{ family: 4, prefix: '10.60.1.0/24' }] } };
   assert.equal(m.cloudInitSnippet(v4only), null);
+  assert.equal(m.cloudInitSnippet(v4only, { macAddress: mac }), null);
   const dual = {
     metadata: { name: 'p' },
-    spec: { network: 'n' },
+    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
     status: { subnets: [{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }] },
   };
-  const d = m.cloudInitSnippet(dual);
-  assert.match(d.networkData, /^version: 2\n/);
-  assert.match(d.networkData, /dhcp4: true/);
-  assert.match(d.networkData, /dhcp6: true/);
+  const d = m.cloudInitSnippet(dual, { macAddress: mac });
+  assert.equal(
+    d.networkData,
+    ['version: 2', 'ethernets:', '  primary:', `    match: {macaddress: "${mac}"}`, '    dhcp4: true', '    dhcp6: true', '    accept-ra: true', ''].join('\n'),
+  );
   assert.equal(d.userData, null);
-  assert.deepEqual([d.clat, d.ignoreAutoDns], [false, false]);
+  assert.deepEqual([d.macAddress, d.clat, d.ignoreAutoDns], [mac, false, false]);
   const only = {
     metadata: { name: 'p' },
-    spec: { network: 'n' },
+    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
     status: {
       subnets: [{ family: 6, prefix: '2001:db8:0:2::/64' }],
       ipv6: { translation: { pref64: '64:ff9b::/96', resolvers: ['2001:db8::53'] } },
     },
   };
-  const o = m.cloudInitSnippet(only, { interfaceName: 'enp1s0' });
-  assert.match(o.networkData, /enp1s0:/);
+  const o = m.cloudInitSnippet(only, { macAddress: mac });
   assert.match(o.networkData, /dhcp4: false/);
-  assert.match(o.networkData, /addresses: \[2001:db8::53\]/);
+  assert.match(o.networkData, /\n {4}nameservers:\n {6}addresses: \[2001:db8::53\]\n$/);
   assert.match(o.userData, /^#cloud-config\n/);
   assert.match(o.userData, /plat-prefix=64:ff9b::\/96/);
   assert.equal(o.clat, true);
+});
+
+test('cloud-init snippet: the network data matches the NIC by the MAC address the VM interface is given', () => {
+  const p = (kind, subnets, translation) => ({
+    metadata: { name: 'p' },
+    spec: { network: 'n', ...(kind ? { backend: { kind, name: 'e' } } : {}) },
+    status: { subnets, ipv6: { translation } },
+  });
+  const only6 = [{ family: 6, prefix: '2001:db8:0:2::/64' }];
+  const dual = [{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }];
+  const tr = { path: 'Fabric', pref64: '64:ff9b::/96', resolvers: ['2001:db8::53', '2001:db8::54'] };
+  // the tenant's text: either separator, any case, spaces around; stored lowercase with colons
+  const s = m.cloudInitSnippet(p('CloudVirt', only6, tr), { macAddress: ' 02-5C-AB-00-00-01 ' });
+  assert.equal(s.macAddress, '02:5c:ab:00:00:01');
+  assert.match(s.networkData, /^ {2}primary:\n {4}match: \{macaddress: "02:5c:ab:00:00:01"\}\n/m);
+  // the VM's interface on the pod network carries the same address (quoted: an unquoted MAC can read as a number)
+  assert.equal(s.vmInterface, 'interfaces:\n  - name: default\n    binding: {name: l2bridge}\n    macAddress: "02:5c:ab:00:00:01"\n');
+  // no interface name anywhere: no eth0 key, no rename, no name match; the guest script finds the NIC at runtime
+  for (const text of [s.networkData, s.vmInterface, s.userData]) {
+    assert.doesNotMatch(text, /\beth\d\b|\benp\d|\bens\d|set-name|\bname: "?e/);
+  }
+  assert.match(s.userData, /ip -6 route show default/);
+  // no MAC address, or one that is not a unicast address: no network data and no VM interface, the user data stays
+  for (const bad of [undefined, '', 'eth0', '02:5c:ab:00:00', '02:5c:ab:00:00:01:02', '02:5c-ab:00:00:01', '01:00:5e:00:00:01', '00:00:00:00:00:00', 'g2:5c:ab:00:00:01']) {
+    const n = m.cloudInitSnippet(p('CloudVirt', only6, tr), { macAddress: bad });
+    assert.deepEqual([n.macAddress, n.networkData, n.vmInterface], [null, null, null], String(bad));
+    assert.match(n.userData, /packages: \[clatd\]/);
+  }
+});
+
+test('MAC addresses: the tenant\'s text normalised, a proposed address locally administered and unicast', () => {
+  assert.equal(m.normalizeMacAddress('0A:58:0A:6E:09:04'), '0a:58:0a:6e:09:04');
+  assert.equal(m.normalizeMacAddress('02-00-00-00-00-01'), '02:00:00:00:00:01');
+  for (const bad of [null, undefined, '', '02:00:00:00:00', '0200.0000.0001', '03:00:00:00:00:01', '00:00:00:00:00:00', '02:00:00:00:00:0g']) {
+    assert.equal(m.normalizeMacAddress(bad), null, String(bad));
+  }
+  assert.equal(m.proposeMacAddress(() => [0xab, 1, 2, 3, 0xff]), '02:ab:01:02:03:ff');
+  const a = m.proposeMacAddress();
+  const b = m.proposeMacAddress();
+  for (const x of [a, b]) {
+    assert.match(x, /^02(:[0-9a-f]{2}){5}$/);
+    assert.equal(m.normalizeMacAddress(x), x);
+  }
+  assert.notEqual(a, b);
+  // the panel's words in both catalogues, in display terms
+  for (const l of ['en', 'fr']) {
+    const t = tOf(load(l));
+    for (const k of ['macAddress', 'macAddressHelp', 'macAddressInvalid', 'newMac', 'vmInterface', 'vmInterfaceHelp', 'networkDataHelp']) {
+      assert.notEqual(t(`ipv6.cloudInit.${k}`), `ipv6.cloudInit.${k}`, `${l}: ${k}`);
+      assert.doesNotMatch(t(`ipv6.cloudInit.${k}`), KIND_NAME, `${l}: ${k}`);
+    }
+  }
 });
 
 test('cloud-init snippet: with resolvers the guest ignores the resolvers DHCP hands out', () => {
@@ -253,7 +307,9 @@ test('cloud-init snippet: with resolvers the guest ignores the resolvers DHCP ha
   assert.match(dual.userData, /\n {6}FAMILIES="ipv6"\n/);
   assert.doesNotMatch(dual.userData, /clatd/);
   // the provider's path: its DHCP hands out the provider's own DNS64 resolver; only the CLAT
-  const prov = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:4::/64' }], { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'] }));
+  const prov = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:4::/64' }], { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'] }), {
+    macAddress: '02:00:00:00:00:01',
+  });
   assert.deepEqual([prov.clat, prov.ignoreAutoDns], [true, false]);
   assert.doesNotMatch(prov.userData, /ignore-auto-dns/);
   assert.match(prov.networkData, /addresses: \[fd00:db8::253\]/);
