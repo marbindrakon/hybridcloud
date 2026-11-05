@@ -260,7 +260,7 @@ class QuietWhilePausedWiring(unittest.TestCase):
         block, rescue = tasks[0]["block"], tasks[0]["rescue"]
         names = [t.get("name", "") for t in block]
         fail = "Fail the job: what waits for this site could not be listed"
-        # after the site's own work: the wake, the canary and the DNS health ran first
+        # after the site's own work: the wake and the DNS health ran first
         self.assertEqual(names[-1], fail)
         self.assertLess(names.index("Wake what waits for this site"), names.index(fail))
         inner = block[-1]["block"]
