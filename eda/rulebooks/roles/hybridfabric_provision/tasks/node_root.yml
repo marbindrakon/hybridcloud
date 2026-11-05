@@ -247,18 +247,24 @@
     - "'bridge-mac=changed' not in _hf_apply.stdout"
     - _hf_frrconf is changed or _hf_daemons is changed or 'reload=due' in _hf_frr_due.stdout
   delegate_to: "{{ bgw_node.name }}"
+  register: _hf_reload
 
-# FRR now runs the files (started, restarted or reloaded above, or nothing was due); a step above that failed ended
-# the job before this, so the next job still finds the reload due
+# FRR runs the files when this job found it active and the reload (when one was due) succeeded, or when this job
+# started or restarted it; a step above that failed ended the job before this. FRR that was starting or reloading on
+# its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read older files, so
+# then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload due
 - name: "{{ bgw_node.name }}: record what FRR loaded"
   ansible.builtin.shell: |
     f=/etc/shc-fabric/root.frr-loaded
+    state=$(systemctl is-active frr); job=$(systemctl show -p Job --value frr)
+    if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: frr $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/frr.conf /etc/frr/daemons 2>/dev/null | sha256sum | cut -d' ' -f1)
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
     echo "$now" > "$f.new" && mv "$f.new" "$f"
     echo recorded
   register: _hf_frr_recorded
-  changed_when: "'recorded' in _hf_frr_recorded.stdout"
+  changed_when: _hf_frr_recorded.stdout == 'recorded'
+  when: _hf_frr_active.stdout == 'active' or (_hf_frr_active.stdout in ['inactive', 'failed'] and _hf_frr_state is changed)
   delegate_to: "{{ bgw_node.name }}"
 
 # the fail-closed rule of the IPv6 egress (after the configuration reload: the filter table is loaded by the apply
@@ -687,5 +693,5 @@
            | combine({'egressIpv6': _eg6} if hf_node_egress.ipv6 is defined else {})] }}
     hf_changed_nodes: >-
       {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_vrfgone, _hf_unit,
-         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state, _hf_guard_files | default({}), _hf_guard_unit | default({}),
-         _hf_guard_gone | default({})] | select('changed') | list | length > 0 else []) }}
+         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state, _hf_reload | default({}), _hf_guard_files | default({}),
+         _hf_guard_unit | default({}), _hf_guard_gone | default({})] | select('changed') | list | length > 0 else []) }}

@@ -252,18 +252,30 @@
   delay: 5
   until: _cg_reload is succeeded
 
-# the instance now runs the file (started, restarted or reloaded above, or nothing was due); a step above that failed
-# ended the job before this, so the next job still finds the reload due
+# the instance runs the file when this job found it active and the reload (when one was due) succeeded, or when this
+# job started or restarted it; a step above that failed ended the job before this. An instance that was starting or
+# reloading on its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read an
+# older file, so then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload
+# due. A reload only the record made due changed the node too: it counts as a configuration change (_cg_frrconf)
 - name: "{{ bgw_node.name }}: record what the instance loaded"
   ansible.builtin.shell: |
     f=/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded
+    u=shc-gw@{{ fab_name }}.service
+    state=$(systemctl is-active "$u"); job=$(systemctl show -p Job --value "$u")
+    if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: $u $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
     echo "$now" > "$f.new" && mv "$f.new" "$f"
     echo recorded
   register: _cg_frr_recorded
-  changed_when: "'recorded' in _cg_frr_recorded.stdout"
+  changed_when: _cg_frr_recorded.stdout == 'recorded'
+  when: _cg_active.stdout == 'active' or (_cg_active.stdout in ['inactive', 'failed'] and _cg_state is changed)
   delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: a reload the record made due changed the node"
+  ansible.builtin.set_fact:
+    _cg_frrconf: "{{ _cg_frrconf | combine({'changed': true}) }}"
+  when: _cg_reload is changed and _cg_frrconf is not changed
 
 - name: "{{ bgw_node.name }}: renew the lease before the wait for the core"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"

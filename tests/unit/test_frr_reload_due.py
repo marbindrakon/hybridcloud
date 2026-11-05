@@ -43,7 +43,8 @@ GW_STEPS = ["what the instance last loaded (without the record: the file as it i
             "start the gateway instance (enabled at boot)",
             "the lease lasts for the FRR reload",
             "reload the FRR configuration",
-            "record what the instance loaded"]
+            "record what the instance loaded",
+            "a reload the record made due changed the node"]
 
 
 def section(path, steps):
@@ -269,8 +270,71 @@ class _Case(unittest.TestCase):
         self.assertEqual(self.job("conf B\n"), ([], False))
 
 
-class RootReload(_Case):
+class _States(_Case):
+    """FRR caught between states: nothing may be recorded unless this job knows FRR runs the file (F3)."""
+
+    def test_an_instance_still_starting_is_not_recorded(self):
+        # activating: the start task leaves it (the module counts it as running), the reload needs active; the file
+        # this job wrote may be newer than what that start read
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("state", "activating\n")
+        self.assertEqual(self.job("conf B\n"), ([], False))
+        self.assertEqual(self.node.runs(), self.want("conf A\n"))
+        self.node.put("state", "active\n")
+        self.assertEqual(self.job("conf B\n"), (["reloaded"], False))   # still due
+        self.assertEqual(self.node.runs(), self.want("conf B\n"))
+
+    def test_an_instance_reloading_on_its_own_is_not_recorded(self):
+        # reloading: the module runs systemctl start, which only waits for that reload (changed, nothing new loaded)
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("state", "reloading\n")
+        self.assertEqual(self.job("conf B\n"), (["waited"], False))
+        self.node.put("state", "active\n")
+        self.assertEqual(self.job("conf B\n"), (["reloaded"], False))
+        self.assertEqual(self.node.runs(), self.want("conf B\n"))
+
+    def test_a_failed_start_is_not_recorded(self):
+        self.node.running("conf A\n", active=False)
+        self.job("conf A\n", start_rc=1)
+        actions, failed = self.job("conf B\n", start_rc=1)
+        self.assertTrue(failed)
+        self.assertNotEqual(self.node.runs(), self.want("conf B\n"))
+        self.assertEqual(self.job("conf B\n"), (["started"], False))
+        self.assertEqual(self.node.runs(), self.want("conf B\n"))
+        self.assertEqual(self.job("conf B\n"), ([], False))
+
+    def test_a_job_queued_for_the_unit_is_not_recorded(self):
+        # active, but a job for the unit is still queued (a restart of its own): what it will load is unknown
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("job", "4711\n")
+        self.assertEqual(self.job("conf B\n"), (["reloaded"], False))
+        os.remove(self.node.p("job"))
+        self.assertEqual(self.job("conf B\n"), (["reloaded"], False))   # the record was not written: due once more
+        self.assertEqual(self.job("conf B\n"), ([], False))
+
+    def test_a_reload_only_the_record_made_due_is_reported_as_a_change(self):
+        # the gate's "a re-run changes nothing" then sees the job that healed an interrupted one as a change, once
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.job("conf B\n", crash_after="FRR configuration")
+        actions, failed, changed = self.job("conf B\n", probe=self.CHANGED)
+        self.assertEqual((actions, failed, changed), (["reloaded"], False, True))
+        actions, failed, changed = self.job("conf B\n", probe=self.CHANGED)
+        self.assertEqual((actions, failed, changed), ([], False, False))
+
+
+class RootReload(_States):
     GATEWAY = False
+    # the node record counts the reload (node_root.yml "record the node": _hf_reload is in its list)
+    CHANGED = "[_hf_files | default({}), _hf_daemons, _hf_frrconf, _hf_frr_state, _hf_reload] | select('changed') | list | length > 0"
+
+    def test_the_node_record_counts_the_reload(self):
+        tasks = load(HF)
+        record = next(t for t in tasks if t.get("name", "").endswith(": record the node"))
+        self.assertIn("_hf_reload | default({})", record["ansible.builtin.set_fact"]["hf_changed_nodes"])
 
     def test_an_interrupted_daemons_change_is_healed(self):
         # the daemons file is loaded by the reload too (it restarts watchfrr with the file's list)
@@ -292,8 +356,15 @@ class RootReload(_Case):
         self.assertEqual(self.job("conf B\n"), ([], False))
 
 
-class GatewayReload(_Case):
+class GatewayReload(_States):
     GATEWAY = True
+    # the node record counts _cg_frrconf among its changes (node_gateway.yml "record the node")
+    CHANGED = "_cg_frrconf is changed or _cg_state is changed"
+
+    def test_the_node_record_counts_the_configuration(self):
+        tasks = load(CG)
+        record = next(t for t in tasks if t.get("name", "").endswith(": record the node"))
+        self.assertIn("_cg_frrconf", record["ansible.builtin.set_fact"]["cg_changed_nodes"])
 
     def test_a_new_unit_restarts_and_records_without_a_reload(self):
         self.node.running("conf A\n")
@@ -316,7 +387,7 @@ class GatewayReload(_Case):
         self.assertEqual(self.job("conf A\n"), ([], False))
 
 
-del _Case
+del _Case, _States
 
 if __name__ == "__main__":
     unittest.main()
