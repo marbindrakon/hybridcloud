@@ -1,9 +1,11 @@
 """The HybridNetwork's status.ipv6.providerPrefixes: the network job lists the IPv6 subnets cloud providers assigned
 to its placements (their status.subnets rows with source Provider) as {prefix, placement, site}, read-only next to the
-address space; absent when there is none. The row shapes follow the
+address space; absent when there is none. A ready placement whose provider subnet came, went or changed since the
+network listed it wakes the network, and so does a placement's completed teardown. The row shapes follow the
 recorded gate evidence: an AWS placement reports the Amazon /56 (dual-stack and IPv6-only alike; the per-zone /64s
 stay in status.realization.site.ipv6.subnets), a Google Cloud placement the subnet's external /64. The plays run in
 ansible-playbook (skipped without it); the wiring checks always run. Documentation prefixes only."""
+import copy
 import itertools
 import os
 import sys
@@ -18,6 +20,8 @@ import shc_status as S  # noqa: E402
 
 ROLES = os.path.join(ROOT, "eda", "rulebooks", "roles")
 HN = os.path.join(ROLES, "hybridnetwork_provision", "tasks")
+NP = os.path.join(ROLES, "networkplacement_provision", "tasks")
+NPD = os.path.join(ROLES, "networkplacement_teardown", "tasks")
 CRD = os.path.join(ROOT, "operator", "config", "crd", "bases", "crd-hybridnetwork.yaml")
 
 AWS56 = "2001:db8:0:5800::/56"          # what an AWS placement reports (the VPC's Amazon block)
@@ -46,6 +50,14 @@ AWS_DUAL = pl("web-aws", [row("10.70.1.0/24", "Network"), row(AWS56, "Provider")
 AWS_ONLY = pl("v6-aws", [row(AWS56_B, "Provider")], site="aws-1")
 GCP_DUAL = pl("web-gcp", [row("10.70.2.0/24", "Network"), row(GCP64, "Provider")], site="gcp-1")
 METAL = pl("web-vms", [row("10.70.0.0/24", "Network"), row(NET64, "Network")], site="metal-1")
+
+
+def nudged(task, extra):
+    """Run one nudge task with its include replaced by a flag: did it wake anything?"""
+    t = copy.deepcopy(task)
+    t.pop("ansible.builtin.include_tasks")
+    t["ansible.builtin.set_fact"] = {"woke": True}
+    return run_play([t, write_out("woke | default(false)")], extra)
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -148,6 +160,59 @@ class ProviderPrefixMerge(unittest.TestCase):
         self.assertEqual(self.write(two, two[1:])["providerPrefixes"], two[1:])
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class PlacementWakesNetwork(unittest.TestCase):
+    def woke(self, was, subnets, listed, name="web-aws"):
+        t = by_name(load(os.path.join(NP, "main.yml")), "Tell the network when the placement's provider-assigned subnet changed")
+        net = {"status": {"ipv6": {"mode": "Platform"} | ({"providerPrefixes": listed} if listed is not None else {})}}
+        return nudged(t, {"fab_namespace": "entity-a", "fab_name": name, "fab_spec": {"network": "net"},
+                          "fab_st": {"status": was}, "np_final": {"subnets": subnets}, "np_network": net})
+
+    def test_listed_as_reported_wakes_nothing(self):
+        listed = [{"prefix": AWS56, "placement": "web-aws", "site": "aws-1"},
+                  {"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}]
+        self.assertFalse(self.woke("ready", AWS_DUAL["status"]["subnets"], listed))
+
+    def test_a_network_without_the_list_is_woken(self):
+        # e.g. the first run after the list was introduced
+        self.assertTrue(self.woke("ready", AWS_DUAL["status"]["subnets"], None))
+
+    def test_a_changed_subnet_wakes_the_network(self):
+        listed = [{"prefix": AWS56_B, "placement": "web-aws", "site": "aws-1"}]
+        self.assertTrue(self.woke("ready", AWS_DUAL["status"]["subnets"], listed))
+
+    def test_a_subnet_that_went_wakes_the_network(self):
+        listed = [{"prefix": AWS56, "placement": "web-aws", "site": "aws-1"}]
+        self.assertTrue(self.woke("ready", [row("10.70.1.0/24", "Network")], listed))
+
+    def test_network_sourced_placements_wake_nothing(self):
+        listed = [{"prefix": GCP64, "placement": "web-gcp", "site": "gcp-1"}]
+        self.assertFalse(self.woke("ready", METAL["status"]["subnets"], listed, name="web-vms"))
+        self.assertFalse(self.woke("ready", METAL["status"]["subnets"], None, name="web-vms"))
+
+    def test_a_placement_becoming_ready_is_left_to_the_wake_before(self):
+        # "Tell the network and the backend" wakes the network then; no second wake
+        self.assertFalse(self.woke("reconciling", AWS_DUAL["status"]["subnets"], None))
+        self.assertFalse(self.woke("pending", AWS_DUAL["status"]["subnets"], None))
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class TeardownWakesNetwork(unittest.TestCase):
+    def woke(self, subnets):
+        t = by_name(load(os.path.join(NPD, "main.yml")), "Tell the network when the placement had a provider-assigned subnet")
+        return nudged(t, {"fab_namespace": "entity-a", "fab_name": "p", "fab_spec": {"network": "net"},
+                          "fab_st": {"subnets": subnets}})
+
+    def test_a_provider_subnet_wakes_the_network(self):
+        self.assertTrue(self.woke(AWS_DUAL["status"]["subnets"]))
+        self.assertTrue(self.woke(GCP_DUAL["status"]["subnets"]))
+
+    def test_others_wake_nothing(self):
+        self.assertFalse(self.woke(METAL["status"]["subnets"]))
+        self.assertFalse(self.woke([]))
+        self.assertFalse(self.woke(None))
+
+
 class Wiring(unittest.TestCase):
     def names(self, path):
         return [t.get("name") for t in walk(load(path))]
@@ -160,6 +225,16 @@ class Wiring(unittest.TestCase):
         self.assertLess(i, names.index("Keep the address space"))
         with open(os.path.join(HN, "main.yml")) as f:
             self.assertIn("'ipv6': hn_ipv6_status", f.read())
+
+    def test_the_teardown_wakes_after_the_deletion_is_complete(self):
+        names = self.names(os.path.join(NPD, "main.yml"))
+        self.assertLess(names.index("Mark deletion complete"),
+                        names.index("Tell the network when the placement had a provider-assigned subnet"))
+
+    def test_the_placement_wake_follows_the_ready_write(self):
+        names = self.names(os.path.join(NP, "main.yml"))
+        self.assertLess(names.index("Report the placement ready"),
+                        names.index("Tell the network when the placement's provider-assigned subnet changed"))
 
     def test_the_network_never_wakes_a_ready_provider_placement(self):
         # no loop: the network's IPv6 row wake skips placements whose IPv6 subnet comes from the provider, and its other
@@ -180,6 +255,8 @@ class Wiring(unittest.TestCase):
         self.assertEqual(sorted(readers), [
             "eda/rulebooks/roles/hybridnetwork_provision/tasks/main.yml",
             "eda/rulebooks/roles/hybridnetwork_provision/tasks/platform_block.yml",
+            "eda/rulebooks/roles/networkplacement_provision/tasks/main.yml",
+            "eda/rulebooks/roles/networkplacement_teardown/tasks/main.yml",
         ])
 
     def test_crd_schema(self):

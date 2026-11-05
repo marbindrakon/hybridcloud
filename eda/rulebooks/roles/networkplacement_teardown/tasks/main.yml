@@ -469,6 +469,16 @@
         - npd_gw.spec is defined
         - _npd_circuits.resources | default([]) | selectattr('spec.network', 'equalto', fab_spec.network) | list | length > 0
 
+    # the network lists its placements' provider-assigned IPv6 subnets (status.ipv6.providerPrefixes) and leaves out a
+    # placement whose deletion is complete: wake it, so the entry goes now and not at the network's next run
+    - name: Tell the network when the placement had a provider-assigned subnet
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridNetwork, namespace: "{{ fab_namespace }}", name: "{{ fab_spec.network }}"}]
+      when: >-
+        fab_st.subnets | default([], true) | selectattr('source', 'defined') | selectattr('source', 'equalto', 'Provider')
+        | list | length > 0
+
     # the operator drops the finalizer the next time it looks at the CR: make that now
     - name: Release the finalizer now
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
