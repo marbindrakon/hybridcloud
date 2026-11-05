@@ -678,7 +678,10 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
   const tenantNetworkData = !CLOUD_NETWORK_CONFIG.has(String(p?.spec?.backend?.kind ?? ''));
   const mac = tenantNetworkData ? normalizeMacAddress(opts.macAddress) : null;
   const tr = p?.status?.ipv6?.translation;
-  const resolvers = Array.isArray(tr?.resolvers) ? (tr?.resolvers ?? []).filter((r) => typeof r === 'string' && !!r) : [];
+  const resolvers = Array.isArray(tr?.resolvers)
+    ? (tr?.resolvers ?? []).filter((r): r is string => typeof r === 'string').map((r) => r.trim()).filter(Boolean)
+    : [];
+  const pref64 = typeof tr?.pref64 === 'string' ? tr.pref64.trim() : '';
   let networkData: string | null = null;
   let vmInterface: string | null = null;
   if (mac) {
@@ -692,11 +695,13 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
       '    dhcp6: true',
       '    accept-ra: true',
     ];
-    if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.join(', ')}]`);
+    // quoted: unquoted, an address that starts or ends with "::" is not a string in a YAML flow sequence
+    if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.map((r) => JSON.stringify(r)).join(', ')}]`);
     networkData = `${net.join('\n')}\n`;
     vmInterface = ['interfaces:', '  - name: default', '    binding: {name: l2bridge}', `    macAddress: "${mac}"`, ''].join('\n');
   }
-  const clat = !v4?.prefix && !!tr?.pref64;
+  // the prefix is the one line of a literal block (clatd.conf), so a single token
+  const clat = !v4?.prefix && /^\S+$/.test(pref64);
   // the platform's resolvers only: on the provider's path the provider's DHCP already hands out its DNS64 resolver
   const keepResolvers = resolvers.length > 0 && tr?.path !== 'Provider';
   let userData: string | null = null;
@@ -705,7 +710,7 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
     const runcmd: string[] = [];
     if (clat) ud.push('packages: [clatd]');
     ud.push('write_files:');
-    if (clat) ud.push('  - path: /etc/clatd.conf', '    content: |', `      plat-prefix=${tr?.pref64}`);
+    if (clat) ud.push('  - path: /etc/clatd.conf', '    content: |', `      plat-prefix=${pref64}`);
     if (keepResolvers) {
       ud.push(
         '  - path: /usr/local/sbin/ignore-auto-dns',

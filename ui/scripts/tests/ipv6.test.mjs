@@ -205,7 +205,7 @@ test('cloud-init snippet: none without an IPv6 subnet; dual-stack DHCP; IPv6-onl
   };
   const o = m.cloudInitSnippet(only, { macAddress: mac });
   assert.match(o.networkData, /dhcp4: false/);
-  assert.match(o.networkData, /\n {4}nameservers:\n {6}addresses: \[2001:db8::53\]\n$/);
+  assert.match(o.networkData, /\n {4}nameservers:\n {6}addresses: \["2001:db8::53"\]\n$/);
   assert.match(o.userData, /^#cloud-config\n/);
   assert.match(o.userData, /plat-prefix=64:ff9b::\/96/);
   assert.equal(o.clat, true);
@@ -252,6 +252,36 @@ test('cloud-init snippet: the network data matches the NIC by the MAC address th
   assert.equal(m.showsCloudInitSnippet(p('CloudOSO', dual, null), { ipv6: true, ipv6Only: false, sources: [], translation: false }), false);
   assert.equal(m.showsCloudInitSnippet(p('CloudOSO', only6, tr), { ipv6: true, ipv6Only: true, sources: [], translation: true }), true);
   assert.equal(m.showsCloudInitSnippet(p('CloudVirt', dual, null), { ipv6: true, ipv6Only: false, sources: [], translation: false }), true);
+});
+
+test('cloud-init snippet: every resolver quoted (an address may start or end with "::"), the prefix one token', () => {
+  const at = (translation) => ({
+    metadata: { name: 'p' },
+    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
+    status: { subnets: [{ family: 6, prefix: '2001:db8:0:2::/64' }], ipv6: { translation } },
+  });
+  const mac = '02:00:00:00:00:01';
+  const s = m.cloudInitSnippet(at({ path: 'Fabric', pref64: ' 64:ff9b::/96 ', resolvers: ['2001:db8:53::', ' ::ffff:10.0.0.1 ', '2001:db8::53', '', 7] }), { macAddress: mac });
+  // unquoted, "2001:db8:53::" reads as a mapping in a YAML flow sequence and "::ffff:10.0.0.1" does not parse
+  assert.equal(
+    s.networkData,
+    [
+      'version: 2',
+      'ethernets:',
+      '  primary:',
+      `    match: {macaddress: "${mac}"}`,
+      '    dhcp4: false',
+      '    dhcp6: true',
+      '    accept-ra: true',
+      '    nameservers:',
+      '      addresses: ["2001:db8:53::", "::ffff:10.0.0.1", "2001:db8::53"]',
+      '',
+    ].join('\n'),
+  );
+  assert.match(s.userData, /\n {4}content: \|\n {6}plat-prefix=64:ff9b::\/96\n {2}- path: /);
+  // a prefix that is not a single token would break the literal block of clatd.conf: no CLAT then
+  const bad = m.cloudInitSnippet(at({ path: 'Fabric', pref64: '64:ff9b::/96\nruncmd: [reboot]', resolvers: [] }), { macAddress: mac });
+  assert.deepEqual([bad.clat, bad.userData], [false, null]);
 });
 
 test('MAC addresses: the tenant\'s text normalised, a proposed address locally administered and unicast', () => {
@@ -327,7 +357,7 @@ test('cloud-init snippet: with resolvers the guest ignores the resolvers DHCP ha
   });
   assert.deepEqual([prov.clat, prov.ignoreAutoDns], [true, false]);
   assert.doesNotMatch(prov.userData, /ignore-auto-dns/);
-  assert.match(prov.networkData, /addresses: \[fd00:db8::253\]/);
+  assert.match(prov.networkData, /addresses: \["fd00:db8::253"\]/);
   // the help reads in both catalogues
   for (const l of ['en', 'fr']) {
     const t = tOf(load(l));
