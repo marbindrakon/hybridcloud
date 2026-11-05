@@ -57,9 +57,15 @@ fabric_realization_defaults:
     sshUser: root
     # the lease fabric-config-<fabric> (coordination.k8s.io, in the fabric's namespace) that lets one job at a time
     # change the border gateway nodes: the fabric's job, its gateways' jobs and their teardowns. The holder renews it
-    # before each node and before and after its long waits, and every step on a node ends after stepTimeoutSeconds:
-    # a step that hangs fails its job, which then frees the lease, instead of outliving the lease it renews.
+    # before each node and before and after its long waits. A lease not renewed for durationSeconds (its holder
+    # crashed) is taken over by a job waiting for it; a job waits at most waitSeconds, which must be longer. Every
+    # step on a node ends after stepTimeoutSeconds (a step that hangs fails its job, which then frees the lease), so
+    # a live holder goes at most one step timeout, 60 s of other steps and two renewals of up to 60 s each between
+    # two renewals: the lease is refused when durationSeconds is below stepTimeoutSeconds + 180. Raise the three
+    # together on nodes where a single step takes minutes (an FRR reload of a very large configuration).
     configLease:
+      durationSeconds: 600
+      waitSeconds: 1200
       stepTimeoutSeconds: 180
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)

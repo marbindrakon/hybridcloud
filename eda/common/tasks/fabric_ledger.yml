@@ -2,13 +2,25 @@
 # shc (design/P7-PLAN.md P7.3.4): run one files/shc_ledger.py action (fabric ledger or config lease) against the
 # services API. Included from a role (paths are role_path-relative). Input: fab_ledger (dict with action, fabric,
 # namespace, ...); the API connection and token are added here and passed on stdin. Sets fab_ledger_result; fails
-# with the helper's error.
+# with the helper's error. A lease-acquire also carries the realization's nodes.configLease (fab_real, which every
+# holder reads before it takes the lease), so all holders of one fabric's lease use the same numbers.
 - name: "Fabric {{ fab_ledger.action }}"
+  vars:
+    _fab_lease_cfg: "{{ ((fab_real | default({}, true)).nodes | default({}, true)).configLease | default({}, true) }}"
+    _fab_lease_req: >-
+      {%- set out = {} -%}
+      {%- for key, arg in [['durationSeconds', 'duration'], ['waitSeconds', 'wait'], ['stepTimeoutSeconds', 'stepTimeout']]
+            if fab_ledger.action == 'lease-acquire' and _fab_lease_cfg[key] is defined and _fab_lease_cfg[key] is not none -%}
+        {%- set _ = out.update({arg: _fab_lease_cfg[key] | int}) -%}
+      {%- endfor -%}
+      {{ out }}
   ansible.builtin.command:
     argv:
       - python3
       - "{{ role_path }}/../../../common/files/shc_ledger.py"
-    stdin: "{{ fab_ledger | combine({'api': services_api_host | trim, 'token': services_bearer_token | trim}) | to_json }}"
+    stdin: >-
+      {{ _fab_lease_req | combine(fab_ledger)
+         | combine({'api': services_api_host | trim, 'token': services_bearer_token | trim}) | to_json }}
   register: _fab_ledger
   changed_when: >-
     (_fab_ledger.stdout | default('')) is search('"(new|created)": true|"released": [0-9]')
