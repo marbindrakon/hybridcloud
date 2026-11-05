@@ -10,7 +10,7 @@ gateway.announceIcmpSource6BySite) and the input filter that comes with it.
   or the IPv6 egress upstreams, which are all behind it), to the site as Type-5 with the gateways' community, and
   never back in at the other node, even from a site that strips communities and with the site-import filter off.
 - The apply loads table ip6 shc_gw_in6 (input hook, stateless, IPv6 to the node from a VRF: ICMPv6 and TCP that
-  opens no connection pass, a TCP connection request is reset, UDP refused with a port unreachable, the rest
+  carries ACK or RST passes, every other TCP segment is reset, UDP refused with a port unreachable, the rest
   dropped) before the VRFs take the ICMP source, removes it with the key, and keeps it after a failed IPv6 step. The
   same ruleset is loaded into a real kernel (an unprivileged user and network namespace; skipped where that is not
   possible) and probed with packets: echo and the replies of a connection the node opened pass, a connection request
@@ -365,6 +365,130 @@ class ApplyConfig(unittest.TestCase):
         self.assertEqual(c["icmp6"], NODE1_ICMP6)
 
 
+class TurnOffOrder(unittest.TestCase):
+    """Turning the switch off withdraws the route before the filter goes: the apply configuration keeps icmp6Announced
+    while the node's filter marker exists (so the first apply keeps the table), FRR is rendered and reloaded without the
+    route, and only after the VPN label check, once the instance's running configuration announces no ICMPv6 source
+    (reloading once more if it still does), is the key dropped and the apply run again. Any step failing in between
+    ends the run with the filter in place."""
+
+    def tasks(self):
+        return load(os.path.join(CG, "node_gateway.yml"))
+
+    def names(self):
+        out = []
+        for t in self.tasks():
+            out.append(t.get("name", ""))
+            for b in t.get("block") or []:
+                out.append(b.get("name", ""))
+        return out
+
+    def test_order(self):
+        n = self.names()
+        at = lambda frag: next(i for i, x in enumerate(n) if frag in x)
+        self.assertLess(at("is the VRFs' input filter loaded"), at("gateway instance config"))
+        self.assertLess(at("keep the filter until the announcement is withdrawn"), at("gateway instance config"))
+        self.assertLess(at("gateway instance config"), at("apply the gateway instance (namespace"))
+        self.assertLess(at("apply the gateway instance (namespace"), at("FRR configuration"))
+        self.assertLess(at("reload the FRR configuration"), at("remove the VRFs' input filter once"))
+        self.assertLess(at("every VRF's VPN label leads into it"), at("remove the VRFs' input filter once"))
+        block = [b["name"] for b in by_name(self.tasks(), "{{ bgw_node.name }}: remove the VRFs' input filter once the "
+                                                          "announcement is withdrawn")["block"]]
+        self.assertEqual([x.split(": ", 1)[1] for x in block], [
+            "does the instance still announce an ICMPv6 source", "reload the FRR configuration (it still announces)",
+            "the instance announces no ICMPv6 source", "the apply configuration as it was written",
+            "gateway instance config without the filter", "apply the gateway instance without the filter"])
+
+    def test_guards(self):
+        tasks = self.tasks()
+        blk = by_name(tasks, "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn")
+        self.assertEqual(blk["when"], "cg_node_in6_keep | default(false) | bool")
+        b = {x["name"].split(": ", 1)[1]: x for x in blk["block"]}
+        self.assertEqual(b["reload the FRR configuration (it still announces)"]["when"], "'announced=yes' in _cg_in6_ann.stdout")
+        # the re-check fails the run (filter kept) while the route is still in the running configuration
+        expr = b["the instance announces no ICMPv6 source"]["failed_when"]
+        for rc, out, failed in ((0, "announced=no\n", False), (0, "announced=yes\n", True), (1, "", True)):
+            ok = eval(expr.replace("_cg_in6_gone.rc", repr(rc)).replace("_cg_in6_gone.stdout", repr(out)))
+            self.assertIs(ok, failed, (rc, out))
+        stat = by_name(tasks, "{{ bgw_node.name }}: is the VRFs' input filter loaded")
+        self.assertEqual(stat["ansible.builtin.stat"]["path"], "/etc/shc-fabric/gw-{{ fab_name }}.in6")
+        self.assertEqual(stat["when"], "cg_node_icmp6_announce | default('', true) | length == 0")
+
+    def check_script(self, vtysh_body):
+        """the withdrawal check (the block's first and third task share it) against a stand-in vtysh"""
+        t = by_name(self.tasks(), "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn")
+        script = t["block"][0]["ansible.builtin.shell"]
+        self.assertEqual(script, t["block"][2]["ansible.builtin.shell"])
+        tmp = tempfile.mkdtemp(prefix="shc-in6-check-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, "vtysh"), "w") as f:
+            f.write("#!/bin/bash\n" + vtysh_body)
+        os.chmod(os.path.join(tmp, "vtysh"), 0o755)
+        env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"])
+        p = subprocess.run(["bash", "-c", script.replace("{{ fab_name }}", "site1")], env=env, capture_output=True,
+                           text=True, timeout=30)
+        return p.returncode, p.stdout.strip()
+
+    def test_withdrawal_check(self):
+        conf = ("router bgp 65010 vrf t51000\n address-family ipv6 unicast\n  network ::/0 route-map GW-LOCAL\n"
+                "  network 2001:db8:100::/56 route-map GW-LOCAL\n%s  label vpn export auto\n exit-address-family\nexit\n")
+        on = conf % "  network 2001:db8:4005:1::1:2/128 route-map GW-LOCAL\n"
+        self.assertEqual(self.check_script("[ \"$2\" = gw-site1 ] || exit 3\ncat <<'E'\n%sE\n" % on), (0, "announced=yes"))
+        self.assertEqual(self.check_script("cat <<'E'\n%sE\n" % (conf % "")), (0, "announced=no"))
+        # FRR unreadable: the check fails (the filter stays)
+        self.assertEqual(self.check_script("exit 1\n")[0], 1)
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_keep_fact(self):
+        t = by_name(self.tasks(), "{{ bgw_node.name }}: keep the filter until the announcement is withdrawn")
+        for marker, want in (({"stat": {"exists": True}}, True), ({"stat": {"exists": False}}, False),
+                             ({"skipped": True, "changed": False}, False), (None, False)):
+            v = {} if marker is None else {"_cg_in6_marker": marker}
+            self.assertIs(run_play([t, write_out("cg_node_in6_keep | bool")], v), want, marker)
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_config_while_keeping_and_after(self):
+        """keeping: the key stays; the configuration written after the withdrawal is byte for byte the switch-off one"""
+        cfg = ApplyConfig("test_on")
+        tasks = self.tasks()
+        off = cfg.content(tasks, {})
+        keeping = cfg.content(tasks, {"cg_node_in6_keep": True})
+        self.assertIs(json.loads(keeping)["icmp6Announced"], True)
+        self.assertEqual({k: v for k, v in json.loads(keeping).items() if k != "icmp6Announced"}, json.loads(off))
+        blk = by_name(tasks, "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn")
+        final = next(x for x in blk["block"] if "without the filter" in x["name"] and "ansible.builtin.copy" in x)
+        import base64
+        out = run_play([{"ansible.builtin.set_fact": {"_f": final["ansible.builtin.copy"]["content"]}}, write_out("_f")],
+                       {"_cg_conf_now": {"content": base64.b64encode(keeping.encode()).decode()}})
+        self.assertEqual(out, off)
+        self.assertEqual(final["ansible.builtin.copy"]["dest"], "/etc/shc-fabric/gw-{{ fab_name }}.json")
+
+
+class TurnOffApply(A.ApplyCase):
+    """the node script under the turn-off sequence: the first apply (key kept) keeps the table, the final apply (key
+    gone) removes it; a run that stops after the first leaves the table, and the next first apply keeps it again"""
+
+    def test_sequence(self):
+        h = self.h
+        h.conf("root", dict(A.ROOT_CONF, **A.ROOT6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", GW_ON)
+        h.ok(self, "gw-iaas1")
+        table = h.get_state()["ns"]["gw-iaas1"]["nft"]["ip6 shc_gw_in6"]
+        # the turn-off run's first apply: the job keeps the key (the marker exists); nothing changes
+        out, _ = h.ok(self, "gw-iaas1")
+        self.assertTrue(out.strip().endswith("changed=no"), out)
+        self.assertEqual(h.get_state()["ns"]["gw-iaas1"]["nft"]["ip6 shc_gw_in6"], table)
+        # (the run stops here: reload failed) the next run's first apply: still kept
+        out, _ = h.ok(self, "gw-iaas1")
+        self.assertIn("ip6 shc_gw_in6", h.get_state()["ns"]["gw-iaas1"]["nft"])
+        # after the withdrawal: the key gone, the table and its marker go
+        h.conf("gw-iaas1", dict(A.GW_CONF, **A.GW6))
+        out, _ = h.ok(self, "gw-iaas1")
+        self.assertNotIn("ip6 shc_gw_in6", h.get_state()["ns"]["gw-iaas1"]["nft"])
+        self.assertFalse(os.path.exists(os.path.join(h.etc, "gw-iaas1.in6")))
+
+
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class Status(unittest.TestCase):
     def test_reported(self):
@@ -407,8 +531,8 @@ class ApplyFilter(A.ApplyCase):
             "table ip6 shc_gw_in6", "delete table ip6 shc_gw_in6", "table ip6 shc_gw_in6 {", "  chain input {",
             "    type filter hook input priority filter; policy accept;",
             '    iifname { "t51000", "t51002" } meta l4proto ipv6-icmp accept',
-            '    iifname { "t51000", "t51002" } tcp flags & (syn | ack) != syn accept',
-            '    iifname { "t51000", "t51002" } tcp flags & (syn | ack) == syn counter reject with tcp reset comment "TCP connection request: reset"',
+            '    iifname { "t51000", "t51002" } tcp flags & (ack | rst) != 0 accept',
+            '    iifname { "t51000", "t51002" } tcp flags & (ack | rst) == 0 counter reject with tcp reset comment "TCP without ACK or RST: reset"',
             '    iifname { "t51000", "t51002" } udp dport 0-65535 counter reject with icmpv6 type port-unreachable comment "UDP: port unreachable"',
             '    iifname { "t51000", "t51002" } counter drop comment "other protocols and fragments without a transport header"',
             "  }", "}"])
@@ -525,7 +649,7 @@ PROBE = textwrap.dedent(r'''
     MAC as its next hop, as an EVPN router MAC); a far host in VRF far behind another slave of t51000 (forwarded
     traffic). A decoy route in the main table toward the site host (dummy0): an answer routed outside the VRF would
     leave there. Probes from the site host, before and after the ruleset (argv[1]) is loaded."""
-    import json, os, socket, struct, subprocess, sys, time
+    import json, os, socket, struct, subprocess, sys, threading, time
 
     ICMP6, SITE, FAR = "2001:db8:4005:1::1:2", "2001:db8:100:1::5", "2001:db8:200::5"
 
@@ -597,6 +721,7 @@ PROBE = textwrap.dedent(r'''
     node_udp = sock(socket.AF_INET6, socket.SOCK_DGRAM, "t51000")
     node_udp.bind(("::", 3784))
     site_tcp = listener("site", SITE, 8080)
+    sess_tcp = listener("site", SITE, 8082)   # only node_session connects here: its queue holds nothing else
     far_tcp = listener("far", FAR, 8081)
 
     def connect(vrf, src, dst, port):
@@ -614,6 +739,62 @@ PROBE = textwrap.dedent(r'''
             return "error %d" % e.errno
         finally:
             s.close()
+
+    def tcp_probe(port, flags):
+        """one hand-built TCP segment (flags as a number) from the site host to the node's address; what comes back:
+        "rst" (a reset), "other <flags>" or "none" """
+        s = sock(socket.AF_INET6, socket.SOCK_RAW, "site", socket.IPPROTO_TCP)
+        s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_CHECKSUM, 16)
+        s.bind((SITE, 0))
+        s.settimeout(1.0)
+        sport = 40000 + (port * 7 + flags) % 20000
+        s.sendto(struct.pack("!HHIIBBHHH", sport, port, 1000, 0, 5 << 4, flags, 1024, 0, 0), (ICMP6, 0))
+        end = time.time() + 1.0
+        try:
+            while time.time() < end:
+                data, peer = s.recvfrom(2048)
+                if peer[0] == ICMP6 and len(data) >= 20 and struct.unpack("!HH", data[:4]) == (port, sport):
+                    return "rst" if data[13] & 0x04 else "other %#x" % data[13]
+        except socket.timeout:
+            pass
+        finally:
+            s.close()
+        return "none"
+
+    def scans():
+        """FIN, NULL and XMAS (FIN|PSH|URG) to the node's listening port 179 and to a closed port"""
+        return {f"{name}_{port}": tcp_probe(port, flags) for name, flags in (("fin", 0x01), ("null", 0x00), ("xmas", 0x29))
+                for port in (179, 180)}
+
+    def node_session(abort):
+        """a connection the node opens to the site host: data both ways, then the site host closes it (FIN, or a reset
+        with abort); "clean" = the node saw the reply and the close, "reset" = it saw the reset"""
+        def serve():
+            c, _ = sess_tcp.accept()
+            c.recv(16)
+            c.sendall(b"pong")
+            if abort:
+                c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            c.close()
+        th = threading.Thread(target=serve)
+        th.start()
+        s = sock(socket.AF_INET6, socket.SOCK_STREAM, "t51000")
+        s.settimeout(3)
+        try:
+            s.bind((ICMP6, 0))
+            s.connect((SITE, 8082))
+            s.sendall(b"ping")
+            time.sleep(0.3)
+            got = s.recv(16)
+            rest = s.recv(16)
+            return "clean" if got == b"pong" and rest == b"" else "data %r %r" % (got, rest)
+        except ConnectionResetError:
+            return "reset"
+        except socket.timeout:
+            return "timeout"
+        finally:
+            s.close()
+            th.join(5)
 
     def icmp_from_node(send, want_type):
         """send() from the site host, then wait for an ICMPv6 message of want_type from the node's address"""
@@ -691,6 +872,9 @@ PROBE = textwrap.dedent(r'''
         r = {"echo": echo(), "tcp_to_node": connect("site", SITE, ICMP6, 179), "udp_to_node": udp(3784),
              "udp_closed": udp(3785), "other_protocol": other_protocol(),
              "tcp_from_node": connect("t51000", ICMP6, SITE, 8080), "forwarded": connect("site", SITE, FAR, 8081)}
+        r.update(scans())
+        r["node_session"] = node_session(False)
+        r["node_session_abort"] = node_session(True)
         r["decoy_tx"] = decoy_tx() - before
         return r
 
@@ -738,19 +922,27 @@ class RealKernel(A.ApplyCase):
             with open(os.path.join(self.evidence, "real-kernel-probes.json"), "w") as f:
                 json.dump(r, f, indent=1)
         # today (no filter): everything reaches the node, its listeners included
-        self.assertEqual(r["before"], {"echo": "reply", "tcp_to_node": "connected", "udp_to_node": "delivered",
-                                       "udp_closed": "refused", "other_protocol": "parameter-problem",
-                                       "tcp_from_node": "connected", "forwarded": "connected", "decoy_tx": 0})
+        scan = lambda listen: {f"{n}_{p}": ("none" if p == 179 else "rst") if listen else "rst"
+                               for n in ("fin", "null", "xmas") for p in (179, 180)}
+        session = {"node_session": "clean", "node_session_abort": "reset"}
+        # (before: FIN, NULL and XMAS tell the listening port, which stays silent, from the closed one, which resets)
+        self.assertEqual(r["before"], dict({"echo": "reply", "tcp_to_node": "connected", "udp_to_node": "delivered",
+                                            "udp_closed": "refused", "other_protocol": "parameter-problem",
+                                            "tcp_from_node": "connected", "forwarded": "connected", "decoy_tx": 0},
+                                           **scan(True), **session))
         # with the filter the node answers like a host with no open port: echo replied, a connection request reset
         # (although a listener is there), UDP refused with port unreachable (never delivered, open port or not), another
         # protocol dropped; the reply to the node's own connection and forwarded traffic pass. Every answer reached the
         # site host, i.e. was routed in the VRF it came from (none left through the main table's decoy route)
-        self.assertEqual(r["after"], {"echo": "reply", "tcp_to_node": "reset", "udp_to_node": "refused",
-                                      "udp_closed": "refused", "other_protocol": "timeout",
-                                      "tcp_from_node": "connected", "forwarded": "connected", "decoy_tx": 0})
+        # FIN, NULL and XMAS now get a reset from the listening port exactly as from the closed one; the node's own
+        # connection still completes, closes cleanly, and sees the site's reset
+        self.assertEqual(r["after"], dict({"echo": "reply", "tcp_to_node": "reset", "udp_to_node": "refused",
+                                           "udp_closed": "refused", "other_protocol": "timeout",
+                                           "tcp_from_node": "connected", "forwarded": "connected", "decoy_tx": 0},
+                                          **scan(False), **session))
         counts = {c: int(n) for n, c in re.findall(r'counter packets (\d+) bytes \d+ \S+(?: with [^"]*)? comment "([^"]+)"',
                                                     r["ruleset"])}
-        self.assertGreaterEqual(counts.get("TCP connection request: reset", 0), 1, r["ruleset"])
+        self.assertGreaterEqual(counts.get("TCP without ACK or RST: reset", 0), 7, r["ruleset"])
         self.assertGreaterEqual(counts.get("UDP: port unreachable", 0), 2, r["ruleset"])
         self.assertGreaterEqual(counts.get("other protocols and fragments without a transport header", 0), 1, r["ruleset"])
 
