@@ -140,8 +140,10 @@ class ProviderPrefixStatus(unittest.TestCase):
 
 
 class ProviderPrefixMerge(unittest.TestCase):
-    """status keeps unknown fields and is merge-patched: the job's null removes the list, a shorter list replaces it.
-    A write that carries only status.ipv6.providerPrefixes leaves the other keys of status.ipv6 as they are."""
+    """Every status write is a JSON merge patch: the job's null removes the list, a shorter list replaces it, and a
+    write that carries only status.ipv6.providerPrefixes leaves the other keys of status.ipv6 as they are. (The status
+    schema keeps unknown fields at its top level only; status.ipv6 does not, so without the CRD field the API server
+    prunes the list.)"""
 
     def obj(self, lst):
         return {"metadata": {"resourceVersion": "1", "generation": 1},
