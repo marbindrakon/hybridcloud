@@ -37,7 +37,7 @@
         hybridnetwork_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (hybridnetwork_observed_generation >= hybridnetwork_generation)
+            and (hybridnetwork_observed_generation | int >= hybridnetwork_generation | int)
             and (hybridnetwork_status == 'ready')
             and (hybridnetwork_ready | bool)
           }}

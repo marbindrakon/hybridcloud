@@ -73,7 +73,7 @@
         rbac_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (rbac_observed_generation >= rbac_generation)
+            and (rbac_observed_generation | int >= rbac_generation | int)
             and (rbac_status == 'ready')
             and (rbac_ready | bool)
           }}

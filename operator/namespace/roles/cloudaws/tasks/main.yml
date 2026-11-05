@@ -23,7 +23,7 @@
         cloudaws_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (cloudaws_observed_generation >= cloudaws_generation)
+            and (cloudaws_observed_generation | int >= cloudaws_generation | int)
             and (cloudaws_status == 'ready')
             and (cloudaws_ready | bool)
           }}

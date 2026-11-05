@@ -22,7 +22,7 @@
         transportlink_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (transportlink_observed_generation >= transportlink_generation)
+            and (transportlink_observed_generation | int >= transportlink_generation | int)
             and (transportlink_status == 'ready')
             and (transportlink_ready | bool)
           }}

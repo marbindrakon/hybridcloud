@@ -55,7 +55,7 @@
         vaultkv_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (vaultkv_observed_generation >= vaultkv_generation)
+            and (vaultkv_observed_generation | int >= vaultkv_generation | int)
             and (vaultkv_status == 'ready')
             and (vaultkv_ready | bool)
           }}

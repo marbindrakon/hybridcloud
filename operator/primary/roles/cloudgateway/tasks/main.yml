@@ -22,7 +22,7 @@
         cloudgateway_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (cloudgateway_observed_generation >= cloudgateway_generation)
+            and (cloudgateway_observed_generation | int >= cloudgateway_generation | int)
             and (cloudgateway_status == 'ready')
             and (cloudgateway_ready | bool)
           }}

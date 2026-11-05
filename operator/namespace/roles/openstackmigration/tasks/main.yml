@@ -23,7 +23,7 @@
         migration_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (migration_observed_generation >= migration_generation)
+            and (migration_observed_generation | int >= migration_generation | int)
             and (migration_status == 'ready')
             and (migration_ready | bool)
           }}

@@ -37,7 +37,7 @@
         vault_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (vault_observed_generation >= vault_generation)
+            and (vault_observed_generation | int >= vault_generation | int)
             and (vault_status == 'ready')
             and (vault_ready | bool)
           }}

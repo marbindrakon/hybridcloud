@@ -73,7 +73,7 @@
         quayorg_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (quayorg_observed_generation >= quayorg_generation)
+            and (quayorg_observed_generation | int >= quayorg_generation | int)
             and (quayorg_status == 'ready')
             and (quayorg_ready | bool)
           }}

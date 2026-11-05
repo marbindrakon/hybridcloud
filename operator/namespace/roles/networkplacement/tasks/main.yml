@@ -37,7 +37,7 @@
         networkplacement_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (networkplacement_observed_generation >= networkplacement_generation)
+            and (networkplacement_observed_generation | int >= networkplacement_generation | int)
             and (networkplacement_status == 'ready')
             and (networkplacement_ready | bool)
           }}

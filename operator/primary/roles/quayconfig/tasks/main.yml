@@ -31,7 +31,7 @@
         quayconfig_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (quayconfig_observed_generation >= quayconfig_generation)
+            and (quayconfig_observed_generation | int >= quayconfig_generation | int)
             and (quayconfig_status == 'ready')
             and (quayconfig_ready | bool)
           }}

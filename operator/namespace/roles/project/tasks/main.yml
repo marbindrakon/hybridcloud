@@ -23,7 +23,7 @@
         project_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (project_observed_generation >= project_generation)
+            and (project_observed_generation | int >= project_generation | int)
             and (project_status == 'ready')
             and (project_ready | bool)
           }}

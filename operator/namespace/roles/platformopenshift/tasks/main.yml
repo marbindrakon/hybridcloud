@@ -23,7 +23,7 @@
         platformopenshift_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (platformopenshift_observed_generation >= platformopenshift_generation)
+            and (platformopenshift_observed_generation | int >= platformopenshift_generation | int)
             and (platformopenshift_status == 'ready')
             and (platformopenshift_ready | bool)
           }}

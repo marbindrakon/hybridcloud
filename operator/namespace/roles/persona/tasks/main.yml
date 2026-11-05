@@ -32,7 +32,7 @@
         persona_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (persona_observed_generation >= persona_generation)
+            and (persona_observed_generation | int >= persona_generation | int)
             and (persona_status == 'ready')
             and (persona_ready | bool)
           }}

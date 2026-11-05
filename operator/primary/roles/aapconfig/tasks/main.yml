@@ -31,7 +31,7 @@
         aapconfig_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (aapconfig_observed_generation >= aapconfig_generation)
+            and (aapconfig_observed_generation | int >= aapconfig_generation | int)
             and (aapconfig_status == 'ready')
             and (aapconfig_ready | bool)
           }}

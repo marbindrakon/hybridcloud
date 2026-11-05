@@ -40,7 +40,7 @@
         team_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (team_observed_generation >= team_generation)
+            and (team_observed_generation | int >= team_generation | int)
             and (team_status == 'ready')
             and (team_ready | bool)
           }}
