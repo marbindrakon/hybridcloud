@@ -639,6 +639,8 @@ gateway:
   siteImportFilter:   # per address family: only the placements' prefixes enter a VRF from the site
     ipv4: false
     ipv6: true
+  announceIcmpSource6: false    # each node announces its icmpSource6 address to the site (with an input filter)
+  announceIcmpSource6BySite: {} # <site>: true or false; overrides announceIcmpSource6 for that site's gateway
 ```
 - **`core.loopbackPool6`:** an IPv6 network of at least a /120, never advertised outside the core (the egress
   filter and the upstream routers should drop it). Provider edge `i` (the root is 1, the gateways 2 and up) gets
@@ -652,8 +654,9 @@ gateway:
   namespace gets `network + (node position << 16) + provider-edge index` as a /128 (the node position is 1-based in
   `borderGateway.nodes`), so the kernel can send Packet Too Big, Time Exceeded and Unreachable from inside a VRF.
   Example: `2001:db8:4005:1::/64` gives the root on the first node `2001:db8:4005:1::1:1` and the gateway with index 2
-  on the second node `2001:db8:4005:1::2:2`. These addresses are never announced. Take them from a range the
-  platform routes (an ICMP error with an unroutable source never reaches the sender).
+  on the second node `2001:db8:4005:1::2:2`. These addresses are not announced unless `gateway.announceIcmpSource6`
+  is on for the site (below). Take them from a range the platform routes (an ICMP error with an unroutable source
+  never reaches the sender).
 - **`gateway.siteImportFilter`:** the gateways' import filter on the routes a site announces (`FROM-SITE`). For a
   family that is on, a route of that family enters only when its prefix lies inside one of the prefixes of the
   site's placements on that gateway (host routes inside them included); every other prefix of that family is
@@ -699,6 +702,29 @@ IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
   is answered with "destination unreachable"; the kernel's default of one message per second per destination (even one
   every 20 ms) leaves a guest connecting to a name with many addresses waiting a full retransmit for the answers that
   were limited. Empty keeps the kernel default.
+- **`gateway.announceIcmpSource6`** (default false) and **`gateway.announceIcmpSource6BySite`** (per site: `true` or
+  `false`, overriding the default for that site's gateway): each border gateway node announces its own
+  `core.icmpSource6` address to the site as a /128 route, in every VRF whose placement holds IPv6 (only with the
+  dual-stack core and `core.icmpSource6` set).
+  - **What it gains.** The gateway announces the network's routes and the default from both nodes, and a site that
+    spreads its traffic over both (ECMP) sends traffic for one node's own address to the other node about half the
+    time, where it is refused. Without the announcement, ping and traceroute from a gateway node, a connection a node
+    opens toward the site, and ping to a node's forward-confirmed name (Reverse DNS, below) answer only sometimes.
+    With it the site sends that traffic to the node that holds the address.
+  - **Where the route goes.** Only to the site: like the covering routes it stays out of the network's VPN, so other
+    sites, attachment circuits and the upstream routers of the IPv6 egress never see it. A gateway never takes a
+    node's address back from the site (`FROM-SITE` refuses the whole `icmpSource6` range), also from a site that
+    drops the gateways' community. The site gains one route per node in each IPv6 VRF; the edge routers of an AWS or
+    Google Cloud site keep it and pass it neither to the transit gateway nor to the Cloud Router.
+  - **The input filter.** With the announcement on, the gateway namespace filters IPv6 addressed to the node itself
+    from a VRF: ICMPv6 passes (echo, errors, neighbour discovery), and TCP segments that open no connection (the
+    replies to connections the node opened); connection requests, UDP and every other protocol are dropped. It keeps
+    no connection state and forwarded traffic never meets it. A UDP traceroute to a node's address therefore ends
+    without an answer from the node; use ICMP (`traceroute -I`).
+  - **Turning it on or off.** Change the realization, then run the site's CloudGateway (Retry now). The job
+    configures one node at a time: the filter is in place before the route is announced, and the routing change adds
+    or removes one line per IPv6 VRF (no session resets). `status.realization.icmpSource6Announced` of the
+    CloudGateway says whether its nodes announce their addresses.
 
 ## Reverse DNS (`dns.reverse6`)
 
