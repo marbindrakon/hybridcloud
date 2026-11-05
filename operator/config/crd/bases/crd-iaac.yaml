@@ -97,6 +97,22 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
                 delivery:
                   type: object
                   description: >-

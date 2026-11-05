@@ -43,6 +43,26 @@ COMMON = {
     "status.status": "Short state word written by the platform's automation.",
     "status.ready": "True when the platform finished creating or updating this object.",
     "status.message": "What happened last, in plain words. Read it when the object is not ready.",
+    "status.phase": (
+        "State of the object, written by the platform: Waiting (for something else), Creating, Updating, "
+        "Ready, Degraded (usable, with reduced health), Paused (the site is paused), Failed or Deleting."
+    ),
+    "status.phaseSince": (
+        "When the object entered the state in status.phase (RFC 3339). It changes only when the state changes."
+    ),
+    "status.summary": (
+        "One line on what the platform is doing or waiting for, in plain words. Read it together with status.phase."
+    ),
+    "status.realized": (
+        "True from the first time the platform finished realizing this object, until a later run fails (then "
+        "false). A run that waits for something else leaves it as it was. Objects that depend on this one keep "
+        "treating it as usable while it re-runs or waits."
+    ),
+    "status.lastHandledReconcileRequest": (
+        "The Retry now request the platform last handled: the value of the "
+        "ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request is open while the "
+        "annotation differs from this value."
+    ),
     "status.lastReconciledAt": "When the platform last finished processing this object (RFC 3339).",
     "status.observedGeneration": (
         "The metadata.generation the status describes. When it is lower than metadata.generation, "
