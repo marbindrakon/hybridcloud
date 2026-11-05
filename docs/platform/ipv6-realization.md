@@ -721,11 +721,16 @@ IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
     Google Cloud site keep it and pass it neither to the transit gateway nor to the Cloud Router.
   - **The input filter.** With the announcement on, the gateway namespace filters IPv6 addressed to the node itself
     from a VRF, and answers like a host with no open port. ICMPv6 passes (echo, errors, neighbour discovery), and so
-    do TCP segments that open no connection (the replies to connections the node opened). A TCP connection request
-    gets a reset and UDP a port unreachable, sent back to the source through the VRF the packet came from, so ping
-    and traceroute (UDP, TCP or ICMP) to a node's address get their last hop. Every other protocol, and a fragment
-    without its transport header, is dropped. The filter is stateless: it keeps no connection state, "a TCP segment
-    that opens no connection" stands in for "established", and forwarded traffic never meets it. The answers are
+    do TCP segments with ACK or RST (the replies to connections the node opened; the node answers any other such
+    segment as a closed port would). Every other TCP segment (a connection request, FIN, NULL or XMAS probes) gets a
+    reset, so a port where the node listens looks closed, and UDP gets a port unreachable, both sent back to the
+    source through the VRF the packet came from, so ping and traceroute (UDP, TCP or ICMP) to a node's address get
+    their last hop. Every other protocol, and a fragment without its transport header, is dropped. The filter is
+    stateless: it keeps no connection state, "a TCP segment with ACK or RST" stands in for "established", and
+    forwarded traffic never meets it. Being stateless, it also refuses the UDP replies to requests the node itself
+    sends from a VRF (a DNS query, NTP or `iperf -u` run on the node inside a VRF gets no answer) and drops TCP that
+    reaches the node fragmented; the node itself sends nothing of the kind from a VRF (its own traffic there is
+    ICMPv6 and TCP). The answers are
     the ones a closed port gets: resets are not rate-limited, unreachables only by the kernel's global ICMP
     limit (`gateway.icmp6RateLimitMs` 0 lifts the per-destination one); an unreachable carries the probe plus 48
     bytes of headers (at most 1280 bytes), a reset is no larger than the request, and both go only toward addresses

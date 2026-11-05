@@ -74,9 +74,9 @@
 #   its ICMP source to the site (FRR's), so the site's hosts reach the node's own address in a VRF every time. The
 #   nftables table ip6 shc_gw_in6 in the namespace (IPv6 rules only, input hook only; loaded before the VRFs' ICMP
 #   sources are set): IPv6 addressed to the node from a VRF is answered as by a host with no open port: ICMPv6 and
-#   TCP segments that open no connection pass, a TCP connection request gets a reset, UDP a port unreachable, the rest
-#   is dropped. Stateless: no connection tracking ("a TCP segment that opens no connection" stands in for
-#   "established"; a stateful rule would make the namespace track and reassemble every tenant's forwarded IPv6 too).
+#   TCP segments with ACK or RST pass, every other TCP segment gets a reset, UDP a port unreachable, the rest is
+#   dropped. Stateless: no connection tracking ("a TCP segment with ACK or RST" stands in for "established"; a
+#   stateful rule would make the namespace track and reassemble every tenant's forwarded IPv6 too).
 #   The table goes when the key does (a run that never had it issues no command for it); an IPv6 step that failed
 #   leaves it as it was.
 set -euo pipefail
@@ -826,11 +826,12 @@ gateway)
   # a packet shows the VRF as its input interface (neighbour discovery keeps its slave device and passes as before).
   # It answers like a host with no open port, so ping and traceroute (UDP, TCP SYN, ICMP) to the node's address get
   # their answer from it: ICMPv6 passes (echo, errors, neighbour discovery, MLD; also a non-first fragment of it); TCP
-  # passes unless it opens a connection (SYN without ACK), so the replies to connections the node opened arrive; a
-  # connection request is reset and UDP refused with a port unreachable, each routed back in the VRF it came from to
-  # its source (as the kernel answers a closed port; resets unlimited, unreachables under the kernel's global ICMP
-  # limit); anything else (other protocols, fragments without a transport header) is dropped. Each refusing rule
-  # counts. Stateless: no rule here may use connection tracking (see the header). Forwarded traffic never reaches
+  # with ACK or RST passes, so the replies to connections the node opened arrive (SYN-ACK, ACK, FIN-ACK, RST) and the
+  # kernel answers the rest of them as any closed port would (a reset, or nothing to a RST); every other TCP segment
+  # (a connection request, FIN, NULL or XMAS probes) is reset, so a listening port looks closed; UDP is refused with a
+  # port unreachable. Each answer is routed back in the VRF it came from to its source (as the kernel answers a closed
+  # port; resets unlimited, unreachables under the kernel's global ICMP limit); anything else (other protocols,
+  # fragments without a transport header) is dropped. Each refusing rule counts. Stateless: no rule here may use connection tracking (see the header). Forwarded traffic never reaches
   # the input hook.
   gw_in6_nft() {
     local m
@@ -838,8 +839,8 @@ gateway)
     printf '%s\n' 'table ip6 shc_gw_in6' 'delete table ip6 shc_gw_in6' 'table ip6 shc_gw_in6 {' \
       '  chain input {' '    type filter hook input priority filter; policy accept;' \
       "$m meta l4proto ipv6-icmp accept" \
-      "$m tcp flags & (syn | ack) != syn accept" \
-      "$m tcp flags & (syn | ack) == syn counter reject with tcp reset comment \"TCP connection request: reset\"" \
+      "$m tcp flags & (ack | rst) != 0 accept" \
+      "$m tcp flags & (ack | rst) == 0 counter reject with tcp reset comment \"TCP without ACK or RST: reset\"" \
       "$m udp dport 0-65535 counter reject with icmpv6 type port-unreachable comment \"UDP: port unreachable\"" \
       "$m counter drop comment \"other protocols and fragments without a transport header\"" \
       '  }' '}'
