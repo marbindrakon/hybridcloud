@@ -29,7 +29,7 @@ import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHid
 import { ToolSignInPanel } from './ToolSignInPanel';
 import { Ipv6CloudInitSnippet } from './Ipv6CloudInitSnippet';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
-import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, placementSubnets, placementTranslation } from '../forms/ipv6';
+import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, networkProviderPrefixes, placementSubnets, placementTranslation } from '../forms/ipv6';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
@@ -646,6 +646,8 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
   const asked = (spec.prefixes ?? []).filter((p) => !held.has(p));
   const { mode, reported } = networkIpv6Mode(item);
   const platformBlocks = space.filter((a) => a.source === 'Platform' && Number(a.family) === 6);
+  // read-only: the subnets cloud providers assigned to placements, outside the address space
+  const providerPrefixes = networkProviderPrefixes(item);
   const platformAsk = platformRequestText(spec, t);
   const spaceCondition = (st.conditions ?? []).find((c) => c?.reason && NETWORK_SPACE_REASONS.includes(c.reason) && c.status !== 'True');
   const families = Array.isArray(st.egress?.families) ? st.egress?.families ?? [] : [];
@@ -686,6 +688,31 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
         )}
         {space.length > 0 && asked.length > 0 && (
           <p className="sc-text-muted">{t('detail.addressSpacePending', { prefixes: asked.join(', ') })}</p>
+        )}
+        {providerPrefixes.length > 0 && (
+          <>
+            <p className="sc-text-muted">{t('ipv6.providerPrefixesNote')}</p>
+            <Table aria-label={t('ipv6.providerPrefixes')} variant="compact" className="sc-mb">
+              <Thead>
+                <Tr>
+                  <Th modifier="wrap">{t('ipv6.providerPrefixes')}</Th>
+                  <Th modifier="wrap">{t('kindsOne.NetworkPlacement')}</Th>
+                  <Th modifier="wrap">{t('fields.site')}</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {providerPrefixes.map((p) => (
+                  <Tr key={`${p.placement ?? ''} ${p.prefix}`}>
+                    <Td dataLabel={t('ipv6.providerPrefixes')}>
+                      <Mono>{p.prefix}</Mono>
+                    </Td>
+                    <Td dataLabel={t('kindsOne.NetworkPlacement')}>{p.placement || <Dash />}</Td>
+                    <Td dataLabel={t('fields.site')}>{p.site || <Dash />}</Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </>
         )}
       </Section>
       <Section title={t('ipv6.title')}>

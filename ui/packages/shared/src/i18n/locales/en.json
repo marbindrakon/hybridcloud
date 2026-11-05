@@ -1477,6 +1477,8 @@
     "blockNotAssigned": "Not assigned yet",
     "holdDown": "Hold-down",
     "holdDownUntil": "The block is held after its release until {{time}}",
+    "providerPrefixes": "IPv6 from the cloud provider",
+    "providerPrefixesNote": "Assigned by the cloud provider to these network placements. Not part of the network's address space: nothing is allocated from it.",
     "why": "Reason",
     "internet": "IPv6 internet",
     "internetOff": "Internet egress is off",

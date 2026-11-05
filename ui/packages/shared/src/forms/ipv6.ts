@@ -75,6 +75,25 @@ export function networkIpv6Mode(n: HybridNetwork | undefined | null): { mode: Ip
   return { mode: deriveIpv6Mode(n?.spec), reported: false };
 }
 
+/**
+ * The IPv6 subnets cloud providers assigned to the network's placements (status.ipv6.providerPrefixes), in the
+ * platform's order. Read-only: not part of the address space, nothing is allocated from them.
+ */
+export function networkProviderPrefixes(
+  n: HybridNetwork | undefined | null,
+): Array<{ prefix: string; placement?: string; site?: string }> {
+  const rows: unknown = n?.status?.ipv6?.providerPrefixes;
+  if (!Array.isArray(rows)) return [];
+  const text = (v: unknown): string => (typeof v === 'string' ? v : '');
+  return rows
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object' && text((r as { prefix?: unknown }).prefix) !== '')
+    .map((r) => ({
+      prefix: text(r.prefix),
+      ...(text(r.placement) ? { placement: text(r.placement) } : {}),
+      ...(text(r.site) ? { site: text(r.site) } : {}),
+    }));
+}
+
 /** Whether the network has IPv4 address space (its own prefixes, or held space in status). */
 export function networkHasIpv4(n: HybridNetwork | undefined | null): boolean {
   const held = (n?.status?.addressSpace ?? []).some((a) => Number(a.family) === 4);

@@ -726,6 +726,15 @@ export interface AddressSpaceEntry {
   source?: 'Tenant' | 'Platform' | string;
 }
 
+/** One IPv6 subnet a cloud provider assigned to a placement of the network (read-only, not in the address space) */
+export interface NetworkProviderPrefix {
+  prefix: string;
+  /** The NetworkPlacement that holds it */
+  placement?: string;
+  /** The site of the placement's environment */
+  site?: string;
+}
+
 export interface HybridNetworkStatus extends OperatorStatus {
   fabric?: string;
   mtu?: number;
@@ -748,6 +757,8 @@ export interface HybridNetworkStatus extends OperatorStatus {
     block?: { prefix?: string; prefixLength?: number; source?: 'Pinned' | 'Allocated' | string };
     /** While waiting for a recently released block: when it can be assigned again (RFC 3339) */
     holdDownUntil?: string;
+    /** IPv6 subnets cloud providers assigned to the network's placements, one per subnet; absent when none */
+    providerPrefixes?: NetworkProviderPrefix[] | null;
   };
   /** Informational; depends on the platform */
   realization?: Record<string, unknown>;

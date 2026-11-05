@@ -1477,6 +1477,8 @@
     "blockNotAssigned": "Pas encore attribué",
     "holdDown": "Mise en réserve",
     "holdDownUntil": "Le bloc reste réservé après sa libération jusqu'au {{time}}",
+    "providerPrefixes": "IPv6 attribué par le fournisseur cloud",
+    "providerPrefixesNote": "Attribué par le fournisseur cloud à ces placements réseau. Ne fait pas partie de l'espace d'adressage du réseau : rien n'y est alloué.",
     "why": "Raison",
     "internet": "Internet IPv6",
     "internetOff": "La sortie Internet est désactivée",
