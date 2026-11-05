@@ -10,9 +10,11 @@ Status contract of the `hybridsovereign.redhat` API.
   `status.summary` are derived on every write.
 - Filters `shc_merge_conditions`, `shc_phase`, `shc_summary`.
 
-`status.phase` is one of `Waiting`, `Creating`, `Updating`, `Ready`, `Degraded`, `Failed`, `Deleting`.
-It is derived, never read by a controller. `status.summary` is a short sentence safe to show to the
-tenant; the condition `message` carries the detail.
+`status.phase` is one of `Waiting`, `Creating`, `Updating`, `Ready`, `Degraded`, `Paused`, `Failed`,
+`Deleting`. It is derived, never read by a controller. `status.summary` is a short sentence safe to show
+to the tenant; the condition `message` carries the detail. The CRD schemas declare `status.phase`,
+`status.phaseSince` and `status.summary` and, on the kinds that write them, `status.realized` and
+`status.lastHandledReconcileRequest`, so `oc explain <kind>.status` shows them.
 
 The pure library (`plugins/module_utils/shc_status.py`, `shc_status_reasons.py`) has no Ansible
 imports and is also used outside Ansible.

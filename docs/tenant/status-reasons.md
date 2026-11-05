@@ -31,7 +31,7 @@ The state is in `status.phase` (since `status.phaseSince`) and is what the **STA
 `oc get` and the **Status** column of the dashboard lists show. The summary is in
 `status.summary` (the **SUMMARY** column with `-o wide`), and the reason is the `reason` of the
 `Ready` condition (`status.conditions`, the **REASON** column). `status.message` has more detail
-where the platform wrote one.
+where the platform wrote one. `oc explain networkplacement.status` describes each of these fields.
 
 ## Retry now
 
