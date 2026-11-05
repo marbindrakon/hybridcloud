@@ -73,10 +73,12 @@
 #   icmp6Announced (gateway, optional, with icmp6; absent or false = none of this is read or set): the node announces
 #   its ICMP source to the site (FRR's), so the site's hosts reach the node's own address in a VRF every time. The
 #   nftables table ip6 shc_gw_in6 in the namespace (IPv6 rules only, input hook only; loaded before the VRFs' ICMP
-#   sources are set): IPv6 addressed to the node from a VRF passes only as ICMPv6 or as a TCP segment that opens no
-#   connection, the rest is dropped. It keeps no connection state (a stateful rule would make the namespace track and
-#   reassemble every tenant's forwarded IPv6 too). The table goes when the key does (a run that never had it issues
-#   no command for it); an IPv6 step that failed leaves it as it was.
+#   sources are set): IPv6 addressed to the node from a VRF is answered as by a host with no open port: ICMPv6 and
+#   TCP segments that open no connection pass, a TCP connection request gets a reset, UDP a port unreachable, the rest
+#   is dropped. Stateless: no connection tracking ("a TCP segment that opens no connection" stands in for
+#   "established"; a stateful rule would make the namespace track and reassemble every tenant's forwarded IPv6 too).
+#   The table goes when the key does (a run that never had it issues no command for it); an IPv6 step that failed
+#   leaves it as it was.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
@@ -822,18 +824,24 @@ gateway)
   }
   # the VRFs' input filter (icmp6Announced): IPv6 addressed to the node itself from a VRF device. Past prerouting such
   # a packet shows the VRF as its input interface (neighbour discovery keeps its slave device and passes as before).
-  # ICMPv6 passes (echo, errors, neighbour discovery, MLD; also a non-first fragment of it); TCP passes unless it
-  # opens a connection (SYN without ACK), so the replies to connections the node opened arrive; the rest (TCP
-  # connection requests, UDP, any other protocol, TCP fragments without a header) is dropped and counted. Stateless:
-  # no rule here may use connection tracking (see the header). Forwarded traffic never reaches the input hook.
+  # It answers like a host with no open port, so ping and traceroute (UDP, TCP SYN, ICMP) to the node's address get
+  # their answer from it: ICMPv6 passes (echo, errors, neighbour discovery, MLD; also a non-first fragment of it); TCP
+  # passes unless it opens a connection (SYN without ACK), so the replies to connections the node opened arrive; a
+  # connection request is reset and UDP refused with a port unreachable, each routed back in the VRF it came from to
+  # its source (as the kernel answers a closed port; resets unlimited, unreachables under the kernel's global ICMP
+  # limit); anything else (other protocols, fragments without a transport header) is dropped. Each refusing rule
+  # counts. Stateless: no rule here may use connection tracking (see the header). Forwarded traffic never reaches
+  # the input hook.
   gw_in6_nft() {
-    local vrfs
-    vrfs=$(jq -r '[.vrfs // [] | .[].name | "\"" + . + "\""] | join(", ")' "$CONF")
+    local m
+    m="    iifname { $(jq -r '[.vrfs // [] | .[].name | "\"" + . + "\""] | join(", ")' "$CONF") }"
     printf '%s\n' 'table ip6 shc_gw_in6' 'delete table ip6 shc_gw_in6' 'table ip6 shc_gw_in6 {' \
       '  chain input {' '    type filter hook input priority filter; policy accept;' \
-      "    iifname { $vrfs } meta l4proto ipv6-icmp accept" \
-      "    iifname { $vrfs } tcp flags & (syn | ack) != syn accept" \
-      "    iifname { $vrfs } counter drop comment \"only ICMPv6 and TCP that opens no connection to the node\"" \
+      "$m meta l4proto ipv6-icmp accept" \
+      "$m tcp flags & (syn | ack) != syn accept" \
+      "$m tcp flags & (syn | ack) == syn counter reject with tcp reset comment \"TCP connection request: reset\"" \
+      "$m udp dport 0-65535 counter reject with icmpv6 type port-unreachable comment \"UDP: port unreachable\"" \
+      "$m counter drop comment \"other protocols and fragments without a transport header\"" \
       '  }' '}'
   }
   # load the filter for the VRFs of this run (replaced as a whole); none without VRFs (no ICMP source to protect)

@@ -36,8 +36,10 @@ fabric_realization_defaults:
     # announce each border gateway node's ICMPv6 source (core.icmpSource6) to the site in every VRF with IPv6: a /128
     # route that stays out of the network's VPN, so the site returns traffic for a node's own address to that node
     # rather than to whichever node its ECMP picks (ping and traceroute from a gateway node, ping to a node's ICMPv6
-    # source name). With it, IPv6 to the node itself from a VRF is filtered: ICMPv6 and TCP segments that open no
-    # connection pass, the rest is dropped. Only with the IPv6 core and core.icmpSource6; off: nothing of it exists
+    # source name). With it, IPv6 to the node itself from a VRF is filtered statelessly, as a host with no open port
+    # answers: ICMPv6 and TCP segments that open no connection pass (no connection tracking: "opens no connection"
+    # stands in for "established"), a TCP connection request gets a reset, UDP a port unreachable, the rest is
+    # dropped. Only with the IPv6 core and core.icmpSource6; off: nothing of it exists
     announceIcmpSource6: false
     # per site (CloudInfrastructure name: true or false): overrides announceIcmpSource6 for that site's gateway
     announceIcmpSource6BySite: {}
