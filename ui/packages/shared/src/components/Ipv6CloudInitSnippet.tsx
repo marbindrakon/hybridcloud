@@ -3,8 +3,10 @@
  * only (no installation values in the template). Shown only where the placement's site reports IPv6: the same
  * capability check that gates the placement form's IPv6 inputs.
  *
- * The network data finds the VM's NIC by its MAC address: the panel proposes a new locally administered address (or
- * takes the tenant's) and shows the VM interface with it next to the network data.
+ * On OpenShift Virtualization the tenant gives the VM its network data, which finds the VM's NIC by its MAC address:
+ * the panel proposes a new locally administered address (or takes the tenant's) and shows the VM interface with it
+ * next to the network data. Elsewhere the cloud provides the network configuration and the panel shows the user data
+ * only.
  */
 import React from 'react';
 import {
@@ -44,41 +46,49 @@ export function Ipv6CloudInitSnippet({
   return (
     <ExpandableSection toggleText={t('ipv6.cloudInit.title')} className="sc-mb">
       <p className="sc-text-muted">{t('ipv6.cloudInit.help')}</p>
-      <FormGroup label={t('ipv6.cloudInit.macAddress')} fieldId={fieldId} style={{ marginTop: '0.75rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', maxWidth: '32rem' }}>
-          <TextInput
-            id={fieldId}
-            value={mac}
-            onChange={(_e, v) => setMac(v)}
-            validated={snippet.macAddress ? 'default' : 'error'}
-          />
-          <Button variant="link" isInline onClick={() => setMac(proposeMacAddress())}>
-            {t('ipv6.cloudInit.newMac')}
-          </Button>
-        </div>
-        <FormHelperText>
-          <HelperText>
-            {snippet.macAddress ? (
-              <HelperTextItem>{t('ipv6.cloudInit.macAddressHelp')}</HelperTextItem>
-            ) : (
-              <HelperTextItem variant="error">{t('ipv6.cloudInit.macAddressInvalid')}</HelperTextItem>
-            )}
-          </HelperText>
-        </FormHelperText>
-      </FormGroup>
-      {snippet.vmInterface && snippet.networkData && (
+      {snippet.tenantNetworkData ? (
         <>
-          <p style={{ marginTop: '0.75rem' }}>
-            <strong>{t('ipv6.cloudInit.vmInterface')}</strong>
-          </p>
-          <p className="sc-text-muted">{t('ipv6.cloudInit.vmInterfaceHelp')}</p>
-          {copy(snippet.vmInterface)}
-          <p style={{ marginTop: '0.75rem' }}>
-            <strong>{t('ipv6.cloudInit.networkData')}</strong>
-          </p>
-          <p className="sc-text-muted">{t('ipv6.cloudInit.networkDataHelp')}</p>
-          {copy(snippet.networkData)}
+          <FormGroup label={t('ipv6.cloudInit.macAddress')} fieldId={fieldId} style={{ marginTop: '0.75rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', maxWidth: '32rem' }}>
+              <TextInput
+                id={fieldId}
+                value={mac}
+                onChange={(_e, v) => setMac(v)}
+                validated={snippet.macAddress ? 'default' : 'error'}
+              />
+              <Button variant="link" isInline onClick={() => setMac(proposeMacAddress())}>
+                {t('ipv6.cloudInit.newMac')}
+              </Button>
+            </div>
+            <FormHelperText>
+              <HelperText>
+                {snippet.macAddress ? (
+                  <HelperTextItem>{t('ipv6.cloudInit.macAddressHelp')}</HelperTextItem>
+                ) : (
+                  <HelperTextItem variant="error">{t('ipv6.cloudInit.macAddressInvalid')}</HelperTextItem>
+                )}
+              </HelperText>
+            </FormHelperText>
+          </FormGroup>
+          {snippet.vmInterface && snippet.networkData && (
+            <>
+              <p style={{ marginTop: '0.75rem' }}>
+                <strong>{t('ipv6.cloudInit.vmInterface')}</strong>
+              </p>
+              <p className="sc-text-muted">{t('ipv6.cloudInit.vmInterfaceHelp')}</p>
+              {copy(snippet.vmInterface)}
+              <p style={{ marginTop: '0.75rem' }}>
+                <strong>{t('ipv6.cloudInit.networkData')}</strong>
+              </p>
+              <p className="sc-text-muted">{t('ipv6.cloudInit.networkDataHelp')}</p>
+              {copy(snippet.networkData)}
+            </>
+          )}
         </>
+      ) : (
+        <p className="sc-text-muted">
+          {t(item.spec?.backend?.kind === 'CloudOSO' ? 'ipv6.cloudInit.networkFromConfigDrive' : 'ipv6.cloudInit.networkFromCloud')}
+        </p>
       )}
       {snippet.userData && (
         <>

@@ -1539,6 +1539,8 @@
       "vmInterfaceHelp": "L'interface de la VM sur le réseau du pod (le réseau nommé default, avec pod: {}) avec cette adresse MAC, sous spec.template.spec.domain.devices de la VM. Définissez-la à la création de la VM : cloud-init applique les données réseau au premier démarrage.",
       "networkData": "Données réseau",
       "networkDataHelp": "Les données réseau cloud-init de la VM (networkData de son volume cloudInitNoCloud ou cloudInitConfigDrive). Une VM avec plusieurs cartes réseau a besoin d'une entrée avec sa propre adresse MAC pour chacune ; cette entrée est la carte réseau de ce placement.",
+      "networkFromConfigDrive": "Sur OpenStack, le config drive porte la configuration réseau de l'invité : créez le serveur avec un config drive et donnez-lui seulement ces données utilisateur.",
+      "networkFromCloud": "Le cloud fournit la configuration réseau de l'invité : donnez à l'instance seulement ces données utilisateur.",
       "userData": "Données utilisateur",
       "userDataDns": "Maintient l'invité sur les résolveurs des données réseau : les résolveurs fournis par DHCP sont ignorés, car ils ne traduisent pas forcément les noms uniquement IPv4. Les noms internes au site ne sont alors pas résolus.",
       "userDataHelp": "Ce placement n'a pas d'IPv4 : un CLAT dans l'invité joint les destinations uniquement IPv4 par le préfixe de traduction.",

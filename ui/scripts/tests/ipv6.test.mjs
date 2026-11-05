@@ -194,7 +194,7 @@ test('cloud-init snippet: none without an IPv6 subnet; dual-stack DHCP; IPv6-onl
     ['version: 2', 'ethernets:', '  primary:', `    match: {macaddress: "${mac}"}`, '    dhcp4: true', '    dhcp6: true', '    accept-ra: true', ''].join('\n'),
   );
   assert.equal(d.userData, null);
-  assert.deepEqual([d.macAddress, d.clat, d.ignoreAutoDns], [mac, false, false]);
+  assert.deepEqual([d.tenantNetworkData, d.macAddress, d.clat, d.ignoreAutoDns], [true, mac, false, false]);
   const only = {
     metadata: { name: 'p' },
     spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
@@ -234,9 +234,24 @@ test('cloud-init snippet: the network data matches the NIC by the MAC address th
   // no MAC address, or one that is not a unicast address: no network data and no VM interface, the user data stays
   for (const bad of [undefined, '', 'eth0', '02:5c:ab:00:00', '02:5c:ab:00:00:01:02', '02:5c-ab:00:00:01', '01:00:5e:00:00:01', '00:00:00:00:00:00', 'g2:5c:ab:00:00:01']) {
     const n = m.cloudInitSnippet(p('CloudVirt', only6, tr), { macAddress: bad });
-    assert.deepEqual([n.macAddress, n.networkData, n.vmInterface], [null, null, null], String(bad));
+    assert.deepEqual([n.tenantNetworkData, n.macAddress, n.networkData, n.vmInterface], [true, null, null, null], String(bad));
     assert.match(n.userData, /packages: \[clatd\]/);
   }
+  // the environment type unknown: as on OpenShift Virtualization (the tenant gives the network data)
+  assert.equal(m.cloudInitSnippet(p(undefined, dual, null), { macAddress: '02:00:00:00:00:01' }).tenantNetworkData, true);
+  // OpenStack: the config drive carries the network configuration; only the user data, whatever MAC address is given
+  const oso = m.cloudInitSnippet(p('CloudOSO', only6, tr), { macAddress: '02:00:00:00:00:01' });
+  assert.deepEqual([oso.tenantNetworkData, oso.macAddress, oso.networkData, oso.vmInterface], [false, null, null, null]);
+  assert.deepEqual([oso.clat, oso.ignoreAutoDns], [true, true]);
+  // ... and nothing to show where there is no user data either
+  assert.equal(m.cloudInitSnippet(p('CloudOSO', dual, null), { macAddress: '02:00:00:00:00:01' }), null);
+  assert.equal(m.cloudInitSnippet(p('CloudAWS', dual, null)), null);
+  // Google Cloud, the provider's path: the CLAT only
+  const gcp = m.cloudInitSnippet(p('CloudGCP', [{ family: 6, prefix: '2001:db8:0:4::/64', source: 'Provider' }], { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['169.254.169.254'] }));
+  assert.deepEqual([gcp.networkData, gcp.clat, gcp.ignoreAutoDns], [null, true, false]);
+  assert.equal(m.showsCloudInitSnippet(p('CloudOSO', dual, null), { ipv6: true, ipv6Only: false, sources: [], translation: false }), false);
+  assert.equal(m.showsCloudInitSnippet(p('CloudOSO', only6, tr), { ipv6: true, ipv6Only: true, sources: [], translation: true }), true);
+  assert.equal(m.showsCloudInitSnippet(p('CloudVirt', dual, null), { ipv6: true, ipv6Only: false, sources: [], translation: false }), true);
 });
 
 test('MAC addresses: the tenant\'s text normalised, a proposed address locally administered and unicast', () => {
@@ -256,7 +271,7 @@ test('MAC addresses: the tenant\'s text normalised, a proposed address locally a
   // the panel's words in both catalogues, in display terms
   for (const l of ['en', 'fr']) {
     const t = tOf(load(l));
-    for (const k of ['macAddress', 'macAddressHelp', 'macAddressInvalid', 'newMac', 'vmInterface', 'vmInterfaceHelp', 'networkDataHelp']) {
+    for (const k of ['macAddress', 'macAddressHelp', 'macAddressInvalid', 'newMac', 'vmInterface', 'vmInterfaceHelp', 'networkDataHelp', 'networkFromConfigDrive', 'networkFromCloud']) {
       assert.notEqual(t(`ipv6.cloudInit.${k}`), `ipv6.cloudInit.${k}`, `${l}: ${k}`);
       assert.doesNotMatch(t(`ipv6.cloudInit.${k}`), KIND_NAME, `${l}: ${k}`);
     }

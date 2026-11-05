@@ -522,6 +522,12 @@ export function ipv6ReasonText(
 /* ------------------------------------------------------------------ cloud-init */
 
 export interface CloudInitSnippet {
+  /**
+   * Whether the tenant gives the VM its network configuration: on OpenShift Virtualization, the networkData of the
+   * VM's NoCloud or config drive volume. Elsewhere the cloud provides it (OpenStack: the config drive the compute
+   * service builds; AWS and Google Cloud: the instance metadata) and only the user data applies.
+   */
+  tenantNetworkData: boolean;
   /** The MAC address the network data matches, lowercase; null when none was given or it is not a unicast address */
   macAddress: string | null;
   /** The VM's interface on the pod network with that MAC address (the VM's domain.devices.interfaces); null without */
@@ -529,6 +535,7 @@ export interface CloudInitSnippet {
   /**
    * cloud-init network configuration, version 2, matching the VM's NIC by its MAC address (every renderer binds by
    * MAC; a name match is ignored by the NetworkManager, sysconfig and networkd renderers); null without a MAC address
+   * or where the tenant does not give network data
    */
   networkData: string | null;
   /**
@@ -619,6 +626,9 @@ function contentBlock(text: string): string[] {
     .map((l) => (l ? `      ${l}` : ''));
 }
 
+/** Environment types whose cloud provides the guest's network configuration: the tenant gives only user data. */
+const CLOUD_NETWORK_CONFIG = new Set(['CloudOSO', 'CloudAWS', 'CloudGCP']);
+
 /**
  * A MAC address as cloud-init and the VM spec take it (six colon-separated pairs, lowercase as netplan requires),
  * from the tenant's text (colons or hyphens, any case); null unless it is a unicast address other than all zeros.
@@ -656,14 +666,17 @@ export function proposeMacAddress(randomOctets?: (n: number) => ArrayLike<number
  * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix.
  *
  * The network data matches the VM's NIC by `macAddress`, the address the VM's interface is given (the guest's own
- * name for the NIC differs between images: eth0, enp1s0, ...); without a valid one there is no network data. Null
- * when the placement has no IPv6 subnet yet.
+ * name for the NIC differs between images: eth0, enp1s0, ...); without a valid one there is no network data. It is
+ * built only where the tenant gives the VM its network configuration (OpenShift Virtualization; also when the
+ * environment type is unknown). On OpenStack, AWS and Google Cloud the cloud provides it and only the user data
+ * applies, so there is no snippet at all when there is no user data. Null when the placement has no IPv6 subnet yet.
  */
 export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: { macAddress?: string } = {}): CloudInitSnippet | null {
   const v6 = placementSubnet(p, 6);
   if (!v6?.prefix) return null;
   const v4 = placementSubnet(p, 4);
-  const mac = normalizeMacAddress(opts.macAddress);
+  const tenantNetworkData = !CLOUD_NETWORK_CONFIG.has(String(p?.spec?.backend?.kind ?? ''));
+  const mac = tenantNetworkData ? normalizeMacAddress(opts.macAddress) : null;
   const tr = p?.status?.ipv6?.translation;
   const resolvers = Array.isArray(tr?.resolvers) ? (tr?.resolvers ?? []).filter((r) => typeof r === 'string' && !!r) : [];
   let networkData: string | null = null;
@@ -708,10 +721,14 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
     if (clat) runcmd.push('  - [systemctl, enable, --now, clatd]');
     userData = [...ud, 'runcmd:', ...runcmd, ''].join('\n');
   }
-  return { macAddress: mac, vmInterface, networkData, userData, clat, ignoreAutoDns: keepResolvers };
+  if (!tenantNetworkData && !userData) return null;
+  return { tenantNetworkData, macAddress: mac, vmInterface, networkData, userData, clat, ignoreAutoDns: keepResolvers };
 }
 
-/** Whether the placement page shows the snippet: an IPv6 subnet in status and a site that reports IPv6. */
+/**
+ * Whether the placement page shows the snippet: an IPv6 subnet in status, a site that reports IPv6, and something to
+ * give the VM (network data on OpenShift Virtualization, else user data).
+ */
 export function showsCloudInitSnippet(p: NetworkPlacement | undefined | null, caps: SiteIpv6Caps | undefined | null): boolean {
   return !!caps?.ipv6 && !!cloudInitSnippet(p);
 }
