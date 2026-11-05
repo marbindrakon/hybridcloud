@@ -548,7 +548,26 @@ export interface CloudInitSnippet {
   clat: boolean;
   /** whether userData keeps the guest on the network data's resolvers (ignoring those handed out by DHCP) */
   ignoreAutoDns: boolean;
+  /**
+   * The VM's cloud-init volume (spec.template.spec.volumes) where the tenant gives the network data: the network data
+   * inline, the user data from `userDataSecret` (KubeVirt refuses inline cloud-init data over
+   * CLOUD_INIT_INLINE_MAX_BYTES; the user data with the resolver step is larger, so it always goes in the Secret);
+   * null elsewhere or when there is neither
+   */
+  vmVolume: string | null;
+  /** A Secret manifest (stringData) with the user data under `userdata`, which `vmVolume` references; null without */
+  userDataSecret: string | null;
+  /** The Secret's name; null without a Secret */
+  secretName: string | null;
+  /** whether the network data is in the Secret too (key `networkdata`), being over KubeVirt's inline limit */
+  networkDataInSecret: boolean;
 }
+
+/** KubeVirt's limit on cloud-init user data and network data given inline in a VM, in bytes (decoded for base64). */
+export const CLOUD_INIT_INLINE_MAX_BYTES = 2048;
+
+/** The cloud-init volume's name: what OpenShift Virtualization templates call it. */
+const CLOUD_INIT_VOLUME = 'cloudinitdisk';
 
 /**
  * The guest script of the user data: on the NIC with the IPv6 default route, ignore the resolvers the network hands
@@ -619,12 +638,29 @@ const IGNORE_AUTO_DNS_UNIT = [
   '',
 ].join('\n');
 
-/** A file's content as a literal block of a write_files entry (six spaces deep, blank lines left empty). */
-function contentBlock(text: string): string[] {
+/** A text as the lines of a literal block `depth` spaces deep (blank lines left empty). */
+function indentedBlock(text: string, depth: number): string[] {
+  const pad = ' '.repeat(depth);
   return text
     .replace(/\n$/, '')
     .split('\n')
-    .map((l) => (l ? `      ${l}` : ''));
+    .map((l) => (l ? `${pad}${l}` : ''));
+}
+
+/** A file's content as a literal block of a write_files entry (six spaces deep, blank lines left empty). */
+function contentBlock(text: string): string[] {
+  return indentedBlock(text, 6);
+}
+
+/** Size in bytes as KubeVirt counts it (UTF-8). */
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** The Secret's name for a placement: one Secret serves every VM on the placement (the user data is the same). */
+function cloudInitSecretName(p: NetworkPlacement | undefined | null): string {
+  const base = String(p?.metadata?.name ?? '').slice(0, 253 - '-cloud-init'.length).replace(/[-.]+$/, '');
+  return base ? `${base}-cloud-init` : 'cloud-init';
 }
 
 /** Environment types whose cloud provides the guest's network configuration: the tenant gives only user data. */
@@ -733,7 +769,51 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
     userData = [...ud, 'runcmd:', ...runcmd, ''].join('\n');
   }
   if (!tenantNetworkData && !userData) return null;
-  return { tenantNetworkData, macAddress: mac, vmInterface, networkData, userData, clat, ignoreAutoDns: keepResolvers };
+  // OpenShift Virtualization: the VM's cloud-init volume, with the user data (and network data over the inline limit)
+  // in a Secret the volume references
+  let vmVolume: string | null = null;
+  let userDataSecret: string | null = null;
+  let secretName: string | null = null;
+  const networkDataInSecret = !!networkData && byteLength(networkData) > CLOUD_INIT_INLINE_MAX_BYTES;
+  if (tenantNetworkData && (networkData || userData)) {
+    const inSecret: [string, string][] = [];
+    if (userData) inSecret.push(['userdata', userData]);
+    if (networkData && networkDataInSecret) inSecret.push(['networkdata', networkData]);
+    if (inSecret.length) {
+      secretName = cloudInitSecretName(p);
+      // the namespace when the placement serves exactly one, so the manifest applies as it is
+      const namespaces = (p?.status?.namespaces ?? []).filter((n): n is string => typeof n === 'string' && !!n.trim());
+      userDataSecret = [
+        'apiVersion: v1',
+        'kind: Secret',
+        'metadata:',
+        `  name: ${JSON.stringify(secretName)}`,
+        ...(namespaces.length === 1 ? [`  namespace: ${JSON.stringify(namespaces[0].trim())}`] : []),
+        'type: Opaque',
+        'stringData:',
+        ...inSecret.flatMap(([key, text]) => [`  ${key}: |`, ...indentedBlock(text, 4)]),
+        '',
+      ].join('\n');
+    }
+    const vol = ['volumes:', `  - name: ${CLOUD_INIT_VOLUME}`, '    cloudInitNoCloud:'];
+    if (userData) vol.push('      secretRef:', `        name: ${JSON.stringify(secretName)}`);
+    if (networkData && networkDataInSecret) vol.push('      networkDataSecretRef:', `        name: ${JSON.stringify(secretName)}`);
+    else if (networkData) vol.push('      networkData: |', ...indentedBlock(networkData, 8));
+    vmVolume = `${vol.join('\n')}\n`;
+  }
+  return {
+    tenantNetworkData,
+    macAddress: mac,
+    vmInterface,
+    networkData,
+    userData,
+    clat,
+    ignoreAutoDns: keepResolvers,
+    vmVolume,
+    userDataSecret,
+    secretName,
+    networkDataInSecret,
+  };
 }
 
 /**

@@ -4,9 +4,10 @@
  * capability check that gates the placement form's IPv6 inputs.
  *
  * On OpenShift Virtualization the tenant gives the VM its network data, which finds the VM's NIC by its MAC address:
- * the panel proposes a new locally administered address (or takes the tenant's) and shows the VM interface with it
- * next to the network data. Elsewhere the cloud provides the network configuration and the panel shows the user data
- * only.
+ * the panel proposes a new locally administered address (or takes the tenant's) and shows three blocks that agree with
+ * each other: the VM interface with that address, the VM's cloud-init volume (network data inline) and the Secret with
+ * the user data that the volume references (KubeVirt refuses inline user data over 2048 bytes). Elsewhere the cloud
+ * provides the network configuration and the panel shows the user data only.
  */
 import React from 'react';
 import {
@@ -70,18 +71,41 @@ export function Ipv6CloudInitSnippet({
               </HelperText>
             </FormHelperText>
           </FormGroup>
-          {snippet.vmInterface && snippet.networkData && (
+          {snippet.vmInterface && (
             <>
               <p style={{ marginTop: '0.75rem' }}>
                 <strong>{t('ipv6.cloudInit.vmInterface')}</strong>
               </p>
               <p className="sc-text-muted">{t('ipv6.cloudInit.vmInterfaceHelp')}</p>
               {copy(snippet.vmInterface)}
+            </>
+          )}
+          {snippet.vmVolume && (
+            <>
               <p style={{ marginTop: '0.75rem' }}>
-                <strong>{t('ipv6.cloudInit.networkData')}</strong>
+                <strong>{t('ipv6.cloudInit.vmVolume')}</strong>
               </p>
-              <p className="sc-text-muted">{t('ipv6.cloudInit.networkDataHelp')}</p>
-              {copy(snippet.networkData)}
+              <p className="sc-text-muted">
+                {t(snippet.networkDataInSecret ? 'ipv6.cloudInit.vmVolumeHelpNetworkInSecret' : 'ipv6.cloudInit.vmVolumeHelp')}
+              </p>
+              {copy(snippet.vmVolume)}
+            </>
+          )}
+          {snippet.userDataSecret && (
+            <>
+              <p style={{ marginTop: '0.75rem' }}>
+                <strong>{t('ipv6.cloudInit.userDataSecret')}</strong>
+              </p>
+              <p className="sc-text-muted">
+                {[
+                  t('ipv6.cloudInit.userDataSecretHelp', { name: snippet.secretName ?? '' }),
+                  snippet.ignoreAutoDns ? t('ipv6.cloudInit.userDataDns') : '',
+                  snippet.clat ? t('ipv6.cloudInit.userDataHelp') : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              </p>
+              {copy(snippet.userDataSecret)}
             </>
           )}
         </>
@@ -90,7 +114,7 @@ export function Ipv6CloudInitSnippet({
           {t(item.spec?.backend?.kind === 'CloudOSO' ? 'ipv6.cloudInit.networkFromConfigDrive' : 'ipv6.cloudInit.networkFromCloud')}
         </p>
       )}
-      {snippet.userData && (
+      {snippet.userData && !snippet.userDataSecret && (
         <>
           <p style={{ marginTop: '0.75rem' }}>
             <strong>{t('ipv6.cloudInit.userData')}</strong>

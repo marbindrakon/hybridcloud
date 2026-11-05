@@ -2,6 +2,7 @@
 // capability gate of the placement IPv6 inputs and the cloud-init snippet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -15,6 +16,10 @@ const tOf = (cat) => (key, opts = {}) => {
 const tEn = tOf(load('en'));
 const KIND_NAME = /\b(HybridNetwork|NetworkPlacement|CloudVirt|CloudOSO|HybridFabric)\b/;
 const codes = (errs) => errs.map((e) => e.code).sort();
+// YAML as cloud-init and the cluster's tooling read it: PyYAML (already needed by these tests, terms-json.py)
+const yamlLoad = (text) =>
+  JSON.parse(execFileSync('python3', ['-I', '-c', 'import json, sys, yaml; json.dump(yaml.safe_load(sys.stdin), sys.stdout)'], { input: text, encoding: 'utf8' }));
+const bytes = (text) => Buffer.byteLength(text, 'utf8');
 
 test('mode follows the fields: platform block, tenant IPv6 prefix, neither', () => {
   assert.equal(m.deriveIpv6Mode({ prefixes: ['10.60.0.0/16'] }), 'None');
@@ -292,6 +297,88 @@ test('cloud-init snippet: every resolver quoted (an address may start or end wit
   assert.deepEqual([bad.clat, bad.userData], [false, null]);
 });
 
+test('cloud-init snippet on OpenShift Virtualization: interface, volume and Secret agree; nothing inline over the limit', () => {
+  assert.equal(m.CLOUD_INIT_INLINE_MAX_BYTES, 2048); // KubeVirt's limit on inline userData and networkData
+  const mac = '02:5c:12:34:56:78';
+  const at = (subnets, translation, namespaces) => ({
+    metadata: { name: 'example-p', namespace: 'entity-example-corp' },
+    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
+    status: { subnets, namespaces, ipv6: { translation } },
+  });
+  const only = [{ family: 6, prefix: '2001:db8:0:2::/64' }];
+  const dual = [{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }];
+  const tr = { path: 'Fabric', pref64: '64:ff9b::/96', resolvers: ['2001:db8:53::10', '2001:db8:53::11'] };
+  const long = Array.from({ length: 8 }, (_, i) => `2001:0db8:ffff:ffff:ffff:ffff:ffff:${String(i).padStart(4, '0')}`);
+  const cases = {
+    v6onlyTranslation: at(only, tr, ['example-vms']),
+    v6onlyLongResolvers: at(only, { ...tr, resolvers: long }, ['example-vms']),
+    v6onlyNoResolvers: at(only, { ...tr, resolvers: [] }, ['a', 'b']),
+    dualResolvers: at(dual, { path: 'Fabric', resolvers: ['2001:db8:53::10'] }, []),
+    dualPlain: at(dual, null, ['example-vms']),
+    v6onlyPlain: at(only, null, undefined),
+  };
+  for (const [name, p] of Object.entries(cases)) {
+    const s = m.cloudInitSnippet(p, { macAddress: mac });
+    const iface = yamlLoad(s.vmInterface).interfaces[0];
+    assert.equal(iface.macAddress, mac, name);
+    const vol = yamlLoad(s.vmVolume).volumes;
+    assert.equal(vol.length, 1, name);
+    assert.equal(vol[0].name, 'cloudinitdisk', name);
+    const src = vol[0].cloudInitNoCloud;
+    // the network data inline, as the snippet builds it, under KubeVirt's limit; it matches the interface's MAC address
+    assert.equal(src.networkData, s.networkData, name);
+    assert.ok(bytes(src.networkData) <= m.CLOUD_INIT_INLINE_MAX_BYTES, `${name}: ${bytes(src.networkData)} bytes inline`);
+    assert.equal(yamlLoad(src.networkData).ethernets.primary.match.macaddress, iface.macAddress, name);
+    // the user data never inline: in the Secret the volume references, byte for byte
+    assert.equal(src.userData, undefined, name);
+    assert.equal(src.userDataBase64, undefined, name);
+    if (!s.userData) {
+      assert.deepEqual([s.userDataSecret, s.secretName, src.secretRef], [null, null, undefined], name);
+      continue;
+    }
+    const secret = yamlLoad(s.userDataSecret);
+    assert.deepEqual([secret.apiVersion, secret.kind, secret.type], ['v1', 'Secret', 'Opaque'], name);
+    assert.equal(secret.metadata.name, 'example-p-cloud-init', name);
+    assert.equal(src.secretRef.name, secret.metadata.name, name);
+    assert.equal(s.secretName, secret.metadata.name, name);
+    assert.deepEqual(Object.keys(secret.stringData), ['userdata'], name);
+    assert.equal(secret.stringData.userdata, s.userData, name);
+    // the manifest names the namespace only when the placement serves exactly one
+    assert.equal(secret.metadata.namespace, p.status.namespaces?.length === 1 ? p.status.namespaces[0] : undefined, name);
+  }
+  // the user data with the resolver step is over the inline limit (why it is in a Secret); the CLAT alone is not
+  assert.ok(bytes(m.cloudInitSnippet(cases.v6onlyTranslation, { macAddress: mac }).userData) > m.CLOUD_INIT_INLINE_MAX_BYTES);
+  assert.ok(bytes(m.cloudInitSnippet(cases.v6onlyNoResolvers, { macAddress: mac }).userData) <= m.CLOUD_INIT_INLINE_MAX_BYTES);
+  // without a valid MAC address: no interface, the volume takes only the user data from the Secret
+  const nomac = m.cloudInitSnippet(cases.v6onlyTranslation, { macAddress: 'x' });
+  assert.equal(nomac.vmInterface, null);
+  assert.deepEqual(yamlLoad(nomac.vmVolume).volumes[0].cloudInitNoCloud, { secretRef: { name: 'example-p-cloud-init' } });
+  // network data over the limit (far more resolvers than any site has) moves into the Secret as well
+  const many = Array.from({ length: 60 }, (_, i) => `2001:db8:ffff:ffff:ffff:ffff:ffff:${i.toString(16)}`);
+  const big = m.cloudInitSnippet(at(only, { ...tr, resolvers: many }, ['example-vms']), { macAddress: mac });
+  assert.ok(bytes(big.networkData) > m.CLOUD_INIT_INLINE_MAX_BYTES);
+  assert.equal(big.networkDataInSecret, true);
+  const bigSrc = yamlLoad(big.vmVolume).volumes[0].cloudInitNoCloud;
+  assert.deepEqual(bigSrc, { secretRef: { name: 'example-p-cloud-init' }, networkDataSecretRef: { name: 'example-p-cloud-init' } });
+  assert.deepEqual(yamlLoad(big.userDataSecret).stringData, { userdata: big.userData, networkdata: big.networkData });
+  // the other environment types: the user data alone (their APIs take 16 KB and more), no volume, no Secret
+  for (const kind of ['CloudOSO', 'CloudAWS', 'CloudGCP']) {
+    const c = m.cloudInitSnippet({ ...cases.v6onlyTranslation, spec: { network: 'n', backend: { kind, name: 'e' } } }, { macAddress: mac });
+    assert.deepEqual([c.vmVolume, c.userDataSecret, c.secretName], [null, null, null], kind);
+    assert.ok(bytes(c.userData) < 16 * 1024, kind);
+    assert.equal(yamlLoad(c.userData).packages[0], 'clatd', kind);
+  }
+  // the panel's words in both catalogues, the limit named
+  for (const l of ['en', 'fr']) {
+    const t = tOf(load(l));
+    for (const k of ['vmVolume', 'vmVolumeHelp', 'vmVolumeHelpNetworkInSecret', 'userDataSecret', 'userDataSecretHelp']) {
+      assert.notEqual(t(`ipv6.cloudInit.${k}`), `ipv6.cloudInit.${k}`, `${l}: ${k}`);
+      assert.doesNotMatch(t(`ipv6.cloudInit.${k}`), KIND_NAME, `${l}: ${k}`);
+    }
+    assert.match(t('ipv6.cloudInit.userDataSecretHelp', { name: 'example-p-cloud-init' }), /example-p-cloud-init.*userdata.*2048/);
+  }
+});
+
 test('MAC addresses: the tenant\'s text normalised, a proposed address locally administered and unicast', () => {
   assert.equal(m.normalizeMacAddress('0A:58:0A:6E:09:04'), '0a:58:0a:6e:09:04');
   assert.equal(m.normalizeMacAddress('02-00-00-00-00-01'), '02:00:00:00:00:01');
@@ -309,7 +396,7 @@ test('MAC addresses: the tenant\'s text normalised, a proposed address locally a
   // the panel's words in both catalogues, in display terms
   for (const l of ['en', 'fr']) {
     const t = tOf(load(l));
-    for (const k of ['macAddress', 'macAddressHelp', 'macAddressInvalid', 'newMac', 'vmInterface', 'vmInterfaceHelp', 'networkDataHelp', 'networkFromConfigDrive', 'networkFromCloud']) {
+    for (const k of ['macAddress', 'macAddressHelp', 'macAddressInvalid', 'newMac', 'vmInterface', 'vmInterfaceHelp', 'networkFromConfigDrive', 'networkFromCloud']) {
       assert.notEqual(t(`ipv6.cloudInit.${k}`), `ipv6.cloudInit.${k}`, `${l}: ${k}`);
       assert.doesNotMatch(t(`ipv6.cloudInit.${k}`), KIND_NAME, `${l}: ${k}`);
     }
