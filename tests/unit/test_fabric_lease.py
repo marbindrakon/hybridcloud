@@ -676,27 +676,37 @@ class HolderWiring(unittest.TestCase):
 
     def test_long_steps_renew_first_when_the_lease_is_short(self):
         # every systemd start, restart or reload (not a timer, not enable/disable alone) and every apply up comes right
-        # after a renewal or a renew-if-short check
+        # after a renewal or a renew-if-short check, at any depth of blocks
+        def lists(tasks):
+            yield tasks
+            for t in tasks:
+                for key in ("block", "rescue", "always"):
+                    if t.get(key):
+                        yield from lists(t[key])
         for role, (_, _, node_file, _, _) in HOLDERS.items():
-            tasks = load(os.path.join(ROLES, role, "tasks", node_file))
-            for i, t in enumerate(tasks):
-                sd = t.get("ansible.builtin.systemd") or {}
-                cmd = str(t.get("ansible.builtin.command") or "")
-                long_step = (sd.get("state") and not str(sd.get("name", "")).endswith(".timer")) or \
-                    re.search(r"shc-fabric-apply \S+ up", cmd)
-                if not long_step:
-                    continue
-                with self.subTest(role=role, task=t["name"]):
-                    self.assertTrue(_renew(tasks[i - 1]) or str(tasks[i - 1].get("ansible.builtin.include_tasks", ""))
-                                    .endswith("fabric_lease_ensure.yml"), tasks[i - 1].get("name"))
+            for tasks in lists(load(os.path.join(ROLES, role, "tasks", node_file))):
+                for i, t in enumerate(tasks):
+                    sd = t.get("ansible.builtin.systemd") or {}
+                    cmd = str(t.get("ansible.builtin.command") or "")
+                    long_step = (sd.get("state") and not str(sd.get("name", "")).endswith(".timer")) or \
+                        re.search(r"shc-fabric-apply .+ up$", cmd.strip())
+                    if not long_step:
+                        continue
+                    with self.subTest(role=role, task=t["name"]):
+                        self.assertGreater(i, 0, "a long step first in its block")
+                        self.assertTrue(_renew(tasks[i - 1]) or str(tasks[i - 1].get("ansible.builtin.include_tasks", ""))
+                                        .endswith("fabric_lease_ensure.yml"), tasks[i - 1].get("name"))
 
     def test_the_applies_end_on_the_node_before_the_step(self):
+        found = []
         for role, node_file in (("hybridfabric_provision", "node_root.yml"), ("cloudgateway_provision", "node_gateway.yml")):
-            for t in load(os.path.join(ROLES, role, "tasks", node_file)):
+            for t in walk(load(os.path.join(ROLES, role, "tasks", node_file))):
                 cmd = str(t.get("ansible.builtin.command") or "")
-                if re.search(r"shc-fabric-apply \S+ up", cmd):
+                if re.search(r"shc-fabric-apply .+ up$", cmd.strip()):
+                    found.append(t["name"])
                     with self.subTest(task=t["name"]):
                         self.assertTrue(cmd.startswith("timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} "))
+        self.assertGreaterEqual(len(found), 2, found)
 
     def test_each_node_starts_with_a_renewal_by_its_holder(self):
         for role, (_, _, node_file, holder, fabric) in HOLDERS.items():
