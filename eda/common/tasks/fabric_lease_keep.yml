@@ -2,8 +2,9 @@
 # shc: the rescue of a holder's node loop (the lease fabric-config-<fabric>), before its always block releases the
 # lease. Which failures leave the nodes quiet decides whether the lease may go at once:
 # - a step that ran past its timeout: ansible stops waiting but not the work (ansible-core 2.19 and later mark it with
-#   ansible_failed_result.timedout; 2.16 only says so in the message, "failed to execute in the expected time frame"). The
-#   command goes on until this job ends its SSH sessions (bgw_disconnect.yml, first thing in the always block), and a
+#   ansible_failed_result.timedout; 2.16 only says so in the message, "failed to execute in the expected time frame").
+#   A looped step reports only "One or more items failed": the timed-out item, marked either way, is in
+#   ansible_failed_result.results. The command goes on until this job ends its SSH sessions (bgw_disconnect.yml, first thing in the always block), and a
 #   systemd job it started runs on until its unit's own limit. The lease is kept (fab_lease_keep: the release is
 #   skipped) and runs out by itself at fab_lease.until; every step starts only with enough of the lease left for all
 #   it can still do on the node (common/vars/fabric_lease.yml, fabric_lease_ensure.yml), so nothing of it outlives
@@ -16,17 +17,28 @@
 # Sets fab_lease_keep_msg (the failure, and when the lease is kept, until when) and re-raises with it; with
 # fab_lease_keep_raise false (a role rescue that releases and reports itself) it only sets the facts.
 - name: Keep the lease while a timed-out step may still run on a node
+  vars:
+    # the failed result, and each item's of a looped step: the first that timed out
+    _fab_timedout: >-
+      {{ ([ansible_failed_result] + (ansible_failed_result.results | default([], true) | list))
+         | select('mapping')
+         | selectattr('timedout', 'defined') | list
+         + ([ansible_failed_result] + (ansible_failed_result.results | default([], true) | list))
+         | select('mapping')
+         | selectattr('msg', 'defined') | selectattr('msg', 'search', 'failed to execute in the expected time frame') | list }}
   ansible.builtin.set_fact:
-    fab_lease_keep: true
-  when: >-
-    ansible_failed_result.timedout is defined
-    or (ansible_failed_result.msg | default('') | string) is search('failed to execute in the expected time frame')
+    fab_lease_keep: "{{ _fab_timedout | length > 0 }}"
+    fab_lease_keep_item: >-
+      {{ (('item ' ~ (_fab_timedout[0]._ansible_item_label | default(_fab_timedout[0].item) | string) ~ ': '
+           ~ (_fab_timedout[0].msg | default('')))
+          if _fab_timedout | length > 0 and _fab_timedout[0].item is defined else '') }}
   timeout: 0
 
 - name: The reason
   ansible.builtin.set_fact:
     fab_lease_keep_msg: >-
       {{ ansible_failed_task.name | default('a node step') }}: {{ ansible_failed_result.msg | default('failed') }}{{
+      (' (' ~ fab_lease_keep_item ~ ')') if fab_lease_keep_item | default('') | length > 0 else '' }}{{
       ('. The step may still be running there: the border gateway configuration lease fabric-config-'
        ~ fab_lease.fabric ~ ' is kept until it runs out at '
        ~ ('%Y-%m-%dT%H:%M:%SZ' | strftime(fab_lease.until | float | int, utc=true))

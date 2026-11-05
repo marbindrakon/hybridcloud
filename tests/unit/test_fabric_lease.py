@@ -1032,6 +1032,31 @@ class FailureClasses(_Ledger):
                 self.assertIn("is kept until it runs out at ", out["why"])
         self.assertEqual(self.calls(), [])
 
+    def test_a_timed_out_item_of_a_looped_step_keeps_the_lease(self):
+        # a looped step reports only "One or more items failed"; the timed-out item is in the results (marked by
+        # timedout on 2.19 and later, by the message on 2.16: this test runs the version installed, the next one fakes
+        # the 2.16 rendering)
+        out = self.loop({"ansible.builtin.command": "sleep {{ item }}", "loop": [0, 10],
+                         "loop_control": {"label": "the item of {{ item }} s"}})
+        self.assertTrue(out["kept"])
+        self.assertEqual(self.calls(), [])
+        self.assertIn("One or more items failed (item the item of 10 s: ", out["why"])
+        self.assertIn("is kept until it runs out at ", out["why"])
+        self.assertTrue(out["sshEnded"])
+
+    def test_a_looped_timeout_in_the_2_16_rendering_keeps_the_lease(self):
+        msg = "The ansible.builtin.copy action failed to execute in the expected time frame (2) and was terminated"
+        out = self.loop({"ansible.builtin.fail": {"msg": "{{ item }}"}, "loop": [msg]})
+        self.assertTrue(out["kept"])
+        self.assertEqual(self.calls(), [])
+        self.assertIn("One or more items failed (item %s: %s)" % (msg, msg), out["why"])
+
+    def test_a_looped_step_with_an_ordinary_error_releases_at_once(self):
+        out = self.loop({"ansible.builtin.command": "{{ item }}", "loop": ["true", "false"]})
+        self.assertFalse(out["kept"])
+        self.assertEqual(self.calls(), ["lease-release"])
+        self.assertNotIn("kept until", out["why"])
+
     def test_a_step_that_returned_an_error_releases_at_once(self):
         out = self.loop({"ansible.builtin.command": "false"})
         self.assertFalse(out["kept"])
