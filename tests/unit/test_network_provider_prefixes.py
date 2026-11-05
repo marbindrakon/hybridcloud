@@ -1,7 +1,8 @@
 """The HybridNetwork's status.ipv6.providerPrefixes: the network job lists the IPv6 subnets cloud providers assigned
 to its placements (their status.subnets rows with source Provider) as {prefix, placement, site}, read-only next to the
 address space; absent when there is none. A ready placement whose provider subnet came, went or changed since the
-network listed it wakes the network, and so does a placement's completed teardown. The row shapes follow the
+network listed it wakes the network, and so does every completed placement deletion (except of a network being
+deleted). The row shapes follow the
 recorded gate evidence: an AWS placement reports the Amazon /56 (dual-stack and IPv6-only alike; the per-zone /64s
 stay in status.realization.site.ipv6.subnets), a Google Cloud placement the subnet's external /64. The plays run in
 ansible-playbook (skipped without it); the wiring checks always run. Documentation prefixes only."""
@@ -198,19 +199,67 @@ class PlacementWakesNetwork(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class TeardownWakesNetwork(unittest.TestCase):
-    def woke(self, subnets):
-        t = by_name(load(os.path.join(NPD, "main.yml")), "Tell the network when the placement had a provider-assigned subnet")
-        return nudged(t, {"fab_namespace": "entity-a", "fab_name": "p", "fab_spec": {"network": "net"},
-                          "fab_st": {"subnets": subnets}})
+    """Every completed placement deletion wakes the network (counts, provider list, the fabric's IPv6 announcements),
+    except a network that is being deleted: there a wake would be a Retry now of its deletion."""
 
-    def test_a_provider_subnet_wakes_the_network(self):
-        self.assertTrue(self.woke(AWS_DUAL["status"]["subnets"]))
-        self.assertTrue(self.woke(GCP_DUAL["status"]["subnets"]))
+    def woke(self, network, fab_st=None, name="net"):
+        tasks = copy.deepcopy(load(os.path.join(NPD, "wake_network.yml")))
+        read = by_name(tasks, "Read the network of the deleted placement")
+        read.pop("kubernetes.core.k8s_info")
+        read.pop("register")
+        read.pop("failed_when")
+        # what the read would return: the network, nothing (gone), or a failed read (no resources)
+        read["ansible.builtin.set_fact"] = {"_npd_wake_net": network}
+        wake = by_name(tasks, "Wake the network of the deleted placement")
+        wake.pop("ansible.builtin.include_tasks")
+        wake["ansible.builtin.set_fact"] = {"woke": True}
+        return run_play(tasks + [write_out("woke | default(false)")],
+                        {"npd_wake_network": name, "npd_wake_namespace": "entity-a", "fab_st": fab_st or {}})
 
-    def test_others_wake_nothing(self):
-        self.assertFalse(self.woke(METAL["status"]["subnets"]))
-        self.assertFalse(self.woke([]))
-        self.assertFalse(self.woke(None))
+    LIVE = {"resources": [{"metadata": {"name": "net", "namespace": "entity-a"}, "status": {"ready": True}}]}
+    DELETING = {"resources": [{"metadata": {"name": "net", "namespace": "entity-a",
+                                            "deletionTimestamp": "2001-01-01T00:00:00Z"}}]}
+
+    def test_every_placement_wakes_a_live_network(self):
+        ipv4_only = pl("v4", [row("10.70.3.0/24", "Network")])
+        for p in (METAL, AWS_DUAL, AWS_ONLY, GCP_DUAL, ipv4_only, pl("bare", [])):
+            self.assertTrue(self.woke(self.LIVE, p["status"]), p["metadata"]["name"])
+
+    def test_a_network_being_deleted_is_not_woken(self):
+        self.assertFalse(self.woke(self.DELETING, METAL["status"]))
+
+    def test_a_network_that_is_gone_or_unreadable_is_not_woken(self):
+        self.assertFalse(self.woke({"resources": []}))
+        self.assertFalse(self.woke({"failed": True, "msg": "connection refused"}))
+        self.assertFalse(self.woke(self.LIVE, name=""))
+
+    def test_the_short_path_runs_the_kind_s_steps_after_the_deletion(self):
+        # teardown_unrealized.yml: a placement refused at validation is deleted without site cleanup; the hook runs
+        t = by_name(load(os.path.join(ROOT, "eda", "common", "tasks", "teardown_unrealized.yml")),
+                    "The kind's steps after the deletion")
+        after = [{"ansible.builtin.set_fact": {"woke": True}}]
+        self.assertTrue(run_play([t, write_out("woke | default(false)")], {"teardown_unrealized_after": "after.yml"},
+                                 files={"after.yml": after}))
+        self.assertFalse(run_play([t, write_out("woke | default(false)")], {}))
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class CountsAfterADeletion(unittest.TestCase):
+    def status(self, placements):
+        t = by_name(load(os.path.join(HN, "main.yml")), "Set the network status")
+        return run_play([t, write_out("{'status': hn_status, 'holders': hn_holders}")],
+                        {"fab_name": "net", "fab_namespace": "entity-a", "fab_entity": "a", "fab_spec": {},
+                         "hn_fabric": {}, "hn_fabric_name": "", "_hn_placements": {"resources": placements}})
+
+    def test_a_completed_deletion_is_not_counted(self):
+        ready = pl("web-vms", METAL["status"]["subnets"])
+        ready["status"]["ready"] = True
+        tearing = pl("web-aws", AWS_DUAL["status"]["subnets"], deleting=True)
+        done = pl("old", METAL["status"]["subnets"], complete=True)
+        out = self.status([ready, tearing, done])
+        self.assertEqual((out["status"]["placementCount"], out["status"]["placementsReady"]), (2, 1))
+        # the IPAM's holders still name every placement that exists
+        self.assertEqual(len(out["holders"]), 3)
 
 
 class Wiring(unittest.TestCase):
@@ -228,8 +277,30 @@ class Wiring(unittest.TestCase):
 
     def test_the_teardown_wakes_after_the_deletion_is_complete(self):
         names = self.names(os.path.join(NPD, "main.yml"))
-        self.assertLess(names.index("Mark deletion complete"),
-                        names.index("Tell the network when the placement had a provider-assigned subnet"))
+        self.assertLess(names.index("Mark deletion complete"), names.index("Tell the network that the placement is gone"))
+        self.assertLess(names.index("Tell the network that the placement is gone"), names.index("Release the finalizer now"))
+        # the wake has no condition of its own: every completed deletion (wake_network.yml skips a deleting network)
+        t = by_name(load(os.path.join(NPD, "main.yml")), "Tell the network that the placement is gone")
+        self.assertNotIn("when", t)
+        self.assertEqual(t["ansible.builtin.include_tasks"], "wake_network.yml")
+        # the short path for a placement refused at validation runs it too, after deletionComplete
+        first = by_name(load(os.path.join(NPD, "main.yml")), "Skip the site cleanup when nothing was realized")
+        self.assertEqual(first["vars"]["teardown_unrealized_after"], "{{ role_path }}/tasks/wake_network.yml")
+        un = self.names(os.path.join(ROOT, "eda", "common", "tasks", "teardown_unrealized.yml"))
+        self.assertLess(un.index("Record the deletion as complete"), un.index("The kind's steps after the deletion"))
+        self.assertLess(un.index("The kind's steps after the deletion"), un.index("End the job"))
+
+    def test_the_teardown_wakes_nothing_else_of_the_network_kind(self):
+        # no double wake: the teardown's other wakes go to the gateway, waiting siblings, the fabric and the placement
+        kinds = []
+        for t in walk(load(os.path.join(NPD, "main.yml"))):
+            crs = (t.get("vars") or {}).get("nudge_crs")
+            if isinstance(crs, list):
+                kinds += [c.get("kind") for c in crs]
+            elif isinstance(crs, str) and "'kind': '" in crs:
+                kinds += [crs.split("'kind': '")[1].split("'")[0]]
+        self.assertNotIn("HybridNetwork", kinds)
+        self.assertEqual(sorted(set(kinds)), ["CloudGateway", "HybridFabric", "NetworkPlacement"])
 
     def test_the_placement_wake_follows_the_ready_write(self):
         names = self.names(os.path.join(NP, "main.yml"))
@@ -250,13 +321,14 @@ class Wiring(unittest.TestCase):
             for f in files:
                 if f.endswith((".yml", ".yaml", ".py", ".j2")):
                     with open(os.path.join(base, f)) as fh:
-                        if "providerPrefixes" in fh.read():
-                            readers.append(os.path.relpath(os.path.join(base, f), ROOT))
+                        code = [ln for ln in fh.read().splitlines() if not ln.lstrip().startswith("#")]
+                    if any("providerPrefixes" in ln for ln in code):
+                        readers.append(os.path.relpath(os.path.join(base, f), ROOT))
+        # the writer (the network job) and the placement's wake, nothing else (comments don't count)
         self.assertEqual(sorted(readers), [
             "eda/rulebooks/roles/hybridnetwork_provision/tasks/main.yml",
             "eda/rulebooks/roles/hybridnetwork_provision/tasks/platform_block.yml",
             "eda/rulebooks/roles/networkplacement_provision/tasks/main.yml",
-            "eda/rulebooks/roles/networkplacement_teardown/tasks/main.yml",
         ])
 
     def test_crd_schema(self):

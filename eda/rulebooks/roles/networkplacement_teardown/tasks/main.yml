@@ -15,11 +15,19 @@
 #    §8.3): the PTR, then the AAAA, before the subnets go back (the deletion waits while a removal fails and the
 #    DNSConfig is usable; without one the platform can remove nothing and goes on);
 # 4. the VNIs go back to the fabric's ledger and the subnets to the network's address space (design/P10-PLAN.md §3),
-#    which wakes the network's placements waiting for address space; deletionComplete.
+#    which wakes the network's placements waiting for address space; deletionComplete;
+# 5. the network is woken (not while it is being deleted): it counts its placements again and, with IPv6 egress, has
+#    the fabric stop announcing the placement's IPv6 subnet (wake_network.yml; also after the short path for a
+#    placement that was refused at validation).
 - block:
     # nothing on a site (refused at validation): delete without site cleanup
     - name: Skip the site cleanup when nothing was realized
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+      vars:
+        # the network counted the placement: tell it that the placement is gone
+        teardown_unrealized_after: "{{ role_path }}/tasks/wake_network.yml"
+        npd_wake_network: "{{ (shc_live_cr.spec | default({}, true)).network | default('', true) }}"
+        npd_wake_namespace: "{{ (shc_live_cr.metadata | default({}, true)).namespace | default('', true) }}"
 
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -469,15 +477,13 @@
         - npd_gw.spec is defined
         - _npd_circuits.resources | default([]) | selectattr('spec.network', 'equalto', fab_spec.network) | list | length > 0
 
-    # the network lists its placements' provider-assigned IPv6 subnets (status.ipv6.providerPrefixes) and leaves out a
-    # placement whose deletion is complete: wake it, so the entry goes now and not at the network's next run
-    - name: Tell the network when the placement had a provider-assigned subnet
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+    # the network counts its placements, lists their provider-assigned subnets and, with IPv6 egress, has the fabric
+    # announce their IPv6 subnets: every completed deletion wakes it (not a network being deleted; wake_network.yml)
+    - name: Tell the network that the placement is gone
+      ansible.builtin.include_tasks: wake_network.yml
       vars:
-        nudge_crs: [{kind: HybridNetwork, namespace: "{{ fab_namespace }}", name: "{{ fab_spec.network }}"}]
-      when: >-
-        fab_st.subnets | default([], true) | selectattr('source', 'defined') | selectattr('source', 'equalto', 'Provider')
-        | list | length > 0
+        npd_wake_network: "{{ fab_spec.network }}"
+        npd_wake_namespace: "{{ fab_namespace }}"
 
     # the operator drops the finalizer the next time it looks at the CR: make that now
     - name: Release the finalizer now

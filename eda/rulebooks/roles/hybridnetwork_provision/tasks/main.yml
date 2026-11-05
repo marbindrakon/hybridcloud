@@ -132,13 +132,21 @@
     - name: Set the network status
       vars:
         _mine: "{{ _hn_placements.resources | default([]) | selectattr('spec.network', 'equalto', fab_name) | list }}"
+        # the counts leave out a placement whose deletion is complete (only its finalizer is left): its teardown wakes
+        # the network after deletionComplete, which may come before the placement is gone
+        _counted: >-
+          {%- set out = [] -%}
+          {%- for p in _mine if not ((p.status | default({}, true)).deletionComplete | default(false, true) | bool) -%}
+            {%- set _ = out.append(p) -%}
+          {%- endfor -%}
+          {{ out }}
       ansible.builtin.set_fact:
         # every placement of the network that still exists holds (or may hold) a subnet
         hn_holders: "{{ _mine | map(attribute='metadata.name') | map('regex_replace', '^', 'NetworkPlacement/' ~ fab_namespace ~ '/') | list }}"
         hn_status: >-
           {{ {'entity': fab_entity,
-              'placementCount': _mine | length,
-              'placementsReady': _mine | selectattr('status.ready', 'defined') | selectattr('status.ready') | list | length}
+              'placementCount': _counted | length,
+              'placementsReady': _counted | selectattr('status.ready', 'defined') | selectattr('status.ready') | list | length}
              | combine({'fabric': hn_fabric_name} if hn_fabric | length > 0 else {})
              | combine({'mtu': (fab_spec.mtu | default(hn_fabric.spec.overlayMtu)) | int} if hn_fabric | length > 0 else {}) }}
 
