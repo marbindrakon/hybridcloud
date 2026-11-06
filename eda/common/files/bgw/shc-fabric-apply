@@ -113,7 +113,10 @@
 #   measured unreachable from a VRF). None of the MPLS steps runs (modules, platform_labels,
 #   input). Both families ride the IPv6 core, so an IPv6 step that fails and the root's router advertisement check
 #   fail the apply too (exit 4, "transport srv6: ..." on stderr) instead of leaving IPv6 out, as does any of the
-#   steps above.
+#   steps above. The refusals that depend only on the state as found (the root's all.rp_filter, an IPv4 policy rule
+#   of the host's own between 0 and 32765, two VRFs on one table while strict mode is off; in a gateway's namespace
+#   that exists already, the latter two), the RA check and the configuration check all run before the run's first
+#   write, so a refused apply leaves the node as it found it (the rule and strict-mode steps check again in place).
 #   The rule sets above gain what the encapsulation would otherwise bypass (only
 #   with srv6): a packet decapsulated into a VRF passes prerouting with the VRF as its input interface, then
 #   forward, never output (as an MPLS pop does); a packet that is encapsulated passes prerouting only, never forward.
@@ -433,8 +436,8 @@ srv6_local4() {
   local rules foreign
   rules=$($NSX ip -4 rule show)
   if [ "$1" = last ]; then
-    foreign=$(awk '{ p = $1; sub(":", "", p) } p + 0 > 0 && p + 0 < 32765 && !(p + 0 == 1000 && / lookup \[l3mdev-table\]/)' \
-      <<<"$rules" | paste -sd ';' -)
+    # (srv6_precheck refused this before the run's first write; checked again here against a rule added since)
+    foreign=$(local4_foreign "$rules")
     if [ -n "$foreign" ]; then
       echo "transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: $foreign" >&2
       return 1
@@ -444,6 +447,42 @@ srv6_local4() {
   else
     grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 0 table local
     ! grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 32765 table local
+  fi
+}
+
+# <rules> (ip -4 rule show): the rules between 0 and 32765 other than the kernel's l3mdev rule, one line, ";" between
+local4_foreign() {
+  awk '{ p = $1; sub(":", "", p) } p + 0 > 0 && p + 0 < 32765 && !(p + 0 == 1000 && / lookup \[l3mdev-table\]/)' \
+    <<<"$1" | paste -sd ';' -
+}
+
+# root|gateway: transport srv6's refusals that depend only on the host's state as found, run before the run's first
+# write (reads only), so a refused apply leaves the node as it found it (exit 4). Root: net.ipv4.conf.all.rp_filter
+# 0 (the network VRFs' rp_filter=0 holds only then; never written here). Root, and a gateway's namespace when it
+# exists already: no IPv4 policy rule of its own between 0 and 32765 (srv6_local4), and no two VRFs on one table
+# while strict mode is off (srv6_strict). The RA precheck and the configuration check run before it too.
+srv6_precheck() {
+  local v rules t
+  if [ "$1" = root ]; then
+    v=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) || v=""
+    if [ "$v" != 0 ]; then
+      echo "transport srv6: net.ipv4.conf.all.rp_filter is ${v:-unreadable}; the root's network VRFs need it 0" \
+        "(decapsulated IPv4 is checked with the larger of it and the VRF device's)" >&2
+      exit 4
+    fi
+  fi
+  rules=$($NSX ip -4 rule show) || { echo "transport srv6: the IPv4 policy rules could not be read" >&2; exit 4; }
+  t=$(local4_foreign "$rules")
+  if [ -n "$t" ]; then
+    echo "transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: $t" >&2
+    exit 4
+  fi
+  [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0
+  t=$($NSX ip -j -d link show type vrf | jq -r '[group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
+      | "table \(.[0].linkinfo.info_data.table): \(map(.ifname) | join(", "))"] | join("; ")') || t=""
+  if [ -n "$t" ]; then
+    echo "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: $t" >&2
+    exit 4
   fi
 }
 
@@ -1060,15 +1099,8 @@ root)
   EV=$(opt .egress.vrf)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
-    # transport srv6: the network VRFs' rp_filter=0 holds only while the host-wide value is 0 (never written here)
-    if [ "$TRANSPORT" = srv6 ]; then
-      RPA=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) || RPA=""
-      if [ "$RPA" != 0 ]; then
-        echo "transport srv6: net.ipv4.conf.all.rp_filter is ${RPA:-unreadable}; the root's network VRFs need it 0" \
-          "(decapsulated IPv4 is checked with the larger of it and the VRF device's)" >&2
-        exit 4
-      fi
-    fi
+    # transport srv6: the refusals that depend only on the host's state, before the run's first write
+    [ "$TRANSPORT" != srv6 ] || srv6_precheck root
     if [ -n "$V6" ] && ! ra_precheck; then
       [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: a host interface relies on router advertisements" >&2; exit 4; }
       V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
@@ -1220,6 +1252,9 @@ gateway)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
     ip link show "$BR" >/dev/null 2>&1 || { echo "core bridge $BR missing: the root instance must be up first" >&2; exit 3; }
+    # transport srv6: the refusals that depend only on the state as found (a namespace that exists already), before
+    # the run's first write
+    if [ "$TRANSPORT" = srv6 ] && shows -qw "^$NS" ip netns list; then NSX=$X srv6_precheck gateway; fi
     shows -qw "^$NS" ip netns list || ip netns add "$NS"
     if [ "$TRANSPORT" = srv6 ]; then
       NSX=$X; srv6_up core0

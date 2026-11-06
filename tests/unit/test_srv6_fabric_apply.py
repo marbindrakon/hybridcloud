@@ -197,11 +197,10 @@ class RootSrv6(ApplyCase):
         rc, out, err, log = h.run("root")
         self.keep("srv6-root-strict-refused", log, out + " | stderr: " + err)
         self.assertEqual(rc, 4, err)
-        self.assertIn("net.vrf.strict_mode=1 refused; VRFs that share a table: table 77: red, blue", err)
-        self.assertIn("transport srv6: net.vrf.strict_mode failed", err)
-        # fail closed: the guard was loaded, nothing of the core came up
-        self.assertIn("inet shc_core_guard", h.get_state()["ns"][""]["nft"])
-        self.assertNotIn("br-core", h.get_state()["ns"][""]["links"])
+        self.assertIn("transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: table 77: red, blue", err)
+        # refused before the run's first write: the host as it was found
+        self.assertEqual(writes(log), [])
+        self.assertEqual(h.get_state(), st)
 
     def test_failing_step_fails_the_apply(self):
         h = self.h
@@ -480,7 +479,7 @@ class ReversePathRoot(ApplyCase):
             self.assertIn("transport srv6: net.ipv4.conf.all.rp_filter is %s; the root's network VRFs need it 0" % all_,
                           err)
             self.assertEqual(writes(log), [])
-            self.assertEqual(h.get_state()["ns"][""]["sysctl"]["net/ipv4/conf/all/rp_filter"], all_)  # never written
+            self.assertEqual(h.get_state(), self.el9_blade(all_))  # the host as it was found; all never written
         # mpls does not mind
         h.set_state(self.el9_blade("1"))
         h.conf("root", root_full())
@@ -702,8 +701,9 @@ class LocalRuleOrder(ApplyCase):
         self.assertEqual(rc, 4, err)
         self.assertIn("transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: "
                       "100:\tfrom all lookup 200", err)
-        self.assertIn("transport srv6: the IPv4 local table behind the VRFs' rule failed", err)
-        self.assertEqual([l for l in writes(log) if " -4 rule " in l], [])
+        # refused before the run's first write: the host as it was found
+        self.assertEqual(writes(log), [])
+        self.assertEqual(h.get_state(), st)
 
     def test_mpls_untouched(self):
         h = self.h
@@ -773,6 +773,54 @@ printf '    inet6 ::1/128 scope host\\n'
         bad = [l for l in code if re.search(r"(?<!\|)\|(?!\|)\s*(grep\s+-[A-Za-z]*[qm]|head\b|sed\s+[^|]*q\b)", l)
                or re.search(r'echo "\$[A-Za-z_]+" \| grep', l)]
         self.assertEqual(bad, [])
+
+
+class RefusedBeforeAnyWrite(ApplyCase):
+    """transport srv6, a gateway whose namespace exists already: an IPv4 policy rule of its own between 0 and 32765,
+    or two VRFs on one table while strict mode is off, refuse the apply before its first write (exit 4, the state and
+    the call log as found)"""
+
+    def gateway_up(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full(**GW_SRV6))
+        h.ok(self, "gw-iaas1")
+
+    def refused(self, st, msg):
+        h = self.h
+        h.set_state(st)
+        rc, out, err, log = h.run("gw-iaas1")
+        self.assertEqual(rc, 4, err)
+        self.assertIn(msg, err)
+        self.assertEqual(writes(log), [])
+        self.assertEqual(h.get_state(), st)
+
+    def test_foreign_rule_in_the_namespace(self):
+        self.gateway_up()
+        st = self.h.get_state()
+        st["ns"]["gw-iaas1"]["rules4"].append({"pref": "500", "table": "77"})
+        self.refused(st, "transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: "
+                         "500:\tfrom all lookup 77")
+
+    def test_vrfs_on_one_table_in_the_namespace(self):
+        self.gateway_up()
+        st = self.h.get_state()
+        import fake_netkernel as FK
+        sc = st["ns"]["gw-iaas1"]["sysctl"]
+        sc["net/vrf/strict_mode"] = "0"
+        FK.Kernel(st).add_link("gw-iaas1", "x1", "vrf", table="51000")
+        self.refused(st, "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: table 51000: t51000, x1")
+
+    def test_fresh_namespace_not_read_in_the_root(self):
+        """no namespace yet: nothing to check there, and nothing of the gateway's checks runs in the root namespace"""
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full(**GW_SRV6))
+        _, log = h.ok(self, "gw-iaas1")
+        first = index(log, r"^W \[root\] ip netns add gw-iaas1$")
+        self.assertEqual([l for l in log[:first] if " -4 rule " in l or "strict_mode" in l or "rp_filter" in l], [])
 
 
 if __name__ == "__main__":
