@@ -122,6 +122,20 @@ def srv6(v):
 
 # ---- mpls: as at the base commit ------------------------------------------------------------------------------------
 
+def without_local4_check(script):
+    """The mpls wait scripts without the IPv4 local-rule check both transports have now (tests/unit/
+    test_fix_mpls_local4_readiness.py covers it): its comment and command lines, which follow the MPLS check."""
+    out, skip = [], 0
+    for line in script.splitlines(True):
+        if line.strip().startswith("# the IPv4 local rule after the l3mdev rule of the VRFs"):
+            skip = 4
+        if skip:
+            skip -= 1
+            continue
+        out.append(line)
+    return "".join(out)
+
+
 @unittest.skipUnless(have_base(), "base commit %s not in the repository" % BASE)
 class MplsScriptsUnchanged(unittest.TestCase):
     """Every readiness script renders on mpls as it did at the base commit, with and without fab_node_transport set,
@@ -130,7 +144,7 @@ class MplsScriptsUnchanged(unittest.TestCase):
     def same(self, path, name, variables):
         old = render(base_shell(path, name), **variables)
         for v in (variables, dict(variables, fab_node_transport="mpls")):
-            self.assertEqual(render(shell_of(path, name), **v), old, name)
+            self.assertEqual(without_local4_check(render(shell_of(path, name), **v)), old, name)
 
     def test_root(self):
         for lo6 in ("", RT_PE["loopback6"]):

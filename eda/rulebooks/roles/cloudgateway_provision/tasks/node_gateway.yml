@@ -393,6 +393,10 @@
     {% if fab_node_transport | default('mpls') != 'srv6' %}
     # MPLS input on the core leg (a reload that disagreed with the kernel turned it off once)
     [ "$(ip netns exec gw-{{ fab_name }} sysctl -n net.mpls.conf.core0.input)" = 1 ]
+    # the IPv4 local rule after the l3mdev rule of the VRFs (at the preference of that rule, 1000, while the namespace has
+    # no VRF), so a packet from a VRF never reaches the default VRF local addresses (on srv6: the SRv6 check below)
+    ip -n gw-{{ fab_name }} -4 rule show | awk '$(NF-1) == "lookup" && $NF == "[l3mdev-table]" {p = $1 + 0; if (!m || p < mp) mp = p; m = 1} $(NF-1) == "lookup" && $NF == "local" {p = $1 + 0; if (!l || p < lp) lp = p; l = 1} END {exit !(l && lp > (m ? mp : 1000))}' \
+      || { echo "the IPv4 rule lookup local is not after the l3mdev rule of the VRFs (a packet from a VRF reaches the default VRF local addresses)" >&2; exit 1; }
     {% endif %}
     $V -c 'show isis neighbor' | grep -q ' Up '
     {% if fab_node_transport | default('mpls') != 'srv6' %}

@@ -445,6 +445,10 @@
       ip -br addr show dev {{ hf_root.bridge }} | grep -q ' {{ hf_root.link }} '
       {% if fab_node_transport | default('mpls') != 'srv6' %}
       [ "$(sysctl -n net.mpls.platform_labels)" = 1048575 ]
+      # the IPv4 local rule after the l3mdev rule of the VRFs (at the preference of that rule, 1000, while the host has
+      # no VRF), so a packet from a VRF never reaches the default VRF local addresses (on srv6: the SRv6 check below)
+      ip -4 rule show | awk '$(NF-1) == "lookup" && $NF == "[l3mdev-table]" {p = $1 + 0; if (!m || p < mp) mp = p; m = 1} $(NF-1) == "lookup" && $NF == "local" {p = $1 + 0; if (!l || p < lp) lp = p; l = 1} END {exit !(l && lp > (m ? mp : 1000))}' \
+        || { echo "the IPv4 rule lookup local is not after the l3mdev rule of the VRFs (a packet from a VRF reaches the default VRF local addresses)" >&2; exit 1; }
       {% endif %}
       {% if hf_node_egress | length > 0 %}
       # egress: the hand-off answers, the table is loaded, each network VRF has its default route and exports it
