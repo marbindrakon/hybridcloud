@@ -437,37 +437,60 @@ class RoutingHeadersOff(ApplyCase):
 
 
 class ReversePathRoot(ApplyCase):
-    """transport srv6: the root's network VRFs filter reverse paths loosely (2) whatever the host's default and all
-    (the larger of all and the device counts); the circuits' devices stay strict; mpls leaves them as created"""
+    """transport srv6: the root's network VRFs filter no reverse paths (0: strict and loose both drop decapsulated
+    IPv4, measured); the host-wide all must be 0 (the larger of all and the device counts), else the root's apply
+    fails before it changes anything; the egress VRF and the circuits' devices stay as they are; mpls: as created"""
 
     def el9_blade(self, all_="0"):
         st = blade()
         st["ns"][""]["sysctl"].update({"net/ipv4/conf/all/rp_filter": all_, "net/ipv4/conf/default/rp_filter": "1"})
         return st
 
-    def test_network_vrfs_loose(self):
+    def test_network_vrfs_off(self):
         h = self.h
-        for all_ in ("0", "1"):
-            h.set_state(self.el9_blade(all_))
-            h.conf("root", root_full(**ROOT_SRV6))
-            h.ok(self, "root")
-            sc = h.get_state()["ns"][""]["sysctl"]
-            for vrf in ("e10000", "e10001"):
-                self.assertEqual(sc["net/ipv4/conf/%s/rp_filter" % vrf], "2", vrf)
-                self.assertEqual(max(int(sc["net/ipv4/conf/all/rp_filter"]), int(sc["net/ipv4/conf/%s/rp_filter" % vrf])), 2)
-            for dev in ("bond1.3001", "bond1.3002"):
-                self.assertEqual(sc["net/ipv4/conf/%s/rp_filter" % dev], "1", dev)
-            self.assertEqual(sc["net/ipv4/conf/egress/rp_filter"], "1")  # not a decapsulating VRF
-            self.assertEqual(sc["net/ipv4/conf/all/rp_filter"], all_)  # the host's own setting untouched
-            out2, log2 = h.ok(self, "root")
-            self.assertTrue(out2.strip().endswith("changed=no"), out2)
-            self.assertEqual([l for l in writes(log2) if "rp_filter=2" in l], [])
+        h.set_state(self.el9_blade())
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        sc = h.get_state()["ns"][""]["sysctl"]
+        for vrf in ("e10000", "e10001"):
+            self.assertEqual(sc["net/ipv4/conf/%s/rp_filter" % vrf], "0", vrf)
+        for dev in ("bond1.3001", "bond1.3002"):
+            self.assertEqual(sc["net/ipv4/conf/%s/rp_filter" % dev], "1", dev)
+        self.assertEqual(sc["net/ipv4/conf/egress/rp_filter"], "1")  # left as it is (input of nothing decapsulated)
+        self.assertEqual(sc["net/ipv4/conf/all/rp_filter"], "0")
+        out2, log2 = h.ok(self, "root")
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        self.assertEqual([l for l in writes(log2) if "rp_filter" in l and "bond1." not in l], [])
         # mpls: as created
         h.set_state(self.el9_blade())
         h.conf("root", root_full())
         _, log = h.ok(self, "root")
         self.assertEqual(h.get_state()["ns"][""]["sysctl"]["net/ipv4/conf/e10000/rp_filter"], "1")
-        self.assertEqual([l for l in log if "rp_filter=2" in l], [])
+        self.assertEqual([l for l in log if "rp_filter=0" in l], [])
+
+    def test_host_all_not_0_fails(self):
+        h = self.h
+        for all_ in ("1", "2"):
+            h.set_state(self.el9_blade(all_))
+            h.conf("root", root_full(**ROOT_SRV6))
+            rc, out, err, log = h.run("root")
+            self.keep("srv6-root-rp-filter-all-%s" % all_, log, out + " | stderr: " + err)
+            self.assertEqual(rc, 4, err)
+            self.assertIn("transport srv6: net.ipv4.conf.all.rp_filter is %s; the root's network VRFs need it 0" % all_,
+                          err)
+            self.assertEqual(writes(log), [])
+            self.assertEqual(h.get_state()["ns"][""]["sysctl"]["net/ipv4/conf/all/rp_filter"], all_)  # never written
+        # mpls does not mind
+        h.set_state(self.el9_blade("1"))
+        h.conf("root", root_full())
+        h.ok(self, "root")
+        # a gateway sets its own namespace's all to 0, whatever the host's
+        h.set_state(self.el9_blade())
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full(**GW_SRV6))
+        h.ok(self, "gw-iaas1")
+        self.assertEqual(h.get_state()["ns"]["gw-iaas1"]["sysctl"]["net/ipv4/conf/all/rp_filter"], "0")
 
 
 class UnreachableBlock(ApplyCase):

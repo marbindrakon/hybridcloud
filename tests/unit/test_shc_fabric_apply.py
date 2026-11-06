@@ -82,11 +82,11 @@ def writes(log):
 
 def blade():
     """The root namespace of a blade before the fabric: management bond0.10, trunk bond1, egress parent bond1.237;
-    IPv6 forwarding on, RA accepted (as V0 read them)."""
+    IPv6 forwarding on, RA accepted (as V0 read them); IPv4 reverse path filtering off host-wide (all, as el9 ships it)."""
     st = {"ns": {"": F.new_ns({"disable_ipv6": "0", "forwarding": "1", "accept_ra": "1", "autoconf": "1"})}}
     k = F.Kernel(st)
     sc = st["ns"][""]["sysctl"]
-    sc.update({"net/ipv4/ip_forward": "1", "net/mpls/platform_labels": "0"})
+    sc.update({"net/ipv4/ip_forward": "1", "net/mpls/platform_labels": "0", "net/ipv4/conf/all/rp_filter": "0"})
     lo = k.add_link("", "lo", "loopback", address="00:00:00:00:00:00")
     lo["up"] = True
     lo["addrs"].append({"family": 4, "local": "127.0.0.1", "prefixlen": 8, "nodad": False})

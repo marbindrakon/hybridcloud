@@ -100,10 +100,11 @@
 #   prefixes; a lookup for a SID whose locator is gone ends there instead of following a default route of the host),
 #   the rule "to <block> lookup main" at pref 999 (ahead of the VRFs' rule: the kernel looks the SID of a packet it
 #   encapsulates up in the packet's ingress VRF otherwise), the encapsulation source (ip sr tunsrc) = the IPv6
-#   loopback; on the root every network VRF e<n> gets loose reverse path filtering (rp_filter=2: decapsulated IPv4
-#   enters with the VRF device as input while its source's route leads to the core bridge, which strict mode
-#   refuses; the kernel takes the larger of all and the device, so 2 holds where all is 1 too; a circuit's packets
-#   are checked on their own device, which stays strict). None of the MPLS steps runs (modules, platform_labels,
+#   loopback; on the root every network VRF e<n> gets no reverse path filtering (rp_filter=0: decapsulated IPv4
+#   enters with the VRF device as input while its source's route leads to the core bridge, outside the VRF, which
+#   strict and loose mode both refuse; the egress VRF and the circuits' devices, strict, are left as they are). The
+#   kernel takes the larger of net.ipv4.conf.all.rp_filter and the device's, and all is the host's: a root with srv6
+#   fails the apply, before it changes anything, while all is not 0. None of the MPLS steps runs (modules, platform_labels,
 #   input). Both families ride the IPv6 core, so an IPv6 step that fails and the root's router advertisement check
 #   fail the apply too (exit 4, "transport srv6: ..." on stderr) instead of leaving IPv6 out, as does any of the
 #   steps above.
@@ -512,9 +513,10 @@ root_vrfs() { ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$
 root_vrf() {  # <vrf> <table>
   ip link show "$1" >/dev/null 2>&1 || ip link add "$1" type vrf table "$2"
   # transport srv6: a SID decapsulates IPv4 into the VRF with the VRF device as input, and the source's route there
-  # leads to the core bridge: loose reverse path filtering (2; the kernel takes the larger of all and the device, so
-  # 2 also holds where all is strict). A circuit's packets are checked on their own device (strict, attach_up)
-  [ "$TRANSPORT" != srv6 ] || srv6_step "loose reverse path filtering on $1" sysctl_ensure "net/ipv4/conf/$1/rp_filter=2"
+  # leads to the core bridge, outside the VRF: strict and loose filtering both drop it (measured), so none (0; the
+  # kernel takes the larger of all and the device: all is checked to be 0 before the root changes anything). A
+  # circuit's packets are checked on their own device (strict, attach_up)
+  [ "$TRANSPORT" != srv6 ] || srv6_step "no reverse path filtering on $1" sysctl_ensure "net/ipv4/conf/$1/rp_filter=0"
   ip link set "$1" up
 }
 
@@ -999,6 +1001,15 @@ root)
   EV=$(opt .egress.vrf)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
+    # transport srv6: the network VRFs' rp_filter=0 holds only while the host-wide value is 0 (never written here)
+    if [ "$TRANSPORT" = srv6 ]; then
+      RPA=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) || RPA=""
+      if [ "$RPA" != 0 ]; then
+        echo "transport srv6: net.ipv4.conf.all.rp_filter is ${RPA:-unreadable}; the root's network VRFs need it 0" \
+          "(decapsulated IPv4 is checked with the larger of it and the VRF device's)" >&2
+        exit 4
+      fi
+    fi
     if [ -n "$V6" ] && ! ra_precheck; then
       [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: a host interface relies on router advertisements" >&2; exit 4; }
       V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
