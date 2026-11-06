@@ -1179,6 +1179,60 @@ class RootUnitStartReason(unittest.TestCase):
                                               P + "stop when the root instance did not start"])
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class DirectApplyReason(unittest.TestCase):
+    """An apply run directly on a node that refuses (exit 4, "transport srv6: …" on stderr) fails its step as before;
+    the role's node-loop rescue puts the apply's own lines into fab_fail_msg, which the status message takes."""
+
+    def rescue_task(self, path):
+        main = load(path)
+        loop = by_name(main, "Configure the nodes, one at a time" if path == HF_MAIN
+                       else "Configure the gateway on the nodes, one at a time")
+        names = [x.get("name") for x in loop["rescue"]]
+        self.assertEqual(names, ["Keep the apply's own reason for the status",
+                                 "Keep the lease while a step may still run on a node"])
+        return copy.deepcopy(loop["rescue"][0])
+
+    def run_failing(self, path, cmd, before=None, timeout=None):
+        step = {"name": "bgw-1: apply the root instance", "ansible.builtin.shell": cmd, "args": {"executable": "/bin/bash"},
+                "register": "_a", "failed_when": "_a.rc != 0 or 'IPv6 core not applied' in _a.stdout"}
+        if timeout:
+            step["timeout"] = timeout
+        start = {"ansible.builtin.set_fact": {"fab_fail_msg": before}} if before is not None else {"ansible.builtin.debug": {"msg": "x"}}
+        play = [start, {"block": [step], "rescue": [self.rescue_task(path)]},
+                write_out("fab_fail_msg | default('UNSET')")]
+        return run_play(play, {})
+
+    def test_refusal_reaches_the_message(self):
+        for path in (HF_MAIN, CG_MAIN):
+            with self.subTest(path=os.path.basename(os.path.dirname(os.path.dirname(path)))):
+                out = self.run_failing(path, "echo 'transport srv6: net.ipv4.conf.all.rp_filter is 1; the root VRFs need "
+                                             "loose or no reverse path filtering' >&2; echo 'transport srv6: second' >&2; exit 4",
+                                       before="")
+                self.assertEqual(out, "bgw-1: apply the root instance: non-zero return code: transport srv6: "
+                                      "net.ipv4.conf.all.rp_filter is 1; the root VRFs need loose or no reverse path "
+                                      "filtering; transport srv6: second")
+
+    def test_mpls_and_other_failures_unchanged(self):
+        for path in (HF_MAIN, CG_MAIN):
+            # no such line: fab_fail_msg is left as it was (the status message as today)
+            self.assertEqual(self.run_failing(path, "echo 'some other error' >&2; exit 3", before=""), "")
+            self.assertEqual(self.run_failing(path, "exit 2"), "UNSET")
+            # the marker failure of an mpls apply (exit 0): no stderr line, unchanged
+            self.assertEqual(self.run_failing(path, "echo 'warning: IPv6 core not applied'", before=""), "")
+            # a step that timed out keeps the lease keeper's message
+            self.assertEqual(self.run_failing(path, "echo 'transport srv6: x' >&2; sleep 5", before="", timeout=1), "")
+
+    def test_the_apply_steps_are_as_before(self):
+        # the steps' outcome is untouched: their failed_when is the base commit's
+        if not have_base():
+            self.skipTest("base commit missing")
+        for path, name in ((RT, P + "apply the root instance"),
+                           (GW, P + "apply the gateway instance (namespace, site leg, core leg)"),
+                           (GW, P + "apply the gateway instance without the filter")):
+            self.assertEqual(by_name(load(path), name), by_name(base_tasks(path), name), name)
+
+
 class TemplatesGetTheirVariables(unittest.TestCase):
     """Every task that renders an FRR template comes after the transport and FRR lookup (node_transport.yml)."""
 

@@ -396,6 +396,22 @@
       # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the always block
       # skips the release; any other failure releases it at once
       rescue:
+        # an apply that refused (exit 4 with "transport srv6: …" on stderr, run directly on a node) fails its step with
+        # "non-zero return code" only: its own lines go into the status message (fab_fail_msg, read by the rescue below).
+        # Only the message changes, and only when the failed step printed such lines; a step that timed out keeps the lease
+        # keeper's message
+        - name: Keep the apply's own reason for the status
+          vars:
+            _why: >-
+              {{ (ansible_failed_result.stderr_lines | default([], true) | select('match', '^transport srv6: ') | list)
+                 if ansible_failed_result is mapping and ansible_failed_result.timedout is not defined else [] }}
+          ansible.builtin.set_fact:
+            fab_fail_msg: >-
+              {{ (ansible_failed_task.name | default('a node step')) ~ ': ' ~ (ansible_failed_result.msg | default('failed'))
+                 ~ ': ' ~ _why | join('; ') }}
+          when: _why | length > 0
+          timeout: 0
+
         - name: Keep the lease while a step may still run on a node
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
           timeout: 0

@@ -671,7 +671,11 @@ class HolderWiring(unittest.TestCase):
                     self.assertLess(0, names.index("Release the lease"))
                     self.assertNotIn("rescue", block)
                 else:
-                    self.assertEqual([x.get("ansible.builtin.include_tasks") for x in block["rescue"]], [keep])
+                    # the keep decision ends the rescue; before it only facts are set (the provision roles keep a
+                    # refused apply's own reason for the status), so nothing can fail or hide the timed-out result
+                    self.assertEqual(block["rescue"][-1].get("ansible.builtin.include_tasks"), keep)
+                    self.assertTrue(all(list(x) == ["name", "vars", "ansible.builtin.set_fact", "when", "timeout"]
+                                        for x in block["rescue"][:-1]), block["rescue"][:-1])
 
     def test_the_renewals_set_their_own_timeout(self):
         # inside the node loops every task inherits the step limit; the renewals must still run when it is short
