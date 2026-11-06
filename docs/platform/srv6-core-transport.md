@@ -95,9 +95,10 @@ default `denyDestinations6` holds `5f00::/16`.
   main table): on `srv6` the apply fails while one does, where on `mpls` it leaves the IPv6 core out. The host's
   IPv4 reverse-path filtering for `all` interfaces (`net.ipv4.conf.all.rp_filter`) must be 0: the apply never
   writes the host's `all` or `default`, and on `srv6` it fails, before changing anything, while `all` is not 0
-  (why, and what it sets on its own devices, is below). The host must have no IPv4 policy rule of its own between
-  preferences 0 and 32765: the apply moves the local-table rule there and refuses while one exists (below).
-  The gateway namespaces are the apply's own and need none of this.
+  (why, and what it sets on its own devices, is below). What the host must not have on either transport (an IPv4
+  policy rule of its own in front of the local table, a VRF of its own on a table the fabric uses) is in
+  [Border gateway nodes](border-gateway-nodes.md#a-networks-vrf-and-the-nodes-own-addresses). The gateway
+  namespaces are the apply's own and need none of this.
 
 ## The routing rule and the kernel guard
 
@@ -132,17 +133,11 @@ On `srv6`, in the root namespace and in every gateway namespace of a node, the a
   kernel applies the larger of `all` and the device's value, so the device's 0 holds only while the host's `all` is
   0, which is why the apply requires it. The attachment circuits' packets are checked on their own devices, which
   stay strict (1).
-- **A VRF's IPv4 lookup stays out of the default VRF.** With reverse-path filtering off on a network VRF, a
-  decapsulated IPv4 packet addressed to one of the node's own default-VRF addresses would be delivered to the node,
-  because the kernel's IPv4 rule for the local table comes before the VRF rule. In the root namespace and in every
-  gateway namespace the apply moves that rule behind the VRF rule (`lookup local` at preference 32765 instead of 0,
-  IPv4 only) and gives every VRF table an IPv4 unreachable default at a metric every real route beats, so a lookup
-  that starts in a VRF ends in that VRF's table: the VRF's own addresses are still local there, the default VRF's
-  are not reachable from it, and a destination the VRF has no route for is refused instead of being routed in the
-  default VRF. The root namespace is the host's: the apply refuses to move the rule, and fails, while the host has
-  an IPv4 policy rule of its own between preferences 0 and 32765 (the kernel's VRF rule aside), since such a rule
-  would then come before the local table for the host's own traffic. Removing the root instance puts the kernel's
-  order back.
+- **A VRF's IPv4 lookup stays out of the default VRF.** With reverse-path filtering off on a network VRF, nothing
+  but the rule order keeps a decapsulated IPv4 packet addressed to one of the node's default-VRF addresses from being
+  delivered to the node. On both transports the apply puts the IPv4 local-table rule behind the VRF rule and gives
+  every VRF table an IPv4 unreachable default
+  ([Border gateway nodes](border-gateway-nodes.md#a-networks-vrf-and-the-nodes-own-addresses)).
 
 The apply loads the guard first, before the other SRv6 settings and before FRR can hold a SID, and any of these
 steps that fails fails the apply.
@@ -158,8 +153,10 @@ it is installed on `mpls`.
 
 Packets take other netfilter hooks than on MPLS: a decapsulated packet passes prerouting (with the VRF device as
 input) and then forward, never output; a packet about to be encapsulated passes prerouting only. The node's own
-filters on the networks' traffic (the TCP MSS clamp on the egress veths, the attachment circuits' chains) keep their
-effect on `srv6`; the rules that needs are added only when the transport is `srv6`.
+filters on the networks' traffic (the attachment circuits' chains, the connection tracking zone of a network's
+traffic) keep their effect on `srv6`; the rules that needs are added only when the transport is `srv6`. The TCP MSS
+clamps sit on the hook each transport uses
+([Border gateway nodes](border-gateway-nodes.md#tcp-mss-clamps)).
 
 ## Choosing and changing the transport
 
@@ -177,7 +174,7 @@ job. On `mpls` the same failure is a warning and IPv4 carries on.
 
 After each node the jobs wait for the node to be ready on the transport before they go on. On `srv6`:
 - **Both instances:** strict VRF mode; `seg6_enabled` 0 on `all`, `default` and the core leg (no routing header
-  accepted); the rule to the block at preference 999; the guard table loaded with its drop rule, a rule that drops
+  accepted); the rule to the block at preference 999; the IPv4 local-table rule behind the VRF rule, as on `mpls`; the guard table loaded with its drop rule, a rule that drops
   what is addressed to the block unless it came in on the core leg or `lo`; the instance's own locator with an
   installed discard route; and for every VRF whose configuration exports a per-VRF SID a
   `seg6local … End.DT46 … vrftable <table>` route in the kernel (the VRF's SID). Readiness does not look at the
@@ -192,7 +189,8 @@ After each node the jobs wait for the node to be ready on the transport before t
   route reflector with VPNv4 and VPNv6 negotiated over the IPv6 loopbacks, and the root's IPv6 loopback and locator
   installed from IS-IS.
 
-The MPLS input and VPN label checks run on `mpls` only.
+The MPLS input and VPN label checks run on `mpls` only. The removal of a VRF a network no longer needs, the
+teardown and the orphan check's view of a node are described in [Border gateway nodes](border-gateway-nodes.md).
 
 ## What a tenant and an operator see
 

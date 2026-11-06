@@ -597,10 +597,12 @@ the primary's upstream sessions fail, the sites' default moves to the standby an
 the prefixes the standby still announces; flows where the tenant sends next recover, receive-only flows reset.
 
 The filter is the nftables table `inet shc_egress6` on every node (IPv6 rules only; the IPv4 table stays as it is):
-outbound from a network only from its platform block (and the node's ICMPv6 source), not to the translator-embedded
-forms of `egress.denyDestinations` (from `translation.<site>.pref64`), then `allowDestinations6` and the resolvers on
-port 53 (`resolverDestinations6` and every `translation.<site>.dns64Resolvers`), then not to `denyDestinations6`; a TCP
-MSS clamp at `wanMtu - 60` both ways; inbound only neighbour discovery, ICMPv6 errors and replies to connections opened
+outbound from a network only from its platform block and the node's /112 of `core.icmpSource6` (the ICMPv6 sources
+of the node's root and gateway namespaces, so a gateway's Packet Too Big toward the internet passes), not to the
+translator-embedded forms of `egress.denyDestinations` (from `translation.<site>.pref64`), then `allowDestinations6`
+and the resolvers on port 53 (`resolverDestinations6` and every `translation.<site>.dns64Resolvers`), then not to
+`denyDestinations6`; a TCP MSS clamp at `wanMtu - 60` both ways
+([Border gateway nodes](border-gateway-nodes.md#tcp-mss-clamps)); inbound only neighbour discovery, ICMPv6 errors and replies to connections opened
 from inside; a source inside `routedPrefixes` arriving from upstream is dropped (`externalSitePrefixes` excepted). The
 table is loaded before FRR takes the sessions' configuration, and the timer unit `shc-egress6-guard` shuts the upstream
 sessions whenever the table is missing (fail closed). The hand-off device's IPv6 MTU is `wanMtu`, so the node itself
