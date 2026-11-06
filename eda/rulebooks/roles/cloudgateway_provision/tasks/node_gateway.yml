@@ -176,6 +176,47 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf
 
+# A VRF this run removes (a network no longer placed here) leaves FRR before the apply deletes its devices. Deleted
+# first, FRR 8.5.3 zebra could crash withdrawing the site remote EVPN routes of the VRF (a neighbour entry on a device
+# already gone), and watchfrr then restarts the whole instance: the site loses its traffic for half a minute, and a
+# second crash soon after leaves the instance without zebra for minutes. The VRFs removed are the VRF devices t<n>
+# of the namespace that the configuration no longer lists: their layer 3 VNI goes first (FRR refuses to remove the
+# BGP instance of a VRF that still has one), then their BGP instance, then 3 s for zebra to withdraw the routes. The
+# apply then deletes the devices, the reload below finds these lines gone already, and the step after it removes the
+# VRF itself. Nothing is sent on a first run (no namespace), when nothing is removed, or while the instance is not
+# active (its start loads the file without the VRF); a refusal is reported and the apply goes on as before
+- name: "{{ bgw_node.name }}: take the VRFs this run removes out of FRR before the apply deletes their devices"
+  ansible.builtin.shell: |
+    ns=gw-{{ fab_name }}; u=shc-gw@{{ fab_name }}.service; V=(vtysh -N "$ns")
+    want=" {{ cg_vrfs | map(attribute='vrf') | join(' ') }} "
+    ip netns list | awk -v n="$ns" '$1 == n {f = 1} END {exit !f}' || { echo "out="; exit 0; }
+    systemctl -q is-active "$u" || { echo "out="; exit 0; }
+    gone=""
+    for v in $(ip netns exec "$ns" ip -br link show type vrf | awk '$1 ~ /^t[0-9]+$/ {print $1}'); do
+      case "$want" in *" $v "*) ;; *) gone="$gone $v" ;; esac
+    done
+    [ -n "$gone" ] || { echo "out="; exit 0; }
+    run=$("${V[@]}" -c 'show running-config') || { echo "the running configuration is unreadable" >&2; echo "out="; exit 0; }
+    cmds=(-c 'configure terminal'); out=""
+    for v in $gone; do
+      b=$(awk -v v="$v" '$1 == "router" && $2 == "bgp" && $4 == "vrf" && $5 == v {print; exit}' <<< "$run")
+      n=$(awk -v v="$v" '$1 == "vrf" && $2 == v {s = 1; next} s && $1 == "exit-vrf" {s = 0} s && $1 == "vni" {print $2; exit}' <<< "$run")
+      [ -z "$n" ] || cmds+=(-c "vrf $v" -c "no vni $n" -c "exit-vrf")
+      [ -z "$b" ] || cmds+=(-c "no $b")
+      [ -z "$b$n" ] || out="$out $v"
+    done
+    if [ -n "$out" ]; then
+      r=$("${V[@]}" "${cmds[@]}" -c end 2>&1) || true
+      [[ $r != *%* ]] || echo "FRR refused part of it: $r" >&2
+      sleep 3
+    fi
+    echo "out=${out# }"
+  args:
+    executable: /bin/bash
+  register: _cg_vrfs_out
+  changed_when: _cg_vrfs_out.stdout is search('out=.')
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: the lease lasts for the apply"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
   vars:

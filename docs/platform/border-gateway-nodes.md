@@ -62,7 +62,11 @@ leg is answered with Packet Too Big or fragmentation needed from the gateway on 
 ## A network that leaves the node
 
 When a network is no longer placed at a site, or loses its egress and its circuits at the root, the apply deletes
-its VRF device and the job reloads FRR without the network. A reload removes the lines of the VRF's `vrf` stanza
+its VRF device and the job reloads FRR without the network. In a gateway the network first leaves FRR: before the
+apply runs, the job takes the VRF's layer 3 VNI and then its BGP instance out of the running instance (only for VRFs
+the namespace has and the configuration no longer lists; nothing at all when none is removed), and waits 3 s. With
+the devices deleted while FRR still held the VRF and the site's routes in it, FRR 8.5.3's zebra could crash
+withdrawing those routes, and watchfrr's restart of the instance cut the site off for about half a minute. A reload removes the lines of the VRF's `vrf` stanza
 but never the VRF itself, so FRR would keep it until its next restart (`show vrf`: `vrf <name> inactive
 (configured)`). After the reload the job therefore removes, in the root and in each gateway, every VRF that FRR lists
 as inactive, that the rendered configuration does not name and that has no BGP instance left. It touches no other VRF
