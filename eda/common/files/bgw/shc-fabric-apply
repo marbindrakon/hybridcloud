@@ -22,7 +22,9 @@
 #   network ipv6 {block, prefixes, src6} (IPv6 internet egress; absent = none, the IPv6 side is removed): the node's
 #   address on egress0 and egress0's IPv6 MTU = wanMtu (the node sends Packet Too Big), and the nftables table inet
 #   shc_egress6 (IPv6 rules only; the IPv4 table above is untouched): the networks' conntrack zones, outbound only
-#   from a network's src6 (its platform block, the node's ICMPv6 source), not to platDeny6, allow6 and the resolvers
+#   from a network's src6 (its platform block and the node's slice of icmpSource6, which holds the ICMPv6 sources of
+#   the node's gateway namespaces, so their Packet Too Big reaches the internet) and the node's ICMPv6 source (a
+#   member another one covers is left out), not to platDeny6, allow6 and the resolvers
 #   on 53 before deny6, the TCP MSS clamp at mss both ways (a network's SYNs leaving it by xe<n>, on forward and
 #   output; the SYN-ACKs into it where the egress VRF forwards them to xo<n>, on forward), inbound only neighbour
 #   discovery, ICMPv6 errors and replies, and a routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR takes the
@@ -754,7 +756,7 @@ PY
 # the IPv6 filter table for the listed networks (replaced as a whole; IPV6-PLAN §3.4 rule order)
 egress6_nft() {
   python3 - "$CONF" <<'PY'
-import json, sys
+import ipaddress, json, sys
 doc = json.load(open(sys.argv[1]))
 e = doc["egress"]
 srv6 = doc.get("transport") == "srv6"
@@ -770,8 +772,14 @@ def iset(name, xs, interval=True):
 out = ["table inet shc_egress6", "delete table inet shc_egress6", "table inet shc_egress6 {"]
 def tag(n):  # the network's VRF e<vpnTarget>: the set name's suffix
     return n["vrf"][1:]
+def uncovered(xs):
+    """the members no other member covers, in their order, each once (an interval set refuses an element inside
+    another: the node's ICMPv6 source lies in the node's slice of the pool when src6 holds that)"""
+    ns = [ipaddress.ip_network(x, strict=False) for x in xs]
+    return [x for i, (x, n) in enumerate(zip(xs, ns))
+            if not any((m != n and n.subnet_of(m)) or (m == n and j < i) for j, m in enumerate(ns) if j != i)]
 for n in nets:
-    iset(f"src6_{tag(n)}", list(n["ipv6"].get("src6") or []) + ([icmp] if icmp else []))
+    iset(f"src6_{tag(n)}", uncovered(list(n["ipv6"].get("src6") or []) + ([icmp] if icmp else [])))
 iset("plat_deny6", v6.get("platDeny6"))
 iset("allow6", v6.get("allow6"))
 iset("resolvers6", v6.get("resolvers6"), interval=False)

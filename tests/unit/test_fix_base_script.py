@@ -20,6 +20,8 @@ from test_srv6_fabric_apply import gw_full, root_full  # noqa: E402
 BASE = "72f86002"
 METRIC = "4278198272"
 NS = r"\[[a-z0-9-]+\]"
+SLICE = "2001:db8:4005:1::1:0/112"  # the first node's slice of icmpSource6 2001:db8:4005:1::/64, as the plan gives it
+ROOT_ICMP6 = "2001:db8:4005:1::1:1"  # the root's own ICMPv6 source on that node (ROOT6), in the slice
 
 # Calls the script issues that BASE does not (a line of the call log, as a regular expression), with the reason.
 ADDED = [
@@ -43,8 +45,9 @@ ADDED = [
 # Calls of BASE the script no longer issues.
 REMOVED = []
 
-# nftables text the script loads differently: (table, regular expression on BASE's text, replacement, reason). Each
-# applies exactly once wherever BASE loaded that table; the edited text must then equal this script's.
+# nftables text the script loads differently: (table, regular expression on BASE's text, replacement, reason, always).
+# Each applies once wherever BASE loaded that table (always: it must; else: where the text has it, at most once); the
+# edited text must then equal this script's.
 NFT = [
     ("inet shc_egress6",
      r'(    oifname "xe\*" [^\n]* comment "mss out"\n)    iifname "xe\*" tcp flags & syn == syn tcp option maxseg size > '
@@ -54,13 +57,17 @@ NFT = [
      r'oifname "xo*" tcp flags & syn == syn tcp option maxseg size > \2 counter tcp option maxseg size set \2 '
      r'comment "mss in, at the egress veth"\n  }\n',
      "F-L2a: the IPv6 clamp into a network at the egress VRF's veth xo<n> (forward) instead of iifname xe* (never "
-     "matched)"),
+     "matched)", True),
     ("inet shc_gw_mss",
      r'  chain clamp \{\n    type filter hook forward priority mangle; policy accept;\n    oifname "vx\*" tcp flags syn '
      r'tcp option maxseg size set rt mtu\n  \}\n',
      "",
      "F-L2b: mpls: no forward chain (its oifname vx* rule never matched; nothing reaches br<vni> by forward); the "
-     "output chain clamp_core stays"),
+     "output chain clamp_core stays", True),
+    ("inet shc_egress6",
+     r'(elements = \{ [^}]*, %s), %s \}' % (re.escape(SLICE), re.escape(ROOT_ICMP6)), r'\1 }',
+     "F-L3: the root's ICMPv6 source left out of src6 where the node's slice of icmpSource6 (from the plan) covers it "
+     "(nftables refuses the overlap)", False),
 ]
 
 KERNEL4 = [{"pref": "0", "table": "local"}, {"pref": "32766", "table": "main"}, {"pref": "32767", "table": "default"}]
@@ -122,11 +129,11 @@ def base_edited(case, what, st, used=None):
     """BASE's state with the listed nftables differences applied (each exactly once per table it loaded)"""
     st = copy.deepcopy(st)
     for name, ns in st["ns"].items():
-        for table, rx, repl, why in NFT:
+        for table, rx, repl, why, always in NFT:
             if table in ns["nft"]:
                 ns["nft"][table], n = re.subn(rx, repl, ns["nft"][table])
-                case.assertEqual(n, 1, "%s: [%s] %s: %s" % (what, name or "root", table, why))
-                if used is not None:
+                case.assertIn(n, (1,) if always else (0, 1), "%s: [%s] %s: %s" % (what, name or "root", table, why))
+                if used is not None and n:
                     used.add(rx)
     return st
 
@@ -153,7 +160,9 @@ class AgainstBase(ApplyCase):
     # ---------------------------------------------------------------------------------------------- the sequences
     def instances(self, which):
         if which == "dual":
-            return [("root", root_full()), ("gw-iaas1", gw_full()), ("gw-aws1", dict(copy.deepcopy(WG_CONF), **WG6))]
+            root = root_full()
+            root["egress"]["networks"][0]["ipv6"]["src6"] = [root["egress"]["networks"][0]["ipv6"]["block"], SLICE]
+            return [("root", root), ("gw-iaas1", gw_full()), ("gw-aws1", dict(copy.deepcopy(WG_CONF), **WG6))]
         root = copy.deepcopy(ROOT_CONF)
         root["attachments"]["circuits"] = [copy.deepcopy(CIRCUIT)]
         return [("root", root), ("gw-iaas1", copy.deepcopy(GW_CONF)), ("gw-aws1", copy.deepcopy(WG_CONF))]
@@ -188,7 +197,7 @@ class AgainstBase(ApplyCase):
         for extra in ({}, {"transport": "mpls"}):
             self.check("dual", extra, used)
         # every listed nftables difference occurred
-        self.assertEqual([why for _, rx, _, why in NFT if rx not in used], [])
+        self.assertEqual([why for _, rx, _, why, _ in NFT if rx not in used], [])
 
     def test_ipv4_only(self):
         self.check("ipv4", {})

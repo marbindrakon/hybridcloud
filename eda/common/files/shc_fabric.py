@@ -49,8 +49,11 @@ actions:
                   translator-embedded deny list from translation.<site>.pref64 and egress.denyDestinations; the
                   resolvers on port 53, egress.ipv6.resolverDestinations6 and every translation.<site>.dns64Resolvers)
                   and per network with ipv6 (its platform block and the placement prefixes inside it, all inside
-                  egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes and whether the
-                  node is the network's standby (index mod nodes); errors for an unusable configuration
+                  egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes, whether the
+                  node is the network's standby (index mod nodes) and the sources the node's filter admits from the
+                  network (src6: the block and, with core.icmpSource6, the node's /112 of it, which holds the ICMPv6
+                  sources of all of that node's namespaces; the node's position is its place in nodes, 1-based);
+                  errors for an unusable configuration
   circuit-plan    {attachments: realization attachments, nodes: [node names], index, ipv6?}  an attachment circuit's
                   link subnet (the index-th of attachments.linkPool), each node's address and the CE's; with ipv6 (the
                   circuit has IPv6 accept entries) also its IPv6 link under ipv6 (the index-th /64 of
@@ -547,6 +550,35 @@ def egress6_plan(eg, req, node_names, errors):
     return nodes, networks
 
 
+def icmp6_slice(core, ordinal):
+    """The node's slice of core.icmpSource6: the /112 holding network + (ordinal << 16) + every provider-edge index,
+    i.e. the ICMPv6 sources of that node's root and gateway namespaces (pe_addresses' icmp6) and of nothing else
+    (another node's, or a cloud edge router's at its own ordinal, are in other slices). None without the pool."""
+    pool = core6(core, "icmpSource6", 96)
+    if pool is None:
+        return None
+    base = int(pool.network_address) + (int(ordinal) << 16)
+    if ordinal < 1 or base + 0xFFFF > int(pool.broadcast_address):
+        raise ValueError(f"node position {ordinal} does not fit core.icmpSource6 {pool}")
+    return ipaddress.ip_network((base, 112))
+
+
+def icmp6_slices(core, node_names, errors):
+    """{node: its slice of core.icmpSource6 (text)} by the node's 1-based position in the request's nodes (the order of
+    borderGateway.nodes, as for pe-addresses' nodeOrdinal); {} without the pool"""
+    out = {}
+    for o, name in enumerate(node_names, 1):
+        try:
+            s = icmp6_slice(core, o)
+        except ValueError as e:
+            errors.append(str(e))
+            return {}
+        if s is None:
+            return {}
+        out[name] = str(s)
+    return out
+
+
 def egress_plan(req):
     eg, node_names = req.get("egress") or {}, req.get("nodes") or []
     chk = egress_check(eg, node_names, req.get("domainAsn"), req.get("core"))
@@ -563,6 +595,7 @@ def egress_plan(req):
     ports = [int(x) for x in eg.get("platformPorts") or [6443, 443]]
     v6_on = bool((eg.get("ipv6") or {}).get("enabled"))
     nodes6, nets6 = egress6_plan(eg, req, node_names, errors) if v6_on else ({}, {})
+    icmp_slices = icmp6_slices(req.get("core") or {}, node_names, errors) if v6_on else {}
     seen = []
     for w in req.get("networks") or []:
         for c in w.get("platform") or []:
@@ -601,10 +634,12 @@ def egress_plan(req):
                  # RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback form at render
                  "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""}
             if v6:
-                # the IPv6 session over the veth, the prefixes announced, and the sources the filter admits (the
-                # node's own ICMPv6 source is added by the node's job: it differs per node)
+                # the IPv6 session over the veth, the prefixes announced, and the sources the filter admits: the
+                # network's block and the node's slice of core.icmpSource6 (the ICMPv6 sources of the node's own
+                # namespaces, so a gateway's Packet Too Big or Time Exceeded toward the internet passes; the root's
+                # own is in it, and the node's job also adds that one by itself)
                 e["ipv6"] = {"block": v6["block"], "prefixes": v6["prefixes"], "standby": v6["primary"] != name,
-                             "src6": [v6["block"]]}
+                             "src6": [v6["block"]] + ([icmp_slices[name]] if name in icmp_slices else [])}
             out.append(e)
             entry = networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": [],
                                                        "internet": internet, "platform": platform,
