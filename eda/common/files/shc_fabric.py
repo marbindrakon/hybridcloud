@@ -8,7 +8,13 @@ actions:
   check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names;
                   the core's IPv6 transport when set: loopbackPool6 an IPv6 network of at least /120, icmpSource6 one of
                   at least /96, the two apart, sidOffset6 above the highest provider-edge index and offset + index
-                  inside the SRGB
+                  inside the SRGB; the core's transport: core.transport and core.transportByNode values mpls or srv6,
+                  transportByNode keys node names, srv6 on a node needs core.loopbackPool6 and core.srv6.block; a
+                  block (when set) a /32 inside 5f00::/16 apart from the core's IPv6 ranges, attachments.linkPool6 and
+                  egress.ipv6.routedPrefixes, at most 255 nodes and a highest provider-edge index of at most 255.
+                  transports: {node: its transport} (see node-transport)
+  node-transport  {core, node}   a border gateway node's VPN transport: core.transportByNode.<node>, else
+                  core.transport, else mpls; an error and transport "" for a value other than mpls or srv6
   check-gateway   {fabric: spec, core: realization core, attachments: realization attachments, gateway: spec,
                   others: [CloudGateway objects or {name, spec}]}
                   nodes match the fabric's, one gateway per site, VLAN and site subnet unique on the fabric and the
@@ -141,6 +147,8 @@ def check_fabric(req):
     except ValueError:
         pass
     errors += core6_check(core, srgb, pe_max, len((spec.get("borderGateway") or {}).get("nodes") or []))
+    node_names = [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []]
+    errors += srv6_check(core, real, node_names, pe_max)
     eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []],
                       spec.get("domainAsn"), core)
     errors += eg["errors"]
@@ -148,7 +156,118 @@ def check_fabric(req):
     at = attachments_check(real.get("attachments") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []], core)
     errors += at["errors"]
     size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
-    return {"errors": errors, "poolSize": size, "peIndexMax": pe_max}
+    return {"errors": errors, "poolSize": size, "peIndexMax": pe_max,
+            "transports": {n: node_transport(core, n) for n in node_names if n}}
+
+
+TRANSPORTS = ("mpls", "srv6")
+SRV6_SPACE = ipaddress.ip_network("5f00::/16")
+# micro-SID layout F3216: block 32 bits, node 16 bits (node position 8 + provider-edge index 8), function 16 bits
+SRV6_ORDINAL_MAX = 255
+
+
+def node_transport(core, node):
+    """The VPN transport of a border gateway node as configured: core.transportByNode.<node>, else core.transport,
+    else mpls (an empty value counts as unset). Not validated: srv6_check names a value outside TRANSPORTS."""
+    core = core or {}
+    by = core.get("transportByNode") or {}
+    v = by.get(node) if isinstance(by, dict) else None
+    if v is None or str(v) == "":
+        v = core.get("transport")
+    return "mpls" if v is None or str(v) == "" else str(v)
+
+
+def srv6_block(core):
+    """The SID block (core.srv6.block) as an IPv6 network, None when empty; ValueError when it is not a /32 inside
+    5f00::/16."""
+    s = (core or {}).get("srv6")
+    if s is None or s == "":
+        return None
+    if not isinstance(s, dict):
+        raise ValueError("realization core.srv6 is not a mapping")
+    v = s.get("block") or ""
+    if not str(v).strip():
+        return None
+    try:
+        n = ipaddress.ip_network(str(v), strict=True)
+    except ValueError as e:
+        raise ValueError(f"realization core.srv6.block: {e}")
+    if n.version != 6 or n.prefixlen != 32 or not n.subnet_of(SRV6_SPACE):
+        raise ValueError(f"realization core.srv6.block {n} is not a /32 inside {SRV6_SPACE}")
+    return n
+
+
+def srv6_check(core, real, node_names, pe_max):
+    """The core's transport switch: core.transport and every core.transportByNode value mpls or srv6, the
+    transportByNode keys names of border gateway nodes; a node on srv6 needs core.loopbackPool6 and core.srv6.block.
+    A block, when set (also while every node is on mpls: the provider edges' locators are derived from it), is a /32
+    inside 5f00::/16 apart from the core's other IPv6 ranges and the routed IPv6 egress space, and the node positions
+    and provider-edge indexes fit its 8-bit fields."""
+    errors = []
+    t = core.get("transport")
+    if t is not None and str(t) != "" and str(t) not in TRANSPORTS:
+        errors.append(f"realization core.transport {t!r} is not one of {', '.join(TRANSPORTS)}")
+    by = core.get("transportByNode") or {}
+    if not isinstance(by, dict):
+        errors.append("realization core.transportByNode is not a mapping of node names to transports")
+        by = {}
+    for k in sorted(by, key=str):
+        v = by[k]
+        if k not in node_names:
+            errors.append(f"realization core.transportByNode.{k} names no node of borderGateway.nodes")
+        if v is not None and str(v) != "" and str(v) not in TRANSPORTS:
+            errors.append(f"realization core.transportByNode.{k} {v!r} is not one of {', '.join(TRANSPORTS)}")
+    srv6_nodes = [n for n in node_names if node_transport(core, n) == "srv6"]
+    block, block_bad = None, False
+    try:
+        block = srv6_block(core)
+    except ValueError as e:
+        errors.append(str(e))
+        block_bad = True
+    if srv6_nodes:
+        if not str(core.get("loopbackPool6") or "").strip():
+            errors.append(f"realization core.transport srv6 (nodes {', '.join(srv6_nodes)}) needs the dual-stack core "
+                          "(core.loopbackPool6)")
+        if block is None and not block_bad:
+            errors.append(f"realization core.transport srv6 (nodes {', '.join(srv6_nodes)}) needs core.srv6.block")
+    if block is None:
+        return errors
+    others = []
+    for k in ("loopbackPool6", "icmpSource6"):
+        try:
+            c = core6(core, k, 128)
+        except ValueError:
+            continue  # core6_check names it
+        if c is not None:
+            others.append((f"core.{k}", c))
+    e6 = ((real or {}).get("egress") or {}).get("ipv6") or {}
+    for c in e6.get("routedPrefixes") or []:
+        try:
+            n = ipaddress.ip_network(str(c), strict=True)
+        except ValueError:
+            continue  # egress6_check names it
+        others.append(("egress.ipv6.routedPrefixes", n))
+    for what, c in others:
+        if c.version == 6 and c.overlaps(block):
+            errors.append(f"realization core.srv6.block {block} overlaps {what} {c}")
+    if len(node_names) > SRV6_ORDINAL_MAX:
+        errors.append(f"realization core.srv6.block: {len(node_names)} border gateway nodes do not fit the locator's "
+                      f"node position (at most {SRV6_ORDINAL_MAX})")
+    if pe_max > SRV6_ORDINAL_MAX:
+        errors.append(f"realization core.srv6.block: the highest provider-edge index {pe_max} does not fit the "
+                      f"locator's index (at most {SRV6_ORDINAL_MAX}: a core.loopbackPool or core.linkSubnet of at most "
+                      "256 addresses)")
+    return errors
+
+
+def node_transport_cmd(req):
+    """node-transport: the VPN transport of one border gateway node (see node_transport); errors and transport ""
+    for a value outside TRANSPORTS."""
+    t = node_transport(req.get("core") or {}, req.get("node"))
+    if t not in TRANSPORTS:
+        return {"errors": [f"transport {t!r} of node {req.get('node')} is not one of {', '.join(TRANSPORTS)}"],
+                "transport": ""}
+    return {"errors": [], "transport": t}
 
 
 def core6(core, key, min_len):
@@ -1353,7 +1472,8 @@ def orphan_report(req):
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-network": check_network,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
            "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan,
-           "circuit-plan": circuit_plan, "check-circuit": check_circuit, "attachments-plan": attachments_plan}
+           "circuit-plan": circuit_plan, "check-circuit": check_circuit, "attachments-plan": attachments_plan,
+           "node-transport": node_transport_cmd}
 
 
 def main():
