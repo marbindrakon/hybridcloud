@@ -9,7 +9,8 @@ WireGuard, the cloud routers) and the routes the sites see stay the same. The sw
 `FABRIC_REALIZATION` (the aap-config environment, JSON; per fabric under `fabrics.<fabric name>`). Installation values
 never go into Git, the CRDs or the forms ([Lab configuration policy](../lab-config.md)).
 
-A fabric has one core transport: every border gateway node, its root and all its gateways use it.
+A fabric has one core transport: every border gateway node, its root and all its gateways use it. Both transports
+are supported; `mpls` is the default.
 
 ## What the switch changes
 
@@ -115,14 +116,30 @@ effect on `srv6`; the rules that needs are added only when the transport is `srv
 
 ## Choosing and changing the transport
 
-Choose the transport when you set up the fabric's realization: the dual-stack core (`core.loopbackPool6`) and the
-block first, then `core.transport: srv6`. The realization does not switch a running node in place. To change the
-transport of an existing environment, change `core.transport`, re-apply the nodes (run the HybridFabric and then each
-CloudGateway, Retry now) and restart their FRR instances, or reboot the nodes.
+Choose the transport when you set up the fabric's realization; for `srv6`, the dual-stack core (`core.loopbackPool6`)
+and the block first, then `core.transport: srv6`. The realization does not switch a running node in place. To change
+the transport of an existing environment, change `core.transport`, re-apply the nodes (run the HybridFabric and then
+each CloudGateway, Retry now) and restart their FRR instances, or reboot the nodes. The jobs themselves reload FRR,
+they don't restart it: a node that ran `mpls` and is applied with `srv6` for the first time gets a reload from the
+job, and the restart (or the reboot) is yours.
+
+On `srv6` both address families ride the IPv6 core, so a step of the IPv6 core that fails fails the apply and the
+job. On `mpls` the same failure is a warning and IPv4 carries on.
 
 ## Readiness
 
 After each node the jobs wait for the node to be ready on the transport before they go on. On `srv6`, per namespace:
 the settings and the rule above, the guard table, IS-IS adjacencies, both VPN families Established over the IPv6
 loopbacks, and for every VRF a `seg6local … End.DT46 … vrftable <table>` route (the VRF's SID). The MPLS input and
-VPN label checks run on `mpls` only. The HybridFabric's `status.realization` names the fabric's transport.
+VPN label checks run on `mpls` only.
+
+## Status
+
+| Where | Field | Content |
+|---|---|---|
+| HybridFabric and CloudGateway `status.realization` | `coreTransport` | `mpls` or `srv6`, on every fabric |
+| HybridFabric `status.realization` (`srv6` only) | `srv6Locators` | `{<node>: <the root's locator>}` |
+| CloudGateway `status.realization` (`srv6` only) | `srv6Locators` | `{<node>: <the gateway's locator>}` |
+| HybridFabric and CloudGateway `status.nodes[]` (`srv6` only) | `transport`, `locator` | `srv6` and the node's locator of that root or gateway |
+
+On `mpls` the `srv6Locators` field and the node records' `transport` and `locator` are absent.
