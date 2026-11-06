@@ -14,6 +14,8 @@ net.ipv6.conf.default when it is created or moved into a namespace; writing net.
 .forwarding rewrites default and every device; an up device with IPv6 enabled (and addrgenmode not none) has an
 fe80::/64 link-local from its MAC; disable_ipv6=1 removes all IPv6 addresses; lo has ::1. sysctl keys follow procps:
 when the first separator is "/", "/" separates (a device name may hold a dot), else ".".
+IPv6 policy rules (`ip -6 rule`) and the SRv6 encapsulation source (`ip sr tunsrc`) are kept per namespace once a
+call sets them; net.vrf.strict_mode=1 is refused while two VRFs share a table, and then a VRF on a used table too.
 Nothing here touches the real system."""
 import fcntl
 import ipaddress
@@ -359,6 +361,45 @@ def ip_main(k, nsname, args, out):
             return True
         raise Fail("route verb " + verb)
 
+    if obj == "rule":  # IPv6 policy rules "to <prefix> lookup <table> pref <n>" (kept per namespace, lazily)
+        if fam != 6:
+            raise Fail("only IPv6 rules are modelled")
+        rules = ns.setdefault("rules6", [])
+        verb = args[0] if args else "show"
+        sel = dict(zip(args[1::2], args[2::2]))
+        if "priority" in sel:
+            sel["pref"] = sel.pop("priority")
+        if verb in ("show", "list"):
+            for r in sorted(rules, key=lambda r: int(r["pref"])):
+                if "pref" in sel and r["pref"] != sel["pref"]:
+                    continue
+                out.append("%s:\tfrom all to %s lookup %s" % (r["pref"], r["to"], r["table"]))
+            return False
+        if verb == "add":
+            r = {"pref": sel["pref"], "to": str(ipaddress.ip_network(sel["to"])), "table": sel.get("lookup", "main")}
+            if r in rules:
+                raise Fail("RTNETLINK answers: File exists", 2)
+            rules.append(r)
+            return True
+        if verb in ("del", "delete"):
+            match = [r for r in rules if all(r[k] == (str(ipaddress.ip_network(v)) if k == "to" else v)
+                                             for k, v in (("pref", sel.get("pref")), ("to", sel.get("to")),
+                                                          ("table", sel.get("lookup"))) if v is not None)]
+            if not match:
+                raise Fail("RTNETLINK answers: No such file or directory", 2)
+            rules.remove(match[0])
+            return True
+        raise Fail("rule verb " + verb)
+
+    if obj == "sr":  # the SRv6 encapsulation source
+        if args[:2] == ["tunsrc", "show"]:
+            out.append("tunsrc addr %s" % ns.get("tunsrc", "::"))
+            return False
+        if args[:2] == ["tunsrc", "set"]:
+            ns["tunsrc"] = str(ipaddress.IPv6Address(args[2]))
+            return True
+        raise Fail("sr " + " ".join(args))
+
     if obj == "neigh":
         verb = args[0]
         rest = args[1:]
@@ -401,6 +442,10 @@ def link_add(k, nsname, rest):
     if mtu:
         common["mtu"] = mtu
     if kind == "vrf":
+        table = extra[extra.index("table") + 1]
+        if k.ns(nsname)["sysctl"].get("net/vrf/strict_mode") == "1" and any(
+                l["kind"] == "vrf" and l["table"] == table for l in k.ns(nsname)["links"].values()):
+            raise Fail("Error: Table is used by another VRF.", 2)
         k.add_link(nsname, name, "vrf", table=extra[extra.index("table") + 1], **common)
     elif kind == "vlan":
         parent = k.ns(nsname)["links"][kw["link"]]
@@ -490,6 +535,12 @@ def sysctl_main(k, nsname, args, out, err):
                 err.append("sysctl: cannot stat /proc/sys/%s: No such file or directory" % path)
                 rc = 255
                 continue
+            if path == "net/vrf/strict_mode" and val == "1":  # refused while two VRFs share a table
+                tables = [l["table"] for l in links.values() if l["kind"] == "vrf"]
+                if len(tables) != len(set(tables)):
+                    err.append('sysctl: setting key "net.vrf.strict_mode": Device or resource busy')
+                    rc = 255
+                    continue
             sc[path] = val
             wrote = True
             if p[:3] == ["net", "ipv6", "conf"] and p[3] == "all" and p[4] in ("disable_ipv6", "forwarding"):
