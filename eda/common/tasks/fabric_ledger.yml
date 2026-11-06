@@ -2,26 +2,79 @@
 # shc (design/P7-PLAN.md P7.3.4): run one files/shc_ledger.py action (fabric ledger or config lease) against the
 # services API. Included from a role (paths are role_path-relative). Input: fab_ledger (dict with action, fabric,
 # namespace, ...); the API connection and token are added here and passed on stdin. Sets fab_ledger_result; fails
-# with the helper's error.
+# with the helper's error. A lease-acquire also carries the realization's nodes.configLease (fab_real, which every
+# holder reads before it takes the lease) as it stands, so all holders of one fabric's lease use the same numbers and
+# the helper refuses a value that is no positive whole number (the step timeout uses the same value).
+# The lease as this job holds it: fab_lease {namespace, fabric, holder, until (epoch s, this host's clock), duration},
+# set after every acquire and renewal, and the step limits derived from it (common/vars/fabric_lease.yml). A release
+# while fab_lease_keep is set (a node step may still be running, fabric_lease_keep.yml) is skipped: the lease then
+# runs out by itself.
+# Every task here sets its own timeout (none: the helper bounds itself), so the step limit the node loops put on their
+# tasks never cuts a renewal or a release short.
 - name: "Fabric {{ fab_ledger.action }}"
+  vars:
+    _fab_lease_cfg: "{{ ((fab_real | default({}, true)).nodes | default({}, true)).configLease | default({}, true) }}"
+    _fab_lease_req: >-
+      {%- set out = {} -%}
+      {%- for key, arg in [['durationSeconds', 'duration'], ['waitSeconds', 'wait'], ['stepTimeoutSeconds', 'stepTimeout'],
+                           ['systemdJobSeconds', 'systemdJob']]
+            if fab_ledger.action == 'lease-acquire' and key in _fab_lease_cfg -%}
+        {%- set _ = out.update({arg: _fab_lease_cfg[key]}) -%}
+      {%- endfor -%}
+      {{ out }}
   ansible.builtin.command:
     argv:
       - python3
       - "{{ role_path }}/../../../common/files/shc_ledger.py"
-    stdin: "{{ fab_ledger | combine({'api': services_api_host | trim, 'token': services_bearer_token | trim}) | to_json }}"
+    stdin: >-
+      {{ _fab_lease_req | combine(fab_ledger)
+         | combine({'api': services_api_host | trim, 'token': services_bearer_token | trim}) | to_json }}
   register: _fab_ledger
   changed_when: >-
     (_fab_ledger.stdout | default('')) is search('"(new|created)": true|"released": [0-9]')
   failed_when: false
   no_log: true
+  timeout: 0
+  when: not (fab_ledger.action == 'lease-release' and fab_lease_keep | default(false) | bool)
 
 - name: "Fabric {{ fab_ledger.action }}: parse the result"
   ansible.builtin.set_fact:
     fab_ledger_result: >-
-      {{ (_fab_ledger.stdout | from_json) if (_fab_ledger.stdout | default('') | trim).startswith('{')
+      {{ {'released': false, 'kept': true} if _fab_ledger is skipped
+         else (_fab_ledger.stdout | from_json) if (_fab_ledger.stdout | default('') | trim).startswith('{')
          else {'error': 'shc_ledger.py rc ' ~ _fab_ledger.rc} }}
+  timeout: 0
 
 - name: "Fabric {{ fab_ledger.action }}: fail on error"
   ansible.builtin.fail:
     msg: "Fabric {{ fab_ledger.action }} failed: {{ fab_ledger_result.error }}"
-  when: _fab_ledger.rc != 0 or 'error' in fab_ledger_result
+  when: _fab_ledger is not skipped and (_fab_ledger.rc != 0 or 'error' in fab_ledger_result)
+  timeout: 0
+
+- name: "Fabric {{ fab_ledger.action }}: the lease as this job holds it"
+  ansible.builtin.set_fact:
+    fab_lease:
+      namespace: "{{ fab_ledger.namespace }}"
+      fabric: "{{ fab_ledger.fabric }}"
+      holder: "{{ fab_ledger.holder }}"
+      until: "{{ (fab_ledger_result.renewedAt | float) + (fab_ledger_result.duration | float) }}"
+      duration: "{{ fab_ledger_result.duration | int }}"
+  when: fab_ledger.action in ['lease-acquire', 'lease-renew']
+  timeout: 0
+
+- name: "Fabric {{ fab_ledger.action }}: the step limits of this lease"
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_lease.yml"
+  when: fab_ledger.action == 'lease-acquire'
+  timeout: 0
+
+# a renewal that found the lease past its duration (still this job's, so nobody else held it): the job went longer
+# than the lease without a renewal, which the step limits should prevent; shown so it is seen
+- name: "Fabric {{ fab_ledger.action }}: the lease had run past its duration"
+  ansible.builtin.debug:
+    msg: >-
+      [WARNING] lease fabric-config-{{ fab_ledger.fabric }} was renewed {{ fab_ledger_result.sinceLastRenewal }} s
+      after its previous renewal, longer than its {{ fab_ledger_result.duration }} s; nobody had taken it over
+  register: _fab_lease_lapsed_note
+  when: fab_ledger.action == 'lease-renew' and fab_ledger_result.lapsed | default(false) | bool
+  timeout: 0

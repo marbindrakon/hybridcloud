@@ -143,7 +143,7 @@ oc get hybridnetworks,cloudvirts,networkplacements -n entity-<tenant>
 ```
 
 The **STATUS** column is the object's state (`status.phase`: Waiting, Creating, Updating, Ready,
-Degraded, Failed or Deleting); **READY** and **REASON** follow it, and the **REASON** says why
+Degraded, Paused, Failed or Deleting); **READY** and **REASON** follow it, and the **REASON** says why
 ([status reasons](status-reasons.md)). Add `-o wide` for the **SUMMARY** column, one line on what
 the platform is doing or waiting for. The dashboard lists show the same Status and Reason. A new
 environment and its placement are usually ready within a few minutes. The

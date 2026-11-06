@@ -37,7 +37,7 @@
         attachmentcircuit_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (attachmentcircuit_observed_generation >= attachmentcircuit_generation)
+            and (attachmentcircuit_observed_generation | int >= attachmentcircuit_generation | int)
             and (attachmentcircuit_status == 'ready')
             and (attachmentcircuit_ready | bool)
           }}

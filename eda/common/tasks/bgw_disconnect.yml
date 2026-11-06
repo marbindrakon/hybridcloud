@@ -1,7 +1,27 @@
 ---
 # shc (design/P7-PLAN.md P7.3.4): remove the SSH key written by bgw_connect.yml.
+# First, end this job's SSH processes to the nodes (clients and their connection masters: their command lines name
+# the job's key directory). A step that ran past its timeout leaves its ssh client running, ansible does not kill it,
+# and the command on the node runs on as long as that session does; ending the session hangs the command up there.
+# Both tasks set their own timeout, so the node loops' step limit never cuts them short.
+- name: End this job's SSH sessions to the border gateway nodes
+  ansible.builtin.shell: |
+    dir='{{ bgw_keydir.path }}/'
+    for p in /proc/[0-9]*; do
+      [ "$(cat "$p/comm" 2>/dev/null)" = ssh ] || continue
+      tr '\0' '\n' < "$p/cmdline" 2>/dev/null | grep -qF -- "$dir" || continue
+      kill "${p##*/}" 2>/dev/null && echo "ended ssh ${p##*/}"
+    done
+    exit 0
+  register: _bgw_ended
+  changed_when: _bgw_ended.stdout | length > 0
+  failed_when: false
+  when: bgw_keydir.path is defined
+  timeout: 30
+
 - name: Remove the border gateway SSH key
   ansible.builtin.file:
     path: "{{ bgw_keydir.path }}"
     state: absent
   when: bgw_keydir.path is defined
+  timeout: 30

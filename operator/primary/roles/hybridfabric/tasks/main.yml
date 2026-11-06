@@ -15,138 +15,18 @@
       vars:
         reconcile_request_cr: "{{ _hybridsovereign_redhat_hybridfabric }}"
 
-    # the translation canary's last read (defaults/main.yml): due for a re-read, or stale
-    - name: Age of the translation canary's last read
-      vars:
-        _st: "{{ _hybridsovereign_redhat_hybridfabric.status | default({}, true) }}"
-        _tr: >-
-          {{ (((_st.realization | default({}, true)).translation | default({}, true))) }}
-        _alert: "{{ _tr.alertMinutes | default(5, true) | int }}"
-        _reread: "{{ [_alert | int * 60, hybridfabric_canary_reread_min_seconds | default(900) | int] | max }}"
-        # the last fabric job's end: its completion (status.delivery.completedAt), or the read when that is later;
-        # none without a read (a status from before readAt existed is read again at once)
-        _read19: "{{ (_tr.readAt | default('', true) | string)[:19] }}"
-        _ended: >-
-          {{ ([_read19, ((_st.delivery | default({}, true)).completedAt | default('', true) | string)[:19]] | max)
-             if _read19 | length == 19 else '' }}
-      ansible.builtin.set_fact:
-        hybridfabric_canary_sites: >-
-          {{ (_tr.canaries | default({}, true)) | dict2items | selectattr('value', 'mapping') | map(attribute='key') | sort | list }}
-        hybridfabric_canary_read_at: "{{ _tr.readAt | default('', true) | string }}"
-        hybridfabric_canary_age: >-
-          {{ ((now(utc=True) - ((_tr.readAt | string)[:19] | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds() | int)
-             if (_tr.readAt | default('', true) | string | length >= 19) else 999999999 }}
-        # seconds since the last fabric job ended: the re-read waits for the interval after it, so runs never chain
-        hybridfabric_canary_idle: >-
-          {{ ((now(utc=True) - (_ended | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds() | int)
-             if (_ended | length == 19) else 999999999 }}
-        hybridfabric_canary_reread_seconds: "{{ _reread }}"
-        # three re-read intervals (the job writes the same, 3 x max(alertMinutes, the minimum interval)); never less
-        # here, so a healthy fabric's reading never reads stale between two re-reads
-        hybridfabric_canary_stale_minutes: >-
-          {{ [_tr.staleAfterMinutes | default(_alert | int * 3, true) | int, (_reread | int * 3 + 59) // 60] | max }}
-
-    - name: Decide whether the canary is due or stale
-      vars:
-        _st: "{{ _hybridsovereign_redhat_hybridfabric.status | default({}, true) }}"
-        _canaries: "{{ ((_st.realization | default({}, true)).translation | default({}, true)).canaries | default({}, true) }}"
-        _cond: "{{ (_st.conditions | default([], true) | selectattr('type', 'equalto', 'IPv6Translation') | list + [{}]) | first }}"
-      ansible.builtin.set_fact:
-        hybridfabric_canary_due: >-
-          {{ hybridfabric_canary_sites | length > 0
-             and hybridfabric_canary_idle | int >= hybridfabric_canary_reread_seconds | int }}
-        hybridfabric_canary_stale: >-
-          {{ hybridfabric_canary_sites | length > 0
-             and hybridfabric_canary_age | int >= hybridfabric_canary_stale_minutes | int * 60 }}
-        # already marked: no site reads healthy or fresh and the condition says so
-        hybridfabric_canary_marked: >-
-          {%- set fresh = [] -%}
-          {%- for site in hybridfabric_canary_sites -%}
-            {%- set r = _canaries[site] -%}
-            {%- if (r.healthy | default(false) | bool) or not (r.stale | default(false) | bool) -%}
-              {%- set _ = fresh.append(site) -%}
-            {%- endif -%}
-          {%- endfor -%}
-          {{ _cond.reason | default('') in ['CanaryStale', 'CanaryFailed'] and fresh | length == 0 }}
-
-    # a reading older than staleAfterMinutes is marked stale at once, whatever the fabric job does next: the status
-    # never reports an old read as healthy (the job's next read replaces the mark). The fabric is read again first: a
-    # job's fresh read that landed after this reconcile's snapshot is never overwritten by the mark
-    - name: Read the fabric again before marking its canary stale
-      kubernetes.core.k8s_info:
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: HybridFabric
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-      register: _hybridfabric_fresh
-      failed_when: false
-      when:
-        - hybridfabric_canary_stale | bool
-        - not (hybridfabric_canary_marked | bool)
-
-    # failedSince of a site that read healthy until now: the moment its reading became overdue (readAt +
-    # staleAfterMinutes), not the read itself (it was healthy then)
-    - name: Mark an old translation canary reading stale
-      vars:
-        _st: "{{ _hybridsovereign_redhat_hybridfabric.status | default({}, true) }}"
-        _canaries: "{{ ((_st.realization | default({}, true)).translation | default({}, true)).canaries | default({}, true) }}"
-        _now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-        _overdue: >-
-          {{ lookup('pipe', 'date -u -d @' ~ ((((hybridfabric_canary_read_at[:19] | to_datetime('%Y-%m-%dT%H:%M:%S'))
-                                                 - ('1970-01-01T00:00:00' | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds()
-                                                | int) + hybridfabric_canary_stale_minutes | int * 60)
-                            ~ ' +%Y-%m-%dT%H:%M:%SZ')
-             if hybridfabric_canary_read_at | length >= 19 else _now }}
-        _why: >-
-          not read since {{ hybridfabric_canary_read_at or 'the canary was configured' }}
-          ({{ (hybridfabric_canary_age | int // 60) if hybridfabric_canary_read_at | length > 0 else '?' }} min, longer than
-          {{ hybridfabric_canary_stale_minutes }} min): the reading is stale{{
-          (' since ' ~ _overdue) if hybridfabric_canary_read_at | length >= 19 else '' }}
-      operator_sdk.util.k8s_status:
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: HybridFabric
-        name: "{{ ansible_operator_meta.name }}"
-        namespace: "{{ ansible_operator_meta.namespace }}"
-        status:
-          realization:
-            translation:
-              canaries: >-
-                {%- set out = {} -%}
-                {%- for site in hybridfabric_canary_sites -%}
-                  {%- set r = _canaries[site] -%}
-                  {%- set _ = out.update({site: {'stale': true, 'healthy': false, 'error': _why | trim,
-                                                 'failedSince': r.failedSince | default('', true) or _overdue | trim}}) -%}
-                {%- endfor -%}
-                {{ out }}
-          conditions:
-            - type: IPv6Translation
-              status: Unknown
-              lastTransitionTime: "{{ _now }}"
-              reason: CanaryStale
-              message: "translation canary {{ _why | trim }}"
-      # a failed mark must not fail the fabric (the re-run below reads the canary again)
-      failed_when: false
-      when:
-        - hybridfabric_canary_stale | bool
-        - not (hybridfabric_canary_marked | bool)
-        # the fresh read still holds the reading this reconcile judged (a job did not record a newer read meanwhile)
-        - _hybridfabric_fresh.resources | default([]) | length > 0
-        - >-
-          (((((_hybridfabric_fresh.resources | first).status | default({}, true)).realization | default({}, true))
-            .translation | default({}, true)).readAt | default('', true) | string) == hybridfabric_canary_read_at
-
     - name: Set event action and reason
       ansible.builtin.set_fact:
         hybridfabric_event_action: "{{ 'Reconcile' if reconcile_now | bool else 'Create' }}"
         hybridfabric_event_reason: "{{ 'HybridFabricReconcileRequested' if reconcile_now | bool else 'HybridFabricCreateRequested' }}"
-        # a Ready, processed fabric runs again only on a Retry-now request or when its canary is due for a re-read
+        # a Ready, processed fabric runs again only on a Retry-now request or a wake from another job (the periodic
+        # reconcile publishes nothing for it)
         hybridfabric_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (hybridfabric_observed_generation >= hybridfabric_generation)
+            and (hybridfabric_observed_generation | int >= hybridfabric_generation | int)
             and (hybridfabric_status == 'ready')
             and (hybridfabric_ready | bool)
-            and not (hybridfabric_canary_due | bool)
           }}
 
     - name: Skip when already processed

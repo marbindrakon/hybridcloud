@@ -53,10 +53,11 @@ check-content:
 	python3 -I scripts/crd-descriptions.py lockstep
 	python3 -I scripts/check-doc-links.py
 
-# Strict server-side dry run of samples/ and the YAML in docs/ (nothing is created).
+# Strict server-side dry run of samples/, the YAML in docs/ and the translation probe's objects (nothing is created).
 # Needs KUBECONFIG (services), SAMPLES_NS (an existing tenant namespace) and optionally OC.
 check-manifests:
-	OC=$${OC:-oc} python3 -I scripts/check-manifests.py samples docs architecture/docs/tutorial/09-hybrid-networks.md
+	OC=$${OC:-oc} python3 -I scripts/check-manifests.py samples docs architecture/docs/tutorial/09-hybrid-networks.md \
+	  tests/connectivity/ipv6-translation-probe
 
 # --- be-foundations ---
 check-includes:

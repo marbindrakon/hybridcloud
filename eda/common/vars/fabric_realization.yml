@@ -33,6 +33,16 @@ fabric_realization_defaults:
     # by the gateway, and a guest connecting to a name with many addresses sends its attempts milliseconds apart:
     # every one must get its answer, or the guest waits a full retransmit
     icmp6RateLimitMs: 0
+    # announce each border gateway node's ICMPv6 source (core.icmpSource6) to the site in every VRF with IPv6: a /128
+    # route that stays out of the network's VPN, so the site returns traffic for a node's own address to that node
+    # rather than to whichever node its ECMP picks (ping and traceroute from a gateway node, ping to a node's ICMPv6
+    # source name). With it, IPv6 to the node itself from a VRF is filtered statelessly, as a host with no open port
+    # answers: ICMPv6 and TCP segments with ACK or RST pass (no connection tracking: "with ACK or RST" stands in for
+    # "established"), every other TCP segment gets a reset, UDP a port unreachable, the rest is dropped. Only with
+    # the IPv6 core and core.icmpSource6; off: nothing of it exists
+    announceIcmpSource6: false
+    # per site (CloudInfrastructure name: true or false): overrides announceIcmpSource6 for that site's gateway
+    announceIcmpSource6BySite: {}
   core:
     bridge: br-core
     loopbackPool: 10.255.0.0/24
@@ -49,12 +59,31 @@ fabric_realization_defaults:
     # inside the SRGB
     sidOffset6: 1000
     # source of the ICMPv6 errors a VRF sends (Packet Too Big, Time Exceeded, Unreachable): a /128 per namespace
-    # per node on every VRF device (network address + (node position << 16) + provider-edge index); never
-    # announced. At least a /96, clear of loopbackPool6. Empty = none
+    # per node on every VRF device (network address + (node position << 16) + provider-edge index); not
+    # announced unless gateway.announceIcmpSource6. At least a /96, clear of loopbackPool6. Empty = none
     icmpSource6: ""
   nodes:
     trunkInterface: bond1
     sshUser: root
+    # the lease fabric-config-<fabric> (coordination.k8s.io, in the fabric's namespace) that lets one job at a time
+    # change the border gateway nodes: the fabric's job, its gateways' jobs and their teardowns. A lease not renewed
+    # for durationSeconds (its holder crashed) is taken over by a job waiting for it; a job waits at most waitSeconds,
+    # which must be longer. The holder renews it before each node, before and after its long waits, and before a step
+    # that can run for minutes when less is left than that step may need. Every attempt of a node step ends after
+    # stepTimeoutSeconds, cut to what the lease has left less a 60 s margin, and a step does not start with less than
+    # 30 s of that: so a step's work, which goes on after a timeout until the job ends its SSH sessions, and a systemd
+    # job it starts (systemdJobSeconds: the longest a start, stop, restart or reload of the node's FRR or a gateway
+    # instance can take under the units' own limits, a restart's stop up to twice TimeoutSec=2m), ends before the
+    # lease does. After a step timed out the job keeps the lease and lets it run out; other failures release it at
+    # once. Each a positive whole number of seconds; the lease is refused when durationSeconds is below
+    # max(stepTimeoutSeconds, systemdJobSeconds) + 120 or waitSeconds is not longer than durationSeconds + 15. Raise
+    # them together on nodes where a single step takes minutes (an FRR reload of a very large configuration, a VPN
+    # label check over very large VPN tables).
+    configLease:
+      durationSeconds: 600
+      waitSeconds: 1200
+      stepTimeoutSeconds: 180
+      systemdJobSeconds: 360
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric
@@ -138,31 +167,6 @@ fabric_realization_defaults:
   # IPv6 subnet); the IPv6 egress filter admits the resolvers on port 53 and denies the private IPv4 ranges of
   # egress.denyDestinations inside every pref64
   translation: {}
-  # platform canaries: workloads the platform team runs on an Entity of its own, read by the platform's jobs to tell
-  # whether a service works end to end for a tenant. Generic: no canary runs by default.
-  canaries:
-    # the translation canary (samples/platform/ipv6-canary): one probe VM on every site that offers IPv6-only
-    # placements with translation. Every minute it checks its address, the resolvers, the translation prefix, an
-    # IPv4-only name and an IPv4 literal through its CLAT, a native IPv6 name, the path MTU and that a denied IPv4
-    # destination stays refused, and serves the results in Prometheus text format at http://[<address>]:<port>/metrics.
-    # The site job finds the probe's address (status.realization.ipv6Canary of the CloudInfrastructure), the fabric
-    # job reads the metrics from the site's gateway (status.realization.translation.canaries of the HybridFabric,
-    # condition IPv6Translation, Warning event IPv6TranslationCanaryFailed).
-    ipv6Translation:
-      # "<namespace>/<name>" of the platform team's IPv6-only HybridNetwork (platformPrefixes family 6, mode Platform,
-      # egress.internet true) that carries the probes; "" = no canary (no status, no condition, no event)
-      network: ""
-      # the name of the probe VM (CloudVirt: the VirtualMachineInstance) or server (CloudOSO) on every placement of
-      # that network
-      workload: ""
-      # the TCP port the probe serves its metrics on
-      port: 9464
-      # how long a site's canary may fail, be stale or be unreachable before the fabric reports it as an event (and
-      # every run while it lasts). It also paces the reads: a Ready fabric runs again to read the canary once
-      # alertMinutes (at least 15 min, an operator default) have passed since its last job ended, and a read older than
-      # three such intervals (no re-run refreshed it) is marked stale, not healthy (status.realization.translation
-      # readAt, staleAfterMinutes)
-      alertMinutes: 5
   # tenant DNS of the platform's own records
   dns:
     # reverse DNS of the platform's IPv6 space. Generic: no reverse zone, so nothing below happens.

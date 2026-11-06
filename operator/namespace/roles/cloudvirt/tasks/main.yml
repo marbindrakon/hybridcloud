@@ -37,7 +37,7 @@
         cloudvirt_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (cloudvirt_observed_generation >= cloudvirt_generation)
+            and (cloudvirt_observed_generation | int >= cloudvirt_generation | int)
             and (cloudvirt_status == 'ready')
             and (cloudvirt_ready | bool)
           }}

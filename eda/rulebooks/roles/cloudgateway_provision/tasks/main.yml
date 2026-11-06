@@ -224,6 +224,17 @@
         cg_root_pe: >-
           {{ cg_root_pe if _cg_on | bool else cg_root_pe | combine({'loopback6': '', 'loopbackIp6': '', 'sid6': 0}) }}
 
+    # each node announces its ICMPv6 source to the site (gateway.announceIcmpSource6, per site
+    # announceIcmpSource6BySite), only with the IPv6 core and core.icmpSource6; off: nothing of it is rendered
+    - name: Announce the nodes' ICMPv6 sources to the site or not
+      vars:
+        _cg_gw: "{{ fab_real.gateway | default({}, true) }}"
+        _cg_by: "{{ _cg_gw.announceIcmpSource6BySite | default({}, true) }}"
+      ansible.builtin.set_fact:
+        cg_icmp6_announce: >-
+          {{ ((_cg_by[cg_site_name] if cg_site_name in _cg_by else _cg_gw.announceIcmpSource6 | default(false)) | bool)
+             and (cg_ipv6_core | bool) and (fab_real.core.icmpSource6 | default('', true) | length > 0) }}
+
     # the networks placed at this site: every NetworkPlacement that names this gateway (status.cloudGateway) and
     # holds its numbers (status.realization), unless its teardown released the gateway; the gateway carries one
     # VRF per placement and is the only writer of the instance's configuration
@@ -339,7 +350,11 @@
       vars:
         fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}"}
 
+    # every step on a node runs within the lease (common/vars/fabric_lease.yml): a block keyword, evaluated again for
+    # each step; the includes and the lease tasks set their own timeout, so the renewals, the SSH cleanup and the
+    # release run even when the lease is short
     - name: Configure the gateway on the nodes, one at a time
+      timeout: "{{ fab_lease_step_timeout }}"
       block:
         - name: Connect to the border gateway nodes
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
@@ -347,8 +362,10 @@
             bgw_fabric_spec: "{{ cg_fabric.spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
+        # node_gateway.yml renews the lease before each node, around the wait for the core and before its long steps
         - name: Configure the gateway instance on each node
           ansible.builtin.include_tasks: node_gateway.yml
+          timeout: 0
           loop: "{{ cg_fabric.spec.borderGateway.nodes }}"
           loop_control:
             loop_var: bgw_node
@@ -356,11 +373,19 @@
       always:
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+          timeout: 0
 
         - name: Release the lease
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+          timeout: 0
           vars:
             fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}"}
+      # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the always block
+      # skips the release; any other failure releases it at once
+      rescue:
+        - name: Keep the lease while a step may still run on a node
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
+          timeout: 0
 
     - name: Give the platform-run edge the nodes' keys and the site key (aws)
       ansible.builtin.include_tasks: site_aws_post.yml
@@ -394,6 +419,7 @@
                                                    'loopback6': cg_pe.loopbackIp6 | default(''),
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name,
+                                                   'icmpSource6Announced': cg_icmp6_announce | default(false) | bool,
                                                    'vrfs': cg_vrfs | map('dict2items')
                                                            | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6', 'covering6'])
                                                            | map('items2dict') | list}

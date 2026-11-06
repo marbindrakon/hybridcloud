@@ -139,6 +139,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -356,6 +378,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -670,6 +714,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -1081,6 +1147,11 @@ spec:
                   description: True when the platform finished creating or updating this object.
                   type: boolean
                 realized:
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
                   type: boolean
                 waitingFor:
                   type: array
@@ -1128,6 +1199,28 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -1382,6 +1475,35 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                realized:
+                  type: boolean
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -1828,6 +1950,35 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                realized:
+                  type: boolean
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -2077,6 +2228,35 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                realized:
+                  type: boolean
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -2532,6 +2712,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -2864,6 +3066,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -3266,6 +3490,35 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                realized:
+                  type: boolean
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -3507,6 +3760,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -3924,6 +4199,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -4303,6 +4600,35 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                realized:
+                  type: boolean
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -4713,6 +5039,25 @@ spec:
                         While the network waits for a block that was released recently: when that block can be
                         assigned again (RFC 3339). Released blocks are held back for a while before another network
                         gets them.
+                    providerPrefixes:
+                      type: array
+                      description: >-
+                        The IPv6 subnets cloud providers assigned to the network's placements (placements with IPv6
+                        source Provider), one entry per subnet as the placement reports it in status.subnets.
+                        Read-only: they are not part of the network's address space and the platform never allocates
+                        from them. Absent when no placement has one.
+                      items:
+                        type: object
+                        properties:
+                          prefix:
+                            type: string
+                            description: The subnet.
+                          placement:
+                            type: string
+                            description: The NetworkPlacement that holds it.
+                          site:
+                            type: string
+                            description: The site (CloudInfrastructure) of the placement's environment.
                 mtu:
                   type: integer
                   description: Effective MTU.
@@ -4803,6 +5148,35 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                realized:
+                  type: boolean
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -5004,6 +5378,22 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
                 delivery:
                   type: object
                   description: >-
@@ -5465,6 +5855,35 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                realized:
+                  type: boolean
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -5743,8 +6162,9 @@ spec:
                 phase:
                   type: string
                   description: >-
-                    Lifecycle phase, written by the platform: Waiting, Creating, Updating, Ready,
-                    Degraded, Failed or Deleting. The steps of the migration are in status.phases.
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
                 phases:
                   type: array
                   description: Steps of the migration, with timestamps.
@@ -5819,6 +6239,22 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -6040,6 +6476,28 @@ spec:
                         description: Result of the run.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -6517,6 +6975,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -6802,6 +7282,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -7058,6 +7560,11 @@ spec:
                   description: True when the platform finished creating or updating this object.
                   type: boolean
                 realized:
+                  description: >-
+                    True from the first time the platform finished realizing this object, until a
+                    later run fails (then false). A run that waits for something else leaves it as
+                    it was. Objects that depend on this one keep treating it as usable while it
+                    re-runs or waits.
                   type: boolean
                 waitingFor:
                   type: array
@@ -7105,6 +7612,28 @@ spec:
                         type: string
                         enum: [running, waiting, success, failed]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -7334,6 +7863,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -7552,6 +8103,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -7802,6 +8375,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -8013,6 +8608,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -8291,6 +8908,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -8775,6 +9414,28 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -8995,6 +9656,22 @@ spec:
                         type: string
                         enum: [running, success, failed, waiting]
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
                 delivery:
                   type: object
                   description: >-
@@ -9215,6 +9892,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
@@ -9477,6 +10176,28 @@ spec:
                         description: When the run was recorded.
                         type: string
                     x-kubernetes-preserve-unknown-fields: true
+                phase:
+                  type: string
+                  description: >-
+                    State of the object, written by the platform: Waiting (for something else),
+                    Creating, Updating, Ready, Degraded (usable, with reduced health), Paused (the
+                    site is paused), Failed or Deleting.
+                phaseSince:
+                  type: string
+                  description: >-
+                    When the object entered the state in status.phase (RFC 3339). It changes only
+                    when the state changes.
+                summary:
+                  type: string
+                  description: >-
+                    One line on what the platform is doing or waiting for, in plain words. Read it
+                    together with status.phase.
+                lastHandledReconcileRequest:
+                  type: string
+                  description: >-
+                    The Retry now request the platform last handled: the value of the
+                    ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-

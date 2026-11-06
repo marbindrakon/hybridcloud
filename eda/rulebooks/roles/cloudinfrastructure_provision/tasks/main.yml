@@ -13,8 +13,6 @@
 #   type external  : nothing to probe (the platform doesn't manage the site); capabilities.evpn = spec.external.evpn.
 #   every type     : capabilities.ipv6* (ipv6_capabilities.yml) = the probe ANDed with the realization's placement
 #                    switches; false until the platform realizes IPv6 on the site.
-#   openshift, openstack: status.realization.ipv6Canary (ipv6_canary.yml) = the address of the platform's translation
-#                    canary probe on this site, when the realization names a canary network.
 #   openshift      : status.realization.tenantDns + condition TenantDns (tenant_dns_health.yml) = the health the
 #                    site's tenant DNS controller reports in its ConfigMap tenant-dns-status.
 - block:
@@ -51,6 +49,29 @@
         ci_capabilities_out: {evpn: false, api: false}
         ci_site_out: {}
         ci_notes: []
+
+    # status.realization.ipv6Canary is no longer written: a record an earlier release left there is removed (the
+    # status keeps unknown fields), also on a paused site (a status write only, nothing on the site). A partial write
+    # while the record is there, none once it is gone; never fails the job
+    - name: Remove the retired probe record from the site's status
+      vars:
+        _ci_real: >-
+          {{ (cloudinfrastructure_cr_lookup.resources[0].status | default({}, true)).realization | default({}, true) }}
+      hybridsovereign.shc.cr_status:
+        host: "{{ services_api_host | trim }}"
+        api_key: "{{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        api_version: hybridsovereign.redhat/v1alpha1
+        plural: cloudinfrastructures
+        name: "{{ cloudinfrastructure_cr_name }}"
+        namespace: "{{ cloudinfrastructure_cr_namespace }}"
+        status: "{{ {'realization': {'ipv6Canary': none}} }}"
+        action: reconcile
+        partial: true
+        ignore_not_found: true
+      register: _ci_retired_write
+      failed_when: false
+      when: _ci_real is mapping and 'ipv6Canary' in _ci_real
 
     # spec.paused: no probe, no realization, no wake of dependants; the record says so and the job ends here.
     # Capabilities and site facts keep their last values (it is still the same site); dependants hold through
@@ -202,12 +223,6 @@
     - name: Refresh the VirtualMachine lists of the environments on this site
       ansible.builtin.include_tasks: cloudvirt_vms.yml
       when: ci_cr_type == 'openshift'
-
-    # the translation canary (realization canaries.ipv6Translation): where the platform's probe answers on this site,
-    # for the fabric job (status.realization.ipv6Canary, a partial write); never fails the job
-    - name: Find the translation canary's probe on this site
-      ansible.builtin.include_tasks: ipv6_canary.yml
-      when: ci_cr_type in ['openshift', 'openstack']
 
     # the tenant DNS controller's health (ConfigMap tenant-dns-status): status.realization.tenantDns and the
     # TenantDns condition (a partial write); never fails the job

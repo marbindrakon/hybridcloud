@@ -2,7 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.4): HybridFabric teardown. The operator's finalizer waited for the fabric's
 # CloudGateways and HybridNetworks. Under the configuration lease, one node at a time: the root instance comes off
 # (FRR stopped and disabled, the core bridge and loopback removed). The ledger ConfigMap goes with the HybridFabric
-# (owner reference); the lease is deleted here.
+# (owner reference); the lease is deleted here, and only while this job still holds it (a job that took it over keeps
+# it until it is done).
 - block:
     - name: Read the HybridFabric
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -21,7 +22,10 @@
       vars:
         fab_ledger: {action: lease-acquire, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hft_holder }}"}
 
+    # every step on a node runs within the lease (common/vars/fabric_lease.yml): a block keyword, evaluated again for
+    # each step; the includes set their own timeout, so the renewals and the SSH cleanup run even when it is short
     - name: Remove the root instance, one node at a time
+      timeout: "{{ fab_lease_step_timeout }}"
       block:
         - name: Connect to the border gateway nodes
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
@@ -29,8 +33,10 @@
             bgw_fabric_spec: "{{ fab_spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
 
+        # node_root_down.yml renews the lease before each node
         - name: Remove the root instance from each node
           ansible.builtin.include_tasks: node_root_down.yml
+          timeout: 0
           loop: "{{ fab_spec.borderGateway.nodes }}"
           loop_control:
             loop_var: bgw_node
@@ -38,17 +44,13 @@
       always:
         - name: Remove the SSH key
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+          timeout: 0
 
     - name: Delete the configuration lease
-      kubernetes.core.k8s:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: coordination.k8s.io/v1
-        kind: Lease
-        name: "fabric-config-{{ fab_name }}"
-        namespace: "{{ fab_namespace }}"
-        state: absent
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: lease-release, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hft_holder }}",
+                     delete: true}
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -72,6 +74,14 @@
         we_namespace: "{{ fab_namespace }}"
 
   rescue:
+    # a node step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml sets fab_lease_keep;
+    # the release below is then skipped, and the message says until when); any other failure releases it here at once
+    - name: Keep the lease while a step may still run on a node
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
+      vars:
+        fab_lease_keep_raise: false
+      when: fab_lease is defined
+
     - name: Release the lease
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
       vars:
@@ -91,7 +101,7 @@
           status: failed
           reason: TeardownFailed
           ready: false
-          message: "{{ ansible_failed_result.msg | default('HybridFabric teardown failed') }}"
+          message: "{{ fab_lease_keep_msg | default(ansible_failed_result.msg | default('HybridFabric teardown failed'), true) }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
       when: fab_name is defined and services_api_host is defined
       ignore_errors: true

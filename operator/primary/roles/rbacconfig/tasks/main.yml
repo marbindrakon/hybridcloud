@@ -37,7 +37,7 @@
         rbac_config_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (rbac_config_observed_generation >= rbac_config_generation)
+            and (rbac_config_observed_generation | int >= rbac_config_generation | int)
             and (rbac_config_status == 'ready')
             and (rbac_config_ready | bool)
           }}

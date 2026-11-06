@@ -1,6 +1,15 @@
 ---
 # shc (design/P7-PLAN.md P7.3.4): remove the border gateway root instance from one node (delegated, become).
-# The fabric's delete waited for its gateways and networks, so nothing else uses the core here.
+# The fabric's delete waited for its gateways and networks, so nothing else uses the core here. Runs under the lease
+# fabric-config-<fabric>, renewed here before the node (realization nodes.configLease); a renewal that finds the lease
+# lost fails the job before the node.
+- name: "{{ bgw_node.name }}: renew the border gateway configuration lease"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ fab_name }}", holder: "{{ hft_holder }}",
+                 step: "removing the root instance from {{ bgw_node.name }}"}
+  timeout: 0
+
 - name: "{{ bgw_node.name }}: stop FRR and keep it off at boot"
   ansible.builtin.systemd:
     name: frr
@@ -49,5 +58,5 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
-  loop: [/etc/shc-fabric/root.json, /etc/modules-load.d/shc-fabric.conf]
+  loop: [/etc/shc-fabric/root.json, /etc/shc-fabric/root.frr-loaded, /etc/modules-load.d/shc-fabric.conf]
   delegate_to: "{{ bgw_node.name }}"

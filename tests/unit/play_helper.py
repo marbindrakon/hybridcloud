@@ -75,3 +75,16 @@ def run_play(tasks, extra_vars, files=None):
             return json.load(f)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_cases(steps, cases, result_expr, extra_vars=None, files=None):
+    """Run the same steps once per case, in one ansible-playbook run, and return the list of result_expr values.
+
+    Each case (any JSON value) is {{ case }} in the steps; result_expr is a Jinja expression evaluated after them.
+    """
+    each = list(steps) + [{"ansible.builtin.set_fact": {
+        "_case_results": "{{ _case_results | default([]) + [ %s ] }}" % result_expr}}]
+    main = [{"ansible.builtin.include_tasks": "case_steps.yml", "loop": "{{ cases }}",
+             "loop_control": {"loop_var": "case"}},
+            write_out("_case_results | default([])")]
+    return run_play(main, dict(extra_vars or {}, cases=cases), files=dict(files or {}, **{"case_steps.yml": each}))

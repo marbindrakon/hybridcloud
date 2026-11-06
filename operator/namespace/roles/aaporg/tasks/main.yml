@@ -73,7 +73,7 @@
         aaporg_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (aaporg_observed_generation >= aaporg_generation)
+            and (aaporg_observed_generation | int >= aaporg_generation | int)
             and (aaporg_status == 'ready')
             and (aaporg_ready | bool)
           }}

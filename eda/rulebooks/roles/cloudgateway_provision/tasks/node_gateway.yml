@@ -2,6 +2,17 @@
 # shc (design/P7-PLAN.md P7.3.5): the gateway instance on one border gateway node (delegated over SSH, become).
 # Inputs: bgw_node, cg_instance (apply config), cg_pe, cg_root_pe, cg_fabric, fab_spec, cg_bgp_password.
 # Appends the node's state to cg_node_results (and its name to cg_changed_nodes when anything changed).
+# Runs under the fabric's lease fabric-config-<fabric>, renewed here before the node and before and after the wait for
+# the core (realization nodes.configLease), and before the apply and the instance's start and reload when less is left
+# than they may need (fabric_lease_ensure.yml); a renewal that finds the lease lost fails the job before the next
+# step. The renewals set their own timeout: the node loop's step limit (common/vars/fabric_lease.yml) never stops them.
+- name: "{{ bgw_node.name }}: renew the border gateway configuration lease"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
+                 step: "the gateway instance on {{ bgw_node.name }}"}
+  timeout: 0
+
 - name: "{{ bgw_node.name }}: the gateway's site address"
   ansible.builtin.set_fact:
     cg_node_addr: "{{ (fab_spec.siteUnderlay.addresses | selectattr('node', 'equalto', bgw_node.name) | first).address }}"
@@ -66,6 +77,26 @@
     - fab_real.core.icmpSource6 | default('', true) | length > 0
     - fab_check_result.icmp6 | default('', true) | length > 0
 
+# with the announcement on (cg_icmp6_announce, main.yml) the node announces its own ICMPv6 source to the site in every
+# IPv6 VRF (frr-gateway.conf.j2) and the apply loads the input filter of the VRFs (icmp6Announced) before FRR takes it
+- name: "{{ bgw_node.name }}: the ICMPv6 source this node announces to the site"
+  ansible.builtin.set_fact:
+    cg_node_icmp6_announce: >-
+      {{ (fab_check_result.icmp6 | default('', true)) if cg_icmp6_announce | default(false) | bool else '' }}
+
+# turning it off: the filter stays (icmp6Announced kept) until the instance's running configuration announces no
+# ICMPv6 source any more, then goes (after the VPN label check below); a run that stops in between keeps the filter
+- name: "{{ bgw_node.name }}: is the VRFs' input filter loaded"
+  ansible.builtin.stat:
+    path: "/etc/shc-fabric/gw-{{ fab_name }}.in6"
+  register: _cg_in6_marker
+  when: cg_node_icmp6_announce | default('', true) | length == 0
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: keep the filter until the announcement is withdrawn"
+  ansible.builtin.set_fact:
+    cg_node_in6_keep: "{{ ((_cg_in6_marker | default({})).stat | default({})).exists | default(false) | bool }}"
+
 # the core's IPv6 keys are empty strings on an IPv4-only core and until the fabric offers the IPv6 core;
 # loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges
 - name: "{{ bgw_node.name }}: gateway instance config"
@@ -81,15 +112,26 @@
                                 'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
                                 'icmpSource6': fab_real.core.icmpSource6 | default('', true),
                                 'icmp6RateLimitMs': ('' if (fab_real.gateway | default({}, true)).icmp6RateLimitMs | default(none) is none
-                                                     else (fab_real.gateway.icmp6RateLimitMs | string))}) | to_nice_json }}
+                                                     else (fab_real.gateway.icmp6RateLimitMs | string))})
+         | combine({'icmp6Announced': true} if (cg_node_icmp6_announce | default('', true) | length > 0
+                                               or cg_node_in6_keep | default(false) | bool) else {})
+         | to_nice_json }}
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_conf
 
+- name: "{{ bgw_node.name }}: the lease lasts for the apply"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+  vars:
+    fab_lease_step: "the apply on {{ bgw_node.name }}"
+  timeout: 0
+
 # an IPv6 step that fails leaves IPv6 out and the IPv4 side as always (exit 0, so a boot keeps the gateway), and
-# prints the marker the job fails on
+# prints the marker the job fails on. The apply runs under a limit on the node 15 s below the step's own: past it,
+# timeout ends the apply and what it started (rc 124), an ordinary failure on a quiet node
 - name: "{{ bgw_node.name }}: apply the gateway instance (namespace, site leg, core leg)"
-  ansible.builtin.command: "/usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up"
+  ansible.builtin.command: >-
+    timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} /usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up
   register: _cg_apply
   changed_when: "'changed=yes' in _cg_apply.stdout"
   failed_when: _cg_apply.rc != 0 or 'IPv6 core not applied' in _cg_apply.stdout
@@ -126,6 +168,22 @@
     mode: "0640"
   delegate_to: "{{ bgw_node.name }}"
 
+# The instance runs what its last start or reload loaded from frr.conf.shc. A job that wrote the file and stopped
+# before the reload (it failed, crashed, timed out or lost the lease) leaves a file the next job finds unchanged, so
+# the reload is also due while the file differs from what was last loaded: its digest, recorded in
+# /etc/shc-fabric/gw-<gateway>.frr-loaded after the instance took it (frr.conf itself is FRR's own copy). An instance
+# without that record (the first run with it) records the file as it is, before this run writes it: the assumption
+# every run made before, so the upgrade alone reloads nothing
+- name: "{{ bgw_node.name }}: what the instance last loaded (without the record: the file as it is)"
+  ansible.builtin.shell: |
+    f=/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded
+    [ -s "$f" ] && exit 0
+    cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1 > "$f.new" && mv "$f.new" "$f"
+    echo recorded
+  register: _cg_frr_seen
+  changed_when: "'recorded' in _cg_frr_seen.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
 # the file holds the BGP session password: never shown. The desired configuration (frr.conf.shc): FRR rewrites its
 # frr.conf after every reload, so comparing against that would always see a change
 - name: "{{ bgw_node.name }}: FRR configuration"
@@ -139,12 +197,27 @@
   register: _cg_frrconf
   no_log: true
 
+- name: "{{ bgw_node.name }}: is a reload due (the file differs from what the instance last loaded)"
+  ansible.builtin.shell: |
+    now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
+    was=$(cat /etc/shc-fabric/gw-{{ fab_name }}.frr-loaded 2>/dev/null)
+    if [ "$now" = "$was" ]; then echo reload=no; else echo reload=due; fi
+  register: _cg_frr_due
+  changed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: is the gateway instance running"
   ansible.builtin.command: "systemctl is-active shc-gw@{{ fab_name }}"
   register: _cg_active
   changed_when: false
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: the lease lasts for the instance's start"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+  vars:
+    fab_lease_step: "the instance's start on {{ bgw_node.name }}"
+  timeout: 0
 
 - name: "{{ bgw_node.name }}: start the gateway instance (enabled at boot)"
   ansible.builtin.systemd:
@@ -157,6 +230,12 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_state
 
+- name: "{{ bgw_node.name }}: the lease lasts for the FRR reload"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+  vars:
+    fab_lease_step: "the FRR reload on {{ bgw_node.name }}"
+  timeout: 0
+
 # one retry: some changes take two passes (FRR 8.5 refuses `bgp graceful-restart` -> `bgp graceful-restart-disable` in
 # one reload, "not valid at this moment", yet ends in the new state; the second reload has nothing left to change)
 - name: "{{ bgw_node.name }}: reload the FRR configuration"
@@ -166,12 +245,44 @@
   when:
     - _cg_active.stdout == 'active'
     - _cg_daemons is not changed and not (_cg_unit_changed | bool)
-    - _cg_frrconf is changed
+    - _cg_frrconf is changed or 'reload=due' in _cg_frr_due.stdout
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_reload
   retries: 1
   delay: 5
   until: _cg_reload is succeeded
+
+# the instance runs the file when this job found it active and the reload (when one was due) succeeded, or when this
+# job started or restarted it; a step above that failed ended the job before this. An instance that was starting or
+# reloading on its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read an
+# older file, so then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload
+# due. A reload only the record made due changed the node too: it counts as a configuration change (_cg_frrconf)
+- name: "{{ bgw_node.name }}: record what the instance loaded"
+  ansible.builtin.shell: |
+    f=/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded
+    u=shc-gw@{{ fab_name }}.service
+    state=$(systemctl is-active "$u"); job=$(systemctl show -p Job --value "$u")
+    if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: $u $state${job:+, job $job}"; exit 0; fi
+    now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    echo "$now" > "$f.new" && mv "$f.new" "$f"
+    echo recorded
+  register: _cg_frr_recorded
+  changed_when: _cg_frr_recorded.stdout == 'recorded'
+  when: _cg_active.stdout == 'active' or (_cg_active.stdout in ['inactive', 'failed'] and _cg_state is changed)
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: a reload the record made due changed the node"
+  ansible.builtin.set_fact:
+    _cg_frrconf: "{{ _cg_frrconf | combine({'changed': true}) }}"
+  when: _cg_reload is changed and _cg_frrconf is not changed
+
+- name: "{{ bgw_node.name }}: renew the lease before the wait for the core"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
+                 step: "the wait for the core on {{ bgw_node.name }}"}
+  timeout: 0
 
 # the core side must come up: IS-IS adjacency with the root and the VPNv4 session to the route reflector; with the
 # IPv6 core (cg_pe.loopback6) also IPv6 forwarding in the namespace, VPNv6 negotiated with the route reflector and its
@@ -241,6 +352,13 @@
   until: _cg_verify.rc == 0
   changed_when: false
   delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: renew the lease after the wait for the core"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
+                 step: "the VPN label check on {{ bgw_node.name }}"}
+  timeout: 0
 
 # FRR 8.5: a VRF deleted and created again under the same name (a placement's VNI used again) can keep zebra's old binding of
 # its VPN label: bgpd exports the label, but zebra never installs it into the kernel, so traffic from the core for the
@@ -419,6 +537,80 @@
   changed_when: _cg_labels.stdout is search('rebound=.')
   delegate_to: "{{ bgw_node.name }}"
 
+# the announcement turned off (cg_node_in6_keep): the instance must no longer announce an ICMPv6 source (a reload
+# first when its running configuration still holds one, e.g. after a run that stopped before its reload); only then
+# does the apply configuration lose icmp6Announced and the apply remove the filter. Any step failing keeps the filter
+- name: "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn"
+  when: cg_node_in6_keep | default(false) | bool
+  block:
+    - name: "{{ bgw_node.name }}: does the instance still announce an ICMPv6 source"
+      ansible.builtin.shell: &cg_in6_announced |
+        set -o pipefail
+        c=$(vtysh -N gw-{{ fab_name }} -c 'show running-config') || { echo "the instance's configuration is unreadable" >&2; exit 1; }
+        if printf '%s\n' "$c" | grep -qE '^ +network [0-9A-Fa-f:]+/128 route-map GW-LOCAL$'; then echo announced=yes; else echo announced=no; fi
+      args:
+        executable: /bin/bash
+      register: _cg_in6_ann
+      changed_when: false
+      delegate_to: "{{ bgw_node.name }}"
+
+    - name: "{{ bgw_node.name }}: the lease lasts for the FRR reload (it still announces)"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+      vars:
+        fab_lease_step: "the FRR reload on {{ bgw_node.name }}"
+      when: "'announced=yes' in _cg_in6_ann.stdout"
+      timeout: 0
+
+    - name: "{{ bgw_node.name }}: reload the FRR configuration (it still announces)"
+      ansible.builtin.systemd:
+        name: "shc-gw@{{ fab_name }}.service"
+        state: reloaded
+      when: "'announced=yes' in _cg_in6_ann.stdout"
+      delegate_to: "{{ bgw_node.name }}"
+
+    - name: "{{ bgw_node.name }}: the instance announces no ICMPv6 source"
+      ansible.builtin.shell: *cg_in6_announced
+      args:
+        executable: /bin/bash
+      register: _cg_in6_gone
+      changed_when: false
+      failed_when: _cg_in6_gone.rc != 0 or 'announced=no' not in _cg_in6_gone.stdout
+      retries: 3
+      delay: 5
+      until: _cg_in6_gone is succeeded
+      delegate_to: "{{ bgw_node.name }}"
+
+    - name: "{{ bgw_node.name }}: the apply configuration as it was written"
+      ansible.builtin.slurp:
+        src: "/etc/shc-fabric/gw-{{ fab_name }}.json"
+      register: _cg_conf_now
+      delegate_to: "{{ bgw_node.name }}"
+
+    # the same bytes the configuration task writes without the key
+    - name: "{{ bgw_node.name }}: gateway instance config without the filter"
+      ansible.builtin.copy:
+        dest: "/etc/shc-fabric/gw-{{ fab_name }}.json"
+        content: >
+          {{ _cg_conf_now.content | b64decode | from_json | dict2items | rejectattr('key', 'equalto', 'icmp6Announced')
+             | items2dict | to_nice_json }}
+        mode: "0644"
+      delegate_to: "{{ bgw_node.name }}"
+
+    - name: "{{ bgw_node.name }}: the lease lasts for the apply without the filter"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
+      vars:
+        fab_lease_step: "the apply on {{ bgw_node.name }}"
+      timeout: 0
+
+    # under the same limit on the node as the first apply (15 s below the step's own)
+    - name: "{{ bgw_node.name }}: apply the gateway instance without the filter"
+      ansible.builtin.command: >-
+        timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} /usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up
+      register: _cg_in6_off
+      changed_when: "'changed=yes' in _cg_in6_off.stdout"
+      failed_when: _cg_in6_off.rc != 0 or 'IPv6 core not applied' in _cg_in6_off.stdout
+      delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: read the gateway's sessions"
   ansible.builtin.shell: |
     vtysh -N gw-{{ fab_name }} -c 'show bgp l2vpn evpn summary json' 2>/dev/null | python3 -c '
@@ -504,5 +696,6 @@
     cg_wg_nodes: >-
       {{ (cg_wg_nodes | default([])) + ([_tun | combine({'name': bgw_node.name})] if _tun | length > 0 else []) }}
     cg_changed_nodes: >-
-      {{ cg_changed_nodes + ([bgw_node.name] if [_cg_files, _cg_conf, _cg_apply, _cg_daemons, _cg_frrconf, _cg_state]
+      {{ cg_changed_nodes + ([bgw_node.name] if [_cg_files, _cg_conf, _cg_apply, _cg_daemons, _cg_frrconf, _cg_state,
+                                                 _cg_in6_off | default({})]
          | select('changed') | list | length > 0 else []) }}

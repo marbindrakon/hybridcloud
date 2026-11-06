@@ -23,7 +23,7 @@
         cloudgcp_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (cloudgcp_observed_generation >= cloudgcp_generation)
+            and (cloudgcp_observed_generation | int >= cloudgcp_generation | int)
             and (cloudgcp_status == 'ready')
             and (cloudgcp_ready | bool)
           }}

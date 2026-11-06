@@ -75,6 +75,25 @@ export function networkIpv6Mode(n: HybridNetwork | undefined | null): { mode: Ip
   return { mode: deriveIpv6Mode(n?.spec), reported: false };
 }
 
+/**
+ * The IPv6 subnets cloud providers assigned to the network's placements (status.ipv6.providerPrefixes), in the
+ * platform's order. Read-only: not part of the address space, nothing is allocated from them.
+ */
+export function networkProviderPrefixes(
+  n: HybridNetwork | undefined | null,
+): Array<{ prefix: string; placement?: string; site?: string }> {
+  const rows: unknown = n?.status?.ipv6?.providerPrefixes;
+  if (!Array.isArray(rows)) return [];
+  const text = (v: unknown): string => (typeof v === 'string' ? v : '');
+  return rows
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object' && text((r as { prefix?: unknown }).prefix) !== '')
+    .map((r) => ({
+      prefix: text(r.prefix),
+      ...(text(r.placement) ? { placement: text(r.placement) } : {}),
+      ...(text(r.site) ? { site: text(r.site) } : {}),
+    }));
+}
+
 /** Whether the network has IPv4 address space (its own prefixes, or held space in status). */
 export function networkHasIpv4(n: HybridNetwork | undefined | null): boolean {
   const held = (n?.status?.addressSpace ?? []).some((a) => Number(a.family) === 4);
@@ -503,25 +522,59 @@ export function ipv6ReasonText(
 /* ------------------------------------------------------------------ cloud-init */
 
 export interface CloudInitSnippet {
-  /** cloud-init network configuration, version 2 (the NoCloud / config drive networkData) */
-  networkData: string;
   /**
-   * cloud-config user data: keep the guest on the reported resolvers (any but the provider's path) and, for an
-   * IPv6-only placement with translation, a CLAT; null when neither applies
+   * Whether the tenant gives the VM its network configuration: on OpenShift Virtualization, the networkData of the
+   * VM's NoCloud or config drive volume. Elsewhere the cloud provides it (OpenStack: the config drive the compute
+   * service builds; AWS and Google Cloud: the instance metadata) and only the user data applies.
+   */
+  tenantNetworkData: boolean;
+  /** The MAC address the network data matches, lowercase; null when none was given or it is not a unicast address */
+  macAddress: string | null;
+  /** The VM's interface on the pod network with that MAC address (the VM's domain.devices.interfaces); null without */
+  vmInterface: string | null;
+  /**
+   * cloud-init network configuration, version 2, matching the VM's NIC by its MAC address (every renderer binds by
+   * MAC; a name match is ignored by the NetworkManager, sysconfig and networkd renderers); null without a MAC address
+   * or where the tenant does not give network data
+   */
+  networkData: string | null;
+  /**
+   * cloud-config user data: keep the guest on the network data's resolvers (where the snippet gives network data and
+   * the platform reports resolvers of its own) and, for an IPv6-only placement with translation, a CLAT; null when
+   * neither applies
    */
   userData: string | null;
   /** whether userData configures a CLAT */
   clat: boolean;
-  /** whether userData keeps the guest on the reported resolvers (ignoring those handed out by DHCP) */
+  /** whether userData keeps the guest on the network data's resolvers (ignoring those handed out by DHCP) */
   ignoreAutoDns: boolean;
+  /**
+   * The VM's cloud-init volume (spec.template.spec.volumes) where the tenant gives the network data: the network data
+   * inline, the user data from `userDataSecret` (KubeVirt refuses inline cloud-init data over
+   * CLOUD_INIT_INLINE_MAX_BYTES; the user data with the resolver step is larger, so it always goes in the Secret);
+   * null elsewhere or when there is neither
+   */
+  vmVolume: string | null;
+  /** A Secret manifest (stringData) with the user data under `userdata`, which `vmVolume` references; null without */
+  userDataSecret: string | null;
+  /** The Secret's name; null without a Secret */
+  secretName: string | null;
+  /** whether the network data is in the Secret too (key `networkdata`), being over KubeVirt's inline limit */
+  networkDataInSecret: boolean;
 }
+
+/** KubeVirt's limit on cloud-init user data and network data given inline in a VM, in bytes (decoded for base64). */
+export const CLOUD_INIT_INLINE_MAX_BYTES = 2048;
+
+/** The cloud-init volume's name: what OpenShift Virtualization templates call it. */
+const CLOUD_INIT_VOLUME = 'cloudinitdisk';
 
 /**
  * The guest script of the user data: on the NIC with the IPv6 default route, ignore the resolvers the network hands
  * out (DHCP, router advertisements) and keep those of the network data, for the families given ("ipv6", or "ipv6
  * ipv4" on an IPv6-only placement). NetworkManager or systemd-networkd; a connection without resolvers of its own is
- * left alone. The translation canary sample (samples/platform/ipv6-canary/probe-user-data.yaml) ships the same
- * script with "ipv6 ipv4".
+ * left alone. The IPv6 translation probe (tests/connectivity/ipv6-translation-probe/probe-user-data.yaml) ships the
+ * same script with "ipv6 ipv4".
  */
 export function ignoreAutoDnsScript(families: string): string {
   return String.raw`#!/bin/bash
@@ -585,48 +638,121 @@ const IGNORE_AUTO_DNS_UNIT = [
   '',
 ].join('\n');
 
-/** A file's content as a literal block of a write_files entry (six spaces deep, blank lines left empty). */
-function contentBlock(text: string): string[] {
+/** A text as the lines of a literal block `depth` spaces deep (blank lines left empty). */
+function indentedBlock(text: string, depth: number): string[] {
+  const pad = ' '.repeat(depth);
   return text
     .replace(/\n$/, '')
     .split('\n')
-    .map((l) => (l ? `      ${l}` : ''));
+    .map((l) => (l ? `${pad}${l}` : ''));
+}
+
+/** A file's content as a literal block of a write_files entry (six spaces deep, blank lines left empty). */
+function contentBlock(text: string): string[] {
+  return indentedBlock(text, 6);
+}
+
+/** Size in bytes as KubeVirt counts it (UTF-8). */
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** The Secret's name for a placement: one Secret serves every VM on the placement (the user data is the same). */
+function cloudInitSecretName(p: NetworkPlacement | undefined | null): string {
+  const base = String(p?.metadata?.name ?? '').slice(0, 253 - '-cloud-init'.length).replace(/[-.]+$/, '');
+  return base ? `${base}-cloud-init` : 'cloud-init';
+}
+
+/** Environment types whose cloud provides the guest's network configuration: the tenant gives only user data. */
+const CLOUD_NETWORK_CONFIG = new Set(['CloudOSO', 'CloudAWS', 'CloudGCP']);
+
+/**
+ * A MAC address as cloud-init and the VM spec take it (six colon-separated pairs, lowercase as netplan requires),
+ * from the tenant's text (colons or hyphens, any case); null unless it is a unicast address other than all zeros.
+ */
+export function normalizeMacAddress(text: string | undefined | null): string | null {
+  const m = String(text ?? '')
+    .trim()
+    .toLowerCase()
+    .match(/^([0-9a-f]{2})([:-])([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})$/);
+  if (!m) return null;
+  const octets = [m[1], m[3], m[4], m[5], m[6], m[7]];
+  if (parseInt(octets[0], 16) & 1) return null; // a group address
+  if (octets.every((o) => o === '00')) return null;
+  return octets.join(':');
+}
+
+/**
+ * A locally administered unicast MAC address for a new VM: 02 and five random octets. Two VMs with the same address on
+ * one network break each other, so the page proposes a new one each time. `randomOctets` is for tests.
+ */
+export function proposeMacAddress(randomOctets?: (n: number) => ArrayLike<number>): string {
+  const octets =
+    randomOctets?.(5) ??
+    (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+      ? crypto.getRandomValues(new Uint8Array(5))
+      : Uint8Array.from({ length: 5 }, () => Math.floor(Math.random() * 256)));
+  return ['02', ...Array.from(octets, (o) => (o & 255).toString(16).padStart(2, '0'))].join(':');
 }
 
 /**
  * Guest network configuration for a VM on the placement's subnet, built from status only: DHCPv4 when the
  * placement has IPv4, DHCPv6 and router advertisements for IPv6, the resolvers the platform reports. With
- * the platform's resolvers, user data makes the guest ignore resolvers handed out by DHCP (they need not translate:
- * on an OpenShift Virtualization site DHCPv6 hands out the cluster's DNS service, without DNS64); for an
- * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix. Null when
- * the placement has no IPv6 subnet yet.
+ * the platform's resolvers in the network data, user data makes the guest ignore resolvers handed out by DHCP (they
+ * need not translate: on an OpenShift Virtualization site DHCPv6 hands out the cluster's DNS service, without
+ * DNS64); for an
+ * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix.
+ *
+ * The network data matches the VM's NIC by `macAddress`, the address the VM's interface is given (the guest's own
+ * name for the NIC differs between images: eth0, enp1s0, ...); without a valid one there is no network data. It is
+ * built only where the tenant gives the VM its network configuration (OpenShift Virtualization; also when the
+ * environment type is unknown). On OpenStack, AWS and Google Cloud the cloud provides it and only the user data
+ * applies, so there is no snippet at all when there is no user data. Null when the placement has no IPv6 subnet yet.
  */
-export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: { interfaceName?: string } = {}): CloudInitSnippet | null {
+export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: { macAddress?: string } = {}): CloudInitSnippet | null {
   const v6 = placementSubnet(p, 6);
   if (!v6?.prefix) return null;
   const v4 = placementSubnet(p, 4);
-  const nic = opts.interfaceName || 'eth0';
+  const tenantNetworkData = !CLOUD_NETWORK_CONFIG.has(String(p?.spec?.backend?.kind ?? ''));
+  const mac = tenantNetworkData ? normalizeMacAddress(opts.macAddress) : null;
   const tr = p?.status?.ipv6?.translation;
-  const resolvers = Array.isArray(tr?.resolvers) ? (tr?.resolvers ?? []).filter((r) => typeof r === 'string' && !!r) : [];
-  const net = [
-    'version: 2',
-    'ethernets:',
-    `  ${nic}:`,
-    `    dhcp4: ${v4?.prefix ? 'true' : 'false'}`,
-    '    dhcp6: true',
-    '    accept-ra: true',
-  ];
-  if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.join(', ')}]`);
-  const clat = !v4?.prefix && !!tr?.pref64;
-  // the platform's resolvers only: on the provider's path the provider's DHCP already hands out its DNS64 resolver
-  const keepResolvers = resolvers.length > 0 && tr?.path !== 'Provider';
+  const resolvers = Array.isArray(tr?.resolvers)
+    ? (tr?.resolvers ?? []).filter((r): r is string => typeof r === 'string').map((r) => r.trim()).filter(Boolean)
+    : [];
+  const pref64 = typeof tr?.pref64 === 'string' ? tr.pref64.trim() : '';
+  let networkData: string | null = null;
+  let vmInterface: string | null = null;
+  if (mac) {
+    // no set-name: every renderer binds the entry by the MAC address, and the guest keeps its own name for the NIC
+    const net = [
+      'version: 2',
+      'ethernets:',
+      '  primary:',
+      `    match: {macaddress: "${mac}"}`,
+      `    dhcp4: ${v4?.prefix ? 'true' : 'false'}`,
+      '    dhcp6: true',
+      '    accept-ra: true',
+    ];
+    // quoted: unquoted, an address that starts or ends with "::" is not a string in a YAML flow sequence
+    if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.map((r) => JSON.stringify(r)).join(', ')}]`);
+    networkData = `${net.join('\n')}\n`;
+    vmInterface = ['interfaces:', '  - name: default', '    binding: {name: l2bridge}', `    macAddress: "${mac}"`, ''].join('\n');
+  }
+  // the prefix is the one line of a literal block (clatd.conf), so a single token
+  const clat = !v4?.prefix && /^\S+$/.test(pref64);
+  // Only where the snippet's network data names the resolvers (OpenShift Virtualization: DHCPv6 also hands out the
+  // cluster's DNS service, without DNS64). Elsewhere the cloud's own DHCP hands out the translation resolvers and
+  // the guest's connection has none of its own: the placement's subnet on OpenStack (the config drive carries the
+  // same list, so the step would only pin the guest to the list it booted with), the VPC's DHCP option set on AWS,
+  // the provider's resolver on the provider's path.
+  const keepResolvers = tenantNetworkData && resolvers.length > 0 && tr?.path !== 'Provider';
   let userData: string | null = null;
   if (clat || keepResolvers) {
     const ud = ['#cloud-config'];
     const runcmd: string[] = [];
     if (clat) ud.push('packages: [clatd]');
     ud.push('write_files:');
-    if (clat) ud.push('  - path: /etc/clatd.conf', '    content: |', `      plat-prefix=${tr?.pref64}`);
+    if (clat) ud.push('  - path: /etc/clatd.conf', '    content: |', `      plat-prefix=${pref64}`);
     if (keepResolvers) {
       ud.push(
         '  - path: /usr/local/sbin/ignore-auto-dns',
@@ -642,10 +768,58 @@ export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: {
     if (clat) runcmd.push('  - [systemctl, enable, --now, clatd]');
     userData = [...ud, 'runcmd:', ...runcmd, ''].join('\n');
   }
-  return { networkData: `${net.join('\n')}\n`, userData, clat, ignoreAutoDns: keepResolvers };
+  if (!tenantNetworkData && !userData) return null;
+  // OpenShift Virtualization: the VM's cloud-init volume, with the user data (and network data over the inline limit)
+  // in a Secret the volume references
+  let vmVolume: string | null = null;
+  let userDataSecret: string | null = null;
+  let secretName: string | null = null;
+  const networkDataInSecret = !!networkData && byteLength(networkData) > CLOUD_INIT_INLINE_MAX_BYTES;
+  if (tenantNetworkData && (networkData || userData)) {
+    const inSecret: [string, string][] = [];
+    if (userData) inSecret.push(['userdata', userData]);
+    if (networkData && networkDataInSecret) inSecret.push(['networkdata', networkData]);
+    if (inSecret.length) {
+      secretName = cloudInitSecretName(p);
+      // the namespace when the placement serves exactly one, so the manifest applies as it is
+      const namespaces = (p?.status?.namespaces ?? []).filter((n): n is string => typeof n === 'string' && !!n.trim());
+      userDataSecret = [
+        'apiVersion: v1',
+        'kind: Secret',
+        'metadata:',
+        `  name: ${JSON.stringify(secretName)}`,
+        ...(namespaces.length === 1 ? [`  namespace: ${JSON.stringify(namespaces[0].trim())}`] : []),
+        'type: Opaque',
+        'stringData:',
+        ...inSecret.flatMap(([key, text]) => [`  ${key}: |`, ...indentedBlock(text, 4)]),
+        '',
+      ].join('\n');
+    }
+    const vol = ['volumes:', `  - name: ${CLOUD_INIT_VOLUME}`, '    cloudInitNoCloud:'];
+    if (userData) vol.push('      secretRef:', `        name: ${JSON.stringify(secretName)}`);
+    if (networkData && networkDataInSecret) vol.push('      networkDataSecretRef:', `        name: ${JSON.stringify(secretName)}`);
+    else if (networkData) vol.push('      networkData: |', ...indentedBlock(networkData, 8));
+    vmVolume = `${vol.join('\n')}\n`;
+  }
+  return {
+    tenantNetworkData,
+    macAddress: mac,
+    vmInterface,
+    networkData,
+    userData,
+    clat,
+    ignoreAutoDns: keepResolvers,
+    vmVolume,
+    userDataSecret,
+    secretName,
+    networkDataInSecret,
+  };
 }
 
-/** Whether the placement page shows the snippet: an IPv6 subnet in status and a site that reports IPv6. */
+/**
+ * Whether the placement page shows the snippet: an IPv6 subnet in status, a site that reports IPv6, and something to
+ * give the VM (network data on OpenShift Virtualization, else user data).
+ */
 export function showsCloudInitSnippet(p: NetworkPlacement | undefined | null, caps: SiteIpv6Caps | undefined | null): boolean {
   return !!caps?.ipv6 && !!cloudInitSnippet(p);
 }

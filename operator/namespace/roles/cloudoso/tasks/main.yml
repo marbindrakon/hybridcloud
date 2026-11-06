@@ -25,7 +25,7 @@
         cloudoso_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (cloudoso_observed_generation >= cloudoso_generation)
+            and (cloudoso_observed_generation | int >= cloudoso_generation | int)
             and (cloudoso_status == 'ready')
             and (cloudoso_ready | bool)
           }}

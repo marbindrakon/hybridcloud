@@ -70,6 +70,15 @@
 #   next to the JSON: a run whose pools are empty (the IPv6 core rolled back) still removes the addresses taken from
 #   them, then forgets them; the IPv6 sysctls and unreachable defaults stay (they don't affect IPv4). A VRF removed
 #   while the keys or pools are known takes its table's IPv6 unreachable default with it.
+#   icmp6Announced (gateway, optional, with icmp6; absent or false = none of this is read or set): the node announces
+#   its ICMP source to the site (FRR's), so the site's hosts reach the node's own address in a VRF every time. The
+#   nftables table ip6 shc_gw_in6 in the namespace (IPv6 rules only, input hook only; loaded before the VRFs' ICMP
+#   sources are set): IPv6 addressed to the node from a VRF is answered as by a host with no open port: ICMPv6 and
+#   TCP segments with ACK or RST pass, every other TCP segment gets a reset, UDP a port unreachable, the rest is
+#   dropped. Stateless: no connection tracking ("a TCP segment with ACK or RST" stands in for "established"; a
+#   stateful rule would make the namespace track and reassemble every tenant's forwarded IPv6 too).
+#   The table goes when the key does (a run that never had it issues no command for it); an IPv6 step that failed
+#   leaves it as it was.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
@@ -92,6 +101,10 @@ POOLS6=/etc/shc-fabric/$I.pools6; POOLS6_USED=""
 MARK6=/etc/shc-fabric/$I.egress6
 # the circuits' IPv6 filter table was loaded (attach_up): a run without a circuit with address6 removes it
 MARKA6=/etc/shc-fabric/$I.attach6
+# the gateway announces its ICMP source ("true" or ""); the VRFs' input filter was loaded (gw_in6): a run without the
+# key removes it
+ICMP6ANN=$(opt .icmp6Announced)
+MARKI6=/etc/shc-fabric/$I.in6
 if [ -z "$LOPOOL6$ICMPPOOL6" ] && [ -r "$POOLS6" ]; then
   { read -r LOPOOL6 || true; read -r ICMPPOOL6 || true; } < "$POOLS6"
   POOLS6_USED=1
@@ -174,9 +187,9 @@ lo6() {
 }
 
 # <vrf> <table>: the IPv6 side of a VRF. The unreachable default at the highest metric (any FRR route wins): a lookup
-# that misses fails in the VRF instead of falling through to the main table. The ICMP source /128 (nodad: never
-# announced, DAD would only delay it): the kernel sources Time Exceeded, Unreachable and Packet Too Big inside the VRF
-# from it, the core loopback is not in the VRF. Others from icmpSource6 removed.
+# that misses fails in the VRF instead of falling through to the main table. The ICMP source /128 (nodad: the device
+# has no neighbours, DAD would only delay it): the kernel sources Time Exceeded, Unreachable and Packet Too Big inside
+# the VRF from it, the core loopback is not in the VRF. Others from icmpSource6 removed.
 vrf6() {
   local a s
   if [ -n "$ICMPPOOL6" ]; then
@@ -806,7 +819,42 @@ gateway)
           $X wg show "$VDEV" public-key; $X wg show "$VDEV" listen-port
           $X wg show "$VDEV" allowed-ips | sort; $X wg show "$VDEV" persistent-keepalive | sort
         fi
+        [ ! -e "$MARKI6" ] || $X nft -s list table ip6 shc_gw_in6 2>/dev/null || true
       fi; } | sha1sum
+  }
+  # the VRFs' input filter (icmp6Announced): IPv6 addressed to the node itself from a VRF device. Past prerouting such
+  # a packet shows the VRF as its input interface (neighbour discovery keeps its slave device and passes as before).
+  # It answers like a host with no open port, so ping and traceroute (UDP, TCP SYN, ICMP) to the node's address get
+  # their answer from it: ICMPv6 passes (echo, errors, neighbour discovery, MLD; also a non-first fragment of it); TCP
+  # with ACK or RST passes, so the replies to connections the node opened arrive (SYN-ACK, ACK, FIN-ACK, RST) and the
+  # kernel answers the rest of them as any closed port would (a reset, or nothing to a RST); every other TCP segment
+  # (a connection request, FIN, NULL or XMAS probes) is reset, so a listening port looks closed; UDP is refused with a
+  # port unreachable. Each answer is routed back in the VRF it came from to its source (as the kernel answers a closed
+  # port; resets unlimited, unreachables under the kernel's global ICMP limit); anything else (other protocols,
+  # fragments without a transport header) is dropped. Each refusing rule counts. Stateless: no rule here may use connection tracking (see the header). Forwarded traffic never reaches
+  # the input hook.
+  gw_in6_nft() {
+    local m
+    m="    iifname { $(jq -r '[.vrfs // [] | .[].name | "\"" + . + "\""] | join(", ")' "$CONF") }"
+    printf '%s\n' 'table ip6 shc_gw_in6' 'delete table ip6 shc_gw_in6' 'table ip6 shc_gw_in6 {' \
+      '  chain input {' '    type filter hook input priority filter; policy accept;' \
+      "$m meta l4proto ipv6-icmp accept" \
+      "$m tcp flags & (ack | rst) != 0 accept" \
+      "$m tcp flags & (ack | rst) == 0 counter reject with tcp reset comment \"TCP without ACK or RST: reset\"" \
+      "$m udp dport 0-65535 counter reject with icmpv6 type port-unreachable comment \"UDP: port unreachable\"" \
+      "$m counter drop comment \"other protocols and fragments without a transport header\"" \
+      '  }' '}'
+  }
+  # load the filter for the VRFs of this run (replaced as a whole); none without VRFs (no ICMP source to protect)
+  gw_in6() {
+    if [ -z "$WANT" ]; then gw_in6_down; return 0; fi
+    gw_in6_nft | $X nft -f -
+    [ -e "$MARKI6" ] || : > "$MARKI6"
+  }
+  gw_in6_down() {
+    [ -e "$MARKI6" ] || return 0
+    $X nft delete table ip6 shc_gw_in6 2>/dev/null || true
+    rm -f "$MARKI6"
   }
   # the site leg stays IPv4 (the site's underlay): no link-local, DAD or MLD on the site's network. Set once the device
   # is in the namespace (a move re-creates its IPv6 settings from the namespace's defaults), before it comes up.
@@ -873,6 +921,13 @@ gateway)
     VTEP=${ADDR%/*}
     WANT=$(jq -r '.vrfs // [] | .[].name' "$CONF")
     [ -z "$WANT" ] || modprobe vrf
+    # the VRFs' input filter before the VRFs take the ICMP source (icmp6Announced; an IPv6 step); without the key
+    # it goes, after a failed IPv6 step (V6 cleared) it stays as it was
+    if [ "$ICMP6ANN" = true ]; then
+      [ -z "$V6" ] || [ -z "$ICMP6" ] || v6 "the input filter of the VRFs" gw_in6
+    else
+      gw_in6_down
+    fi
     for v in $(jq -r '.vrfs // [] | .[] | [.name, .vni, (.mtu // 9000)] | join(":")' "$CONF"); do
       IFS=: read -r VRF VNI VMTU <<<"$v"
       $X ip link show "$VRF" >/dev/null 2>&1 || $X ip link add "$VRF" type vrf table "$VNI"
@@ -920,6 +975,7 @@ gateway)
     ip link show "$CV" >/dev/null 2>&1 && ip link del "$CV"
     ip netns list | grep -qw "^$NS" && ip netns del "$NS"
     [ -z "$WG" ] || rm -f "$WGKEY"
+    rm -f "$MARKI6"
   fi
   ;;
 *) echo "unknown instance type $TYPE" >&2; exit 2 ;;

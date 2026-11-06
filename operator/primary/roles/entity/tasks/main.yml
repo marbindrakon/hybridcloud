@@ -32,7 +32,7 @@
         entity_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (entity_observed_generation >= entity_generation)
+            and (entity_observed_generation | int >= entity_generation | int)
             and (entity_status == 'ready')
             and (entity_ready | bool)
           }}

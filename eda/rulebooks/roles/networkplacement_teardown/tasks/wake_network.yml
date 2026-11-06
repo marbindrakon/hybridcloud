@@ -1,0 +1,32 @@
+---
+# The placement's deletion is complete (after deletionComplete is written, on both the full teardown and the short
+# path of a placement refused at validation): wake its network. Its job then counts its placements again
+# (placementCount, placementsReady), drops the placement's entry from status.ipv6.providerPrefixes and, with the
+# network's IPv6 egress realized, wakes the fabric, which stops announcing the placement's IPv6 subnet
+# (hybridnetwork_provision "Wake the fabric"; both leave out placements being deleted). Nothing else wakes a ready
+# network's job when a placement goes: the operator's annotation hybridsovereign.redhat/dependent-removed only lets a
+# network that is being deleted re-check its finalizer.
+# Not a network that is being deleted (its teardown waits for its placements): there a wake is a Retry now of its
+# deletion, which publishes the delete event again; the dependent-removed annotation already wakes its finalizer.
+# Never fails the teardown (the deletion is complete).
+# Inputs: npd_wake_network (the network's name), npd_wake_namespace.
+- name: Read the network of the deleted placement
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridNetwork
+    name: "{{ npd_wake_network }}"
+    namespace: "{{ npd_wake_namespace }}"
+  register: _npd_wake_net
+  failed_when: false
+  when: npd_wake_network | default('', true) | length > 0
+
+- name: Wake the network of the deleted placement
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: HybridNetwork, namespace: "{{ npd_wake_namespace }}", name: "{{ npd_wake_network }}"}]
+  when:
+    - _npd_wake_net.resources | default([], true) | length > 0
+    - _npd_wake_net.resources[0].metadata.deletionTimestamp is not defined

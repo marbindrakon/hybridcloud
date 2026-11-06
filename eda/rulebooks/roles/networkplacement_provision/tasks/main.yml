@@ -504,6 +504,24 @@
           - {kind: "{{ np_backend_kind }}", namespace: "{{ fab_namespace }}", name: "{{ np_backend_name if np_backend_kind == 'CloudVirt' else '' }}"}
       when: fab_st.status | default('') != 'ready'
 
+    # the network lists its placements' provider-assigned IPv6 subnets (status.ipv6.providerPrefixes); the wake above
+    # misses a re-run of a ready placement, so one whose provider subnet came, went or changed since the network
+    # listed it wakes the network here (the network never wakes a ready placement with a provider subnet back)
+    - name: Tell the network when the placement's provider-assigned subnet changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridNetwork, namespace: "{{ fab_namespace }}", name: "{{ fab_spec.network }}"}]
+        _mine6: >-
+          {{ np_final.subnets | default([], true) | selectattr('source', 'defined') | selectattr('source', 'equalto', 'Provider')
+             | map(attribute='prefix') | select('search', ':') | sort | list }}
+        _listed6: >-
+          {{ ((np_network.status | default({}, true)).ipv6 | default({}, true)).providerPrefixes | default([], true)
+             | selectattr('placement', 'defined') | selectattr('placement', 'equalto', fab_name)
+             | map(attribute='prefix') | sort | list }}
+      when:
+        - fab_st.status | default('') == 'ready'
+        - _mine6 != _listed6
+
     # the circuits' policy (deny and advertise lists) holds the network's placement prefixes
     - name: Tell the fabric when the network has attachment circuits
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"

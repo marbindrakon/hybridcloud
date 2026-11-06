@@ -1,17 +1,16 @@
-# The translation canary's objects, in the platform team's own tenant (here entity-example-platform): an IPv6-only
+# The IPv6 translation probe's objects, in a tenant of the tester's own (here entity-example-platform): an IPv6-only
 # network with IPv6 from the platform and internet access, an OpenShift Virtualization environment and an OpenStack
-# environment, and one placement of the network per OpenShift Virtualization or OpenStack site that offers IPv6-only
-# placements with translation (AWS and Google Cloud sites take no canary). Then one probe per placement (vm-cloudvirt.yaml, server-cloudoso.md), and the realization names the network and the probe:
-#   canaries.ipv6Translation: {network: entity-example-platform/ipv6-canary, workload: canary}
-# Site names (site-vm, site-osp) are placeholders for the sites that offer IPv6-only placements.
+# environment, and one placement of the network per OpenShift Virtualization or OpenStack site to test (a site that
+# offers IPv6-only placements with translation: capabilities ipv6Only and ipv6Translation). Then one probe per
+# placement (vm-cloudvirt.yaml, server-cloudoso.md). Site names (site-vm, site-osp) are placeholders.
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: HybridNetwork
 metadata:
-  name: ipv6-canary
+  name: ipv6-probe
   namespace: entity-example-platform
 spec:
-  description: The platform's translation canary (IPv6-only, IPv6 from the platform, internet access).
+  description: IPv6 translation probe (IPv6-only, IPv6 from the platform, internet access).
   platformPrefixes:
     - family: 6
   egress:
@@ -20,15 +19,15 @@ spec:
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: CloudVirt
 metadata:
-  name: canary-vms
+  name: probe-vms
   namespace: entity-example-platform
 spec:
   cloudRef:
     name: site-vm
-  description: The translation canary probe on an OpenShift Virtualization site.
+  description: The IPv6 translation probe on an OpenShift Virtualization site.
   namespaces:
     - name: probes
-      network: ipv6-canary
+      network: ipv6-probe
   quota:
     cpu: "2"
     memory: 4Gi
@@ -38,35 +37,35 @@ spec:
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: NetworkPlacement
 metadata:
-  name: ipv6-canary-vms
+  name: ipv6-probe-vms
   namespace: entity-example-platform
 spec:
-  network: ipv6-canary
+  network: ipv6-probe
   backend:
     kind: CloudVirt
-    name: canary-vms
+    name: probe-vms
   ipv6:
     prefixLength: 64
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: CloudOSO
 metadata:
-  name: canary-osp
+  name: probe-osp
   namespace: entity-example-platform
 spec:
   cloudRef:
     name: site-osp
-  project: canary-osp
+  project: probe-osp
 ---
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: NetworkPlacement
 metadata:
-  name: ipv6-canary-osp
+  name: ipv6-probe-osp
   namespace: entity-example-platform
 spec:
-  network: ipv6-canary
+  network: ipv6-probe
   backend:
     kind: CloudOSO
-    name: canary-osp
+    name: probe-osp
   ipv6:
     prefixLength: 64

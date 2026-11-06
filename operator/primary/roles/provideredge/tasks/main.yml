@@ -22,7 +22,7 @@
         provideredge_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (provideredge_observed_generation >= provideredge_generation)
+            and (provideredge_observed_generation | int >= provideredge_generation | int)
             and (provideredge_status == 'ready')
             and (provideredge_ready | bool)
           }}

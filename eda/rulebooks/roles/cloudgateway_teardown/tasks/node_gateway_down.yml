@@ -1,7 +1,16 @@
 ---
 # shc (design/P7-PLAN.md P7.3.5): remove a gateway instance from one node (delegated, become). The gateway's
 # delete waited for its placements; VRFs of placements deleted together with the gateway (which didn't wait for a
-# release) go with the instance.
+# release) go with the instance. Runs under the fabric's lease fabric-config-<fabric>, renewed here before the node
+# (realization nodes.configLease, with its own timeout: the node loop's step limit never stops it); a renewal
+# that finds the lease lost fails the job before the node.
+- name: "{{ bgw_node.name }}: renew the border gateway configuration lease"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cgt_holder }}",
+                 step: "removing the gateway instance from {{ bgw_node.name }}"}
+  timeout: 0
+
 - name: "{{ bgw_node.name }}: stop the gateway instance and keep it off at boot"
   ansible.builtin.systemd:
     name: "shc-gw@{{ fab_name }}.service"
@@ -27,5 +36,6 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
-  loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/etc/shc-fabric/gw-{{ fab_name }}.wgkey", "/var/run/frr/gw-{{ fab_name }}"]
+  loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/etc/shc-fabric/gw-{{ fab_name }}.wgkey",
+         "/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded", "/var/run/frr/gw-{{ fab_name }}"]
   delegate_to: "{{ bgw_node.name }}"

@@ -23,7 +23,7 @@
         assignment_skip_reconcile: >-
           {{
             (not (reconcile_now | bool))
-            and (assignment_observed_generation >= assignment_generation)
+            and (assignment_observed_generation | int >= assignment_generation | int)
             and (assignment_status == 'ready')
             and (assignment_ready | bool)
           }}

@@ -134,17 +134,18 @@ class NetworkRefusalTest(unittest.TestCase):
         tasks = [t, write_out("hn_ipv6_status")]
         return run_play(tasks, {"fab_ipam_result": {"addressSpace": [], "changed": False}, "hn_block": block,
                                 "hn_tenant6": tenant6, "hn_platform6": platform6, "hn_mode6": "Platform" if block else
-                                ("Tenant" if tenant6 else "None")})
+                                ("Tenant" if tenant6 else "None"), "hn_provider6": []})
 
     def test_ipv6_status_shapes(self):
         st = self.ipv6_status("2001:db8:4000::/56", [], {"family": 6})
         self.assertEqual(st, {"mode": "Platform", "prefixes": ["2001:db8:4000::/56"],
                               "block": {"prefix": "2001:db8:4000::/56", "prefixLength": 56, "source": "Allocated"},
-                              "holdDownUntil": None})
+                              "holdDownUntil": None, "providerPrefixes": None})
         st = self.ipv6_status("2001:db8:4100::/56", [], {"family": 6, "prefix": "2001:db8:4100::/56"})
         self.assertEqual(st["block"]["source"], "Pinned")
         st = self.ipv6_status("", ["fd12:3456:789a::/48"], {})
-        self.assertEqual(st, {"mode": "Tenant", "prefixes": ["fd12:3456:789a::/48"], "block": None, "holdDownUntil": None})
+        self.assertEqual(st, {"mode": "Tenant", "prefixes": ["fd12:3456:789a::/48"], "block": None, "holdDownUntil": None,
+                              "providerPrefixes": None})
         self.assertEqual(self.ipv6_status("", [], {})["mode"], "None")
 
 

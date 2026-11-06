@@ -733,3 +733,37 @@ class NetworkWakesFabric(unittest.TestCase):
     def test_without_realized_ipv6_egress_the_prefixes_do_not_matter(self):
         carried = {"network": "acme/g", "ipv6": False, "prefixes6": []}
         self.assertFalse(self.woke([self.pl("a", "g", ["2001:db8:1:1::/64"])], carried))
+
+    # a provider-assigned subnet (source Provider) is never in the fabric's announced set: it must not count
+    def sourced(self, name, rows, deleting=False):
+        p = self.pl(name, "g", [], deleting=deleting)
+        p["status"]["subnets"] = [{"family": 6 if ":" in x else 4, "prefix": x, "source": src} for x, src in rows]
+        return p
+
+    def with_provider(self, *network_sourced):
+        aws = self.sourced("aws", [("10.0.9.0/24", "Network"), ("2001:db8:0:5800::/56", "Provider")])
+        return [aws] + [self.sourced(n, [(x, "Network")]) for n, x in network_sourced]
+
+    def test_a_provider_placement_wakes_nothing_when_nothing_changed(self):
+        carried = {"network": "acme/g", "ipv6": True, "prefixes6": ["2001:db8:1:1::/64"]}
+        self.assertFalse(self.woke(self.with_provider(("a", "2001:db8:1:1::/64")), carried))
+
+    def test_with_a_provider_placement_a_network_subnet_that_came_wakes(self):
+        carried = {"network": "acme/g", "ipv6": True, "prefixes6": ["2001:db8:1:1::/64"]}
+        self.assertTrue(self.woke(self.with_provider(("a", "2001:db8:1:1::/64"), ("b", "2001:db8:1:2::/64")), carried))
+
+    def test_a_deleted_placement_s_subnet_wakes_the_fabric_to_withdraw_it(self):
+        # the placement's teardown woke the network after deletionComplete: the placement is gone, or still there
+        # (being deleted, its finalizer not released yet); either way its /64 no longer counts
+        carried = {"network": "acme/g", "ipv6": True, "prefixes6": ["2001:db8:1:1::/64", "2001:db8:1:2::/64"]}
+        a = self.sourced("a", [("2001:db8:1:1::/64", "Network")])
+        self.assertTrue(self.woke([a], carried))
+        b = self.sourced("b", [("10.0.2.0/24", "Network"), ("2001:db8:1:2::/64", "Network")], deleting=True)
+        b["status"]["deletionComplete"] = True
+        self.assertTrue(self.woke([a, b], carried))
+        # once the fabric announces only a's /64, the next network run wakes nothing
+        self.assertFalse(self.woke([a, b], {"network": "acme/g", "ipv6": True, "prefixes6": ["2001:db8:1:1::/64"]}))
+
+    def test_with_a_provider_placement_a_network_subnet_that_went_wakes(self):
+        carried = {"network": "acme/g", "ipv6": True, "prefixes6": ["2001:db8:1:1::/64", "2001:db8:1:2::/64"]}
+        self.assertTrue(self.woke(self.with_provider(("a", "2001:db8:1:1::/64")), carried))
