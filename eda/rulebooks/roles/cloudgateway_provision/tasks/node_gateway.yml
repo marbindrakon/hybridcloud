@@ -333,6 +333,40 @@
     _cg_frrconf: "{{ _cg_frrconf | combine({'changed': true}) }}"
   when: _cg_reload is changed and _cg_frrconf is not changed
 
+# A VRF the configuration no longer has (a network no longer placed here) stays in FRR after the reload: frr-reload
+# removes the lines of its vrf stanza but never sends "no vrf", so zebra and the other daemons keep it as configured
+# (show vrf: "vrf <name> inactive (configured)", nothing in the running configuration) until FRR restarts. The apply
+# above already deleted its device, so FRR accepts the removal now; it touches no other VRF and no session. Only a
+# VRF that zebra lists as inactive, that the rendered configuration does not name and that has no BGP instance left
+# is removed. One that FRR refuses is reported and stays (inert: no device, no routes); the next job tries again.
+# Same code as the root's (only the first line differs)
+- name: "{{ bgw_node.name }}: remove from FRR the VRFs its configuration no longer has"
+  ansible.builtin.shell: |
+    u=shc-gw@{{ fab_name }}.service; conf=/etc/frr/gw-{{ fab_name }}/frr.conf.shc; V=(vtysh -N gw-{{ fab_name }})
+    systemctl -q is-active "$u" && [ -r "$conf" ] || exit 0
+    # whether the text on stdin names the VRF: its vrf stanza or a BGP instance in it
+    named() {
+      awk -v v="$1" '($1 == "vrf" && $2 == v) || ($1 == "router" && $2 == "bgp" && $4 == "vrf" && $5 == v) {f = 1} END {exit !f}'
+    }
+    vrfs=$("${V[@]}" -c 'show vrf') && run=$("${V[@]}" -c 'show running-config') \
+      || { echo "the VRFs of the instance are unreadable; left to the next job" >&2; exit 0; }
+    removed=""; kept=""
+    for v in $(awk '$1 == "vrf" && $3 == "inactive" {print $2}' <<< "$vrfs"); do
+      named "$v" < "$conf" && continue
+      if named "$v" <<< "$run"; then
+        kept="$kept $v"; echo "VRF $v: it still has a BGP instance; left to the next job" >&2; continue
+      fi
+      out=$("${V[@]}" -c 'configure terminal' -c "no vrf $v" 2>&1) && [[ $out != *%* ]] && { removed="$removed $v"; continue; }
+      kept="$kept $v"; echo "VRF $v: FRR keeps it: ${out:-no reason given}" >&2
+    done
+    echo "removed=${removed# }"
+    [ -z "$kept" ] || echo "kept=${kept# }"
+  args:
+    executable: /bin/bash
+  register: _cg_vrfs_gone
+  changed_when: _cg_vrfs_gone.stdout is search('removed=.')
+  delegate_to: "{{ bgw_node.name }}"
+
 # SRv6 core: the instance's guard is kept between jobs (hybridfabric_provision core_guard_unit.yml); nothing of it on
 # mpls
 - name: "{{ bgw_node.name }}: keep the SRv6 core guard"
@@ -1046,5 +1080,6 @@
       {{ (cg_wg_nodes | default([])) + ([_tun | combine({'name': bgw_node.name})] if _tun | length > 0 else []) }}
     cg_changed_nodes: >-
       {{ cg_changed_nodes + ([bgw_node.name] if [_cg_files, _cg_conf, _cg_apply, _cg_daemons, _cg_frrconf, _cg_state,
-                                                 _cg_in6_off | default({}), _cgu_files | default({}), _cgu_timer | default({})]
+                                                 _cg_vrfs_gone | default({}), _cg_in6_off | default({}),
+                                                 _cgu_files | default({}), _cgu_timer | default({})]
          | select('changed') | list | length > 0 else []) }}
