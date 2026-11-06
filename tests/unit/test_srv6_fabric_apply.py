@@ -11,6 +11,7 @@ Documentation prefixes and an arbitrary block of 5f00::/16 only."""
 import copy
 import os
 import re
+import subprocess
 import sys
 import unittest
 
@@ -100,20 +101,30 @@ class RootSrv6(ApplyCase):
         self.assertIn('    iifname != { "br-core", "lo" } ip6 daddr %s counter drop comment ' % BLOCK, guard)
         self.assertIn("type filter hook prerouting priority raw; policy accept;", guard)
         bridge = index(log, r"^W \[root\] ip link add br-core ")
-        for pat in (r"^W \[root\] sysctl -qw net\.vrf\.strict_mode=1$", r"^W \[root\] sysctl -qw net/ipv6/conf/all/seg6_enabled=1$",
+        for pat in (r"^W \[root\] sysctl -qw net\.vrf\.strict_mode=1$", r"^W \[root\] sysctl -qw net/ipv6/conf/all/seg6_enabled=0$",
+                    r"^W \[root\] sysctl -qw net/ipv6/conf/default/seg6_enabled=0$",
+                    r"^W \[root\] ip -6 route replace unreachable %s metric 4278198272 table main$" % re.escape(BLOCK),
                     r"^W \[root\] sysctl -qw net/ipv6/seg6_flowlabel=1$",
                     r"^W \[root\] ip -6 rule add to %s lookup main pref 999$" % re.escape(BLOCK),
                     r"^W \[root\] ip sr tunsrc set 2001:db8:4005:ffff::1$"):
             self.assertLess(0, index(log, pat))
             self.assertLess(index(log, pat), bridge, pat)
-        # the core leg once it exists, before it comes up
-        leg = index(log, r"^W \[root\] sysctl -qw net/ipv6/conf/br-core/seg6_enabled=1$")
+        # the core leg once it exists, before it comes up (read: it inherited 0 from default)
+        leg = index(log, r"^R \[root\] sysctl -n net/ipv6/conf/br-core/seg6_enabled$")
         self.assertLess(bridge, leg)
         self.assertLess(leg, index(log, r"^W \[root\] ip link set br-core mtu 9100 up$"))
         sc = h.get_state()["ns"][""]["sysctl"]
-        for k in ("net/vrf/strict_mode", "net/ipv6/conf/all/seg6_enabled", "net/ipv6/conf/default/seg6_enabled",
-                  "net/ipv6/seg6_flowlabel", "net/ipv6/conf/br-core/seg6_enabled"):
+        for k in ("net/vrf/strict_mode", "net/ipv6/seg6_flowlabel"):
             self.assertEqual(sc.get(k), "1", k)
+        # no routing header accepted: all, default, the core leg and every device the run created
+        self.assertEqual(sorted(k for k, v in sc.items() if k.endswith("/seg6_enabled") and v != "0"), [])
+        # (lo predates the run: the fake holds no value for it, the kernel's own is 0)
+        for d in ("all", "default", "br-core", "egress", "egress0", "e10000", "e10001", "xe10000", "xo10000",
+                  "bond1.3001", "bond1.3002"):
+            self.assertEqual(sc.get("net/ipv6/conf/%s/seg6_enabled" % d), "0", d)
+        # the block unreachable in main at the highest metric
+        self.assertIn({"type": "unreachable", "dst": BLOCK, "metric": "4278198272", "table": "main"},
+                      h.get_state()["ns"][""]["routes6"])
         st = h.get_state()["ns"][""]
         self.assertEqual(st["rules6"], [{"pref": "999", "to": BLOCK, "table": "main"}])
         self.assertEqual(st["tunsrc"], "2001:db8:4005:ffff::1")
@@ -202,8 +213,13 @@ class RootSrv6(ApplyCase):
         self.assertEqual(rc, 4, err)
         self.assertIn("transport srv6: the SRv6 settings failed", err)
         h.set_state(blade())
-        rc, out, err, _ = h.run("root", fail=r"\[root\] sysctl -qw net/ipv6/conf/br-core/seg6_enabled=1")
+        h.ok(self, "root")
+        st = h.get_state()
+        st["ns"][""]["sysctl"]["net/ipv6/conf/br-core/seg6_enabled"] = "1"
+        h.set_state(st)
+        rc, out, err, _ = h.run("root", fail=r"\[root\] sysctl -qw net/ipv6/conf/br-core/seg6_enabled=0")
         self.assertEqual(rc, 4, err)
+        self.assertIn("transport srv6: seg6_enabled on the core leg br-core failed", err)
 
     def test_configuration_errors(self):
         h = self.h
@@ -229,6 +245,8 @@ class RootSrv6(ApplyCase):
         self.assertEqual(st["rules6"], [])
         self.assertEqual(st["tunsrc"], "::")
         self.assertNotIn("inet shc_core_guard", st["nft"])
+        self.assertEqual([r for r in st["routes6"] if r["table"] == "main" and r["type"] == "unreachable"], [])
+        self.assertFalse(os.path.exists(os.path.join(h.etc, "root.guard")))
         self.assertTrue(out.strip().endswith("changed=yes"), out)
         # the guard goes last
         self.assertLess(index(log, r"^W \[root\] ip -6 rule del pref 999 "),
@@ -254,9 +272,11 @@ class GatewaySrv6(ApplyCase):
             self.assertLess(index(log, r"^W \[root\] ip netns add %s$" % name), index(log, r"^W \[%s\] nft -f -$" % name))
             st = h.get_state()["ns"][name]
             self.assertIn('iifname != { "core0", "lo" } ip6 daddr %s counter drop' % BLOCK, st["nft"]["inet shc_core_guard"])
-            for k in ("net/vrf/strict_mode", "net/ipv6/conf/all/seg6_enabled", "net/ipv6/conf/default/seg6_enabled",
-                      "net/ipv6/seg6_flowlabel", "net/ipv6/conf/core0/seg6_enabled"):
+            for k in ("net/vrf/strict_mode", "net/ipv6/seg6_flowlabel"):
                 self.assertEqual(st["sysctl"].get(k), "1", (name, k))
+            for d in ["all", "default"] + sorted(set(st["links"]) - {"lo"}):  # lo: as in test_fresh_root
+                self.assertEqual(st["sysctl"].get("net/ipv6/conf/%s/seg6_enabled" % d), "0", (name, d))
+            self.assertIn({"type": "unreachable", "dst": BLOCK, "metric": "4278198272", "table": "main"}, st["routes6"])
             self.assertEqual(st["rules6"], [{"pref": "999", "to": BLOCK, "table": "main"}])
             self.assertEqual(st["tunsrc"], src)
             self.assertEqual([l for l in writes(log) if "mpls" in l], [])
@@ -359,6 +379,221 @@ class IPv6CoreRequired(ApplyCase):
         rc, out, err, _ = h.run("gw-iaas1", fail=refuse)
         self.assertEqual(rc, 0, err)
         self.assertIn("warning: IPv6 in VRF t51000 failed; IPv6 core not applied", out)
+
+
+def seg6_open(st, ns, devs):
+    """an earlier configuration that accepted routing headers: all, default and the devices at 1"""
+    sc = st["ns"][ns]["sysctl"]
+    for d in ["all", "default"] + list(devs):
+        sc["net/ipv6/conf/%s/seg6_enabled" % d] = "1"
+    return st
+
+
+class RoutingHeadersOff(ApplyCase):
+    """transport srv6 accepts no routing header: a re-apply closes what an earlier configuration opened, and every
+    device created afterwards inherits 0; the management interface is never touched"""
+
+    def test_root_reapply_closes(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        st = h.get_state()
+        devs = [d for d in st["ns"][""]["links"] if d != "bond0.10"]
+        h.set_state(seg6_open(st, "", devs + ["bond0.10"]))
+        out, log = h.ok(self, "root")
+        self.keep("srv6-root-seg6-closed", log, out)
+        self.assertTrue(out.strip().endswith("changed=yes"), out)
+        sc = h.get_state()["ns"][""]["sysctl"]
+        for d in ["all", "default", "br-core", "egress0", "e10000", "e10001", "xe10000", "xo10000", "bond1.3001", "lo"]:
+            self.assertEqual(sc["net/ipv6/conf/%s/seg6_enabled" % d], "0", d)
+        self.assertEqual(sc["net/ipv6/conf/bond0.10/seg6_enabled"], "1")  # the management interface: untouched
+        self.assertEqual([l for l in log if "bond0" in l], [])
+        out2, _ = h.ok(self, "root")
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+
+    def test_new_devices_inherit_0(self):
+        """default was 1 (an earlier run): it is set to 0 before any device of the run exists"""
+        h = self.h
+        h.set_state(seg6_open(blade(), "", []))
+        h.conf("root", root_full(**ROOT_SRV6))
+        _, log = h.ok(self, "root")
+        default0 = index(log, r"^W \[root\] sysctl -qw net/ipv6/conf/default/seg6_enabled=0$")
+        self.assertLess(default0, index(log, r"^W \[root\] ip link add br-core "))
+        self.assertLess(default0, index(log, r"^W \[root\] ip link add egress "))
+
+    def test_gateway_reapply_closes(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full(**GW_SRV6))
+        h.ok(self, "gw-iaas1")
+        st = h.get_state()
+        h.set_state(seg6_open(st, "gw-iaas1", st["ns"]["gw-iaas1"]["links"]))
+        out, _ = h.ok(self, "gw-iaas1")
+        self.assertTrue(out.strip().endswith("changed=yes"), out)
+        st = h.get_state()["ns"]["gw-iaas1"]
+        for d in ["all", "default"] + sorted(st["links"]):
+            self.assertEqual(st["sysctl"]["net/ipv6/conf/%s/seg6_enabled" % d], "0", d)
+
+
+class ReversePathRoot(ApplyCase):
+    """transport srv6: the root's network VRFs filter reverse paths loosely (2) whatever the host's default and all
+    (the larger of all and the device counts); the circuits' devices stay strict; mpls leaves them as created"""
+
+    def el9_blade(self, all_="0"):
+        st = blade()
+        st["ns"][""]["sysctl"].update({"net/ipv4/conf/all/rp_filter": all_, "net/ipv4/conf/default/rp_filter": "1"})
+        return st
+
+    def test_network_vrfs_loose(self):
+        h = self.h
+        for all_ in ("0", "1"):
+            h.set_state(self.el9_blade(all_))
+            h.conf("root", root_full(**ROOT_SRV6))
+            h.ok(self, "root")
+            sc = h.get_state()["ns"][""]["sysctl"]
+            for vrf in ("e10000", "e10001"):
+                self.assertEqual(sc["net/ipv4/conf/%s/rp_filter" % vrf], "2", vrf)
+                self.assertEqual(max(int(sc["net/ipv4/conf/all/rp_filter"]), int(sc["net/ipv4/conf/%s/rp_filter" % vrf])), 2)
+            for dev in ("bond1.3001", "bond1.3002"):
+                self.assertEqual(sc["net/ipv4/conf/%s/rp_filter" % dev], "1", dev)
+            self.assertEqual(sc["net/ipv4/conf/egress/rp_filter"], "1")  # not a decapsulating VRF
+            self.assertEqual(sc["net/ipv4/conf/all/rp_filter"], all_)  # the host's own setting untouched
+            out2, log2 = h.ok(self, "root")
+            self.assertTrue(out2.strip().endswith("changed=no"), out2)
+            self.assertEqual([l for l in writes(log2) if "rp_filter=2" in l], [])
+        # mpls: as created
+        h.set_state(self.el9_blade())
+        h.conf("root", root_full())
+        _, log = h.ok(self, "root")
+        self.assertEqual(h.get_state()["ns"][""]["sysctl"]["net/ipv4/conf/e10000/rp_filter"], "1")
+        self.assertEqual([l for l in log if "rp_filter=2" in l], [])
+
+
+class UnreachableBlock(ApplyCase):
+    def test_kept_and_counted(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        route = {"type": "unreachable", "dst": BLOCK, "metric": "4278198272", "table": "main"}
+        st = h.get_state()
+        st["ns"][""]["routes6"].remove(route)
+        st["ns"][""]["routes6"].append(dict(route, dst="5f00:9999::/32"))  # an earlier block's
+        h.set_state(st)
+        out, log = h.ok(self, "root")
+        self.assertTrue(out.strip().endswith("changed=yes"), out)
+        main = [r for r in h.get_state()["ns"][""]["routes6"] if r["table"] == "main"]
+        self.assertEqual(main, [route])
+        index(log, r"^W \[root\] ip -6 route del unreachable 5f00:9999::/32 metric 4278198272 table main$")
+        out2, log2 = h.ok(self, "root")
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        self.assertEqual([l for l in writes(log2) if " route " in l], [])
+
+
+class GuardAction(ApplyCase):
+    """shc-fabric-apply <instance> guard: guard=ok while the table is as the last load left it, else it is loaded again
+    (guard=restored); guard=none on mpls or without the gateway's namespace"""
+
+    def guard(self, name):
+        rc, out, err, log = self.h.run(name, "guard")
+        self.assertEqual(rc, 0, err)
+        return out.strip(), log
+
+    def test_root(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        out, log = self.guard("root")
+        self.assertEqual(out, "guard=ok")
+        self.assertEqual(writes(log), [])
+        want = h.get_state()["ns"][""]["nft"]["inet shc_core_guard"]
+        for damage in ("gone", "altered"):
+            st = h.get_state()
+            if damage == "gone":
+                del st["ns"][""]["nft"]["inet shc_core_guard"]
+            else:
+                st["ns"][""]["nft"]["inet shc_core_guard"] = want.replace("counter drop", "counter accept")
+            h.set_state(st)
+            out, log = self.guard("root")
+            self.keep("srv6-guard-root-" + damage, log, out)
+            self.assertEqual(out, "guard=restored", damage)
+            self.assertEqual(writes(log), ["W [root] nft -f -"])
+            self.assertEqual(h.get_state()["ns"][""]["nft"]["inet shc_core_guard"], want)
+            self.assertEqual(self.guard("root")[0], "guard=ok")
+        # a missing listing (an apply older than the action) counts as altered: loaded again
+        os.unlink(os.path.join(h.etc, "root.guard"))
+        self.assertEqual(self.guard("root")[0], "guard=restored")
+        self.assertEqual(self.guard("root")[0], "guard=ok")
+
+    def test_gateway_and_none(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full(**GW_SRV6))
+        self.assertEqual(self.guard("gw-iaas1")[0], "guard=none")  # no namespace yet
+        h.ok(self, "gw-iaas1")
+        self.assertEqual(self.guard("gw-iaas1")[0], "guard=ok")
+        st = h.get_state()
+        del st["ns"]["gw-iaas1"]["nft"]["inet shc_core_guard"]
+        h.set_state(st)
+        out, log = self.guard("gw-iaas1")
+        self.assertEqual(out, "guard=restored")
+        self.assertEqual(writes(log), ["W [gw-iaas1] nft -f -"])
+        h.ok(self, "gw-iaas1", "down")
+        self.assertFalse(os.path.exists(os.path.join(h.etc, "gw-iaas1.guard")))
+        self.assertEqual(self.guard("gw-iaas1")[0], "guard=none")
+        # mpls: nothing at all
+        h.conf("root", root_full())
+        out, log = self.guard("root")
+        self.assertEqual((out, log), ("guard=none", []))
+
+    def test_unknown_action(self):
+        self.h.conf("root", root_full())
+        rc, _, err, log = self.h.run("root", "sideways")
+        self.assertEqual((rc, err.strip(), writes(log)), (2, "unknown action sideways", []))
+
+
+class BaseScriptUnchanged(ApplyCase):
+    """transport absent or mpls: the calls, output, kernel state and files of the script of the release before the
+    SRv6 transport (BASE), for a dual-stack root with IPv6 egress and an IPv4 and an IPv6 circuit, a VLAN gateway with
+    icmp6Announced and a WireGuard gateway: two rounds up, then down. Skipped where the history lacks BASE."""
+    BASE = "72f86002"
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            p = subprocess.run(["git", "-C", C.ROOT, "show", "%s:eda/common/files/bgw/shc-fabric-apply" % cls.BASE],
+                               capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            p = None
+        if p is None or p.returncode != 0:
+            raise unittest.SkipTest("%s not in this checkout's history" % cls.BASE)
+        cls.baseline = p.stdout
+
+    def sequence(self, script, extra):
+        h = self.h
+        h.set_state(blade())
+        for f in os.listdir(h.etc):
+            os.unlink(os.path.join(h.etc, f))
+        runs = []
+        for n in range(2):
+            for name, conf in (("root", root_full()), ("gw-iaas1", gw_full()),
+                               ("gw-aws1", dict(copy.deepcopy(WG_CONF), **WG6))):
+                h.conf(name, dict(conf, **extra))
+                runs.append(h.ok(self, name, script=script))
+        for name in ("gw-aws1", "gw-iaas1", "root"):
+            runs.append(h.ok(self, name, "down", script=script))
+        return runs, h.get_state(), sorted(os.listdir(h.etc))
+
+    def test_same_as_base(self):
+        old = self.sequence("old", {})
+        for extra in ({}, {"transport": "mpls"}):
+            new = self.sequence("new", extra)
+            for (o_out, o_log), (n_out, n_log) in zip(old[0], new[0]):
+                self.assertEqual(o_log, n_log, extra)
+                self.assertEqual(o_out, n_out, extra)
+            self.assertEqual(old[1], new[1], extra)
+            self.assertEqual(old[2], new[2], extra)
 
 
 if __name__ == "__main__":
