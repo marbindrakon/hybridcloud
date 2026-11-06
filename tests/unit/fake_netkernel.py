@@ -14,7 +14,8 @@ net.ipv6.conf.default when it is created or moved into a namespace; writing net.
 .forwarding rewrites default and every device; an up device with IPv6 enabled (and addrgenmode not none) has an
 fe80::/64 link-local from its MAC; disable_ipv6=1 removes all IPv6 addresses; lo has ::1. sysctl keys follow procps:
 when the first separator is "/", "/" separates (a device name may hold a dot), else ".".
-IPv6 policy rules (`ip -6 rule`) and the SRv6 encapsulation source (`ip sr tunsrc`) are kept per namespace once a
+IPv6 policy rules (`ip -6 rule`), IPv4 policy rules (`ip -4 rule`: the kernel's defaults, the l3mdev rule with the
+first VRF), IPv4 unreachable routes, and the SRv6 encapsulation source (`ip sr tunsrc`) are kept per namespace once a
 call sets them; a device inherits net.ipv6.conf.default.seg6_enabled and net.ipv4.conf.default.rp_filter once
 the state holds them; net.vrf.strict_mode=1 is refused while two VRFs share a table, and then a VRF on a used table too.
 Nothing here touches the real system."""
@@ -319,12 +320,14 @@ def ip_main(k, nsname, args, out):
     if obj == "route":
         verb = args[0] if args else "show"
         rest = args[1:]
-        if fam != 6:
-            raise Fail("only IPv6 routes are modelled")
+        if fam not in (4, 6):
+            raise Fail("routes need -4 or -6 here")
+        key = "routes6" if fam == 6 else "routes4"  # IPv4: unreachable routes only, kept lazily
+        ns.setdefault(key, [])
         if verb in ("show", "list"):
             sel = dict(zip(rest[0::2], rest[1::2]))
             table = sel.get("table", "main")
-            routes = [r for r in ns["routes6"] if table == "all" or r["table"] == table]
+            routes = [r for r in ns[key] if table == "all" or r["table"] == table]
             if "proto" in sel:
                 routes = [r for r in routes if r.get("proto") == sel["proto"]]
             if "-j" in opts:
@@ -350,21 +353,48 @@ def ip_main(k, nsname, args, out):
                 raise Fail("only unreachable routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
             r = {"type": "unreachable", "dst": rest[1], "metric": sel["metric"], "table": sel.get("table", "main")}
-            ns["routes6"] = [x for x in ns["routes6"] if not (x["table"] == r["table"] and x["dst"] == r["dst"]
+            ns[key] = [x for x in ns[key] if not (x["table"] == r["table"] and x["dst"] == r["dst"]
                                                                and x["metric"] == r["metric"])]
-            ns["routes6"].append(r)
+            ns[key].append(r)
             return True
         if verb in ("del", "delete"):
             if rest[:1] != ["unreachable"]:
                 raise Fail("only unreachable routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
-            match = [x for x in ns["routes6"] if x["type"] == "unreachable" and x["dst"] == rest[1]
+            match = [x for x in ns[key] if x["type"] == "unreachable" and x["dst"] == rest[1]
                      and x["table"] == sel.get("table", "main") and ("metric" not in sel or x["metric"] == sel["metric"])]
             if not match:
                 raise Fail("RTNETLINK answers: No such process", 2)
-            ns["routes6"].remove(match[0])
+            ns[key].remove(match[0])
             return True
         raise Fail("route verb " + verb)
+
+    if obj == "rule" and fam == 4:  # IPv4 policy rules "pref <n> table <t>", from the kernel's defaults (lazily)
+        rules = rules4(ns)
+        verb = args[0] if args else "show"
+        sel = dict(zip(args[1::2], args[2::2]))
+        if "priority" in sel:
+            sel["pref"] = sel.pop("priority")
+        if "lookup" in sel:
+            sel["table"] = sel.pop("lookup")
+        if verb in ("show", "list"):
+            for r in sorted(rules, key=lambda r: int(r["pref"])):
+                if "pref" not in sel or r["pref"] == sel["pref"]:
+                    out.append("%s:\tfrom all lookup %s" % (r["pref"], r["table"]))
+            return False
+        if verb == "add":
+            r = {"pref": sel["pref"], "table": sel.get("table", "main")}
+            if r in rules:
+                raise Fail("RTNETLINK answers: File exists", 2)
+            rules.append(r)
+            return True
+        if verb in ("del", "delete"):
+            match = [r for r in rules if r["pref"] == sel.get("pref", r["pref"]) and r["table"] == sel.get("table", r["table"])]
+            if not match:
+                raise Fail("RTNETLINK answers: No such file or directory", 2)
+            rules.remove(match[0])
+            return True
+        raise Fail("rule verb " + verb)
 
     if obj == "rule":  # IPv6 policy rules "to <prefix> lookup <table> pref <n>" (kept per namespace, lazily)
         if fam != 6:
@@ -425,6 +455,17 @@ def ip_main(k, nsname, args, out):
     raise Fail("object " + obj)
 
 
+def rules4(ns):
+    """a namespace's IPv4 rules, created on first use with the kernel's defaults (and the l3mdev rule once there is a
+    VRF, as the vrf module adds it with the first VRF device)"""
+    if "rules4" not in ns:
+        ns["rules4"] = [{"pref": "0", "table": "local"}, {"pref": "32766", "table": "main"},
+                        {"pref": "32767", "table": "default"}]
+        if any(l["kind"] == "vrf" for l in ns["links"].values()):
+            ns["rules4"].append({"pref": "1000", "table": "[l3mdev-table]"})
+    return ns["rules4"]
+
+
 def link_add(k, nsname, rest):
     kw = {}
     name = None
@@ -452,6 +493,8 @@ def link_add(k, nsname, rest):
                 l["kind"] == "vrf" and l["table"] == table for l in k.ns(nsname)["links"].values()):
             raise Fail("Error: Table is used by another VRF.", 2)
         k.add_link(nsname, name, "vrf", table=extra[extra.index("table") + 1], **common)
+        if "rules4" in k.ns(nsname) and {"pref": "1000", "table": "[l3mdev-table]"} not in k.ns(nsname)["rules4"]:
+            k.ns(nsname)["rules4"].append({"pref": "1000", "table": "[l3mdev-table]"})
     elif kind == "vlan":
         parent = k.ns(nsname)["links"][kw["link"]]
         common["mtu"] = mtu or parent["mtu"]

@@ -104,7 +104,13 @@
 #   enters with the VRF device as input while its source's route leads to the core bridge, outside the VRF, which
 #   strict and loose mode both refuse; the egress VRF and the circuits' devices, strict, are left as they are). The
 #   kernel takes the larger of net.ipv4.conf.all.rp_filter and the device's, and all is the host's: a root with srv6
-#   fails the apply, before it changes anything, while all is not 0. None of the MPLS steps runs (modules, platform_labels,
+#   fails the apply, before it changes anything, while all is not 0. IPv4 in the namespace (root and gateway): the
+#   rule "lookup local" moves from 0 to 32765, behind the VRFs' l3mdev rule (added before the old one is deleted;
+#   refused while another IPv4 rule sits between 0 and 32765), and every VRF table gets an IPv4 unreachable default at
+#   metric 4278198272: a packet in a VRF (one decapsulated into it, or from a site) addressed to an address of the
+#   default VRF is then no longer delivered locally, nor routed through the main table; the VRF's own addresses are
+#   in its own table and stay reachable (IPv6 rules are left as they are: the default VRF's IPv6 addresses were
+#   measured unreachable from a VRF). None of the MPLS steps runs (modules, platform_labels,
 #   input). Both families ride the IPv6 core, so an IPv6 step that fails and the root's router advertisement check
 #   fail the apply too (exit 4, "transport srv6: ..." on stderr) instead of leaving IPv6 out, as does any of the
 #   steps above.
@@ -116,7 +122,8 @@
 #   xo<n> in the egress VRF (shc_egress6), a circuit's packets to the platform's sources are also dropped in
 #   prerouting by the device (shc_attach), and a gateway also clamps the SYNs it forwards to a site's bridge br<vni>
 #   (shc_gw_mss). down: the root removes the encapsulation source, the rule, the unreachable route and the guard (the
-#   sysctls stay, inert without SIDs); a gateway's state goes with its namespace.
+#   sysctls stay, inert without SIDs) and puts the IPv4 local rule back at 0 (added before the one at 32765 is
+#   deleted); a gateway's state goes with its namespace.
 #   shc-fabric-apply <instance> guard   (run periodically, any time): the guard table kept in place between applies.
 #   Each load lists the table into <instance>.guard next to the JSON; the action compares the namespace's table with
 #   that listing and loads it again when it is missing or differs. Prints guard=ok, guard=restored, or guard=none
@@ -401,7 +408,45 @@ srv6_up() {
     net/ipv6/seg6_flowlabel=1
   srv6_step "the unreachable route to the SID block" srv6_unreach "$SRV6_BLOCK"
   srv6_step "the rule to the SID block" srv6_rule "$SRV6_BLOCK"
+  srv6_step "the IPv4 local table behind the VRFs' rule" srv6_local4 last
   srv6_step "the encapsulation source" srv6_tunsrc "$SRV6_SRC"
+}
+
+# last|first: the IPv4 rule "lookup local" at 32765, behind the VRFs' l3mdev rule (1000), or back at 0 (the kernel's
+# order). In front of the l3mdev rule, a packet in a VRF (decapsulated into it) addressed to an address of the default
+# VRF is delivered locally before its VRF's table is read; behind it, the VRF's lookup ends in the VRF's own table
+# (its own addresses are there, and an unreachable default, vrf4_unreach). The new rule is added before the old one is
+# deleted (never a moment without one). Refused while another IPv4 rule sits between 0 and 32765: moved behind it,
+# the local table would no longer come first for the default VRF's own traffic matching it
+srv6_local4() {
+  local rules foreign
+  rules=$($NSX ip -4 rule show)
+  if [ "$1" = last ]; then
+    foreign=$(awk '{ p = $1; sub(":", "", p) } p + 0 > 0 && p + 0 < 32765 && !(p + 0 == 1000 && / lookup \[l3mdev-table\]/)' \
+      <<<"$rules" | paste -sd ';' -)
+    if [ -n "$foreign" ]; then
+      echo "transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: $foreign" >&2
+      return 1
+    fi
+    grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 32765 table local
+    ! grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 0 table local
+  else
+    grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 0 table local
+    ! grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 32765 table local
+  fi
+}
+
+# <table>: a VRF's IPv4 unreachable default at the highest metric (any FRR route wins), so a lookup in the VRF that
+# misses ends there instead of falling through to the rules behind the l3mdev rule (the local table, main)
+vrf4_unreach() {
+  $NSX ip -4 route show table "$1" | grep -qE '^unreachable default .*metric 4278198272( |$)' ||
+    $NSX ip -4 route replace unreachable default metric 4278198272 table "$1"
+}
+
+# <table>: a deleted VRF's IPv4 unreachable default (transport srv6 only; no command otherwise)
+vrf4_gone() {
+  [ "$TRANSPORT" = srv6 ] && [ -n "$1" ] || return 0
+  $NSX ip -4 route del unreachable default metric 4278198272 table "$1" 2>/dev/null || true
 }
 
 # [<block>]: the block unreachable in the main table at the highest metric (every real route wins: the locators are
@@ -431,6 +476,7 @@ srv6_down() {
   srv6_tunsrc ::
   srv6_rule ""
   srv6_unreach ""
+  srv6_local4 first
   $NSX nft delete table inet shc_core_guard 2>/dev/null || true
   rm -f "$GUARDREF"
 }
@@ -442,6 +488,8 @@ srv6_state() {
     net.ipv6.seg6_flowlabel "net/ipv6/conf/$1/seg6_enabled" 2>/dev/null || true
   $NSX ip -6 rule show pref 999 2>/dev/null || true
   $NSX ip -6 route show table main type unreachable 2>/dev/null | grep ' metric 4278198272' || true
+  $NSX ip -4 rule show 2>/dev/null || true
+  $NSX ip -4 route show table all 2>/dev/null | grep '^unreachable default .*metric 4278198272' || true
   $NSX ip sr tunsrc show 2>/dev/null || true
   $NSX nft -s list table inet shc_core_guard 2>/dev/null || true
 }
@@ -529,7 +577,7 @@ root_vrfs_prune() {
     for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname'); do ip link del "$d"; done
     t=$(vrf_table "$v")
     ip link del "$v"
-    vrf6_gone "$t"
+    vrf6_gone "$t"; vrf4_gone "$t"
   done
 }
 
@@ -542,7 +590,7 @@ egress_down() {
   m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty')
   ip link del egress0 2>/dev/null || true
   if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then
-    t=$(vrf_table "$m"); ip link del "$m"; vrf6_gone "$t"
+    t=$(vrf_table "$m"); ip link del "$m"; vrf6_gone "$t"; vrf4_gone "$t"
   fi
 }
 
@@ -1041,6 +1089,13 @@ root)
         v6 "IPv6 in VRF ${v%%:*}" vrf6 "${v%%:*}" "${v#*:}"
       done
     fi
+    # transport srv6: every root VRF's IPv4 lookup ends in its own table
+    if [ "$TRANSPORT" = srv6 ]; then
+      for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
+          | map(.table | tostring) | unique | .[]' "$CONF"); do
+        srv6_step "the IPv4 unreachable default of table $v" vrf4_unreach "$v"
+      done
+    fi
     # transport srv6: no routing header on any of the instance's devices (never the management interface)
     # shellcheck disable=SC2046
     [ "$TRANSPORT" != srv6 ] || srv6_step "seg6_enabled off on the instance's devices" srv6_seg6_off \
@@ -1207,6 +1262,7 @@ gateway)
       $X ip link show "$VRF" >/dev/null 2>&1 || $X ip link add "$VRF" type vrf table "$VNI"
       $X ip link set "$VRF" up
       v6 "IPv6 in VRF $VRF" vrf6 "$VRF" "$VNI"
+      [ "$TRANSPORT" != srv6 ] || srv6_step "the IPv4 unreachable default of VRF $VRF" vrf4_unreach "$VNI"
       # shellcheck disable=SC2046
       v6 "IPv6 covering routes in VRF $VRF" vrf6_covers "$VRF" "$VNI" \
         $(jq -r --arg v "$VRF" '.vrfs[] | select(.name == $v) | .covering6 // [] | .[]' "$CONF")
@@ -1245,7 +1301,7 @@ gateway)
       $X ip link del "vx$VNI" 2>/dev/null || true
       $X ip link del "br$VNI" 2>/dev/null || true
       $X ip link del "$VRF"
-      vrf6_gone "$VNI"
+      vrf6_gone "$VNI"; vrf4_gone "$VNI"
     done
     # transport srv6: no routing header on any device of the namespace
     # shellcheck disable=SC2046

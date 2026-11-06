@@ -3,8 +3,9 @@ test_shc_fabric_apply. transport absent or "mpls": exactly today's calls, output
 "srv6", root and gateway, each in its own namespace: the guard table inet shc_core_guard before anything else, the
 strict VRF mode (refused, and the apply failed naming the VRFs, while two VRFs share a table), the seg6 sysctls, the
 rule to the block at pref 999, the encapsulation source; no MPLS step; a second run changed=no; a failing step, a
-failing IPv6 core step and the root's router advertisement check fail the apply (on mpls: the warning, exit 0); down
-leaves nothing in the root namespace. The netfilter additions on srv6 (zones by the VRF device in prerouting, the
+failing IPv6 core step and the root's router advertisement check fail the apply (on mpls: the warning, exit 0); the
+IPv4 local table behind the VRFs' rule with an unreachable default in every VRF; down leaves nothing in the root
+namespace. The netfilter additions on srv6 (zones by the VRF device in prerouting, the
 IPv6 MSS clamp toward xo<n>, the circuits' platform-source drop in prerouting, the gateway's forward clamp toward
 br<vni>) and, where an unprivileged network namespace allows it, `nft -c` of every srv6 rule set.
 Documentation prefixes and an arbitrary block of 5f00::/16 only."""
@@ -617,6 +618,100 @@ class BaseScriptUnchanged(ApplyCase):
                 self.assertEqual(o_out, n_out, extra)
             self.assertEqual(old[1], new[1], extra)
             self.assertEqual(old[2], new[2], extra)
+
+
+KERNEL4 = [{"pref": "0", "table": "local"}, {"pref": "32766", "table": "main"}, {"pref": "32767", "table": "default"}]
+SRV6_4 = [{"pref": "1000", "table": "[l3mdev-table]"}, {"pref": "32765", "table": "local"},
+          {"pref": "32766", "table": "main"}, {"pref": "32767", "table": "default"}]
+
+
+def rules4(st, ns):
+    return sorted(st["ns"][ns].get("rules4", KERNEL4), key=lambda r: int(r["pref"]))
+
+
+def unreach4(st, ns):
+    return sorted(r["table"] for r in st["ns"][ns].get("routes4", [])
+                  if r["type"] == "unreachable" and r["dst"] == "default" and r["metric"] == "4278198272")
+
+
+class LocalRuleOrder(ApplyCase):
+    """transport srv6, IPv4: the local table behind the VRFs' l3mdev rule (32765, added before the rule at 0 goes), so a
+    packet in a VRF never reaches the default VRF's local addresses, and every VRF's table ends in an unreachable
+    default; root down restores the kernel's order; mpls never touches either"""
+
+    def test_root(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        out, log = h.ok(self, "root")
+        self.keep("srv6-root-local-rule", log, out)
+        st = h.get_state()
+        self.assertEqual(rules4(st, ""), SRV6_4)
+        self.assertLess(index(log, r"^W \[root\] ip -4 rule add pref 32765 table local$"),
+                        index(log, r"^W \[root\] ip -4 rule del pref 0 table local$"))
+        self.assertLess(index(log, r"^W \[root\] ip -4 rule del pref 0 table local$"), index(log, r"^W \[root\] ip link add br-core "))
+        self.assertEqual(unreach4(st, ""), ["110000", "110001", "9000"])
+        out2, log2 = h.ok(self, "root")
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        self.assertEqual([l for l in writes(log2) if " -4 " in l], [])
+        # counted: the rule put back by hand is moved again
+        st = h.get_state()
+        st["ns"][""]["rules4"].append({"pref": "0", "table": "local"})
+        h.set_state(st)
+        out3, _ = h.ok(self, "root")
+        self.assertTrue(out3.strip().endswith("changed=yes"), out3)
+        self.assertEqual(rules4(h.get_state(), ""), SRV6_4)
+        # a circuit's VRF removed: its IPv4 unreachable default with it
+        c = root_full(**ROOT_SRV6)
+        c["attachments"]["circuits"] = []
+        h.conf("root", c)
+        h.ok(self, "root")
+        self.assertEqual(unreach4(h.get_state(), ""), ["110000", "9000"])
+        # down: the kernel's order again (added before deleted), the VRFs' routes gone
+        out4, log4 = h.ok(self, "root", "down")
+        self.assertEqual(rules4(h.get_state(), ""), sorted(KERNEL4 + [{"pref": "1000", "table": "[l3mdev-table]"}],
+                                                          key=lambda r: int(r["pref"])))
+        self.assertLess(index(log4, r"^W \[root\] ip -4 rule add pref 0 table local$"),
+                        index(log4, r"^W \[root\] ip -4 rule del pref 32765 table local$"))
+        self.assertEqual(unreach4(h.get_state(), ""), [])
+
+    def test_gateway(self):
+        h = self.h
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full(**GW_SRV6))
+        out, log = h.ok(self, "gw-iaas1")
+        st = h.get_state()
+        self.assertEqual(rules4(st, "gw-iaas1"), SRV6_4)
+        self.assertEqual(unreach4(st, "gw-iaas1"), ["51000", "51002"])
+        self.assertEqual([l for l in log if " -4 rule " in l and not l.startswith(("W [gw-iaas1]", "R [gw-iaas1]"))], [])
+        out2, log2 = h.ok(self, "gw-iaas1")
+        self.assertTrue(out2.strip().endswith("changed=no"), out2)
+        self.assertEqual([l for l in writes(log2) if " -4 " in l], [])
+        h.conf("gw-iaas1", gw_full(**dict(GW_SRV6, vrfs=GW_CONF["vrfs"][:1])))
+        h.ok(self, "gw-iaas1")
+        self.assertEqual(unreach4(h.get_state(), "gw-iaas1"), ["51000"])
+
+    def test_foreign_rule_refused(self):
+        h = self.h
+        st = blade()
+        st["ns"][""]["rules4"] = KERNEL4 + [{"pref": "100", "table": "200"}]
+        h.set_state(st)
+        h.conf("root", root_full(**ROOT_SRV6))
+        rc, out, err, log = h.run("root")
+        self.keep("srv6-root-foreign-rule", log, out + " | stderr: " + err)
+        self.assertEqual(rc, 4, err)
+        self.assertIn("transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: "
+                      "100:\tfrom all lookup 200", err)
+        self.assertIn("transport srv6: the IPv4 local table behind the VRFs' rule failed", err)
+        self.assertEqual([l for l in writes(log) if " -4 rule " in l], [])
+
+    def test_mpls_untouched(self):
+        h = self.h
+        h.conf("root", root_full())
+        _, log = h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full())
+        _, log2 = h.ok(self, "gw-iaas1")
+        self.assertEqual([l for l in log + log2 if " -4 rule " in l or " -4 route " in l], [])
 
 
 if __name__ == "__main__":
