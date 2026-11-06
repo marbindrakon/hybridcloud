@@ -370,7 +370,8 @@ vrf_table() {
 ra_precheck() {
   local d m
   for d in $(ip -j -6 route show proto ra | jq -r '.[] | (.dev // empty), (.nexthops // [] | .[].dev)' | sort -u); do
-    m=$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty')
+    # (a device gone since the route was read takes no router advertisements)
+    m=$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty') || continue
     if [ -n "$m" ] && shows -q ' vrf table ' ip -d link show "$m" 2>/dev/null; then continue; fi
     echo "warning: interface $d relies on router advertisements; IPv6 core not applied"
     return 1
@@ -707,7 +708,8 @@ egress_down() {
   rm -f "$MARK6"
   nft delete table ip shc_egress 2>/dev/null || true
   for x in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
-  m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty')
+  # a root that never had egress has no egress0 (ip fails, the pipeline with it): nothing to remove
+  m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty') || m=""
   ip link del egress0 2>/dev/null || true
   if [ -n "$m" ] && shows -q ' vrf table ' ip -d link show "$m" 2>/dev/null; then
     t=$(vrf_table "$m"); ip link del "$m"; vrf6_gone "$t"; vrf4_gone "$t"
@@ -1149,7 +1151,8 @@ post_start() {
   ns=$(q .netns); conf=/etc/frr/$ns/frr.conf.shc; [ -f "$conf" ] || conf=/etc/frr/$ns/frr.conf
   want=$(jq -r '.vrfs // [] | .[].name' "$CONF" | sort | tr '\n' ' ')
   for i in $(seq 1 30); do
-    have=$(vtysh -N "$ns" -c 'show vrf' 2>/dev/null | awk '$1 == "vrf" {print $2}' | sort | tr '\n' ' ')
+    # (vtysh fails until the instance's daemons answer: none known yet, wait on)
+    have=$(vtysh -N "$ns" -c 'show vrf' 2>/dev/null | awk '$1 == "vrf" {print $2}' | sort | tr '\n' ' ') || have=""
     vtysh -N "$ns" -c 'show bgp summary' >/dev/null 2>&1 && [ "$have" = "$want" ] && break
     sleep 2
   done
