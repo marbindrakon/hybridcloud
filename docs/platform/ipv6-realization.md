@@ -633,7 +633,9 @@ IPv6 between the sites rides the border gateway core as IPv6 VPN routes next to 
 dual-stack: every root and gateway namespace on a border gateway node gets an IPv6 loopback in the same IS-IS
 (single topology, one prefix SID per loopback), the core legs carry IPv6 link-local addresses only, and a VRF's IPv6
 VPN routes use the namespace's IPv6 loopback as next hop. FRR installs no labelled IPv6 route over an IPv4 next hop,
-so an IPv4-only core can't carry IPv6 between sites. The BGP sessions stay on the IPv4 loopbacks.
+so an IPv4-only core can't carry IPv6 between sites. The BGP sessions stay on the IPv4 loopbacks. This is the
+MPLS transport, the default; a node can carry its VPN routes over SRv6 instead, which needs this dual-stack core
+([SRv6 core transport](srv6-core-transport.md)).
 
 ```yaml
 core:
