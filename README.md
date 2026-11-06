@@ -31,6 +31,8 @@ status. Argo CD on the central cluster deploys the whole platform from this repo
   roles, sign-in.
 - [IPv6 realization](docs/platform/ipv6-realization.md): platform IPv6 pools, per-site switches,
   translation, IPv6 egress, reverse DNS, the cloud edges.
+- [SRv6 core transport](docs/platform/srv6-core-transport.md): the fabric's core transport switch,
+  the SID block, readiness and status.
 - [Bootstrap](bootstrap/README.md): build the charts and seed Argo CD on a new installation.
 - [Disconnected deploy](docs/disconnected-deploy.md): what a disconnected installation needs.
 - [Architecture](architecture/README.md) and its [index](architecture/docs/architecture.md).

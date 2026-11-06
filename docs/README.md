@@ -19,6 +19,7 @@
 |---|---|
 | [Onboard a tenant](platform/onboard-a-tenant.md) | Sites and allowed sites, the tenant and its profile, access groups, the role table, the access fields, membership, sign-in checks, offboarding. |
 | [IPv6 realization](platform/ipv6-realization.md) | Platform IPv6 pools, block sizes, tenant allowance and hold-down, exclusive ranges, per-site switches and sources, site capabilities, AWS and Google Cloud placements, translation, IPv6 egress, the dual-stack core, reverse DNS, the AWS and Google Cloud edges. |
+| [SRv6 core transport](platform/srv6-core-transport.md) | The fabric's core transport switch, the SID block and locators, what a border gateway node needs, the guard and the routing rule, readiness, status fields, changing transport. |
 | [Convert an OpenShift Virtualization site to dual-stack](platform/metal-dual-stack-conversion.md) | The day-2 conversion of a bare-metal OpenShift cluster: pre-checks, the node step, the cluster step, the roll, post steps, verification, rollback by rebuild, known product issues. |
 | [Bootstrap](../bootstrap/README.md) | Building the charts and seeding Argo CD on a new installation. |
 | [Disconnected deploy](disconnected-deploy.md) | What a disconnected installation needs. |
