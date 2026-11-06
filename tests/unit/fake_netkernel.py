@@ -15,7 +15,8 @@ net.ipv6.conf.default when it is created or moved into a namespace; writing net.
 fe80::/64 link-local from its MAC; disable_ipv6=1 removes all IPv6 addresses; lo has ::1. sysctl keys follow procps:
 when the first separator is "/", "/" separates (a device name may hold a dot), else ".".
 IPv6 policy rules (`ip -6 rule`) and the SRv6 encapsulation source (`ip sr tunsrc`) are kept per namespace once a
-call sets them; net.vrf.strict_mode=1 is refused while two VRFs share a table, and then a VRF on a used table too.
+call sets them; a device inherits net.ipv6.conf.default.seg6_enabled and net.ipv4.conf.default.rp_filter once
+the state holds them; net.vrf.strict_mode=1 is refused while two VRFs share a table, and then a VRF on a used table too.
 Nothing here touches the real system."""
 import fcntl
 import ipaddress
@@ -77,6 +78,10 @@ class Kernel:
         sc = self.ns(nsname)["sysctl"]
         for a in V6_ATTRS:
             sc[f"net/ipv6/conf/{dev}/{a}"] = sc.get(f"net/ipv6/conf/default/{a}", NETNS_DEFAULTS[a])
+        # seg6_enabled (and IPv4 rp_filter) only once a call set the namespace's default (states without it unchanged)
+        for key in ("net/ipv6/conf/{}/seg6_enabled", "net/ipv4/conf/{}/rp_filter"):
+            if key.format("default") in sc:
+                sc[key.format(dev)] = sc[key.format("default")]
 
     def drop6(self, nsname, dev):
         sc = self.ns(nsname)["sysctl"]
