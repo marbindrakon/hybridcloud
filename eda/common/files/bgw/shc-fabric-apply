@@ -66,7 +66,8 @@
 #   never takes RAs or SLAAC. The root
 #   leaves IPv6 out (prints "warning: ... IPv6 core not applied", IPv4 as always, exit 0) when a host interface
 #   outside the VRFs holds routes from router advertisements, and the same when an IPv6 step fails (a sysctl the
-#   host lacks, an address refused): the rest of IPv6 is left out, IPv4 goes on as without the keys. The
+#   host lacks, an address refused): the rest of IPv6 is left out, IPv4 goes on as without the keys (transport
+#   mpls; with srv6 both fail the apply, see the core transport below). The
 #   management interface is never touched. The pools of the last run that had them are kept in <instance>.pools6
 #   next to the JSON: a run whose pools are empty (the IPv6 core rolled back) still removes the addresses taken from
 #   them, then forgets them; the IPv6 sysctls and unreachable defaults stay (they don't affect IPv4). A VRF removed
@@ -92,8 +93,10 @@
 #   namespace share a table, which fails the apply naming them), seg6_enabled on all, default and (once it exists)
 #   the core leg, net.ipv6.seg6_flowlabel=1, the rule "to <block> lookup main" at pref 999 (ahead of the VRFs' rule:
 #   the kernel looks the SID of a packet it encapsulates up in the packet's ingress VRF otherwise), the encapsulation
-#   source (ip sr tunsrc) = the IPv6 loopback. None of the MPLS steps runs (modules, platform_labels, input). A step
-#   that fails fails the apply (exit 4). The rule sets above gain what the encapsulation would otherwise bypass (only
+#   source (ip sr tunsrc) = the IPv6 loopback. None of the MPLS steps runs (modules, platform_labels, input). Both
+#   families ride the IPv6 core, so an IPv6 step that fails and the root's router advertisement check fail the apply
+#   too (exit 4, "transport srv6: ..." on stderr) instead of leaving IPv6 out, as does any of the steps above.
+#   The rule sets above gain what the encapsulation would otherwise bypass (only
 #   with srv6): a packet decapsulated into a VRF passes prerouting with the VRF as its input interface, then
 #   forward, never output (as an MPLS pop does); a packet that is encapsulated passes prerouting only, never forward.
 #   So the conntrack zones are also set in prerouting by the VRF device (shc_egress, shc_egress6, shc_attach,
@@ -212,6 +215,8 @@ v6() {
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || return 0
+  # transport srv6: both families ride the IPv6 core, so IPv4 alone is no working state: the apply fails
+  [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: $what failed (the IPv6 core carries both families)" >&2; exit 4; }
   echo "warning: $what failed; IPv6 core not applied"
   V6FAILED=1; V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
 }
@@ -925,7 +930,10 @@ root)
   EV=$(opt .egress.vrf)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
-    if [ -n "$V6" ] && ! ra_precheck; then V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""; fi
+    if [ -n "$V6" ] && ! ra_precheck; then
+      [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: a host interface relies on router advertisements" >&2; exit 4; }
+      V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
+    fi
     if [ "$TRANSPORT" = srv6 ]; then
       srv6_up "$BR"
     else

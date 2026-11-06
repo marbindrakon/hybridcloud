@@ -2,10 +2,11 @@
 test_shc_fabric_apply. transport absent or "mpls": exactly today's calls, output, kernel state and files. transport
 "srv6", root and gateway, each in its own namespace: the guard table inet shc_core_guard before anything else, the
 strict VRF mode (refused, and the apply failed naming the VRFs, while two VRFs share a table), the seg6 sysctls, the
-rule to the block at pref 999, the encapsulation source; no MPLS step; a second run changed=no; a failing step fails
-the apply; down leaves nothing in the root namespace. The netfilter additions on srv6 (zones by the VRF device in
-prerouting, the IPv6 MSS clamp toward xo<n>, the circuits' platform-source drop in prerouting, the gateway's forward
-clamp toward br<vni>) and, where an unprivileged network namespace allows it, `nft -c` of every srv6 rule set.
+rule to the block at pref 999, the encapsulation source; no MPLS step; a second run changed=no; a failing step, a
+failing IPv6 core step and the root's router advertisement check fail the apply (on mpls: the warning, exit 0); down
+leaves nothing in the root namespace. The netfilter additions on srv6 (zones by the VRF device in prerouting, the
+IPv6 MSS clamp toward xo<n>, the circuits' platform-source drop in prerouting, the gateway's forward clamp toward
+br<vni>) and, where an unprivileged network namespace allows it, `nft -c` of every srv6 rule set.
 Documentation prefixes and an arbitrary block of 5f00::/16 only."""
 import copy
 import os
@@ -294,6 +295,70 @@ class GatewaySrv6(ApplyCase):
         self.assertNotIn("gw-iaas1", h.get_state()["ns"])
         self.assertEqual(h.get_state()["ns"][""], self.root_after)
         self.assertTrue(out.strip().endswith("changed=yes"), out)
+
+
+class IPv6CoreRequired(ApplyCase):
+    """transport srv6: both families ride the IPv6 core, so an IPv6 step that fails, and the root's router
+    advertisement check, fail the apply; on mpls both keep the warning line and exit 0"""
+
+    RA = {"type": "unicast", "dst": "default", "via": "fe80::1", "dev": "bond0.10", "proto": "ra", "metric": "1024",
+          "table": "main"}
+
+    def ra_blade(self):
+        st = blade()
+        st["ns"][""]["routes6"].append(dict(self.RA))
+        return st
+
+    def test_ra_precheck_fails_the_apply(self):
+        h = self.h
+        h.set_state(self.ra_blade())
+        h.conf("root", root_full(**ROOT_SRV6))
+        rc, out, err, log = h.run("root")
+        self.keep("srv6-root-ra-precheck", log, out + " | stderr: " + err)
+        self.assertEqual(rc, 4, err)
+        self.assertIn("transport srv6: a host interface relies on router advertisements", err)
+        self.assertIn("warning: interface bond0.10 relies on router advertisements", out)
+        self.assertEqual(writes(log), [])  # nothing changed: the check comes first
+        # mpls: as before, the warning and exit 0
+        h.set_state(self.ra_blade())
+        h.conf("root", root_full())
+        rc, out, err, _ = h.run("root")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("IPv6 core not applied", out)
+
+    def test_root_ipv6_step_fails_the_apply(self):
+        h = self.h
+        refuse = r"^\[root\] sysctl -qw net/ipv6/conf/br-core/accept_ra=0$"
+        h.conf("root", root_full(**ROOT_SRV6))
+        rc, out, err, log = h.run("root", fail=refuse)
+        self.keep("srv6-root-v6-step-refused", log, out + " | stderr: " + err)
+        self.assertEqual(rc, 4, err)
+        self.assertIn("transport srv6: IPv6 settings of the core bridge br-core failed (the IPv6 core carries both "
+                      "families)", err)
+        self.assertNotIn("IPv6 core not applied", out)
+        h.set_state(blade())
+        h.conf("root", root_full())
+        rc, out, err, _ = h.run("root", fail=refuse)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("warning: IPv6 settings of the core bridge br-core failed; IPv6 core not applied", out)
+
+    def test_gateway_ipv6_step_fails_the_apply(self):
+        h = self.h
+        refuse = r"^\[gw-iaas1\] ip addr add \S+ dev t51000 nodad$"
+        h.conf("root", root_full(**ROOT_SRV6))
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full(**GW_SRV6))
+        rc, out, err, log = h.run("gw-iaas1", fail=refuse)
+        self.keep("srv6-gw-v6-step-refused", log, out + " | stderr: " + err)
+        self.assertEqual(rc, 4, err)
+        self.assertIn("transport srv6: IPv6 in VRF t51000 failed", err)
+        h.set_state(blade())
+        h.conf("root", root_full())
+        h.ok(self, "root")
+        h.conf("gw-iaas1", gw_full())
+        rc, out, err, _ = h.run("gw-iaas1", fail=refuse)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("warning: IPv6 in VRF t51000 failed; IPv6 core not applied", out)
 
 
 if __name__ == "__main__":
