@@ -384,14 +384,15 @@
       # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the always block
       # skips the release; any other failure releases it at once
       rescue:
-        # an apply that refused (exit 4 with "transport srv6: …" on stderr, run directly on a node) fails its step with
+        # an apply that refused (exit 4 with "shc-fabric-apply: …" or, for what only the SRv6 core refuses, "transport
+        # srv6: …" on stderr, run directly on a node) fails its step with
         # "non-zero return code" only: its own lines go into the status message (fab_fail_msg, read by the rescue below).
         # Only the message changes, and only when the failed step printed such lines; a step that timed out keeps the lease
         # keeper's message
         - name: Keep the apply's own reason for the status
           vars:
             _why: >-
-              {{ (ansible_failed_result.stderr_lines | default([], true) | select('match', '^transport srv6: ') | list)
+              {{ (ansible_failed_result.stderr_lines | default([], true) | select('match', '^(transport srv6|shc-fabric-apply): ') | list)
                  if ansible_failed_result is mapping and ansible_failed_result.timedout is not defined else [] }}
           ansible.builtin.set_fact:
             fab_fail_msg: >-

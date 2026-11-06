@@ -179,7 +179,8 @@
   failed_when: false
 
 # the unit is active (its apply succeeded), or the job fails with the apply's own reason: the lines it printed under
-# this start ("transport srv6: …", what the SRv6 core refuses), else systemd's message. Read only
+# this start ("shc-fabric-apply: …", what the apply refuses on either transport, or "transport srv6: …", what only
+# the SRv6 core refuses), else systemd's message. Read only
 - name: "{{ bgw_node.name }}: the root instance runs, or why not"
   ansible.builtin.shell: |
     u=shc-fabric-apply@root.service
@@ -188,7 +189,7 @@
     echo "state=$s"
     inv=$(systemctl show -p InvocationID --value "$u")
     if [ -n "$inv" ]; then journalctl -o cat --no-pager "_SYSTEMD_INVOCATION_ID=$inv"; else journalctl -o cat --no-pager -n 50 -u "$u"; fi \
-      | grep -E '^transport srv6: ' | tail -n 5
+      | grep -E '^(transport srv6|shc-fabric-apply): ' | tail -n 5
     exit 1
   args:
     executable: /bin/bash
@@ -199,7 +200,7 @@
 
 - name: "{{ bgw_node.name }}: stop when the root instance did not start"
   vars:
-    _why: "{{ _hf_unit_state.stdout_lines | default([]) | select('match', '^transport srv6: ') | list }}"
+    _why: "{{ _hf_unit_state.stdout_lines | default([]) | select('match', '^(transport srv6|shc-fabric-apply): ') | list }}"
   ansible.builtin.fail:
     msg: >-
       HybridFabric {{ fab_name }} on {{ bgw_node.name }}: the root instance (shc-fabric-apply@root.service) did not
