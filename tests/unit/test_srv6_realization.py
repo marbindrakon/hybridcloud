@@ -1,8 +1,8 @@
-"""The SRv6 core transport in eda/common/files/shc_fabric.py: the realization keys core.transport,
-core.transportByNode and core.srv6.block (defaults, check-fabric's validation), the SRv6 locator pe-addresses
-returns (locator, locatorNode), the node-transport sub-command, and the SID block among the platform's IPv6 ranges.
+"""The SRv6 core transport in eda/common/files/shc_fabric.py: the realization keys core.transport (one for the
+fabric) and core.srv6.block (defaults, check-fabric's validation), the SRv6 locator pe-addresses returns (locator,
+locatorNode), and the SID block among the platform's IPv6 ranges.
 
-With every node on mpls and no block, check-fabric, pe-addresses, platform_ranges6 and check-circuit answer exactly
+On mpls and with no block, check-fabric, pe-addresses, platform_ranges6 and check-circuit answer exactly
 what the release before answered (BASE below, read from Git; those comparisons are skipped without it), apart from
 the new keys. Documentation and private ranges only; the SID block examples are made up."""
 import copy
@@ -70,13 +70,13 @@ class Defaults(unittest.TestCase):
     def test_realization_keys(self):
         core = REAL["core"]
         self.assertEqual(core["transport"], "mpls")
-        self.assertEqual(core["transportByNode"], {})
+        self.assertNotIn("transportByNode", core)
         self.assertEqual(core["srv6"], {"block": ""})
 
     def test_defaults_pass(self):
         r = fabric(REAL["core"])
         self.assertEqual(r["errors"], [])
-        self.assertEqual(r["transports"], {"bgw-1": "mpls", "bgw-2": "mpls"})
+        self.assertEqual(r["transport"], "mpls")
 
     def test_whole_default_realization_passes(self):
         r = F.check_fabric({"spec": spec(), "realization": copy.deepcopy(REAL)})
@@ -96,7 +96,7 @@ AT6 = {"enabled": True, "vlanPool": {"start": 3000, "end": 3099}, "linkPool": "1
 
 @unittest.skipIf(BASE_MOD is None, f"release {BASE} not readable from Git")
 class AsTheRelease(unittest.TestCase):
-    """mpls everywhere and no block: the release's answers, plus the new keys only."""
+    """mpls and no block: the release's answers, plus the new keys only."""
 
     def test_check_fabric(self):
         for core in CORPUS:
@@ -104,8 +104,7 @@ class AsTheRelease(unittest.TestCase):
                 for real in ({}, {"attachments": AT6}):
                     req = {"spec": spec(nodes), "realization": dict({"core": copy.deepcopy(core)}, **real)}
                     new, old = F.check_fabric(copy.deepcopy(req)), BASE_MOD.check_fabric(copy.deepcopy(req))
-                    self.assertEqual(set(new["transports"].values()) - {"mpls"}, set(), core)
-                    new.pop("transports")
+                    self.assertEqual(new.pop("transport"), "mpls", core)
                     self.assertEqual(new, old, (core, nodes, real))
 
     def test_pe_addresses(self):
@@ -129,47 +128,35 @@ class AsTheRelease(unittest.TestCase):
 
 
 class CheckTransport(unittest.TestCase):
-    def test_srv6_everywhere(self):
+    def test_srv6(self):
         r = fabric(SRV6)
         self.assertEqual(r["errors"], [])
-        self.assertEqual(r["transports"], {"bgw-1": "srv6", "bgw-2": "srv6"})
+        self.assertEqual(r["transport"], "srv6")
 
-    def test_one_node(self):
-        r = fabric(dict(CORE6, transportByNode={"bgw-2": "srv6"}, srv6={"block": BLOCK}))
-        self.assertEqual(r["errors"], [])
-        self.assertEqual(r["transports"], {"bgw-1": "mpls", "bgw-2": "srv6"})
-        # and the other way round: srv6 the default, one node back on mpls
-        r = fabric(dict(SRV6, transportByNode={"bgw-1": "mpls"}))
-        self.assertEqual(r["errors"], [])
-        self.assertEqual(r["transports"], {"bgw-1": "mpls", "bgw-2": "srv6"})
-
-    def test_empty_values_are_mpls(self):
-        r = fabric(dict(CORE, transport="", transportByNode={"bgw-1": ""}))
-        self.assertEqual(r["errors"], [])
-        self.assertEqual(r["transports"], {"bgw-1": "mpls", "bgw-2": "mpls"})
-        self.assertEqual(fabric(dict(CORE, transport=None, transportByNode=None))["errors"], [])
+    def test_empty_is_mpls(self):
+        for t in ("", None):
+            r = fabric(dict(CORE, transport=t))
+            self.assertEqual((r["errors"], r["transport"]), ([], "mpls"), t)
 
     def test_unknown_transport(self):
-        self.assertIn("core.transport 'MPLS' is not one of mpls, srv6", errs(dict(CORE, transport="MPLS")))
-        self.assertIn("core.transportByNode.bgw-1 'sr-mpls' is not one of", errs(dict(CORE, transportByNode={"bgw-1": "sr-mpls"})))
+        r = fabric(dict(CORE, transport="MPLS"))
+        self.assertIn("core.transport 'MPLS' is not one of mpls, srv6", " | ".join(r["errors"]))
+        self.assertEqual(r["transport"], "")
 
-    def test_unknown_node(self):
-        e = errs(dict(CORE, transportByNode={"bgw-3": "mpls"}))
-        self.assertIn("core.transportByNode.bgw-3 names no node of borderGateway.nodes", e)
-
-    def test_by_node_not_a_mapping(self):
-        self.assertIn("core.transportByNode is not a mapping", errs(dict(CORE, transportByNode=["bgw-1"])))
+    def test_no_per_node_transport(self):
+        e = errs(dict(SRV6, transportByNode={"bgw-1": "mpls"}))
+        self.assertIn("core.transportByNode is not supported: the fabric has one transport (core.transport)", e)
+        # an empty leftover is harmless
+        self.assertEqual(errs(dict(SRV6, transportByNode={})), "")
 
     def test_srv6_needs_the_ipv6_core(self):
-        e = errs(dict(CORE, transport="srv6", srv6={"block": BLOCK}))
-        self.assertIn("srv6 (nodes bgw-1, bgw-2) needs the dual-stack core (core.loopbackPool6)", e)
-        e = errs(dict(CORE, transportByNode={"bgw-2": "srv6"}, srv6={"block": BLOCK}))
-        self.assertIn("srv6 (nodes bgw-2) needs the dual-stack core", e)
+        self.assertIn("core.transport srv6 needs the dual-stack core (core.loopbackPool6)",
+                      errs(dict(CORE, transport="srv6", srv6={"block": BLOCK})))
 
     def test_srv6_needs_a_block(self):
         for core in (dict(CORE6, transport="srv6"), dict(CORE6, transport="srv6", srv6={"block": ""}),
                      dict(CORE6, transport="srv6", srv6={})):
-            self.assertIn("needs core.srv6.block", errs(core))
+            self.assertIn("core.transport srv6 needs core.srv6.block", errs(core))
 
     def test_malformed_block_named_once(self):
         e = fabric(dict(CORE6, transport="srv6", srv6={"block": "5f00:db8::1/32"}))["errors"]
@@ -186,7 +173,7 @@ class CheckBlock(unittest.TestCase):
         self.assertEqual(errs(dict(SRV6, srv6={"block": "5f00:ffff::/32"})), "")
         self.assertEqual(errs(dict(SRV6, srv6={"block": "5f00::/32"})), "")
 
-    def test_checked_while_every_node_is_mpls(self):
+    def test_checked_on_mpls(self):
         self.assertEqual(errs(dict(CORE6, srv6={"block": BLOCK})), "")
         self.assertIn("is not a /32 inside 5f00::/16", errs(dict(CORE6, srv6={"block": "2001:db8::/32"})))
         # a block without the IPv6 core is fine while no node uses it
@@ -289,31 +276,6 @@ class Locator(unittest.TestCase):
         r = json.loads(p.stdout)
         self.assertEqual((r["locator"], r["locatorNode"], r["loopbackIp6"]),
                          ("5f00:db8:102::/48", 258, "2001:db8:4005:ffff::2"))
-
-
-class NodeTransport(unittest.TestCase):
-    def nt(self, core, node):
-        return F.node_transport_cmd({"core": core, "node": node})
-
-    def test_resolution(self):
-        self.assertEqual(self.nt({}, "bgw-1"), {"errors": [], "transport": "mpls"})
-        self.assertEqual(self.nt(REAL["core"], "bgw-1")["transport"], "mpls")
-        self.assertEqual(self.nt({"transport": "srv6"}, "bgw-1")["transport"], "srv6")
-        core = {"transport": "mpls", "transportByNode": {"bgw-2": "srv6"}}
-        self.assertEqual(self.nt(core, "bgw-1")["transport"], "mpls")
-        self.assertEqual(self.nt(core, "bgw-2")["transport"], "srv6")
-        self.assertEqual(self.nt({"transport": "srv6", "transportByNode": {"bgw-2": ""}}, "bgw-2")["transport"], "srv6")
-
-    def test_invalid(self):
-        r = self.nt({"transport": "srv6", "transportByNode": {"bgw-1": "SRv6"}}, "bgw-1")
-        self.assertEqual(r["transport"], "")
-        self.assertIn("'SRv6' of node bgw-1 is not one of mpls, srv6", r["errors"][0])
-
-    def test_cli(self):
-        req = {"action": "node-transport", "core": {"transportByNode": {"bgw-2": "srv6"}}, "node": "bgw-2"}
-        p = subprocess.run([sys.executable, "-I", os.path.join(FILES, "shc_fabric.py")], input=json.dumps(req),
-                           capture_output=True, text=True, check=True)
-        self.assertEqual(json.loads(p.stdout), {"errors": [], "transport": "srv6"})
 
 
 class PlatformRange(unittest.TestCase):
