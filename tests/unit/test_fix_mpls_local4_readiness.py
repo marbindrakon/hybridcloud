@@ -124,7 +124,7 @@ class Srv6Check(unittest.TestCase):
             a = cc.gw_ok()
         else:
             code, args = snippet(render(shell_of(st.RT, st.T_RT_WAIT), **st.srv6(st.ROOT_VARS)))
-            a = st.core_answers([], [], static=[st.RT_PE["locator"]], running=cc.root_running(),
+            a = st.core_answers([], [], own=[st.RT_PE["locator"]], running=cc.root_running(),
                                 guard=st.guard_table("br-core"))
         a.pop("ip -4 rule show")
         first = {"ip -4 rule show": rules}

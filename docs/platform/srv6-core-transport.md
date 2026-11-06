@@ -16,7 +16,7 @@ are supported; `mpls` is the default.
 
 | | `mpls` (default) | `srv6` |
 |---|---|---|
-| IS-IS on the core | segment routing: a prefix SID per loopback, MPLS labels | dual-stack IS-IS as before, without segment routing; each provider edge's locator enters level 2 as a discard route, restricted to the locator |
+| IS-IS on the core | segment routing: a prefix SID per loopback, MPLS labels | dual-stack IS-IS as before, without segment routing; each provider edge's locator is a prefix of its passive `lo`, nothing is redistributed |
 | VPN sessions to the root | over the IPv4 loopbacks | over the IPv6 loopbacks, with the extended next hop capability; both VPN families on them |
 | Per VRF | an MPLS label (`label vpn export auto`) | one SID (`sid vpn per-vrf export auto`) that carries IPv4 and IPv6 (`End.DT46`) |
 | Kernel | MPLS input on the core legs and `lo` | SRv6 enabled on the core leg, a routing rule and a guard for the SID block, no MPLS |
@@ -104,6 +104,21 @@ default `denyDestinations6` holds `5f00::/16`.
 
 On `srv6`, in the root namespace and in every gateway namespace of a node, the apply sets:
 
+- **The locator on `lo`.** IS-IS announces the locator because `lo`, a passive IS-IS interface, holds an address
+  with the locator's length: the anchor, the locator's first address (`<locator>::1/48`; its function field is 0 and
+  FRR allocates SID functions from 1, so it is never a SID), added `nodad noprefixroute`. A passive interface's
+  prefixes are announced on every start of isisd, so a restart of FRR's daemons (watchfrr restarts all of them when
+  zebra dies), a unit restart, a reload or a boot all leave the locator announced. A redistributed discard route did
+  not: after watchfrr's restart the redistribution was in the running configuration but was not applied, and the
+  provider edge's SIDs were unreachable from every other node until a reboot. Without the kernel's prefix route for
+  the anchor (`noprefixroute`) the apply adds the locator as a `blackhole` in the main table at metric 4278198272,
+  so a packet for an unallocated SID is dropped without an answer (with the prefix route the node would answer it
+  with an unreachable); the SIDs are longer routes and win. The anchor itself is a local address of the node (the
+  core can reach it like a loopback; the guard drops it from anywhere else, as all of the block); the kernel also
+  adds the locator's subnet-router anycast address (`<locator>::`). The apply remembers the anchor in
+  `<instance>.locator6` next to the JSON and removes it when the locator changes, on the root's `down`, and on a
+  run with `mpls` that finds the file.
+
 - `net.vrf.strict_mode=1` (the decapsulating SIDs need it; the apply fails, naming them, while two VRFs of the
   namespace share a table), `net.ipv6.seg6_flowlabel=1` (the outer flow label follows the inner flow) and the
   encapsulation source (`ip sr tunsrc`) to the namespace's own IPv6 loopback. No MPLS setting.
@@ -188,8 +203,9 @@ job. On `mpls` the same failure is a warning and IPv4 carries on.
 After each node the jobs wait for the node to be ready on the transport before they go on. On `srv6`:
 - **Both instances:** strict VRF mode; `seg6_enabled` 0 on `all`, `default` and the core leg (no routing header
   accepted); the rule to the block at preference 999; the IPv4 local-table rule behind the VRF rule, as on `mpls`; the guard table loaded with its drop rule, a rule that drops
-  what is addressed to the block unless it came in on the core leg or `lo`; the instance's own locator with an
-  installed discard route; and for every VRF whose configuration exports a per-VRF SID a
+  what is addressed to the block unless it came in on the core leg or `lo`; the instance's own locator announced: its anchor on `lo`, the connected route zebra
+  makes of it, and its prefix in the instance's own IS-IS LSP (the state a lost announcement leaves: sessions up,
+  routes in, the locator missing from the own LSP and so from every other node); and for every VRF whose configuration exports a per-VRF SID a
   `seg6local … End.DT46 … vrftable <table>` route in the kernel (the VRF's SID). Readiness does not look at the
   unreachable route for the block.
 - **The root** also requires that the provider-edge group listens on `core.loopbackPool6`. Its gateways' sessions it

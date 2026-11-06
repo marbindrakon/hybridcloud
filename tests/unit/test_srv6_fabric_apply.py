@@ -507,7 +507,7 @@ class UnreachableBlock(ApplyCase):
         h.set_state(st)
         out, log = h.ok(self, "root")
         self.assertTrue(out.strip().endswith("changed=yes"), out)
-        main = [r for r in h.get_state()["ns"][""]["routes6"] if r["table"] == "main"]
+        main = [r for r in h.get_state()["ns"][""]["routes6"] if r["table"] == "main" and r["type"] == "unreachable"]
         self.assertEqual(main, [route])
         index(log, r"^W \[root\] ip -6 route del unreachable 5f00:9999::/32 metric 4278198272 table main$")
         out2, log2 = h.ok(self, "root")

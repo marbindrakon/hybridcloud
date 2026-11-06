@@ -187,7 +187,8 @@ def addr_text(a):
     scope = "link" if ipaddress.ip_address(a["local"]) in ipaddress.ip_network("fe80::/10") else "global"
     if a["local"] == "::1":
         scope = "host"
-    return "    inet6 %s/%d scope %s%s " % (a["local"], a["prefixlen"], scope, " nodad" if a["nodad"] else "")
+    return "    inet6 %s/%d scope %s%s%s " % (a["local"], a["prefixlen"], scope, " nodad" if a["nodad"] else "",
+                                       " noprefixroute" if a.get("noprefixroute") else "")
 
 
 def parse_ifaddr(s):
@@ -313,7 +314,10 @@ def ip_main(k, nsname, args, out):
                 raise Fail("RTNETLINK answers: File exists", 2)
             if have:
                 l["addrs"].remove(have[0])
-            l["addrs"].append({"family": v, "local": local, "prefixlen": plen, "nodad": "nodad" in rest[1:]})
+            a = {"family": v, "local": local, "prefixlen": plen, "nodad": "nodad" in rest[1:]}
+            if "noprefixroute" in rest[1:]:
+                a["noprefixroute"] = True
+            l["addrs"].append(a)
             return True
         raise Fail("addr verb " + verb)
 
@@ -330,6 +334,8 @@ def ip_main(k, nsname, args, out):
             routes = [r for r in ns[key] if table == "all" or r["table"] == table]
             if "proto" in sel:
                 routes = [r for r in routes if r.get("proto") == sel["proto"]]
+            if "type" in sel:
+                routes = [r for r in routes if r["type"] == sel["type"]]
             if "-j" in opts:
                 out.append(json.dumps([{k2: v2 for k2, v2 in (("type", r["type"]), ("dst", r["dst"]),
                                                               ("gateway", r.get("via")), ("dev", r.get("dev")),
@@ -338,7 +344,7 @@ def ip_main(k, nsname, args, out):
                                        for r in routes]))
             else:
                 for r in routes:
-                    s = ("unreachable " if r["type"] == "unreachable" else "") + r["dst"]
+                    s = (r["type"] + " " if r["type"] in ("unreachable", "blackhole") else "") + r["dst"]
                     if r.get("via"):
                         s += " via " + r["via"]
                     s += " dev " + (r.get("dev") or "lo")
@@ -349,19 +355,19 @@ def ip_main(k, nsname, args, out):
                     out.append(s + " metric %s pref medium" % r["metric"])
             return False
         if verb == "replace":
-            if rest[:1] != ["unreachable"]:
-                raise Fail("only unreachable routes are modelled")
+            if rest[:1] not in (["unreachable"], ["blackhole"]):
+                raise Fail("only unreachable and blackhole routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
-            r = {"type": "unreachable", "dst": rest[1], "metric": sel["metric"], "table": sel.get("table", "main")}
+            r = {"type": rest[0], "dst": rest[1], "metric": sel["metric"], "table": sel.get("table", "main")}
             ns[key] = [x for x in ns[key] if not (x["table"] == r["table"] and x["dst"] == r["dst"]
                                                                and x["metric"] == r["metric"])]
             ns[key].append(r)
             return True
         if verb in ("del", "delete"):
-            if rest[:1] != ["unreachable"]:
-                raise Fail("only unreachable routes are modelled")
+            if rest[:1] not in (["unreachable"], ["blackhole"]):
+                raise Fail("only unreachable and blackhole routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
-            match = [x for x in ns[key] if x["type"] == "unreachable" and x["dst"] == rest[1]
+            match = [x for x in ns[key] if x["type"] == rest[0] and x["dst"] == rest[1]
                      and x["table"] == sel.get("table", "main") and ("metric" not in sel or x["metric"] == sel["metric"])]
             if not match:
                 raise Fail("RTNETLINK answers: No such process", 2)

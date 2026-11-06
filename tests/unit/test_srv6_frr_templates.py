@@ -4,8 +4,8 @@
   transport rendered (BASE below, read from Git; skipped without it), for every representative input of the existing
   template tests.
 - srv6: no MPLS in the configuration (no `mpls enable`, no segment routing in IS-IS, no VPN labels); a locator per
-  provider edge in the text form of the node's FRR version, announced into IS-IS as a discard route through a
-  route-map that admits the locator alone; the VPN sessions between the IPv6 loopbacks with the extended next hop;
+  provider edge in the text form of the node's FRR version, announced by IS-IS as a prefix of the passive lo (the
+  apply holds its anchor there): no discard static, prefix-list, route-map or redistribution; the VPN sessions between the IPv6 loopbacks with the extended next hop;
   one SID per VRF; `nexthop vpn export` the IPv6 loopback where the template sets one today and absent where it sets
   none. Every other line (site sessions, EVPN, filters, route-maps, egress and circuit sessions, communities) is the
   same as with mpls.
@@ -125,14 +125,12 @@ GW_MPLS_ONLY = [r"^ mpls enable$", r"^interface t5\d+$", r"^ segment-routing (on
                 r"^  label vpn export auto$",
                 r"^ neighbor 10\.255\.0\.1 (remote-as 65010|description border gateway route reflector|update-source lo)$",
                 r"^  neighbor 10\.255\.0\.1 activate$"]
-GW_SRV6_ONLY = [rf"^ipv6 route {GW_LOC} blackhole$", rf"^ipv6 prefix-list CORE-LOCATOR seq 5 permit {GW_LOC}$",
-                r"^route-map CORE-LOCATOR permit 10$", r"^ match ipv6 address prefix-list CORE-LOCATOR$", r"^segment-routing$",
+GW_SRV6_ONLY = [r"^segment-routing$",
                 r"^ srv6$", r"^  encapsulation$", rf"^   source-address {GW_LO6}$", r"^  locators$", r"^   locator MAIN$",
                 rf"^    prefix {GW_LOC} block-len 32 node-len 16( func-bits 16)?$", r"^    behavior usid$",
                 rf"^ neighbor {RT_LO6} (remote-as 65010|description border gateway route reflector|update-source {GW_LO6}|capability extended-nexthop)$",
                 r"^ segment-routing srv6$", r"^  locator MAIN$", rf"^  neighbor {RT_LO6} activate$",
-                r"^ sid vpn per-vrf export auto$",
-                r"^ redistribute ipv6 static level-2 route-map CORE-LOCATOR$"]
+                r"^ sid vpn per-vrf export auto$"]
 STRUCTURE = {"!", " !", "exit", " exit", "  exit", "   exit"}
 
 
@@ -164,7 +162,7 @@ class GatewaySrv6(unittest.TestCase):
             self.assertNotIn("10.255.0.1", out)
 
     def test_locator_frr8(self):
-        self.assertIn(f"ipv6 route {GW_LOC} blackhole\n!\n", self.out)
+        self.assertNotRegex(self.out, r"(?m)^ipv6 route ")  # no discard static: the apply blackholes the locator
         self.assertEqual(block(self.out, "segment-routing"),
                          ["segment-routing", " srv6", "  locators", "   locator MAIN",
                           f"    prefix {GW_LOC} block-len 32 node-len 16 func-bits 16", "    behavior usid",
@@ -184,13 +182,10 @@ class GatewaySrv6(unittest.TestCase):
 
     def test_isis_carries_the_locator_alone(self):
         self.assertEqual(block(self.out, "router isis CORE"),
-                         ["router isis CORE", " is-type level-2-only", " net 49.0001.0000.0000.0002.00",
-                          " redistribute ipv6 static level-2 route-map CORE-LOCATOR", "exit"])
-        self.assertEqual([ln for ln in self.out.splitlines() if "CORE-LOCATOR" in ln and "prefix-list" in ln],
-                         [f"ipv6 prefix-list CORE-LOCATOR seq 5 permit {GW_LOC}", " match ipv6 address prefix-list CORE-LOCATOR"])
-        self.assertEqual(block(self.out, "route-map CORE-LOCATOR permit 10"),
-                         ["route-map CORE-LOCATOR permit 10", " match ipv6 address prefix-list CORE-LOCATOR", "exit"])
-        self.assertEqual(len(re.findall(r"(?m)^route-map CORE-LOCATOR ", self.out)), 1)
+                         ["router isis CORE", " is-type level-2-only", " net 49.0001.0000.0000.0002.00", "exit"])
+        # the locator is a prefix of the passive lo (the apply holds its anchor there): nothing redistributed
+        self.assertNotIn("CORE-LOCATOR", self.out)
+        self.assertNotIn("redistribute", block(self.out, "router isis CORE"))
         self.assertEqual(block(self.out, "interface lo"),
                          ["interface lo", " ip router isis CORE", " ipv6 router isis CORE", " isis passive", "exit"])
         self.assertEqual(block(self.out, "interface core0"),
@@ -252,14 +247,11 @@ class GatewaySrv6(unittest.TestCase):
 # the core transport's lines of the root, per transport (comments and the lines that close a block aside)
 RT_MPLS_ONLY = [r"^ mpls enable$", r"^ segment-routing (on|global-block \d+ \d+|prefix \S+ index \d+)$", r"^  label vpn export auto$",
                 r"^ neighbor PE update-source lo$", r"^ bgp listen range 10\.255\.0\.0/24 peer-group PE$"]
-RT_SRV6_ONLY = [rf"^ipv6 route {RT_LOC} blackhole$", rf"^ipv6 prefix-list CORE-LOCATOR seq 5 permit {RT_LOC}$",
-                r"^route-map CORE-LOCATOR permit 10$", r"^ match ipv6 address prefix-list CORE-LOCATOR$",
-                r"^segment-routing$", r"^ srv6$", r"^  encapsulation$", rf"^   source-address {RT_LO6}$",
+RT_SRV6_ONLY = [r"^segment-routing$", r"^ srv6$", r"^  encapsulation$", rf"^   source-address {RT_LO6}$",
                 r"^  locators$", r"^   locator MAIN$", rf"^    prefix {RT_LOC} block-len 32 node-len 16( func-bits 16)?$",
                 r"^    behavior usid$", rf"^ neighbor PE (update-source {RT_LO6}|capability extended-nexthop)$",
                 r"^ bgp listen range 2001:db8:4005:ffff::/64 peer-group PE$", r"^ segment-routing srv6$",
-                r"^  locator MAIN$", r"^ sid vpn per-vrf export auto$",
-                r"^ redistribute ipv6 static level-2 route-map CORE-LOCATOR$"]
+                r"^  locator MAIN$", r"^ sid vpn per-vrf export auto$"]
 
 
 class RootSrv6(unittest.TestCase):
@@ -279,8 +271,8 @@ class RootSrv6(unittest.TestCase):
                 self.assertNotIn("listen range 10.255.0.0/24", out, name)
 
     def test_locator(self):
-        self.assertIn(f"ipv6 route {RT_LOC} blackhole\n!\nipv6 prefix-list CORE-LOCATOR seq 5 permit {RT_LOC}\n!\n"
-                      "route-map CORE-LOCATOR permit 10\n match ipv6 address prefix-list CORE-LOCATOR\nexit\n", self.out)
+        self.assertNotIn(f"ipv6 route {RT_LOC}", self.out)
+        self.assertNotIn("CORE-LOCATOR", self.out)
         self.assertEqual(block(self.out, "segment-routing"),
                          ["segment-routing", " srv6", "  locators", "   locator MAIN",
                           f"    prefix {RT_LOC} block-len 32 node-len 16 func-bits 16", "    behavior usid",
@@ -291,11 +283,9 @@ class RootSrv6(unittest.TestCase):
                           "    behavior usid", "   exit", "  exit", " exit", "exit"])
 
     def test_isis_carries_the_locator_alone(self):
-        # the VRFs' static routes (egress and routed space) are no default-VRF routes; the route-map admits the locator only
+        # nothing redistributed: the locator is a prefix of the passive lo (the apply holds its anchor there)
         self.assertEqual(block(self.out, "router isis CORE"),
-                         ["router isis CORE", " is-type level-2-only", " net 49.0001.0000.0000.0001.00",
-                          " redistribute ipv6 static level-2 route-map CORE-LOCATOR", "exit"])
-        self.assertEqual(re.findall(r"(?m)^ipv6 prefix-list CORE-LOCATOR .*$", self.out), [f"ipv6 prefix-list CORE-LOCATOR seq 5 permit {RT_LOC}"])
+                         ["router isis CORE", " is-type level-2-only", " net 49.0001.0000.0000.0001.00", "exit"])
         self.assertEqual(block(self.out, "interface br-core"),
                          ["interface br-core", " ip router isis CORE", " ipv6 router isis CORE", " isis priority 127", "exit"])
         self.assertEqual(block(self.out, "interface lo"),

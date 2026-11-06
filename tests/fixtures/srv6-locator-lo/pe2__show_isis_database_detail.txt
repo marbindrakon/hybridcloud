@@ -1,0 +1,50 @@
+Area CORE:
+IS-IS Level-2 link-state database:
+LSP ID                  PduLen  SeqNumber   Chksum  Holdtime  ATT/P/OL
+localhost.loca.00-00      150   0x00000028  0x51af    1109    0/0/0
+  Protocols Supported: IPv4, IPv6
+  Area Address: 49.0001
+  Hostname: localhost.localdomain
+  TE Router ID: 198.51.100.1
+  Router Capability: 198.51.100.1 , D:0, S:0
+  Extended Reachability: 0000.0000.0001.02 (Metric: 10)
+  IPv4 Interface Address: 198.51.100.1
+  IPv6 Reachability: fd00:5e6:ff::1/128 (Metric: 10)
+  IPv6 Reachability: fd00:5e6:5::/48 (Metric: 0)
+  IPv6 Reachability: fd00:5e6:ff::5/128 (Metric: 0)
+
+localhost.loca.02-00       73   0x00000027  0x6521    1136    0/0/0
+  Extended Reachability: 0000.0000.0001.00 (Metric: 0)
+  Extended Reachability: 0000.0000.0003.00 (Metric: 0)
+  Extended Reachability: 0000.0000.0004.00 (Metric: 0)
+  Extended Reachability: 0000.0000.0002.00 (Metric: 0)
+
+localhost.loca.00-00      128   0x0000002a  0x7441    1088    0/0/0
+  Protocols Supported: IPv4, IPv6
+  Area Address: 49.0001
+  Hostname: localhost.localdomain
+  TE Router ID: 10.65.0.4
+  Router Capability: 10.65.0.4 , D:0, S:0
+  Extended Reachability: 0000.0000.0001.02 (Metric: 10)
+  IPv4 Interface Address: 10.65.0.4
+  IPv6 Reachability: fd00:5e6:ff::2/128 (Metric: 10)
+  IPv6 Reachability: fd00:5e6:2::/48 (Metric: 0)
+
+localhost.loca.00-00 *    109   0x00000033  0x0f89    1142    0/0/0
+  Protocols Supported: IPv4, IPv6
+  Area Address: 49.0001
+  Hostname: localhost.localdomain
+  Extended Reachability: 0000.0000.0001.02 (Metric: 10)
+  IPv6 Reachability: fd00:5e6:3::/48 (Metric: 10)
+  IPv6 Reachability: fd00:5e6:ff::3/128 (Metric: 10)
+
+localhost.loca.00-00      109   0x00000028  0x8a20    1086    0/0/0
+  Protocols Supported: IPv4, IPv6
+  Area Address: 49.0001
+  Hostname: localhost.localdomain
+  Extended Reachability: 0000.0000.0001.02 (Metric: 10)
+  IPv6 Reachability: fd00:5e6:ff::4/128 (Metric: 10)
+  IPv6 Reachability: fd00:5e6:4::/48 (Metric: 0)
+
+    5 LSPs
+

@@ -12,16 +12,9 @@ service integrated-vtysh-config
 !
 {% if _srv6 %}
 ! SRv6 core: the root is a provider edge for the egress and circuit VRFs, so it has a locator of its own for their
-! SIDs. The discard route is what IS-IS announces for it (only the locator, through CORE-LOCATOR); the SIDs inside it
-! are longer routes, so a packet for an unused SID is dropped here
-ipv6 route {{ hf_pe.locator }} blackhole
-!
-ipv6 prefix-list CORE-LOCATOR seq 5 permit {{ hf_pe.locator }}
-!
-route-map CORE-LOCATOR permit 10
- match ipv6 address prefix-list CORE-LOCATOR
-exit
-!
+! SIDs. IS-IS announces the locator as a prefix of lo (passive): shc-fabric-apply holds the locator's first address
+! there with the locator's length, and blackholes the locator, so a packet for an unused SID is dropped here (the SIDs
+! inside it are longer routes)
 ! the locator as micro-SIDs (32-bit block, 16-bit node, 16-bit function), in the form this FRR version prints back
 {% if _frr10 %}
 ! (it also shows the kernel's encapsulation source, set by shc-fabric-apply: without it a reload would remove it)
@@ -487,10 +480,9 @@ exit
 router isis CORE
  is-type level-2-only
  net {{ hf_pe.net }}
-{% if _srv6 %}
-{#- SRv6: no segment routing in the IGP; it carries the loopbacks and, of the static routes, the locator alone #}
- redistribute ipv6 static level-2 route-map CORE-LOCATOR
-{% else %}
+{# SRv6: no segment routing in the IGP and no redistribution; it carries the prefixes of lo, the loopbacks and the
+   locator #}
+{% if not _srv6 %}
  segment-routing on
  segment-routing global-block {{ fab_real.core.srgb.start }} {{ fab_real.core.srgb.end }}
  segment-routing prefix {{ hf_pe.loopback }} index {{ hf_pe.index }}

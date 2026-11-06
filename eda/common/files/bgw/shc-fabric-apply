@@ -108,7 +108,11 @@
 #   prefixes; a lookup for a SID whose locator is gone ends there instead of following a default route of the host),
 #   the rule "to <block> lookup main" at pref 999 (ahead of the VRFs' rule: the kernel looks the SID of a packet it
 #   encapsulates up in the packet's ingress VRF otherwise), the encapsulation source (ip sr tunsrc) = the IPv6
-#   loopback; on the root every network VRF e<n> gets no reverse path filtering (rp_filter=0: decapsulated IPv4
+#   loopback; once lo has its loopbacks, the locator's anchor on lo (its first address with the locator's length,
+#   noprefixroute: IS-IS announces the locator as the passive lo's prefix, on every start of FRR's daemons) and the
+#   locator blackholed in the main table at metric 4278198272 (an unallocated SID is dropped without an answer; the
+#   last anchor is remembered in <instance>.locator6 next to the JSON, and a run with mpls, or the root's down, removes
+#   it; a gateway's goes with its namespace); on the root every network VRF e<n> gets no reverse path filtering (rp_filter=0: decapsulated IPv4
 #   enters with the VRF device as input while its source's route leads to the core bridge, outside the VRF, which
 #   strict and loose mode both refuse; the egress VRF and the circuits' devices, strict, are left as they are). The
 #   kernel takes the larger of net.ipv4.conf.all.rp_filter and the device's, and all is the host's: a root with srv6
@@ -203,15 +207,18 @@ except ValueError:
     src = None
 if src is None or src.version != 6:
     bad("the IPv6 loopback (loopback6) is required")
-print(block, src)
+# the locator's anchor on lo: its first address, with the locator's prefix length
+print(block, src, "%s/%d" % (loc.network_address + 1, loc.prefixlen), loc)
 PY
 }
-SRV6_BLOCK=""; SRV6_SRC=""
+SRV6_BLOCK=""; SRV6_SRC=""; SRV6_ANCHOR=""; SRV6_LOC=""
+# the locator anchor (address and locator) as the last run set it: a run without it (mpls, down) removes it
+LOCMARK=/etc/shc-fabric/$I.locator6
 # the guard table as the last load listed it (the guard action compares the namespace's table with it)
 GUARDREF=/etc/shc-fabric/$I.guard
 if [ "$TRANSPORT" = srv6 ] && { [ "$ACT" = up ] || [ "$ACT" = guard ]; }; then
   S6=$(srv6_conf) || exit 4
-  read -r SRV6_BLOCK SRV6_SRC <<<"$S6"
+  read -r SRV6_BLOCK SRV6_SRC SRV6_ANCHOR SRV6_LOC <<<"$S6"
 fi
 if [ -z "$LOPOOL6$ICMPPOOL6" ] && [ -r "$POOLS6" ]; then
   { read -r LOPOOL6 || true; read -r ICMPPOOL6 || true; } < "$POOLS6"
@@ -584,6 +591,29 @@ srv6_unreach() {
   [ -z "${1:-}" ] || grep -qxF -- "$1" <<<"$have" || $NSX ip -6 route replace unreachable "$1" metric 4278198272 table main
 }
 
+# [<anchor> <locator>]: the locator as a connected prefix of lo, which IS-IS announces as a passive interface's
+# prefix on every start of the daemons (a redistributed route was lost when FRR restarted its daemons after one died,
+# and a reload that added the redistribution did not apply it): the anchor (the locator's first address, with the
+# locator's length; no SID: FRR allocates functions from 1, and an address is a local address, never a SID route)
+# without the kernel's prefix route (noprefixroute), and the locator as a blackhole in the main table at the highest
+# metric, so a packet for an unallocated SID is dropped here, silently (the SIDs are longer routes; the prefix route
+# would answer it with an unreachable). The last run's anchor and blackhole (LOCMARK) removed when they differ; none of
+# it without both arguments
+srv6_locator() {
+  local old="" oldloc="" want="${1:-} ${2:-}"
+  [ ! -r "$LOCMARK" ] || read -r old oldloc < "$LOCMARK" || true
+  if [ -n "$old" ] && [ "$old $oldloc" != "$want" ]; then
+    ! shows -q " $old " $NSX ip -6 addr show dev lo || $NSX ip -6 addr del "$old" dev lo
+    ! shows -qE "^blackhole $oldloc .*metric 4278198272( |\$)" $NSX ip -6 route show table main type blackhole ||
+      $NSX ip -6 route del blackhole "$oldloc" metric 4278198272 table main
+  fi
+  if [ -z "${1:-}" ]; then rm -f "$LOCMARK"; return 0; fi
+  shows -q " $1 " $NSX ip -6 addr show dev lo || $NSX ip -6 addr add "$1" dev lo nodad noprefixroute
+  shows -qE "^blackhole $2 .*metric 4278198272( |\$)" $NSX ip -6 route show table main type blackhole ||
+    $NSX ip -6 route replace blackhole "$2" metric 4278198272 table main
+  { [ -r "$LOCMARK" ] && [ "$(<"$LOCMARK")" = "$want" ]; } || printf '%s\n' "$want" > "$LOCMARK"
+}
+
 # <dev>...: no routing header accepted (seg6_enabled 0: the decapsulating SIDs are routes, not local addresses, and
 # never read it; with it a packet to any local address could carry a segment list to any SID). all and default are
 # set first in srv6_up; this corrects the devices an earlier configuration left at 1
@@ -611,6 +641,7 @@ srv6_state() {
     net.ipv6.seg6_flowlabel "net/ipv6/conf/$1/seg6_enabled" 2>/dev/null || true
   $NSX ip -6 rule show pref 999 2>/dev/null || true
   $NSX ip -6 route show table main type unreachable 2>/dev/null | grep ' metric 4278198272' || true
+  $NSX ip -6 route show table main type blackhole 2>/dev/null | grep ' metric 4278198272' || true
   $NSX ip sr tunsrc show 2>/dev/null || true
   $NSX nft -s list table inet shc_core_guard 2>/dev/null || true
 }
@@ -1202,6 +1233,11 @@ root)
     for a in $(stray lo "$LOPOOL" "$LO"); do ip addr del "$a" dev lo; done
     addr_ensure lo "$LO"
     v6 "the IPv6 loopback" lo6
+    if [ "$TRANSPORT" = srv6 ]; then
+      srv6_step "the locator on lo" srv6_locator "$SRV6_ANCHOR" "$SRV6_LOC"
+    elif [ -e "$LOCMARK" ]; then
+      srv6_locator
+    fi
     [ "$TRANSPORT" = srv6 ] || sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
@@ -1230,6 +1266,7 @@ root)
     for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
     LO6=""; v6 "the IPv6 loopback removal" lo6
     [ "$TRANSPORT" != srv6 ] || srv6_down
+    [ ! -e "$LOCMARK" ] || srv6_locator
     local4 first
   fi
   ;;
@@ -1350,6 +1387,11 @@ gateway)
     for a in $(stray lo "$LOPOOL" "$LO"); do $X ip addr del "$a" dev lo; done
     addr_ensure lo "$LO"
     v6 "the IPv6 loopback" lo6
+    if [ "$TRANSPORT" = srv6 ]; then
+      srv6_step "the locator on lo" srv6_locator "$SRV6_ANCHOR" "$SRV6_LOC"
+    elif [ -e "$LOCMARK" ]; then
+      srv6_locator
+    fi
     if [ -n "$WG" ]; then
       wg_leg
     else
@@ -1437,7 +1479,7 @@ gateway)
     ip link show "$CV" >/dev/null 2>&1 && ip link del "$CV"
     shows -qw "^$NS" ip netns list && ip netns del "$NS"
     [ -z "$WG" ] || rm -f "$WGKEY"
-    rm -f "$MARKI6" "$GUARDREF"
+    rm -f "$MARKI6" "$GUARDREF" "$LOCMARK"
   fi
   ;;
 *) echo "unknown instance type $TYPE" >&2; exit 2 ;;
