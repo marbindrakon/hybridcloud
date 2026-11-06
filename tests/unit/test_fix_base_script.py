@@ -1,7 +1,8 @@
 """shc-fabric-apply with transport absent or "mpls" against the script of the release before the SRv6 transport (BASE),
 run against the fake kernel of test_shc_fabric_apply: the same calls in the same order, the same output, kernel state
 after every run, and files, except for exactly the differences this file lists as data (calls added or removed,
-nftables text, and the IPv4 rules and routes the fixes keep; every one with its reason). Any other difference fails. Two instance sets, two rounds up, then down: a
+nftables text, and the IPv4 rules and routes the fixes keep; every one with its reason). Any other difference fails.
+Two instance sets, two rounds up, then down: a
 dual-stack root with IPv6 egress and an IPv4 and an IPv6 circuit, a VLAN gateway with icmp6Announced and a WireGuard
 gateway; and the same IPv4 only. Skipped where the history lacks BASE."""
 import copy

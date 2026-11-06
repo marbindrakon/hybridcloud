@@ -24,11 +24,11 @@
 #   shc_egress6 (IPv6 rules only; the IPv4 table above is untouched): the networks' conntrack zones, outbound only
 #   from a network's src6 (its platform block and the node's slice of icmpSource6, which holds the ICMPv6 sources of
 #   the node's gateway namespaces, so their Packet Too Big reaches the internet) and the node's ICMPv6 source (a
-#   member another one covers is left out), not to platDeny6, allow6 and the resolvers
-#   on 53 before deny6, the TCP MSS clamp at mss both ways (a network's SYNs leaving it by xe<n>, on forward and
-#   output; the SYN-ACKs into it where the egress VRF forwards them to xo<n>, on forward), inbound only neighbour
-#   discovery, ICMPv6 errors and replies, and a routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR takes the
-#   sessions' configuration (fail closed; shc-egress6-guard keeps it so). The sessions themselves are FRR's.
+#   member another one covers is left out), not to platDeny6, allow6 and the resolvers on 53 before deny6, the TCP
+#   MSS clamp at mss both ways (a network's SYNs leaving it by xe<n>, on forward and output; the SYN-ACKs into it
+#   where the egress VRF forwards them to xo<n>, on forward), inbound only neighbour discovery, ICMPv6 errors and
+#   replies, and a routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR
+#   takes the sessions' configuration (fail closed; shc-egress6-guard keeps it so). The sessions themselves are FRR's.
 #   attachments {vlanPool: [start, end], parents: [interface], platformSources, circuits: [{circuit, device, parent,
 #   vlan, mtu, vrf, table, zone, address, link, nat}]} (attachment circuits; absent = none): per circuit a VLAN
 #   device <parent>.<vlan> in the network's root VRF e<n> (created when missing; the same VRF as the network's
@@ -87,8 +87,9 @@
 #   The table goes when the key does (a run that never had it issues no command for it); an IPv6 step that failed
 #   leaves it as it was.
 # Core transport (both types): transport (the core's, not a site leg's) "mpls" or "srv6"; absent = mpls, and a run
-#   with mpls issues no command of what follows. srv6 also reads srv6 {block, locator} (the SID block; the
-#   provider edge's locator, which must lie in it: FRR announces it, nothing here sets it) and needs loopback6.
+#   with mpls issues none of the srv6 commands this paragraph describes. srv6 also reads srv6 {block, locator} (the
+#   SID block; the provider edge's locator, which must lie in it: FRR announces it, nothing here sets it) and needs
+#   loopback6.
 #   An instance is never switched between transports in place (the operator re-applies and restarts FRR, or reboots).
 #   transport srv6, in the instance's namespace (root: the host's, core leg the core bridge; gateway: its namespace,
 #   core leg core0), first of all (FRR starts after the apply at boot and the jobs reload or restart it after it, so
