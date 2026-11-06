@@ -820,7 +820,10 @@
   delegate_to: "{{ bgw_node.name }}"
 
 # The SRv6 core has no labels to bind: every root VRF must have its SID in the kernel, an End.DT46 route from the
-# root's locator into the VRF's table (one SID per VRF carries both families). A VRF still without one after the
+# root's locator into the VRF's table (one SID per VRF carries both families). The VRFs that must have one are those
+# whose BGP instance in the rendered configuration (/etc/frr/frr.conf) holds the per-VRF SID line: FRR allocates a
+# SID only for a VRF that exports to the VPN, and the template writes the line only there; the table is the VRF's
+# (hf_node_vrfs). A VRF still without one after the
 # settle time fails the job and is named (no repair is known: a VRF created again under the same name got its SID
 # back by itself in every test). Same check code as the gateway's.
 - name: "{{ bgw_node.name }}: every root VRF's SID leads into it"
@@ -849,14 +852,34 @@
         return found
 
 
+    def exported(text):
+        """The VRFs whose BGP instance in the rendered FRR configuration has a per-VRF SID: a "router bgp <as> vrf <name>"
+        block (to the next line that is not indented) holding "sid vpn per-vrf export auto". FRR allocates the SID only
+        for a VRF that exports to the VPN, and the template writes the line only there."""
+        out, vrf = set(), None
+        for line in text.splitlines():
+            w = line.split()
+            if line.startswith("router bgp ") and len(w) == 5 and w[3] == "vrf":
+                vrf = w[4]
+            elif not line.startswith(" "):
+                vrf = None
+            elif vrf and line.strip() == "sid vpn per-vrf export auto":
+                out.add(vrf)
+        return out
+
+
     def main(argv, run):
-        """argv: <netns or ""> <own locator> then <vrf>:<table> per VRF. Prints "<vrf> <table>" per VRF that the kernel
-        has no End.DT46 SID route into whose SID is in the own locator."""
+        """argv: <netns or ""> <own locator> <rendered FRR configuration> then <vrf>:<table> per VRF. Prints "<vrf>
+        <table>" per VRF with a per-VRF SID in the configuration that the kernel has no End.DT46 SID route into whose SID
+        is in the own locator; a VRF without one in the configuration exports nothing and is not checked."""
         netns, loc = argv[0], ipaddress.ip_network(argv[1])
+        want = exported(run(["cat", argv[2]]))
         ip = ["ip"] + (["-n", netns] if netns else [])
         have = sids(run(ip + ["-6", "route", "show", "table", "all"]))
-        for spec in argv[2:]:
+        for spec in argv[3:]:
             name, table = spec.rsplit(":", 1)
+            if name not in want:
+                continue
             mine = []
             for s in have.get(int(table), []):
                 try:
@@ -870,7 +893,7 @@
 
     if __name__ == "__main__":
         sys.exit(main(sys.argv[1:], run))
-    ' "" {{ hf_pe.locator }} {{ _vrfs | join(' ') }}
+    ' "" {{ hf_pe.locator }} /etc/frr/frr.conf {{ _vrfs | join(' ') }}
     }
     # the VRFs still without their SID route after up to <tries> checks 5 s apart (in $b)
     settle() {

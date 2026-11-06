@@ -16,6 +16,10 @@ with the command output replaced by fixtures:
   t51000); pe2-sids-vrf-recreated.txt the SID route after VRF t51001 was deleted and created again under the same
   name (G.txt: a new function number, same locator; the spike printed it with repeated blanks squeezed). The
   spike's block is fd00:5e6::/32 (pe2's locator fd00:5e6:3::/48), outside 5f00::/16 by design of the spike.
+- tests/fixtures/srv6-frr-renders/: stream B's FRR templates rendered for srv6 on FRR 8 by its own test
+  (tests/unit/test_srv6_frr_templates.py on branch srv6-b at 7c04a3ca, SHC_RENDER_OUT): gw-srv6-frr8.conf,
+  root-srv6-frr8.conf, and root-srv6-frr8-noexport.conf (its root_vars(v6=True, families=[6]): network VRFs that
+  export nothing to the VPN, hence no per-VRF SID). The SID check reads the VRFs that must have a SID from them.
 - the FRR JSON (BGP summaries, `show ipv6 route isis|static json`) is written in the shapes FRR 8.5.3's source
   prints, as tests/unit/test_gateway_readiness.py does (the spike kept no JSON); `ip -6 rule show` in the form
   iproute2 prints a rule with a destination selector ("999:<tab>from all to <prefix> lookup main"), not taken from
@@ -351,15 +355,42 @@ class Srv6Locators(unittest.TestCase):
         run_play([stop, keep, write_out("1")], dict(v, fab_node_transport="mpls", fab_check_result={"errors": ["x"]},
                                                     hf_pe={}))
 
-    def test_gateway_needs_the_ipv6_core(self):
-        stop = by_name(load(GW), P + "the SRv6 core needs the fabric's IPv6 core")
-        v = {"bgw_node": {"name": "bgw-1"}, "fab_name": "site1", "cg_fabric_name": "lab", "fab_node_transport": "srv6",
-             "cg_pe": GW_PE, "cg_root_pe": RT_PE}
-        run_play([stop, write_out("1")], dict(v, cg_ipv6_core=True))
-        with self.assertRaises(AssertionError) as e:
-            run_play([stop, write_out("1")], dict(v, cg_ipv6_core=False))
-        self.assertIn("does not report yet (status.realization.ipv6Core)", str(e.exception))
-        run_play([stop, write_out("1")], dict(v, cg_ipv6_core=False, fab_node_transport="mpls"))
+    def test_no_early_failure_for_the_ipv6_core(self):
+        # the gateway waits in main.yml instead (GatewayWaitsForTheIpv6Core)
+        self.assertNotIn("needs the fabric's IPv6 core", open(GW).read())
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class GatewayWaitsForTheIpv6Core(unittest.TestCase):
+    """On the SRv6 core a gateway waits (pending, as for a fabric that is not ready) until the fabric reports its
+    IPv6 core; on mpls nothing changes."""
+
+    def waiting(self, transport, status, before=()):
+        main = load(CG_MAIN)
+        tasks = [by_name(main, "Wait for the fabric to be ready"), by_name(main, "Wait for the fabric's IPv6 core (SRv6 core)")]
+        core = {} if transport is None else {"transport": transport}
+        facts = {"ansible.builtin.set_fact": {"cg_waiting": list(before)}}
+        return run_play([facts] + tasks + [write_out("cg_waiting")],
+                        {"cg_fabric_found": True, "cg_fabric_name": "lab", "fab_real": {"core": core},
+                         "cg_fabric": {"spec": {}, "status": status}})
+
+    def test_srv6(self):
+        ready = {"ready": True, "status": "ready", "realization": {"ipv6Core": False}}
+        self.assertEqual(self.waiting("srv6", ready),
+                         ["HybridFabric lab (IPv6 core not reported yet; the SRv6 core needs it)"])
+        self.assertEqual(self.waiting("srv6", dict(ready, realization={"ipv6Core": True})), [])
+        self.assertEqual(self.waiting("srv6", {"ready": True, "status": "ready"}),
+                         ["HybridFabric lab (IPv6 core not reported yet; the SRv6 core needs it)"])
+        # a fabric not ready yet: one entry for it, not two
+        self.assertEqual(self.waiting("srv6", {"status": "pending"}), ["HybridFabric lab (pending)"])
+        # what else it waits for stays
+        self.assertEqual(self.waiting("srv6", ready, before=["CloudInfrastructure site1: evpn capability"]),
+                         ["CloudInfrastructure site1: evpn capability",
+                          "HybridFabric lab (IPv6 core not reported yet; the SRv6 core needs it)"])
+
+    def test_mpls_unchanged(self):
+        for transport in (None, "mpls"):
+            self.assertEqual(self.waiting(transport, {"ready": True, "status": "ready"}), [])
 
 
 # ---- srv6: the readiness checks -------------------------------------------------------------------------------------
@@ -401,6 +432,13 @@ def core_answers(est4, est6, plain=None, isis=(), static=(), rule=BLOCK, strict=
     if guard:
         a["nft list table inet shc_core_guard"] = "table inet shc_core_guard {\n}\n"
     return a
+
+
+def sid_conf(*vrfs):
+    """A rendered FRR configuration in the form of the templates: one BGP instance with the per-VRF SID per VRF."""
+    return "".join("router bgp 65010 vrf %s\n bgp router-id 10.255.0.2\n sid vpn per-vrf export auto\n"
+                   " address-family ipv4 unicast\n  rd vpn export 65010:1\n exit-address-family\nexit\n!\n" % v
+                   for v in vrfs)
 
 
 class Fake:
@@ -593,17 +631,19 @@ class Srv6CoreCheck(unittest.TestCase):
 class Srv6SidCheck(unittest.TestCase):
     """The per-VRF SID check with the spike's real kernel output (locators of the spike's block fd00:5e6::/32)."""
 
-    def check(self, netns, locator, vrfs, text):
+    def check(self, netns, locator, vrfs, text, conf=None):
         sh = render(shell_of(GW, T_GW_SID), **srv6(dict(GW_VARS, cg_pe=dict(GW_PE, locator=locator))))
         code, _ = snippet(sh)
-        args = [netns, locator] + vrfs
-        rc, out, _, calls = run_code(code, args, {"route show table all": text})
+        args = [netns, locator, "/etc/frr/x.conf"] + vrfs
+        if conf is None:
+            conf = sid_conf(*[v.split(":")[0] for v in vrfs])
+        rc, out, _, calls = run_code(code, args, {"cat /etc/frr/x.conf": conf, "route show table all": text})
         return rc, out, calls
 
     def test_plain_pe(self):
         rc, out, calls = self.check("gw-x", "fd00:5e6:3::/48", ["t51001:51001"], fixture("pe2-route6.txt"))
         self.assertEqual((rc, out), (0, ""))
-        self.assertEqual(calls, [["ip", "-n", "gw-x", "-6", "route", "show", "table", "all"]])
+        self.assertEqual(calls, [["cat", "/etc/frr/x.conf"], ["ip", "-n", "gw-x", "-6", "route", "show", "table", "all"]])
 
     def test_encapsulating_routes_are_no_sid(self):
         # pe2's VPN routes to the other PEs are seg6 encap routes, not End.DT46: they never count for a VRF
@@ -632,10 +672,52 @@ class Srv6SidCheck(unittest.TestCase):
     def test_task_arguments(self):
         _, args = snippet(render(shell_of(GW, T_GW_SID), **srv6(dict(GW_VARS, cg_vrfs=[
             {"vrf": "t51000", "vni": 51000}, {"vrf": "t51001", "vni": 51001, "families": [6]}]))))
-        self.assertEqual(args, ["gw-iaas1", GW_PE["locator"], "t51000:51000", "t51001:51001"])
+        self.assertEqual(args, ["gw-iaas1", GW_PE["locator"], "/etc/frr/gw-iaas1/frr.conf.shc", "t51000:51000",
+                                "t51001:51001"])
         _, args = snippet(render(shell_of(RT, T_RT_SID), **srv6(dict(ROOT_VARS, hf_node_vrfs=[
             {"vrf": "e100", "table": 100100, "families": [4, 6]}, {"vrf": "e101", "table": 100101}]))))
-        self.assertEqual(args, ["", RT_PE["locator"], "e100:100100", "e101:100101"])
+        self.assertEqual(args, ["", RT_PE["locator"], "/etc/frr/frr.conf", "e100:100100", "e101:100101"])
+
+    def test_vrfs_without_an_export_are_not_checked(self):
+        # e101 exports nothing (no per-VRF SID in the configuration): no SID expected for it
+        rc, out, _ = self.check("", "fd00:5e6:3::/48", ["t51001:51001", "e101:100101"], fixture("pe2-route6.txt"),
+                                conf=sid_conf("t51001") + "router bgp 65010 vrf e101\n bgp router-id 10.255.0.1\nexit\n")
+        self.assertEqual((rc, out), (0, ""))
+
+
+def exported_of(path):
+    code, _ = snippet(render(shell_of(path, T_GW_SID if path == GW else T_RT_SID),
+                             **srv6(dict(ROOT_VARS, **GW_VARS) if path == GW else ROOT_VARS)))
+    ns = {"__name__": "x"}
+    exec(compile(code, "<inline check>", "exec"), ns)
+    return ns["exported"]
+
+
+class SidVrfsFromTheRenderedConfiguration(unittest.TestCase):
+    """The VRFs that must have a SID, read from stream B's templates as rendered (tests/fixtures/srv6-frr-renders/)."""
+
+    def render_text(self, name):
+        with open(os.path.join(ROOT, "tests", "fixtures", "srv6-frr-renders", name)) as f:
+            return f.read()
+
+    def test_gateway_every_tenant_vrf(self):
+        text = self.render_text("gw-srv6-frr8.conf")
+        vrfs = {l.split()[1] for l in text.splitlines() if l.startswith("vrf ")}
+        self.assertEqual(vrfs, {"t51000", "t51003"})
+        # every tenant VRF exports: the derived set is today's list
+        self.assertEqual(exported_of(GW)(text), vrfs)
+
+    def test_root(self):
+        f = exported_of(RT)
+        # the network VRF exports, the egress VRF (its own AS, no VPN) does not
+        self.assertEqual(f(self.render_text("root-srv6-frr8.conf")), {"e10000"})
+        # network VRFs that export nothing to the VPN: none to check
+        self.assertEqual(f(self.render_text("root-srv6-frr8-noexport.conf")), set())
+
+    def test_same_function_on_both(self):
+        text = self.render_text("gw-srv6-frr8.conf") + self.render_text("root-srv6-frr8.conf")
+        self.assertEqual(exported_of(GW)(text), exported_of(RT)(text))
+
 
 
 class Srv6SidScript(unittest.TestCase):
@@ -643,12 +725,16 @@ class Srv6SidScript(unittest.TestCase):
 
     def run_task(self, kernel):
         with tempfile.TemporaryDirectory() as d:
-            for name, body in (("ip", '#!/bin/bash\ncat "$SHIM/kernel"\n'), ("sleep", "#!/bin/bash\nexit 0\n")):
+            for name, body in (("ip", '#!/bin/bash\n/usr/bin/cat "$SHIM/kernel"\n'), ("sleep", "#!/bin/bash\nexit 0\n"),
+                               ("cat", '#!/bin/bash\n[ "$1" = /etc/frr/gw-iaas1/frr.conf.shc ] || exit 1\n'
+                                       '/usr/bin/cat "$SHIM/conf"\n')):
                 with open(os.path.join(d, name), "w") as f:
                     f.write(body)
                 os.chmod(os.path.join(d, name), 0o755)
             with open(os.path.join(d, "kernel"), "w") as f:
                 f.write(kernel)
+            with open(os.path.join(d, "conf"), "w") as f:
+                f.write(sid_conf("t51001", "t51002"))
             v = srv6(dict(GW_VARS, cg_pe=dict(GW_PE, locator="fd00:5e6:3::/48"),
                           cg_vrfs=[{"vrf": "t51001", "vni": 51001}, {"vrf": "t51002", "vni": 51002}]))
             sh = render(shell_of(GW, T_GW_SID), **v)

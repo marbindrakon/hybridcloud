@@ -130,6 +130,19 @@
         # usable: ready, or realized and not failed (a fabric re-run doesn't stop its gateways)
         - not (((cg_fabric.status | default({}, true)).ready | default(false) | bool) or (((cg_fabric.status | default({}, true)).realized | default(false) | bool) and (cg_fabric.status | default({}, true)).status | default('') != 'failed'))
 
+    # the SRv6 core runs the VPN session over the IPv6 loopbacks, which the gateway takes only once the fabric reports
+    # its IPv6 core (status.realization.ipv6Core, below): until then the gateway waits as for a fabric that is not
+    # ready, and runs again on its reconcile period
+    - name: Wait for the fabric's IPv6 core (SRv6 core)
+      ansible.builtin.set_fact:
+        cg_waiting: "{{ cg_waiting + ['HybridFabric ' ~ cg_fabric_name ~ ' (IPv6 core not reported yet; the SRv6 core needs it)'] }}"
+      when:
+        - cg_fabric_found
+        # not again for a fabric the gateway already waits for
+        - cg_waiting | select('match', 'HybridFabric ') | list | length == 0
+        - (fab_real.core | default({}, true)).transport | default('mpls', true) == 'srv6'
+        - not ((((cg_fabric.status | default({}, true)).realization | default({}, true)).ipv6Core | default(false)) | bool)
+
     - name: Set the site status
       ansible.builtin.set_fact:
         cg_status:
