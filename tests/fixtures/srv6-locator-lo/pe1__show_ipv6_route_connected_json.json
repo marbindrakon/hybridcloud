@@ -1,28 +1,23 @@
 {
-  "fd00:5e6:3::/48":[
+  "fd00:5e6:2::/48":[
     {
-      "prefix":"fd00:5e6:3::/48",
+      "prefix":"fd00:5e6:2::/48",
       "prefixLen":48,
       "protocol":"connected",
       "vrfId":0,
       "vrfName":"default",
-      "selected":true,
-      "destSelected":true,
-      "distance":0,
-      "metric":1024,
-      "installed":true,
+      "distance":255,
+      "metric":8192,
       "table":254,
-      "internalStatus":16,
-      "internalFlags":8,
+      "internalStatus":0,
+      "internalFlags":0,
       "internalNextHopNum":1,
       "internalNextHopActiveNum":1,
-      "nexthopGroupId":82,
-      "installedNexthopGroupId":82,
-      "uptime":"00:02:14",
+      "nexthopGroupId":179,
+      "uptime":"01:01:17",
       "nexthops":[
         {
-          "flags":3,
-          "fib":true,
+          "flags":1,
           "unreachable":true,
           "blackhole":true,
           "active":true
@@ -30,9 +25,9 @@
       ]
     }
   ],
-  "fd00:5e6:ff::3/128":[
+  "fd00:5e6:ff::2/128":[
     {
-      "prefix":"fd00:5e6:ff::3/128",
+      "prefix":"fd00:5e6:ff::2/128",
       "prefixLen":128,
       "protocol":"connected",
       "vrfId":0,
@@ -47,9 +42,9 @@
       "internalFlags":8,
       "internalNextHopNum":1,
       "internalNextHopActiveNum":1,
-      "nexthopGroupId":83,
-      "installedNexthopGroupId":83,
-      "uptime":"00:02:14",
+      "nexthopGroupId":134,
+      "installedNexthopGroupId":134,
+      "uptime":"01:11:45",
       "nexthops":[
         {
           "flags":3,
@@ -79,9 +74,9 @@
       "internalFlags":8,
       "internalNextHopNum":1,
       "internalNextHopActiveNum":1,
-      "nexthopGroupId":84,
-      "installedNexthopGroupId":84,
-      "uptime":"00:02:14",
+      "nexthopGroupId":135,
+      "installedNexthopGroupId":135,
+      "uptime":"01:11:45",
       "nexthops":[
         {
           "flags":3,

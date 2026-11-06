@@ -203,8 +203,8 @@ job. On `mpls` the same failure is a warning and IPv4 carries on.
 After each node the jobs wait for the node to be ready on the transport before they go on. On `srv6`:
 - **Both instances:** strict VRF mode; `seg6_enabled` 0 on `all`, `default` and the core leg (no routing header
   accepted); the rule to the block at preference 999; the IPv4 local-table rule behind the VRF rule, as on `mpls`; the guard table loaded with its drop rule, a rule that drops
-  what is addressed to the block unless it came in on the core leg or `lo`; the instance's own locator announced: its anchor on `lo`, the connected route zebra
-  makes of it, and its prefix in the instance's own IS-IS LSP (the state a lost announcement leaves: sessions up,
+  what is addressed to the block unless it came in on the core leg or `lo`; the instance's own locator announced: its anchor on `lo` and its prefix in the
+  instance's own IS-IS LSP (the state a lost announcement leaves: sessions up,
   routes in, the locator missing from the own LSP and so from every other node); and for every VRF whose configuration exports a per-VRF SID a
   `seg6local … End.DT46 … vrftable <table>` route in the kernel (the VRF's SID). Readiness does not look at the
   unreachable route for the block.

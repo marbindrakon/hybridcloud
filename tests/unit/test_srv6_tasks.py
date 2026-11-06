@@ -26,9 +26,11 @@ with the command output replaced by fixtures:
   `ip -6 route show table all`, `nft list table inet shc_core_guard`, the gateways' SID lists, EVPN summaries and
   `show vrf vni json`; and from that run's evidence/snap-post.txt gw-site-a's `show running-config` and its guard
   listed without counters (`nft -s`). summary(), zebra(), RULES and guard_table() build their variants from these.
-- tests/fixtures/srv6-locator-lo/: real outputs of a provider edge whose locator is a prefix of lo (FRR 8.5.3 on the
-  test VM, the locator's anchor set by the apply's helper): `show isis database detail`, `ip -6 addr show dev lo`,
-  `show ipv6 route connected json`; own_locator() builds them for the instance's locator. And the replica's failed
+- tests/fixtures/srv6-locator-lo/: real outputs of a provider edge whose locator is a prefix of lo (FRR 8.5.3-17 on
+  the test VM, the anchor and the blackhole set by the apply's own helper): `show isis database detail`,
+  `ip -6 addr show dev lo`, and `show ipv6 route connected json` (zebra lists the prefix with distance 255, metric
+  8192, the blackhole as nexthop and no `selected`: why the check does not read zebra); own_locator() builds the
+  first two for the instance's locator. And the replica's failed
   gateway (a zebra crash and watchfrr's restart, p10): its IS-IS database as recorded (own LSP without its locator).
 - still hand-built (the replica recorded none): the root's running configuration (its PE listen range) and a gateway's
   `show bgp ipv4 vpn summary established json` (its IPv6 one stands in).
@@ -456,7 +458,7 @@ def zebra(protocol, *prefixes, installed=True):
 
 
 LOCLO = os.path.join(ROOT, "tests", "fixtures", "srv6-locator-lo")
-VM_LOC, VM_ANCHOR = "fd00:5e6:3::/48", "fd00:5e6:3::1/48"
+VM_LOC, VM_ANCHOR = "fd00:5e6:2::/48", "fd00:5e6:2::1/48"
 
 
 def locfix(name):
@@ -466,24 +468,20 @@ def locfix(name):
 
 def own_locator(locators, lsp=True):
     """The answers that show an instance's locator announced as a prefix of lo, from the test VM's real outputs: the
-    anchor on lo (`ip -6 addr show dev lo`), zebra's connected route, and the own LSP (`show isis database detail`)
-    carrying the locator (without lsp, or without locators: the own LSP without it)."""
-    addr = locfix("pe2__ip6-addr-lo.txt")
-    conn = json.loads(locfix("pe2__show_ipv6_route_connected_json.json"))
-    db = locfix("pe2__show_isis_database_detail.txt")
+    anchor on lo (`ip -6 addr show dev lo`) and the own LSP (`show isis database detail`) carrying the locator
+    (without lsp, or without locators: the own LSP without it)."""
+    addr = locfix("pe1__ip6-addr-lo.txt")
+    db = locfix("pe1__show_isis_database_detail.txt")
     line = "  IPv6 Reachability: %s (Metric: 10)\n" % VM_LOC
     assert line in db and VM_ANCHOR in addr
     if not locators:
         addr = addr.replace("    inet6 %s scope global nodad noprefixroute \n       valid_lft forever preferred_lft forever\n"
                             % VM_ANCHOR, "")
-    entry = conn.pop(VM_LOC)[0]
     for loc in locators:
         n = ipaddress.ip_network(loc)
         addr = addr.replace(VM_ANCHOR, "%s/%d" % (n.network_address + 1, n.prefixlen), 1)
-        conn[loc] = [dict(entry, prefix=loc)]
     db = db.replace(line, "".join("  IPv6 Reachability: %s (Metric: 10)\n" % loc for loc in locators) if lsp else "")
-    return {"ip -6 addr show dev lo": addr, "show ipv6 route connected json": json.dumps(conn, indent=2),
-            "show isis database detail": db}
+    return {"ip -6 addr show dev lo": addr, "show isis database detail": db}
 
 
 # `ip -6 rule show` as the replica's root printed it, the block replaced
@@ -644,16 +642,16 @@ class Srv6CoreCheck(unittest.TestCase):
         self.assertEqual((rc, out.strip()), (1, "ipv6Vpn=NotActivated"))
 
     def test_gateway_locator_on_lo(self):
-        """the locator announced as a prefix of lo: the anchor, the connected route and the own LSP each required"""
+        """the locator announced as a prefix of lo: the anchor and the own LSP each required; zebra is not read (FRR 8.5.3
+        lists the connected prefix unselected, at distance 255, while IS-IS announces it: the VM's real output)"""
         loc = "5f00:db8:102::/48"
+        conn = json.loads(locfix("pe1__show_ipv6_route_connected_json.json"))[VM_LOC][0]
+        self.assertEqual((conn["protocol"], conn["distance"], "selected" in conn), ("connected", 255, False))
         for kw, msg in (({"own": []}, "lo does not hold the locator anchor 5f00:db8:102::1/48"),
-                        ({}, "the locator %s is no connected route" % loc),
                         ({}, "the own IS-IS LSP does not announce the locator %s" % loc)):
             with self.subTest(msg=msg):
                 a = self.gw_ok(**kw)
-                if "connected" in msg:
-                    a["show ipv6 route connected json"] = "{}"
-                elif "LSP" in msg:
+                if "LSP" in msg:
                     a.update({k: v for k, v in own_locator([loc], lsp=False).items() if "isis" in k})
                 rc, _, err, _ = self.gw(a)
                 self.assertEqual(rc, 1)
@@ -662,6 +660,7 @@ class Srv6CoreCheck(unittest.TestCase):
         self.assertEqual((rc, err), (0, ""))
         self.assertIn(["ip", "netns", "exec", "gw-iaas1", "ip", "-6", "addr", "show", "dev", "lo"], calls)
         self.assertIn(["vtysh", "-N", "gw-iaas1", "-c", "show isis database detail"], calls)
+        self.assertFalse([c for c in calls if "connected" in " ".join(c)], calls)
 
     def test_gateway_isis(self):
         # the root's locator not learned, then its loopback not installed
@@ -840,9 +839,9 @@ class ReplicaReadiness(unittest.TestCase):
         exec(compile(code, "<inline check>", "exec"), ns)
         self.assertFalse(ns["announced"](failed, ipaddress.ip_network("5f00:b046:101::/48")))
         self.assertFalse(ns["announced"](failed, ipaddress.ip_network("5f00:b046:102::/48")))
-        db = locfix("pe2__show_isis_database_detail.txt")
+        db = locfix("pe1__show_isis_database_detail.txt")
         self.assertTrue(ns["announced"](db, ipaddress.ip_network(VM_LOC)))
-        self.assertFalse(ns["announced"](db, ipaddress.ip_network("fd00:5e6:2::/48")))  # another node's LSP
+        self.assertFalse(ns["announced"](db, ipaddress.ip_network("fd00:5e6:3::/48")))  # another node's LSP
 
     def test_gateways_up(self):
         for site, lo6, loc in (("site-a", "2001:db8:4005:ffff::2", "5f00:b046:102::/48"),

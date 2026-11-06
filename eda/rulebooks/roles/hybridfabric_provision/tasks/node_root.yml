@@ -559,7 +559,7 @@
       {% if fab_node_transport | default('mpls') == 'srv6' %}
       # SRv6 core: the root's kernel settings for SRv6 (strict mode, no routing header accepted on all, default and the core
       # bridge, the rule to the SID block, the IPv4 local rule after the l3mdev rule of the VRFs, the guard with its drop rule),
-      # its locator (the anchor on lo, its connected route, its prefix in the own IS-IS LSP) and the PE group
+      # its locator (the anchor on lo and its prefix in the own IS-IS LSP) and the PE group
       # listening on the IPv6 loopback pool are required. The gateways' sessions are reported, not required, as on the
       # MPLS core for gateways not yet on the IPv6 core: one that lacks a VPN family or whose IPv6 loopback or locator has
       # not arrived from IS-IS is listed (pendingPeers) and its own job repairs it; the fabric does not fail on it (a
@@ -624,7 +624,7 @@
           routing header accepted (seg6_enabled 0 on all, default and the core leg: the SID routes need none), the rule that
           looks the block up in the main table at preference 999, the IPv4 lookup local rule after the l3mdev rule, the guard
           with its drop rule for the block), the own
-          locator (its anchor on lo, its connected route, its prefix in the own LSP), and per provider-edge peer the VPN session over the IPv6 loopbacks with VPNv4 and VPNv6
+          locator (its anchor on lo and its prefix in the own LSP), and per provider-edge peer the VPN session over the IPv6 loopbacks with VPNv4 and VPNv6
           negotiated, its IPv6 loopback and its locator installed from IS-IS. With a peer named (a gateway) all of it is
           required. Without one (the route reflector) the PE group must listen on the pool and the peers are the sessions up
           from the pool: a peer that lacks a family or whose loopback or locator has not arrived is reported (stderr, and
@@ -697,14 +697,12 @@
           elif not guarded(guard, block, leg):
               errors.append("the guard table inet shc_core_guard has no drop rule for %s from outside %s and lo" % (block, leg))
           # the locator is a prefix of lo, a passive IS-IS interface: its anchor on lo (the first address, the locator
-          # length), the connected route zebra makes of it, and the instance own LSP announcing it (that announcement is what
-          # a redistributed discard route lost when FRR restarted its daemons)
+          # length) and the instance own LSP announcing it (that announcement is what a redistributed discard route lost
+          # when FRR restarted its daemons). Not zebra: FRR 8.5.3 lists the connected prefix as not selected (distance 255,
+          # the blackhole of the apply as its nexthop) while IS-IS announces it, and how it lists it differs between versions
           anchor = "%s/%d" % (loc.network_address + 1, loc.prefixlen)
           if (" %s " % anchor) not in (read(x + ["ip", "-6", "addr", "show", "dev", "lo"]) or ""):
               errors.append("lo does not hold the locator anchor %s" % anchor)
-          if not any(r.get("protocol") == "connected" and r.get("selected")
-                     for r in show("show ipv6 route connected json").get(str(loc), [])):
-              errors.append("the locator %s is no connected route" % loc)
           if not announced(read(vtysh + ["-c", "show isis database detail"]) or "", loc):
               errors.append("the own IS-IS LSP does not announce the locator %s" % loc)
           neg, state = {}, {}

@@ -1,7 +1,7 @@
 1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
-    inet6 fd00:5e6:3::1/48 scope global nodad noprefixroute 
+    inet6 fd00:5e6:2::1/48 scope global nodad noprefixroute 
        valid_lft forever preferred_lft forever
-    inet6 fd00:5e6:ff::3/128 scope global nodad 
+    inet6 fd00:5e6:ff::2/128 scope global nodad 
        valid_lft forever preferred_lft forever
     inet6 ::1/128 scope host proto kernel_lo 
        valid_lft forever preferred_lft forever

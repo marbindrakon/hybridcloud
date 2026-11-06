@@ -1,1 +1,0 @@
-blackhole fd00:5e6:3::/48 dev lo metric 1024 pref medium
