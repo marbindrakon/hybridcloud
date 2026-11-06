@@ -9,9 +9,7 @@ WireGuard, the cloud routers) and the routes the sites see stay the same. The sw
 `FABRIC_REALIZATION` (the aap-config environment, JSON; per fabric under `fabrics.<fabric name>`). Installation values
 never go into Git, the CRDs or the forms ([Lab configuration policy](../lab-config.md)).
 
-The transport is chosen per node, and every namespace on a node (the root and all its gateways) uses the node's. A
-node's core never reaches another node, so nodes on different transports work side by side: you can move one node,
-watch it, and move the next.
+A fabric has one core transport: every border gateway node, its root and all its gateways use it.
 
 ## What the switch changes
 
@@ -31,30 +29,27 @@ targets are the same on both.
 ```yaml
 core:
   loopbackPool6: ""       # the IPv6 loopbacks (dual-stack core); srv6 needs it
-  transport: mpls         # mpls or srv6: the transport of every node not listed below
-  transportByNode: {}     # <node>: mpls or srv6; overrides transport for that node
+  transport: mpls         # mpls or srv6: the fabric's core transport
   srv6:
     block: ""             # the SID block: a /32 inside 5f00::/16; srv6 needs it
 ```
-- **`core.transport`:** `mpls` or `srv6`. Empty counts as `mpls`.
-- **`core.transportByNode`:** keys are names from the HybridFabric's `borderGateway.nodes`, values `mpls` or `srv6`.
-  A node not listed takes `core.transport`. `shc_fabric.py node-transport` (`{core, node}` in, `{transport}` out)
-  resolves one node the same way the jobs do.
+- **`core.transport`:** `mpls` or `srv6`, for the whole fabric. Empty counts as `mpls`. There is no per-node
+  transport.
 - **`core.srv6.block`:** the SID block, a /32 inside `5f00::/16`, the range RFC 9602 sets aside for SRv6 SIDs. Draw
   one at random for the installation, so two installations that ever meet don't collide. It stays inside the core:
   never announce it, and list it in `network.exclusiveRanges` so no tenant prefix overlaps it (the routing rule below
-  would take such a prefix out of its network's VRF). A block can be set while every node is on `mpls`; it is
+  would take such a prefix out of its network's VRF). A block can be set while the transport is `mpls`; it is
   checked as soon as it is set.
 
 The HybridFabric job refuses the fabric (`InvalidSpec`) when:
-- a transport is neither `mpls` nor `srv6`, or a `transportByNode` key names no node of the fabric;
-- a node resolves to `srv6` while `core.loopbackPool6` or `core.srv6.block` is empty;
+- the transport is neither `mpls` nor `srv6`, or the realization sets `core.transportByNode` (not supported);
+- the transport is `srv6` while `core.loopbackPool6` or `core.srv6.block` is empty;
 - the block is not exactly a /32 inside `5f00::/16`, or overlaps `core.loopbackPool6`, `core.icmpSource6`,
   `attachments.linkPool6` or `egress.ipv6.routedPrefixes`;
 - with a block, the fabric has more than 255 nodes or the highest provider-edge index is above 255 (a
   `core.loopbackPool` or `core.linkSubnet` of at most 256 addresses keeps it at 254; the defaults do).
 
-With every node on `mpls` and no block, nothing of this applies and every node renders and applies as before.
+On `mpls` and with no block, nothing of this applies and every node renders and applies as before.
 
 ## SID layout
 
@@ -95,12 +90,11 @@ default `denyDestinations6` holds `5f00::/16`.
 
 ## The routing rule and the kernel guard
 
-In the root namespace and in every gateway namespace of an `srv6` node the apply sets:
+On `srv6`, in the root namespace and in every gateway namespace of a node, the apply sets:
 
 - `net.vrf.strict_mode=1`, SRv6 processing (`seg6_enabled`) on `all`, `default` and the core leg,
   `net.ipv6.seg6_flowlabel=1` (the outer flow label follows the inner flow) and the encapsulation source
-  (`ip sr tunsrc`) to the namespace's own IPv6 loopback. No MPLS setting, and MPLS input is switched off where it was
-  on.
+  (`ip sr tunsrc`) to the namespace's own IPv6 loopback. No MPLS setting.
 - **The routing rule** `ip -6 rule … to <block> lookup main pref 999`. After encapsulating a packet that came in on a
   VRF device, the kernel looks the outer destination (the SID) up in that VRF, where the VRF's default route (the
   network's own, or the `unreachable` default) takes it and nothing reaches the core. The rule sends every lookup for
@@ -112,31 +106,23 @@ In the root namespace and in every gateway namespace of an `srv6` node the apply
   not touch them.
 
 The guard is loaded before FRR can hold a SID, and a step that fails fails the apply, so a node never holds a SID
-without its guard (fail closed). Back on `mpls`, the rule, the guard and the encapsulation source are removed.
+without its guard (fail closed).
 
 Packets take other netfilter hooks than on MPLS: a decapsulated packet passes prerouting (with the VRF device as
 input) and then forward, never output; a packet about to be encapsulated passes prerouting only. The node's own
 filters on the networks' traffic (the TCP MSS clamp on the egress veths, the attachment circuits' chains) keep their
-effect on an `srv6` node; the rules that needs are added only when the node's transport is `srv6`.
+effect on `srv6`; the rules that needs are added only when the transport is `srv6`.
 
-## Moving a node and back
+## Choosing and changing the transport
 
-1. Roll out the dual-stack core (`core.loopbackPool6`) if the fabric doesn't have it.
-2. Draw the block and set `core.srv6.block` (and add it to `network.exclusiveRanges`). This changes nothing on the
-   nodes.
-3. Set `core.transportByNode.<node>: srv6` for one node and run the HybridFabric (Retry now). The job restarts that
-   node's FRR instances (a transport change is not reloaded), so the node's VPN sessions go down once; the other
-   nodes carry the sites meanwhile, as in any node-by-node run. The node's gateways follow without a separate Retry
-   now on each CloudGateway.
-4. Check the node (below), then move the next one the same way. When every node is on `srv6`, you can set
-   `core.transport: srv6` and empty `core.transportByNode`; nothing changes on the nodes.
-
-Back is the same with `mpls`: set the node's entry to `mpls` (or remove it while `core.transport` is `mpls`) and run
-the HybridFabric. The block can stay set.
+Choose the transport when you set up the fabric's realization: the dual-stack core (`core.loopbackPool6`) and the
+block first, then `core.transport: srv6`. The realization does not switch a running node in place. To change the
+transport of an existing environment, change `core.transport`, re-apply the nodes (run the HybridFabric and then each
+CloudGateway, Retry now) and restart their FRR instances, or reboot the nodes.
 
 ## Readiness
 
-After each node the jobs wait for the node to be ready on its transport before they go on. On `srv6`, per namespace:
+After each node the jobs wait for the node to be ready on the transport before they go on. On `srv6`, per namespace:
 the settings and the rule above, the guard table, IS-IS adjacencies, both VPN families Established over the IPv6
 loopbacks, and for every VRF a `seg6local … End.DT46 … vrftable <table>` route (the VRF's SID). The MPLS input and
-VPN label checks run on `mpls` nodes only. The HybridFabric's `status.realization` names each node's transport.
+VPN label checks run on `mpls` only. The HybridFabric's `status.realization` names the fabric's transport.
