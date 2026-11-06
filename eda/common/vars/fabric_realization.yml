@@ -62,20 +62,18 @@ fabric_realization_defaults:
     # per node on every VRF device (network address + (node position << 16) + provider-edge index); not
     # announced unless gateway.announceIcmpSource6. At least a /96, clear of loopbackPool6. Empty = none
     icmpSource6: ""
-    # VPN transport of the core on a border gateway node, for the node's root and all its gateway namespaces: mpls =
-    # IS-IS segment routing and MPLS L3VPN (labels over the loopbacks' node SIDs); srv6 = SRv6 L3VPN, one SID per VRF
+    # VPN transport of the core, one for the fabric (every node's root and all its gateway namespaces): mpls = IS-IS
+    # segment routing and MPLS L3VPN (labels over the loopbacks' node SIDs); srv6 = SRv6 L3VPN, one SID per VRF
     # (End.DT46, IPv4 and IPv6) from the provider edge's locator in core.srv6.block, the VPN sessions over the IPv6
-    # loopbacks. srv6 needs the dual-stack core (loopbackPool6) and core.srv6.block
+    # loopbacks. srv6 needs the dual-stack core (loopbackPool6) and core.srv6.block. A running node is not switched
+    # in place: after a change re-apply the nodes and restart their FRR instances (or reboot them)
     transport: mpls
-    # per node (borderGateway.nodes[].name: mpls or srv6): overrides transport for that node, so the nodes can change
-    # transport one at a time
-    transportByNode: {}
     srv6:
       # the SID block: a /32 inside 5f00::/16 (the SRv6 SID space), never announced outside the core. Micro-SIDs
       # (block 32, node 16, function 16 bits): a provider edge's locator is the /48 with node id
       # (node position << 8) + provider-edge index, so it is unique across the nodes although the loopbacks repeat;
       # node position and index each at most 255. Packets addressed into the block are taken only from the core
-      # leg. Empty = no SRv6 (every node mpls)
+      # leg. Empty = no SRv6
       block: ""
   nodes:
     trunkInterface: bond1
