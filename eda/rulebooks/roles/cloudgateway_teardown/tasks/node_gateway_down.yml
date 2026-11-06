@@ -51,3 +51,8 @@
   loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/etc/shc-fabric/gw-{{ fab_name }}.wgkey",
          "/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded", "/var/run/frr/gw-{{ fab_name }}"]
   delegate_to: "{{ bgw_node.name }}"
+
+# the last instance on the node (the fabric's root went before it): the root unit stopped, the apply script and the
+# unit templates removed; while any other instance is left, nothing
+- name: "{{ bgw_node.name }}: the fabric's programs and units"
+  ansible.builtin.include_tasks: "{{ role_path }}/../hybridfabric_teardown/tasks/node_programs_down.yml"

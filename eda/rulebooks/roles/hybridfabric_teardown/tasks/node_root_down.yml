@@ -17,12 +17,13 @@
     enabled: false
   delegate_to: "{{ bgw_node.name }}"
 
+# every daemon the fabric turns on (bfdd: BFD on attachment circuits)
 - name: "{{ bgw_node.name }}: FRR daemons off"
   ansible.builtin.lineinfile:
     path: /etc/frr/daemons
     regexp: "^{{ item }}="
     line: "{{ item }}=no"
-  loop: [bgpd, isisd]
+  loop: [bgpd, isisd, bfdd]
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: FRR configuration without the fabric"
@@ -47,6 +48,25 @@
     echo removed
   register: _hft_guard
   changed_when: "'removed' in _hft_guard.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
+# the IPv6 egress guard (installed with IPv6 egress; the root's alone): its timer stopped and disabled, its files and
+# its marker removed, as the fabric job does when IPv6 egress goes
+- name: "{{ bgw_node.name }}: remove the IPv6 egress guard"
+  ansible.builtin.shell: |
+    changed=no
+    if systemctl -q is-enabled shc-egress6-guard.timer 2>/dev/null || systemctl -q is-active shc-egress6-guard.timer 2>/dev/null; then
+      systemctl disable --now shc-egress6-guard.timer; changed=yes
+    fi
+    for f in /etc/systemd/system/shc-egress6-guard.timer /etc/systemd/system/shc-egress6-guard.service /usr/local/sbin/shc-egress6-guard /run/shc-egress6-guard.shut; do
+      [ -e "$f" ] && { rm -f "$f"; changed=yes; }
+    done
+    [ "$changed" = no ] || systemctl daemon-reload
+    echo "changed=$changed"
+  args:
+    executable: /bin/bash
+  register: _hft_egress6_guard
+  changed_when: "'changed=yes' in _hft_egress6_guard.stdout"
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: is the root instance installed"
@@ -75,3 +95,7 @@
     state: absent
   loop: [/etc/shc-fabric/root.json, /etc/shc-fabric/root.frr-loaded, /etc/modules-load.d/shc-fabric.conf]
   delegate_to: "{{ bgw_node.name }}"
+
+# with no instance left on the node: the root unit stopped, the apply script and the unit templates removed
+- name: "{{ bgw_node.name }}: the fabric's programs and units"
+  ansible.builtin.include_tasks: node_programs_down.yml
