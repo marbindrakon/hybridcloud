@@ -93,8 +93,15 @@
 #   the core leg, net.ipv6.seg6_flowlabel=1, the rule "to <block> lookup main" at pref 999 (ahead of the VRFs' rule:
 #   the kernel looks the SID of a packet it encapsulates up in the packet's ingress VRF otherwise), the encapsulation
 #   source (ip sr tunsrc) = the IPv6 loopback. None of the MPLS steps runs (modules, platform_labels, input). A step
-#   that fails fails the apply (exit 4). down: the root removes the encapsulation source, the rule and the guard
-#   (the sysctls stay, inert without SIDs); a gateway's state goes with its namespace.
+#   that fails fails the apply (exit 4). The rule sets above gain what the encapsulation would otherwise bypass (only
+#   with srv6): a packet decapsulated into a VRF passes prerouting with the VRF as its input interface, then
+#   forward, never output (as an MPLS pop does); a packet that is encapsulated passes prerouting only, never forward.
+#   So the conntrack zones are also set in prerouting by the VRF device (shc_egress, shc_egress6, shc_attach,
+#   shc_attach6: as on output), the IPv6 TCP MSS into a network is also clamped where it is still forwarded, toward
+#   xo<n> in the egress VRF (shc_egress6), a circuit's packets to the platform's sources are also dropped in
+#   prerouting by the device (shc_attach), and a gateway also clamps the SYNs it forwards to a site's bridge br<vni>
+#   (shc_gw_mss). down: the root removes the encapsulation source, the rule and the guard (the sysctls stay, inert
+#   without SIDs); a gateway's state goes with its namespace.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
@@ -472,7 +479,9 @@ egress_down() {
 egress_nft() {
   python3 - "$CONF" <<'PY'
 import json, sys
-e = json.load(open(sys.argv[1]))["egress"]
+doc = json.load(open(sys.argv[1]))
+e = doc["egress"]
+srv6 = doc.get("transport") == "srv6"
 nets = e.get("networks") or []
 def elements(xs):
     return ", ".join(xs)
@@ -482,6 +491,9 @@ if e.get("deny"):
 if e.get("allow"):
     out.append(f"  set allow {{ type ipv4_addr; flags interval; elements = {{ {elements(e['allow'])} }}; }}")
 zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
+# transport srv6: a network's traffic decapsulated into its VRF passes prerouting with the VRF as its input interface
+# (it never passes output): the zone by the VRF device too
+zones_in = zones + ("".join(f', "{n["vrf"]}" : {n["zone"]}' for n in nets) if srv6 else "")
 nats = elements(f'"{n["xe"]}" : {n["nat"]}' for n in nets if n.get("nat"))
 srcs = e.get("platformSources") or []
 ports = ", ".join(str(p) for p in e.get("platformPorts") or [6443, 443])
@@ -491,7 +503,7 @@ for hook in ("output", "prerouting"):
     out.append(f"  chain zone_{hook} {{")
     out.append(f"    type filter hook {hook} priority raw; policy accept;")
     if nets:
-        out.append(f"    ct zone set {'oifname' if hook == 'output' else 'iifname'} map {{ {zones} }}")
+        out.append(f"    ct zone set {'oifname' if hook == 'output' else 'iifname'} map {{ {zones if hook == 'output' else zones_in} }}")
     out.append("  }")
 for hook in ("output", "forward"):
     out.append(f"  chain filter_{hook} {{")
@@ -527,7 +539,9 @@ PY
 egress6_nft() {
   python3 - "$CONF" <<'PY'
 import json, sys
-e = json.load(open(sys.argv[1]))["egress"]
+doc = json.load(open(sys.argv[1]))
+e = doc["egress"]
+srv6 = doc.get("transport") == "srv6"
 v6 = e["ipv6"]
 nets = [n for n in e.get("networks") or [] if n.get("ipv6")]
 icmp = (v6.get("icmp6") or "").split("/")[0]
@@ -549,11 +563,13 @@ iset("deny6", v6.get("deny6"))
 iset("routed6", v6.get("routed"))
 iset("external6", v6.get("external6"))
 zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
+# transport srv6: by the VRF device in prerouting too (as in shc_egress)
+zones_in = zones + ("".join(f', "{n["vrf"]}" : {n["zone"]}' for n in nets) if srv6 else "")
 for hook, by in (("prerouting", "iifname"), ("output", "oifname")):
     out.append(f"  chain zone_{hook} {{")
     out.append(f"    type filter hook {hook} priority raw; policy accept;")
     if nets:
-        out.append(f"    meta nfproto ipv6 ct zone set {by} map {{ {zones} }}")
+        out.append(f"    meta nfproto ipv6 ct zone set {by} map {{ {zones_in if hook == 'prerouting' else zones} }}")
     out.append("  }")
 # from a network toward the egress VRF (packets leave the network's VRF through its xe veth)
 out.append("  chain outbound {")
@@ -578,6 +594,12 @@ for by, what in (("oifname", "out"), ("iifname", "in")):
 out.append("  }")
 for hook in ("forward", "output"):
     out.append(f"  chain clamp_{hook} {{ type filter hook {hook} priority mangle; policy accept; meta nfproto ipv6 jump clamp; }}")
+# transport srv6: TCP into a network leaves its VRF encapsulated, never through forward there; it is still forwarded
+# in the egress VRF, toward the network's veth xo<n>
+if srv6:
+    out += ["  chain clamp_return {", "    type filter hook forward priority mangle; policy accept;",
+            f'    meta nfproto ipv6 oifname "xo*" tcp flags & syn == syn tcp option maxseg size > {mss} counter '
+            f'tcp option maxseg size set {mss} comment "mss in, at the egress veth"', "  }"]
 # into a network (packets arrive on its xe veth from the egress VRF)
 out.append("  chain inbound {")
 out.append("    type filter hook prerouting priority filter; policy accept;")
@@ -717,7 +739,9 @@ attach_down() {
 attach_nft() {
   python3 - "$CONF" <<'PY'
 import json, sys
-a = json.load(open(sys.argv[1]))["attachments"]
+doc = json.load(open(sys.argv[1]))
+a = doc["attachments"]
+srv6 = doc.get("transport") == "srv6"
 cs = a.get("circuits") or []
 srcs = a.get("platformSources") or []
 def devs(xs):
@@ -730,10 +754,18 @@ if cs:
     vrfs = {c["vrf"]: c["zone"] for c in cs}
     zones_out = zones + "".join(f', "{v}" : {z}' for v, z in sorted(vrfs.items()))
     # the network's zone: a circuit's traffic that leaves through the network's egress veth is source-NATed there
+    # transport srv6: a packet decapsulated into the VRF passes prerouting with the VRF as its input interface (never
+    # output): the VRF's zone there too
     out += ["  chain zone_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
-            f"    ct zone set iifname map {{ {zones} }}", "  }",
+            f"    ct zone set iifname map {{ {zones_out if srv6 else zones} }}", "  }",
             "  chain zone_output {", "    type filter hook output priority raw; policy accept;",
             f"    ct zone set oifname map {{ {zones_out} }}", "  }"]
+    # transport srv6: a circuit's packet to the platform's sources that is routed into the core is encapsulated and
+    # never passes forward: dropped before routing too (still by the device: the first of its two prerouting passes)
+    if srv6 and srcs:
+        out += ["  chain from_circuit {", "    type filter hook prerouting priority filter; policy accept;",
+                f'    iifname {devs(cs)} ip daddr {{ {", ".join(srcs)} }} counter drop comment "the platform\'s sources"',
+                "  }"]
     # past prerouting, a packet from a device in a VRF shows the VRF as its input interface: the circuit's device is
     # the slave interface (meta sdifname)
     out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
@@ -762,7 +794,9 @@ PY
 attach6_nft() {
   python3 - "$CONF" <<'PY'
 import ipaddress, json, sys
-a = json.load(open(sys.argv[1]))["attachments"]
+doc = json.load(open(sys.argv[1]))
+a = doc["attachments"]
+srv6 = doc.get("transport") == "srv6"
 cs = [c for c in a.get("circuits") or [] if c.get("address6")]
 for c in cs:  # the link as a network (the form nft prints)
     c["link6"] = str(ipaddress.ip_network(str(c.get("link6") or c["address6"]), strict=False))
@@ -784,8 +818,9 @@ zones = ", ".join(f'"{c["device"]}" : {c["zone"]}' for c in cs)
 # the node's own packets in a VRF pass output first with the VRF as their output interface (as in shc_attach)
 vrfs = {c["vrf"]: c["zone"] for c in cs}
 zones_out = zones + "".join(f', "{v}" : {z}' for v, z in sorted(vrfs.items()))
+# transport srv6: the VRF's zone in prerouting too (as in shc_attach)
 out += ["  chain zone_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
-        f"    ct zone set iifname map {{ {zones} }}", "  }",
+        f"    ct zone set iifname map {{ {zones_out if srv6 else zones} }}", "  }",
         "  chain zone_output {", "    type filter hook output priority raw; policy accept;",
         f"    ct zone set oifname map {{ {zones_out} }}", "  }"]
 # before routing the device is still the input interface: everything the CE sends, to the node or through it
@@ -1099,10 +1134,13 @@ gateway)
     # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole.
     # Forwarded SYNs (from the site's leg) pass the forward hook on the bridge port; SYNs that arrive over the core
     # (MPLS popped into the VRF, e.g. another site's gateway) leave through the output hook on the VRF's bridge.
+    # Transport srv6: SYNs from the core are decapsulated into the VRF and forwarded to the bridge (never output).
     if [ -n "$WANT" ]; then
+      M6=""
+      [ "$TRANSPORT" != srv6 ] || M6='    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu'
       printf '%s\n' 'add table inet shc_gw_mss' 'delete table inet shc_gw_mss' 'table inet shc_gw_mss {' \
         '  chain clamp {' '    type filter hook forward priority mangle; policy accept;' \
-        '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu' '  }' \
+        '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu' ${M6:+"$M6"} '  }' \
         '  chain clamp_core {' '    type filter hook output priority mangle; policy accept;' \
         '    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu' '  }' '}' | $X nft -f -
     else
