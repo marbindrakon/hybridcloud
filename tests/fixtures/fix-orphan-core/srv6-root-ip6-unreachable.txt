@@ -1,0 +1,5 @@
+unreachable 2001:db8:4005::/48 dev lo table 9000 proto 196 metric 20 pref medium
+unreachable default dev lo table 9000 metric 4278198272 pref medium
+unreachable 2001:db8:4005::/48 dev lo table 110000 proto 196 metric 20 pref medium
+unreachable default dev lo table 110000 metric 4278198272 pref medium
+unreachable 5f00:b046::/32 dev lo metric 4278198272 pref medium

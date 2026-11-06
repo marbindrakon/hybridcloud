@@ -73,6 +73,34 @@ ANSWERS = {
 }
 
 
+
+def core_answers(namespaces, transport="mpls"):
+    """The reads of the core transport and IPv4 separation check (fabric_orphan_check nodes.yml: namespace_core,
+    node_core) for a node in order on its transport, so they add no finding (tests/unit/test_fix_orphan_core.py
+    covers them)."""
+    a = {}
+    for ns in namespaces:
+        x = "" if ns == "root" else "ip netns exec %s " % ns
+        a[x + "ip -j -4 route show table all type unreachable"] = "[]"
+        a[x + "ip -j -6 rule show"] = json.dumps([{"priority": 0, "src": "all", "table": "local"},
+                                                   {"priority": 32766, "src": "all", "table": "main"}])
+        a[x + "ip -j -4 rule show"] = json.dumps([{"priority": 1000, "src": "all", "l3mdev": None},
+                                                   {"priority": 32765, "src": "all", "table": "local"},
+                                                   {"priority": 32766, "src": "all", "table": "main"}])
+        if transport == "mpls":
+            a[x + "nft list tables"] = ""
+            a[x + "ip sr tunsrc show"] = "tunsrc addr ::\n"
+        else:
+            a[x + "ip -f mpls route show"] = ""
+    a["find /etc/shc-fabric /etc/systemd/system /etc/systemd/system/timers.target.wants /etc/modules-load.d -maxdepth 1 "
+      "( -name *.guard -o -name shc-core-guard@* -o -name shc-fabric.conf )"] = ""
+    a["systemctl list-units --all --plain --no-legend shc-core-guard@*"] = ""
+    return a
+
+
+ANSWERS.update(core_answers(["gw-iaas1", "gw-atuin", "root"]))
+
+
 class Fake:
     """run(cmd): the fixture for exactly that command line; records the calls."""
 
@@ -150,7 +178,7 @@ class NodeReadTest(unittest.TestCase):
         self.assertEqual(out["ipv6Orphans"], ["IPv6 unreachable default in table 51003 (gw-iaas1) belongs to no VRF",
                                               "IPv6 unreachable default in table 51002 (gw-atuin) belongs to no VRF"])
         # the rendered call carries the empty pool
-        self.assertIn('main(run, [], 1, 0,\n                          "")', shell(v))
+        self.assertIn('main(run, [], 1, 0,\n                          "",', shell(v))
 
     def test_unreadable_answers_are_empty(self):
         a = dict(ANSWERS, **{"vtysh -c show bfd peers json": "% Can't open configuration file",
@@ -161,7 +189,7 @@ class NodeReadTest(unittest.TestCase):
 
     def test_rendered_values_and_shell_syntax(self):
         sh = shell()
-        self.assertIn('main(run, ["bond1"], 3000, 3099,\n                          "2001:db8:4005:1::/64")', sh)
+        self.assertIn('main(run, ["bond1"], 3000, 3099,\n                          "2001:db8:4005:1::/64",', sh)
         self.assertNotIn("'", code())
         proc = subprocess.run(["bash", "-n"], input=sh, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
