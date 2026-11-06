@@ -134,7 +134,10 @@
 #   VRF's IPv6 addresses were measured unreachable from a VRF). A step that fails fails the apply (exit 4,
 #   "shc-fabric-apply: <step> failed" on stderr). Refusals (both transports, exit 4, "shc-fabric-apply: ..." on stderr):
 #   an IPv4 policy rule of the host's own between 0 and 32765 (the local table would no longer come first for the
-#   default VRF's traffic matching it), in the root namespace and in a gateway's namespace that exists already. They
+#   default VRF's traffic matching it), and a VRF other than the one the configuration names for a table the
+#   configuration will use (root: the egress, network and circuit VRFs' tables; gateway: the VNIs; the VRF the run
+#   creates would share the table with it, or with strict mode be refused part-way), named with its table, in the root
+#   namespace and in a gateway's namespace that exists already. They
 #   run, with the RA check and the configuration check, before the run's first write, so a refused apply leaves the
 #   node as it found it (the rule step checks again in place). The root's down puts the rule back at 0 (added before
 #   the one at 32765 is deleted); a gateway's go with its namespace.
@@ -432,14 +435,26 @@ local4_state() {
   $NSX ip -4 route show table all 2>/dev/null | grep '^unreachable default .*metric 4278198272' || true
 }
 
+# the VRFs the configuration names, "<table> <vrf>" per line (root: the egress VRF, the networks' and the circuits'
+# VRFs; gateway: its VRFs, table = VNI)
+want_vrfs() {
+  if [ "$TYPE" = root ]; then
+    jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
+      | map("\(.table) \(.vrf)") | unique | .[]' "$CONF"
+  else
+    jq -r '.vrfs // [] | .[] | "\(.vni) \(.name)"' "$CONF"
+  fi
+}
+
 # root|gateway: the refusals that depend only on the state as found, run before the run's first write (reads only), so
 # a refused apply leaves the node as it found it (exit 4, the reason on stderr). In the root namespace, and in a
-# gateway's namespace that exists already: no IPv4 policy rule of its own between 0 and 32765 (local4). Transport srv6
+# gateway's namespace that exists already: no IPv4 policy rule of its own between 0 and 32765 (local4), and no VRF
+# other than the one the configuration names for a table it will use (want_vrfs). Transport srv6
 # also: the root's net.ipv4.conf.all.rp_filter 0 (the network VRFs' rp_filter=0 holds only then; never written here),
 # and no two VRFs on one table while strict mode is off (srv6_strict). The RA precheck and the configuration check run
 # before the first write too.
 precheck() {
-  local v rules t
+  local v rules t want
   if [ "$TRANSPORT" = srv6 ] && [ "$1" = root ]; then
     v=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) || v=""
     if [ "$v" != 0 ]; then
@@ -453,6 +468,19 @@ precheck() {
   if [ -n "$t" ]; then
     echo "shc-fabric-apply: IPv4 policy rules between 0 and 32765 would come before the local table: $t" >&2
     exit 4
+  fi
+  # a VRF other than the one the configuration names for a table it will use: the VRF the run creates would share
+  # the table with it (transport srv6: the kernel refuses the creation part-way, strict mode)
+  want=$(want_vrfs)
+  if [ -n "$want" ]; then
+    t=$($NSX ip -j -d link show type vrf | jq -r --arg w "$want" '($w | split("\n") | map(select(. != "") | split(" ")
+        | {key: .[0], value: .[1]}) | from_entries) as $m | [.[] | (.linkinfo.info_data.table | tostring) as $t
+        | select($m[$t] != null and $m[$t] != .ifname) | "VRF \(.ifname) holds table \($t), which this configuration"
+        + " gives to \($m[$t])"] | join("; ")') || { echo "shc-fabric-apply: the VRFs could not be read" >&2; exit 4; }
+    if [ -n "$t" ]; then
+      echo "shc-fabric-apply: a VRF that is not this instance's holds a table it will use: $t" >&2
+      exit 4
+    fi
   fi
   [ "$TRANSPORT" = srv6 ] || return 0
   [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0

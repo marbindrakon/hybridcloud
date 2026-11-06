@@ -759,8 +759,10 @@ class RefusedBeforeAnyWrite(ApplyCase):
         import fake_netkernel as FK
         sc = st["ns"]["gw-iaas1"]["sysctl"]
         sc["net/vrf/strict_mode"] = "0"
-        FK.Kernel(st).add_link("gw-iaas1", "x1", "vrf", table="51000")
-        self.refused(st, "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: table 51000: t51000, x1")
+        # (a VRF on one of the gateway's own tables is refused before this: test_fix_foreign_vrf)
+        FK.Kernel(st).add_link("gw-iaas1", "x1", "vrf", table="77")
+        FK.Kernel(st).add_link("gw-iaas1", "x2", "vrf", table="77")
+        self.refused(st, "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: table 77: x1, x2")
 
     def test_fresh_namespace_not_read_in_the_root(self):
         """no namespace yet: nothing to check there, and nothing of the gateway's checks runs in the root namespace"""

@@ -684,7 +684,8 @@ class VrfRemovalTest(ApplyCase):
         h.conf("gw-iaas1", dict(GW_CONF, vrfs=[]))
         out, log = h.ok(self, "gw-iaas1")
         self.assertNotIn("t51000", h.get_state()["ns"]["gw-iaas1"]["links"])
-        self.assertEqual([l for l in log if is_v6(l) or " -d link show" in l], [])
+        # (the precheck's read of the namespace's VRFs, whose tables the configuration names, is no IPv6 command)
+        self.assertEqual([l for l in log if is_v6(l) or (" -d link show" in l and "link show type vrf" not in l)], [])
 
 
 def v4_writes(log):

@@ -37,6 +37,8 @@ ADDED = [
      "F-L1: a removed VRF's IPv4 unreachable default"),
     (r"^R \[root\] ip -j -d link show (egress|e\d+)$", "F-L1: a removed root VRF's table, read without the IPv6 keys too"),
     (r"^R \[root\] ip netns list$", "F-L1: the gateway's precheck (a namespace that exists already), on mpls too"),
+    # F-L6: a VRF other than the configuration's on a table it will use, both transports
+    (r"^R %s ip -j -d link show type vrf$" % NS, "F-L6: the namespace's VRFs and their tables, read by the precheck"),
 ]
 # Calls of BASE the script no longer issues.
 REMOVED = []
