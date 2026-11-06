@@ -872,6 +872,12 @@ def attachments_check(at, node_names, core=None):
                         continue
                     if c is not None and pool6.overlaps(c):
                         errors.append(f"realization attachments.linkPool6 {pool6} overlaps core.{k} {c}")
+                try:
+                    c = srv6_block(core)
+                except ValueError:
+                    c = None  # srv6_check names it
+                if c is not None and pool6.overlaps(c):
+                    errors.append(f"realization attachments.linkPool6 {pool6} overlaps core.srv6.block {c}")
         except ValueError as e:
             errors.append(f"realization attachments.linkPool6: {e}")
     for c in at.get("reserved6") or []:
@@ -932,11 +938,13 @@ NO_CIRCUIT_IPV6 = "IPv6 is not offered on attachment circuits of this fabric"
 def platform_ranges6(at, core, translation):
     """The platform's own IPv6 ranges a CE's routes never reach into: the circuits' IPv6 link pool
     (attachments.linkPool6), the installation's IPv6 infrastructure ranges (attachments.reserved6), the core's IPv6
-    loopbacks and ICMPv6 sources (core.loopbackPool6, core.icmpSource6) and every site's translation prefix
-    (translation.<site>.pref64). Without those inside another one, in address order; unusable values are left out
-    (the realization check names them)."""
+    loopbacks, ICMPv6 sources and SRv6 SID block (core.loopbackPool6, core.icmpSource6, core.srv6.block) and every
+    site's translation prefix (translation.<site>.pref64). Without those inside another one, in address order;
+    unusable values are left out (the realization check names them)."""
+    srv6 = (core or {}).get("srv6")
     given = [(at or {}).get("linkPool6")] + list((at or {}).get("reserved6") or []) + [
-        (core or {}).get("loopbackPool6"), (core or {}).get("icmpSource6")]
+        (core or {}).get("loopbackPool6"), (core or {}).get("icmpSource6"),
+        srv6.get("block") if isinstance(srv6, dict) else None]
     given += [((translation or {}).get(s) or {}).get("pref64") for s in sorted((translation or {}).keys())]
     out = []
     for c in given:

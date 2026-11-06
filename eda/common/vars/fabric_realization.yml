@@ -222,7 +222,7 @@ fabric_realization_defaults:
     linkPool6: ""
     # the platform's own IPv6 infrastructure ranges (e.g. the part of its routed space that holds linkPool6 and the
     # core's IPv6 ranges): a CE's IPv6 routes never reach into them, like linkPool6, core.loopbackPool6,
-    # core.icmpSource6 and the translation prefixes
+    # core.icmpSource6, core.srv6.block and the translation prefixes
     reserved6: []
     # central Vault KV path (mount central) for each circuit's BGP password
     secretPath: "fabric/circuits/{entity}/{name}"
