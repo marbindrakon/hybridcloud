@@ -20,12 +20,20 @@ with the command output replaced by fixtures:
   (tests/unit/test_srv6_frr_templates.py on branch srv6-b at 7c04a3ca, SHC_RENDER_OUT): gw-srv6-frr8.conf,
   root-srv6-frr8.conf, and root-srv6-frr8-noexport.conf (its root_vars(v6=True, families=[6]): network VRFs that
   export nothing to the VPN, hence no per-VRF SID). The SID check reads the VRFs that must have a SID from them.
-- the FRR JSON (BGP summaries, `show ipv6 route isis|static json`) is written in the shapes FRR 8.5.3's source
-  prints, as tests/unit/test_gateway_readiness.py does (the spike kept no JSON); `ip -6 rule show` in the form
-  iproute2 prints a rule with a destination selector ("999:<tab>from all to <prefix> lookup main"), not taken from
-  a real run either.
+- tests/fixtures/srv6-replica-p2/: real outputs of the replica (FRR 8.5.3 on the SRv6 core with uSID, the
+  integrated commit e0785d63; p-srv6/replica/out/p2-srv6-e0785d63/dfix/, copied as they are): per instance (root,
+  gw-site-a/b/c) the VPN summaries, `show ipv6 route isis json`, `show isis neighbor json`, `ip -6 rule show`,
+  `ip -6 route show table all`, `nft list table inet shc_core_guard`, the gateways' SID lists, EVPN summaries and
+  `show vrf vni json`; and from that run's evidence/snap-post.txt gw-site-a's `show running-config` and its guard
+  listed without counters (`nft -s`). summary(), zebra(), RULES and guard_table() build their variants from these.
+- still hand-built (the replica recorded none): `show ipv6 route static json` (the locator's discard route, assumed
+  in the IS-IS entry's shape), the root's running configuration (its PE listen range) and a gateway's
+  `show bgp ipv4 vpn summary established json` (its IPv6 one stands in).
+- before the replica, the FRR JSON and the rule and guard listings were written from FRR's and iproute2's source;
+  the replica's outputs have the shapes assumed (see the record).
 """
 import copy
+import ipaddress
 import json
 import os
 import subprocess
@@ -395,23 +403,43 @@ class GatewayWaitsForTheIpv6Core(unittest.TestCase):
 
 # ---- srv6: the readiness checks -------------------------------------------------------------------------------------
 
+REPLICA = os.path.join(ROOT, "tests", "fixtures", "srv6-replica-p2")
+
+
+def replica(name):
+    with open(os.path.join(REPLICA, name)) as f:
+        return f.read()
+
+
 def summary(peers):
-    return json.dumps({"routerId": "10.255.0.2", "as": 65010, "peers": {p: {"remoteAs": 65010, "state": s}
-                                                                         for p, s in peers.items()}})
+    """`show bgp ipv4|ipv6 vpn summary [established] json` in the shape FRR 8.5.3 prints on the SRv6 core (the
+    replica's root, two IPv6 listen-range peers): its header and one of its peer entries per peer, with the state."""
+    real = json.loads(replica("root__show_bgp_ipv4_vpn_summary_json.json"))
+    entry = next(iter(real["peers"].values()))
+    real["peers"] = {p: dict(entry, state=s) for p, s in peers.items()}
+    real["displayedPeers"] = real["totalPeers"] = len(peers)
+    return json.dumps(real, indent=2)
 
 
 def zebra(protocol, *prefixes, installed=True):
+    """`show ipv6 route <protocol> json` in the shape FRR 8.5.3 prints (an entry of the replica's
+    `show ipv6 route isis json`, with prefix, protocol and installed set). The replica recorded no static route JSON:
+    for the locator's discard route the same entry shape with protocol static is assumed."""
+    real = json.loads(replica("gw-site-a__show_ipv6_route_isis_json.json"))
+    entry = next(iter(real.values()))[0]
     out = {}
     for p in prefixes:
-        r = {"prefix": p, "protocol": protocol, "selected": True, "distance": 115 if protocol == "isis" else 1}
-        if installed:
-            r["installed"] = True
+        r = dict(entry, prefix=p, prefixLen=int(p.split("/")[1]), protocol=protocol)
+        if protocol != "isis":
+            r["distance"] = 1
+        if not installed:
+            r.pop("installed")
         out[p] = [r]
-    return json.dumps(out)
+    return json.dumps(out, indent=2)
 
 
-RULES = ("0:\tfrom all lookup local\n999:\tfrom all to %s lookup main\n1000:\tfrom all lookup [l3mdev-table]\n"
-         "32766:\tfrom all lookup main\n")
+# `ip -6 rule show` as the replica's root printed it, the block replaced
+RULES = replica("root__ip6-rule.txt").replace("5f00:b046::/32", "%s")
 
 
 def core_answers(est4, est6, plain=None, isis=(), static=(), rule=BLOCK, strict="1", seg6=None, guard=True,
@@ -437,11 +465,9 @@ def core_answers(est4, est6, plain=None, isis=(), static=(), rule=BLOCK, strict=
 
 
 def guard_table(leg, block=BLOCK):
-    """`nft list table inet shc_core_guard` as nft prints the table the apply loads (counter values in the rule; the
-    form of nft's listing, not taken from a real run)."""
-    return ("table inet shc_core_guard {\n\tchain guard {\n\t\ttype filter hook prerouting priority raw; policy accept;\n"
-            "\t\tiifname != { \"%s\", \"lo\" } ip6 daddr %s counter packets 0 bytes 0 drop comment "
-            "\"SID block from outside the core\"\n\t}\n}\n" % (leg, block))
+    """`nft list table inet shc_core_guard` as the replica's root printed it, with the core leg and the block
+    replaced."""
+    return replica("root__shc_core_guard.txt").replace('"br-core"', '"%s"' % leg).replace("5f00:b046::/32", block)
 
 
 def sid_conf(*vrfs):
@@ -656,6 +682,110 @@ class Srv6CoreCheck(unittest.TestCase):
             [self.GW6], [self.GW6], isis=[self.GW6 + "/128", "5f00:db8:202::/48"], static=["5f00:db8:201::/48"],
             running=self.root_running(), guard=guard_table("br-core")))
         self.assertEqual((rc, err), (0, ""))
+
+
+RBLOCK, RPOOL6 = "5f00:b046::/32", "2001:db8:4005:ffff::/64"
+
+
+def replica_answers(inst, leg, static, running="", ipv4_established=None):
+    """run() answers from what the replica recorded for one instance (tests/fixtures/srv6-replica-p2/<inst>__*):
+    the VPN summaries, IS-IS routes, policy rules and guard listing as FRR 8.5.3, iproute2 and nft printed them on the
+    SRv6 core, the sysctls as the apply sets them (0, strict mode 1). Not recorded there: the static route JSON (the
+    locator's discard route, built by zebra() from the IS-IS entry shape), the root's running configuration (its PE
+    listen range, given as text) and a gateway's `show bgp ipv4 vpn summary established json` (ipv4_established: the
+    instance's IPv6 established summary stands in, the same header and peer entry shape)."""
+    a = {"net.vrf.strict_mode": "1\n"}
+    for dev in ("all", "default", leg):
+        a["net/ipv6/conf/%s/seg6_enabled" % dev] = "0\n"
+    est4 = inst + "__show_bgp_ipv4_vpn_summary_established_json.json"
+    a.update({"ip -6 rule show": replica(inst + "__ip6-rule.txt"),
+              "ipv4 vpn summary established json": replica(ipv4_established or est4),
+              "ipv6 vpn summary established json": replica(inst + "__show_bgp_ipv6_vpn_summary_established_json.json"),
+              "show bgp ipv4 vpn summary json": replica(inst + "__show_bgp_ipv4_vpn_summary_json.json"),
+              "show bgp ipv6 vpn summary json": replica(inst + "__show_bgp_ipv6_vpn_summary_json.json"),
+              "show ipv6 route isis json": replica(inst + "__show_ipv6_route_isis_json.json"),
+              "show ipv6 route static json": zebra("static", static),
+              "show running-config": running,
+              "nft list table inet shc_core_guard": replica(inst + "__shc_core_guard.txt")})
+    return a
+
+
+class ReplicaReadiness(unittest.TestCase):
+    """The SRv6 check against the replica's real outputs (FRR 8.5.3, uSID, one root and three gateways; gw-site-b's
+    session to the root was down when they were taken: Idle, no IS-IS routes)."""
+
+    def gw(self, site, lo6, loc):
+        v = srv6(dict(GW_VARS, fab_real={"core": dict(CORE, srv6={"block": RBLOCK})},
+                      cg_pe=dict(GW_PE, loopbackIp6=lo6, locator=loc)))
+        code, args = snippet(render(shell_of(GW, T_GW_WAIT), **v))
+        inst = "gw-" + site
+        return run_code(code, args, replica_answers(
+            inst, "core0", loc, ipv4_established=inst + "__show_bgp_ipv6_vpn_summary_established_json.json"))
+
+    def test_gateways_up(self):
+        for site, lo6, loc in (("site-a", "2001:db8:4005:ffff::2", "5f00:b046:102::/48"),
+                               ("site-c", "2001:db8:4005:ffff::4", "5f00:b046:104::/48")):
+            with self.subTest(site=site):
+                rc, out, err, _ = self.gw(site, lo6, loc)
+                self.assertEqual((rc, out.strip(), err), (0, "ipv6Vpn=Established", ""))
+
+    def test_gateway_whose_session_is_down(self):
+        rc, out, err, _ = self.gw("site-b", "2001:db8:4005:ffff::3", "5f00:b046:103::/48")
+        self.assertEqual((rc, out.strip()), (1, "ipv6Vpn=Idle"))
+        self.assertIn("VPNv4 2001:db8:4005:ffff::1: Idle", err)
+        self.assertIn("VPNv6 2001:db8:4005:ffff::1: Idle", err)
+        self.assertIn("2001:db8:4005:ffff::1/128 of 2001:db8:4005:ffff::1 is not an installed IS-IS route", err)
+        self.assertIn("5f00:b046:101::/48 of 2001:db8:4005:ffff::1 is not an installed IS-IS route", err)
+
+    def test_root_with_one_gateway_down(self):
+        # the root sees site-a (::2) and site-c (::4); site-b's session is not up, so not a peer: Established
+        v = srv6(dict(ROOT_VARS, fab_real={"core": dict(CORE, srv6={"block": RBLOCK})},
+                      hf_pe=dict(RT_PE, locator="5f00:b046:101::/48")))
+        code, args = snippet(render(shell_of(RT, T_RT_WAIT), **v))
+        a = replica_answers("root", "br-core", "5f00:b046:101::/48",
+                            running="router bgp 65010\n bgp listen range %s peer-group PE\n" % RPOOL6)
+        rc, out, err, _ = run_code(code, args, a)
+        self.assertEqual((rc, out.split(), err), (0, ["ipv6Vpn=Established", "pendingPeers="], ""))
+        # site-c's locator withdrawn: reported, not an error
+        isis = json.loads(a["show ipv6 route isis json"])
+        isis.pop("5f00:b046:104::/48")
+        a["show ipv6 route isis json"] = json.dumps(isis)
+        rc, out, err, _ = run_code(code, args, a)
+        self.assertEqual((rc, out.split()), (0, ["ipv6Vpn=Partial", "pendingPeers=2001:db8:4005:ffff::4"]))
+
+    def test_guard_listings(self):
+        code, _ = snippet(render(shell_of(GW, T_GW_WAIT), **srv6(GW_VARS)))
+        ns = {"__name__": "x"}
+        exec(compile(code, "<inline check>", "exec"), ns)
+        block = ipaddress.ip_network(RBLOCK)
+        for name, leg in (("root__shc_core_guard.txt", "br-core"), ("gw-site-a__shc_core_guard.txt", "core0"),
+                          ("gw-site-a__shc_core_guard-stateless.txt", "core0")):
+            with self.subTest(listing=name):
+                self.assertTrue(ns["guarded"](replica(name), block, leg))
+                self.assertFalse(ns["guarded"](replica(name), block, "core9"))
+
+    def test_sid_check(self):
+        sh = render(shell_of(GW, T_GW_SID), **srv6(GW_VARS))
+        code, _ = snippet(sh)
+        for inst, loc, vrfs, conf in (
+                ("gw-site-a", "5f00:b046:102::/48", ["t51000:51000", "t51003:51003"], sid_conf("t51000", "t51003")),
+                ("gw-site-b", "5f00:b046:103::/48", ["t51001:51001"], sid_conf("t51001")),
+                ("gw-site-c", "5f00:b046:104::/48", ["t51002:51002"], sid_conf("t51002")),
+                ("root", "5f00:b046:101::/48", ["e10000:110000"], sid_conf("e10000"))):
+            with self.subTest(inst=inst):
+                answers = {"cat /c": conf, "route show table all": replica(inst + "__ip6-route-all.txt")}
+                self.assertEqual(run_code(code, ["", loc, "/c"] + vrfs, answers)[:2], (0, ""))
+                # the seg6local lines alone (the replica's SID lists) give the same
+                if inst != "root":
+                    answers["route show table all"] = replica(inst + "__sids.txt")
+                    self.assertEqual(run_code(code, ["", loc, "/c"] + vrfs, answers)[:2], (0, ""))
+        # a SID of another gateway's locator does not count
+        answers = {"cat /c": sid_conf("t51000"), "route show table all": replica("gw-site-a__ip6-route-all.txt")}
+        self.assertEqual(run_code(code, ["", "5f00:b046:104::/48", "/c", "t51000:51000"], answers)[1], "t51000 51000\n")
+
+    def test_exported_from_real_running_config(self):
+        # FRR's own printout of gw-site-a's configuration (" !" lines inside the VRF's BGP instance)
+        self.assertEqual(exported_of(GW)(replica("gw-site-a__running-config.txt")), {"t51000"})
 
 
 class Srv6SidCheck(unittest.TestCase):

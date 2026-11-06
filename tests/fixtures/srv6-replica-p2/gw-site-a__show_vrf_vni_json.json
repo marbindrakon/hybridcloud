@@ -1,0 +1,20 @@
+{
+  "vrfs":[
+    {
+      "vrf":"t51000",
+      "vni":51000,
+      "vxlanIntf":"vx51000",
+      "sviIntf":"br51000",
+      "state":"Up",
+      "routerMac":"72:af:64:b1:a2:44"
+    },
+    {
+      "vrf":"t51003",
+      "vni":51003,
+      "vxlanIntf":"vx51003",
+      "sviIntf":"br51003",
+      "state":"Up",
+      "routerMac":"4a:aa:19:1e:4d:5b"
+    }
+  ]
+}

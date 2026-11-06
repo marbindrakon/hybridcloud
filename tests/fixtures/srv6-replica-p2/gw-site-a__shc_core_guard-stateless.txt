@@ -1,0 +1,6 @@
+table inet shc_core_guard {
+	chain guard {
+		type filter hook prerouting priority raw; policy accept;
+		iifname != { "core0", "lo" } ip6 daddr 5f00:b046::/32 counter drop comment "SID block from outside the core"
+	}
+}

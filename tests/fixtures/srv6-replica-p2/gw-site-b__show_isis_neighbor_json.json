@@ -1,0 +1,21 @@
+{
+  "areas":[
+    {
+      "area":"CORE",
+      "circuits":[
+        {
+          "circuit":2,
+          "adj":"0000.0000.0001",
+          "interface":"core0",
+          "level":2,
+          "state":"Up",
+          "expires-in":"28s",
+          "snpa":"02fa.0aff.0101"
+        },
+        {
+          "circuit":0
+        }
+      ]
+    }
+  ]
+}

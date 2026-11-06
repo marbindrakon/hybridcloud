@@ -1,0 +1,34 @@
+local 2001:db8:4005:1::1:2 dev t51000 table 51000 proto kernel metric 0 pref medium
+2001:db8:4005:1::1:2 dev t51000 table 51000 proto kernel metric 256 pref medium
+2001:db8:4005:4001::/64 nhid 25 via ::ffff:10.250.1.11 dev br51000 table 51000 proto bgp metric 20 onlink pref medium
+2001:db8:4005:4003::/64 nhid 51  encap seg6 mode encap segs 1 [ 5f00:b046:104:1:: ] via fe80::e835:8dff:fe14:c848 dev core0 table 51000 proto bgp metric 20 pref medium
+unreachable 2001:db8:4005:4000::/56 dev lo table 51000 metric 4278198272 pref medium
+unreachable 2001:db8:4005::/48 dev lo table 51000 metric 4278198272 pref medium
+2001:db8:cafe::/48 nhid 33  encap seg6 mode encap segs 1 [ 5f00:b046:101:1:: ] via fe80::fa:aff:feff:101 dev core0 table 51000 proto bgp metric 20 pref medium
+multicast ff00::/8 dev br51000 table 51000 proto kernel metric 256 pref medium
+default nhid 33  encap seg6 mode encap segs 1 [ 5f00:b046:101:1:: ] via fe80::fa:aff:feff:101 dev core0 table 51000 proto bgp metric 20 pref medium
+unreachable default dev lo table 51000 metric 4278198272 pref medium
+local 2001:db8:4005:1::1:2 dev t51003 table 51003 proto kernel metric 0 pref medium
+2001:db8:4005:1::1:2 dev t51003 table 51003 proto kernel metric 256 pref medium
+2001:db8:4005:4101::/64 nhid 119 via ::ffff:10.250.1.11 dev br51003 table 51003 proto bgp metric 20 onlink pref medium
+unreachable 2001:db8:4005:4100::/56 dev lo table 51003 metric 4278198272 pref medium
+unreachable 2001:db8:4005::/48 dev lo table 51003 metric 4278198272 pref medium
+multicast ff00::/8 dev br51003 table 51003 proto kernel metric 256 pref medium
+unreachable default dev lo table 51003 metric 4278198272 pref medium
+2001:db8:4005:ffff::1 nhid 30 via fe80::fa:aff:feff:101 dev core0 proto isis metric 20 pref medium
+2001:db8:4005:ffff::2 dev lo proto kernel metric 256 pref medium
+2001:db8:4005:ffff::4 nhid 47 via fe80::e835:8dff:fe14:c848 dev core0 proto isis metric 20 pref medium
+5f00:b046:101::/48 nhid 30 via fe80::fa:aff:feff:101 dev core0 proto isis metric 20 pref medium
+5f00:b046:102:1:: nhid 22  encap seg6local action End.DT46 vrftable 51000 dev t51000 proto bgp metric 20 pref medium
+5f00:b046:102:5:: nhid 115  encap seg6local action End.DT46 vrftable 51003 dev t51003 proto bgp metric 20 pref medium
+blackhole 5f00:b046:102::/48 dev lo proto 196 metric 20 pref medium
+5f00:b046:104::/48 nhid 47 via fe80::e835:8dff:fe14:c848 dev core0 proto isis metric 20 pref medium
+unreachable 5f00:b046::/32 dev lo metric 4278198272 pref medium
+fe80::/64 dev core0 proto kernel metric 256 pref medium
+local ::1 dev lo table local proto kernel metric 0 pref medium
+local 2001:db8:4005:ffff::2 dev lo table local proto kernel metric 0 pref medium
+anycast fe80:: dev core0 table local proto kernel metric 0 pref medium
+local fe80::e88f:75ff:fe78:a65d dev core0 table local proto kernel metric 0 pref medium
+multicast ff00::/8 dev core0 table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev vx51000 table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev vx51003 table local proto kernel metric 256 pref medium

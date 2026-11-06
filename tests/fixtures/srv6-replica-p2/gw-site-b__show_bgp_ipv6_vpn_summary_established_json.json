@@ -1,0 +1,22 @@
+{
+  "routerId":"10.250.2.4",
+  "as":65010,
+  "vrfId":0,
+  "vrfName":"default",
+  "tableVersion":0,
+  "ribCount":1,
+  "ribMemory":192,
+  "peerCount":1,
+  "peerMemory":741976,
+  "peerGroupCount":1,
+  "peerGroupMemory":64,
+  "peers":{
+  },
+  "failedPeers":1,
+  "displayedPeers":0,
+  "totalPeers":1,
+  "dynamicPeers":0,
+  "bestPath":{
+    "multiPathRelax":"false"
+  }
+}
