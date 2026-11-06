@@ -92,8 +92,10 @@ default `denyDestinations6` holds `5f00::/16`.
 - **The root namespace prepared by the node's own setup.** The root instance runs in the host's namespace, and the
   apply does not set its forwarding: the host must forward IPv4 and IPv6. No host interface outside the VRFs may
   take routes from router advertisements (a host that routes IPv6 ignores them, and IS-IS adds IPv6 routes to the
-  main table): on `srv6` the apply fails while one does, where on `mpls` it leaves the IPv6 core out. The apply
-  writes neither the host's `all` nor its `default` reverse-path filtering; what it sets on its own devices is below.
+  main table): on `srv6` the apply fails while one does, where on `mpls` it leaves the IPv6 core out. The host's
+  IPv4 reverse-path filtering for `all` interfaces (`net.ipv4.conf.all.rp_filter`) must be 0: the apply never
+  writes the host's `all` or `default`, and on `srv6` it fails, before changing anything, while `all` is not 0
+  (why, and what it sets on its own devices, is below).
   The gateway namespaces are the apply's own and need none of this.
 
 ## The routing rule and the kernel guard
@@ -123,11 +125,12 @@ On `srv6`, in the root namespace and in every gateway namespace of a node, the a
   routable from every VRF; without the guard a host in any network could address another provider edge's SID
   directly and have its packet decapsulated into that SID's VRF. Packets the node encapsulates itself never pass
   prerouting, so the guard does not touch them.
-- **Loose reverse-path filtering on the root's network VRFs.** Each network VRF `e<n>` in the root gets IPv4
-  `rp_filter=2`. A SID decapsulates IPv4 into the VRF with the VRF device as input, and the route back to its source
-  in that VRF points at the core bridge, which strict filtering refuses. The kernel applies the larger of `all` and
-  the device's value, so 2 holds where the host's `all` is 1. The attachment circuits' packets are checked on their
-  own devices, which stay strict (1).
+- **No reverse-path filtering on the root's network VRFs.** Each network VRF `e<n>` in the root gets IPv4
+  `rp_filter=0`. A SID decapsulates IPv4 into the VRF with the VRF device as input, and the route back to its source
+  in that VRF points at the core bridge, outside the VRF: both strict and loose filtering drop such a packet. The
+  kernel applies the larger of `all` and the device's value, so the device's 0 holds only while the host's `all` is
+  0, which is why the apply requires it. The attachment circuits' packets are checked on their own devices, which
+  stay strict (1).
 
 The apply loads the guard first, before the other SRv6 settings and before FRR can hold a SID, and any of these
 steps that fails fails the apply.
