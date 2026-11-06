@@ -23,8 +23,9 @@
 #   address on egress0 and egress0's IPv6 MTU = wanMtu (the node sends Packet Too Big), and the nftables table inet
 #   shc_egress6 (IPv6 rules only; the IPv4 table above is untouched): the networks' conntrack zones, outbound only
 #   from a network's src6 (its platform block, the node's ICMPv6 source), not to platDeny6, allow6 and the resolvers
-#   on 53 before deny6, the TCP MSS clamp at mss, inbound only neighbour discovery, ICMPv6 errors and replies, and a
-#   routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR takes the
+#   on 53 before deny6, the TCP MSS clamp at mss both ways (a network's SYNs leaving it by xe<n>, on forward and
+#   output; the SYN-ACKs into it where the egress VRF forwards them to xo<n>, on forward), inbound only neighbour
+#   discovery, ICMPv6 errors and replies, and a routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR takes the
 #   sessions' configuration (fail closed; shc-egress6-guard keeps it so). The sessions themselves are FRR's.
 #   attachments {vlanPool: [start, end], parents: [interface], platformSources, circuits: [{circuit, device, parent,
 #   vlan, mtu, vrf, table, zone, address, link, nat}]} (attachment circuits; absent = none): per circuit a VLAN
@@ -48,7 +49,9 @@
 #   (staticd), never kernel routes set here.
 #   vrfs [{name, vni, mtu}]: one Linux VRF per network placed at the site (table = VNI) with its layer 3 VNI: a
 #   bridge br<vni> in the VRF and a VXLAN device vx<vni> from the gateway's site address; VRFs named t<digits> that
-#   are no longer listed are removed with their devices.
+#   are no longer listed are removed with their devices. With VRFs, the nftables table inet shc_gw_mss: the SYNs and
+#   SYN-ACKs the core sends toward a site clamped to the route's MTU where they leave by the site's bridge br<vni> (on
+#   the output hook: an MPLS pop into the VRF transmits there; transport srv6: on forward instead).
 #   wireguard {device, listenPort, keepalive, peers: [{publicKey, endpoint?, allowedIPs, persistentKeepalive?}]}
 #   (transport wireguard, instead of trunk/vlan): the site leg is a WireGuard device, created in the root namespace
 #   (its UDP socket follows the node's own routing) and moved into the namespace, with the gateway's site address.
@@ -114,9 +117,8 @@
 #   with srv6): a packet decapsulated into a VRF passes prerouting with the VRF as its input interface, then
 #   forward, never output (as an MPLS pop does); a packet that is encapsulated passes prerouting only, never forward.
 #   So the conntrack zones are also set in prerouting by the VRF device (shc_egress, shc_egress6, shc_attach,
-#   shc_attach6: as on output), the IPv6 TCP MSS into a network is also clamped where it is still forwarded, toward
-#   xo<n> in the egress VRF (shc_egress6), a circuit's packets to the platform's sources are also dropped in
-#   prerouting by the device (shc_attach), and a gateway also clamps the SYNs it forwards to a site's bridge br<vni>
+#   shc_attach6: as on output), a circuit's packets to the platform's sources are also dropped in prerouting by the
+#   device (shc_attach), and a gateway clamps the SYNs toward a site's bridge br<vni> on forward instead of output
 #   (shc_gw_mss). down: the root removes the encapsulation source, the rule, the unreachable route and the guard (the
 #   sysctls stay, inert without SIDs); a gateway's state goes with its namespace.
 #   shc-fabric-apply <instance> guard   (run periodically, any time): the guard table kept in place between applies.
@@ -801,19 +803,19 @@ if v6.get("deny6"):
 out.append("  }")
 for hook in ("forward", "output"):
     out.append(f"  chain out_{hook} {{ type filter hook {hook} priority filter; policy accept; meta nfproto ipv6 jump outbound; }}")
-# TCP toward and from the internet never uses segments larger than the WAN carries
+# TCP toward and from the internet never uses segments larger than the WAN carries. Toward it: a network's SYNs leaving
+# its VRF by the xe veth (popped from MPLS into the VRF they pass output, decapsulated or from a circuit forward)
 out.append("  chain clamp {")
-for by, what in (("oifname", "out"), ("iifname", "in")):
-    out.append(f'    {by} "xe*" tcp flags & syn == syn tcp option maxseg size > {mss} counter tcp option maxseg size set {mss} comment "mss {what}"')
+out.append(f'    oifname "xe*" tcp flags & syn == syn tcp option maxseg size > {mss} counter tcp option maxseg size set {mss} comment "mss out"')
 out.append("  }")
 for hook in ("forward", "output"):
     out.append(f"  chain clamp_{hook} {{ type filter hook {hook} priority mangle; policy accept; meta nfproto ipv6 jump clamp; }}")
-# transport srv6: TCP into a network leaves its VRF encapsulated, never through forward there; it is still forwarded
-# in the egress VRF, toward the network's veth xo<n>
-if srv6:
-    out += ["  chain clamp_return {", "    type filter hook forward priority mangle; policy accept;",
-            f'    meta nfproto ipv6 oifname "xo*" tcp flags & syn == syn tcp option maxseg size > {mss} counter '
-            f'tcp option maxseg size set {mss} comment "mss in, at the egress veth"', "  }"]
+# from it: the SYN-ACKs into a network are forwarded in the egress VRF toward the network's veth xo<n> (past it, in the
+# network's VRF, their input interface is the VRF device, and with srv6 they are encapsulated without passing forward);
+# forward only, so the node's own SYNs are not clamped
+out += ["  chain clamp_return {", "    type filter hook forward priority mangle; policy accept;",
+        f'    meta nfproto ipv6 oifname "xo*" tcp flags & syn == syn tcp option maxseg size > {mss} counter '
+        f'tcp option maxseg size set {mss} comment "mss in, at the egress veth"', "  }"]
 # into a network (packets arrive on its xe veth from the egress VRF)
 out.append("  chain inbound {")
 out.append("    type filter hook prerouting priority filter; policy accept;")
@@ -1373,17 +1375,15 @@ gateway)
       [ "$TRANSPORT" = srv6 ] || $X sysctl -qw "net.mpls.conf.$VRF.input=1" 2>/dev/null || true
     done
     # TCP towards a site never uses segments larger than its leg carries (rt mtu = the route's device MTU): the
-    # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole.
-    # Forwarded SYNs (from the site's leg) pass the forward hook on the bridge port; SYNs that arrive over the core
-    # (MPLS popped into the VRF, e.g. another site's gateway) leave through the output hook on the VRF's bridge.
-    # Transport srv6: SYNs from the core are decapsulated into the VRF and forwarded to the bridge (never output).
+    # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole. The
+    # SYNs and SYN-ACKs that arrive over the core leave by the site's bridge br<vni> (a routed packet's output device;
+    # the VXLAN port is the bridge's): popped from MPLS they are transmitted on the VRF device and pass the output
+    # hook (chain clamp_core), decapsulated (srv6) they pass forward (chain clamp); nothing else reaches the bridge
+    # by the other hook but the node's own packets, which the kernel already sizes to the route.
     if [ -n "$WANT" ]; then
-      M6=""
-      [ "$TRANSPORT" != srv6 ] || M6='    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu'
+      if [ "$TRANSPORT" = srv6 ]; then MC=clamp; MH=forward; else MC=clamp_core; MH=output; fi
       printf '%s\n' 'add table inet shc_gw_mss' 'delete table inet shc_gw_mss' 'table inet shc_gw_mss {' \
-        '  chain clamp {' '    type filter hook forward priority mangle; policy accept;' \
-        '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu' ${M6:+"$M6"} '  }' \
-        '  chain clamp_core {' '    type filter hook output priority mangle; policy accept;' \
+        "  chain $MC {" "    type filter hook $MH priority mangle; policy accept;" \
         '    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu' '  }' '}' | $X nft -f -
     else
       $X nft delete table inet shc_gw_mss 2>/dev/null || true

@@ -6,9 +6,9 @@ strict VRF mode (refused, and the apply failed naming the VRFs, while two VRFs s
 rule to the block at pref 999, the encapsulation source; no MPLS step; a second run changed=no; a failing step, a
 failing IPv6 core step and the root's router advertisement check fail the apply (on mpls: the warning, exit 0); the
 IPv4 local table behind the VRFs' rule with an unreachable default in every VRF; down leaves nothing in the root
-namespace. The netfilter additions on srv6 (zones by the VRF device in prerouting, the
-IPv6 MSS clamp toward xo<n>, the circuits' platform-source drop in prerouting, the gateway's forward clamp toward
-br<vni>) and, where an unprivileged network namespace allows it, `nft -c` of every srv6 rule set.
+namespace. The netfilter additions on srv6 (zones by the VRF device in prerouting, the circuits' platform-source drop
+in prerouting, the gateway's clamp toward br<vni> on forward instead of output) and, where an unprivileged network
+namespace allows it, `nft -c` of every srv6 rule set.
 Documentation prefixes and an arbitrary block of 5f00::/16 only."""
 import copy
 import os
@@ -163,15 +163,10 @@ class RootSrv6(ApplyCase):
         # shc_egress: the network VRF's zone in prerouting too; nothing else
         expect("ip shc_egress", ('    ct zone set iifname map { "xe10000" : 1 }',
                                  '    ct zone set iifname map { "xe10000" : 1, "e10000" : 1 }'))
-        # shc_egress6: the same, and the return clamp in the egress VRF (after the clamp's base chains)
-        clamp_out = ("  chain clamp_output { type filter hook output priority mangle; policy accept; "
-                     "meta nfproto ipv6 jump clamp; }\n")
+        # shc_egress6: the same (the return clamp in the egress VRF is on both transports: test_fix_mss_clamp)
         expect("inet shc_egress6",
                ('    meta nfproto ipv6 ct zone set iifname map { "xe10000" : 1 }',
-                '    meta nfproto ipv6 ct zone set iifname map { "xe10000" : 1, "e10000" : 1 }'),
-               (clamp_out, clamp_out + "  chain clamp_return {\n    type filter hook forward priority mangle; policy accept;\n"
-                '    meta nfproto ipv6 oifname "xo*" tcp flags & syn == syn tcp option maxseg size > 1360 counter '
-                'tcp option maxseg size set 1360 comment "mss in, at the egress veth"\n  }\n'))
+                '    meta nfproto ipv6 ct zone set iifname map { "xe10000" : 1, "e10000" : 1 }'))
         # shc_attach: the VRFs' zones in prerouting, the platform sources dropped before routing
         zone_out = '    ct zone set oifname map { "bond1.3001" : 2, "bond1.3002" : 2, "e10001" : 2 }\n  }\n'
         expect("ip shc_attach",
@@ -286,8 +281,8 @@ class GatewaySrv6(ApplyCase):
             self.assertEqual([l for l in log if any(x in l for x in SRV6_WORDS) and not l.startswith(("W [%s]" % name, "R [%s]" % name))], [])
             mss = st["nft"]["inet shc_gw_mss"]
             self.assertIn('  chain clamp {\n    type filter hook forward priority mangle; policy accept;\n'
-                          '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu\n'
-                          '    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu\n  }', mss)
+                          '    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu\n  }\n}', mss)
+            self.assertNotIn("clamp_core", mss)
             nft_check(self, mss.replace("add table inet shc_gw_mss\n", "table inet shc_gw_mss\n"))
             nft_check(self, st["nft"]["inet shc_core_guard"])
             out2, log2 = h.ok(self, name)

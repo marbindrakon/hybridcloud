@@ -1,7 +1,7 @@
 """shc-fabric-apply with transport absent or "mpls" against the script of the release before the SRv6 transport (BASE),
 run against the fake kernel of test_shc_fabric_apply: the same calls in the same order, the same output, kernel state
-after every run, and files, except for exactly the differences this file lists as data (the fixes made on both
-transports; every one with its reason). Any other difference fails. Two instance sets, two rounds up, then down: a
+after every run, and files, except for exactly the differences this file lists as data (calls added or removed,
+nftables text, and the IPv4 rules and routes the fixes keep; every one with its reason). Any other difference fails. Two instance sets, two rounds up, then down: a
 dual-stack root with IPv6 egress and an IPv4 and an IPv6 circuit, a VLAN gateway with icmp6Announced and a WireGuard
 gateway; and the same IPv4 only. Skipped where the history lacks BASE."""
 import copy
@@ -42,6 +42,26 @@ ADDED = [
 ]
 # Calls of BASE the script no longer issues.
 REMOVED = []
+
+# nftables text the script loads differently: (table, regular expression on BASE's text, replacement, reason). Each
+# applies exactly once wherever BASE loaded that table; the edited text must then equal this script's.
+NFT = [
+    ("inet shc_egress6",
+     r'(    oifname "xe\*" [^\n]* comment "mss out"\n)    iifname "xe\*" tcp flags & syn == syn tcp option maxseg size > '
+     r'(\d+) counter tcp option maxseg size set \2 comment "mss in"\n(  \}\n  chain clamp_forward [^\n]*\n'
+     r'  chain clamp_output [^\n]*\n)',
+     r'\1\3  chain clamp_return {\n    type filter hook forward priority mangle; policy accept;\n    meta nfproto ipv6 '
+     r'oifname "xo*" tcp flags & syn == syn tcp option maxseg size > \2 counter tcp option maxseg size set \2 '
+     r'comment "mss in, at the egress veth"\n  }\n',
+     "F-L2a: the IPv6 clamp into a network at the egress VRF's veth xo<n> (forward) instead of iifname xe* (never "
+     "matched)"),
+    ("inet shc_gw_mss",
+     r'  chain clamp \{\n    type filter hook forward priority mangle; policy accept;\n    oifname "vx\*" tcp flags syn '
+     r'tcp option maxseg size set rt mtu\n  \}\n',
+     "",
+     "F-L2b: mpls: no forward chain (its oifname vx* rule never matched; nothing reaches br<vni> by forward); the "
+     "output chain clamp_core stays"),
+]
 
 KERNEL4 = [{"pref": "0", "table": "local"}, {"pref": "32766", "table": "main"}, {"pref": "32767", "table": "default"}]
 L3MDEV = {"pref": "1000", "table": "[l3mdev-table]"}
@@ -98,11 +118,24 @@ def assert_runs_like_base(case, what, old_runs, new_runs):
         case.assertEqual(oo, no, what)
 
 
-def assert_state_like_base(case, what, old, new, root_down=False):
+def base_edited(case, what, st, used=None):
+    """BASE's state with the listed nftables differences applied (each exactly once per table it loaded)"""
+    st = copy.deepcopy(st)
+    for name, ns in st["ns"].items():
+        for table, rx, repl, why in NFT:
+            if table in ns["nft"]:
+                ns["nft"][table], n = re.subn(rx, repl, ns["nft"][table])
+                case.assertEqual(n, 1, "%s: [%s] %s: %s" % (what, name or "root", table, why))
+                if used is not None:
+                    used.add(rx)
+    return st
+
+
+def assert_state_like_base(case, what, old, new, root_down=False, used=None):
     for ns in old["ns"].values():  # the base script never touches what the fixes add
         case.assertNotIn("rules4", ns, what)
         case.assertNotIn("routes4", ns, what)
-    case.assertEqual(old, normalize(case, what, new, root_down), what)
+    case.assertEqual(base_edited(case, what, old, used), normalize(case, what, new, root_down), what)
 
 
 class AgainstBase(ApplyCase):
@@ -141,18 +174,21 @@ class AgainstBase(ApplyCase):
                          "files": sorted(os.listdir(h.etc))})
         return runs
 
-    def check(self, which, extra):
+    def check(self, which, extra, used=None):
         old, new = self.sequence("old", which, {}), self.sequence("new", which, extra)
         for o, n in zip(old, new):
             what = "%s %s %s" % (which, extra or "absent", n["what"])
             compare_logs(self, what, o["log"], n["log"])
             self.assertEqual(o["out"], n["out"], what)
             self.assertEqual(o["files"], n["files"], what)
-            assert_state_like_base(self, what, o["state"], n["state"], n["what"] == "root down")
+            assert_state_like_base(self, what, o["state"], n["state"], n["what"] == "root down", used)
 
     def test_dual_stack(self):
+        used = set()
         for extra in ({}, {"transport": "mpls"}):
-            self.check("dual", extra)
+            self.check("dual", extra, used)
+        # every listed nftables difference occurred
+        self.assertEqual([why for _, rx, _, why in NFT if rx not in used], [])
 
     def test_ipv4_only(self):
         self.check("ipv4", {})
