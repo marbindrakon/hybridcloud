@@ -34,6 +34,21 @@
     mode: "0640"
   delegate_to: "{{ bgw_node.name }}"
 
+# the SRv6 core guard units (installed only on the SRv6 core; the fabric's delete waited for its gateways, so only the
+# root's timer can be left): stopped and removed
+- name: "{{ bgw_node.name }}: remove the SRv6 core guard units"
+  ansible.builtin.shell: |
+    [ -e /etc/systemd/system/shc-core-guard@.timer ] || exit 0
+    for u in $(systemctl list-units --all --plain --no-legend 'shc-core-guard@*.timer' | awk '{print $1}') shc-core-guard@root.timer; do
+      systemctl disable --now "$u" 2>/dev/null || true
+    done
+    rm -f /etc/systemd/system/shc-core-guard@.timer /etc/systemd/system/shc-core-guard@.service
+    systemctl daemon-reload
+    echo removed
+  register: _hft_guard
+  changed_when: "'removed' in _hft_guard.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: is the root instance installed"
   ansible.builtin.stat:
     path: /etc/shc-fabric/root.json

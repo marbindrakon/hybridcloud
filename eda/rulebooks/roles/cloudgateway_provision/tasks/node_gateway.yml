@@ -333,6 +333,14 @@
     _cg_frrconf: "{{ _cg_frrconf | combine({'changed': true}) }}"
   when: _cg_reload is changed and _cg_frrconf is not changed
 
+# SRv6 core: the instance's guard is kept between jobs (hybridfabric_provision core_guard_unit.yml); nothing of it on
+# mpls
+- name: "{{ bgw_node.name }}: keep the SRv6 core guard"
+  ansible.builtin.include_tasks: "{{ role_path }}/../hybridfabric_provision/tasks/core_guard_unit.yml"
+  vars:
+    cgu_instance: "gw-{{ fab_name }}"
+  when: fab_node_transport | default('mpls') == 'srv6'
+
 - name: "{{ bgw_node.name }}: renew the lease before the wait for the core"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
   vars:
@@ -368,8 +376,9 @@
     up = {v.get("vrf"): str(v.get("state", "")).lower() for v in json.load(sys.stdin).get("vrfs", [])}
     sys.exit(0 if all(up.get(n) == "up" for n in sys.argv[1:]) else 1)' {{ cg_vrfs | map(attribute='vrf') | join(' ') }}
     {% if fab_node_transport | default('mpls') == 'srv6' %}
-    # SRv6 core: IPv6 forwarding, the namespace's kernel settings for SRv6 (strict mode, SRv6 on the core leg, the rule
-    # to the SID block, the guard), the gateway's locator discard route, and the VPN session to the route reflector over
+    # SRv6 core: IPv6 forwarding, the namespace's kernel settings for SRv6 (strict mode, no routing header accepted on
+    # all, default and the core leg, the rule to the SID block, the guard with its drop rule), the gateway's locator
+    # discard route, and the VPN session to the route reflector over
     # the IPv6 loopbacks with VPNv4 and VPNv6 negotiated, the root's IPv6 loopback and locator installed from IS-IS. Same
     # check code as the root's. Prints ipv6Vpn=<state> for the node record.
     [ "$(ip netns exec gw-{{ fab_name }} sysctl -n net.ipv6.conf.all.forwarding)" = 1 ]
@@ -389,14 +398,39 @@
             return None
 
 
+    def guarded(text, block, leg):
+        """Whether the guard table (nft list table inet shc_core_guard) holds the drop rule for the block: a rule that
+        drops what is addressed to the block (ip6 daddr) unless it came in on the core leg or lo (iifname != {...})."""
+        for line in text.splitlines():
+            w = line.replace("{", " { ").replace("}", " } ").replace(",", " ").split()
+            if "drop" not in w or "daddr" not in w or w[w.index("daddr") - 1] != "ip6" or "iifname" not in w:
+                continue
+            try:
+                if ipaddress.ip_network(w[w.index("daddr") + 1], strict=False) != block:
+                    continue
+            except (ValueError, IndexError):
+                continue
+            i = w.index("iifname")
+            if w[i + 1:i + 3] != ["!=", "{"] or "}" not in w[i + 3:]:
+                continue
+            devs = {d.strip(chr(34)) for d in w[i + 3:w.index("}", i + 3)]}
+            if devs == {leg, "lo"}:
+                return True
+        return False
+
+
     def main(argv, run):
         """argv: <vtysh pathspace or ""> <netns or ""> <core leg> <SID block> <own IPv6 loopback> <own locator>
-        <IPv6 loopback pool> [<peer IPv6 loopback>...]. The SRv6 core of this instance: the kernel (VRF strict mode, SRv6
-        accepted on all, default and the core leg, the rule that looks the block up in the main table at preference 999,
-        the guard table), the own locator discard route, and per provider-edge peer the VPN session over the IPv6
-        loopbacks with VPNv4 and VPNv6 negotiated, its IPv6 loopback and its locator installed from IS-IS. Without a peer
-        named (the route reflector) the peers are the sessions up from the IPv6 loopback pool, none is no error, and the
-        PE group listens on the pool. Prints ipv6Vpn=<state>; exits 1 while anything is missing."""
+        <IPv6 loopback pool> [<peer IPv6 loopback>...]. The SRv6 core of this instance: the kernel (VRF strict mode, no
+        routing header accepted (seg6_enabled 0 on all, default and the core leg: the SID routes need none), the rule that
+        looks the block up in the main table at preference 999, the guard with its drop rule for the block), the own
+        locator discard route, and per provider-edge peer the VPN session over the IPv6 loopbacks with VPNv4 and VPNv6
+        negotiated, its IPv6 loopback and its locator installed from IS-IS. With a peer named (a gateway) all of it is
+        required. Without one (the route reflector) the PE group must listen on the pool and the peers are the sessions up
+        from the pool: a peer that lacks a family or whose loopback or locator has not arrived is reported (stderr, and
+        the state: Established = every peer complete, Partial = some, NoNeg = none, NoPeers = no session), not an error,
+        so a gateway that its own job still has to repair never fails the fabric. Prints ipv6Vpn=<state> (and on the
+        route reflector pendingPeers=<peer,...>); exits 1 while anything required is missing."""
         pathspace, netns, leg = argv[0], argv[1], argv[2]
         block, own6 = ipaddress.ip_network(argv[3]), ipaddress.ip_address(argv[4])
         loc, pool6 = ipaddress.ip_network(argv[5]), ipaddress.ip_network(argv[6])
@@ -420,8 +454,8 @@
         if (read(x + ["sysctl", "-n", "net.vrf.strict_mode"]) or "").strip() != "1":
             errors.append("net.vrf.strict_mode is not 1")
         for dev in ("all", "default", leg):
-            if (read(x + ["sysctl", "-n", "net/ipv6/conf/%s/seg6_enabled" % dev]) or "").strip() != "1":
-                errors.append("seg6_enabled is not 1 on %s" % dev)
+            if (read(x + ["sysctl", "-n", "net/ipv6/conf/%s/seg6_enabled" % dev]) or "").strip() != "0":
+                errors.append("net.ipv6.conf.%s.seg6_enabled is not 0 (routing headers accepted)" % dev)
         rule = False
         for line in (read(x + ["ip", "-6", "rule", "show"]) or "").splitlines():
             w = line.split()
@@ -433,8 +467,11 @@
                 pass
         if not rule:
             errors.append("no rule to %s lookup main at preference 999" % block)
-        if read(x + ["nft", "list", "table", "inet", "shc_core_guard"]) is None:
+        guard = read(x + ["nft", "list", "table", "inet", "shc_core_guard"])
+        if guard is None:
             errors.append("the guard table inet shc_core_guard is not loaded")
+        elif not guarded(guard, block, leg):
+            errors.append("the guard table inet shc_core_guard has no drop rule for %s from outside %s and lo" % (block, leg))
         if not any(r.get("protocol") == "static" and r.get("selected") and r.get("installed")
                    for r in show("show ipv6 route static json").get(str(loc), [])):
             errors.append("the locator %s has no installed discard route" % loc)
@@ -459,31 +496,41 @@
         peers = want or sorted(p for p in up if p and ipaddress.ip_address(p) in pool6)
         isis6 = show("show ipv6 route isis json")
         base = int(loc.network_address) - ((int(own6) - int(pool6.network_address)) << 80)
+        pending = []
         for p in peers:
+            missing = []
             for f, fam in (("ipv4", "VPNv4"), ("ipv6", "VPNv6")):
                 if p not in neg[f]:
                     s = state.get(p, "")
-                    errors.append("%s %s: %s" % (fam, p, "NoNeg" if s == "Established" else (s or "NotActivated")))
+                    missing.append("%s %s: %s" % (fam, p, "NoNeg" if s == "Established" else (s or "NotActivated")))
             i = int(ipaddress.ip_address(p)) - int(pool6.network_address)
             need = [p + "/128"]
             if 1 <= i <= 255:
                 need.append(str(ipaddress.ip_network((base + (i << 80), 48))))
             else:
-                errors.append("%s is no provider-edge loopback of %s" % (p, pool6))
+                missing.append("%s is no provider-edge loopback of %s" % (p, pool6))
             for pfx in need:
                 if not any(r.get("protocol") == "isis" and r.get("selected") and r.get("installed")
                            for r in isis6.get(pfx, [])):
-                    errors.append("%s of %s is not an installed IS-IS route" % (pfx, p))
-        six = [p for p in peers if p in neg["ipv6"]]
+                    missing.append("%s of %s is not an installed IS-IS route" % (pfx, p))
+            if missing and not want:
+                pending.append(p)
+                missing = ["peer not ready on the SRv6 core: " + m for m in missing]
+                for m in missing:
+                    print(m, file=sys.stderr)
+            else:
+                errors += missing
         if want:
             s = state.get(want[0], "")
             result = "Established" if want[0] in neg["ipv6"] else ("NoNeg" if s == "Established" else (s or "NotActivated"))
         else:
-            result = ("NoPeers" if not peers else "Established" if len(six) == len(peers)
-                      else "NoNeg" if not six else "Partial")
+            result = ("NoPeers" if not peers else "Established" if not pending
+                      else "NoNeg" if len(pending) == len(peers) else "Partial")
         for e in errors:
             print(e, file=sys.stderr)
         print("ipv6Vpn=" + result)
+        if not want:
+            print("pendingPeers=" + ",".join(pending))
         return 1 if errors else 0
 
 
@@ -982,5 +1029,5 @@
       {{ (cg_wg_nodes | default([])) + ([_tun | combine({'name': bgw_node.name})] if _tun | length > 0 else []) }}
     cg_changed_nodes: >-
       {{ cg_changed_nodes + ([bgw_node.name] if [_cg_files, _cg_conf, _cg_apply, _cg_daemons, _cg_frrconf, _cg_state,
-                                                 _cg_in6_off | default({})]
+                                                 _cg_in6_off | default({}), _cgu_files | default({}), _cgu_timer | default({})]
          | select('changed') | list | length > 0 else []) }}

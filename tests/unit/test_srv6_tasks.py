@@ -420,7 +420,7 @@ def core_answers(est4, est6, plain=None, isis=(), static=(), rule=BLOCK, strict=
     seg6 = seg6 or {}
     a = {"net.vrf.strict_mode": strict + "\n"}
     for dev in ("all", "default", "core0", "br-core"):
-        a["net/ipv6/conf/%s/seg6_enabled" % dev] = seg6.get(dev, "1") + "\n"
+        a["net/ipv6/conf/%s/seg6_enabled" % dev] = seg6.get(dev, "0") + "\n"
     a.update({"ip -6 rule show": RULES % rule,
               "ipv4 vpn summary established json": summary({p: "Established" for p in est4}),
               "ipv6 vpn summary established json": summary({p: "Established" for p in est6}),
@@ -429,9 +429,19 @@ def core_answers(est4, est6, plain=None, isis=(), static=(), rule=BLOCK, strict=
               "show ipv6 route isis json": zebra("isis", *isis),
               "show ipv6 route static json": zebra("static", *static),
               "show running-config": running})
-    if guard:
-        a["nft list table inet shc_core_guard"] = "table inet shc_core_guard {\n}\n"
+    if guard is True:
+        a["nft list table inet shc_core_guard"] = guard_table("core0")
+    elif guard:
+        a["nft list table inet shc_core_guard"] = guard
     return a
+
+
+def guard_table(leg, block=BLOCK):
+    """`nft list table inet shc_core_guard` as nft prints the table the apply loads (counter values in the rule; the
+    form of nft's listing, not taken from a real run)."""
+    return ("table inet shc_core_guard {\n\tchain guard {\n\t\ttype filter hook prerouting priority raw; policy accept;\n"
+            "\t\tiifname != { \"%s\", \"lo\" } ip6 daddr %s counter packets 0 bytes 0 drop comment "
+            "\"SID block from outside the core\"\n\t}\n}\n" % (leg, block))
 
 
 def sid_conf(*vrfs):
@@ -528,6 +538,8 @@ class Srv6CoreCheck(unittest.TestCase):
 
     def root(self, answers):
         code, args = snippet(render(shell_of(RT, T_RT_WAIT), **srv6(ROOT_VARS)))
+        if answers.get("nft list table inet shc_core_guard") == guard_table("core0"):
+            answers["nft list table inet shc_core_guard"] = guard_table("br-core")
         return run_code(code, args, answers)
 
     def gw_ok(self, **kw):
@@ -567,8 +579,15 @@ class Srv6CoreCheck(unittest.TestCase):
 
     def test_gateway_kernel_settings(self):
         for kw, msg in (({"strict": "0"}, "net.vrf.strict_mode is not 1"),
-                        ({"seg6": {"core0": "0"}}, "seg6_enabled is not 1 on core0"),
-                        ({"seg6": {"default": "0"}}, "seg6_enabled is not 1 on default"),
+                        ({"seg6": {"core0": "1"}}, "net.ipv6.conf.core0.seg6_enabled is not 0 (routing headers accepted)"),
+                        ({"seg6": {"default": "1"}}, "net.ipv6.conf.default.seg6_enabled is not 0"),
+                        ({"seg6": {"all": "1"}}, "net.ipv6.conf.all.seg6_enabled is not 0"),
+                        ({"guard": "table inet shc_core_guard {\n}\n"},
+                         "the guard table inet shc_core_guard has no drop rule for 5f00:db8::/32 from outside core0 and lo"),
+                        ({"guard": guard_table("core0", "5f00:db9::/32")}, "has no drop rule for 5f00:db8::/32"),
+                        ({"guard": guard_table("core1")}, "has no drop rule for 5f00:db8::/32 from outside core0"),
+                        ({"guard": guard_table("core0").replace(" drop ", " accept ")}, "has no drop rule"),
+                        ({"guard": guard_table("core0").replace("iifname != ", "iifname ")}, "has no drop rule"),
                         ({"rule": "5f00:db9::/32"}, "no rule to 5f00:db8::/32 lookup main at preference 999"),
                         ({"guard": False}, "the guard table inet shc_core_guard is not loaded"),
                         ({"static": []}, "the locator 5f00:db8:102::/48 has no installed discard route")):
@@ -589,7 +608,11 @@ class Srv6CoreCheck(unittest.TestCase):
 
     def test_root_without_gateways(self):
         rc, out, err, calls = self.root(core_answers([], [], static=["5f00:db8:101::/48"], running=self.root_running()))
-        self.assertEqual((rc, out.strip(), err), (0, "ipv6Vpn=NoPeers", ""))
+        self.assertEqual((rc, out.split(), err), (0, ["ipv6Vpn=NoPeers", "pendingPeers="], ""))
+        # the guard of the root names its core bridge
+        rc, _, err, _ = self.root(core_answers([], [], static=["5f00:db8:101::/48"], running=self.root_running(),
+                                               guard=guard_table("core1")))
+        self.assertIn("has no drop rule for 5f00:db8::/32 from outside br-core and lo", err)
         self.assertTrue(all(c[0] != "ip" or c[:2] == ["ip", "-6"] for c in calls))
         self.assertIn(["sysctl", "-n", "net/ipv6/conf/br-core/seg6_enabled"], calls)
 
@@ -604,18 +627,25 @@ class Srv6CoreCheck(unittest.TestCase):
         isis = [gw2 + "/128", "5f00:db8:102::/48", gw3 + "/128", "5f00:db8:103::/48"]
         base = dict(static=["5f00:db8:101::/48"], running=self.root_running())
         rc, out, err, _ = self.root(core_answers([gw2, gw3], [gw2, gw3], isis=isis, **base))
-        self.assertEqual((rc, out.strip(), err), (0, "ipv6Vpn=Established", ""))
-        # gw3 has not negotiated VPNv6: Partial, and an error (both families are required on the SRv6 core)
+        self.assertEqual((rc, out.split(), err), (0, ["ipv6Vpn=Established", "pendingPeers="], ""))
+        # gw3 has not negotiated VPNv6: reported (Partial, pendingPeers), not an error: its own job repairs it
         rc, out, err, _ = self.root(core_answers([gw2, gw3], [gw2], isis=isis, **base))
-        self.assertEqual((rc, out.strip()), (1, "ipv6Vpn=Partial"))
-        self.assertIn("VPNv6 %s: NoNeg" % gw3, err)
-        # gw3's locator (node field 1 << 8 | 3) not learned
-        rc, _, err, _ = self.root(core_answers([gw2, gw3], [gw2, gw3], isis=isis[:3], **base))
-        self.assertEqual(rc, 1)
+        self.assertEqual((rc, out.split()), (0, ["ipv6Vpn=Partial", "pendingPeers=" + gw3]))
+        self.assertIn("peer not ready on the SRv6 core: VPNv6 %s: NoNeg" % gw3, err)
+        # gw3's locator (node field 1 << 8 | 3) not learned: the same
+        rc, out, err, _ = self.root(core_answers([gw2, gw3], [gw2, gw3], isis=isis[:3], **base))
+        self.assertEqual((rc, out.split()), (0, ["ipv6Vpn=Partial", "pendingPeers=" + gw3]))
         self.assertIn("5f00:db8:103::/48 of %s is not an installed IS-IS route" % gw3, err)
+        # neither gateway complete: NoNeg, still no error
+        rc, out, _, _ = self.root(core_answers([gw2, gw3], [], isis=isis, **base))
+        self.assertEqual((rc, out.split()), (0, ["ipv6Vpn=NoNeg", "pendingPeers=%s,%s" % (gw2, gw3)]))
+        # the root's own state stays required while gateways are pending
+        rc, _, err, _ = self.root(core_answers([gw2, gw3], [gw2], isis=isis, seg6={"br-core": "1"}, **base))
+        self.assertEqual(rc, 1)
+        self.assertIn("net.ipv6.conf.br-core.seg6_enabled is not 0", err)
         # a session from outside the pool (not a provider edge) is not waited for
         rc, out, _, _ = self.root(core_answers([gw2, "10.255.0.9"], [gw2], isis=isis[:2], **base))
-        self.assertEqual((rc, out.strip()), (0, "ipv6Vpn=Established"))
+        self.assertEqual((rc, out.split()[0]), (0, "ipv6Vpn=Established"))
 
     def test_locator_on_the_second_node(self):
         # node 2: the root's locator 5f00:db8:201::/48, a gateway with index 2 has 5f00:db8:202::/48
@@ -624,7 +654,7 @@ class Srv6CoreCheck(unittest.TestCase):
         code, args = snippet(render(shell_of(RT, T_RT_WAIT), **v))
         rc, out, err, _ = run_code(code, args, core_answers(
             [self.GW6], [self.GW6], isis=[self.GW6 + "/128", "5f00:db8:202::/48"], static=["5f00:db8:201::/48"],
-            running=self.root_running()))
+            running=self.root_running(), guard=guard_table("br-core")))
         self.assertEqual((rc, err), (0, ""))
 
 
@@ -763,9 +793,9 @@ class Srv6SidScript(unittest.TestCase):
 class Srv6Records(unittest.TestCase):
     unchanged = {"changed": False}
 
-    def root_record(self, transport):
+    def root_record(self, transport, verify=("ipv6Vpn=Established", "pendingPeers=")):
         task = by_name(load(RT), P + "record the node")
-        v = dict(copy.deepcopy(ROOT_VARS), hf_node_attach={}, _hf_verify={"stdout_lines": ["ipv6Vpn=Established"]},
+        v = dict(copy.deepcopy(ROOT_VARS), hf_node_attach={}, _hf_verify={"stdout_lines": list(verify)},
                  **{k: self.unchanged for k in ("_hf_files", "_hf_modules", "_hf_rootconf", "_hf_vrfgone", "_hf_unit",
                                                 "_hf_apply", "_hf_daemons", "_hf_frrconf", "_hf_frr_state")})
         if transport:
@@ -776,7 +806,12 @@ class Srv6Records(unittest.TestCase):
         out = self.root_record("srv6")
         self.assertTrue(out["message"].startswith(
             "root instance: VPNv4 and VPNv6 route reflector, SRv6 (locator 5f00:db8:101::/48), br-core"), out["message"])
-        self.assertEqual((out["transport"], out["locator"], out["ipv6Vpn"]), ("srv6", "5f00:db8:101::/48", "Established"))
+        self.assertEqual((out["transport"], out["locator"], out["ipv6Vpn"], out["pendingPeers"]),
+                         ("srv6", "5f00:db8:101::/48", "Established", []))
+        self.assertNotIn("not ready on the SRv6 core", out["message"])
+        out = self.root_record("srv6", ["ipv6Vpn=Partial", "pendingPeers=2001:db8:4005:ffff::3"])
+        self.assertEqual((out["ipv6Vpn"], out["pendingPeers"]), ("Partial", ["2001:db8:4005:ffff::3"]))
+        self.assertTrue(out["message"].endswith(", not ready on the SRv6 core: 2001:db8:4005:ffff::3"), out["message"])
         for t in (None, "mpls"):
             out = self.root_record(t)
             self.assertTrue(out["message"].startswith("root instance: VPNv4 and VPNv6 route reflector, IS-IS SR (SID "
@@ -842,6 +877,84 @@ class Srv6Records(unittest.TestCase):
                        dict(common, fab_real={"model": "linux-pe"}, cg_node_results=[{"name": "bgw-1"}]))
         self.assertEqual(out["realization"]["coreTransport"], "mpls")
         self.assertNotIn("srv6Locators", out["realization"])
+
+
+CGU = os.path.join(ROLES, "hybridfabric_provision", "tasks", "core_guard_unit.yml")
+
+
+class CoreGuardUnit(unittest.TestCase):
+    """The SRv6 core guard between jobs: a timer per instance running `shc-fabric-apply <instance> guard`, installed
+    and enabled only on srv6, stopped with a gateway instance and removed with the root."""
+
+    def test_included_on_srv6_only(self):
+        for path, inst in ((RT, "root"), (GW, "gw-{{ fab_name }}")):
+            t = by_name(load(path), P + "keep the SRv6 core guard")
+            self.assertTrue(t["ansible.builtin.include_tasks"].endswith("core_guard_unit.yml"))
+            self.assertEqual((t["vars"]["cgu_instance"], t["when"]), (inst, "fab_node_transport | default('mpls') == 'srv6'"))
+            # after the apply (the apply loads the guard first), before the wait
+            names = [x.get("name", "") for x in load(path)]
+            apply = [i for i, n in enumerate(names) if n.startswith(P + "apply the ")][0]
+            self.assertLess(apply, names.index(t["name"]))
+            # nothing else installs or enables it
+            from play_helper import walk
+            self.assertEqual(len([x for x in walk(load(path))
+                                  if str(x.get("ansible.builtin.include_tasks", "")).endswith("core_guard_unit.yml")]), 1)
+            self.assertNotIn("shc-core-guard@", open(path).read())
+
+    def test_units(self):
+        tasks = load(CGU)
+        units = {i["name"]: i["content"] for i in tasks[0]["loop"]}
+        self.assertIn("ExecStart=/usr/local/sbin/shc-fabric-apply %i guard\n", units["shc-core-guard@.service"])
+        self.assertIn("Type=oneshot\n", units["shc-core-guard@.service"])
+        self.assertIn("OnUnitActiveSec=15s\n", units["shc-core-guard@.timer"])
+        self.assertIn("WantedBy=timers.target\n", units["shc-core-guard@.timer"])
+        sd = tasks[1]["ansible.builtin.systemd"]
+        self.assertEqual((sd["name"], sd["enabled"], sd["state"]), ("shc-core-guard@{{ cgu_instance }}.timer", True, "started"))
+
+    def run_teardown(self, path, name, have_units, fab_name="site1"):
+        t = copy.deepcopy(by_name(load(path), P + name))
+        sh = t["ansible.builtin.shell"]
+        with tempfile.TemporaryDirectory() as d:
+            unit_dir = os.path.join(d, "etc/systemd/system")
+            os.makedirs(unit_dir)
+            if have_units:
+                for u in ("shc-core-guard@.timer", "shc-core-guard@.service"):
+                    open(os.path.join(unit_dir, u), "w").close()
+            with open(os.path.join(d, "systemctl"), "w") as f:
+                f.write('#!/bin/bash\necho "$*" >> "%s/log"\n'
+                        'case "$1" in list-units) echo "shc-core-guard@gw-a.timer loaded active waiting x" ;; '
+                        'is-enabled) exit 0 ;; esac\nexit 0\n' % d)
+            os.chmod(os.path.join(d, "systemctl"), 0o755)
+            sh = render(sh.replace("/etc/systemd/system/", unit_dir + "/"), fab_name=fab_name)
+            env = dict(os.environ, PATH=d + os.pathsep + os.environ.get("PATH", ""))
+            proc = subprocess.run(["bash", "-s"], input=sh, capture_output=True, text=True, env=env, timeout=30)
+            log = open(os.path.join(d, "log")).read() if os.path.exists(os.path.join(d, "log")) else ""
+            return proc, log, sorted(os.listdir(unit_dir))
+
+    def test_gateway_teardown(self):
+        path = os.path.join(ROLES, "cloudgateway_teardown", "tasks", "node_gateway_down.yml")
+        proc, log, _ = self.run_teardown(path, "stop the instance's SRv6 core guard", True)
+        self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "stopped"), proc.stderr)
+        self.assertIn("disable --now shc-core-guard@gw-site1.timer", log)
+        # an mpls node: no unit template, nothing called
+        proc, log, _ = self.run_teardown(path, "stop the instance's SRv6 core guard", False)
+        self.assertEqual((proc.returncode, proc.stdout, log), (0, "", ""))
+        # before the namespace goes
+        names = [x.get("name", "") for x in load(path)]
+        self.assertLess(names.index(P + "stop the instance's SRv6 core guard"),
+                        names.index(P + "remove the namespace and the core leg"))
+
+    def test_root_teardown(self):
+        path = os.path.join(ROLES, "hybridfabric_teardown", "tasks", "node_root_down.yml")
+        proc, log, left = self.run_teardown(path, "remove the SRv6 core guard units", True)
+        self.assertEqual((proc.returncode, proc.stdout.strip(), left), (0, "removed", []), proc.stderr)
+        self.assertIn("disable --now shc-core-guard@root.timer", log)
+        self.assertIn("disable --now shc-core-guard@gw-a.timer", log)
+        proc, log, _ = self.run_teardown(path, "remove the SRv6 core guard units", False)
+        self.assertEqual((proc.returncode, proc.stdout, log), (0, "", ""))
+        names = [x.get("name", "") for x in load(path)]
+        self.assertLess(names.index(P + "remove the SRv6 core guard units"),
+                        names.index(P + "remove the root instance (core bridge, loopback)"))
 
 
 class TemplatesGetTheirVariables(unittest.TestCase):

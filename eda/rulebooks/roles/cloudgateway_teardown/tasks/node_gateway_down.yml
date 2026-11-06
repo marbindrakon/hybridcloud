@@ -19,6 +19,18 @@
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# the instance's SRv6 core guard timer (installed only on the SRv6 core: nothing to do without the unit template)
+- name: "{{ bgw_node.name }}: stop the instance's SRv6 core guard"
+  ansible.builtin.shell: |
+    [ -e /etc/systemd/system/shc-core-guard@.timer ] || exit 0
+    u=shc-core-guard@gw-{{ fab_name }}.timer
+    if systemctl -q is-enabled "$u" 2>/dev/null || systemctl -q is-active "$u" 2>/dev/null; then
+      systemctl disable --now "$u" && echo stopped
+    fi
+  register: _cgt_guard
+  changed_when: "'stopped' in _cgt_guard.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: is the instance installed"
   ansible.builtin.stat:
     path: "/etc/shc-fabric/gw-{{ fab_name }}.json"
