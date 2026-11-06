@@ -92,19 +92,28 @@ default `denyDestinations6` holds `5f00::/16`.
 - **The root namespace prepared by the node's own setup.** The root instance runs in the host's namespace, and the
   apply does not set its forwarding: the host must forward IPv4 and IPv6. No host interface outside the VRFs may
   take routes from router advertisements (a host that routes IPv6 ignores them, and IS-IS adds IPv6 routes to the
-  main table): on `srv6` the apply fails while one does, where on `mpls` it leaves the IPv6 core out. Keep the host's
-  IPv4 reverse-path filtering loose (2) or off (0) for the root's VRF devices: a packet decapsulated into a root VRF
-  enters it as if it had arrived on the VRF device, and its route back to the site points at the core bridge, which
-  strict filtering (1) is expected to refuse. The gateway namespaces are the apply's own and need none of this.
+  main table): on `srv6` the apply fails while one does, where on `mpls` it leaves the IPv6 core out. The apply
+  writes neither the host's `all` nor its `default` reverse-path filtering; what it sets on its own devices is below.
+  The gateway namespaces are the apply's own and need none of this.
 
 ## The routing rule and the kernel guard
 
 On `srv6`, in the root namespace and in every gateway namespace of a node, the apply sets:
 
 - `net.vrf.strict_mode=1` (the decapsulating SIDs need it; the apply fails, naming them, while two VRFs of the
-  namespace share a table), the kernel's SRv6 settings, `net.ipv6.seg6_flowlabel=1` (the outer flow label follows
-  the inner flow) and the encapsulation source (`ip sr tunsrc`) to the namespace's own IPv6 loopback. No MPLS
-  setting.
+  namespace share a table), `net.ipv6.seg6_flowlabel=1` (the outer flow label follows the inner flow) and the
+  encapsulation source (`ip sr tunsrc`) to the namespace's own IPv6 loopback. No MPLS setting.
+- **No routing header accepted.** `seg6_enabled` is 0 on `all` and `default` (so every device created later inherits
+  0) and on the core leg, and at the end of each run the apply sets 0 on every device of the instance an earlier
+  configuration left at 1: in a gateway namespace every device; in the root `lo`, the core bridge, `egress0`, the
+  egress VRF, the network VRFs `e<n>`, their veths `xe<n>` and `xo<n>` and the circuits' devices, never the
+  management interface. The SIDs that decapsulate are routes, not local addresses, and do not read the setting; with
+  it on, a packet addressed to any local address of the provider edge could carry a segment list on to any SID,
+  past the guard below.
+- **The unreachable route** for the block in the namespace's main table, at the highest metric (4278198272). Every
+  real route wins over it (the locators are longer prefixes). It is there for a SID whose locator has gone from
+  IS-IS while a VPN route still names it: the lookup through the rule below ends at this route instead of following
+  a default route the host's main table may hold.
 - **The routing rule** `ip -6 rule … to <block> lookup main pref 999`. After encapsulating a packet that came in on a
   VRF device, the kernel looks the outer destination (the SID) up in that VRF, where the VRF's default route (the
   network's own, or the `unreachable` default) takes it and nothing reaches the core. The rule sends every lookup for
@@ -114,9 +123,23 @@ On `srv6`, in the root namespace and in every gateway namespace of a node, the a
   routable from every VRF; without the guard a host in any network could address another provider edge's SID
   directly and have its packet decapsulated into that SID's VRF. Packets the node encapsulates itself never pass
   prerouting, so the guard does not touch them.
+- **Loose reverse-path filtering on the root's network VRFs.** Each network VRF `e<n>` in the root gets IPv4
+  `rp_filter=2`. A SID decapsulates IPv4 into the VRF with the VRF device as input, and the route back to its source
+  in that VRF points at the core bridge, which strict filtering refuses. The kernel applies the larger of `all` and
+  the device's value, so 2 holds where the host's `all` is 1. The attachment circuits' packets are checked on their
+  own devices, which stay strict (1).
 
 The apply loads the guard first, before the other SRv6 settings and before FRR can hold a SID, and any of these
 steps that fails fails the apply.
+
+**The guard between jobs.** On `srv6` the jobs install the templated units `shc-core-guard@<instance>.service` and
+`.timer` and enable one timer per instance: `shc-core-guard@root.timer` for the root and `shc-core-guard@gw-<name>.timer`
+for each gateway, as the IPv6 egress filter has its own timer. Every 15 seconds (the first time 30 seconds after
+boot) the service runs `shc-fabric-apply <instance> guard`, which compares the instance's guard table with what the
+last apply loaded and loads it again when it is missing or differs (a ruleset flush, a hand change). It prints
+`guard=ok`, `guard=restored`, or `guard=none` (an instance on `mpls`, or a gateway whose namespace is gone). A
+gateway's teardown stops its timer; the fabric's teardown stops every remaining one and removes the units. Nothing of
+it is installed on `mpls`.
 
 Packets take other netfilter hooks than on MPLS: a decapsulated packet passes prerouting (with the VRF device as
 input) and then forward, never output; a packet about to be encapsulated passes prerouting only. The node's own
@@ -138,12 +161,18 @@ job. On `mpls` the same failure is a warning and IPv4 carries on.
 ## Readiness
 
 After each node the jobs wait for the node to be ready on the transport before they go on. On `srv6`:
-- **Both instances:** strict VRF mode and the SRv6 settings, the rule to the block at preference 999, the guard table
-  loaded, the instance's own locator with an installed discard route, and for every VRF whose configuration exports
-  a per-VRF SID a `seg6local … End.DT46 … vrftable <table>` route in the kernel (the VRF's SID).
-- **The root** also checks that the provider-edge group listens on `core.loopbackPool6`, and for each gateway
-  session that is up whether VPNv4 and VPNv6 are negotiated over the IPv6 loopbacks and whether the gateway's IPv6
-  loopback and locator are installed from IS-IS. No gateway session yet is no error: the gateways follow the root.
+- **Both instances:** strict VRF mode; `seg6_enabled` 0 on `all`, `default` and the core leg (no routing header
+  accepted); the rule to the block at preference 999; the guard table loaded with its drop rule, a rule that drops
+  what is addressed to the block unless it came in on the core leg or `lo`; the instance's own locator with an
+  installed discard route; and for every VRF whose configuration exports a per-VRF SID a
+  `seg6local … End.DT46 … vrftable <table>` route in the kernel (the VRF's SID). Readiness does not look at the
+  unreachable route for the block.
+- **The root** also requires that the provider-edge group listens on `core.loopbackPool6`. Its gateways' sessions it
+  reports and does not require: a gateway whose session is up but lacks VPNv4 or VPNv6, or whose IPv6 loopback or
+  locator is not installed from IS-IS, is listed in the node record's `pendingPeers` and in its message ("not ready
+  on the SRv6 core: …"), and the node's `ipv6Vpn` reads `Partial` (some gateways complete) or `NoNeg` (none);
+  `Established` when every gateway is complete, `NoPeers` without a gateway session. The fabric does not fail for it:
+  the gateway's own job repairs it, and a failed fabric would hold that job back.
 - **A gateway** also checks IPv6 forwarding in its namespace, its IS-IS adjacency with the root, its session to the
   route reflector with VPNv4 and VPNv6 negotiated over the IPv6 loopbacks, and the root's IPv6 loopback and locator
   installed from IS-IS.
@@ -152,7 +181,8 @@ The MPLS input and VPN label checks run on `mpls` only.
 
 ## What a tenant and an operator see
 
-Paths through an `srv6` core look different from MPLS in the tools:
+Paths through an `srv6` core look different from MPLS in the tools. These were seen in a test setup with the same
+kernel and FRR versions, not yet with this realization:
 - A traceroute from a site shows the egress provider edge, answering from its address in the network's VRF, and no
   core address; the ingress provider edge does not appear. IPv6 traceroutes may show the provider edges' hops
   silent.
@@ -169,5 +199,6 @@ Paths through an `srv6` core look different from MPLS in the tools:
 | HybridFabric `status.realization` (`srv6` only) | `srv6Locators` | `{<node>: <the root's locator>}` |
 | CloudGateway `status.realization` (`srv6` only) | `srv6Locators` | `{<node>: <the gateway's locator>}` |
 | HybridFabric and CloudGateway `status.nodes[]` (`srv6` only) | `transport`, `locator` | `srv6` and the node's locator of that root or gateway |
+| HybridFabric `status.nodes[]` (`srv6` only) | `pendingPeers` | the IPv6 loopbacks of the gateways whose session is up but not complete on the SRv6 core (see Readiness); empty when none |
 
-On `mpls` the `srv6Locators` field and the node records' `transport` and `locator` are absent.
+On `mpls` the `srv6Locators` field and the node records' `transport`, `locator` and `pendingPeers` are absent.
