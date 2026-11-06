@@ -95,7 +95,9 @@
 #   core leg core0), first of all (FRR starts after the apply at boot and the jobs reload or restart it after it, so
 #   the namespace never holds a SID route without it): the nftables table inet shc_core_guard (raw prerouting: IPv6
 #   addressed to the block that did not arrive on the core leg or lo is dropped, counted; encapsulated packets never
-#   pass prerouting), then net.vrf.strict_mode=1 (the decapsulating SIDs need it; it is refused while two VRFs in the
+#   pass prerouting; with icmp6, output: the namespace's ICMPv6 errors that leave by the core leg toward an address
+#   outside the core (not the block, loopbackPool6 or link-local) take icmp6 as their source, see srv6_guard), then
+#   net.vrf.strict_mode=1 (the decapsulating SIDs need it; it is refused while two VRFs in the
 #   namespace share a table, which fails the apply naming them), seg6_enabled=0 on all and default (so every device
 #   created later inherits 0) and on the core leg once it exists, and at the end of the run on every device of the
 #   instance an earlier configuration left at 1 (root: lo, the core bridge, egress0, the egress VRF, e<n>, xe<n>, xo<n>
@@ -503,12 +505,30 @@ srv6_step() { run_step "transport srv6" "$@"; }
 
 # <core leg>: the guard table (replaced as a whole). Only the core leg and lo may address the block: a host on an
 # interface in the main table could otherwise reach this node's SIDs (and so a VRF), and with the rule below a tenant
-# too, from its VRF
+# too, from its VRF.
+# With an ICMP source (icmp6), chain errors: an ICMPv6 error the namespace sends for a packet a SID decapsulated into a
+# VRF would carry the core loopback. The kernel picks an error's source from the route back when that route (looked
+# up outside the VRF) names one, else from the device the packet came in by: the core leg here, outside every VRF, so
+# an address of the default VRF (the loopback), never the VRF's own ICMP source (with MPLS the popped packet comes in
+# by the VRF device and gets it). The loopback is never announced outside the core, so the error was dropped on its
+# way to the internet (the egress filter admits the gateways' ICMP sources) and showed a core address to tenants. The
+# error is generated in the VRF and leaves by the core leg encapsulated: it passes output (as itself) only there. Errors
+# toward the core (the block, loopbackPool6, link-local) keep their source; the default VRF routes nothing else into
+# the core leg. Filter type, not route: a changed source must not reroute the packet (outside its VRF)
 srv6_guard() {
+  local errs=() core
+  if [ -n "$ICMP6" ]; then
+    core=$(python3 -c 'import ipaddress, sys
+print(", ".join(map(str, ipaddress.collapse_addresses(ipaddress.ip_network(n) for n in sys.argv[1:] if n))))' \
+      "$SRV6_BLOCK" "$LOPOOL6" fe80::/10)
+    errs=('  chain errors {' '    type filter hook output priority filter; policy accept;'
+      "    oifname \"$1\" ip6 daddr != { $core } icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } counter ip6 saddr set ${ICMP6%/*} comment \"VRF errors from the ICMP source\""
+      '  }')
+  fi
   printf '%s\n' 'table inet shc_core_guard' 'delete table inet shc_core_guard' 'table inet shc_core_guard {' \
     '  chain guard {' '    type filter hook prerouting priority raw; policy accept;' \
     "    iifname != { \"$1\", \"lo\" } ip6 daddr $SRV6_BLOCK counter drop comment \"SID block from outside the core\"" \
-    '  }' '}' | $NSX nft -f -
+    '  }' "${errs[@]}" '}' | $NSX nft -f -
   $NSX nft -s list table inet shc_core_guard > "$GUARDREF"
 }
 

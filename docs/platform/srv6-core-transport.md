@@ -127,6 +127,19 @@ On `srv6`, in the root namespace and in every gateway namespace of a node, the a
   routable from every VRF; without the guard a host in any network could address another provider edge's SID
   directly and have its packet decapsulated into that SID's VRF. Packets the node encapsulates itself never pass
   prerouting, so the guard does not touch them.
+- **ICMPv6 errors from the VRF's own source.** A packet a SID decapsulates into a VRF came in by the core leg, which
+  is outside every VRF. When the node sends an ICMPv6 error for it (Packet Too Big toward a site's smaller leg, Time
+  Exceeded, Unreachable), the kernel picks the error's source from the device the packet came in by, so among the
+  default VRF's addresses: the IPv6 loopback, a core address that is never announced outside the core. (With MPLS the
+  popped packet comes in by the VRF device, and the error carries the VRF's ICMPv6 source.) Such an error is dropped
+  by the root's egress filter on its way to the internet, which stalls path MTU discovery toward a site behind a small
+  leg, and shows a core address to tenants. With an ICMPv6 source (`core.icmpSource6`), the guard table therefore has
+  a second chain, on the output hook: an ICMPv6 error that leaves by the core leg toward an address outside the core
+  (the block, `core.loopbackPool6`, link-local) gets the namespace's ICMPv6 source, the address every VRF device of
+  the namespace holds. The error is generated in the VRF and passes the output hook as itself once, before it is
+  encapsulated. The chain is a filter chain, not a route chain: a changed source must not make the kernel route the
+  packet again, outside its VRF. Errors toward core addresses keep the loopback; the default VRF routes nothing else
+  into the core leg.
 - **No reverse-path filtering on the root's network VRFs.** Each network VRF `e<n>` in the root gets IPv4
   `rp_filter=0`. A SID decapsulates IPv4 into the VRF with the VRF device as input, and the route back to its source
   in that VRF points at the core bridge, outside the VRF: both strict and loose filtering drop such a packet. The
