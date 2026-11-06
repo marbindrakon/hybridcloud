@@ -377,7 +377,8 @@
     sys.exit(0 if all(up.get(n) == "up" for n in sys.argv[1:]) else 1)' {{ cg_vrfs | map(attribute='vrf') | join(' ') }}
     {% if fab_node_transport | default('mpls') == 'srv6' %}
     # SRv6 core: IPv6 forwarding, the namespace's kernel settings for SRv6 (strict mode, no routing header accepted on
-    # all, default and the core leg, the rule to the SID block, the guard with its drop rule), the gateway's locator
+    # all, default and the core leg, the rule to the SID block, the IPv4 local rule after the VRFs' l3mdev rule, the
+    # guard with its drop rule), the gateway's locator
     # discard route, and the VPN session to the route reflector over
     # the IPv6 loopbacks with VPNv4 and VPNv6 negotiated, the root's IPv6 loopback and locator installed from IS-IS. Same
     # check code as the root's. Prints ipv6Vpn=<state> for the node record.
@@ -423,7 +424,8 @@
         """argv: <vtysh pathspace or ""> <netns or ""> <core leg> <SID block> <own IPv6 loopback> <own locator>
         <IPv6 loopback pool> [<peer IPv6 loopback>...]. The SRv6 core of this instance: the kernel (VRF strict mode, no
         routing header accepted (seg6_enabled 0 on all, default and the core leg: the SID routes need none), the rule that
-        looks the block up in the main table at preference 999, the guard with its drop rule for the block), the own
+        looks the block up in the main table at preference 999, the IPv4 lookup local rule after the l3mdev rule, the guard
+        with its drop rule for the block), the own
         locator discard route, and per provider-edge peer the VPN session over the IPv6 loopbacks with VPNv4 and VPNv6
         negotiated, its IPv6 loopback and its locator installed from IS-IS. With a peer named (a gateway) all of it is
         required. Without one (the route reflector) the PE group must listen on the pool and the peers are the sessions up
@@ -467,6 +469,21 @@
                 pass
         if not rule:
             errors.append("no rule to %s lookup main at preference 999" % block)
+        l3mdev, local = [], []
+        for line in (read(x + ["ip", "-4", "rule", "show"]) or "").splitlines():
+            w = line.split()
+            if len(w) < 3 or not w[0].endswith(":") or not w[0][:-1].isdigit():
+                continue
+            if w[-2:] == ["lookup", "[l3mdev-table]"]:
+                l3mdev.append(int(w[0][:-1]))
+            elif w[-2:] == ["lookup", "local"]:
+                local.append(int(w[0][:-1]))
+        if not l3mdev:
+            errors.append("no IPv4 l3mdev rule")
+        elif not local or min(local) < min(l3mdev):
+            errors.append("the IPv4 rule lookup local is at %s, not after the l3mdev rule at %d (a packet from a VRF reaches "
+                          "the default VRF local addresses)" % (", ".join(str(p) for p in sorted(local)) or "no preference",
+                                                                min(l3mdev)))
         guard = read(x + ["nft", "list", "table", "inet", "shc_core_guard"])
         if guard is None:
             errors.append("the guard table inet shc_core_guard is not loaded")

@@ -164,6 +164,10 @@
     fab_lease_step: "the root instance's unit start on {{ bgw_node.name }}"
   timeout: 0
 
+# A start that fails (the apply under the unit refused or failed) is judged by the next step, which takes the apply's
+# own reason from the unit's journal: systemd's message ("Unable to start service …") names none, and the journal is
+# out of reach once the job has left the node. A step that runs out of time still fails here (a timeout overrides
+# failed_when)
 - name: "{{ bgw_node.name }}: run the root instance at boot (and now)"
   ansible.builtin.systemd:
     name: shc-fabric-apply@root.service
@@ -172,6 +176,36 @@
     daemon_reload: "{{ _hf_files is changed }}"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_unit
+  failed_when: false
+
+# the unit is active (its apply succeeded), or the job fails with the apply's own reason: the lines it printed under
+# this start ("transport srv6: …", what the SRv6 core refuses), else systemd's message. Read only
+- name: "{{ bgw_node.name }}: the root instance runs, or why not"
+  ansible.builtin.shell: |
+    u=shc-fabric-apply@root.service
+    s=$(systemctl is-active "$u")
+    [ "$s" = active ] && exit 0
+    echo "state=$s"
+    inv=$(systemctl show -p InvocationID --value "$u")
+    if [ -n "$inv" ]; then journalctl -o cat --no-pager "_SYSTEMD_INVOCATION_ID=$inv"; else journalctl -o cat --no-pager -n 50 -u "$u"; fi \
+      | grep -E '^transport srv6: ' | tail -n 5
+    exit 1
+  args:
+    executable: /bin/bash
+  register: _hf_unit_state
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: stop when the root instance did not start"
+  vars:
+    _why: "{{ _hf_unit_state.stdout_lines | default([]) | select('match', '^transport srv6: ') | list }}"
+  ansible.builtin.fail:
+    msg: >-
+      HybridFabric {{ fab_name }} on {{ bgw_node.name }}: the root instance (shc-fabric-apply@root.service) did not
+      start: {{ (_why | join('; ')) if _why | length > 0
+                else (_hf_unit.msg | default('', true) or (_hf_unit_state.stdout_lines | default(['unknown']) | first)) }}
+  when: _hf_unit_state.rc | default(1) != 0
 
 - name: "{{ bgw_node.name }}: the lease lasts for the apply"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
@@ -474,7 +508,8 @@
       {% endfor %}
       {% if fab_node_transport | default('mpls') == 'srv6' %}
       # SRv6 core: the root's kernel settings for SRv6 (strict mode, no routing header accepted on all, default and the core
-      # bridge, the rule to the SID block, the guard with its drop rule), its locator's discard route and the PE group
+      # bridge, the rule to the SID block, the IPv4 local rule after the VRFs' l3mdev rule, the guard with its drop rule),
+      # its locator's discard route and the PE group
       # listening on the IPv6 loopback pool are required. The gateways' sessions are reported, not required, as on the
       # MPLS core for gateways not yet on the IPv6 core: one that lacks a VPN family or whose IPv6 loopback or locator has
       # not arrived from IS-IS is listed (pendingPeers) and its own job repairs it; the fabric does not fail on it (a
@@ -521,7 +556,8 @@
           """argv: <vtysh pathspace or ""> <netns or ""> <core leg> <SID block> <own IPv6 loopback> <own locator>
           <IPv6 loopback pool> [<peer IPv6 loopback>...]. The SRv6 core of this instance: the kernel (VRF strict mode, no
           routing header accepted (seg6_enabled 0 on all, default and the core leg: the SID routes need none), the rule that
-          looks the block up in the main table at preference 999, the guard with its drop rule for the block), the own
+          looks the block up in the main table at preference 999, the IPv4 lookup local rule after the l3mdev rule, the guard
+          with its drop rule for the block), the own
           locator discard route, and per provider-edge peer the VPN session over the IPv6 loopbacks with VPNv4 and VPNv6
           negotiated, its IPv6 loopback and its locator installed from IS-IS. With a peer named (a gateway) all of it is
           required. Without one (the route reflector) the PE group must listen on the pool and the peers are the sessions up
@@ -565,6 +601,21 @@
                   pass
           if not rule:
               errors.append("no rule to %s lookup main at preference 999" % block)
+          l3mdev, local = [], []
+          for line in (read(x + ["ip", "-4", "rule", "show"]) or "").splitlines():
+              w = line.split()
+              if len(w) < 3 or not w[0].endswith(":") or not w[0][:-1].isdigit():
+                  continue
+              if w[-2:] == ["lookup", "[l3mdev-table]"]:
+                  l3mdev.append(int(w[0][:-1]))
+              elif w[-2:] == ["lookup", "local"]:
+                  local.append(int(w[0][:-1]))
+          if not l3mdev:
+              errors.append("no IPv4 l3mdev rule")
+          elif not local or min(local) < min(l3mdev):
+              errors.append("the IPv4 rule lookup local is at %s, not after the l3mdev rule at %d (a packet from a VRF reaches "
+                            "the default VRF local addresses)" % (", ".join(str(p) for p in sorted(local)) or "no preference",
+                                                                  min(l3mdev)))
           guard = read(x + ["nft", "list", "table", "inet", "shc_core_guard"])
           if guard is None:
               errors.append("the guard table inet shc_core_guard is not loaded")

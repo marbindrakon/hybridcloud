@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -440,6 +441,10 @@ def zebra(protocol, *prefixes, installed=True):
 
 # `ip -6 rule show` as the replica's root printed it, the block replaced
 RULES = replica("root__ip6-rule.txt").replace("5f00:b046::/32", "%s")
+# `ip -4 rule show`: the kernel's default (a replica namespace, its F.txt), and the same rules with lookup local moved
+# to 32765 as the apply leaves them on the SRv6 core (built from the default, not recorded)
+RULES4_DEFAULT = open(os.path.join(ROOT, "tests", "fixtures", "srv6-replica-p4", "ip4-rule-default.txt")).read()
+RULES4 = open(os.path.join(ROOT, "tests", "fixtures", "srv6-replica-p4", "ip4-rule-srv6.txt")).read()
 
 
 def core_answers(est4, est6, plain=None, isis=(), static=(), rule=BLOCK, strict="1", seg6=None, guard=True,
@@ -449,7 +454,7 @@ def core_answers(est4, est6, plain=None, isis=(), static=(), rule=BLOCK, strict=
     a = {"net.vrf.strict_mode": strict + "\n"}
     for dev in ("all", "default", "core0", "br-core"):
         a["net/ipv6/conf/%s/seg6_enabled" % dev] = seg6.get(dev, "0") + "\n"
-    a.update({"ip -6 rule show": RULES % rule,
+    a.update({"ip -6 rule show": RULES % rule, "ip -4 rule show": RULES4,
               "ipv4 vpn summary established json": summary({p: "Established" for p in est4}),
               "ipv6 vpn summary established json": summary({p: "Established" for p in est6}),
               "show bgp ipv4 vpn summary json": summary(plain if plain is not None else {p: "Established" for p in est4}),
@@ -621,6 +626,20 @@ class Srv6CoreCheck(unittest.TestCase):
                 rc, _, err, _ = self.gw(self.gw_ok(**kw))
                 self.assertEqual(rc, 1)
                 self.assertIn(msg, err)
+        # the IPv4 lookup local rule: the kernel's default (0, ahead of the VRFs), both, none, or the l3mdev rule gone
+        for rules4, msg in ((RULES4_DEFAULT, "the IPv4 rule lookup local is at 0, not after the l3mdev rule at 1000"),
+                            (RULES4_DEFAULT.replace("1000:", "32765:\tfrom all lookup local\n1000:"),
+                             "the IPv4 rule lookup local is at 0, 32765, not after the l3mdev rule at 1000"),
+                            (RULES4.replace("32765:\tfrom all lookup local\n", ""),
+                             "the IPv4 rule lookup local is at no preference, not after the l3mdev rule at 1000"),
+                            (RULES4.replace("1000:\tfrom all lookup [l3mdev-table]\n", ""), "no IPv4 l3mdev rule")):
+            with self.subTest(rules4=rules4):
+                a = self.gw_ok()
+                a["ip -4 rule show"] = rules4
+                rc, _, err, calls = self.gw(a)
+                self.assertEqual(rc, 1)
+                self.assertIn(msg, err)
+                self.assertIn(["ip", "netns", "exec", "gw-iaas1", "ip", "-4", "rule", "show"], calls)
         # the block as the kernel prints it equals a differently written block
         a = self.gw_ok()
         a["ip -6 rule show"] = RULES % "5f00:0db8:0::/32"
@@ -639,7 +658,7 @@ class Srv6CoreCheck(unittest.TestCase):
         rc, _, err, _ = self.root(core_answers([], [], static=["5f00:db8:101::/48"], running=self.root_running(),
                                                guard=guard_table("core1")))
         self.assertIn("has no drop rule for 5f00:db8::/32 from outside br-core and lo", err)
-        self.assertTrue(all(c[0] != "ip" or c[:2] == ["ip", "-6"] for c in calls))
+        self.assertTrue(all(c[0] != "ip" or c[:2] in (["ip", "-6"], ["ip", "-4"]) for c in calls))
         self.assertIn(["sysctl", "-n", "net/ipv6/conf/br-core/seg6_enabled"], calls)
 
     def test_root_listen_range(self):
@@ -665,6 +684,13 @@ class Srv6CoreCheck(unittest.TestCase):
         # neither gateway complete: NoNeg, still no error
         rc, out, _, _ = self.root(core_answers([gw2, gw3], [], isis=isis, **base))
         self.assertEqual((rc, out.split()), (0, ["ipv6Vpn=NoNeg", "pendingPeers=%s,%s" % (gw2, gw3)]))
+        # the root's IPv4 local rule is checked in the root namespace too
+        a = core_answers([gw2, gw3], [gw2, gw3], isis=isis, **base)
+        a["ip -4 rule show"] = RULES4_DEFAULT
+        rc, _, err, calls = self.root(a)
+        self.assertEqual(rc, 1)
+        self.assertIn("the IPv4 rule lookup local is at 0", err)
+        self.assertIn(["ip", "-4", "rule", "show"], calls)
         # the root's own state stays required while gateways are pending
         rc, _, err, _ = self.root(core_answers([gw2, gw3], [gw2], isis=isis, seg6={"br-core": "1"}, **base))
         self.assertEqual(rc, 1)
@@ -698,7 +724,7 @@ def replica_answers(inst, leg, static, running="", ipv4_established=None):
     for dev in ("all", "default", leg):
         a["net/ipv6/conf/%s/seg6_enabled" % dev] = "0\n"
     est4 = inst + "__show_bgp_ipv4_vpn_summary_established_json.json"
-    a.update({"ip -6 rule show": replica(inst + "__ip6-rule.txt"),
+    a.update({"ip -6 rule show": replica(inst + "__ip6-rule.txt"), "ip -4 rule show": RULES4,
               "ipv4 vpn summary established json": replica(ipv4_established or est4),
               "ipv6 vpn summary established json": replica(inst + "__show_bgp_ipv6_vpn_summary_established_json.json"),
               "show bgp ipv4 vpn summary json": replica(inst + "__show_bgp_ipv4_vpn_summary_json.json"),
@@ -1085,6 +1111,72 @@ class CoreGuardUnit(unittest.TestCase):
         names = [x.get("name", "") for x in load(path)]
         self.assertLess(names.index(P + "remove the SRv6 core guard units"),
                         names.index(P + "remove the root instance (core bridge, loopback)"))
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RootUnitStartReason(unittest.TestCase):
+    """A root unit start that fails (its apply refused) fails the job with the apply's own lines, read from the
+    unit's journal; a start that succeeds goes on as before."""
+
+    STUB = """#!/bin/bash
+    case "$1" in
+      is-active) cat "$SHIM/state" ;;
+      show) echo 4711 ;;
+    esac
+    """
+    JOURNAL = """#!/bin/bash
+    echo "$*" >> "$SHIM/jargs"
+    cat "$SHIM/journal"
+    """
+
+    def run_steps(self, state, journal, unit_result):
+        tasks = load(RT)
+        check = copy.deepcopy(by_name(tasks, P + "the root instance runs, or why not"))
+        stop = by_name(tasks, P + "stop when the root instance did not start")
+        check.pop("delegate_to")
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (("systemctl", self.STUB), ("journalctl", self.JOURNAL)):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(textwrap.dedent(body))
+                os.chmod(os.path.join(d, name), 0o755)
+            for name, body in (("state", state + "\n"), ("journal", journal)):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(body)
+            check["environment"] = {"SHIM": d, "PATH": d + ":" + os.environ.get("PATH", "")}
+            try:
+                out = run_play([check, stop, write_out("'went on'")],
+                               {"bgw_node": {"name": "bgw-1"}, "fab_name": "lab", "_hf_unit": unit_result})
+                jargs = open(os.path.join(d, "jargs")).read() if os.path.exists(os.path.join(d, "jargs")) else ""
+                return out, jargs
+            except AssertionError as e:
+                return str(e), ""
+
+    def test_active_goes_on(self):
+        out, jargs = self.run_steps("active", "", {"changed": False})
+        self.assertEqual((out, jargs), ("went on", ""))
+
+    def test_failed_start_names_the_apply_reason(self):
+        journal = ("Starting shc fabric instance root...\n"
+                   "transport srv6: net.ipv4.conf.all.rp_filter is 1; the root's network VRFs need it 0\n"
+                   "shc-fabric-apply@root.service: Main process exited, code=exited, status=4/NOPERMISSION\n")
+        out, _ = self.run_steps("failed", journal, {"failed": False, "msg": "Unable to start service shc-fabric-apply@root.service"})
+        self.assertIn("HybridFabric lab on bgw-1: the root instance (shc-fabric-apply@root.service) did not start: "
+                      "transport srv6: net.ipv4.conf.all.rp_filter is 1; the root's network VRFs need it 0", out)
+        self.assertNotIn("went on", out)
+
+    def test_failed_start_without_a_reason_line(self):
+        # the mpls path, or a failure the apply did not explain: systemd's message, as before
+        out, _ = self.run_steps("failed", "something else\n",
+                                {"failed": False, "msg": "Unable to start service shc-fabric-apply@root.service"})
+        self.assertIn("did not start: Unable to start service shc-fabric-apply@root.service", out)
+
+    def test_the_start_itself_no_longer_fails_but_a_timeout_does(self):
+        t = by_name(load(RT), P + "run the root instance at boot (and now)")
+        self.assertIs(t["failed_when"], False)
+        names = [x.get("name", "") for x in load(RT)]
+        i = names.index(t["name"])
+        self.assertEqual(names[i + 1:i + 3], [P + "the root instance runs, or why not",
+                                              P + "stop when the root instance did not start"])
 
 
 class TemplatesGetTheirVariables(unittest.TestCase):
