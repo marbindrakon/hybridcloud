@@ -714,5 +714,66 @@ class LocalRuleOrder(ApplyCase):
         self.assertEqual([l for l in log + log2 if " -4 rule " in l or " -4 route " in l], [])
 
 
+class CheckThenAct(unittest.TestCase):
+    """A check like "ip addr show dev X | grep -q A || ip addr add A dev X" under pipefail reads "absent" when grep exits
+    at the first match while ip is still writing (ip dies of SIGPIPE). The script's helper shows reads the output to
+    its end first. A fake ip that prints the matching line, waits and prints more: the old form adds an address that
+    is there, the script's addr_ensure and shows never do."""
+
+    FAKE_IP = """#!/bin/bash
+if [ "$1" = addr ] && [ "$2" = add ]; then echo "add $*" >> "$ADDS"; exit 2; fi
+printf '1: lo: <LOOPBACK,UP> mtu 65536\\n    inet 10.255.0.2/32 scope global lo\\n'
+sleep 0.3
+printf '    inet6 ::1/128 scope host\\n'
+"""
+
+    def setUp(self):
+        import tempfile
+        import shutil
+        self.tmp = tempfile.mkdtemp(prefix="shc-pipe-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        os.makedirs(os.path.join(self.tmp, "bin"))
+        with open(os.path.join(self.tmp, "bin", "ip"), "w") as f:
+            f.write(self.FAKE_IP)
+        os.chmod(os.path.join(self.tmp, "bin", "ip"), 0o755)
+        self.adds = os.path.join(self.tmp, "adds")
+        with open(os.path.join(C.ROOT, C.SCRIPT_REL)) as f:
+            text = f.read()
+        self.funcs = "\n".join(re.search(r"^%s\(\) \{.*?^\}\n|^%s\(\) \{.*\}\n" % (n, n), text, re.S | re.M).group(0)
+                               for n in ("shows", "addr_ensure"))
+
+    def run_bash(self, body):
+        path = os.path.join(self.tmp, "t.sh")
+        with open(path, "w") as f:
+            f.write("set -euo pipefail\nNSX=''\n" + self.funcs + "\n" + body + "\necho done\n")
+        env = dict(os.environ, PATH=os.path.join(self.tmp, "bin") + os.pathsep + os.environ["PATH"], ADDS=self.adds)
+        p = subprocess.run(["bash", path], env=env, capture_output=True, text=True, timeout=30)
+        adds = open(self.adds).read() if os.path.exists(self.adds) else ""
+        if os.path.exists(self.adds):
+            os.unlink(self.adds)
+        return p, adds
+
+    def test_old_form_misreads(self):
+        p, adds = self.run_bash('ip addr show dev lo | grep -q " 10.255.0.2/32 " || ip addr add 10.255.0.2/32 dev lo')
+        self.assertNotEqual(p.returncode, 0)  # the add was attempted and refused: errexit
+        self.assertIn("add addr add 10.255.0.2/32 dev lo", adds)
+
+    def test_script_helpers(self):
+        p, adds = self.run_bash('addr_ensure lo 10.255.0.2/32\nshows -q " 10.255.0.2/32 " ip addr show dev lo\n'
+                                '! shows -q " 10.255.0.9/32 " ip addr show dev lo')
+        self.assertEqual((p.returncode, adds), (0, ""), p.stderr)
+        self.assertTrue(p.stdout.strip().endswith("done"))
+        # absent: added
+        p, adds = self.run_bash("addr_ensure lo 10.255.0.9/32 || true")
+        self.assertIn("add addr add 10.255.0.9/32 dev lo", adds)
+
+    def test_no_early_exit_pipeline_left(self):
+        with open(os.path.join(C.ROOT, C.SCRIPT_REL)) as f:
+            code = [l for l in f.read().splitlines() if not l.lstrip().startswith("#")]
+        bad = [l for l in code if re.search(r"(?<!\|)\|(?!\|)\s*(grep\s+-[A-Za-z]*[qm]|head\b|sed\s+[^|]*q\b)", l)
+               or re.search(r'echo "\$[A-Za-z_]+" \| grep', l)]
+        self.assertEqual(bad, [])
+
+
 if __name__ == "__main__":
     unittest.main()
