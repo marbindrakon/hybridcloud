@@ -92,6 +92,14 @@
   # the SRv6 core uses no MPLS
   when: fab_node_transport | default('mpls') == 'mpls'
 
+# a node that ran the MPLS core before keeps that file, and would load the MPLS modules at every boot for nothing
+- name: "{{ bgw_node.name }}: no MPLS modules at boot on the SRv6 core"
+  ansible.builtin.file:
+    path: /etc/modules-load.d/shc-fabric.conf
+    state: absent
+  delegate_to: "{{ bgw_node.name }}"
+  when: fab_node_transport | default('mpls') == 'srv6'
+
 - name: "{{ bgw_node.name }}: instance config directory"
   ansible.builtin.file:
     path: /etc/shc-fabric
