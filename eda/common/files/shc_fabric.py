@@ -31,7 +31,9 @@ actions:
                   core.loopbackPool6 also its IPv6 loopback (loopback6 /128, loopbackIp6) and the IPv6 loopback's SID
                   label (sid6 = SRGB start + sidOffset6 + index), else "" / 0; with core.icmpSource6 and nodeOrdinal
                   (the node's 1-based position in borderGateway.nodes) icmp6, the namespace's ICMPv6 source on that
-                  node (network address + (nodeOrdinal << 16) + index, /128), else ""
+                  node (network address + (nodeOrdinal << 16) + index, /128), else ""; with core.srv6.block and
+                  nodeOrdinal the SRv6 locator (the /48 of the block with node field locatorNode = nodeOrdinal * 256 +
+                  index, both 1-255; unique across nodes), else "" / 0
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
                   the site namespace of each CloudVirt namespace: <entity>-<cloudvirt>-<name>, cut to 54 characters
                   plus a hash when longer than 63 (namespace names are global on the site's cluster), with its
@@ -660,11 +662,21 @@ def pe_addresses(req):
     out = {"errors": [], "index": i, "loopback": f"{lo.network_address + i}/32", "loopbackIp": str(lo.network_address + i),
            "link": f"{link.network_address + i}/{link.prefixlen}", "linkIp": str(link.network_address + i),
            "net": f"{area}.0000.0000.{i:04x}.00", "sid": srgb["start"] + i,
-           "loopback6": "", "loopbackIp6": "", "sid6": 0, "icmp6": ""}
+           "loopback6": "", "loopbackIp6": "", "sid6": 0, "icmp6": "", "locator": "", "locatorNode": 0}
     try:
         lo6, icmp6 = core6(core, "loopbackPool6", 120), core6(core, "icmpSource6", 96)
+        block = srv6_block(core)
     except ValueError as e:
         return {"errors": [str(e)]}
+    if block is not None and req.get("nodeOrdinal") not in (None, ""):
+        # the SRv6 locator: the /48 of the block whose node field (bits 32-47) is (node position << 8) + index
+        o = int(req["nodeOrdinal"])
+        if not 1 <= o <= SRV6_ORDINAL_MAX or not 1 <= i <= SRV6_ORDINAL_MAX:
+            return {"errors": [f"node position {o} or provider-edge index {i} does not fit the SRv6 locator "
+                               f"(1-{SRV6_ORDINAL_MAX} each)"]}
+        node = (o << 8) + i
+        out.update({"locator": str(ipaddress.ip_network((int(block.network_address) + (node << 80), 48))),
+                    "locatorNode": node})
     if lo6 is not None:
         sid6 = srgb["start"] + int(core.get("sidOffset6", 1000)) + i
         if i >= lo6.num_addresses or sid6 > srgb["end"]:
