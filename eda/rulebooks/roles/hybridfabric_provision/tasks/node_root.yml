@@ -508,7 +508,7 @@
       {% endfor %}
       {% if fab_node_transport | default('mpls') == 'srv6' %}
       # SRv6 core: the root's kernel settings for SRv6 (strict mode, no routing header accepted on all, default and the core
-      # bridge, the rule to the SID block, the IPv4 local rule after the VRFs' l3mdev rule, the guard with its drop rule),
+      # bridge, the rule to the SID block, the IPv4 local rule after the l3mdev rule of the VRFs, the guard with its drop rule),
       # its locator's discard route and the PE group
       # listening on the IPv6 loopback pool are required. The gateways' sessions are reported, not required, as on the
       # MPLS core for gateways not yet on the IPv6 core: one that lacks a VPN family or whose IPv6 loopback or locator has

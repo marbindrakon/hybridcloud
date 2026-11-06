@@ -377,7 +377,7 @@
     sys.exit(0 if all(up.get(n) == "up" for n in sys.argv[1:]) else 1)' {{ cg_vrfs | map(attribute='vrf') | join(' ') }}
     {% if fab_node_transport | default('mpls') == 'srv6' %}
     # SRv6 core: IPv6 forwarding, the namespace's kernel settings for SRv6 (strict mode, no routing header accepted on
-    # all, default and the core leg, the rule to the SID block, the IPv4 local rule after the VRFs' l3mdev rule, the
+    # all, default and the core leg, the rule to the SID block, the IPv4 local rule after the l3mdev rule of the VRFs, the
     # guard with its drop rule), the gateway's locator
     # discard route, and the VPN session to the route reflector over
     # the IPv6 loopbacks with VPNv4 and VPNv6 negotiated, the root's IPv6 loopback and locator installed from IS-IS. Same
