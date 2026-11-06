@@ -393,10 +393,13 @@
     {% if fab_node_transport | default('mpls') != 'srv6' %}
     # MPLS input on the core leg (a reload that disagreed with the kernel turned it off once)
     [ "$(ip netns exec gw-{{ fab_name }} sysctl -n net.mpls.conf.core0.input)" = 1 ]
-    # the IPv4 local rule after the l3mdev rule of the VRFs (at the preference of that rule, 1000, while the namespace has
-    # no VRF), so a packet from a VRF never reaches the default VRF local addresses (on srv6: the SRv6 check below)
-    ip -n gw-{{ fab_name }} -4 rule show | awk '$(NF-1) == "lookup" && $NF == "[l3mdev-table]" {p = $1 + 0; if (!m || p < mp) mp = p; m = 1} $(NF-1) == "lookup" && $NF == "local" {p = $1 + 0; if (!l || p < lp) lp = p; l = 1} END {exit !(l && lp > (m ? mp : 1000))}' \
-      || { echo "the IPv4 rule lookup local is not after the l3mdev rule of the VRFs (a packet from a VRF reaches the default VRF local addresses)" >&2; exit 1; }
+    # the IPv4 local rule after the l3mdev rule of the VRFs, so a packet from a VRF never reaches the default VRF local
+    # addresses; a namespace with no VRF device has no l3mdev rule: there exactly one lookup local rule, at 32765 where
+    # the apply puts it; no l3mdev rule while VRF devices exist fails, naming them (on srv6: the SRv6 check below)
+    v=$(ip -n gw-{{ fab_name }} -br link show type vrf)
+    rc=0; ip -n gw-{{ fab_name }} -4 rule show | awk -v vrfs="$v" '$(NF-1) == "lookup" && $NF == "[l3mdev-table]" {p = $1 + 0; if (!m || p < mp) mp = p; m = 1} $(NF-1) == "lookup" && $NF == "local" {p = $1 + 0; if (!l || p < lp) lp = p; l = 1; n++} END {if (m) exit !(l && lp > mp); if (vrfs != "") exit 2; exit !(n == 1 && lp == 32765)}' || rc=$?
+    if [ "$rc" = 2 ]; then echo "no IPv4 l3mdev rule (VRF devices: $(printf '%s\n' "$v" | awk '{print $1}' | paste -sd ' ' -))" >&2; exit 1; fi
+    [ "$rc" = 0 ] || { echo "the IPv4 rule lookup local is not after the l3mdev rule of the VRFs (a packet from a VRF reaches the default VRF local addresses)" >&2; exit 1; }
     {% endif %}
     $V -c 'show isis neighbor' | grep -q ' Up '
     {% if fab_node_transport | default('mpls') != 'srv6' %}
@@ -517,7 +520,16 @@
             elif w[-2:] == ["lookup", "local"]:
                 local.append(int(w[0][:-1]))
         if not l3mdev:
-            errors.append("no IPv4 l3mdev rule")
+            # no l3mdev rule: right only in a namespace without a VRF device (the kernel adds the rule with the first
+            # one); there exactly one lookup local rule, at 32765 where the apply puts it. VRF devices that cannot be
+            # read count as present
+            devs = read(x + ["ip", "-br", "link", "show", "type", "vrf"])
+            names = sorted(l.split()[0] for l in (devs or "").splitlines() if l.split())
+            if devs is None or names:
+                errors.append("no IPv4 l3mdev rule (VRF devices: %s)" % (", ".join(names) or "unreadable"))
+            elif sorted(local) != [32765]:
+                errors.append("the IPv4 rule lookup local is at %s, not at 32765 alone (a namespace without VRF devices)"
+                              % (", ".join(str(p) for p in sorted(local)) or "no preference"))
         elif not local or min(local) < min(l3mdev):
             errors.append("the IPv4 rule lookup local is at %s, not after the l3mdev rule at %d (a packet from a VRF reaches "
                           "the default VRF local addresses)" % (", ".join(str(p) for p in sorted(local)) or "no preference",

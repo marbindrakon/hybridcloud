@@ -125,14 +125,14 @@ def srv6(v):
 def without_local4_check(script):
     """The mpls wait scripts without the IPv4 local-rule check both transports have now (tests/unit/
     test_fix_mpls_local4_readiness.py covers it): its comment and command lines, which follow the MPLS check."""
-    out, skip = [], 0
+    out, skip = [], False
     for line in script.splitlines(True):
         if line.strip().startswith("# the IPv4 local rule after the l3mdev rule of the VRFs"):
-            skip = 4
-        if skip:
-            skip -= 1
-            continue
-        out.append(line)
+            skip = True
+        if not skip:
+            out.append(line)
+        elif line.strip().startswith('[ "$rc" = 0 ] || {'):
+            skip = False
     return "".join(out)
 
 
