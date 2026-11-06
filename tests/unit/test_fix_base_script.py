@@ -1,0 +1,176 @@
+"""shc-fabric-apply with transport absent or "mpls" against the script of the release before the SRv6 transport (BASE),
+run against the fake kernel of test_shc_fabric_apply: the same calls in the same order, the same output, kernel state
+after every run, and files, except for exactly the differences this file lists as data (the fixes made on both
+transports; every one with its reason). Any other difference fails. Two instance sets, two rounds up, then down: a
+dual-stack root with IPv6 egress and an IPv4 and an IPv6 circuit, a VLAN gateway with icmp6Announced and a WireGuard
+gateway; and the same IPv4 only. Skipped where the history lacks BASE."""
+import copy
+import difflib
+import os
+import re
+import subprocess
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import test_root_circuit_ipv6 as C  # noqa: E402
+from test_shc_fabric_apply import CIRCUIT, GW_CONF, ROOT_CONF, WG6, WG_CONF, ApplyCase, blade  # noqa: E402
+from test_srv6_fabric_apply import gw_full, root_full  # noqa: E402
+
+BASE = "72f86002"
+METRIC = "4278198272"
+NS = r"\[[a-z0-9-]+\]"
+
+# Calls the script issues that BASE does not (a line of the call log, as a regular expression), with the reason.
+ADDED = [
+    # F-L1: the VRFs' IPv4 separation, both transports
+    (r"^R %s ip -4 rule show$" % NS, "F-L1: the IPv4 rules read (precheck, the move, the snapshot)"),
+    (r"^W %s ip -4 rule add pref 32765 table local$" % NS, "F-L1: the local table behind the VRFs' rule"),
+    (r"^W %s ip -4 rule del pref 0 table local$" % NS, "F-L1: (added before the old one goes)"),
+    (r"^W \[root\] ip -4 rule add pref 0 table local$", "F-L1: root down puts the kernel's order back"),
+    (r"^W \[root\] ip -4 rule del pref 32765 table local$", "F-L1: root down"),
+    (r"^R %s ip -4 route show table \d+$" % NS, "F-L1: a VRF's IPv4 unreachable default, read"),
+    (r"^W %s ip -4 route replace unreachable default metric %s table \d+$" % (NS, METRIC),
+     "F-L1: a VRF's IPv4 unreachable default"),
+    (r"^R %s ip -4 route show table all$" % NS, "F-L1: the snapshot"),
+    (r"^W \[root\] ip -4 route del unreachable default metric %s table \d+$" % METRIC,
+     "F-L1: a removed VRF's IPv4 unreachable default"),
+    (r"^R \[root\] ip -j -d link show (egress|e\d+)$", "F-L1: a removed root VRF's table, read without the IPv6 keys too"),
+    (r"^R \[root\] ip netns list$", "F-L1: the gateway's precheck (a namespace that exists already), on mpls too"),
+]
+# Calls of BASE the script no longer issues.
+REMOVED = []
+
+KERNEL4 = [{"pref": "0", "table": "local"}, {"pref": "32766", "table": "main"}, {"pref": "32767", "table": "default"}]
+L3MDEV = {"pref": "1000", "table": "[l3mdev-table]"}
+MOVED4 = [L3MDEV, {"pref": "32765", "table": "local"}, {"pref": "32766", "table": "main"},
+          {"pref": "32767", "table": "default"}]
+
+
+def by_pref(rules):
+    return sorted(rules, key=lambda r: int(r["pref"]))
+
+
+def allowed(line, table):
+    return any(re.search(rx, line) for rx, _ in table)
+
+
+def compare_logs(case, what, old, new):
+    """the call logs equal but for the listed differences (ADDED in new, REMOVED from old), in the same order"""
+    sm = difflib.SequenceMatcher(None, old, new, autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            continue
+        gone = [l for l in old[i1:i2] if not allowed(l, REMOVED)]
+        came = [l for l in new[j1:j2] if not allowed(l, ADDED)]
+        case.assertEqual(gone, came, "%s: calls differ from the base beyond the listed differences:\n- %s\n+ %s" % (
+            what, "\n- ".join(old[i1:i2]), "\n+ ".join(new[j1:j2])))
+
+
+def normalize(case, what, st, root_down=False):
+    """the new state with the listed differences checked and taken out (root_down: after the root's down)"""
+    st = copy.deepcopy(st)
+    for name, ns in st["ns"].items():
+        vrf_tables = sorted(str(l["table"]) for l in ns["links"].values() if l["kind"] == "vrf")
+        # F-L1: the local rule behind the l3mdev rule (root down: the kernel's order again)
+        rules = ns.pop("rules4", None)
+        if rules is not None:
+            want = by_pref(KERNEL4 + [L3MDEV]) if (name == "" and root_down) else (
+                MOVED4 if (vrf_tables or L3MDEV in rules) else MOVED4[1:])
+            case.assertEqual(by_pref(rules), by_pref(want), "%s: IPv4 rules in [%s]" % (what, name or "root"))
+        # F-L1: one IPv4 unreachable default per VRF table, nothing else
+        routes = ns.pop("routes4", None)
+        if routes is not None:
+            case.assertEqual(sorted(r["table"] for r in routes), vrf_tables, "%s: [%s]" % (what, name or "root"))
+            for r in routes:
+                case.assertEqual({k: r[k] for k in ("type", "dst", "metric")},
+                                 {"type": "unreachable", "dst": "default", "metric": METRIC}, what)
+    return st
+
+
+def assert_runs_like_base(case, what, old_runs, new_runs):
+    """runs: [(stdout, call log)] of the base script and of this one, the same instances in the same order"""
+    case.assertEqual(len(old_runs), len(new_runs), what)
+    for i, ((oo, ol), (no, nl)) in enumerate(zip(old_runs, new_runs)):
+        compare_logs(case, "%s, run %d" % (what, i + 1), ol, nl)
+        case.assertEqual(oo, no, what)
+
+
+def assert_state_like_base(case, what, old, new, root_down=False):
+    for ns in old["ns"].values():  # the base script never touches what the fixes add
+        case.assertNotIn("rules4", ns, what)
+        case.assertNotIn("routes4", ns, what)
+    case.assertEqual(old, normalize(case, what, new, root_down), what)
+
+
+class AgainstBase(ApplyCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            p = subprocess.run(["git", "-C", C.ROOT, "show", "%s:eda/common/files/bgw/shc-fabric-apply" % BASE],
+                               capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            p = None
+        if p is None or p.returncode != 0:
+            raise unittest.SkipTest("%s not in this checkout's history" % BASE)
+        cls.baseline = p.stdout
+
+    # ---------------------------------------------------------------------------------------------- the sequences
+    def instances(self, which):
+        if which == "dual":
+            return [("root", root_full()), ("gw-iaas1", gw_full()), ("gw-aws1", dict(copy.deepcopy(WG_CONF), **WG6))]
+        root = copy.deepcopy(ROOT_CONF)
+        root["attachments"]["circuits"] = [copy.deepcopy(CIRCUIT)]
+        return [("root", root), ("gw-iaas1", copy.deepcopy(GW_CONF)), ("gw-aws1", copy.deepcopy(WG_CONF))]
+
+    def sequence(self, script, which, extra):
+        h = self.h
+        h.set_state(blade())
+        for f in os.listdir(h.etc):
+            os.unlink(os.path.join(h.etc, f))
+        runs = []
+        steps = [(name, conf, "up") for _ in range(2) for name, conf in self.instances(which)]
+        steps += [(name, None, "down") for name in ("gw-aws1", "gw-iaas1", "root")]
+        for name, conf, act in steps:
+            if conf is not None:
+                h.conf(name, dict(conf, **extra))
+            out, log = h.ok(self, name, act, script=script)
+            runs.append({"what": "%s %s" % (name, act), "out": out, "log": log, "state": h.get_state(),
+                         "files": sorted(os.listdir(h.etc))})
+        return runs
+
+    def check(self, which, extra):
+        old, new = self.sequence("old", which, {}), self.sequence("new", which, extra)
+        for o, n in zip(old, new):
+            what = "%s %s %s" % (which, extra or "absent", n["what"])
+            compare_logs(self, what, o["log"], n["log"])
+            self.assertEqual(o["out"], n["out"], what)
+            self.assertEqual(o["files"], n["files"], what)
+            assert_state_like_base(self, what, o["state"], n["state"], n["what"] == "root down")
+
+    def test_dual_stack(self):
+        for extra in ({}, {"transport": "mpls"}):
+            self.check("dual", extra)
+
+    def test_ipv4_only(self):
+        self.check("ipv4", {})
+
+    def test_an_unlisted_difference_fails(self):
+        base = ["R [root] ip netns list", "W [root] ip link add egress type vrf table 9000", "W [root] nft -f -"]
+        compare_logs(self, "listed", base, base[:2] + ["W [root] ip -4 rule add pref 32765 table local"] + base[2:])
+        for new in (base[:2] + ["W [root] ip link set egress up"] + base[2:], base[:1] + base[2:], base[::-1]):
+            with self.assertRaises(AssertionError):
+                compare_logs(self, "unlisted", base, new)
+
+    def test_listed_differences_are_seen(self):
+        """every listed difference occurs in the sequences (a stale entry would hide nothing, but says what isn't so)"""
+        seen = set()
+        for which in ("dual", "ipv4"):
+            for run in self.sequence("new", which, {}):
+                for l in run["log"]:
+                    seen |= {rx for rx, _ in ADDED if re.search(rx, l)}
+        self.assertEqual([rx for rx, _ in ADDED if rx not in seen], [])
+
+
+if __name__ == "__main__":
+    unittest.main()

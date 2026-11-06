@@ -104,19 +104,12 @@
 #   enters with the VRF device as input while its source's route leads to the core bridge, outside the VRF, which
 #   strict and loose mode both refuse; the egress VRF and the circuits' devices, strict, are left as they are). The
 #   kernel takes the larger of net.ipv4.conf.all.rp_filter and the device's, and all is the host's: a root with srv6
-#   fails the apply, before it changes anything, while all is not 0. IPv4 in the namespace (root and gateway): the
-#   rule "lookup local" moves from 0 to 32765, behind the VRFs' l3mdev rule (added before the old one is deleted;
-#   refused while another IPv4 rule sits between 0 and 32765), and every VRF table gets an IPv4 unreachable default at
-#   metric 4278198272: a packet in a VRF (one decapsulated into it, or from a site) addressed to an address of the
-#   default VRF is then no longer delivered locally, nor routed through the main table; the VRF's own addresses are
-#   in its own table and stay reachable (IPv6 rules are left as they are: the default VRF's IPv6 addresses were
-#   measured unreachable from a VRF). None of the MPLS steps runs (modules, platform_labels,
-#   input). Both families ride the IPv6 core, so an IPv6 step that fails and the root's router advertisement check
-#   fail the apply too (exit 4, "transport srv6: ..." on stderr) instead of leaving IPv6 out, as does any of the
-#   steps above. The refusals that depend only on the state as found (the root's all.rp_filter, an IPv4 policy rule
-#   of the host's own between 0 and 32765, two VRFs on one table while strict mode is off; in a gateway's namespace
-#   that exists already, the latter two), the RA check and the configuration check all run before the run's first
-#   write, so a refused apply leaves the node as it found it (the rule and strict-mode steps check again in place).
+#   fails the apply, before it changes anything, while all is not 0. None of the MPLS steps runs (modules,
+#   platform_labels, input). Both families ride the IPv6 core, so an IPv6 step that fails and the root's router
+#   advertisement check fail the apply too (exit 4, "transport srv6: ..." on stderr) instead of leaving IPv6 out, as
+#   does any of the steps above. Its refusals that depend only on the state as found (the root's all.rp_filter; two
+#   VRFs on one table while strict mode is off, in the root namespace and in a gateway's namespace that exists
+#   already) run with the common ones below, before the run's first write (the strict-mode step checks again in place).
 #   The rule sets above gain what the encapsulation would otherwise bypass (only
 #   with srv6): a packet decapsulated into a VRF passes prerouting with the VRF as its input interface, then
 #   forward, never output (as an MPLS pop does); a packet that is encapsulated passes prerouting only, never forward.
@@ -125,12 +118,26 @@
 #   xo<n> in the egress VRF (shc_egress6), a circuit's packets to the platform's sources are also dropped in
 #   prerouting by the device (shc_attach), and a gateway also clamps the SYNs it forwards to a site's bridge br<vni>
 #   (shc_gw_mss). down: the root removes the encapsulation source, the rule, the unreachable route and the guard (the
-#   sysctls stay, inert without SIDs) and puts the IPv4 local rule back at 0 (added before the one at 32765 is
-#   deleted); a gateway's state goes with its namespace.
+#   sysctls stay, inert without SIDs); a gateway's state goes with its namespace.
 #   shc-fabric-apply <instance> guard   (run periodically, any time): the guard table kept in place between applies.
 #   Each load lists the table into <instance>.guard next to the JSON; the action compares the namespace's table with
 #   that listing and loads it again when it is missing or differs. Prints guard=ok, guard=restored, or guard=none
 #   (transport mpls, or a gateway whose namespace does not exist); exit 0 (4 when the reload fails).
+# The VRFs' IPv4 separation (both types, both transports), in the instance's namespace (root: the host's; gateway: its
+#   namespace): the IPv4 rule "lookup local" moves from 0 to 32765, behind the VRFs' l3mdev rule (added before the old
+#   one is deleted), and every VRF table of the instance gets an IPv4 unreachable default at metric 4278198272 (any
+#   FRR route wins; it goes with its VRF): a packet in a VRF (from a site, popped from MPLS into it on the output
+#   path, or decapsulated into it) addressed to an address of the default VRF is no longer delivered locally, and a
+#   lookup that misses in the VRF ends there instead of being routed by the main table; the VRF's own addresses are in
+#   its own table and stay reachable, the default VRF's own traffic (the core's sessions, the site leg, VXLAN,
+#   WireGuard, the host's services) still meets the local table first (IPv6 rules are left as they are: the default
+#   VRF's IPv6 addresses were measured unreachable from a VRF). A step that fails fails the apply (exit 4,
+#   "shc-fabric-apply: <step> failed" on stderr). Refusals (both transports, exit 4, "shc-fabric-apply: ..." on stderr):
+#   an IPv4 policy rule of the host's own between 0 and 32765 (the local table would no longer come first for the
+#   default VRF's traffic matching it), in the root namespace and in a gateway's namespace that exists already. They
+#   run, with the RA check and the configuration check, before the run's first write, so a refused apply leaves the
+#   node as it found it (the rule step checks again in place). The root's down puts the rule back at 0 (added before
+#   the one at 32765 is deleted); a gateway's go with its namespace.
 set -euo pipefail
 NSX=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post|guard]}; ACT=${2:-up}
@@ -342,7 +349,6 @@ vrf6_covers() {
 
 # a VRF's table (ip -d link), "" when the device is no VRF
 vrf_table() {
-  [ -n "$V6KNOWN" ] || return 0
   $NSX ip -j -d link show "$1" 2>/dev/null | jq -r '.[0].linkinfo.info_data.table // empty' 2>/dev/null || true
 }
 
@@ -361,18 +367,106 @@ ra_precheck() {
   done
 }
 
-# --- transport srv6 (see the header), in the namespace $NSX selects
-# srv6_step <what> <helper> [args]: one step; a failure fails the apply (exit 4). The helper runs in a subshell with
-# errexit of its own (as in v6)
-srv6_step() {
-  local what=$1 rc
-  shift
+# run_step <prefix> <what> <helper> [args]: one step; a failure fails the apply (exit 4, "<prefix>: <what> failed" on
+# stderr). The helper runs in a subshell with errexit of its own (as in v6)
+run_step() {
+  local pfx=$1 what=$2 rc
+  shift 2
   set +e
   ( set -e; "$@" )
   rc=$?
   set -e
-  [ "$rc" -eq 0 ] || { echo "transport srv6: $what failed" >&2; exit 4; }
+  [ "$rc" -eq 0 ] || { echo "$pfx: $what failed" >&2; exit 4; }
 }
+# a step of the VRFs' IPv4 separation (both transports, see the header)
+step() { run_step shc-fabric-apply "$@"; }
+
+# --- the VRFs' IPv4 separation (both transports, see the header), in the namespace $NSX selects
+# last|first: the IPv4 rule "lookup local" at 32765, behind the VRFs' l3mdev rule (1000), or back at 0 (the kernel's
+# order). In front of the l3mdev rule, a packet in a VRF (from a site, popped from MPLS or decapsulated into it)
+# addressed to an address of the default VRF is delivered locally before its VRF's table is read; behind it, the VRF's
+# lookup ends in the VRF's own table (its own addresses are there, and an unreachable default, vrf4_unreach). The new
+# rule is added before the old one is deleted (never a moment without one). Refused while another IPv4 rule sits
+# between 0 and 32765: moved behind it, the local table would no longer come first for the default VRF's own traffic
+# matching it
+local4() {
+  local rules foreign
+  rules=$($NSX ip -4 rule show)
+  if [ "$1" = last ]; then
+    # (precheck refused this before the run's first write; checked again here against a rule added since)
+    foreign=$(local4_foreign "$rules")
+    if [ -n "$foreign" ]; then
+      echo "shc-fabric-apply: IPv4 policy rules between 0 and 32765 would come before the local table: $foreign" >&2
+      return 1
+    fi
+    grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 32765 table local
+    ! grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 0 table local
+  else
+    grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 0 table local
+    ! grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 32765 table local
+  fi
+}
+
+# <rules> (ip -4 rule show): the rules between 0 and 32765 other than the kernel's l3mdev rule, one line, ";" between
+local4_foreign() {
+  awk '{ p = $1; sub(":", "", p) } p + 0 > 0 && p + 0 < 32765 && !(p + 0 == 1000 && / lookup \[l3mdev-table\]/)' \
+    <<<"$1" | paste -sd ';' -
+}
+
+# <table>: a VRF's IPv4 unreachable default at the highest metric (any FRR route wins), so a lookup in the VRF that
+# misses ends there instead of falling through to the rules behind the l3mdev rule (the local table, main)
+vrf4_unreach() {
+  shows -qE '^unreachable default .*metric 4278198272( |$)' $NSX ip -4 route show table "$1" ||
+    $NSX ip -4 route replace unreachable default metric 4278198272 table "$1"
+}
+
+# <table>: a deleted VRF's IPv4 unreachable default (on lo, it outlives the device)
+vrf4_gone() {
+  [ -n "$1" ] || return 0
+  $NSX ip -4 route del unreachable default metric 4278198272 table "$1" 2>/dev/null || true
+}
+
+# the IPv4 rules and the VRFs' IPv4 unreachable defaults, for the snapshot
+local4_state() {
+  $NSX ip -4 rule show 2>/dev/null || true
+  $NSX ip -4 route show table all 2>/dev/null | grep '^unreachable default .*metric 4278198272' || true
+}
+
+# root|gateway: the refusals that depend only on the state as found, run before the run's first write (reads only), so
+# a refused apply leaves the node as it found it (exit 4, the reason on stderr). In the root namespace, and in a
+# gateway's namespace that exists already: no IPv4 policy rule of its own between 0 and 32765 (local4). Transport srv6
+# also: the root's net.ipv4.conf.all.rp_filter 0 (the network VRFs' rp_filter=0 holds only then; never written here),
+# and no two VRFs on one table while strict mode is off (srv6_strict). The RA precheck and the configuration check run
+# before the first write too.
+precheck() {
+  local v rules t
+  if [ "$TRANSPORT" = srv6 ] && [ "$1" = root ]; then
+    v=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) || v=""
+    if [ "$v" != 0 ]; then
+      echo "transport srv6: net.ipv4.conf.all.rp_filter is ${v:-unreadable}; the root's network VRFs need it 0" \
+        "(decapsulated IPv4 is checked with the larger of it and the VRF device's)" >&2
+      exit 4
+    fi
+  fi
+  rules=$($NSX ip -4 rule show) || { echo "shc-fabric-apply: the IPv4 policy rules could not be read" >&2; exit 4; }
+  t=$(local4_foreign "$rules")
+  if [ -n "$t" ]; then
+    echo "shc-fabric-apply: IPv4 policy rules between 0 and 32765 would come before the local table: $t" >&2
+    exit 4
+  fi
+  [ "$TRANSPORT" = srv6 ] || return 0
+  [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0
+  t=$($NSX ip -j -d link show type vrf | jq -r '[group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
+      | "table \(.[0].linkinfo.info_data.table): \(map(.ifname) | join(", "))"] | join("; ")') || t=""
+  if [ -n "$t" ]; then
+    echo "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: $t" >&2
+    exit 4
+  fi
+}
+
+# --- transport srv6 (see the header), in the namespace $NSX selects
+# srv6_step <what> <helper> [args]: one step; a failure fails the apply (exit 4, "transport srv6: <what> failed")
+srv6_step() { run_step "transport srv6" "$@"; }
 
 # <core leg>: the guard table (replaced as a whole). Only the core leg and lo may address the block: a host on an
 # interface in the main table could otherwise reach this node's SIDs (and so a VRF), and with the rule below a tenant
@@ -422,81 +516,7 @@ srv6_up() {
     net/ipv6/seg6_flowlabel=1
   srv6_step "the unreachable route to the SID block" srv6_unreach "$SRV6_BLOCK"
   srv6_step "the rule to the SID block" srv6_rule "$SRV6_BLOCK"
-  srv6_step "the IPv4 local table behind the VRFs' rule" srv6_local4 last
   srv6_step "the encapsulation source" srv6_tunsrc "$SRV6_SRC"
-}
-
-# last|first: the IPv4 rule "lookup local" at 32765, behind the VRFs' l3mdev rule (1000), or back at 0 (the kernel's
-# order). In front of the l3mdev rule, a packet in a VRF (decapsulated into it) addressed to an address of the default
-# VRF is delivered locally before its VRF's table is read; behind it, the VRF's lookup ends in the VRF's own table
-# (its own addresses are there, and an unreachable default, vrf4_unreach). The new rule is added before the old one is
-# deleted (never a moment without one). Refused while another IPv4 rule sits between 0 and 32765: moved behind it,
-# the local table would no longer come first for the default VRF's own traffic matching it
-srv6_local4() {
-  local rules foreign
-  rules=$($NSX ip -4 rule show)
-  if [ "$1" = last ]; then
-    # (srv6_precheck refused this before the run's first write; checked again here against a rule added since)
-    foreign=$(local4_foreign "$rules")
-    if [ -n "$foreign" ]; then
-      echo "transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: $foreign" >&2
-      return 1
-    fi
-    grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 32765 table local
-    ! grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 0 table local
-  else
-    grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 0 table local
-    ! grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 32765 table local
-  fi
-}
-
-# <rules> (ip -4 rule show): the rules between 0 and 32765 other than the kernel's l3mdev rule, one line, ";" between
-local4_foreign() {
-  awk '{ p = $1; sub(":", "", p) } p + 0 > 0 && p + 0 < 32765 && !(p + 0 == 1000 && / lookup \[l3mdev-table\]/)' \
-    <<<"$1" | paste -sd ';' -
-}
-
-# root|gateway: transport srv6's refusals that depend only on the host's state as found, run before the run's first
-# write (reads only), so a refused apply leaves the node as it found it (exit 4). Root: net.ipv4.conf.all.rp_filter
-# 0 (the network VRFs' rp_filter=0 holds only then; never written here). Root, and a gateway's namespace when it
-# exists already: no IPv4 policy rule of its own between 0 and 32765 (srv6_local4), and no two VRFs on one table
-# while strict mode is off (srv6_strict). The RA precheck and the configuration check run before it too.
-srv6_precheck() {
-  local v rules t
-  if [ "$1" = root ]; then
-    v=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) || v=""
-    if [ "$v" != 0 ]; then
-      echo "transport srv6: net.ipv4.conf.all.rp_filter is ${v:-unreadable}; the root's network VRFs need it 0" \
-        "(decapsulated IPv4 is checked with the larger of it and the VRF device's)" >&2
-      exit 4
-    fi
-  fi
-  rules=$($NSX ip -4 rule show) || { echo "transport srv6: the IPv4 policy rules could not be read" >&2; exit 4; }
-  t=$(local4_foreign "$rules")
-  if [ -n "$t" ]; then
-    echo "transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: $t" >&2
-    exit 4
-  fi
-  [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0
-  t=$($NSX ip -j -d link show type vrf | jq -r '[group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
-      | "table \(.[0].linkinfo.info_data.table): \(map(.ifname) | join(", "))"] | join("; ")') || t=""
-  if [ -n "$t" ]; then
-    echo "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: $t" >&2
-    exit 4
-  fi
-}
-
-# <table>: a VRF's IPv4 unreachable default at the highest metric (any FRR route wins), so a lookup in the VRF that
-# misses ends there instead of falling through to the rules behind the l3mdev rule (the local table, main)
-vrf4_unreach() {
-  shows -qE '^unreachable default .*metric 4278198272( |$)' $NSX ip -4 route show table "$1" ||
-    $NSX ip -4 route replace unreachable default metric 4278198272 table "$1"
-}
-
-# <table>: a deleted VRF's IPv4 unreachable default (transport srv6 only; no command otherwise)
-vrf4_gone() {
-  [ "$TRANSPORT" = srv6 ] && [ -n "$1" ] || return 0
-  $NSX ip -4 route del unreachable default metric 4278198272 table "$1" 2>/dev/null || true
 }
 
 # [<block>]: the block unreachable in the main table at the highest metric (every real route wins: the locators are
@@ -526,7 +546,6 @@ srv6_down() {
   srv6_tunsrc ::
   srv6_rule ""
   srv6_unreach ""
-  srv6_local4 first
   $NSX nft delete table inet shc_core_guard 2>/dev/null || true
   rm -f "$GUARDREF"
 }
@@ -538,8 +557,6 @@ srv6_state() {
     net.ipv6.seg6_flowlabel "net/ipv6/conf/$1/seg6_enabled" 2>/dev/null || true
   $NSX ip -6 rule show pref 999 2>/dev/null || true
   $NSX ip -6 route show table main type unreachable 2>/dev/null | grep ' metric 4278198272' || true
-  $NSX ip -4 rule show 2>/dev/null || true
-  $NSX ip -4 route show table all 2>/dev/null | grep '^unreachable default .*metric 4278198272' || true
   $NSX ip sr tunsrc show 2>/dev/null || true
   $NSX nft -s list table inet shc_core_guard 2>/dev/null || true
 }
@@ -567,7 +584,7 @@ snapshot() {
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
-    egress_state; attach_state; srv6_state "$BR"
+    egress_state; attach_state; local4_state; srv6_state "$BR"
     if [ -n "$V6KNOWN" ]; then  # the devices this sets up (never the management interface)
       ip -br -6 addr show | grep -E "^(lo|$BR|egress0|e[0-9]+${EV:+|$EV})[@ ]" || true
       sysctl -n "net/ipv6/conf/$BR/disable_ipv6" "net/ipv6/conf/$BR/accept_ra" "net/ipv6/conf/$BR/autoconf" \
@@ -1099,8 +1116,8 @@ root)
   EV=$(opt .egress.vrf)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
-    # transport srv6: the refusals that depend only on the host's state, before the run's first write
-    [ "$TRANSPORT" != srv6 ] || srv6_precheck root
+    # the refusals that depend only on the host's state, before the run's first write
+    precheck root
     if [ -n "$V6" ] && ! ra_precheck; then
       [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: a host interface relies on router advertisements" >&2; exit 4; }
       V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
@@ -1111,6 +1128,7 @@ root)
       modprobe mpls_router; modprobe mpls_iptunnel
       sysctl -qw net.mpls.platform_labels=1048575
     fi
+    step "the IPv4 local table behind the VRFs' rule" local4 last
     MAC=$(printf '02:fa:%02x:%02x:%02x:%02x' $(echo "${LINK%/*}" | tr . ' '))
     ip link show "$BR" >/dev/null 2>&1 || ip link add "$BR" address "$MAC" type bridge
     if [ "$(cat "/sys/class/net/$BR/address")" != "$MAC" ]; then ip link set "$BR" address "$MAC"; echo "bridge-mac=changed"; fi
@@ -1132,13 +1150,11 @@ root)
         v6 "IPv6 in VRF ${v%%:*}" vrf6 "${v%%:*}" "${v#*:}"
       done
     fi
-    # transport srv6: every root VRF's IPv4 lookup ends in its own table
-    if [ "$TRANSPORT" = srv6 ]; then
-      for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
-          | map(.table | tostring) | unique | .[]' "$CONF"); do
-        srv6_step "the IPv4 unreachable default of table $v" vrf4_unreach "$v"
-      done
-    fi
+    # every root VRF's IPv4 lookup ends in its own table
+    for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
+        | map(.table | tostring) | unique | .[]' "$CONF"); do
+      step "the IPv4 unreachable default of table $v" vrf4_unreach "$v"
+    done
     # transport srv6: no routing header on any of the instance's devices (never the management interface)
     # shellcheck disable=SC2046
     [ "$TRANSPORT" != srv6 ] || srv6_step "seg6_enabled off on the instance's devices" srv6_seg6_off \
@@ -1152,6 +1168,7 @@ root)
     for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
     LO6=""; v6 "the IPv6 loopback removal" lo6
     [ "$TRANSPORT" != srv6 ] || srv6_down
+    local4 first
   fi
   ;;
 gateway)
@@ -1185,6 +1202,7 @@ gateway)
           $X wg show "$VDEV" allowed-ips | sort; $X wg show "$VDEV" persistent-keepalive | sort
         fi
         [ ! -e "$MARKI6" ] || $X nft -s list table ip6 shc_gw_in6 2>/dev/null || true
+        NSX=$X local4_state
         NSX=$X srv6_state core0
       fi; } | sha1sum
   }
@@ -1252,9 +1270,9 @@ gateway)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
     ip link show "$BR" >/dev/null 2>&1 || { echo "core bridge $BR missing: the root instance must be up first" >&2; exit 3; }
-    # transport srv6: the refusals that depend only on the state as found (a namespace that exists already), before
-    # the run's first write
-    if [ "$TRANSPORT" = srv6 ] && shows -qw "^$NS" ip netns list; then NSX=$X srv6_precheck gateway; fi
+    # the refusals that depend only on the state as found (a namespace that exists already), before the run's first
+    # write
+    if shows -qw "^$NS" ip netns list; then NSX=$X precheck gateway; fi
     shows -qw "^$NS" ip netns list || ip netns add "$NS"
     if [ "$TRANSPORT" = srv6 ]; then
       NSX=$X; srv6_up core0
@@ -1265,6 +1283,7 @@ gateway)
     fi
     $X ip link set lo up
     NSX=$X
+    step "the IPv4 local table behind the VRFs' rule" local4 last
     [ -z "$V6" ] || v6 "the namespace's IPv6 settings" router6
     for a in $(stray lo "$LOPOOL" "$LO"); do $X ip addr del "$a" dev lo; done
     addr_ensure lo "$LO"
@@ -1308,7 +1327,7 @@ gateway)
       $X ip link show "$VRF" >/dev/null 2>&1 || $X ip link add "$VRF" type vrf table "$VNI"
       $X ip link set "$VRF" up
       v6 "IPv6 in VRF $VRF" vrf6 "$VRF" "$VNI"
-      [ "$TRANSPORT" != srv6 ] || srv6_step "the IPv4 unreachable default of VRF $VRF" vrf4_unreach "$VNI"
+      step "the IPv4 unreachable default of VRF $VRF" vrf4_unreach "$VNI"
       # shellcheck disable=SC2046
       v6 "IPv6 covering routes in VRF $VRF" vrf6_covers "$VRF" "$VNI" \
         $(jq -r --arg v "$VRF" '.vrfs[] | select(.name == $v) | .covering6 // [] | .[]' "$CONF")

@@ -6,7 +6,8 @@ the core and site legs, the loopback, the VRFs' unreachable defaults and ICMP so
 and a second run that reads changed=no. The addresses are documentation prefixes.
 
 SHC_APPLY_BASELINE=<git revision> also compares a run of that revision's script with this one for an IPv4-only
-JSON: the same calls, in the same order, and the same final state."""
+JSON: the same calls, in the same order, and the same final state (exactly: a revision from the VRFs' IPv4
+separation on; against the release before the SRv6 transport, with the listed differences, see test_fix_base_script)."""
 import copy
 import ipaddress
 import json
@@ -261,7 +262,8 @@ class IPv4OnlyTest(ApplyCase):
 
 
 class BaselineTest(ApplyCase):
-    """IPv4-only JSON: this script issues exactly the calls of the baseline revision (SHC_APPLY_BASELINE)."""
+    """IPv4-only JSON: this script issues exactly the calls of the baseline revision (SHC_APPLY_BASELINE; one from the
+    VRFs' IPv4 separation on: older ones differ by design, test_fix_base_script lists how)."""
 
     @classmethod
     def setUpClass(cls):

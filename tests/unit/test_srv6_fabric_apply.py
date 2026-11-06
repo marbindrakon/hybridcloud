@@ -1,5 +1,6 @@
 """shc-fabric-apply with the core transport key (transport, srv6 {block, locator}), run against the fake kernel of
-test_shc_fabric_apply. transport absent or "mpls": exactly today's calls, output, kernel state and files. transport
+test_shc_fabric_apply. transport absent, "mpls" and "mpls" with srv6 keys: the same calls, output, kernel state and
+files, none of them an SRv6 one (against the script before the SRv6 transport: test_fix_base_script). transport
 "srv6", root and gateway, each in its own namespace: the guard table inet shc_core_guard before anything else, the
 strict VRF mode (refused, and the apply failed naming the VRFs, while two VRFs share a table), the seg6 sysctls, the
 rule to the block at pref 999, the encapsulation source; no MPLS step; a second run changed=no; a failing step, a
@@ -26,7 +27,7 @@ BLOCK = "5f00:1234::/32"
 ROOT_SRV6 = {"transport": "srv6", "srv6": {"block": BLOCK, "locator": "5f00:1234:101::/48"}}
 GW_SRV6 = {"transport": "srv6", "srv6": {"block": BLOCK, "locator": "5f00:1234:102::/48"}}
 WG_SRV6 = {"transport": "srv6", "srv6": {"block": BLOCK, "locator": "5f00:1234:106::/48"}}
-SRV6_WORDS = ("seg6", "strict_mode", "rule", " sr tunsrc", "shc_core_guard")
+SRV6_WORDS = ("seg6", "strict_mode", " -6 rule", " sr tunsrc", "shc_core_guard")
 
 
 def root_full(**over):
@@ -576,49 +577,6 @@ class GuardAction(ApplyCase):
         self.assertEqual((rc, err.strip(), writes(log)), (2, "unknown action sideways", []))
 
 
-class BaseScriptUnchanged(ApplyCase):
-    """transport absent or mpls: the calls, output, kernel state and files of the script of the release before the
-    SRv6 transport (BASE), for a dual-stack root with IPv6 egress and an IPv4 and an IPv6 circuit, a VLAN gateway with
-    icmp6Announced and a WireGuard gateway: two rounds up, then down. Skipped where the history lacks BASE."""
-    BASE = "72f86002"
-
-    @classmethod
-    def setUpClass(cls):
-        try:
-            p = subprocess.run(["git", "-C", C.ROOT, "show", "%s:eda/common/files/bgw/shc-fabric-apply" % cls.BASE],
-                               capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            p = None
-        if p is None or p.returncode != 0:
-            raise unittest.SkipTest("%s not in this checkout's history" % cls.BASE)
-        cls.baseline = p.stdout
-
-    def sequence(self, script, extra):
-        h = self.h
-        h.set_state(blade())
-        for f in os.listdir(h.etc):
-            os.unlink(os.path.join(h.etc, f))
-        runs = []
-        for n in range(2):
-            for name, conf in (("root", root_full()), ("gw-iaas1", gw_full()),
-                               ("gw-aws1", dict(copy.deepcopy(WG_CONF), **WG6))):
-                h.conf(name, dict(conf, **extra))
-                runs.append(h.ok(self, name, script=script))
-        for name in ("gw-aws1", "gw-iaas1", "root"):
-            runs.append(h.ok(self, name, "down", script=script))
-        return runs, h.get_state(), sorted(os.listdir(h.etc))
-
-    def test_same_as_base(self):
-        old = self.sequence("old", {})
-        for extra in ({}, {"transport": "mpls"}):
-            new = self.sequence("new", extra)
-            for (o_out, o_log), (n_out, n_log) in zip(old[0], new[0]):
-                self.assertEqual(o_log, n_log, extra)
-                self.assertEqual(o_out, n_out, extra)
-            self.assertEqual(old[1], new[1], extra)
-            self.assertEqual(old[2], new[2], extra)
-
-
 KERNEL4 = [{"pref": "0", "table": "local"}, {"pref": "32766", "table": "main"}, {"pref": "32767", "table": "default"}]
 SRV6_4 = [{"pref": "1000", "table": "[l3mdev-table]"}, {"pref": "32765", "table": "local"},
           {"pref": "32766", "table": "main"}, {"pref": "32767", "table": "default"}]
@@ -636,7 +594,7 @@ def unreach4(st, ns):
 class LocalRuleOrder(ApplyCase):
     """transport srv6, IPv4: the local table behind the VRFs' l3mdev rule (32765, added before the rule at 0 goes), so a
     packet in a VRF never reaches the default VRF's local addresses, and every VRF's table ends in an unreachable
-    default; root down restores the kernel's order; mpls never touches either"""
+    default; root down restores the kernel's order (the same on mpls: test_fix_vrf_ipv4)"""
 
     def test_root(self):
         h = self.h
@@ -699,19 +657,11 @@ class LocalRuleOrder(ApplyCase):
         rc, out, err, log = h.run("root")
         self.keep("srv6-root-foreign-rule", log, out + " | stderr: " + err)
         self.assertEqual(rc, 4, err)
-        self.assertIn("transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: "
+        self.assertIn("shc-fabric-apply: IPv4 policy rules between 0 and 32765 would come before the local table: "
                       "100:\tfrom all lookup 200", err)
         # refused before the run's first write: the host as it was found
         self.assertEqual(writes(log), [])
         self.assertEqual(h.get_state(), st)
-
-    def test_mpls_untouched(self):
-        h = self.h
-        h.conf("root", root_full())
-        _, log = h.ok(self, "root")
-        h.conf("gw-iaas1", gw_full())
-        _, log2 = h.ok(self, "gw-iaas1")
-        self.assertEqual([l for l in log + log2 if " -4 rule " in l or " -4 route " in l], [])
 
 
 class CheckThenAct(unittest.TestCase):
@@ -800,7 +750,7 @@ class RefusedBeforeAnyWrite(ApplyCase):
         self.gateway_up()
         st = self.h.get_state()
         st["ns"]["gw-iaas1"]["rules4"].append({"pref": "500", "table": "77"})
-        self.refused(st, "transport srv6: IPv4 policy rules between 0 and 32765 would come before the local table: "
+        self.refused(st, "shc-fabric-apply: IPv4 policy rules between 0 and 32765 would come before the local table: "
                          "500:\tfrom all lookup 77")
 
     def test_vrfs_on_one_table_in_the_namespace(self):
