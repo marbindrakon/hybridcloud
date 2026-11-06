@@ -22,6 +22,71 @@
   changed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# the core transport (fab_node_transport: the fabric's one transport, the root's too) and the node's FRR
+# (fab_frr_major); on the SRv6 core what it needs, before anything on the node changes
+- name: "{{ bgw_node.name }}: the core transport and FRR on this node"
+  ansible.builtin.include_tasks: "{{ role_path }}/../hybridfabric_provision/tasks/node_transport.yml"
+  vars:
+    nt_who: "CloudGateway {{ fab_name }}"
+
+# the VPN session runs over the IPv6 loopbacks on the SRv6 core: the fabric must offer the IPv6 core (cg_ipv6_core,
+# main.yml), which it does whenever it reports a node on srv6
+- name: "{{ bgw_node.name }}: the SRv6 core needs the fabric's IPv6 core"
+  ansible.builtin.fail:
+    msg: >-
+      CloudGateway {{ fab_name }} on {{ bgw_node.name }}: the core transport srv6 needs the IPv6 core, which
+      HybridFabric {{ cg_fabric_name }} does not report yet (status.realization.ipv6Core)
+  when:
+    - fab_node_transport == 'srv6'
+    - not (cg_ipv6_core | default(false) | bool) or cg_pe.loopbackIp6 | default('', true) | length == 0
+      or cg_root_pe.loopbackIp6 | default('', true) | length == 0
+
+# the SRv6 locators differ per node (the node's position in borderGateway.nodes): the root's (index 1) and this
+# gateway's; only on the SRv6 core
+- name: "{{ bgw_node.name }}: the root's SRv6 locator on this node"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+  vars:
+    fab_check:
+      action: pe-addresses
+      core: "{{ fab_real.core }}"
+      index: 1
+      nodeOrdinal: "{{ (cg_fabric.spec.borderGateway.nodes | map(attribute='name') | list).index(bgw_node.name) + 1 }}"
+  when: fab_node_transport == 'srv6'
+
+- name: "{{ bgw_node.name }}: keep the root's SRv6 locator"
+  ansible.builtin.set_fact:
+    cg_root_pe: >-
+      {{ cg_root_pe | combine({'locator': fab_check_result.locator | default(''),
+                               'locatorNode': fab_check_result.locatorNode | default(0)}) }}
+    _cg_locator_errors: "{{ fab_check_result.errors | default([]) }}"
+  when: fab_node_transport == 'srv6'
+
+- name: "{{ bgw_node.name }}: the gateway's SRv6 locator on this node"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+  vars:
+    fab_check:
+      action: pe-addresses
+      core: "{{ fab_real.core }}"
+      index: "{{ cg_pe.index }}"
+      nodeOrdinal: "{{ (cg_fabric.spec.borderGateway.nodes | map(attribute='name') | list).index(bgw_node.name) + 1 }}"
+  when: fab_node_transport == 'srv6'
+
+- name: "{{ bgw_node.name }}: stop on an SRv6 locator that does not fit"
+  ansible.builtin.fail:
+    msg: >-
+      CloudGateway {{ fab_name }} on {{ bgw_node.name }}: {{ ((_cg_locator_errors + fab_check_result.errors | default([]))
+      | unique | join('; ')) or 'the realization gives no SRv6 locator for this node' }}
+  when:
+    - fab_node_transport == 'srv6'
+    - (_cg_locator_errors + fab_check_result.errors | default([])) | length > 0
+      or fab_check_result.locator | default('', true) | length == 0
+      or cg_root_pe.locator | default('', true) | length == 0
+
+- name: "{{ bgw_node.name }}: the gateway's SRv6 locator"
+  ansible.builtin.set_fact:
+    cg_pe: "{{ cg_pe | combine({'locator': fab_check_result.locator, 'locatorNode': fab_check_result.locatorNode}) }}"
+  when: fab_node_transport == 'srv6'
+
 - name: "{{ bgw_node.name }}: install the apply script and the gateway unit"
   ansible.builtin.copy:
     src: "{{ role_path }}/../../../common/files/bgw/{{ item.src }}"
@@ -98,7 +163,8 @@
     cg_node_in6_keep: "{{ ((_cg_in6_marker | default({})).stat | default({})).exists | default(false) | bool }}"
 
 # the core's IPv6 keys are empty strings on an IPv4-only core and until the fabric offers the IPv6 core;
-# loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges
+# loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges. On
+# an srv6 node transport and srv6 {block, locator} (absent: mpls, so an mpls node's file stays as it was)
 - name: "{{ bgw_node.name }}: gateway instance config"
   vars:
     _cg_icmp6: >-
@@ -115,6 +181,8 @@
                                                      else (fab_real.gateway.icmp6RateLimitMs | string))})
          | combine({'icmp6Announced': true} if (cg_node_icmp6_announce | default('', true) | length > 0
                                                or cg_node_in6_keep | default(false) | bool) else {})
+         | combine({'transport': 'srv6', 'srv6': {'block': fab_real.core.srv6.block, 'locator': cg_pe.locator}}
+                   if fab_node_transport | default('mpls') == 'srv6' else {})
          | to_nice_json }}
     mode: "0644"
   delegate_to: "{{ bgw_node.name }}"
@@ -286,18 +354,23 @@
 
 # the core side must come up: IS-IS adjacency with the root and the VPNv4 session to the route reflector; with the
 # IPv6 core (cg_pe.loopback6) also IPv6 forwarding in the namespace, VPNv6 negotiated with the route reflector and its
-# IPv6 loopback installed from IS-IS (prints ipv6Vpn=<state> for the node record)
+# IPv6 loopback installed from IS-IS (prints ipv6Vpn=<state> for the node record). On the SRv6 core (fab_node_transport
+# srv6) no MPLS input and no session over the IPv4 loopbacks: the SRv6 check below instead
 - name: "{{ bgw_node.name }}: wait for the core (IS-IS, VPNv4 and VPNv6) and the upstream route reflectors"
   ansible.builtin.shell: |
     set -e
     V="vtysh -N gw-{{ fab_name }}"
+    {% if fab_node_transport | default('mpls') != 'srv6' %}
     # MPLS input on the core leg (a reload that disagreed with the kernel turned it off once)
     [ "$(ip netns exec gw-{{ fab_name }} sysctl -n net.mpls.conf.core0.input)" = 1 ]
+    {% endif %}
     $V -c 'show isis neighbor' | grep -q ' Up '
+    {% if fab_node_transport | default('mpls') != 'srv6' %}
     $V -c 'show bgp ipv4 vpn summary json' | python3 -c '
     import json, sys
     p = json.load(sys.stdin).get("peers", {}).get(sys.argv[1], {})
     sys.exit(0 if p.get("state") == "Established" else 1)' {{ cg_root_pe.loopbackIp }}
+    {% endif %}
     $V -c 'show bgp l2vpn evpn summary json' | python3 -c '
     import json, sys
     peers = json.load(sys.stdin).get("peers", {})
@@ -306,7 +379,130 @@
     import json, sys
     up = {v.get("vrf"): str(v.get("state", "")).lower() for v in json.load(sys.stdin).get("vrfs", [])}
     sys.exit(0 if all(up.get(n) == "up" for n in sys.argv[1:]) else 1)' {{ cg_vrfs | map(attribute='vrf') | join(' ') }}
-    {% if cg_pe.loopback6 | default('') | length > 0 %}
+    {% if fab_node_transport | default('mpls') == 'srv6' %}
+    # SRv6 core: IPv6 forwarding, the namespace's kernel settings for SRv6 (strict mode, SRv6 on the core leg, the rule
+    # to the SID block, the guard), the gateway's locator discard route, and the VPN session to the route reflector over
+    # the IPv6 loopbacks with VPNv4 and VPNv6 negotiated, the root's IPv6 loopback and locator installed from IS-IS. Same
+    # check code as the root's. Prints ipv6Vpn=<state> for the node record.
+    [ "$(ip netns exec gw-{{ fab_name }} sysctl -n net.ipv6.conf.all.forwarding)" = 1 ]
+    python3 -c '
+    import ipaddress, json, subprocess, sys
+
+
+    def run(cmd):
+        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+    def addr(text):
+        """An address as the canonical text FRR prints, None when it is none."""
+        try:
+            return str(ipaddress.ip_address(str(text).split("%")[0]))
+        except ValueError:
+            return None
+
+
+    def main(argv, run):
+        """argv: <vtysh pathspace or ""> <netns or ""> <core leg> <SID block> <own IPv6 loopback> <own locator>
+        <IPv6 loopback pool> [<peer IPv6 loopback>...]. The SRv6 core of this instance: the kernel (VRF strict mode, SRv6
+        accepted on all, default and the core leg, the rule that looks the block up in the main table at preference 999,
+        the guard table), the own locator discard route, and per provider-edge peer the VPN session over the IPv6
+        loopbacks with VPNv4 and VPNv6 negotiated, its IPv6 loopback and its locator installed from IS-IS. Without a peer
+        named (the route reflector) the peers are the sessions up from the IPv6 loopback pool, none is no error, and the
+        PE group listens on the pool. Prints ipv6Vpn=<state>; exits 1 while anything is missing."""
+        pathspace, netns, leg = argv[0], argv[1], argv[2]
+        block, own6 = ipaddress.ip_network(argv[3]), ipaddress.ip_address(argv[4])
+        loc, pool6 = ipaddress.ip_network(argv[5]), ipaddress.ip_network(argv[6])
+        want = [a for a in (addr(p) for p in argv[7:]) if a]
+        x = ["ip", "netns", "exec", netns] if netns else []
+        vtysh = ["vtysh"] + (["-N", pathspace] if pathspace else [])
+        errors = []
+
+        def read(cmd):
+            try:
+                return run(cmd)
+            except (OSError, subprocess.CalledProcessError):
+                return None
+
+        def show(c):
+            try:
+                return json.loads(read(vtysh + ["-c", c]) or "{}")
+            except ValueError:
+                return {}
+
+        if (read(x + ["sysctl", "-n", "net.vrf.strict_mode"]) or "").strip() != "1":
+            errors.append("net.vrf.strict_mode is not 1")
+        for dev in ("all", "default", leg):
+            if (read(x + ["sysctl", "-n", "net/ipv6/conf/%s/seg6_enabled" % dev]) or "").strip() != "1":
+                errors.append("seg6_enabled is not 1 on %s" % dev)
+        rule = False
+        for line in (read(x + ["ip", "-6", "rule", "show"]) or "").splitlines():
+            w = line.split()
+            if len(w) < 6 or w[0] != "999:" or w[-2:] != ["lookup", "main"] or "to" not in w[:-2]:
+                continue
+            try:
+                rule = rule or ipaddress.ip_network(w[w.index("to") + 1], strict=False) == block
+            except ValueError:
+                pass
+        if not rule:
+            errors.append("no rule to %s lookup main at preference 999" % block)
+        if read(x + ["nft", "list", "table", "inet", "shc_core_guard"]) is None:
+            errors.append("the guard table inet shc_core_guard is not loaded")
+        if not any(r.get("protocol") == "static" and r.get("selected") and r.get("installed")
+                   for r in show("show ipv6 route static json").get(str(loc), [])):
+            errors.append("the locator %s has no installed discard route" % loc)
+        neg, state = {}, {}
+        for f in ("ipv4", "ipv6"):
+            neg[f] = {addr(p) for p in show("show bgp %s vpn summary established json" % f).get("peers", {})}
+            for p, v in show("show bgp %s vpn summary json" % f).get("peers", {}).items():
+                if v.get("state") == "Established" or addr(p) not in state:
+                    state[addr(p)] = v.get("state", "")
+        if not want:
+            ranges = []
+            for line in (read(vtysh + ["-c", "show running-config"]) or "").splitlines():
+                w = line.split()
+                if w[:3] == ["bgp", "listen", "range"] and w[4:] == ["peer-group", "PE"]:
+                    try:
+                        ranges.append(ipaddress.ip_network(w[3], strict=False))
+                    except ValueError:
+                        pass
+            if pool6 not in ranges:
+                errors.append("the PE group does not listen on %s" % pool6)
+        up = {p for p, s in state.items() if p and s == "Established"} | neg["ipv4"] | neg["ipv6"]
+        peers = want or sorted(p for p in up if p and ipaddress.ip_address(p) in pool6)
+        isis6 = show("show ipv6 route isis json")
+        base = int(loc.network_address) - ((int(own6) - int(pool6.network_address)) << 80)
+        for p in peers:
+            for f, fam in (("ipv4", "VPNv4"), ("ipv6", "VPNv6")):
+                if p not in neg[f]:
+                    s = state.get(p, "")
+                    errors.append("%s %s: %s" % (fam, p, "NoNeg" if s == "Established" else (s or "NotActivated")))
+            i = int(ipaddress.ip_address(p)) - int(pool6.network_address)
+            need = [p + "/128"]
+            if 1 <= i <= 255:
+                need.append(str(ipaddress.ip_network((base + (i << 80), 48))))
+            else:
+                errors.append("%s is no provider-edge loopback of %s" % (p, pool6))
+            for pfx in need:
+                if not any(r.get("protocol") == "isis" and r.get("selected") and r.get("installed")
+                           for r in isis6.get(pfx, [])):
+                    errors.append("%s of %s is not an installed IS-IS route" % (pfx, p))
+        six = [p for p in peers if p in neg["ipv6"]]
+        if want:
+            s = state.get(want[0], "")
+            result = "Established" if want[0] in neg["ipv6"] else ("NoNeg" if s == "Established" else (s or "NotActivated"))
+        else:
+            result = ("NoPeers" if not peers else "Established" if len(six) == len(peers)
+                      else "NoNeg" if not six else "Partial")
+        for e in errors:
+            print(e, file=sys.stderr)
+        print("ipv6Vpn=" + result)
+        return 1 if errors else 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main(sys.argv[1:], run))
+    ' gw-{{ fab_name }} gw-{{ fab_name }} core0 {{ fab_real.core.srv6.block }} {{ cg_pe.loopbackIp6 }} {{ cg_pe.locator }} {{ fab_real.core.loopbackPool6 }} {{ cg_root_pe.loopbackIp6 }}
+    {% elif cg_pe.loopback6 | default('') | length > 0 %}
     [ "$(ip netns exec gw-{{ fab_name }} sysctl -n net.ipv6.conf.all.forwarding)" = 1 ]
     python3 -c '
     import ipaddress, json, subprocess, sys
@@ -357,7 +553,7 @@
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
   vars:
     fab_ledger: {action: lease-renew, namespace: "{{ fab_namespace }}", fabric: "{{ cg_fabric_name }}", holder: "{{ cg_holder }}",
-                 step: "the VPN label check on {{ bgw_node.name }}"}
+                 step: "the VPN {{ 'SID' if fab_node_transport | default('mpls') == 'srv6' else 'label' }} check on {{ bgw_node.name }}"}
   timeout: 0
 
 # FRR 8.5: a VRF deleted and created again under the same name (a placement's VNI used again) can keep zebra's old binding of
@@ -369,7 +565,8 @@
 # so the label is also read where the core sees it, on the route reflector (the root FRR of this node: the paths
 # from this gateway's loopback under the VRF's RD). Only the family whose label has no route is bound again, under
 # that family; a family with no exported route yet needs one more MPLS route into the VRF. A VRF without the IPv6
-# family is checked as before (any MPLS route into it, IPv4 bound again). Same check code as the root's
+# family is checked as before (any MPLS route into it, IPv4 bound again). Only on the MPLS core (fab_node_transport
+# mpls); the SRv6 core checks its SIDs instead (below). Same check code as the root's
 # (python3 -c '<code>' <pathspace> <netns> <loopback> <vrf>:<families>:<rd> ...). The families are the ones the
 # FRR configuration carries (frr-gateway.conf.j2: IPv6 only with the IPv6 core), so a check never binds a label under
 # an address family the file does not have; a VRF that carries none (IPv6 only, IPv4-only core) has no label.
@@ -535,6 +732,80 @@
     executable: /bin/bash
   register: _cg_labels
   changed_when: _cg_labels.stdout is search('rebound=.')
+  when: fab_node_transport | default('mpls') == 'mpls'
+  delegate_to: "{{ bgw_node.name }}"
+
+# The SRv6 core has no labels to bind: every VRF must have its SID in the namespace's kernel, an End.DT46 route from
+# the gateway's locator on this node into the VRF's table (the VNI; one SID per VRF carries both families). A VRF
+# still without one after the settle time fails the job and is named (no repair is known: a VRF created again under
+# the same name got its SID back by itself in every test). Same check code as the root's.
+- name: "{{ bgw_node.name }}: every VRF's SID leads into it"
+  ansible.builtin.shell: |
+    {% set _vrfs = [] %}
+    {% for v in cg_vrfs %}
+    {% set _ = _vrfs.append(v.vrf ~ ':' ~ v.vni) %}
+    {% endfor %}
+    bad() {
+    python3 -c '
+    import ipaddress, re, subprocess, sys
+
+
+    def run(cmd):
+        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+    def sids(text):
+        """The SID routes of the kernel (ip -6 route show table all): per VRF table the SIDs routed into it by an End.DT46
+        route (encap seg6local action End.DT46 vrftable <table>)."""
+        found = {}
+        for line in text.splitlines():
+            m = re.search(r" encap seg6local action End\.DT46 vrftable (\d+)( |$)", line)
+            if m:
+                found.setdefault(int(m.group(1)), []).append(line.split()[0].split("/")[0])
+        return found
+
+
+    def main(argv, run):
+        """argv: <netns or ""> <own locator> then <vrf>:<table> per VRF. Prints "<vrf> <table>" per VRF that the kernel
+        has no End.DT46 SID route into whose SID is in the own locator."""
+        netns, loc = argv[0], ipaddress.ip_network(argv[1])
+        ip = ["ip"] + (["-n", netns] if netns else [])
+        have = sids(run(ip + ["-6", "route", "show", "table", "all"]))
+        for spec in argv[2:]:
+            name, table = spec.rsplit(":", 1)
+            mine = []
+            for s in have.get(int(table), []):
+                try:
+                    mine.append(ipaddress.ip_address(s) in loc)
+                except ValueError:
+                    pass
+            if not any(mine):
+                print(name, table)
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main(sys.argv[1:], run))
+    ' gw-{{ fab_name }} {{ cg_pe.locator }} {{ _vrfs | join(' ') }}
+    }
+    # the VRFs still without their SID route after up to <tries> checks 5 s apart (in $b)
+    settle() {
+      for i in $(seq "$1"); do b=$(bad) || return 1; [ -z "$b" ] && return 0; sleep 5; done
+      b=$(bad)
+    }
+    settle 9 || { echo "the SID check could not read the kernel's routes" >&2; exit 1; }
+    if [ -n "$b" ]; then
+      while read -r v t; do
+        echo "VRF $v: no SRv6 SID in the kernel (no End.DT46 route from locator {{ cg_pe.locator }} into its table $t)" >&2
+      done <<< "$b"
+      exit 1
+    fi
+    echo "sids=ok"
+  args:
+    executable: /bin/bash
+  register: _cg_sids
+  changed_when: false
+  when: fab_node_transport == 'srv6'
   delegate_to: "{{ bgw_node.name }}"
 
 # the announcement turned off (cg_node_in6_keep): the instance must no longer announce an ICMPv6 source (a reload
@@ -666,6 +937,7 @@
     # a tunnel is up while at least one peer handshook within the last 3 minutes
     _tun_state: "{{ ('up' if _tun.peers | default([]) | selectattr('up') | list | length > 0 else 'down') if _tun | length > 0 else '' }}"
     _v6: "{{ cg_pe.loopback6 | default('') | length > 0 }}"
+    _srv6: "{{ fab_node_transport | default('mpls') == 'srv6' }}"
     # IPv4 only: {"<vrf>": n}; with the IPv6 core: {"<vrf>": {"4": n, "6": m}}
     _vr: >-
       {%- set out = {} -%}
@@ -688,11 +960,14 @@
            'siteSessions': _s.site | int, 'upstreamSessions': _s.upstream | int, 'coreSessions': 1,
            'vrfs': cg_vrfs | length, 'vrfRoutes': _vr, 'ipv6Vpn': _ipv6vpn | trim,
            'message': 'gateway instance gw-' ~ fab_name ~ ': VPNv4' ~ (' and VPNv6' if _v6 | bool else '') ~ ' to '
-                      ~ cg_root_pe.loopbackIp ~ ', IS-IS SR SID ' ~ cg_pe.sid ~ ', loopback ' ~ cg_pe.loopbackIp
+                      ~ (('route reflector ' ~ cg_root_pe.loopbackIp6 ~ ', SRv6 locator ' ~ cg_pe.locator) if _srv6 | bool
+                         else (cg_root_pe.loopbackIp ~ ', IS-IS SR SID ' ~ cg_pe.sid))
+                      ~ ', loopback ' ~ cg_pe.loopbackIp
                       ~ ((' ' ~ cg_pe.loopbackIp6 | default('')) if _v6 | bool else '')
                       ~ ((', tunnel ' ~ _tun_state) if _tun | length > 0 else ''),
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
-           | combine({'tunnel': _tun_state} if _tun | length > 0 else {})] }}
+           | combine({'tunnel': _tun_state} if _tun | length > 0 else {})
+           | combine({'transport': 'srv6', 'locator': cg_pe.locator} if _srv6 | bool else {})] }}
     cg_wg_nodes: >-
       {{ (cg_wg_nodes | default([])) + ([_tun | combine({'name': bgw_node.name})] if _tun | length > 0 else []) }}
     cg_changed_nodes: >-

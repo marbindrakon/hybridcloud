@@ -420,10 +420,15 @@
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name,
                                                    'icmpSource6Announced': cg_icmp6_announce | default(false) | bool,
+                                                   'coreTransport': (fab_real.core | default({}, true)).transport | default('mpls', true),
                                                    'vrfs': cg_vrfs | map('dict2items')
                                                            | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6', 'covering6'])
                                                            | map('items2dict') | list}
-                                                  | combine(cg_rdns_record | default({}, true))}) }}
+                                                  | combine(cg_rdns_record | default({}, true))
+                                                  | combine({'srv6Locators': cg_node_results | selectattr('locator', 'defined')
+                                                                             | items2dict(key_name='name', value_name='locator')}
+                                                            if cg_node_results | selectattr('locator', 'defined') | list | length > 0
+                                                            else {})}) }}
 
     # an aws site's routers got new keys: look again once they applied them, so the status shows their sessions
     - name: Reconcile once more after the edge's configuration changed (aws)
