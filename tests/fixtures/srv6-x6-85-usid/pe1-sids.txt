@@ -1,0 +1,1 @@
+fd00:5e6:2:1:: nhid 18  encap seg6local action End.DT46 vrftable 51000 dev t51000 proto bgp metric 20 pref medium

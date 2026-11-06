@@ -1,0 +1,12 @@
+2602:81f:4005:1001::/64 nhid 34  encap seg6 mode encap segs 1 [ fd00:5e6:2:1:: ] via fe80::2c01:7cff:fe31:74d9 dev core0 proto bgp metric 20 pref medium
+anycast 2602:81f:4005:1002:: dev hb0 proto kernel metric 0 pref medium
+2602:81f:4005:1002::/64 dev hb0 proto kernel metric 256 pref medium
+2602:81f:4005:1005::/64 nhid 36  encap seg6 mode encap segs 1 [ fd00:5e6:5:1:: ] via fe80::3c16:b5ff:fe8e:fe6b dev core0 proto bgp metric 20 pref medium
+2602:81f:4005:1e01::3 dev t51001 proto kernel metric 256 pref medium
+2602:81f:4005:1e01::5 nhid 36  encap seg6 mode encap segs 1 [ fd00:5e6:5:1:: ] via fe80::3c16:b5ff:fe8e:fe6b dev core0 proto bgp metric 20 pref medium
+anycast fe80:: dev hb0 proto kernel metric 0 pref medium
+fe80::/64 dev hb0 proto kernel metric 256 pref medium
+multicast ff00::/8 dev hb0 proto kernel metric 256 pref medium
+default nhid 32  encap seg6 mode encap segs 1 [ fd00:5e6:4:1:: ] via fe80::20d0:abff:fe6f:87b7 dev core0 proto bgp metric 20 pref medium
+unreachable default dev lo metric 4278198272 pref medium
+fd00:5e6:3:1:: nhid 18  encap seg6local action End.DT46 vrftable 51001 dev t51001 proto bgp metric 20 pref medium
