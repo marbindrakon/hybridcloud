@@ -65,8 +65,20 @@ class Kernel:
         i = self.next_index()
         return "02:00:00:00:%02x:%02x" % (i // 256, i % 256)
 
+    MODULE_OF = {"vlan": "8021q", "vrf": "vrf", "veth": "veth", "macvlan": "macvlan", "wireguard": "wireguard",
+                 "bridge": "bridge", "dummy": "dummy", "vxlan": "vxlan", "bond": "bonding"}
+
+    def module_loaded(self, kind):
+        """the kind's module: loaded by modprobe (recorded in the state) or by a device of that kind, ever created"""
+        mod = self.MODULE_OF.get(kind, kind)
+        return mod in self.st.get("modules", []) or any(
+            l["kind"] == kind for ns in self.st["ns"].values() for l in ns["links"].values())
+
     def add_link(self, nsname, name, kind, **kw):
         ns = self.ns(nsname)
+        mod = self.MODULE_OF.get(kind, kind)
+        if mod not in self.st.setdefault("modules", []):
+            self.st["modules"].append(mod)
         link = {"name": name, "kind": kind, "mtu": kw.get("mtu", 65536 if kind == "loopback" else 1500),
                 "up": False, "master": None, "address": kw.get("address") or self.new_mac(),
                 "index": self.next_index(), "addrgenmode": "eui64", "addrs": [], "parent": kw.get("parent"),
@@ -255,7 +267,13 @@ def ip_main(k, nsname, args, out):
             if "master" in sel:
                 cand = [l for l in cand if l["master"] == sel["master"]]
             if "-j" in opts:
-                out.append(json.dumps([link_json(l, nsname, "-d" in opts) for l in cand]))
+                # the blades (kernel 5.14.0-687, iproute2 6.17): "type <kind>" while the kind's module is not loaded
+                # lists every link as an empty object (a fresh boot before the apply's modprobe: 2026-11-07); a module
+                # is loaded by modprobe or by the first device of its kind, and stays loaded
+                if "type" in sel and not cand and dev is None and not k.module_loaded(sel["type"]):
+                    out.append(json.dumps([{} for _ in links]))
+                else:
+                    out.append(json.dumps([link_json(l, nsname, "-d" in opts) for l in cand]))
             else:
                 for l in cand:
                     out.append(link_line(l, nsname, "-d" in opts))
@@ -749,6 +767,9 @@ def main():
             elif tool == "cat":
                 rc = cat_main(k, nsname, list(args), out, err)
             elif tool == "modprobe":
+                for m in args:
+                    if not m.startswith("-") and m not in k.st.setdefault("modules", []):
+                        k.st["modules"].append(m)
                 wrote = True
             elif tool == "vtysh":
                 pass

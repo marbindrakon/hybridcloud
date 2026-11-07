@@ -70,7 +70,9 @@ class NoEgressRoot(ApplyCase):
         h.scripts["old"] = h.copy_script(base, "apply-old")
         for name, over in VARIANTS:
             with self.subTest(variant=name):
-                h.set_state(blade())
+                st = blade()
+                st["modules"] = ["vrf"]  # not the boot-time VRF listing (test_fix_vrf_json_at_boot): this fix's defect
+                h.set_state(st)
                 h.conf("root", bare_root(**over))
                 rc, out, err, log = h.run("root", script="old")
                 self.assertNotEqual(rc, 0, out)

@@ -486,10 +486,12 @@ precheck() {
   fi
   # a VRF other than the one the configuration names for a table it will use: the VRF the run creates would share
   # the table with it (transport srv6: the kernel refuses the creation part-way, strict mode)
+  # (on the blades' kernel, "ip -j link show type <kind>" prints one empty object per link while the kind's module is
+  # not loaded, as at boot before any VRF exists: every listing by kind here keeps only entries that name a device)
   want=$(want_vrfs)
   if [ -n "$want" ]; then
-    t=$($NSX ip -j -d link show type vrf | jq -r --arg w "$want" '($w | split("\n") | map(select(. != "") | split(" ")
-        | {key: .[0], value: .[1]}) | from_entries) as $m | [.[] | (.linkinfo.info_data.table | tostring) as $t
+    t=$($NSX ip -j -d link show type vrf | jq -r --arg w "$want" 'def vrfs: map(select(.ifname != null)); ($w | split("\n") | map(select(. != "") | split(" ")
+        | {key: .[0], value: .[1]}) | from_entries) as $m | [vrfs[] | (.linkinfo.info_data.table | tostring) as $t
         | select($m[$t] != null and $m[$t] != .ifname) | "VRF \(.ifname) holds table \($t), which this configuration"
         + " gives to \($m[$t])"] | join("; ")') || { echo "shc-fabric-apply: the VRFs could not be read" >&2; exit 4; }
     if [ -n "$t" ]; then
@@ -499,7 +501,7 @@ precheck() {
   fi
   [ "$TRANSPORT" = srv6 ] || return 0
   [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0
-  t=$($NSX ip -j -d link show type vrf | jq -r '[group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
+  t=$($NSX ip -j -d link show type vrf | jq -r 'def vrfs: map(select(.ifname != null)); [vrfs | group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
       | "table \(.[0].linkinfo.info_data.table): \(map(.ifname) | join(", "))"] | join("; ")') || t=""
   if [ -n "$t" ]; then
     echo "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: $t" >&2
@@ -545,7 +547,7 @@ srv6_strict() {
   local t
   [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0
   $NSX sysctl -qw net.vrf.strict_mode=1 && return 0
-  t=$($NSX ip -j -d link show type vrf | jq -r '[group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
+  t=$($NSX ip -j -d link show type vrf | jq -r 'def vrfs: map(select(.ifname != null)); [vrfs | group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
       | "table \(.[0].linkinfo.info_data.table): \(map(.ifname) | join(", "))"] | join("; ")')
   echo "transport srv6: net.vrf.strict_mode=1 refused${t:+; VRFs that share a table: $t}" >&2
   return 1
@@ -708,7 +710,7 @@ egress_state() {
 }
 
 # the root VRFs e<digits> (networks' VRFs: egress and attachment circuits)
-root_vrfs() { ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$' || true; }
+root_vrfs() { ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^e[0-9]+$' || true; }
 
 root_vrf() {  # <vrf> <table>
   ip link show "$1" >/dev/null 2>&1 || ip link add "$1" type vrf table "$2"
@@ -726,7 +728,7 @@ root_vrfs_prune() {
   for v in $(root_vrfs); do
     grep -qx -- "$v" <<<"$want" && continue
     ip link del "xe${v#e}" 2>/dev/null || true
-    for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname'); do ip link del "$d"; done
+    for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname // empty'); do ip link del "$d"; done
     t=$(vrf_table "$v")
     ip link del "$v"
     vrf6_gone "$t"; vrf4_gone "$t"
@@ -738,7 +740,7 @@ egress_down() {
   nft delete table inet shc_egress6 2>/dev/null || true
   rm -f "$MARK6"
   nft delete table ip shc_egress 2>/dev/null || true
-  for x in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
+  for x in $(ip -j link show type veth | jq -r '.[].ifname // empty' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
   # a root that never had egress has no egress0 (ip fails, the pipeline with it): nothing to remove
   m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty') || m=""
   ip link del egress0 2>/dev/null || true
@@ -951,7 +953,7 @@ egress_up() {
     for a in $(stray "$xo" 0.0.0.0/0 "$xoa"); do ip addr del "$a" dev "$xo"; done
     addr_ensure "$xo" "$xoa"
   done
-  for v in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do
+  for v in $(ip -j link show type veth | jq -r '.[].ifname // empty' | grep -E '^xe[0-9]+$' || true); do
     grep -qx -- "e${v#xe}" <<<"$want" || ip link del "$v"
   done
   nat=$(jq -r '.egress.networks // [] | .[].nat | select(. != null and . != "")' "$CONF")
@@ -1462,7 +1464,7 @@ gateway)
     else
       $X nft delete table inet shc_gw_mss 2>/dev/null || true
     fi
-    for VRF in $($X ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^t[0-9]+$' || true); do
+    for VRF in $($X ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^t[0-9]+$' || true); do
       grep -qx -- "$VRF" <<<"$WANT" && continue
       VNI=${VRF#t}
       $X ip link del "vx$VNI" 2>/dev/null || true
