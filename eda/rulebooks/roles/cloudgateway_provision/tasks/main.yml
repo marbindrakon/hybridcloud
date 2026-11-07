@@ -130,6 +130,19 @@
         # usable: ready, or realized and not failed (a fabric re-run doesn't stop its gateways)
         - not (((cg_fabric.status | default({}, true)).ready | default(false) | bool) or (((cg_fabric.status | default({}, true)).realized | default(false) | bool) and (cg_fabric.status | default({}, true)).status | default('') != 'failed'))
 
+    # the SRv6 core runs the VPN session over the IPv6 loopbacks, which the gateway takes only once the fabric reports
+    # its IPv6 core (status.realization.ipv6Core, below): until then the gateway waits as for a fabric that is not
+    # ready, and runs again on its reconcile period
+    - name: Wait for the fabric's IPv6 core (SRv6 core)
+      ansible.builtin.set_fact:
+        cg_waiting: "{{ cg_waiting + ['HybridFabric ' ~ cg_fabric_name ~ ' (IPv6 core not reported yet; the SRv6 core needs it)'] }}"
+      when:
+        - cg_fabric_found
+        # not again for a fabric the gateway already waits for
+        - cg_waiting | select('match', 'HybridFabric ') | list | length == 0
+        - (fab_real.core | default({}, true)).transport | default('mpls', true) == 'srv6'
+        - not ((((cg_fabric.status | default({}, true)).realization | default({}, true)).ipv6Core | default(false)) | bool)
+
     - name: Set the site status
       ansible.builtin.set_fact:
         cg_status:
@@ -383,6 +396,23 @@
       # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the always block
       # skips the release; any other failure releases it at once
       rescue:
+        # an apply that refused (exit 4 with "shc-fabric-apply: …" or, for what only the SRv6 core refuses, "transport
+        # srv6: …" on stderr, run directly on a node) fails its step with
+        # "non-zero return code" only: its own lines go into the status message (fab_fail_msg, read by the rescue below).
+        # Only the message changes, and only when the failed step printed such lines; a step that timed out keeps the lease
+        # keeper's message
+        - name: Keep the apply's own reason for the status
+          vars:
+            _why: >-
+              {{ (ansible_failed_result.stderr_lines | default([], true) | select('match', '^(transport srv6|shc-fabric-apply): ') | list)
+                 if ansible_failed_result is mapping and ansible_failed_result.timedout is not defined else [] }}
+          ansible.builtin.set_fact:
+            fab_fail_msg: >-
+              {{ (ansible_failed_task.name | default('a node step')) ~ ': ' ~ (ansible_failed_result.msg | default('failed'))
+                 ~ ': ' ~ _why | join('; ') }}
+          when: _why | length > 0
+          timeout: 0
+
         - name: Keep the lease while a step may still run on a node
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
           timeout: 0
@@ -420,10 +450,15 @@
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name,
                                                    'icmpSource6Announced': cg_icmp6_announce | default(false) | bool,
+                                                   'coreTransport': (fab_real.core | default({}, true)).transport | default('mpls', true),
                                                    'vrfs': cg_vrfs | map('dict2items')
                                                            | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6', 'covering6'])
                                                            | map('items2dict') | list}
-                                                  | combine(cg_rdns_record | default({}, true))}) }}
+                                                  | combine(cg_rdns_record | default({}, true))
+                                                  | combine({'srv6Locators': cg_node_results | selectattr('locator', 'defined')
+                                                                             | items2dict(key_name='name', value_name='locator')}
+                                                            if cg_node_results | selectattr('locator', 'defined') | list | length > 0
+                                                            else {})}) }}
 
     # an aws site's routers got new keys: look again once they applied them, so the status shows their sessions
     - name: Reconcile once more after the edge's configuration changed (aws)

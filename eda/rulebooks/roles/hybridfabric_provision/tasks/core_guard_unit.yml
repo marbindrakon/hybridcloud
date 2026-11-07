@@ -1,0 +1,53 @@
+---
+# The SRv6 core guard between jobs (transport srv6 only; the callers skip it on mpls, so nothing of it is installed
+# there): a timer unit per instance runs `shc-fabric-apply <instance> guard` every 15 s, which checks the instance's
+# guard table (inet shc_core_guard) against what the apply loads and restores it when it is missing or differs (a
+# ruleset flush, a hand repair of another table): the rule at preference 999 and the SIDs stay between jobs, so the
+# guard must too. Templated units shc-core-guard@<instance>.{service,timer}, as the IPv6 egress guard's timer
+# (shc-egress6-guard). Used by node_root.yml (instance root) and cloudgateway_provision node_gateway.yml (gw-<name>),
+# after the apply loaded the guard; the gateway's teardown stops its instance's timer.
+# Input: bgw_node, cgu_instance (root, gw-<name>). Registers _cgu_files and _cgu_timer.
+- name: "{{ bgw_node.name }}: install the SRv6 core guard units"
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    content: "{{ item.content }}"
+    mode: "0644"
+    owner: root
+    group: root
+  loop:
+    - name: shc-core-guard@.service
+      content: |
+        # shc fabric: the SRv6 core guard of instance %i (installed by the platform's fabric jobs)
+        [Unit]
+        Description=shc fabric: SRv6 core guard of %i
+        After=shc-fabric-apply@root.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/shc-fabric-apply %i guard
+    - name: shc-core-guard@.timer
+      content: |
+        # shc fabric: the SRv6 core guard of instance %i, every 15 s
+        [Unit]
+        Description=shc fabric: SRv6 core guard of %i (every 15 s)
+
+        [Timer]
+        OnBootSec=30s
+        OnUnitActiveSec=15s
+        AccuracySec=1s
+
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _cgu_files
+
+- name: "{{ bgw_node.name }}: run the SRv6 core guard of {{ cgu_instance }} on its timer"
+  ansible.builtin.systemd:
+    name: "shc-core-guard@{{ cgu_instance }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: "{{ _cgu_files is changed }}"
+  delegate_to: "{{ bgw_node.name }}"
+  register: _cgu_timer

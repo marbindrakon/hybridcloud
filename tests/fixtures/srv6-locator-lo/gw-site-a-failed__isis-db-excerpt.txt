@@ -1,0 +1,4 @@
+localhost.loca.00-00      147   0x00000006  0xbf2b     919    0/0/0
+  IPv6 Reachability: 2001:db8:4005:ffff::1/128 (Metric: 10)
+  IPv6 Reachability: 5f00:b046:101::/48 (Metric: 0)
+localhost.loca.00-00 *    135   0x00000006  0x1168     938    0/0/0

@@ -1,0 +1,1 @@
+5f00:b046:104:1:: nhid 22  encap seg6local action End.DT46 vrftable 51002 dev t51002 proto bgp metric 20 pref medium

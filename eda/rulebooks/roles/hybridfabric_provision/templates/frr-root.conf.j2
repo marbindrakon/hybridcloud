@@ -1,4 +1,8 @@
 {% set _v6 = hf_pe.loopback6 | default('') | length > 0 %}
+{# the node's core transport: MPLS L3VPN over IS-IS segment routing (mpls) or SRv6 L3VPN over the IPv6 core (srv6);
+   the FRR major version picks the text form the daemons print back, which frr-reload compares #}
+{% set _srv6 = (fab_node_transport | default('mpls')) == 'srv6' %}
+{% set _frr10 = (fab_frr_major | default(8)) | int >= 10 %}
 ! Managed by the platform: HybridFabric {{ fab_name }}, border gateway root instance. Changes here are overwritten.
 frr version 8.5
 frr defaults traditional
@@ -6,8 +10,39 @@ hostname {{ bgw_node.name }}
 log syslog informational
 service integrated-vtysh-config
 !
+{% if _srv6 %}
+! SRv6 core: the root is a provider edge for the egress and circuit VRFs, so it has a locator of its own for their
+! SIDs. IS-IS announces the locator as a prefix of lo (passive): shc-fabric-apply holds the locator's first address
+! there with the locator's length, and blackholes the locator, so a packet for an unused SID is dropped here (the SIDs
+! inside it are longer routes)
+! the locator as micro-SIDs (32-bit block, 16-bit node, 16-bit function), in the form this FRR version prints back
+{% if _frr10 %}
+! (it also shows the kernel's encapsulation source, set by shc-fabric-apply: without it a reload would remove it)
+{% endif %}
+segment-routing
+ srv6
+{% if _frr10 %}
+  encapsulation
+   source-address {{ hf_pe.loopbackIp6 }}
+  exit
+{% endif %}
+  locators
+   locator MAIN
+{% if _frr10 %}
+    prefix {{ hf_pe.locator }} block-len 32 node-len 16
+{% else %}
+    prefix {{ hf_pe.locator }} block-len 32 node-len 16 func-bits 16
+{% endif %}
+    behavior usid
+   exit
+  exit
+ exit
+exit
+!
+{% else %}
 ! mpls enable mirrors the kernel's MPLS input (set by shc-fabric-apply): zebra shows it in the running config, so
 ! without it here a configuration reload would turn MPLS input off.
+{% endif %}
 ! The root is always the core LAN's designated IS (priority 127): a gateway that joined and won the election (equal
 ! priority, higher MAC) left FRR 8.5's LSPs on every node without the LAN's pseudonode, so no core routes, until the
 ! root restarted.
@@ -17,7 +52,9 @@ interface {{ hf_root.bridge }}
  ipv6 router isis CORE
 {% endif %}
  isis priority 127
+{% if not _srv6 %}
  mpls enable
+{% endif %}
 exit
 !
 interface lo
@@ -26,7 +63,9 @@ interface lo
  ipv6 router isis CORE
 {% endif %}
  isis passive
+{% if not _srv6 %}
  mpls enable
+{% endif %}
 exit
 !
 ! no graceful restart: when a gateway (a listen-range peer) is removed, FRR 8.5's restart timer for it still fired
@@ -38,8 +77,21 @@ router bgp {{ fab_spec.domainAsn }}
  bgp graceful-restart-disable
  neighbor PE peer-group
  neighbor PE remote-as {{ fab_spec.domainAsn }}
+{% if _srv6 %}
+{# SRv6: the gateways' VPN sessions come from their IPv6 loopbacks, and the extended next hop lets the IPv4 VPN
+   routes carry an IPv6 loopback as next hop (an SRv6 SID is only reached over IPv6). The root's own VRFs take their
+   SIDs from locator MAIN #}
+ neighbor PE update-source {{ hf_pe.loopbackIp6 }}
+ neighbor PE capability extended-nexthop
+ bgp listen range {{ fab_real.core.loopbackPool6 }} peer-group PE
+ !
+ segment-routing srv6
+  locator MAIN
+ exit
+{% else %}
  neighbor PE update-source lo
  bgp listen range {{ fab_real.core.loopbackPool }} peer-group PE
+{% endif %}
  !
  address-family ipv4 vpn
   neighbor PE activate
@@ -268,6 +320,11 @@ exit
 router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  bgp router-id {{ hf_pe.loopbackIp }}
  no bgp default ipv4-unicast
+{% if _srv6 and (4 in _fam or (_e6 and n.ipv6 is defined) or n.circuits | selectattr('ipv6', 'defined') | list) %}
+{#- SRv6: one SID for the VRF and both address families (decapsulation into the VRF's table, IPv4 or IPv6 inside),
+    in place of a label per family #}
+ sid vpn per-vrf export auto
+{% endif %}
 {% if _e6 and n.ipv6 is defined %}
 {# v6only: the veth also carries the IPv4 /31 of the IPv4 egress, and FRR would peer over it (the IPv4 filter drops
    that); the session stays on the link-local addresses the router advertisements exchange #}
@@ -312,13 +369,17 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   neighbor {{ c.ce }} route-map {{ c.id }}-OUT out
   neighbor {{ c.ce }} maximum-prefix {{ c.maxPrefixes }}{{ ' warning-only' if c.maxPrefixAction == 'warning' else (' restart ' ~ hf_attach_restart if hf_attach_restart | int > 0 else '') }}
 {% endfor %}
+{% if not _srv6 %}
   label vpn export auto
+{% endif %}
   rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
   rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
 {# FRR tracks an exported BGP route's next hop inside the VRF, where the loopback is unknown: with a CE's routes
    in the VRF, the VPN routes keep their own next hop (announced as the node's own address) #}
+{#- SRv6: the same rule, with the IPv6 loopback where a next hop is set (the SID is reached over IPv6); where none is
+    set the routes go out with the session's local address, the IPv6 loopback, as next hop (extended next hop) #}
 {% if not n.circuits %}
-  nexthop vpn export {{ hf_pe.loopbackIp }}
+  nexthop vpn export {{ hf_pe.loopbackIp6 if _srv6 else hf_pe.loopbackIp }}
 {% endif %}
   export vpn
   import vpn
@@ -352,7 +413,9 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   neighbor {{ c.ipv6.ce }} route-map {{ c.id }}-OUT6 out
   neighbor {{ c.ipv6.ce }} maximum-prefix {{ c.maxPrefixes }}{{ ' warning-only' if c.maxPrefixAction == 'warning' else (' restart ' ~ hf_attach_restart if hf_attach_restart | int > 0 else '') }}
 {% endfor %}
+{% if not _srv6 %}
   label vpn export auto
+{% endif %}
   rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
   rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
 {# no nexthop vpn export once a CE's IPv6 routes are in the VRF (the IPv4 rule above, for the same reason): with
@@ -417,11 +480,15 @@ exit
 router isis CORE
  is-type level-2-only
  net {{ hf_pe.net }}
+{# SRv6: no segment routing in the IGP and no redistribution; it carries the prefixes of lo, the loopbacks and the
+   locator #}
+{% if not _srv6 %}
  segment-routing on
  segment-routing global-block {{ fab_real.core.srgb.start }} {{ fab_real.core.srgb.end }}
  segment-routing prefix {{ hf_pe.loopback }} index {{ hf_pe.index }}
 {% if _v6 %}
  segment-routing prefix {{ hf_pe.loopback6 }} index {{ hf_pe.index | int + fab_real.core.sidOffset6 | default(1000) | int }}
+{% endif %}
 {% endif %}
 exit
 !

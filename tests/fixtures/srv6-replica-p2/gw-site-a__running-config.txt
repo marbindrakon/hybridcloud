@@ -1,0 +1,140 @@
+Building configuration...
+
+Current configuration:
+frr version 8.5.3
+frr defaults datacenter
+hostname localhost.localdomain
+log syslog informational
+ipv6 route 5f00:b046:102::/48 blackhole
+vrf t51000
+ vni 51000
+exit-vrf
+interface lo
+ ip router isis CORE
+ ipv6 router isis CORE
+ isis passive
+exit
+interface core0
+ ip router isis CORE
+ ipv6 router isis CORE
+exit
+router bgp 65010
+ bgp router-id 10.250.1.4
+ no bgp default ipv4-unicast
+ bgp graceful-restart-disable
+ neighbor SITE peer-group
+ neighbor SITE remote-as 65010
+ neighbor SITE bfd
+ neighbor 2001:db8:4005:ffff::1 remote-as 65010
+ neighbor 2001:db8:4005:ffff::1 description border gateway route reflector
+ neighbor 2001:db8:4005:ffff::1 update-source 2001:db8:4005:ffff::2
+ neighbor 2001:db8:4005:ffff::1 capability extended-nexthop
+ bgp listen range 10.250.1.0/24 peer-group SITE
+ !
+ segment-routing srv6
+  locator MAIN
+ exit
+ !
+ address-family ipv4 vpn
+  neighbor 2001:db8:4005:ffff::1 activate
+ exit-address-family
+ !
+ address-family ipv6 vpn
+  neighbor 2001:db8:4005:ffff::1 activate
+ exit-address-family
+ !
+ address-family l2vpn evpn
+  neighbor SITE activate
+  neighbor SITE route-reflector-client
+  neighbor SITE soft-reconfiguration inbound
+  neighbor SITE route-map FROM-SITE in
+  advertise-all-vni
+ exit-address-family
+exit
+router bgp 65010 vrf t51000
+ bgp router-id 10.250.1.4
+ no bgp default ipv4-unicast
+ sid vpn per-vrf export auto
+ !
+ address-family ipv4 unicast
+  rd vpn export 65010:51000
+  nexthop vpn export 2001:db8:4005:ffff::2
+  rt vpn both 65010:10000
+  route-map vpn export TO-VPN-10000
+  export vpn
+  import vpn
+ exit-address-family
+ !
+ address-family ipv6 unicast
+  network 2001:db8:4005::/48 route-map GW-LOCAL
+  network 2001:db8:4005:4000::/56 route-map GW-LOCAL
+  rd vpn export 65010:51000
+  nexthop vpn export 2001:db8:4005:ffff::2
+  rt vpn both 65010:10000
+  route-map vpn export TO-VPN-10000
+  export vpn
+  import vpn
+ exit-address-family
+ !
+ address-family l2vpn evpn
+  advertise ipv4 unicast route-map GW-T5
+  advertise ipv6 unicast route-map GW-T5
+ exit-address-family
+exit
+router isis CORE
+ is-type level-2-only
+ net 49.0001.0000.0000.0002.00
+ redistribute ipv6 static level-2 route-map CORE-LOCATOR
+exit
+ipv6 prefix-list CORE-LOCATOR seq 5 permit 5f00:b046:102::/48
+ipv6 prefix-list SITE-V6 seq 2678503428 permit 2001:db8:4005:4001::/64 le 128
+ipv6 prefix-list ANY-V6 seq 5 permit ::/0 le 128
+bgp community-list standard EGRESS-STANDBY seq 5 permit 65010:998
+bgp community-list standard GW-LOCAL seq 5 permit 65010:997
+bgp community-list standard GW-ORIG seq 5 permit 65010:999
+route-map CORE-LOCATOR permit 10
+ match ipv6 address prefix-list CORE-LOCATOR
+exit
+route-map FROM-SITE deny 10
+ match community GW-ORIG
+exit
+route-map FROM-SITE permit 20
+ match ipv6 address prefix-list SITE-V6
+exit
+route-map FROM-SITE deny 30
+ match ipv6 address prefix-list ANY-V6
+exit
+route-map FROM-SITE permit 40
+exit
+route-map GW-T5 permit 5
+ match community EGRESS-STANDBY
+ set community 65010:999 additive
+ set local-preference 50
+exit
+route-map GW-T5 permit 10
+ set community 65010:999 additive
+exit
+route-map GW-LOCAL permit 10
+ set community 65010:997 additive
+exit
+route-map TO-VPN-10000 deny 5
+ match community GW-LOCAL
+exit
+route-map TO-VPN-10000 permit 10
+ set extcommunity none
+ set extcommunity rt 65010:10000
+exit
+segment-routing
+ srv6
+  locators
+   locator MAIN
+    prefix 5f00:b046:102::/48 block-len 32 node-len 16 func-bits 16
+    behavior usid
+   exit
+   !
+  exit
+  !
+ exit
+ !
+exit
+end

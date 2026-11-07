@@ -1,0 +1,53 @@
+---
+# One border gateway node's core transport and its FRR, for the root (node_root.yml) and the gateway instances
+# (cloudgateway_provision node_gateway.yml), delegated to the node (read only).
+# Sets fab_node_transport (mpls or srv6: the fabric's core transport, realization core.transport, default mpls; one
+# transport for the root and every gateway instance on every node) and fab_frr_major (int: the major
+# version of the installed FRR, package frr or frr10; the FRR templates write their version-dependent text in the form
+# that version prints back), fab_frr_version (text). Fails when no FRR package is installed, and on an srv6 node when
+# the realization lacks the SID block (core.srv6.block) or the dual-stack core (core.loopbackPool6), or the FRR is
+# older than 8.5 (8.5 brought the micro-SID locator and the per-VRF SID): before anything on the node changed.
+# Input: bgw_node, fab_real, nt_who (who the messages name: "HybridFabric <name>", ...).
+- name: "{{ bgw_node.name }}: the installed FRR (package frr or frr10)"
+  ansible.builtin.shell: |
+    rpm -q --qf '%{NAME} %{VERSION}\n' frr frr10 | grep -E '^frr(10)? [0-9]' || { echo "no FRR package (frr or frr10) is installed" >&2; exit 1; }
+  register: _nt_frr
+  changed_when: false
+  delegate_to: "{{ bgw_node.name }}"
+
+# with both packages installed the newer one counts
+- name: "{{ bgw_node.name }}: the node's core transport and FRR version"
+  vars:
+    _nt_best: >-
+      {%- set best = {'v': [-1, -1], 'text': ''} -%}
+      {%- for l in _nt_frr.stdout_lines | default([]) if l.split() | length == 2 -%}
+        {%- set p = (l.split()[1].split('.') + ['0', '0'])[:2] | map('int') | list -%}
+        {%- if p > best.v -%}{%- set _ = best.update({'v': p, 'text': l.split()[1]}) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ best }}
+  ansible.builtin.set_fact:
+    fab_node_transport: "{{ (fab_real.core | default({}, true)).transport | default('mpls', true) | string }}"
+    fab_frr_major: "{{ _nt_best.v[0] | int }}"
+    fab_frr_minor: "{{ _nt_best.v[1] | int }}"
+    fab_frr_version: "{{ _nt_best.text }}"
+
+- name: "{{ bgw_node.name }}: stop on a core transport this platform does not realize"
+  ansible.builtin.fail:
+    msg: "{{ nt_who }} on {{ bgw_node.name }}: the core transport {{ fab_node_transport }} is not one of mpls, srv6"
+  when: fab_node_transport not in ['mpls', 'srv6']
+
+- name: "{{ bgw_node.name }}: stop when the SRv6 core lacks what it needs"
+  vars:
+    _nt_core: "{{ fab_real.core | default({}, true) }}"
+    _nt_missing: >-
+      {{ (['the SID block (realization core.srv6.block)']
+          if ((_nt_core.srv6 | default({}, true)).block | default('', true) | string | trim | length == 0) else [])
+         + (['the dual-stack core (realization core.loopbackPool6)']
+            if (_nt_core.loopbackPool6 | default('', true) | string | trim | length == 0) else [])
+         + (['FRR 8.5 or later (installed: ' ~ (fab_frr_version or 'unknown') ~ ')']
+            if [fab_frr_major | int, fab_frr_minor | int] < [8, 5] else []) }}
+  ansible.builtin.fail:
+    msg: "{{ nt_who }} on {{ bgw_node.name }}: the core transport srv6 needs {{ _nt_missing | join(', ') }}"
+  when:
+    - fab_node_transport == 'srv6'
+    - _nt_missing | length > 0

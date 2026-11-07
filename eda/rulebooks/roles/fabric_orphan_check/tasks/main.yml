@@ -59,10 +59,13 @@
   vars:
     fab_check: {action: orphan-report, crs: "{{ foc_crs }}", ledgers: "{{ foc_ledgers }}", sites: "{{ foc_sites }}", nodes: "{{ foc_nodes }}"}
 
-# the report's findings, and the nodes' IPv6 leftovers (nodes.yml: compared on the node against its own VRF devices)
+# the report's findings, the nodes' IPv6 leftovers (nodes.yml: compared on the node against its own VRF devices) and
+# their core transport and IPv4 separation state that is not the fabric's (nodes.yml: per the fabric's transport)
 - name: Collect the findings
   ansible.builtin.set_fact:
-    foc_findings: "{{ fab_check_result.findings + (foc_nodes | map(attribute='ipv6Orphans') | flatten) }}"
+    foc_findings: >-
+      {{ fab_check_result.findings + (foc_nodes | map(attribute='ipv6Orphans') | flatten)
+         + (foc_nodes | map(attribute='coreOrphans', default=[]) | flatten) }}
 
 - name: Report
   ansible.builtin.debug:

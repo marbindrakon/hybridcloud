@@ -6,7 +6,9 @@
 #    reported in status.realization.ipam.pools; a pool change wakes the networks waiting for platform address space.
 # 3. Under the lease fabric-config-<fabric>, one node at a time: the root instance (shc-fabric-apply root: MPLS,
 #    the node-local core bridge, the loopback; FRR: VPNv4 route reflector for the core's loopback range, IS-IS
-#    with segment routing). A failure stops before the next node. The job renews the lease before each node, around
+#    with segment routing; with the core transport srv6 (realization core.transport):
+#    SRv6 instead of MPLS and segment routing, the VPN sessions over the IPv6 loopbacks). A failure stops before the
+#    next node. The job renews the lease before each node, around
 #    its long wait and before its long steps, and every step on a node runs within the lease (fabric_lease.yml); a
 #    step that timed out keeps the lease until it runs out (fabric_lease_keep.yml).
 # 4. Provider internet egress (realization egress.enabled): the HybridNetworks holding an egress index in the
@@ -382,6 +384,23 @@
       # a step that timed out may still run on a node: the lease is kept (fabric_lease_keep.yml) and the always block
       # skips the release; any other failure releases it at once
       rescue:
+        # an apply that refused (exit 4 with "shc-fabric-apply: …" or, for what only the SRv6 core refuses, "transport
+        # srv6: …" on stderr, run directly on a node) fails its step with
+        # "non-zero return code" only: its own lines go into the status message (fab_fail_msg, read by the rescue below).
+        # Only the message changes, and only when the failed step printed such lines; a step that timed out keeps the lease
+        # keeper's message
+        - name: Keep the apply's own reason for the status
+          vars:
+            _why: >-
+              {{ (ansible_failed_result.stderr_lines | default([], true) | select('match', '^(transport srv6|shc-fabric-apply): ') | list)
+                 if ansible_failed_result is mapping and ansible_failed_result.timedout is not defined else [] }}
+          ansible.builtin.set_fact:
+            fab_fail_msg: >-
+              {{ (ansible_failed_task.name | default('a node step')) ~ ': ' ~ (ansible_failed_result.msg | default('failed'))
+                 ~ ': ' ~ _why | join('; ') }}
+          when: _why | length > 0
+          timeout: 0
+
         - name: Keep the lease while a step may still run on a node
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_keep.yml"
           timeout: 0
@@ -499,7 +518,8 @@
           ('; ' ~ hf_attach.status | length ~ ' attachment circuit(s)' ~ ((', not realized: ' ~ hf_attach.skipped
              | map(attribute='circuit') | join(', ')) if hf_attach.skipped else ''))
           if fab_real.attachments.enabled | default(false) | bool else '' }}{{
-          ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}
+          ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}{{
+          '; SRv6 core' if (fab_real.core | default({}, true)).transport | default('mpls', true) == 'srv6' else '' }}
         # the IPv6 egress condition (only with IPv6 egress): True while every node has an upstream session and the
         # default route; Degraded otherwise (the networks' rows say the same)
         fab_conditions: >-
@@ -510,6 +530,7 @@
                             ~ ' since ' ~ hf_egress6_status.degradedSince) if hf_egress6_status.degraded | default(false)
                            else 'every node has an upstream session and the default route')}]
              if hf_egress6_status.enabled | default(false) else []) }}
+        # coreTransport: the core's transport (mpls or srv6); srv6Locators (SRv6 core): {node: the root's locator}.
         # status.realization.translation is no longer written: the null removes what an earlier release recorded there
         # (the status is merge-patched and keeps unknown fields; a no-op once it is gone). Its former condition,
         # IPv6Translation, goes with the same write (the status library drops retired condition types)
@@ -526,7 +547,11 @@
                                          'networks': hf_egress_status, 'ipv6': hf_egress6_status},
                               'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
                               'ipam': hf_ipam,
-                              'translation': none}} }}
+                              'coreTransport': (fab_real.core | default({}, true)).transport | default('mpls', true),
+                              'translation': none}
+                             | combine({'srv6Locators': hf_node_results | selectattr('locator', 'defined')
+                                                        | items2dict(key_name='name', value_name='locator')}
+                                       if hf_node_results | selectattr('locator', 'defined') | list | length > 0 else {})} }}
 
     # the networks this run added to or removed from the egress (or whose IPv6 egress came or went) wait for it: wake
     # them; when the IPv6 egress became degraded or recovered, every network with IPv6 egress (their family row says so)

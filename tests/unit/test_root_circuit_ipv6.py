@@ -314,7 +314,8 @@ def nft_check(text):
 
 
 class ApplyIPv4Unchanged(ApplyCase):
-    """IPv4-only circuits (with and without the IPv6 core): the calls and the final state of the release's script."""
+    """IPv4-only circuits (with and without the IPv6 core): the calls and the final state of the release's script (but
+    for the differences listed in test_fix_base_script)."""
 
     def setUp(self):
         super().setUp()
@@ -324,13 +325,13 @@ class ApplyIPv4Unchanged(ApplyCase):
         self.h.scripts["old"] = self.h.copy_script(base, "apply-old")
 
     def test_same_calls_and_state(self):
+        """(but for the differences the fixes on both transports made, listed in test_fix_base_script)"""
+        import test_fix_base_script as B
         for conf in (root_conf(CIRCUIT, CIRCUIT2), dict(root_conf(CIRCUIT), **{k: "" for k in ROOT6})):
             r = A.BaselineTest.run_both(self, conf, [])
             (old_logs, old_state), (new_logs, new_state) = r["old"], r["new"]
-            for (oo, ol), (no, nl) in zip(old_logs, new_logs):
-                self.assertEqual(ol, nl)
-                self.assertEqual(oo, no)
-            self.assertEqual(old_state, new_state)
+            B.assert_runs_like_base(self, "circuits", old_logs, new_logs)
+            B.assert_state_like_base(self, "circuits", old_state, new_state)
             self.assertNotIn("ip6 shc_attach6", new_state["ns"][""]["nft"])
 
 

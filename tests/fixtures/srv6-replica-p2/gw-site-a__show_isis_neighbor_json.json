@@ -1,0 +1,21 @@
+{
+  "areas":[
+    {
+      "area":"CORE",
+      "circuits":[
+        {
+          "circuit":2,
+          "adj":"localhost.localdomain",
+          "interface":"core0",
+          "level":2,
+          "state":"Up",
+          "expires-in":"28s",
+          "snpa":"ea35.8d14.c848"
+        },
+        {
+          "circuit":0
+        }
+      ]
+    }
+  ]
+}

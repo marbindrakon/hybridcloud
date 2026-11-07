@@ -1,0 +1,4 @@
+0:	from all lookup local
+999:	from all to 5f00:b046::/32 lookup main
+1000:	from all lookup [l3mdev-table]
+32766:	from all lookup main

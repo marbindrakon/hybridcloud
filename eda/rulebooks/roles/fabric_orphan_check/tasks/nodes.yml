@@ -4,7 +4,13 @@
 # a root VRF, or on a bearer interface with a VLAN in the attachment pool) with their global IPv6 addresses, whether
 # the circuits' IPv6 filter table is loaded, the root's BFD sessions, and the IPv6 pieces shc-fabric-apply gives
 # every VRF (the unreachable default of its table, the ICMPv6 source /128 on its device) that belong to no VRF device
-# of their namespace any more (ipv6Orphans: a VRF removed behind the apply script's back, or a table reused)
+# of their namespace any more (ipv6Orphans: a VRF removed behind the apply script's back, or a table reused), and
+# (coreOrphans) the kernel and host state of the core transport and of the VRFs' IPv4 separation that is not the
+# fabric's: the IPv4 unreachable default of a table no VRF uses, an IPv4 rule lookup local anywhere but at 32765; on
+# the SRv6 core what does not belong to its SID block or to an instance on the node (the unreachable route of the
+# block in a main table, the rule at preference 999, the guard table inet shc_core_guard, the units
+# shc-core-guard@<instance> and the guard files <instance>.guard); and the state of the other transport (the SRv6
+# pieces on an mpls fabric; MPLS routes and the MPLS module file on an srv6 fabric)
 - name: The platform's realization parameters
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
   vars:
@@ -53,20 +59,33 @@
                 return []
 
 
+        METRIC = 4278198272
+
+
+        def same_net(a, b):
+            try:
+                return ipaddress.ip_network(a, strict=False) == ipaddress.ip_network(b, strict=False)
+            except ValueError:
+                return False
+
+
         def vrfs_and_ipv6(ns, run, icmp_pool):
             """The VRF devices of a namespace (root: the node itself) and the IPv6 pieces the apply script gives a VRF
             that belong to none of them: an unreachable route (its metric, 4278198272: the default, or a covering
             route of a gateway) in a table no VRF device uses, an address from the ICMPv6 source pool on a device that
             is no VRF. Both are the leftovers of a VRF that went away behind the apply script, which removes them only
-            with the VRF."""
+            with the VRF. An unreachable route of that metric in the main table that is no default is the SID block
+            route of the SRv6 core: returned apart (main6) for the core check."""
             x = [] if ns == "root" else ["ip", "netns", "exec", ns]
             links = loads(run(x + ["ip", "-j", "-d", "link", "show", "type", "vrf"]))
             names = {l["ifname"] for l in links}
             tables = {str(((l.get("linkinfo") or {}).get("info_data") or {}).get("table")) for l in links}
-            gone = []
+            gone, main6 = [], []
             for r in loads(run(x + ["ip", "-j", "-6", "route", "show", "table", "all", "type", "unreachable"])):
                 table = str(r.get("table", "main"))
-                if r.get("metric") == 4278198272 and table not in tables:
+                if r.get("metric") == METRIC and table == "main" and r.get("dst") != "default":
+                    main6.append(str(r.get("dst")))
+                elif r.get("metric") == METRIC and table not in tables:
                     gone.append("IPv6 unreachable %s in table %s (%s) belongs to no VRF" % (r.get("dst"), table, ns))
             if icmp_pool:
                 pool = ipaddress.ip_network(icmp_pool, strict=False)
@@ -78,15 +97,91 @@
                             continue
                         if addr in pool and l.get("ifname") not in names:
                             gone.append("ICMPv6 source %s on %s (%s) belongs to no VRF" % (addr, l.get("ifname"), ns))
-            return sorted(names), gone
+            return sorted(names), gone, tables, main6
 
 
-        def main(run, parents, lo, hi, icmp_pool):
-            out, left = {}, []
+        def namespace_core(ns, run, transport, block, tables, main6):
+            """What a namespace holds of the core transport and of the VRFs IPv4 separation that does not belong to
+            the fabric as it is (see the task comment): findings, each naming the namespace."""
+            x = [] if ns == "root" else ["ip", "netns", "exec", ns]
+            srv6, found = transport == "srv6", []
+            other = "the fabric core transport is mpls" if not srv6 else "not the fabric SID block %s" % block
+            for r in loads(run(x + ["ip", "-j", "-4", "route", "show", "table", "all", "type", "unreachable"])):
+                table = str(r.get("table", "main"))
+                if r.get("metric") == METRIC and table not in tables:
+                    found.append("IPv4 unreachable %s in table %s (%s) belongs to no VRF" % (r.get("dst"), table, ns))
+            for dst in main6:
+                if not (srv6 and same_net(dst, block)):
+                    found.append("IPv6 unreachable %s in the main table (%s): an SRv6 SID block route, %s" % (dst, ns, other))
+            for r in loads(run(x + ["ip", "-j", "-6", "rule", "show"])):
+                if r.get("priority") == 999 and r.get("table") == "main" and r.get("dst"):
+                    dst = "%s/%s" % (r["dst"], r.get("dstlen", 128))
+                    if not (srv6 and same_net(dst, block)):
+                        found.append("IPv6 rule 999 to %s lookup main (%s): the SRv6 SID block rule, %s" % (dst, ns, other))
+            local = sorted(r.get("priority") for r in loads(run(x + ["ip", "-j", "-4", "rule", "show"]))
+                           if r.get("table") == "local")
+            if local and local != [32765]:
+                found.append("IPv4 rule lookup local at %s (%s), not at 32765 behind the VRFs rule: a packet from a VRF "
+                             "reaches the addresses of the default VRF" % (", ".join(str(p) for p in local), ns))
+            if not srv6 and "table inet shc_core_guard" in [l.strip() for l in run(x + ["nft", "list", "tables"]).splitlines()]:
+                found.append("nft table inet shc_core_guard (%s): the SRv6 core guard, %s" % (ns, other))
+            if not srv6:
+                src = (run(x + ["ip", "sr", "tunsrc", "show"]).split() or [""])[-1]
+                if src and src != "::":
+                    found.append("SRv6 encapsulation source %s (%s): %s" % (src, ns, other))
+            else:
+                n = len([l for l in run(x + ["ip", "-f", "mpls", "route", "show"]).splitlines() if l.strip()])
+                if n:
+                    found.append("%d MPLS route(s) (%s): MPLS state, but the fabric core transport is srv6" % (n, ns))
+            return found
+
+
+        def node_core(run, transport, instances):
+            """The node-wide pieces of the SRv6 core guard (the units shc-core-guard@<instance>, their templates, the
+            guard files /etc/shc-fabric/<instance>.guard) and the MPLS module file: on srv6 a unit or guard file of an
+            instance that is not on the node (instances: root and the gw-* namespaces), on mpls every one of them, and
+            on srv6 the MPLS module file."""
+            srv6, found = transport == "srv6", []
+            files = [l.strip() for l in run(["find", "/etc/shc-fabric", "/etc/systemd/system",
+                                             "/etc/systemd/system/timers.target.wants", "/etc/modules-load.d",
+                                             "-maxdepth", "1", "(", "-name", "*.guard", "-o", "-name", "shc-core-guard@*",
+                                             "-o", "-name", "shc-fabric.conf", ")"]).splitlines() if l.strip()]
+            units = set()
+            for line in run(["systemctl", "list-units", "--all", "--plain", "--no-legend", "shc-core-guard@*"]).splitlines():
+                w = line.split()
+                if len(w) >= 3 and w[2] != "inactive":
+                    units.add(w[0])
+            units |= {f.rsplit("/", 1)[-1] for f in files if f.startswith("/etc/systemd/system/timers.target.wants/")}
+            for u in sorted(units):
+                m = re.fullmatch(r"shc-core-guard@(.+)[.](timer|service)", u)
+                if not srv6:
+                    found.append("unit %s: the SRv6 core guard, but the fabric core transport is mpls" % u)
+                elif m and m.group(1) not in instances:
+                    found.append("unit %s: the SRv6 core guard of %s, which is not on the node" % (u, m.group(1)))
+            for f in files:
+                name = f.rsplit("/", 1)[-1]
+                if f.startswith("/etc/shc-fabric/") and name.endswith(".guard"):
+                    if not srv6:
+                        found.append("guard file %s: the SRv6 core guard, but the fabric core transport is mpls" % f)
+                    elif name[:-len(".guard")] not in instances:
+                        found.append("guard file %s: the SRv6 core guard of %s, which is not on the node"
+                                     % (f, name[:-len(".guard")]))
+                elif f.startswith("/etc/systemd/system/shc-core-guard@") and not srv6:
+                    found.append("unit file %s: the SRv6 core guard, but the fabric core transport is mpls" % f)
+                elif f == "/etc/modules-load.d/shc-fabric.conf" and srv6:
+                    found.append("%s loads the MPLS modules at boot, but the fabric core transport is srv6" % f)
+            return found
+
+
+        def main(run, parents, lo, hi, icmp_pool, transport="mpls", block=""):
+            out, left, core = {}, [], []
             spaces = [line.split()[0] for line in run(["ip", "netns", "list"]).splitlines() if line.split()]
-            for ns in [s for s in spaces if s.startswith("gw-")] + ["root"]:
-                out[ns], gone = vrfs_and_ipv6(ns, run, icmp_pool)
+            gws = [s for s in spaces if s.startswith("gw-")]
+            for ns in gws + ["root"]:
+                out[ns], gone, tables, main6 = vrfs_and_ipv6(ns, run, icmp_pool)
                 left += gone
+                core += namespace_core(ns, run, transport, block, tables, main6)
+            core += node_core(run, transport, set(gws) | {"root"})
             devices = []
             for l in loads(run(["ip", "-j", "-d", "link", "show", "type", "vlan"])):
                 vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
@@ -104,12 +199,15 @@
             peers = loads(run(["vtysh", "-c", "show bfd peers json"]))
             bfd = [{"peer": p.get("peer"), "vrf": p.get("vrf") or "default", "interface": p.get("interface") or "",
                     "status": p.get("status") or ""} for p in peers if isinstance(p, dict)]
-            return {"netns": out, "rootDevices": devices, "rootBfd": bfd, "rootAttach6": attach6, "ipv6Orphans": left}
+            return {"netns": out, "rootDevices": devices, "rootBfd": bfd, "rootAttach6": attach6, "ipv6Orphans": left,
+                    "coreOrphans": core}
 
 
         if __name__ == "__main__":
             print(json.dumps(main(run, {{ foc_parents | to_json }}, {{ foc_pool[0] | int }}, {{ foc_pool[1] | int }},
-                                  {{ fab_real.core.icmpSource6 | default('', true) | to_json }})))
+                                  {{ fab_real.core.icmpSource6 | default('', true) | to_json }},
+                                  transport={{ (fab_real.core.transport | default('mpls', true)) | to_json }},
+                                  block={{ ((fab_real.core.srv6 | default({}, true)).block | default('', true)) | to_json }})))
         PY
       args:
         executable: /bin/bash
@@ -132,6 +230,7 @@
         {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': n.netns,
                                 'rootDevices': n.rootDevices, 'rootBfd': n.rootBfd | default([]),
                                 'rootAttach6': n.rootAttach6 | default(false),
-                                'ipv6Orphans': n.ipv6Orphans | default([]) | map('regex_replace', '^', 'node ' ~ r.item.name ~ ': ') | list}) -%}
+                                'ipv6Orphans': n.ipv6Orphans | default([]) | map('regex_replace', '^', 'node ' ~ r.item.name ~ ': ') | list,
+                                'coreOrphans': n.coreOrphans | default([]) | map('regex_replace', '^', 'node ' ~ r.item.name ~ ': ') | list}) -%}
       {%- endfor -%}
       {{ foc_nodes + out }}

@@ -1,0 +1,80 @@
+anycast 2001:db8:4001:237:: dev egress0 table 9000 proto kernel metric 0 pref medium
+local 2001:db8:4001:237::13 dev egress0 table 9000 proto kernel metric 0 pref medium
+2001:db8:4001:237::/64 dev egress0 table 9000 proto kernel metric 256 pref medium
+local 2001:db8:4005:1::1:1 dev egress table 9000 proto kernel metric 0 pref medium
+2001:db8:4005:1::1:1 dev egress table 9000 proto kernel metric 256 pref medium
+2001:db8:4005:4001::/64 nhid 91 via fe80::ac36:cfff:fe54:f46f dev xo10000 table 9000 proto bgp metric 20 pref medium
+2001:db8:4005:4003::/64 nhid 91 via fe80::ac36:cfff:fe54:f46f dev xo10000 table 9000 proto bgp metric 20 pref medium
+unreachable 2001:db8:4005::/48 dev lo table 9000 proto 196 metric 20 pref medium
+anycast fe80:: dev egress0 table 9000 proto kernel metric 0 pref medium
+anycast fe80:: dev xo10000 table 9000 proto kernel metric 0 pref medium
+local fe80::5875:ccff:fecf:80e7 dev xo10000 table 9000 proto kernel metric 0 pref medium
+local fe80::94ad:ccff:fe73:6e77 dev egress0 table 9000 proto kernel metric 0 pref medium
+fe80::/64 dev egress0 table 9000 proto kernel metric 256 pref medium
+fe80::/64 dev xo10000 table 9000 proto kernel metric 256 pref medium
+multicast ff00::/8 dev egress0 table 9000 proto kernel metric 256 pref medium
+multicast ff00::/8 dev xo10000 table 9000 proto kernel metric 256 pref medium
+default nhid 69 via fe80::ccf4:5eff:fe7b:576f dev egress0 table 9000 proto bgp metric 20 pref medium
+unreachable default dev lo table 9000 metric 4278198272 pref medium
+local 2001:db8:4005:1::1:1 dev e10000 table 110000 proto kernel metric 0 pref medium
+2001:db8:4005:1::1:1 dev e10000 table 110000 proto kernel metric 256 pref medium
+anycast 2001:db8:4005:100:: dev bond1.3000 table 110000 proto kernel metric 0 pref medium
+local 2001:db8:4005:100::1 dev bond1.3000 table 110000 proto kernel metric 0 pref medium
+2001:db8:4005:100::/64 dev bond1.3000 table 110000 proto kernel metric 256 pref medium
+2001:db8:4005:4001::/64 nhid 89  encap seg6 mode encap segs 1 [ 5f00:b046:102:1:: ] via fe80::e88f:75ff:fe78:a65d dev br-core table 110000 proto bgp metric 20 pref medium
+2001:db8:4005:4003::/64 nhid 114  encap seg6 mode encap segs 1 [ 5f00:b046:104:1:: ] via fe80::e835:8dff:fe14:c848 dev br-core table 110000 proto bgp metric 20 pref medium
+unreachable 2001:db8:4005::/48 dev lo table 110000 proto 196 metric 20 pref medium
+2001:db8:cafe::/48 nhid 75 via fe80::d4ed:aeff:fe50:b5fb dev bond1.3000 table 110000 proto bgp metric 20 pref medium
+anycast fe80:: dev xe10000 table 110000 proto kernel metric 0 pref medium
+anycast fe80:: dev bond1.3000 table 110000 proto kernel metric 0 pref medium
+local fe80::ac36:cfff:fe54:f46f dev xe10000 table 110000 proto kernel metric 0 pref medium
+local fe80::ec88:81ff:fe17:5009 dev bond1.3000 table 110000 proto kernel metric 0 pref medium
+fe80::/64 dev xe10000 table 110000 proto kernel metric 256 pref medium
+fe80::/64 dev bond1.3000 table 110000 proto kernel metric 256 pref medium
+multicast ff00::/8 dev xe10000 table 110000 proto kernel metric 256 pref medium
+multicast ff00::/8 dev bond1.3000 table 110000 proto kernel metric 256 pref medium
+default nhid 72 via fe80::5875:ccff:fecf:80e7 dev xe10000 table 110000 proto bgp metric 20 pref medium
+unreachable default dev lo table 110000 metric 4278198272 pref medium
+::1 dev lo proto kernel metric 256 pref medium
+2001:db8:4005:ffff::1 dev lo proto kernel metric 256 pref medium
+2001:db8:4005:ffff::2 nhid 85 via fe80::e88f:75ff:fe78:a65d dev br-core proto isis metric 20 pref medium
+2001:db8:4005:ffff::4 nhid 110 via fe80::e835:8dff:fe14:c848 dev br-core proto isis metric 20 pref medium
+5f00:b046:101:1:: nhid 67  encap seg6local action End.DT46 vrftable 110000 dev e10000 proto bgp metric 20 pref medium
+blackhole 5f00:b046:101::/48 dev lo proto 196 metric 20 pref medium
+5f00:b046:102::/48 nhid 85 via fe80::e88f:75ff:fe78:a65d dev br-core proto isis metric 20 pref medium
+5f00:b046:104::/48 nhid 110 via fe80::e835:8dff:fe14:c848 dev br-core proto isis metric 20 pref medium
+unreachable 5f00:b046::/32 dev lo metric 4278198272 pref medium
+fe80::/64 dev bond1 proto kernel metric 256 pref medium
+fe80::/64 dev bond1.237 proto kernel metric 256 pref medium
+fe80::/64 dev wo-site_c proto kernel metric 256 pref medium
+fe80::/64 dev pe2 proto kernel metric 256 pref medium
+fe80::/64 dev br-core proto kernel metric 256 pref medium
+fe80::/64 dev pe3 proto kernel metric 256 pref medium
+fe80::/64 dev pe4 proto kernel metric 256 pref medium
+fe80::/64 dev eth0 proto kernel metric 1024 pref medium
+local ::1 dev lo table local proto kernel metric 0 pref medium
+local 2001:db8:4005:ffff::1 dev lo table local proto kernel metric 0 pref medium
+anycast fe80:: dev eth0 table local proto kernel metric 0 pref medium
+anycast fe80:: dev bond1 table local proto kernel metric 0 pref medium
+anycast fe80:: dev wo-site_c table local proto kernel metric 0 pref medium
+anycast fe80:: dev bond1.237 table local proto kernel metric 0 pref medium
+anycast fe80:: dev pe2 table local proto kernel metric 0 pref medium
+anycast fe80:: dev br-core table local proto kernel metric 0 pref medium
+anycast fe80:: dev pe3 table local proto kernel metric 0 pref medium
+anycast fe80:: dev pe4 table local proto kernel metric 0 pref medium
+local fe80::fa:aff:feff:101 dev br-core table local proto kernel metric 0 pref medium
+local fe80::10b3:f3ff:fe23:f0a2 dev wo-site_c table local proto kernel metric 0 pref medium
+local fe80::5054:ff:fe2f:f66b dev eth0 table local proto kernel metric 0 pref medium
+local fe80::6c21:d1ff:fe8e:a7f8 dev pe2 table local proto kernel metric 0 pref medium
+local fe80::9cc9:7ff:fe48:96a1 dev pe4 table local proto kernel metric 0 pref medium
+local fe80::e850:4cff:fe66:2c84 dev pe3 table local proto kernel metric 0 pref medium
+local fe80::ec88:81ff:fe17:5009 dev bond1 table local proto kernel metric 0 pref medium
+local fe80::ec88:81ff:fe17:5009 dev bond1.237 table local proto kernel metric 0 pref medium
+multicast ff00::/8 dev eth0 table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev bond1 table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev bond1.237 table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev wo-site_c table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev pe2 table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev br-core table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev pe3 table local proto kernel metric 256 pref medium
+multicast ff00::/8 dev pe4 table local proto kernel metric 256 pref medium

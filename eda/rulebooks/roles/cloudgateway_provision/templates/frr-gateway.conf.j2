@@ -4,6 +4,12 @@
 {% set _egress6 = ((fab_real.egress | default({})).ipv6 | default({})) %}
 {# this node's ICMPv6 source (/128) when the gateway announces it to the site (node_gateway.yml); '' = not announced #}
 {% set _icmp6 = (cg_node_icmp6_announce | default('', true)) if _v6 else '' %}
+{# the node's core transport: MPLS L3VPN over IS-IS segment routing (mpls) or SRv6 L3VPN over the IPv6 core (srv6);
+   the FRR major version picks the text form the daemons print back, which frr-reload compares #}
+{% set _srv6 = (fab_node_transport | default('mpls')) == 'srv6' %}
+{% set _frr10 = (fab_frr_major | default(8)) | int >= 10 %}
+{# the route reflector's address on the VPN session #}
+{% set _rr = cg_root_pe.loopbackIp6 if _srv6 else cg_root_pe.loopbackIp %}
 ! Managed by the platform: CloudGateway {{ fab_name }} (site {{ cg_site_name }}) on {{ bgw_node.name }}. Changes here are overwritten.
 frr version 8.5
 frr defaults datacenter
@@ -21,6 +27,46 @@ exit-vrf
 ip route {{ rr }}/32 {{ fab_spec.siteUnderlay.gateway }}
 {% endfor %}
 !
+{% if _srv6 %}
+! SRv6 core: the VPN SIDs come from this gateway's locator. IS-IS announces the locator as a prefix of lo (passive):
+! shc-fabric-apply holds the locator's first address there with the locator's length, and blackholes the locator, so
+! a packet for an unused SID is dropped here (the SIDs inside it are longer routes)
+! the locator as micro-SIDs (32-bit block, 16-bit node, 16-bit function), in the form this FRR version prints back
+{% if _frr10 %}
+! (it also shows the kernel's encapsulation source, set by shc-fabric-apply: without it a reload would remove it)
+{% endif %}
+segment-routing
+ srv6
+{% if _frr10 %}
+  encapsulation
+   source-address {{ cg_pe.loopbackIp6 }}
+  exit
+{% endif %}
+  locators
+   locator MAIN
+{% if _frr10 %}
+    prefix {{ cg_pe.locator }} block-len 32 node-len 16
+{% else %}
+    prefix {{ cg_pe.locator }} block-len 32 node-len 16 func-bits 16
+{% endif %}
+    behavior usid
+   exit
+  exit
+ exit
+exit
+!
+interface lo
+ ip router isis CORE
+ ipv6 router isis CORE
+ isis passive
+exit
+!
+interface core0
+ ip router isis CORE
+ ipv6 router isis CORE
+exit
+!
+{% else %}
 ! mpls enable mirrors the kernel's MPLS input (set by shc-fabric-apply): zebra shows it in the running config, so
 ! without it here a configuration reload would turn MPLS input off (labelled packets from the core then drop)
 interface lo
@@ -46,6 +92,7 @@ interface {{ v.vrf }}
 exit
 !
 {% endfor %}
+{% endif %}
 ! routes the gateways originate into the site carry this community; a gateway never takes them back from the site
 bgp community-list standard GW-ORIG seq 5 permit {{ _asn }}:{{ fab_real.gatewayCommunity }}
 !
@@ -191,9 +238,22 @@ router bgp {{ _asn }}
  neighbor {{ rr }} peer-group UPSTREAM
 {% endfor %}
 {% endif %}
+{% if _srv6 %}
+{# SRv6: the VPN session runs between the IPv6 loopbacks, and the extended next hop lets the IPv4 VPN routes carry
+   the IPv6 loopback as next hop (an SRv6 SID is only reached over IPv6). The VRFs' SIDs come from locator MAIN #}
+ neighbor {{ cg_root_pe.loopbackIp6 }} remote-as {{ _asn }}
+ neighbor {{ cg_root_pe.loopbackIp6 }} description border gateway route reflector
+ neighbor {{ cg_root_pe.loopbackIp6 }} update-source {{ cg_pe.loopbackIp6 }}
+ neighbor {{ cg_root_pe.loopbackIp6 }} capability extended-nexthop
+ !
+ segment-routing srv6
+  locator MAIN
+ exit
+{% else %}
  neighbor {{ cg_root_pe.loopbackIp }} remote-as {{ _asn }}
  neighbor {{ cg_root_pe.loopbackIp }} description border gateway route reflector
  neighbor {{ cg_root_pe.loopbackIp }} update-source lo
+{% endif %}
  !
  address-family l2vpn evpn
   neighbor SITE activate
@@ -211,14 +271,14 @@ router bgp {{ _asn }}
  exit-address-family
  !
  address-family ipv4 vpn
-  neighbor {{ cg_root_pe.loopbackIp }} activate
+  neighbor {{ _rr }} activate
  exit-address-family
 {% if _v6 %}
  !
 {# on whenever the core carries IPv6, also without IPv6 VRFs: a new address family resets the session once, so that
    happens when the core gains IPv6, not when a tenant first places IPv6 #}
  address-family ipv6 vpn
-  neighbor {{ cg_root_pe.loopbackIp }} activate
+  neighbor {{ _rr }} activate
  exit-address-family
 {% endif %}
 exit
@@ -231,13 +291,20 @@ exit
 router bgp {{ _asn }} vrf {{ v.vrf }}
  bgp router-id {{ cg_node_addr }}
  no bgp default ipv4-unicast
+{% if _srv6 %}
+{#- SRv6: one SID for the VRF and both address families (decapsulation into the VRF's table, IPv4 or IPv6 inside),
+    in place of a label per family; the IPv6 loopback is the next hop of both #}
+ sid vpn per-vrf export auto
+{% endif %}
 {% if 4 in _fam %}
  !
  address-family ipv4 unicast
+{% if not _srv6 %}
   label vpn export auto
+{% endif %}
   rd vpn export {{ _rd }}
   rt vpn both {{ _asn }}:{{ v.vpnTarget }}
-  nexthop vpn export {{ cg_pe.loopbackIp }}
+  nexthop vpn export {{ cg_pe.loopbackIp6 if _srv6 else cg_pe.loopbackIp }}
   route-map vpn export TO-VPN-{{ v.vpnTarget }}
   export vpn
   import vpn
@@ -266,7 +333,9 @@ router bgp {{ _asn }} vrf {{ v.vrf }}
 {% if _icmp6 %}
   network {{ _icmp6 }} route-map GW-LOCAL
 {% endif %}
+{% if not _srv6 %}
   label vpn export auto
+{% endif %}
   rd vpn export {{ _rd }}
   rt vpn both {{ _asn }}:{{ v.vpnTarget }}
   nexthop vpn export {{ cg_pe.loopbackIp6 }}
@@ -292,11 +361,15 @@ exit
 router isis CORE
  is-type level-2-only
  net {{ cg_pe.net }}
+{# SRv6: no segment routing in the IGP and no redistribution; it carries the prefixes of lo, the loopbacks and the
+   locator #}
+{% if not _srv6 %}
  segment-routing on
  segment-routing global-block {{ fab_real.core.srgb.start }} {{ fab_real.core.srgb.end }}
  segment-routing prefix {{ cg_pe.loopback }} index {{ cg_pe.index }}
 {% if _v6 %}
  segment-routing prefix {{ cg_pe.loopback6 }} index {{ cg_pe.index | int + fab_real.core.sidOffset6 | default(1000) | int }}
+{% endif %}
 {% endif %}
 exit
 !

@@ -6,7 +6,8 @@ the core and site legs, the loopback, the VRFs' unreachable defaults and ICMP so
 and a second run that reads changed=no. The addresses are documentation prefixes.
 
 SHC_APPLY_BASELINE=<git revision> also compares a run of that revision's script with this one for an IPv4-only
-JSON: the same calls, in the same order, and the same final state."""
+JSON: the same calls, in the same order, and the same final state (exactly: a revision from the VRFs' IPv4
+separation on; against the release before the SRv6 transport, with the listed differences, see test_fix_base_script)."""
 import copy
 import ipaddress
 import json
@@ -26,7 +27,7 @@ FAKE = os.path.join(HERE, "fake_netkernel.py")
 sys.path.insert(0, HERE)
 import fake_netkernel as F  # noqa: E402
 
-TOOLS = ("ip", "sysctl", "nft", "wg", "modprobe", "vtysh", "cat")
+TOOLS = ("ip", "sysctl", "nft", "wg", "modprobe", "vtysh", "cat", "udevadm")
 METRIC = "4278198272"
 
 ROOT_CONF = {
@@ -82,11 +83,11 @@ def writes(log):
 
 def blade():
     """The root namespace of a blade before the fabric: management bond0.10, trunk bond1, egress parent bond1.237;
-    IPv6 forwarding on, RA accepted (as V0 read them)."""
+    IPv6 forwarding on, RA accepted (as V0 read them); IPv4 reverse path filtering off host-wide (all, as el9 ships it)."""
     st = {"ns": {"": F.new_ns({"disable_ipv6": "0", "forwarding": "1", "accept_ra": "1", "autoconf": "1"})}}
     k = F.Kernel(st)
     sc = st["ns"][""]["sysctl"]
-    sc.update({"net/ipv4/ip_forward": "1", "net/mpls/platform_labels": "0"})
+    sc.update({"net/ipv4/ip_forward": "1", "net/mpls/platform_labels": "0", "net/ipv4/conf/all/rp_filter": "0"})
     lo = k.add_link("", "lo", "loopback", address="00:00:00:00:00:00")
     lo["up"] = True
     lo["addrs"].append({"family": 4, "local": "127.0.0.1", "prefixlen": 8, "nodad": False})
@@ -261,7 +262,8 @@ class IPv4OnlyTest(ApplyCase):
 
 
 class BaselineTest(ApplyCase):
-    """IPv4-only JSON: this script issues exactly the calls of the baseline revision (SHC_APPLY_BASELINE)."""
+    """IPv4-only JSON: this script issues exactly the calls of the baseline revision (SHC_APPLY_BASELINE; one from the
+    VRFs' IPv4 separation on: older ones differ by design, test_fix_base_script lists how)."""
 
     @classmethod
     def setUpClass(cls):
@@ -461,7 +463,7 @@ class RootIPv6Test(ApplyCase):
         self.assertTrue(h.has_ll("", "br-core"))
         self.assertEqual(h.addrs6("", "br-core"), [])
         # egress0 never takes RAs or SLAAC: set before it comes up in the egress VRF
-        e_made = index(log, r"^W \[root\] ip link add egress0 link bond1\.237 type macvlan mode bridge$")
+        e_made = index(log, r"^W \[root\] ip link add egress0 link bond1\.237 address \S+ type macvlan mode bridge$")
         e_ra = index(log, r"^W \[root\] sysctl -qw net/ipv6/conf/egress0/accept_ra=0$")
         e_up = index(log, r"^W \[root\] ip link set egress0 master egress mtu 9000 up$")
         self.assertLess(e_made, e_ra)
@@ -682,7 +684,8 @@ class VrfRemovalTest(ApplyCase):
         h.conf("gw-iaas1", dict(GW_CONF, vrfs=[]))
         out, log = h.ok(self, "gw-iaas1")
         self.assertNotIn("t51000", h.get_state()["ns"]["gw-iaas1"]["links"])
-        self.assertEqual([l for l in log if is_v6(l) or " -d link show" in l], [])
+        # (the precheck's read of the namespace's VRFs, whose tables the configuration names, is no IPv6 command)
+        self.assertEqual([l for l in log if is_v6(l) or (" -d link show" in l and "link show type vrf" not in l)], [])
 
 
 def v4_writes(log):

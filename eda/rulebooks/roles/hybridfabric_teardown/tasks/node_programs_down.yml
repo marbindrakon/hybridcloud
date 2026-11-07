@@ -1,0 +1,39 @@
+---
+# shc: the last step of a teardown on a border gateway node (delegated, become), included by node_root_down.yml (this
+# role) and by cloudgateway_teardown's node_gateway_down.yml. Once no instance of the fabric is left on the node (no
+# root or gateway configuration in /etc/shc-fabric, no gateway unit running, failed or enabled), nothing of it stays
+# installed or running there: the root unit is stopped (a oneshot that stays "active (exited)" after its start; it
+# has no stop action) and disabled, and the apply script, the unit templates of the root, the gateways and the SRv6
+# core guard and the empty /etc/shc-fabric are removed. While an instance is left, all of it stays: a gateway still
+# needs the script for its own teardown, and its unit requires the root unit (stopping that would stop the gateway).
+# A teardown that fails before this step and runs again finds the script in place; a second run changes nothing.
+- name: "{{ bgw_node.name }}: once no instance is left, remove the fabric's programs and units"
+  ansible.builtin.shell: |
+    left=""
+    for f in /etc/shc-fabric/root.json /etc/shc-fabric/gw-*.json; do
+      [ -e "$f" ] && { f=${f##*/}; left="$left ${f%.json}"; }
+    done
+    for u in $(systemctl list-units --plain --no-legend 'shc-gw@*.service' | awk '{print $1}') \
+             $(ls /etc/systemd/system/*.wants/ 2>/dev/null | awk '/^shc-gw@.+[.]service$/'); do
+      case " $left " in *" $u "*) ;; *) left="$left $u" ;; esac
+    done
+    if [ -n "$left" ]; then echo "kept: instances left on the node:$left"; exit 0; fi
+    changed=no
+    u=shc-fabric-apply@root.service
+    if systemctl -q is-active "$u" || systemctl -q is-failed "$u"; then
+      systemctl stop "$u"; systemctl reset-failed "$u" 2>/dev/null; changed=yes
+    fi
+    if systemctl -q is-enabled "$u" 2>/dev/null; then systemctl disable "$u"; changed=yes; fi
+    for f in /usr/local/sbin/shc-fabric-apply /etc/systemd/system/shc-fabric-apply@.service \
+             /etc/systemd/system/shc-gw@.service /etc/systemd/system/shc-core-guard@.service \
+             /etc/systemd/system/shc-core-guard@.timer; do
+      [ -e "$f" ] && { rm -f "$f"; changed=yes; }
+    done
+    [ -d /etc/shc-fabric ] && rmdir /etc/shc-fabric 2>/dev/null && changed=yes
+    [ "$changed" = no ] || systemctl daemon-reload
+    echo "changed=$changed"
+  args:
+    executable: /bin/bash
+  register: _ft_programs
+  changed_when: "'changed=yes' in _ft_programs.stdout"
+  delegate_to: "{{ bgw_node.name }}"

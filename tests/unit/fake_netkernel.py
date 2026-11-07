@@ -14,6 +14,10 @@ net.ipv6.conf.default when it is created or moved into a namespace; writing net.
 .forwarding rewrites default and every device; an up device with IPv6 enabled (and addrgenmode not none) has an
 fe80::/64 link-local from its MAC; disable_ipv6=1 removes all IPv6 addresses; lo has ::1. sysctl keys follow procps:
 when the first separator is "/", "/" separates (a device name may hold a dot), else ".".
+IPv6 policy rules (`ip -6 rule`), IPv4 policy rules (`ip -4 rule`: the kernel's defaults, the l3mdev rule with the
+first VRF), IPv4 unreachable routes, and the SRv6 encapsulation source (`ip sr tunsrc`) are kept per namespace once a
+call sets them; a device inherits net.ipv6.conf.default.seg6_enabled and net.ipv4.conf.default.rp_filter once
+the state holds them; net.vrf.strict_mode=1 is refused while two VRFs share a table, and then a VRF on a used table too.
 Nothing here touches the real system."""
 import fcntl
 import ipaddress
@@ -58,11 +62,24 @@ class Kernel:
         return self.st["ifindex"]
 
     def new_mac(self):
-        i = self.next_index()
+        self.st["macseq"] = self.st.get("macseq", 0) + 1
+        i = self.st["macseq"]
         return "02:00:00:00:%02x:%02x" % (i // 256, i % 256)
+
+    MODULE_OF = {"vlan": "8021q", "vrf": "vrf", "veth": "veth", "macvlan": "macvlan", "wireguard": "wireguard",
+                 "bridge": "bridge", "dummy": "dummy", "vxlan": "vxlan", "bond": "bonding"}
+
+    def module_loaded(self, kind):
+        """the kind's module: loaded by modprobe (recorded in the state) or by a device of that kind, ever created"""
+        mod = self.MODULE_OF.get(kind, kind)
+        return mod in self.st.get("modules", []) or any(
+            l["kind"] == kind for ns in self.st["ns"].values() for l in ns["links"].values())
 
     def add_link(self, nsname, name, kind, **kw):
         ns = self.ns(nsname)
+        mod = self.MODULE_OF.get(kind, kind)
+        if mod not in self.st.setdefault("modules", []):
+            self.st["modules"].append(mod)
         link = {"name": name, "kind": kind, "mtu": kw.get("mtu", 65536 if kind == "loopback" else 1500),
                 "up": False, "master": None, "address": kw.get("address") or self.new_mac(),
                 "index": self.next_index(), "addrgenmode": "eui64", "addrs": [], "parent": kw.get("parent"),
@@ -75,6 +92,10 @@ class Kernel:
         sc = self.ns(nsname)["sysctl"]
         for a in V6_ATTRS:
             sc[f"net/ipv6/conf/{dev}/{a}"] = sc.get(f"net/ipv6/conf/default/{a}", NETNS_DEFAULTS[a])
+        # seg6_enabled (and IPv4 rp_filter) only once a call set the namespace's default (states without it unchanged)
+        for key in ("net/ipv6/conf/{}/seg6_enabled", "net/ipv4/conf/{}/rp_filter"):
+            if key.format("default") in sc:
+                sc[key.format(dev)] = sc[key.format("default")]
 
     def drop6(self, nsname, dev):
         sc = self.ns(nsname)["sysctl"]
@@ -179,7 +200,8 @@ def addr_text(a):
     scope = "link" if ipaddress.ip_address(a["local"]) in ipaddress.ip_network("fe80::/10") else "global"
     if a["local"] == "::1":
         scope = "host"
-    return "    inet6 %s/%d scope %s%s " % (a["local"], a["prefixlen"], scope, " nodad" if a["nodad"] else "")
+    return "    inet6 %s/%d scope %s%s%s " % (a["local"], a["prefixlen"], scope, " nodad" if a["nodad"] else "",
+                                       " noprefixroute" if a.get("noprefixroute") else "")
 
 
 def parse_ifaddr(s):
@@ -246,7 +268,13 @@ def ip_main(k, nsname, args, out):
             if "master" in sel:
                 cand = [l for l in cand if l["master"] == sel["master"]]
             if "-j" in opts:
-                out.append(json.dumps([link_json(l, nsname, "-d" in opts) for l in cand]))
+                # the blades (kernel 5.14.0-687, iproute2 6.17): "type <kind>" while the kind's module is not loaded
+                # lists every link as an empty object (a fresh boot before the apply's modprobe: 2026-11-07); a module
+                # is loaded by modprobe or by the first device of its kind, and stays loaded
+                if "type" in sel and not cand and dev is None and not k.module_loaded(sel["type"]):
+                    out.append(json.dumps([{} for _ in links]))
+                else:
+                    out.append(json.dumps([link_json(l, nsname, "-d" in opts) for l in cand]))
             else:
                 for l in cand:
                     out.append(link_line(l, nsname, "-d" in opts))
@@ -305,21 +333,28 @@ def ip_main(k, nsname, args, out):
                 raise Fail("RTNETLINK answers: File exists", 2)
             if have:
                 l["addrs"].remove(have[0])
-            l["addrs"].append({"family": v, "local": local, "prefixlen": plen, "nodad": "nodad" in rest[1:]})
+            a = {"family": v, "local": local, "prefixlen": plen, "nodad": "nodad" in rest[1:]}
+            if "noprefixroute" in rest[1:]:
+                a["noprefixroute"] = True
+            l["addrs"].append(a)
             return True
         raise Fail("addr verb " + verb)
 
     if obj == "route":
         verb = args[0] if args else "show"
         rest = args[1:]
-        if fam != 6:
-            raise Fail("only IPv6 routes are modelled")
+        if fam not in (4, 6):
+            raise Fail("routes need -4 or -6 here")
+        key = "routes6" if fam == 6 else "routes4"  # IPv4: unreachable routes only, kept lazily
+        ns.setdefault(key, [])
         if verb in ("show", "list"):
             sel = dict(zip(rest[0::2], rest[1::2]))
             table = sel.get("table", "main")
-            routes = [r for r in ns["routes6"] if table == "all" or r["table"] == table]
+            routes = [r for r in ns[key] if table == "all" or r["table"] == table]
             if "proto" in sel:
                 routes = [r for r in routes if r.get("proto") == sel["proto"]]
+            if "type" in sel:
+                routes = [r for r in routes if r["type"] == sel["type"]]
             if "-j" in opts:
                 out.append(json.dumps([{k2: v2 for k2, v2 in (("type", r["type"]), ("dst", r["dst"]),
                                                               ("gateway", r.get("via")), ("dev", r.get("dev")),
@@ -328,7 +363,7 @@ def ip_main(k, nsname, args, out):
                                        for r in routes]))
             else:
                 for r in routes:
-                    s = ("unreachable " if r["type"] == "unreachable" else "") + r["dst"]
+                    s = (r["type"] + " " if r["type"] in ("unreachable", "blackhole") else "") + r["dst"]
                     if r.get("via"):
                         s += " via " + r["via"]
                     s += " dev " + (r.get("dev") or "lo")
@@ -339,25 +374,91 @@ def ip_main(k, nsname, args, out):
                     out.append(s + " metric %s pref medium" % r["metric"])
             return False
         if verb == "replace":
-            if rest[:1] != ["unreachable"]:
-                raise Fail("only unreachable routes are modelled")
+            if rest[:1] not in (["unreachable"], ["blackhole"]):
+                raise Fail("only unreachable and blackhole routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
-            r = {"type": "unreachable", "dst": rest[1], "metric": sel["metric"], "table": sel.get("table", "main")}
-            ns["routes6"] = [x for x in ns["routes6"] if not (x["table"] == r["table"] and x["dst"] == r["dst"]
+            r = {"type": rest[0], "dst": rest[1], "metric": sel["metric"], "table": sel.get("table", "main")}
+            ns[key] = [x for x in ns[key] if not (x["table"] == r["table"] and x["dst"] == r["dst"]
                                                                and x["metric"] == r["metric"])]
-            ns["routes6"].append(r)
+            ns[key].append(r)
             return True
         if verb in ("del", "delete"):
-            if rest[:1] != ["unreachable"]:
-                raise Fail("only unreachable routes are modelled")
+            if rest[:1] not in (["unreachable"], ["blackhole"]):
+                raise Fail("only unreachable and blackhole routes are modelled")
             sel = dict(zip(rest[2::2], rest[3::2]))
-            match = [x for x in ns["routes6"] if x["type"] == "unreachable" and x["dst"] == rest[1]
+            match = [x for x in ns[key] if x["type"] == rest[0] and x["dst"] == rest[1]
                      and x["table"] == sel.get("table", "main") and ("metric" not in sel or x["metric"] == sel["metric"])]
             if not match:
                 raise Fail("RTNETLINK answers: No such process", 2)
-            ns["routes6"].remove(match[0])
+            ns[key].remove(match[0])
             return True
         raise Fail("route verb " + verb)
+
+    if obj == "rule" and fam == 4:  # IPv4 policy rules "pref <n> table <t>", from the kernel's defaults (lazily)
+        rules = rules4(ns)
+        verb = args[0] if args else "show"
+        sel = dict(zip(args[1::2], args[2::2]))
+        if "priority" in sel:
+            sel["pref"] = sel.pop("priority")
+        if "lookup" in sel:
+            sel["table"] = sel.pop("lookup")
+        if verb in ("show", "list"):
+            for r in sorted(rules, key=lambda r: int(r["pref"])):
+                if "pref" not in sel or r["pref"] == sel["pref"]:
+                    out.append("%s:\tfrom all lookup %s" % (r["pref"], r["table"]))
+            return False
+        if verb == "add":
+            r = {"pref": sel["pref"], "table": sel.get("table", "main")}
+            if r in rules:
+                raise Fail("RTNETLINK answers: File exists", 2)
+            rules.append(r)
+            return True
+        if verb in ("del", "delete"):
+            match = [r for r in rules if r["pref"] == sel.get("pref", r["pref"]) and r["table"] == sel.get("table", r["table"])]
+            if not match:
+                raise Fail("RTNETLINK answers: No such file or directory", 2)
+            rules.remove(match[0])
+            return True
+        raise Fail("rule verb " + verb)
+
+    if obj == "rule":  # IPv6 policy rules "to <prefix> lookup <table> pref <n>" (kept per namespace, lazily)
+        if fam != 6:
+            raise Fail("only IPv6 rules are modelled")
+        rules = ns.setdefault("rules6", [])
+        verb = args[0] if args else "show"
+        sel = dict(zip(args[1::2], args[2::2]))
+        if "priority" in sel:
+            sel["pref"] = sel.pop("priority")
+        if verb in ("show", "list"):
+            for r in sorted(rules, key=lambda r: int(r["pref"])):
+                if "pref" in sel and r["pref"] != sel["pref"]:
+                    continue
+                out.append("%s:\tfrom all to %s lookup %s" % (r["pref"], r["to"], r["table"]))
+            return False
+        if verb == "add":
+            r = {"pref": sel["pref"], "to": str(ipaddress.ip_network(sel["to"])), "table": sel.get("lookup", "main")}
+            if r in rules:
+                raise Fail("RTNETLINK answers: File exists", 2)
+            rules.append(r)
+            return True
+        if verb in ("del", "delete"):
+            match = [r for r in rules if all(r[k] == (str(ipaddress.ip_network(v)) if k == "to" else v)
+                                             for k, v in (("pref", sel.get("pref")), ("to", sel.get("to")),
+                                                          ("table", sel.get("lookup"))) if v is not None)]
+            if not match:
+                raise Fail("RTNETLINK answers: No such file or directory", 2)
+            rules.remove(match[0])
+            return True
+        raise Fail("rule verb " + verb)
+
+    if obj == "sr":  # the SRv6 encapsulation source
+        if args[:2] == ["tunsrc", "show"]:
+            out.append("tunsrc addr %s" % ns.get("tunsrc", "::"))
+            return False
+        if args[:2] == ["tunsrc", "set"]:
+            ns["tunsrc"] = str(ipaddress.IPv6Address(args[2]))
+            return True
+        raise Fail("sr " + " ".join(args))
 
     if obj == "neigh":
         verb = args[0]
@@ -379,6 +480,17 @@ def ip_main(k, nsname, args, out):
     raise Fail("object " + obj)
 
 
+def rules4(ns):
+    """a namespace's IPv4 rules, created on first use with the kernel's defaults (and the l3mdev rule once there is a
+    VRF, as the vrf module adds it with the first VRF device)"""
+    if "rules4" not in ns:
+        ns["rules4"] = [{"pref": "0", "table": "local"}, {"pref": "32766", "table": "main"},
+                        {"pref": "32767", "table": "default"}]
+        if any(l["kind"] == "vrf" for l in ns["links"].values()):
+            ns["rules4"].append({"pref": "1000", "table": "[l3mdev-table]"})
+    return ns["rules4"]
+
+
 def link_add(k, nsname, rest):
     kw = {}
     name = None
@@ -396,12 +508,20 @@ def link_add(k, nsname, rest):
     extra = rest[i + 2:]
     if name in k.ns(nsname)["links"]:
         raise Fail("RTNETLINK answers: File exists", 2)
+    if nsname == "":  # the host's udev will apply its sysctl.d defaults to the new device (see udev_pending)
+        k.st.setdefault("udev_pending", []).append(name)
     mtu = int(kw["mtu"]) if "mtu" in kw else None
     common = {"address": kw.get("address"), "parent": kw.get("link")}
     if mtu:
         common["mtu"] = mtu
     if kind == "vrf":
+        table = extra[extra.index("table") + 1]
+        if k.ns(nsname)["sysctl"].get("net/vrf/strict_mode") == "1" and any(
+                l["kind"] == "vrf" and l["table"] == table for l in k.ns(nsname)["links"].values()):
+            raise Fail("Error: Table is used by another VRF.", 2)
         k.add_link(nsname, name, "vrf", table=extra[extra.index("table") + 1], **common)
+        if "rules4" in k.ns(nsname) and {"pref": "1000", "table": "[l3mdev-table]"} not in k.ns(nsname)["rules4"]:
+            k.ns(nsname)["rules4"].append({"pref": "1000", "table": "[l3mdev-table]"})
     elif kind == "vlan":
         parent = k.ns(nsname)["links"][kw["link"]]
         common["mtu"] = mtu or parent["mtu"]
@@ -490,6 +610,12 @@ def sysctl_main(k, nsname, args, out, err):
                 err.append("sysctl: cannot stat /proc/sys/%s: No such file or directory" % path)
                 rc = 255
                 continue
+            if path == "net/vrf/strict_mode" and val == "1":  # refused while two VRFs share a table
+                tables = [l["table"] for l in links.values() if l["kind"] == "vrf"]
+                if len(tables) != len(set(tables)):
+                    err.append('sysctl: setting key "net.vrf.strict_mode": Device or resource busy')
+                    rc = 255
+                    continue
             sc[path] = val
             wrote = True
             if p[:3] == ["net", "ipv6", "conf"] and p[3] == "all" and p[4] in ("disable_ipv6", "forwarding"):
@@ -609,6 +735,22 @@ def cat_main(k, nsname, args, out, err):
 
 
 # ----------------------------------------------------------------------------------------------------------- main
+def udev_apply(k, names=None):
+    """the host's udev rule for a new net device runs systemd-sysctl for its prefixes, which applies the host's
+    sysctl.d defaults (RHEL 50-redhat.conf: net.ipv4.conf.*.rp_filter = 1) over whatever a call set meanwhile"""
+    pending = k.st.get("udev_pending", [])
+    done = pending if names is None else [n for n in pending if n in names]
+    changed = False
+    for name in done:
+        pending.remove(name)
+        if name in k.ns("")["links"]:
+            k.ns("")["sysctl"][f"net/ipv4/conf/{name}/rp_filter"] = "1"
+            changed = True
+    if not pending:
+        k.st.pop("udev_pending", None)
+    return changed or bool(done)
+
+
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
     if tool == "cat" and not any(a.startswith(("/sys/", "/proc/")) for a in args):
@@ -625,6 +767,7 @@ def main():
         k = Kernel(st)
         out, err = [], []
         rc, wrote = 0, False
+        pending_before = list(st.get("udev_pending", []))
         try:
             if nsname not in st["ns"]:
                 raise Fail('Cannot open network namespace "%s": No such file or directory' % nsname)
@@ -644,15 +787,28 @@ def main():
             elif tool == "cat":
                 rc = cat_main(k, nsname, list(args), out, err)
             elif tool == "modprobe":
+                for m in args:
+                    if not m.startswith("-") and m not in k.st.setdefault("modules", []):
+                        k.st["modules"].append(m)
                 wrote = True
             elif tool == "vtysh":
                 pass
+            elif tool == "udevadm":
+                if args[:1] == ["settle"]:
+                    wrote = udev_apply(k) or wrote
+                else:
+                    raise Fail("unknown udevadm verb " + " ".join(args))
             else:
                 raise Fail("unknown tool " + tool)
         except Fail as e:
             err.append(str(e))
             rc = e.code
             wrote = False
+        if tool != "udevadm" and pending_before and wrote:
+            # the host's udev handled the add event of a device created by an EARLIER call while this call ran: its
+            # sysctl.d defaults land after this call's own write (the race measured at a blade's boot, 2026-11-07:
+            # the apply's read, then its write, then udev's)
+            udev_apply(k, pending_before)
         if wrote:
             with open(os.environ["FAKE_STATE"] + ".tmp", "w") as f:
                 json.dump(st, f, indent=1, sort_keys=True)

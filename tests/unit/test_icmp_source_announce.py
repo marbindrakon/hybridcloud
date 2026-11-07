@@ -622,9 +622,11 @@ class ApplyFilter(A.ApplyCase):
 
 class ApplyOffAsBefore(A.ApplyCase):
     """L6 for the node: with the key absent or false, the release before's script and this one make the same calls in
-    the same order and leave the same kernel state (nftables included), on a fresh blade and on a second run."""
+    the same order and leave the same kernel state (nftables included), on a fresh blade and on a second run (but for
+    the differences listed in test_fix_base_script)."""
 
     def test_same_calls_and_state(self):
+        import test_fix_base_script as B
         old = git_show(A.SCRIPT_REL)
         if old is None:
             self.skipTest(f"{BASE} not in this checkout")
@@ -641,8 +643,9 @@ class ApplyOffAsBefore(A.ApplyCase):
                 for _ in range(2):
                     runs.append(self.h.ok(self, "gw-iaas1", script=which))
                 results[which] = (runs, self.h.get_state(), sorted(os.listdir(self.h.etc)))
-            self.assertEqual(results["old"][0], results["new"][0], gw6)
-            self.assertEqual(results["old"][1], results["new"][1], gw6)
+            # (but for the differences the fixes on both transports made, listed in test_fix_base_script)
+            B.assert_runs_like_base(self, str(gw6), results["old"][0], results["new"][0])
+            B.assert_state_like_base(self, str(gw6), results["old"][1], results["new"][1])
             self.assertEqual(results["old"][2], results["new"][2], gw6)
             self.assertNotIn(TABLE, results["new"][1]["ns"]["gw-iaas1"]["nft"])
 

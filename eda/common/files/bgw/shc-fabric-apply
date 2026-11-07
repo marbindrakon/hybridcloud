@@ -2,9 +2,10 @@
 # shc-fabric-apply: realize one fabric instance on a border gateway node from /etc/shc-fabric/<instance>.json.
 # Installed and run by the platform's HybridFabric/CloudGateway jobs, and at boot by shc-fabric-apply@<instance>
 # before FRR starts. Idempotent; the last line says whether anything changed ("changed=yes|no").
-#   shc-fabric-apply <instance> [up|down]
+#   shc-fabric-apply <instance> [up|down]   (and post, guard: see below)
 # instance type "root" (the border gateway's own instance, root namespace):
-#   MPLS (modules, platform_labels), the node-local core bridge with the link address and a fixed MAC (a Linux bridge
+#   MPLS (modules, platform_labels; transport mpls, see below), the node-local core bridge with the link address and a
+#   fixed MAC (a Linux bridge
 #   otherwise takes a port's MAC whenever ports change, and IS-IS on it keeps the old one: prints bridge-mac=changed
 #   when it had to set it, so FRR can be restarted), the provider-edge loopback on lo; other addresses from the
 #   fabric's core prefixes are removed.
@@ -21,10 +22,13 @@
 #   network ipv6 {block, prefixes, src6} (IPv6 internet egress; absent = none, the IPv6 side is removed): the node's
 #   address on egress0 and egress0's IPv6 MTU = wanMtu (the node sends Packet Too Big), and the nftables table inet
 #   shc_egress6 (IPv6 rules only; the IPv4 table above is untouched): the networks' conntrack zones, outbound only
-#   from a network's src6 (its platform block, the node's ICMPv6 source), not to platDeny6, allow6 and the resolvers
-#   on 53 before deny6, the TCP MSS clamp at mss, inbound only neighbour discovery, ICMPv6 errors and replies, and a
-#   routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR takes the
-#   sessions' configuration (fail closed; shc-egress6-guard keeps it so). The sessions themselves are FRR's.
+#   from a network's src6 (its platform block and the node's slice of icmpSource6, which holds the ICMPv6 sources of
+#   the node's gateway namespaces, so their Packet Too Big reaches the internet) and the node's ICMPv6 source (a
+#   member another one covers is left out), not to platDeny6, allow6 and the resolvers on 53 before deny6, the TCP
+#   MSS clamp at mss both ways (a network's SYNs leaving it by xe<n>, on forward and output; the SYN-ACKs into it
+#   where the egress VRF forwards them to xo<n>, on forward), inbound only neighbour discovery, ICMPv6 errors and
+#   replies, and a routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR
+#   takes the sessions' configuration (fail closed; shc-egress6-guard keeps it so). The sessions themselves are FRR's.
 #   attachments {vlanPool: [start, end], parents: [interface], platformSources, circuits: [{circuit, device, parent,
 #   vlan, mtu, vrf, table, zone, address, link, nat}]} (attachment circuits; absent = none): per circuit a VLAN
 #   device <parent>.<vlan> in the network's root VRF e<n> (created when missing; the same VRF as the network's
@@ -41,13 +45,15 @@
 #   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed.
 #   Root VRFs e<digits> that neither the egress nor a circuit lists are removed with their devices.
 # instance type "gateway" (a CloudGateway, network namespace <netns>):
-#   the namespace (forwarding, MPLS), the provider-edge loopback, the site's underlay VLAN on the trunk moved into
+#   the namespace (forwarding, MPLS with transport mpls), the provider-edge loopback, the site's underlay VLAN on the trunk moved into
 #   the namespace with the gateway's site address, and a veth from the namespace's core0 (link address) to the core
 #   bridge. down deletes the veth and the namespace (the VLAN device goes with it). FRR's routes are FRR's own
 #   (staticd), never kernel routes set here.
 #   vrfs [{name, vni, mtu}]: one Linux VRF per network placed at the site (table = VNI) with its layer 3 VNI: a
 #   bridge br<vni> in the VRF and a VXLAN device vx<vni> from the gateway's site address; VRFs named t<digits> that
-#   are no longer listed are removed with their devices.
+#   are no longer listed are removed with their devices. With VRFs, the nftables table inet shc_gw_mss: the SYNs and
+#   SYN-ACKs the core sends toward a site clamped to the route's MTU where they leave by the site's bridge br<vni> (on
+#   the output hook: an MPLS pop into the VRF transmits there; transport srv6: on forward instead).
 #   wireguard {device, listenPort, keepalive, peers: [{publicKey, endpoint?, allowedIPs, persistentKeepalive?}]}
 #   (transport wireguard, instead of trunk/vlan): the site leg is a WireGuard device, created in the root namespace
 #   (its UDP socket follows the node's own routing) and moved into the namespace, with the gateway's site address.
@@ -65,7 +71,8 @@
 #   never takes RAs or SLAAC. The root
 #   leaves IPv6 out (prints "warning: ... IPv6 core not applied", IPv4 as always, exit 0) when a host interface
 #   outside the VRFs holds routes from router advertisements, and the same when an IPv6 step fails (a sysctl the
-#   host lacks, an address refused): the rest of IPv6 is left out, IPv4 goes on as without the keys. The
+#   host lacks, an address refused): the rest of IPv6 is left out, IPv4 goes on as without the keys (transport
+#   mpls; with srv6 both fail the apply, see the core transport below). The
 #   management interface is never touched. The pools of the last run that had them are kept in <instance>.pools6
 #   next to the JSON: a run whose pools are empty (the IPv6 core rolled back) still removes the addresses taken from
 #   them, then forgets them; the IPv6 sysctls and unreachable defaults stay (they don't affect IPv4). A VRF removed
@@ -79,9 +86,76 @@
 #   stateful rule would make the namespace track and reassemble every tenant's forwarded IPv6 too).
 #   The table goes when the key does (a run that never had it issues no command for it); an IPv6 step that failed
 #   leaves it as it was.
+# Core transport (both types): transport (the core's, not a site leg's) "mpls" or "srv6"; absent = mpls, and a run
+#   with mpls issues none of the srv6 commands this paragraph describes. srv6 also reads srv6 {block, locator} (the
+#   SID block; the provider edge's locator, which must lie in it: FRR announces it, nothing here sets it) and needs
+#   loopback6.
+#   An instance is never switched between transports in place (the operator re-applies and restarts FRR, or reboots).
+#   transport srv6, in the instance's namespace (root: the host's, core leg the core bridge; gateway: its namespace,
+#   core leg core0), first of all (FRR starts after the apply at boot and the jobs reload or restart it after it, so
+#   the namespace never holds a SID route without it): the nftables table inet shc_core_guard (raw prerouting: IPv6
+#   addressed to the block that did not arrive on the core leg or lo is dropped, counted; encapsulated packets never
+#   pass prerouting; with icmp6, output: the namespace's ICMPv6 errors that leave by the core leg toward an address
+#   outside the core (not the block, loopbackPool6 or link-local) take icmp6 as their source, see srv6_guard), then
+#   net.vrf.strict_mode=1 (the decapsulating SIDs need it; it is refused while two VRFs in the
+#   namespace share a table, which fails the apply naming them), seg6_enabled=0 on all and default (so every device
+#   created later inherits 0) and on the core leg once it exists, and at the end of the run on every device of the
+#   instance an earlier configuration left at 1 (root: lo, the core bridge, egress0, the egress VRF, e<n>, xe<n>, xo<n>
+#   and the circuits' devices, never the management interface; gateway: every device of the namespace): no routing
+#   header is accepted anywhere (the decapsulating SIDs are routes, not local addresses, and never read the setting;
+#   with it a packet to any local address could carry a segment list on to any SID), net.ipv6.seg6_flowlabel=1, the
+#   block unreachable in the main table at metric 4278198272 (every real route wins: the locators are longer
+#   prefixes; a lookup for a SID whose locator is gone ends there instead of following a default route of the host),
+#   the rule "to <block> lookup main" at pref 999 (ahead of the VRFs' rule: the kernel looks the SID of a packet it
+#   encapsulates up in the packet's ingress VRF otherwise), the encapsulation source (ip sr tunsrc) = the IPv6
+#   loopback; once lo has its loopbacks, the locator's anchor on lo (its first address with the locator's length,
+#   noprefixroute: IS-IS announces the locator as the passive lo's prefix, on every start of FRR's daemons) and the
+#   locator blackholed in the main table at metric 4278198272 (an unallocated SID is dropped without an answer; the
+#   last anchor is remembered in <instance>.locator6 next to the JSON, and a run with mpls, or the root's down, removes
+#   it; a gateway's goes with its namespace); on the root every network VRF e<n> gets no reverse path filtering (rp_filter=0, set once udev
+#   has applied the host's sysctl.d defaults to the new device, and set again by the guard action: decapsulated IPv4
+#   enters with the VRF device as input while its source's route leads to the core bridge, outside the VRF, which
+#   strict and loose mode both refuse; the egress VRF and the circuits' devices, strict, are left as they are). The
+#   kernel takes the larger of net.ipv4.conf.all.rp_filter and the device's, and all is the host's: a root with srv6
+#   fails the apply, before it changes anything, while all is not 0. None of the MPLS steps runs (modules,
+#   platform_labels, input). Both families ride the IPv6 core, so an IPv6 step that fails and the root's router
+#   advertisement check fail the apply too (exit 4, "transport srv6: ..." on stderr) instead of leaving IPv6 out, as
+#   does any of the steps above. Its refusals that depend only on the state as found (the root's all.rp_filter; two
+#   VRFs on one table while strict mode is off, in the root namespace and in a gateway's namespace that exists
+#   already) run with the common ones below, before the run's first write (the strict-mode step checks again in place).
+#   The rule sets above gain what the encapsulation would otherwise bypass (only
+#   with srv6): a packet decapsulated into a VRF passes prerouting with the VRF as its input interface, then
+#   forward, never output (as an MPLS pop does); a packet that is encapsulated passes prerouting only, never forward.
+#   So the conntrack zones are also set in prerouting by the VRF device (shc_egress, shc_egress6, shc_attach,
+#   shc_attach6: as on output), a circuit's packets to the platform's sources are also dropped in prerouting by the
+#   device (shc_attach), and a gateway clamps the SYNs toward a site's bridge br<vni> on forward instead of output
+#   (shc_gw_mss). down: the root removes the encapsulation source, the rule, the unreachable route and the guard (the
+#   sysctls stay, inert without SIDs); a gateway's state goes with its namespace.
+#   shc-fabric-apply <instance> guard   (run periodically, any time): the guard table kept in place between applies.
+#   Each load lists the table into <instance>.guard next to the JSON; the action compares the namespace's table with
+#   that listing and loads it again when it is missing or differs. Prints guard=ok, guard=restored, or guard=none
+#   (transport mpls, or a gateway whose namespace does not exist); exit 0 (4 when the reload fails).
+# The VRFs' IPv4 separation (both types, both transports), in the instance's namespace (root: the host's; gateway: its
+#   namespace): the IPv4 rule "lookup local" moves from 0 to 32765, behind the VRFs' l3mdev rule (added before the old
+#   one is deleted), and every VRF table of the instance gets an IPv4 unreachable default at metric 4278198272 (any
+#   FRR route wins; it goes with its VRF): a packet in a VRF (from a site, popped from MPLS into it on the output
+#   path, or decapsulated into it) addressed to an address of the default VRF is no longer delivered locally, and a
+#   lookup that misses in the VRF ends there instead of being routed by the main table; the VRF's own addresses are in
+#   its own table and stay reachable, the default VRF's own traffic (the core's sessions, the site leg, VXLAN,
+#   WireGuard, the host's services) still meets the local table first (IPv6 rules are left as they are: the default
+#   VRF's IPv6 addresses were measured unreachable from a VRF). A step that fails fails the apply (exit 4,
+#   "shc-fabric-apply: <step> failed" on stderr). Refusals (both transports, exit 4, "shc-fabric-apply: ..." on stderr):
+#   an IPv4 policy rule of the host's own between 0 and 32765 (the local table would no longer come first for the
+#   default VRF's traffic matching it), and a VRF other than the one the configuration names for a table the
+#   configuration will use (root: the egress, network and circuit VRFs' tables; gateway: the VNIs; the VRF the run
+#   creates would share the table with it, or with strict mode be refused part-way), named with its table, in the root
+#   namespace and in a gateway's namespace that exists already. They
+#   run, with the RA check and the configuration check, before the run's first write, so a refused apply leaves the
+#   node as it found it (the rule step checks again in place). The root's down puts the rule back at 0 (added before
+#   the one at 32765 is deleted); a gateway's go with its namespace.
 set -euo pipefail
 NSX=""
-I=${1:?usage: shc-fabric-apply <instance> [up|down|post]}; ACT=${2:-up}
+I=${1:?usage: shc-fabric-apply <instance> [up|down|post|guard]}; ACT=${2:-up}
 CONF=/etc/shc-fabric/$I.json
 [ -r "$CONF" ] || { echo "no $CONF" >&2; exit 2; }
 q() { jq -er "$1" "$CONF"; }
@@ -105,6 +179,48 @@ MARKA6=/etc/shc-fabric/$I.attach6
 # key removes it
 ICMP6ANN=$(opt .icmp6Announced)
 MARKI6=/etc/shc-fabric/$I.in6
+# the core transport (see the header)
+TRANSPORT=$(opt .transport); TRANSPORT=${TRANSPORT:-mpls}
+case "$TRANSPORT" in mpls|srv6) ;; *) echo "unknown transport $TRANSPORT" >&2; exit 2 ;; esac
+# transport srv6: the block (canonical) and the encapsulation source (the IPv6 loopback's address), or the reason
+srv6_conf() {
+  python3 - "$CONF" <<'PY'
+import ipaddress, json, sys
+c = json.load(open(sys.argv[1]))
+s = c.get("srv6") or {}
+def bad(msg):
+    print("transport srv6: " + msg, file=sys.stderr)
+    sys.exit(4)
+def net(key):
+    try:
+        n = ipaddress.ip_network(str(s.get(key) or ""))
+    except ValueError:
+        n = None
+    if n is None or n.version != 6:
+        bad(f"srv6.{key} {s.get(key)!r} is no IPv6 prefix")
+    return n
+block, loc = net("block"), net("locator")
+if not loc.subnet_of(block):
+    bad(f"the locator {loc} is not inside the block {block}")
+try:
+    src = ipaddress.ip_interface(str(c.get("loopback6") or "")).ip
+except ValueError:
+    src = None
+if src is None or src.version != 6:
+    bad("the IPv6 loopback (loopback6) is required")
+# the locator's anchor on lo: its first address, with the locator's prefix length
+print(block, src, "%s/%d" % (loc.network_address + 1, loc.prefixlen), loc)
+PY
+}
+SRV6_BLOCK=""; SRV6_SRC=""; SRV6_ANCHOR=""; SRV6_LOC=""
+# the locator anchor (address and locator) as the last run set it: a run without it (mpls, down) removes it
+LOCMARK=/etc/shc-fabric/$I.locator6
+# the guard table as the last load listed it (the guard action compares the namespace's table with it)
+GUARDREF=/etc/shc-fabric/$I.guard
+if [ "$TRANSPORT" = srv6 ] && { [ "$ACT" = up ] || [ "$ACT" = guard ]; }; then
+  S6=$(srv6_conf) || exit 4
+  read -r SRV6_BLOCK SRV6_SRC SRV6_ANCHOR SRV6_LOC <<<"$S6"
+fi
 if [ -z "$LOPOOL6$ICMPPOOL6" ] && [ -r "$POOLS6" ]; then
   { read -r LOPOOL6 || true; read -r ICMPPOOL6 || true; } < "$POOLS6"
   POOLS6_USED=1
@@ -126,7 +242,18 @@ for i in json.load(sys.stdin):
             print(s)' "$2" "$3"; }
 
 # <dev> <cidr> [nodad]: add the address unless the device holds it (<cidr> as "ip addr show" prints it: see canon)
-addr_ensure() { $NSX ip addr show dev "$1" | grep -q " ${2} " || $NSX ip addr add "$2" dev "$1" ${3:+"$3"}; }
+# shows <grep options> <pattern> <command> [args]: the command's output matches. The output is read to its end before
+# the test: with "command | grep -q" grep exits at the first match while the command may still be writing (ip writes in
+# several calls), the command dies of SIGPIPE, pipefail fails the pipeline and the check reads "absent" for an item
+# that is there. Fails like the pipeline did when the command fails.
+shows() {
+  local o=$1 p=$2 out
+  shift 2
+  out=$("$@") || return 1
+  grep "$o" -- "$p" <<<"$out"
+}
+
+addr_ensure() { shows -q " ${2} " $NSX ip addr show dev "$1" || $NSX ip addr add "$2" dev "$1" ${3:+"$3"}; }
 
 # key=value... ("/" form: a device name may hold a dot): write only the values that differ, so a re-run writes
 # nothing - writing net.ipv6.conf.all.disable_ipv6 or .forwarding also rewrites every device's own value
@@ -152,6 +279,8 @@ v6() {
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || return 0
+  # transport srv6: both families ride the IPv6 core, so IPv4 alone is no working state: the apply fails
+  [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: $what failed (the IPv6 core carries both families)" >&2; exit 4; }
   echo "warning: $what failed; IPv6 core not applied"
   V6FAILED=1; V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
 }
@@ -197,7 +326,7 @@ vrf6() {
     for a in $s; do $NSX ip addr del "$a" dev "$1"; done
   fi
   [ -n "$V6" ] || return 0
-  $NSX ip -6 route show table "$2" | grep -qE '^unreachable default .*metric 4278198272( |$)' ||
+  shows -qE '^unreachable default .*metric 4278198272( |$)' $NSX ip -6 route show table "$2" ||
     $NSX ip -6 route replace unreachable default metric 4278198272 table "$2"
   [ -z "$ICMP6" ] || addr_ensure "$1" "$ICMP6" nodad
 }
@@ -232,13 +361,12 @@ vrf6_covers() {
     case "$want" in *" $p "*) ;; *) $NSX ip -6 route del unreachable "$p" metric 4278198272 table "$t" ;; esac
   done
   for p in $want; do
-    echo "$have" | grep -qx "$p" || $NSX ip -6 route replace unreachable "$p" metric 4278198272 table "$t"
+    grep -qx -- "$p" <<<"$have" || $NSX ip -6 route replace unreachable "$p" metric 4278198272 table "$t"
   done
 }
 
 # a VRF's table (ip -d link), "" when the device is no VRF
 vrf_table() {
-  [ -n "$V6KNOWN" ] || return 0
   $NSX ip -j -d link show "$1" 2>/dev/null | jq -r '.[0].linkinfo.info_data.table // empty' 2>/dev/null || true
 }
 
@@ -250,11 +378,301 @@ vrf_table() {
 ra_precheck() {
   local d m
   for d in $(ip -j -6 route show proto ra | jq -r '.[] | (.dev // empty), (.nexthops // [] | .[].dev)' | sort -u); do
-    m=$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty')
-    if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then continue; fi
+    # (a device gone since the route was read takes no router advertisements)
+    m=$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty') || continue
+    if [ -n "$m" ] && shows -q ' vrf table ' ip -d link show "$m" 2>/dev/null; then continue; fi
     echo "warning: interface $d relies on router advertisements; IPv6 core not applied"
     return 1
   done
+}
+
+# run_step <prefix> <what> <helper> [args]: one step; a failure fails the apply (exit 4, "<prefix>: <what> failed" on
+# stderr). The helper runs in a subshell with errexit of its own (as in v6)
+run_step() {
+  local pfx=$1 what=$2 rc
+  shift 2
+  set +e
+  ( set -e; "$@" )
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { echo "$pfx: $what failed" >&2; exit 4; }
+}
+# a step of the VRFs' IPv4 separation (both transports, see the header)
+step() { run_step shc-fabric-apply "$@"; }
+
+# --- the VRFs' IPv4 separation (both transports, see the header), in the namespace $NSX selects
+# last|first: the IPv4 rule "lookup local" at 32765, behind the VRFs' l3mdev rule (1000), or back at 0 (the kernel's
+# order). In front of the l3mdev rule, a packet in a VRF (from a site, popped from MPLS or decapsulated into it)
+# addressed to an address of the default VRF is delivered locally before its VRF's table is read; behind it, the VRF's
+# lookup ends in the VRF's own table (its own addresses are there, and an unreachable default, vrf4_unreach). The new
+# rule is added before the old one is deleted (never a moment without one). Refused while another IPv4 rule sits
+# between 0 and 32765: moved behind it, the local table would no longer come first for the default VRF's own traffic
+# matching it
+local4() {
+  local rules foreign
+  rules=$($NSX ip -4 rule show)
+  if [ "$1" = last ]; then
+    # (precheck refused this before the run's first write; checked again here against a rule added since)
+    foreign=$(local4_foreign "$rules")
+    if [ -n "$foreign" ]; then
+      echo "shc-fabric-apply: IPv4 policy rules between 0 and 32765 would come before the local table: $foreign" >&2
+      return 1
+    fi
+    grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 32765 table local
+    ! grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 0 table local
+  else
+    grep -qE '^0:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule add pref 0 table local
+    ! grep -qE '^32765:[[:space:]]+from all lookup local[[:space:]]*$' <<<"$rules" || $NSX ip -4 rule del pref 32765 table local
+  fi
+}
+
+# <rules> (ip -4 rule show): the rules between 0 and 32765 other than the kernel's l3mdev rule, one line, ";" between
+local4_foreign() {
+  awk '{ p = $1; sub(":", "", p) } p + 0 > 0 && p + 0 < 32765 && !(p + 0 == 1000 && / lookup \[l3mdev-table\]/)' \
+    <<<"$1" | paste -sd ';' -
+}
+
+# <table>: a VRF's IPv4 unreachable default at the highest metric (any FRR route wins), so a lookup in the VRF that
+# misses ends there instead of falling through to the rules behind the l3mdev rule (the local table, main)
+vrf4_unreach() {
+  shows -qE '^unreachable default .*metric 4278198272( |$)' $NSX ip -4 route show table "$1" ||
+    $NSX ip -4 route replace unreachable default metric 4278198272 table "$1"
+}
+
+# <table>: a deleted VRF's IPv4 unreachable default (on lo, it outlives the device)
+vrf4_gone() {
+  [ -n "$1" ] || return 0
+  $NSX ip -4 route del unreachable default metric 4278198272 table "$1" 2>/dev/null || true
+}
+
+# the IPv4 rules and the VRFs' IPv4 unreachable defaults, for the snapshot
+local4_state() {
+  $NSX ip -4 rule show 2>/dev/null || true
+  $NSX ip -4 route show table all 2>/dev/null | grep '^unreachable default .*metric 4278198272' || true
+}
+
+# the VRFs the configuration names, "<table> <vrf>" per line (root: the egress VRF, the networks' and the circuits'
+# VRFs; gateway: its VRFs, table = VNI)
+want_vrfs() {
+  if [ "$TYPE" = root ]; then
+    jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
+      | map("\(.table) \(.vrf)") | unique | .[]' "$CONF"
+  else
+    jq -r '.vrfs // [] | .[] | "\(.vni) \(.name)"' "$CONF"
+  fi
+}
+
+# root|gateway: the refusals that depend only on the state as found, run before the run's first write (reads only), so
+# a refused apply leaves the node as it found it (exit 4, the reason on stderr). In the root namespace, and in a
+# gateway's namespace that exists already: no IPv4 policy rule of its own between 0 and 32765 (local4), and no VRF
+# other than the one the configuration names for a table it will use (want_vrfs). Transport srv6
+# also: the root's net.ipv4.conf.all.rp_filter 0 (the network VRFs' rp_filter=0 holds only then; never written here),
+# and no two VRFs on one table while strict mode is off (srv6_strict). The RA precheck and the configuration check run
+# before the first write too.
+precheck() {
+  local v rules t want
+  if [ "$TRANSPORT" = srv6 ] && [ "$1" = root ]; then
+    v=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) || v=""
+    if [ "$v" != 0 ]; then
+      echo "transport srv6: net.ipv4.conf.all.rp_filter is ${v:-unreadable}; the root's network VRFs need it 0" \
+        "(decapsulated IPv4 is checked with the larger of it and the VRF device's)" >&2
+      exit 4
+    fi
+  fi
+  rules=$($NSX ip -4 rule show) || { echo "shc-fabric-apply: the IPv4 policy rules could not be read" >&2; exit 4; }
+  t=$(local4_foreign "$rules")
+  if [ -n "$t" ]; then
+    echo "shc-fabric-apply: IPv4 policy rules between 0 and 32765 would come before the local table: $t" >&2
+    exit 4
+  fi
+  # a VRF other than the one the configuration names for a table it will use: the VRF the run creates would share
+  # the table with it (transport srv6: the kernel refuses the creation part-way, strict mode)
+  # (on the blades' kernel, "ip -j link show type <kind>" prints one empty object per link while the kind's module is
+  # not loaded, as at boot before any VRF exists: every listing by kind here keeps only entries that name a device)
+  want=$(want_vrfs)
+  if [ -n "$want" ]; then
+    t=$($NSX ip -j -d link show type vrf | jq -r --arg w "$want" 'def vrfs: map(select(.ifname != null)); ($w | split("\n") | map(select(. != "") | split(" ")
+        | {key: .[0], value: .[1]}) | from_entries) as $m | [vrfs[] | (.linkinfo.info_data.table | tostring) as $t
+        | select($m[$t] != null and $m[$t] != .ifname) | "VRF \(.ifname) holds table \($t), which this configuration"
+        + " gives to \($m[$t])"] | join("; ")') || { echo "shc-fabric-apply: the VRFs could not be read" >&2; exit 4; }
+    if [ -n "$t" ]; then
+      echo "shc-fabric-apply: a VRF that is not this instance's holds a table it will use: $t" >&2
+      exit 4
+    fi
+  fi
+  [ "$TRANSPORT" = srv6 ] || return 0
+  [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0
+  t=$($NSX ip -j -d link show type vrf | jq -r 'def vrfs: map(select(.ifname != null)); [vrfs | group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
+      | "table \(.[0].linkinfo.info_data.table): \(map(.ifname) | join(", "))"] | join("; ")') || t=""
+  if [ -n "$t" ]; then
+    echo "transport srv6: net.vrf.strict_mode=1 refused; VRFs that share a table: $t" >&2
+    exit 4
+  fi
+}
+
+# --- transport srv6 (see the header), in the namespace $NSX selects
+# srv6_step <what> <helper> [args]: one step; a failure fails the apply (exit 4, "transport srv6: <what> failed")
+srv6_step() { run_step "transport srv6" "$@"; }
+
+# <core leg>: the guard table (replaced as a whole). Only the core leg and lo may address the block: a host on an
+# interface in the main table could otherwise reach this node's SIDs (and so a VRF), and with the rule below a tenant
+# too, from its VRF.
+# With an ICMP source (icmp6), chain errors: an ICMPv6 error the namespace sends for a packet a SID decapsulated into a
+# VRF would carry the core loopback. The kernel picks an error's source from the route back when that route (looked
+# up outside the VRF) names one, else from the device the packet came in by: the core leg here, outside every VRF, so
+# an address of the default VRF (the loopback), never the VRF's own ICMP source (with MPLS the popped packet comes in
+# by the VRF device and gets it). The loopback is never announced outside the core, so the error was dropped on its
+# way to the internet (the egress filter admits the gateways' ICMP sources) and showed a core address to tenants. The
+# error is generated in the VRF and leaves by the core leg encapsulated: it passes output (as itself) only there. Errors
+# toward the core (the block, loopbackPool6, link-local) keep their source; the default VRF routes nothing else into
+# the core leg. Filter type, not route: a changed source must not reroute the packet (outside its VRF)
+srv6_guard() {
+  local errs=() core
+  if [ -n "$ICMP6" ]; then
+    core=$(python3 -c 'import ipaddress, sys
+print(", ".join(map(str, ipaddress.collapse_addresses(ipaddress.ip_network(n) for n in sys.argv[1:] if n))))' \
+      "$SRV6_BLOCK" "$LOPOOL6" fe80::/10)
+    errs=('  chain errors {' '    type filter hook output priority filter; policy accept;'
+      "    oifname \"$1\" ip6 daddr != { $core } icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } counter ip6 saddr set ${ICMP6%/*} comment \"VRF errors from the ICMP source\""
+      '  }')
+  fi
+  printf '%s\n' 'table inet shc_core_guard' 'delete table inet shc_core_guard' 'table inet shc_core_guard {' \
+    '  chain guard {' '    type filter hook prerouting priority raw; policy accept;' \
+    "    iifname != { \"$1\", \"lo\" } ip6 daddr $SRV6_BLOCK counter drop comment \"SID block from outside the core\"" \
+    '  }' "${errs[@]}" '}' | $NSX nft -f -
+  $NSX nft -s list table inet shc_core_guard > "$GUARDREF"
+}
+
+# strict VRF mode, or the VRFs that keep it off (two VRFs on one table)
+srv6_strict() {
+  local t
+  [ "$($NSX sysctl -n net.vrf.strict_mode 2>/dev/null)" != 1 ] || return 0
+  $NSX sysctl -qw net.vrf.strict_mode=1 && return 0
+  t=$($NSX ip -j -d link show type vrf | jq -r 'def vrfs: map(select(.ifname != null)); [vrfs | group_by(.linkinfo.info_data.table | tostring)[] | select(length > 1)
+      | "table \(.[0].linkinfo.info_data.table): \(map(.ifname) | join(", "))"] | join("; ")')
+  echo "transport srv6: net.vrf.strict_mode=1 refused${t:+; VRFs that share a table: $t}" >&2
+  return 1
+}
+
+# [<block>]: the rule "to <block> lookup main" at pref 999 (none without a block); other such rules at 999 removed
+srv6_rule() {
+  local have p
+  have=$($NSX ip -6 rule show pref 999 | awk '$1 == "999:" && $2 == "from" && $3 == "all" && $4 == "to" &&
+    $6 == "lookup" && $7 == "main" {print $5}')
+  [ "$have" != "${1:-}" ] || return 0
+  for p in $have; do $NSX ip -6 rule del pref 999 to "$p" lookup main; done
+  [ -z "${1:-}" ] || $NSX ip -6 rule add to "$1" lookup main pref 999
+}
+
+# <address>: the encapsulation source (:: = none)
+srv6_tunsrc() {
+  local have
+  have=$($NSX ip sr tunsrc show | awk '{print $3}')
+  [ "$have" = "$1" ] || $NSX ip sr tunsrc set "$1"
+}
+
+# <core leg>: the namespace's SRv6 settings, the guard first
+srv6_up() {
+  srv6_step "the guard table inet shc_core_guard" srv6_guard "$1"
+  srv6_step "the vrf module" modprobe vrf
+  srv6_step "net.vrf.strict_mode" srv6_strict
+  srv6_step "the SRv6 settings" sysctl_ensure net/ipv6/conf/all/seg6_enabled=0 net/ipv6/conf/default/seg6_enabled=0 \
+    net/ipv6/seg6_flowlabel=1
+  srv6_step "the unreachable route to the SID block" srv6_unreach "$SRV6_BLOCK"
+  srv6_step "the rule to the SID block" srv6_rule "$SRV6_BLOCK"
+  srv6_step "the encapsulation source" srv6_tunsrc "$SRV6_SRC"
+}
+
+# [<block>]: the block unreachable in the main table at the highest metric (every real route wins: the locators are
+# longer prefixes), so a lookup through the rule for a SID whose locator is gone ends here and never follows a default
+# route of the host; this script's other such routes removed
+srv6_unreach() {
+  local have p
+  have=$($NSX ip -6 route show table main type unreachable | awk '$1 == "unreachable" && $2 != "default" &&
+    / metric 4278198272( |$)/ {print $2}')
+  for p in $have; do [ "$p" = "${1:-}" ] || $NSX ip -6 route del unreachable "$p" metric 4278198272 table main; done
+  [ -z "${1:-}" ] || grep -qxF -- "$1" <<<"$have" || $NSX ip -6 route replace unreachable "$1" metric 4278198272 table main
+}
+
+# [<anchor> <locator>]: the locator as a connected prefix of lo, which IS-IS announces as a passive interface's
+# prefix on every start of the daemons (a redistributed route was lost when FRR restarted its daemons after one died,
+# and a reload that added the redistribution did not apply it): the anchor (the locator's first address, with the
+# locator's length; no SID: FRR allocates functions from 1, and an address is a local address, never a SID route)
+# without the kernel's prefix route (noprefixroute), and the locator as a blackhole in the main table at the highest
+# metric, so a packet for an unallocated SID is dropped here, silently (the SIDs are longer routes; the prefix route
+# would answer it with an unreachable). The last run's anchor and blackhole (LOCMARK) removed when they differ; none of
+# it without both arguments
+srv6_locator() {
+  local old="" oldloc="" want="${1:-} ${2:-}"
+  [ ! -r "$LOCMARK" ] || read -r old oldloc < "$LOCMARK" || true
+  if [ -n "$old" ] && [ "$old $oldloc" != "$want" ]; then
+    ! shows -q " $old " $NSX ip -6 addr show dev lo || $NSX ip -6 addr del "$old" dev lo
+    ! shows -qE "^blackhole $oldloc .*metric 4278198272( |\$)" $NSX ip -6 route show table main type blackhole ||
+      $NSX ip -6 route del blackhole "$oldloc" metric 4278198272 table main
+  fi
+  if [ -z "${1:-}" ]; then rm -f "$LOCMARK"; return 0; fi
+  shows -q " $1 " $NSX ip -6 addr show dev lo || $NSX ip -6 addr add "$1" dev lo nodad noprefixroute
+  shows -qE "^blackhole $2 .*metric 4278198272( |\$)" $NSX ip -6 route show table main type blackhole ||
+    $NSX ip -6 route replace blackhole "$2" metric 4278198272 table main
+  { [ -r "$LOCMARK" ] && [ "$(<"$LOCMARK")" = "$want" ]; } || printf '%s\n' "$want" > "$LOCMARK"
+}
+
+# <dev>...: no routing header accepted (seg6_enabled 0: the decapsulating SIDs are routes, not local addresses, and
+# never read it; with it a packet to any local address could carry a segment list to any SID). all and default are
+# set first in srv6_up; this corrects the devices an earlier configuration left at 1
+srv6_seg6_off() {
+  local d
+  for d in "$@"; do
+    [ "$($NSX sysctl -n "net/ipv6/conf/$d/seg6_enabled" 2>/dev/null)" != 1 ] || $NSX sysctl -qw "net/ipv6/conf/$d/seg6_enabled=0"
+  done
+}
+
+# root down with transport srv6: the encapsulation source, the rule, then the guard (FRR holds no SID any more); the
+# sysctls stay (inert without SIDs)
+srv6_down() {
+  srv6_tunsrc ::
+  srv6_rule ""
+  srv6_unreach ""
+  $NSX nft delete table inet shc_core_guard 2>/dev/null || true
+  rm -f "$GUARDREF"
+}
+
+# <core leg>: the SRv6 state for the snapshot (only with transport srv6: no command otherwise)
+srv6_state() {
+  [ "$TRANSPORT" = srv6 ] || return 0
+  $NSX sysctl -n net.vrf.strict_mode net.ipv6.conf.all.seg6_enabled net.ipv6.conf.default.seg6_enabled \
+    net.ipv6.seg6_flowlabel "net/ipv6/conf/$1/seg6_enabled" 2>/dev/null || true
+  $NSX ip -6 rule show pref 999 2>/dev/null || true
+  $NSX ip -6 route show table main type unreachable 2>/dev/null | grep ' metric 4278198272' || true
+  $NSX ip -6 route show table main type blackhole 2>/dev/null | grep ' metric 4278198272' || true
+  $NSX ip sr tunsrc show 2>/dev/null || true
+  $NSX nft -s list table inet shc_core_guard 2>/dev/null || true
+}
+
+# the guard action: the instance's guard table as the last load left it, else loaded again (see the header)
+guard_check() {
+  local leg have
+  [ "$TRANSPORT" = srv6 ] || { echo "guard=none"; return 0; }
+  if [ "$TYPE" = gateway ]; then
+    NS=$(q .netns)
+    shows -qw "^$NS" ip netns list || { echo "guard=none"; return 0; }
+    NSX="ip netns exec $NS"; leg=core0
+  else
+    leg=$(q .bridge)
+  fi
+  have=$($NSX nft -s list table inet shc_core_guard 2>/dev/null) || have=""
+  if [ -n "$have" ] && [ -r "$GUARDREF" ] && [ "$have" = "$(<"$GUARDREF")" ]; then echo "guard=ok"; else
+    srv6_step "the guard table inet shc_core_guard" srv6_guard "$leg"
+    echo "guard=restored"
+  fi
+  # the root's network VRFs keep rp_filter 0 (root_vrf): the host's udev or a sysctl run of its own can set it back
+  if [ "$TYPE" = root ]; then
+    for v in $(root_vrfs); do
+      [ "$(sysctl -n "net/ipv4/conf/$v/rp_filter" 2>/dev/null)" = 0 ] && continue
+      srv6_step "no reverse path filtering on $v" sysctl_ensure "net/ipv4/conf/$v/rp_filter=0"
+      echo "rpfilter=restored $v"
+    done
+  fi
 }
 
 snapshot() {
@@ -263,7 +681,7 @@ snapshot() {
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
-    egress_state; attach_state
+    egress_state; attach_state; local4_state; srv6_state "$BR"
     if [ -n "$V6KNOWN" ]; then  # the devices this sets up (never the management interface)
       ip -br -6 addr show | grep -E "^(lo|$BR|egress0|e[0-9]+${EV:+|$EV})[@ ]" || true
       sysctl -n "net/ipv6/conf/$BR/disable_ipv6" "net/ipv6/conf/$BR/accept_ra" "net/ipv6/conf/$BR/autoconf" \
@@ -302,10 +720,21 @@ egress_state() {
 }
 
 # the root VRFs e<digits> (networks' VRFs: egress and attachment circuits)
-root_vrfs() { ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^e[0-9]+$' || true; }
+root_vrfs() { ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^e[0-9]+$' || true; }
 
 root_vrf() {  # <vrf> <table>
-  ip link show "$1" >/dev/null 2>&1 || ip link add "$1" type vrf table "$2"
+  if ! ip link show "$1" >/dev/null 2>&1; then
+    ip link add "$1" type vrf table "$2"
+    # the host's udev applies the sysctl.d entries for a new device from its add event, after this command returned
+    # (RHEL: net.ipv4.conf.*.rp_filter = 1): the setting below would be overwritten moments later (measured at a boot,
+    # 2026-11-07). Wait for udev to have handled the event first
+    [ "$TRANSPORT" != srv6 ] || udevadm settle --timeout=15 2>/dev/null || true
+  fi
+  # transport srv6: a SID decapsulates IPv4 into the VRF with the VRF device as input, and the source's route there
+  # leads to the core bridge, outside the VRF: strict and loose filtering both drop it (measured), so none (0; the
+  # kernel takes the larger of all and the device: all is checked to be 0 before the root changes anything). A
+  # circuit's packets are checked on their own device (strict, attach_up)
+  [ "$TRANSPORT" != srv6 ] || srv6_step "no reverse path filtering on $1" sysctl_ensure "net/ipv4/conf/$1/rp_filter=0"
   ip link set "$1" up
 }
 
@@ -313,12 +742,12 @@ root_vrf() {  # <vrf> <table>
 root_vrfs_prune() {
   local want="$1" v d t
   for v in $(root_vrfs); do
-    echo "$want" | grep -qx "$v" && continue
+    grep -qx -- "$v" <<<"$want" && continue
     ip link del "xe${v#e}" 2>/dev/null || true
-    for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname'); do ip link del "$d"; done
+    for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname // empty'); do ip link del "$d"; done
     t=$(vrf_table "$v")
     ip link del "$v"
-    vrf6_gone "$t"
+    vrf6_gone "$t"; vrf4_gone "$t"
   done
 }
 
@@ -327,11 +756,12 @@ egress_down() {
   nft delete table inet shc_egress6 2>/dev/null || true
   rm -f "$MARK6"
   nft delete table ip shc_egress 2>/dev/null || true
-  for x in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
-  m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty')
+  for x in $(ip -j link show type veth | jq -r '.[].ifname // empty' | grep -E '^xe[0-9]+$' || true); do ip link del "$x"; done
+  # a root that never had egress has no egress0 (ip fails, the pipeline with it): nothing to remove
+  m=$(ip -j link show egress0 2>/dev/null | jq -r '.[0].master // empty') || m=""
   ip link del egress0 2>/dev/null || true
-  if [ -n "$m" ] && ip -d link show "$m" 2>/dev/null | grep -q ' vrf table '; then
-    t=$(vrf_table "$m"); ip link del "$m"; vrf6_gone "$t"
+  if [ -n "$m" ] && shows -q ' vrf table ' ip -d link show "$m" 2>/dev/null; then
+    t=$(vrf_table "$m"); ip link del "$m"; vrf6_gone "$t"; vrf4_gone "$t"
   fi
 }
 
@@ -339,7 +769,9 @@ egress_down() {
 egress_nft() {
   python3 - "$CONF" <<'PY'
 import json, sys
-e = json.load(open(sys.argv[1]))["egress"]
+doc = json.load(open(sys.argv[1]))
+e = doc["egress"]
+srv6 = doc.get("transport") == "srv6"
 nets = e.get("networks") or []
 def elements(xs):
     return ", ".join(xs)
@@ -349,6 +781,9 @@ if e.get("deny"):
 if e.get("allow"):
     out.append(f"  set allow {{ type ipv4_addr; flags interval; elements = {{ {elements(e['allow'])} }}; }}")
 zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
+# transport srv6: a network's traffic decapsulated into its VRF passes prerouting with the VRF as its input interface
+# (it never passes output): the zone by the VRF device too
+zones_in = zones + ("".join(f', "{n["vrf"]}" : {n["zone"]}' for n in nets) if srv6 else "")
 nats = elements(f'"{n["xe"]}" : {n["nat"]}' for n in nets if n.get("nat"))
 srcs = e.get("platformSources") or []
 ports = ", ".join(str(p) for p in e.get("platformPorts") or [6443, 443])
@@ -358,7 +793,7 @@ for hook in ("output", "prerouting"):
     out.append(f"  chain zone_{hook} {{")
     out.append(f"    type filter hook {hook} priority raw; policy accept;")
     if nets:
-        out.append(f"    ct zone set {'oifname' if hook == 'output' else 'iifname'} map {{ {zones} }}")
+        out.append(f"    ct zone set {'oifname' if hook == 'output' else 'iifname'} map {{ {zones if hook == 'output' else zones_in} }}")
     out.append("  }")
 for hook in ("output", "forward"):
     out.append(f"  chain filter_{hook} {{")
@@ -393,8 +828,10 @@ PY
 # the IPv6 filter table for the listed networks (replaced as a whole; IPV6-PLAN §3.4 rule order)
 egress6_nft() {
   python3 - "$CONF" <<'PY'
-import json, sys
-e = json.load(open(sys.argv[1]))["egress"]
+import ipaddress, json, sys
+doc = json.load(open(sys.argv[1]))
+e = doc["egress"]
+srv6 = doc.get("transport") == "srv6"
 v6 = e["ipv6"]
 nets = [n for n in e.get("networks") or [] if n.get("ipv6")]
 icmp = (v6.get("icmp6") or "").split("/")[0]
@@ -407,8 +844,14 @@ def iset(name, xs, interval=True):
 out = ["table inet shc_egress6", "delete table inet shc_egress6", "table inet shc_egress6 {"]
 def tag(n):  # the network's VRF e<vpnTarget>: the set name's suffix
     return n["vrf"][1:]
+def uncovered(xs):
+    """the members no other member covers, in their order, each once (an interval set refuses an element inside
+    another: the node's ICMPv6 source lies in the node's slice of the pool when src6 holds that)"""
+    ns = [ipaddress.ip_network(x, strict=False) for x in xs]
+    return [x for i, (x, n) in enumerate(zip(xs, ns))
+            if not any((m != n and n.subnet_of(m)) or (m == n and j < i) for j, m in enumerate(ns) if j != i)]
 for n in nets:
-    iset(f"src6_{tag(n)}", list(n["ipv6"].get("src6") or []) + ([icmp] if icmp else []))
+    iset(f"src6_{tag(n)}", uncovered(list(n["ipv6"].get("src6") or []) + ([icmp] if icmp else [])))
 iset("plat_deny6", v6.get("platDeny6"))
 iset("allow6", v6.get("allow6"))
 iset("resolvers6", v6.get("resolvers6"), interval=False)
@@ -416,11 +859,13 @@ iset("deny6", v6.get("deny6"))
 iset("routed6", v6.get("routed"))
 iset("external6", v6.get("external6"))
 zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
+# transport srv6: by the VRF device in prerouting too (as in shc_egress)
+zones_in = zones + ("".join(f', "{n["vrf"]}" : {n["zone"]}' for n in nets) if srv6 else "")
 for hook, by in (("prerouting", "iifname"), ("output", "oifname")):
     out.append(f"  chain zone_{hook} {{")
     out.append(f"    type filter hook {hook} priority raw; policy accept;")
     if nets:
-        out.append(f"    meta nfproto ipv6 ct zone set {by} map {{ {zones} }}")
+        out.append(f"    meta nfproto ipv6 ct zone set {by} map {{ {zones_in if hook == 'prerouting' else zones} }}")
     out.append("  }")
 # from a network toward the egress VRF (packets leave the network's VRF through its xe veth)
 out.append("  chain outbound {")
@@ -438,13 +883,19 @@ if v6.get("deny6"):
 out.append("  }")
 for hook in ("forward", "output"):
     out.append(f"  chain out_{hook} {{ type filter hook {hook} priority filter; policy accept; meta nfproto ipv6 jump outbound; }}")
-# TCP toward and from the internet never uses segments larger than the WAN carries
+# TCP toward and from the internet never uses segments larger than the WAN carries. Toward it: a network's SYNs leaving
+# its VRF by the xe veth (popped from MPLS into the VRF they pass output, decapsulated or from a circuit forward)
 out.append("  chain clamp {")
-for by, what in (("oifname", "out"), ("iifname", "in")):
-    out.append(f'    {by} "xe*" tcp flags & syn == syn tcp option maxseg size > {mss} counter tcp option maxseg size set {mss} comment "mss {what}"')
+out.append(f'    oifname "xe*" tcp flags & syn == syn tcp option maxseg size > {mss} counter tcp option maxseg size set {mss} comment "mss out"')
 out.append("  }")
 for hook in ("forward", "output"):
     out.append(f"  chain clamp_{hook} {{ type filter hook {hook} priority mangle; policy accept; meta nfproto ipv6 jump clamp; }}")
+# from it: the SYN-ACKs into a network are forwarded in the egress VRF toward the network's veth xo<n> (past it, in the
+# network's VRF, their input interface is the VRF device, and with srv6 they are encapsulated without passing forward);
+# forward only, so the node's own SYNs are not clamped
+out += ["  chain clamp_return {", "    type filter hook forward priority mangle; policy accept;",
+        f'    meta nfproto ipv6 oifname "xo*" tcp flags & syn == syn tcp option maxseg size > {mss} counter '
+        f'tcp option maxseg size set {mss} comment "mss in, at the egress veth"', "  }"]
 # into a network (packets arrive on its xe veth from the egress VRF)
 out.append("  chain inbound {")
 out.append("    type filter hook prerouting priority filter; policy accept;")
@@ -491,20 +942,47 @@ egress6_down() {
   rm -f "$MARK6"
 }
 
+# <dev> <address>...: one ARP announcement per address (a broadcast request with sender = target = the address and
+# the device's MAC), for the device's own address and the proxied ones (iputils arping cannot send from a proxied
+# address): the hand-off router's ARP cache follows the device's MAC. Best effort: a failure is reported, not fatal
+arp_announce() {
+  python3 - "$@" <<'PY' || echo "arp-announce=failed" >&2
+import fcntl, socket, struct, sys
+dev, addrs = sys.argv[1], sys.argv[2:]
+try:
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0806))
+    s.bind((dev, 0))
+    mac = fcntl.ioctl(s.fileno(), 0x8927, struct.pack('256s', dev.encode()))[18:24]
+    for a in addrs:
+        ip = socket.inet_aton(a)
+        arp = struct.pack('!HHBBH6s4s6s4s', 1, 0x0800, 6, 4, 1, mac, ip, b'\x00' * 6, ip)
+        for _ in range(2):
+            s.send(b'\xff' * 6 + mac + b'\x08\x06' + arp)
+except OSError as e:
+    sys.exit(1)
+PY
+}
+
 egress_up() {
-  local ev et par emtu eaddr want nat n v t z xe xo xea xoa a
+  local ev et par emtu eaddr want nat n v t z xe xo xea xoa a emac
   ev=$(q .egress.vrf); et=$(q .egress.table); par=$(q .egress.parent); emtu=$(q .egress.mtu); eaddr=$(q .egress.address)
   wait_link "$par" "$emtu" || { echo "egress parent interface $par missing or below MTU $emtu" >&2; exit 3; }
   modprobe vrf
   ip link show "$ev" >/dev/null 2>&1 || ip link add "$ev" type vrf table "$et"
   ip link set "$ev" up
-  ip link show egress0 >/dev/null 2>&1 || ip link add egress0 link "$par" type macvlan mode bridge
+  # a MAC of its own, from the egress address, the same at every boot: the hand-off router's ARP cache keeps the
+  # MAC it learned for the proxied NAT pool addresses for hours, and a macvlan without one gets a new random MAC
+  # at every creation (after a reboot the pool's return traffic went to the old MAC until the cache expired:
+  # measured 2026-11-07); the announcements below refresh the cache when the MAC did change
+  emac=$(printf '02:e9:%02x:%02x:%02x:%02x' $(echo "${eaddr%/*}" | tr . ' '))
+  ip link show egress0 >/dev/null 2>&1 || ip link add egress0 link "$par" address "$emac" type macvlan mode bridge
+  if [ "$(cat /sys/class/net/egress0/address)" != "$emac" ]; then ip link set egress0 address "$emac"; echo "egress-mac=changed"; fi
   # the hand-off network's routers never configure the egress (its addresses come from the realization)
   [ -z "$V6" ] || v6 "IPv6 settings of egress0" sysctl_ensure net/ipv6/conf/egress0/accept_ra=0 \
     net/ipv6/conf/egress0/autoconf=0
   ip link set egress0 master "$ev" mtu "$emtu" up
   for a in $(stray egress0 0.0.0.0/0 "$eaddr"); do ip addr del "$a" dev egress0; done
-  ip addr show dev egress0 | grep -q " ${eaddr} " || ip addr add "$eaddr" dev egress0
+  addr_ensure egress0 "$eaddr"
   sysctl -qw net.ipv4.neigh.egress0.proxy_delay=0
   want=$(jq -r '.egress.networks // [] | .[].vrf' "$CONF")
   for n in $(jq -r '.egress.networks // [] | .[] | [.vrf, .table, .xe, .xo, .xeAddr, .xoAddr] | join(":")' "$CONF"); do
@@ -514,18 +992,19 @@ egress_up() {
     ip link set "$xe" master "$v" mtu "$emtu" up
     ip link set "$xo" master "$ev" mtu "$emtu" up
     for a in $(stray "$xe" 0.0.0.0/0 "$xea"); do ip addr del "$a" dev "$xe"; done
-    ip addr show dev "$xe" | grep -q " ${xea} " || ip addr add "$xea" dev "$xe"
+    addr_ensure "$xe" "$xea"
     for a in $(stray "$xo" 0.0.0.0/0 "$xoa"); do ip addr del "$a" dev "$xo"; done
-    ip addr show dev "$xo" | grep -q " ${xoa} " || ip addr add "$xoa" dev "$xo"
+    addr_ensure "$xo" "$xoa"
   done
-  for v in $(ip -j link show type veth | jq -r '.[].ifname' | grep -E '^xe[0-9]+$' || true); do
-    echo "$want" | grep -qx "e${v#xe}" || ip link del "$v"
+  for v in $(ip -j link show type veth | jq -r '.[].ifname // empty' | grep -E '^xe[0-9]+$' || true); do
+    grep -qx -- "e${v#xe}" <<<"$want" || ip link del "$v"
   done
   nat=$(jq -r '.egress.networks // [] | .[].nat | select(. != null and . != "")' "$CONF")
   for a in $(ip -4 neigh show proxy dev egress0 | awk '{print $1}'); do
-    echo "$nat" | grep -qx "$a" || ip neigh del proxy "$a" dev egress0
+    grep -qx -- "$a" <<<"$nat" || ip neigh del proxy "$a" dev egress0
   done
-  for a in $nat; do ip -4 neigh show proxy dev egress0 | grep -q "^$a " || ip neigh add proxy "$a" dev egress0; done
+  for a in $nat; do shows -q "^$a " ip -4 neigh show proxy dev egress0 || ip neigh add proxy "$a" dev egress0; done
+  arp_announce egress0 "${eaddr%/*}" $nat
   egress_nft | nft -f -
   if jq -e '.egress.ipv6' "$CONF" >/dev/null 2>&1; then egress6_up; elif [ -e "$MARK6" ]; then egress6_down "$emtu"; fi
 }
@@ -584,7 +1063,9 @@ attach_down() {
 attach_nft() {
   python3 - "$CONF" <<'PY'
 import json, sys
-a = json.load(open(sys.argv[1]))["attachments"]
+doc = json.load(open(sys.argv[1]))
+a = doc["attachments"]
+srv6 = doc.get("transport") == "srv6"
 cs = a.get("circuits") or []
 srcs = a.get("platformSources") or []
 def devs(xs):
@@ -597,10 +1078,18 @@ if cs:
     vrfs = {c["vrf"]: c["zone"] for c in cs}
     zones_out = zones + "".join(f', "{v}" : {z}' for v, z in sorted(vrfs.items()))
     # the network's zone: a circuit's traffic that leaves through the network's egress veth is source-NATed there
+    # transport srv6: a packet decapsulated into the VRF passes prerouting with the VRF as its input interface (never
+    # output): the VRF's zone there too
     out += ["  chain zone_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
-            f"    ct zone set iifname map {{ {zones} }}", "  }",
+            f"    ct zone set iifname map {{ {zones_out if srv6 else zones} }}", "  }",
             "  chain zone_output {", "    type filter hook output priority raw; policy accept;",
             f"    ct zone set oifname map {{ {zones_out} }}", "  }"]
+    # transport srv6: a circuit's packet to the platform's sources that is routed into the core is encapsulated and
+    # never passes forward: dropped before routing too (still by the device: the first of its two prerouting passes)
+    if srv6 and srcs:
+        out += ["  chain from_circuit {", "    type filter hook prerouting priority filter; policy accept;",
+                f'    iifname {devs(cs)} ip daddr {{ {", ".join(srcs)} }} counter drop comment "the platform\'s sources"',
+                "  }"]
     # past prerouting, a packet from a device in a VRF shows the VRF as its input interface: the circuit's device is
     # the slave interface (meta sdifname)
     out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
@@ -629,7 +1118,9 @@ PY
 attach6_nft() {
   python3 - "$CONF" <<'PY'
 import ipaddress, json, sys
-a = json.load(open(sys.argv[1]))["attachments"]
+doc = json.load(open(sys.argv[1]))
+a = doc["attachments"]
+srv6 = doc.get("transport") == "srv6"
 cs = [c for c in a.get("circuits") or [] if c.get("address6")]
 for c in cs:  # the link as a network (the form nft prints)
     c["link6"] = str(ipaddress.ip_network(str(c.get("link6") or c["address6"]), strict=False))
@@ -651,8 +1142,9 @@ zones = ", ".join(f'"{c["device"]}" : {c["zone"]}' for c in cs)
 # the node's own packets in a VRF pass output first with the VRF as their output interface (as in shc_attach)
 vrfs = {c["vrf"]: c["zone"] for c in cs}
 zones_out = zones + "".join(f', "{v}" : {z}' for v, z in sorted(vrfs.items()))
+# transport srv6: the VRF's zone in prerouting too (as in shc_attach)
 out += ["  chain zone_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
-        f"    ct zone set iifname map {{ {zones} }}", "  }",
+        f"    ct zone set iifname map {{ {zones_out if srv6 else zones} }}", "  }",
         "  chain zone_output {", "    type filter hook output priority raw; policy accept;",
         f"    ct zone set oifname map {{ {zones_out} }}", "  }"]
 # before routing the device is still the input interface: everything the CE sends, to the node or through it
@@ -698,7 +1190,7 @@ attach_up() {
   fi
   for c in $(jq -r '.attachments.circuits // [] | .[] | [.device, .parent, .vlan, .mtu, .vrf, .table, .address] | join(":")' "$CONF"); do
     IFS=: read -r dev par vlan mtu v t addr <<<"$c"
-    a6=$(jq -r --arg d "$dev" '.attachments.circuits[] | select(.device == $d) | .address6 // empty' "$CONF" | head -n 1)
+    a6=$(jq -r --arg d "$dev" '[.attachments.circuits[] | select(.device == $d) | .address6 // empty][0] // empty' "$CONF")
     wait_link "$par" "$mtu" || { echo "bearer interface $par missing or below MTU $mtu" >&2; exit 3; }
     root_vrf "$v" "$t"
     ip link show "$dev" >/dev/null 2>&1 || ip link add link "$par" name "$dev" type vlan id "$vlan"
@@ -714,7 +1206,7 @@ attach_up() {
     [ "$(ip -j link show dev "$dev" | jq -r '.[0].master // empty')" = "$v" ] || ip link set "$dev" master "$v"
     ip link set "$dev" mtu "$mtu" up
     for a in $(stray "$dev" 0.0.0.0/0 "$addr"); do ip addr del "$a" dev "$dev"; done
-    ip addr show dev "$dev" | grep -q " ${addr} " || ip addr add "$addr" dev "$dev"
+    addr_ensure "$dev" "$addr"
     if [ -n "$a6" ]; then
       # nodad: the link is the circuit's alone (the node, the other node and the CE hold fixed addresses)
       a6=$(canon "$a6")
@@ -722,7 +1214,7 @@ attach_up() {
       addr_ensure "$dev" "$a6" nodad
     fi
   done
-  for dev in $(attach_devices); do echo "$want" | grep -qx "$dev" || ip link del "$dev"; done
+  for dev in $(attach_devices); do grep -qx -- "$dev" <<<"$want" || ip link del "$dev"; done
   if [ -n "$want" ]; then attach_nft | nft -f -; else nft delete table ip shc_attach 2>/dev/null || true; fi
   [ -n "$want6" ] || attach6_down
 }
@@ -736,7 +1228,8 @@ post_start() {
   ns=$(q .netns); conf=/etc/frr/$ns/frr.conf.shc; [ -f "$conf" ] || conf=/etc/frr/$ns/frr.conf
   want=$(jq -r '.vrfs // [] | .[].name' "$CONF" | sort | tr '\n' ' ')
   for i in $(seq 1 30); do
-    have=$(vtysh -N "$ns" -c 'show vrf' 2>/dev/null | awk '$1 == "vrf" {print $2}' | sort | tr '\n' ' ')
+    # (vtysh fails until the instance's daemons answer: none known yet, wait on)
+    have=$(vtysh -N "$ns" -c 'show vrf' 2>/dev/null | awk '$1 == "vrf" {print $2}' | sort | tr '\n' ' ') || have=""
     vtysh -N "$ns" -c 'show bgp summary' >/dev/null 2>&1 && [ "$have" = "$want" ] && break
     sleep 2
   done
@@ -751,26 +1244,47 @@ post_start() {
   unset pw
 }
 
+case "$ACT" in
+up|down|post) ;;
+guard) guard_check; exit 0 ;;
+*) echo "unknown action $ACT" >&2; exit 2 ;;
+esac
 case "$TYPE" in
 root)
   BR=$(q .bridge); MTU=$(q .mtu); LO=$(q .loopback); LOPOOL=$(q .loopbackPool); LINK=$(q .link)
   EV=$(opt .egress.vrf)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
-    if [ -n "$V6" ] && ! ra_precheck; then V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""; fi
-    modprobe mpls_router; modprobe mpls_iptunnel
-    sysctl -qw net.mpls.platform_labels=1048575
+    # the refusals that depend only on the host's state, before the run's first write
+    precheck root
+    if [ -n "$V6" ] && ! ra_precheck; then
+      [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: a host interface relies on router advertisements" >&2; exit 4; }
+      V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
+    fi
+    if [ "$TRANSPORT" = srv6 ]; then
+      srv6_up "$BR"
+    else
+      modprobe mpls_router; modprobe mpls_iptunnel
+      sysctl -qw net.mpls.platform_labels=1048575
+    fi
+    step "the IPv4 local table behind the VRFs' rule" local4 last
     MAC=$(printf '02:fa:%02x:%02x:%02x:%02x' $(echo "${LINK%/*}" | tr . ' '))
     ip link show "$BR" >/dev/null 2>&1 || ip link add "$BR" address "$MAC" type bridge
     if [ "$(cat "/sys/class/net/$BR/address")" != "$MAC" ]; then ip link set "$BR" address "$MAC"; echo "bridge-mac=changed"; fi
     [ -z "$V6" ] || v6 "IPv6 settings of the core bridge $BR" core6 "$BR"
+    [ "$TRANSPORT" != srv6 ] || srv6_step "seg6_enabled on the core leg $BR" sysctl_ensure "net/ipv6/conf/$BR/seg6_enabled=0"
     ip link set "$BR" mtu "$MTU" up
     for a in $(stray "$BR" 0.0.0.0/0 "$LINK"); do ip addr del "$a" dev "$BR"; done
-    ip addr show dev "$BR" | grep -q " ${LINK} " || ip addr add "$LINK" dev "$BR"
+    addr_ensure "$BR" "$LINK"
     for a in $(stray lo "$LOPOOL" "$LO"); do ip addr del "$a" dev lo; done
-    ip addr show dev lo | grep -q " ${LO} " || ip addr add "$LO" dev lo
+    addr_ensure lo "$LO"
     v6 "the IPv6 loopback" lo6
-    sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
+    if [ "$TRANSPORT" = srv6 ]; then
+      srv6_step "the locator on lo" srv6_locator "$SRV6_ANCHOR" "$SRV6_LOC"
+    elif [ -e "$LOCMARK" ]; then
+      srv6_locator
+    fi
+    [ "$TRANSPORT" = srv6 ] || sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
     root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf] | unique | .[]' "$CONF")"
@@ -780,6 +1294,16 @@ root)
         v6 "IPv6 in VRF ${v%%:*}" vrf6 "${v%%:*}" "${v#*:}"
       done
     fi
+    # every root VRF's IPv4 lookup ends in its own table
+    for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
+        | map(.table | tostring) | unique | .[]' "$CONF"); do
+      step "the IPv4 unreachable default of table $v" vrf4_unreach "$v"
+    done
+    # transport srv6: no routing header on any of the instance's devices (never the management interface)
+    # shellcheck disable=SC2046
+    [ "$TRANSPORT" != srv6 ] || srv6_step "seg6_enabled off on the instance's devices" srv6_seg6_off \
+      $(ip -j link show | jq -r --arg br "$BR" --arg ev "$EV" '.[].ifname | select(. == "lo" or . == $br or . == "egress0"
+        or . == $ev or test("^(e|xe|xo)[0-9]+$"))') $(jq -r '.attachments.circuits // [] | .[].device' "$CONF")
   else
     egress_down
     attach_down
@@ -787,6 +1311,9 @@ root)
     ip link show "$BR" >/dev/null 2>&1 && ip link del "$BR"
     for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
     LO6=""; v6 "the IPv6 loopback removal" lo6
+    [ "$TRANSPORT" != srv6 ] || srv6_down
+    [ ! -e "$LOCMARK" ] || srv6_locator
+    local4 first
   fi
   ;;
 gateway)
@@ -801,7 +1328,7 @@ gateway)
   CMTU=$(q .coreMtu); MTU=$(jq -r '.mtu // empty' "$CONF"); X="ip netns exec $NS"
   snapshot() {
     { ip netns list | grep -w "^$NS" || true; ip -o link show "$CV" 2>/dev/null | grep -o 'mtu [0-9]*\|master [a-z0-9-]*\|state [A-Z]*' || true
-      if ip netns list | grep -qw "^$NS"; then
+      if shows -qw "^$NS" ip netns list; then
         $X ip -br -4 addr show; $X ip -o link show | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|state [A-Z]*' || true
         $X sysctl -n net.ipv4.ip_forward net.mpls.platform_labels net.mpls.conf.lo.input 2>/dev/null || true
         $X sysctl -n net.mpls.conf.core0.input 2>/dev/null || true
@@ -820,6 +1347,8 @@ gateway)
           $X wg show "$VDEV" allowed-ips | sort; $X wg show "$VDEV" persistent-keepalive | sort
         fi
         [ ! -e "$MARKI6" ] || $X nft -s list table ip6 shc_gw_in6 2>/dev/null || true
+        NSX=$X local4_state
+        NSX=$X srv6_state core0
       fi; } | sha1sum
   }
   # the VRFs' input filter (icmp6Announced): IPv6 addressed to the node itself from a VRF device. Past prerouting such
@@ -872,7 +1401,7 @@ gateway)
     $X wg set "$VDEV" private-key "$WGKEY" listen-port "$port"
     want=$(jq -r '.wireguard.peers[].publicKey' "$CONF")
     for peer in $($X wg show "$VDEV" peers); do
-      echo "$want" | grep -qxF -- "$peer" || $X wg set "$VDEV" peer "$peer" remove
+      grep -qxF -- "$peer" <<<"$want" || $X wg set "$VDEV" peer "$peer" remove
     done
     while read -r p; do
       set -- peer "$(jq -r .publicKey <<<"$p")" allowed-ips "$(jq -r '.allowedIPs | join(",")' <<<"$p")" \
@@ -886,15 +1415,29 @@ gateway)
   before=$(snapshot)
   if [ "$ACT" = up ]; then
     ip link show "$BR" >/dev/null 2>&1 || { echo "core bridge $BR missing: the root instance must be up first" >&2; exit 3; }
-    ip netns list | grep -qw "^$NS" || ip netns add "$NS"
-    $X sysctl -qw net.ipv4.ip_forward=1 net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0 \
-      net.mpls.platform_labels=1048575
+    # the refusals that depend only on the state as found (a namespace that exists already), before the run's first
+    # write
+    if shows -qw "^$NS" ip netns list; then NSX=$X precheck gateway; fi
+    shows -qw "^$NS" ip netns list || ip netns add "$NS"
+    if [ "$TRANSPORT" = srv6 ]; then
+      NSX=$X; srv6_up core0
+      $X sysctl -qw net.ipv4.ip_forward=1 net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0
+    else
+      $X sysctl -qw net.ipv4.ip_forward=1 net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0 \
+        net.mpls.platform_labels=1048575
+    fi
     $X ip link set lo up
     NSX=$X
+    step "the IPv4 local table behind the VRFs' rule" local4 last
     [ -z "$V6" ] || v6 "the namespace's IPv6 settings" router6
     for a in $(stray lo "$LOPOOL" "$LO"); do $X ip addr del "$a" dev lo; done
-    $X ip addr show dev lo | grep -q " ${LO} " || $X ip addr add "$LO" dev lo
+    addr_ensure lo "$LO"
     v6 "the IPv6 loopback" lo6
+    if [ "$TRANSPORT" = srv6 ]; then
+      srv6_step "the locator on lo" srv6_locator "$SRV6_ANCHOR" "$SRV6_LOC"
+    elif [ -e "$LOCMARK" ]; then
+      srv6_locator
+    fi
     if [ -n "$WG" ]; then
       wg_leg
     else
@@ -907,17 +1450,18 @@ gateway)
       $X ip link set "$VDEV" mtu "$MTU" up
     fi
     for a in $(stray "$VDEV" 0.0.0.0/0 "$ADDR"); do $X ip addr del "$a" dev "$VDEV"; done
-    $X ip addr show dev "$VDEV" | grep -q " ${ADDR} " || $X ip addr add "$ADDR" dev "$VDEV"
+    addr_ensure "$VDEV" "$ADDR"
     if ! ip link show "$CV" >/dev/null 2>&1; then
       $X ip link del core0 >/dev/null 2>&1 || true
       ip link add "$CV" mtu "$CMTU" type veth peer name core0 netns "$NS"
     fi
     ip link set "$CV" master "$BR" mtu "$CMTU" up
     [ -z "$V6" ] || v6 "IPv6 settings of the core leg core0" core6 core0
+    [ "$TRANSPORT" != srv6 ] || srv6_step "seg6_enabled on the core leg core0" sysctl_ensure net/ipv6/conf/core0/seg6_enabled=0
     $X ip link set core0 mtu "$CMTU" up
     for a in $(stray core0 0.0.0.0/0 "$LINK"); do $X ip addr del "$a" dev core0; done
-    $X ip addr show dev core0 | grep -q " ${LINK} " || $X ip addr add "$LINK" dev core0
-    $X sysctl -qw net.mpls.conf.lo.input=1 net.mpls.conf.core0.input=1
+    addr_ensure core0 "$LINK"
+    [ "$TRANSPORT" = srv6 ] || $X sysctl -qw net.mpls.conf.lo.input=1 net.mpls.conf.core0.input=1
     VTEP=${ADDR%/*}
     WANT=$(jq -r '.vrfs // [] | .[].name' "$CONF")
     [ -z "$WANT" ] || modprobe vrf
@@ -933,6 +1477,7 @@ gateway)
       $X ip link show "$VRF" >/dev/null 2>&1 || $X ip link add "$VRF" type vrf table "$VNI"
       $X ip link set "$VRF" up
       v6 "IPv6 in VRF $VRF" vrf6 "$VRF" "$VNI"
+      step "the IPv4 unreachable default of VRF $VRF" vrf4_unreach "$VNI"
       # shellcheck disable=SC2046
       v6 "IPv6 covering routes in VRF $VRF" vrf6_covers "$VRF" "$VNI" \
         $(jq -r --arg v "$VRF" '.vrfs[] | select(.name == $v) | .covering6 // [] | .[]' "$CONF")
@@ -947,35 +1492,40 @@ gateway)
       fi
       $X ip link set "vx$VNI" master "br$VNI" mtu "$VMTU" up
       $X ip link set "vx$VNI" type bridge_slave neigh_suppress on learning off
-      $X sysctl -qw "net.mpls.conf.$VRF.input=1" 2>/dev/null || true
+      [ "$TRANSPORT" = srv6 ] || $X sysctl -qw "net.mpls.conf.$VRF.input=1" 2>/dev/null || true
     done
     # TCP towards a site never uses segments larger than its leg carries (rt mtu = the route's device MTU): the
-    # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole.
-    # Forwarded SYNs (from the site's leg) pass the forward hook on the bridge port; SYNs that arrive over the core
-    # (MPLS popped into the VRF, e.g. another site's gateway) leave through the output hook on the VRF's bridge.
+    # VRFs hold no address to send "fragmentation needed" from, so path MTU discovery alone would black-hole. The
+    # SYNs and SYN-ACKs that arrive over the core leave by the site's bridge br<vni> (a routed packet's output device;
+    # the VXLAN port is the bridge's): popped from MPLS they are transmitted on the VRF device and pass the output
+    # hook (chain clamp_core), decapsulated (srv6) they pass forward (chain clamp); nothing else reaches the bridge
+    # by the other hook but the node's own packets, which the kernel already sizes to the route.
     if [ -n "$WANT" ]; then
+      if [ "$TRANSPORT" = srv6 ]; then MC=clamp; MH=forward; else MC=clamp_core; MH=output; fi
       printf '%s\n' 'add table inet shc_gw_mss' 'delete table inet shc_gw_mss' 'table inet shc_gw_mss {' \
-        '  chain clamp {' '    type filter hook forward priority mangle; policy accept;' \
-        '    oifname "vx*" tcp flags syn tcp option maxseg size set rt mtu' '  }' \
-        '  chain clamp_core {' '    type filter hook output priority mangle; policy accept;' \
+        "  chain $MC {" "    type filter hook $MH priority mangle; policy accept;" \
         '    oifname "br*" tcp flags syn tcp option maxseg size set rt mtu' '  }' '}' | $X nft -f -
     else
       $X nft delete table inet shc_gw_mss 2>/dev/null || true
     fi
-    for VRF in $($X ip -j link show type vrf | jq -r '.[].ifname' | grep -E '^t[0-9]+$' || true); do
-      echo "$WANT" | grep -qx "$VRF" && continue
+    for VRF in $($X ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^t[0-9]+$' || true); do
+      grep -qx -- "$VRF" <<<"$WANT" && continue
       VNI=${VRF#t}
       $X ip link del "vx$VNI" 2>/dev/null || true
       $X ip link del "br$VNI" 2>/dev/null || true
       $X ip link del "$VRF"
-      vrf6_gone "$VNI"
+      vrf6_gone "$VNI"; vrf4_gone "$VNI"
     done
+    # transport srv6: no routing header on any device of the namespace
+    # shellcheck disable=SC2046
+    [ "$TRANSPORT" != srv6 ] || srv6_step "seg6_enabled off on the namespace's devices" srv6_seg6_off \
+      $($X ip -j link show | jq -r '.[].ifname')
     NSX=""
   else
     ip link show "$CV" >/dev/null 2>&1 && ip link del "$CV"
-    ip netns list | grep -qw "^$NS" && ip netns del "$NS"
+    shows -qw "^$NS" ip netns list && ip netns del "$NS"
     [ -z "$WG" ] || rm -f "$WGKEY"
-    rm -f "$MARKI6"
+    rm -f "$MARKI6" "$GUARDREF" "$LOCMARK"
   fi
   ;;
 *) echo "unknown instance type $TYPE" >&2; exit 2 ;;

@@ -8,7 +8,11 @@ actions:
   check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names;
                   the core's IPv6 transport when set: loopbackPool6 an IPv6 network of at least /120, icmpSource6 one of
                   at least /96, the two apart, sidOffset6 above the highest provider-edge index and offset + index
-                  inside the SRGB
+                  inside the SRGB; the core's transport, one for the fabric: core.transport mpls (also when empty) or
+                  srv6, srv6 needs core.loopbackPool6 and core.srv6.block; a block (when set) a /32 inside 5f00::/16
+                  apart from the core's IPv6 ranges, attachments.linkPool6 and egress.ipv6.routedPrefixes, at most 255
+                  nodes and a highest provider-edge index of at most 255. transport: the fabric's transport ("" when
+                  it is neither)
   check-gateway   {fabric: spec, core: realization core, attachments: realization attachments, gateway: spec,
                   others: [CloudGateway objects or {name, spec}]}
                   nodes match the fabric's, one gateway per site, VLAN and site subnet unique on the fabric and the
@@ -25,7 +29,9 @@ actions:
                   core.loopbackPool6 also its IPv6 loopback (loopback6 /128, loopbackIp6) and the IPv6 loopback's SID
                   label (sid6 = SRGB start + sidOffset6 + index), else "" / 0; with core.icmpSource6 and nodeOrdinal
                   (the node's 1-based position in borderGateway.nodes) icmp6, the namespace's ICMPv6 source on that
-                  node (network address + (nodeOrdinal << 16) + index, /128), else ""
+                  node (network address + (nodeOrdinal << 16) + index, /128), else ""; with core.srv6.block and
+                  nodeOrdinal the SRv6 locator (the /48 of the block with node field locatorNode = nodeOrdinal * 256 +
+                  index, both 1-255; unique across nodes), else "" / 0
   cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
                   the site namespace of each CloudVirt namespace: <entity>-<cloudvirt>-<name>, cut to 54 characters
                   plus a hash when longer than 63 (namespace names are global on the site's cluster), with its
@@ -43,8 +49,11 @@ actions:
                   translator-embedded deny list from translation.<site>.pref64 and egress.denyDestinations; the
                   resolvers on port 53, egress.ipv6.resolverDestinations6 and every translation.<site>.dns64Resolvers)
                   and per network with ipv6 (its platform block and the placement prefixes inside it, all inside
-                  egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes and whether the
-                  node is the network's standby (index mod nodes); errors for an unusable configuration
+                  egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes, whether the
+                  node is the network's standby (index mod nodes) and the sources the node's filter admits from the
+                  network (src6: the block and, with core.icmpSource6, the node's /112 of it, which holds the ICMPv6
+                  sources of all of that node's namespaces; the node's position is its place in nodes, 1-based);
+                  errors for an unusable configuration
   circuit-plan    {attachments: realization attachments, nodes: [node names], index, ipv6?}  an attachment circuit's
                   link subnet (the index-th of attachments.linkPool), each node's address and the CE's; with ipv6 (the
                   circuit has IPv6 accept entries) also its IPv6 link under ipv6 (the index-th /64 of
@@ -141,6 +150,8 @@ def check_fabric(req):
     except ValueError:
         pass
     errors += core6_check(core, srgb, pe_max, len((spec.get("borderGateway") or {}).get("nodes") or []))
+    node_names = [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []]
+    errors += srv6_check(core, real, node_names, pe_max)
     eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []],
                       spec.get("domainAsn"), core)
     errors += eg["errors"]
@@ -148,7 +159,94 @@ def check_fabric(req):
     at = attachments_check(real.get("attachments") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []], core)
     errors += at["errors"]
     size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
-    return {"errors": errors, "poolSize": size, "peIndexMax": pe_max}
+    t = core_transport(core)
+    return {"errors": errors, "poolSize": size, "peIndexMax": pe_max, "transport": t if t in TRANSPORTS else ""}
+
+
+TRANSPORTS = ("mpls", "srv6")
+SRV6_SPACE = ipaddress.ip_network("5f00::/16")
+# micro-SID layout F3216: block 32 bits, node 16 bits (node position 8 + provider-edge index 8), function 16 bits
+SRV6_ORDINAL_MAX = 255
+
+
+def core_transport(core):
+    """The fabric's VPN transport as configured: core.transport, mpls when unset or empty. Not validated: srv6_check
+    names a value outside TRANSPORTS."""
+    v = (core or {}).get("transport")
+    return "mpls" if v is None or str(v) == "" else str(v)
+
+
+def srv6_block(core):
+    """The SID block (core.srv6.block) as an IPv6 network, None when empty; ValueError when it is not a /32 inside
+    5f00::/16."""
+    s = (core or {}).get("srv6")
+    if s is None or s == "":
+        return None
+    if not isinstance(s, dict):
+        raise ValueError("realization core.srv6 is not a mapping")
+    v = s.get("block") or ""
+    if not str(v).strip():
+        return None
+    try:
+        n = ipaddress.ip_network(str(v), strict=True)
+    except ValueError as e:
+        raise ValueError(f"realization core.srv6.block: {e}")
+    if n.version != 6 or n.prefixlen != 32 or not n.subnet_of(SRV6_SPACE):
+        raise ValueError(f"realization core.srv6.block {n} is not a /32 inside {SRV6_SPACE}")
+    return n
+
+
+def srv6_check(core, real, node_names, pe_max):
+    """The core's transport, one for the fabric: core.transport mpls or srv6; srv6 needs core.loopbackPool6 and
+    core.srv6.block (there is no per-node transport: a core.transportByNode is refused). A block, when set (also on
+    mpls: the provider edges' locators are derived from it), is a /32 inside 5f00::/16 apart from the core's other
+    IPv6 ranges and the routed IPv6 egress space, and the node positions and provider-edge indexes fit its 8-bit
+    fields."""
+    errors = []
+    t = core.get("transport")
+    if t is not None and str(t) != "" and str(t) not in TRANSPORTS:
+        errors.append(f"realization core.transport {t!r} is not one of {', '.join(TRANSPORTS)}")
+    if core.get("transportByNode"):
+        errors.append("realization core.transportByNode is not supported: the fabric has one transport (core.transport)")
+    block, block_bad = None, False
+    try:
+        block = srv6_block(core)
+    except ValueError as e:
+        errors.append(str(e))
+        block_bad = True
+    if core_transport(core) == "srv6":
+        if not str(core.get("loopbackPool6") or "").strip():
+            errors.append("realization core.transport srv6 needs the dual-stack core (core.loopbackPool6)")
+        if block is None and not block_bad:
+            errors.append("realization core.transport srv6 needs core.srv6.block")
+    if block is None:
+        return errors
+    others = []
+    for k in ("loopbackPool6", "icmpSource6"):
+        try:
+            c = core6(core, k, 128)
+        except ValueError:
+            continue  # core6_check names it
+        if c is not None:
+            others.append((f"core.{k}", c))
+    e6 = ((real or {}).get("egress") or {}).get("ipv6") or {}
+    for c in e6.get("routedPrefixes") or []:
+        try:
+            n = ipaddress.ip_network(str(c), strict=True)
+        except ValueError:
+            continue  # egress6_check names it
+        others.append(("egress.ipv6.routedPrefixes", n))
+    for what, c in others:
+        if c.version == 6 and c.overlaps(block):
+            errors.append(f"realization core.srv6.block {block} overlaps {what} {c}")
+    if len(node_names) > SRV6_ORDINAL_MAX:
+        errors.append(f"realization core.srv6.block: {len(node_names)} border gateway nodes do not fit the locator's "
+                      f"node position (at most {SRV6_ORDINAL_MAX})")
+    if pe_max > SRV6_ORDINAL_MAX:
+        errors.append(f"realization core.srv6.block: the highest provider-edge index {pe_max} does not fit the "
+                      f"locator's index (at most {SRV6_ORDINAL_MAX}: a core.loopbackPool or core.linkSubnet of at most "
+                      "256 addresses)")
+    return errors
 
 
 def core6(core, key, min_len):
@@ -452,6 +550,35 @@ def egress6_plan(eg, req, node_names, errors):
     return nodes, networks
 
 
+def icmp6_slice(core, ordinal):
+    """The node's slice of core.icmpSource6: the /112 holding network + (ordinal << 16) + every provider-edge index,
+    i.e. the ICMPv6 sources of that node's root and gateway namespaces (pe_addresses' icmp6) and of nothing else
+    (another node's, or a cloud edge router's at its own ordinal, are in other slices). None without the pool."""
+    pool = core6(core, "icmpSource6", 96)
+    if pool is None:
+        return None
+    base = int(pool.network_address) + (int(ordinal) << 16)
+    if ordinal < 1 or base + 0xFFFF > int(pool.broadcast_address):
+        raise ValueError(f"node position {ordinal} does not fit core.icmpSource6 {pool}")
+    return ipaddress.ip_network((base, 112))
+
+
+def icmp6_slices(core, node_names, errors):
+    """{node: its slice of core.icmpSource6 (text)} by the node's 1-based position in the request's nodes (the order of
+    borderGateway.nodes, as for pe-addresses' nodeOrdinal); {} without the pool"""
+    out = {}
+    for o, name in enumerate(node_names, 1):
+        try:
+            s = icmp6_slice(core, o)
+        except ValueError as e:
+            errors.append(str(e))
+            return {}
+        if s is None:
+            return {}
+        out[name] = str(s)
+    return out
+
+
 def egress_plan(req):
     eg, node_names = req.get("egress") or {}, req.get("nodes") or []
     chk = egress_check(eg, node_names, req.get("domainAsn"), req.get("core"))
@@ -468,6 +595,7 @@ def egress_plan(req):
     ports = [int(x) for x in eg.get("platformPorts") or [6443, 443]]
     v6_on = bool((eg.get("ipv6") or {}).get("enabled"))
     nodes6, nets6 = egress6_plan(eg, req, node_names, errors) if v6_on else ({}, {})
+    icmp_slices = icmp6_slices(req.get("core") or {}, node_names, errors) if v6_on else {}
     seen = []
     for w in req.get("networks") or []:
         for c in w.get("platform") or []:
@@ -506,10 +634,12 @@ def egress_plan(req):
                  # RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback form at render
                  "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""}
             if v6:
-                # the IPv6 session over the veth, the prefixes announced, and the sources the filter admits (the
-                # node's own ICMPv6 source is added by the node's job: it differs per node)
+                # the IPv6 session over the veth, the prefixes announced, and the sources the filter admits: the
+                # network's block and the node's slice of core.icmpSource6 (the ICMPv6 sources of the node's own
+                # namespaces, so a gateway's Packet Too Big or Time Exceeded toward the internet passes; the root's
+                # own is in it, and the node's job also adds that one by itself)
                 e["ipv6"] = {"block": v6["block"], "prefixes": v6["prefixes"], "standby": v6["primary"] != name,
-                             "src6": [v6["block"]]}
+                             "src6": [v6["block"]] + ([icmp_slices[name]] if name in icmp_slices else [])}
             out.append(e)
             entry = networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": [],
                                                        "internet": internet, "platform": platform,
@@ -541,11 +671,21 @@ def pe_addresses(req):
     out = {"errors": [], "index": i, "loopback": f"{lo.network_address + i}/32", "loopbackIp": str(lo.network_address + i),
            "link": f"{link.network_address + i}/{link.prefixlen}", "linkIp": str(link.network_address + i),
            "net": f"{area}.0000.0000.{i:04x}.00", "sid": srgb["start"] + i,
-           "loopback6": "", "loopbackIp6": "", "sid6": 0, "icmp6": ""}
+           "loopback6": "", "loopbackIp6": "", "sid6": 0, "icmp6": "", "locator": "", "locatorNode": 0}
     try:
         lo6, icmp6 = core6(core, "loopbackPool6", 120), core6(core, "icmpSource6", 96)
+        block = srv6_block(core)
     except ValueError as e:
         return {"errors": [str(e)]}
+    if block is not None and req.get("nodeOrdinal") not in (None, ""):
+        # the SRv6 locator: the /48 of the block whose node field (bits 32-47) is (node position << 8) + index
+        o = int(req["nodeOrdinal"])
+        if not 1 <= o <= SRV6_ORDINAL_MAX or not 1 <= i <= SRV6_ORDINAL_MAX:
+            return {"errors": [f"node position {o} or provider-edge index {i} does not fit the SRv6 locator "
+                               f"(1-{SRV6_ORDINAL_MAX} each)"]}
+        node = (o << 8) + i
+        out.update({"locator": str(ipaddress.ip_network((int(block.network_address) + (node << 80), 48))),
+                    "locatorNode": node})
     if lo6 is not None:
         sid6 = srgb["start"] + int(core.get("sidOffset6", 1000)) + i
         if i >= lo6.num_addresses or sid6 > srgb["end"]:
@@ -741,6 +881,12 @@ def attachments_check(at, node_names, core=None):
                         continue
                     if c is not None and pool6.overlaps(c):
                         errors.append(f"realization attachments.linkPool6 {pool6} overlaps core.{k} {c}")
+                try:
+                    c = srv6_block(core)
+                except ValueError:
+                    c = None  # srv6_check names it
+                if c is not None and pool6.overlaps(c):
+                    errors.append(f"realization attachments.linkPool6 {pool6} overlaps core.srv6.block {c}")
         except ValueError as e:
             errors.append(f"realization attachments.linkPool6: {e}")
     for c in at.get("reserved6") or []:
@@ -801,11 +947,13 @@ NO_CIRCUIT_IPV6 = "IPv6 is not offered on attachment circuits of this fabric"
 def platform_ranges6(at, core, translation):
     """The platform's own IPv6 ranges a CE's routes never reach into: the circuits' IPv6 link pool
     (attachments.linkPool6), the installation's IPv6 infrastructure ranges (attachments.reserved6), the core's IPv6
-    loopbacks and ICMPv6 sources (core.loopbackPool6, core.icmpSource6) and every site's translation prefix
-    (translation.<site>.pref64). Without those inside another one, in address order; unusable values are left out
-    (the realization check names them)."""
+    loopbacks, ICMPv6 sources and SRv6 SID block (core.loopbackPool6, core.icmpSource6, core.srv6.block) and every
+    site's translation prefix (translation.<site>.pref64). Without those inside another one, in address order;
+    unusable values are left out (the realization check names them)."""
+    srv6 = (core or {}).get("srv6")
     given = [(at or {}).get("linkPool6")] + list((at or {}).get("reserved6") or []) + [
-        (core or {}).get("loopbackPool6"), (core or {}).get("icmpSource6")]
+        (core or {}).get("loopbackPool6"), (core or {}).get("icmpSource6"),
+        srv6.get("block") if isinstance(srv6, dict) else None]
     given += [((translation or {}).get(s) or {}).get("pref64") for s in sorted((translation or {}).keys())]
     out = []
     for c in given:
