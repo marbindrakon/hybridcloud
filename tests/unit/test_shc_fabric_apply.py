@@ -27,7 +27,7 @@ FAKE = os.path.join(HERE, "fake_netkernel.py")
 sys.path.insert(0, HERE)
 import fake_netkernel as F  # noqa: E402
 
-TOOLS = ("ip", "sysctl", "nft", "wg", "modprobe", "vtysh", "cat")
+TOOLS = ("ip", "sysctl", "nft", "wg", "modprobe", "vtysh", "cat", "udevadm")
 METRIC = "4278198272"
 
 ROOT_CONF = {

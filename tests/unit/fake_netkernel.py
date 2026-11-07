@@ -507,6 +507,8 @@ def link_add(k, nsname, rest):
     extra = rest[i + 2:]
     if name in k.ns(nsname)["links"]:
         raise Fail("RTNETLINK answers: File exists", 2)
+    if nsname == "":  # the host's udev will apply its sysctl.d defaults to the new device (see udev_pending)
+        k.st.setdefault("udev_pending", []).append(name)
     mtu = int(kw["mtu"]) if "mtu" in kw else None
     common = {"address": kw.get("address"), "parent": kw.get("link")}
     if mtu:
@@ -732,6 +734,22 @@ def cat_main(k, nsname, args, out, err):
 
 
 # ----------------------------------------------------------------------------------------------------------- main
+def udev_apply(k, names=None):
+    """the host's udev rule for a new net device runs systemd-sysctl for its prefixes, which applies the host's
+    sysctl.d defaults (RHEL 50-redhat.conf: net.ipv4.conf.*.rp_filter = 1) over whatever a call set meanwhile"""
+    pending = k.st.get("udev_pending", [])
+    done = pending if names is None else [n for n in pending if n in names]
+    changed = False
+    for name in done:
+        pending.remove(name)
+        if name in k.ns("")["links"]:
+            k.ns("")["sysctl"][f"net/ipv4/conf/{name}/rp_filter"] = "1"
+            changed = True
+    if not pending:
+        k.st.pop("udev_pending", None)
+    return changed or bool(done)
+
+
 def main():
     tool, args = sys.argv[1], sys.argv[2:]
     if tool == "cat" and not any(a.startswith(("/sys/", "/proc/")) for a in args):
@@ -748,6 +766,7 @@ def main():
         k = Kernel(st)
         out, err = [], []
         rc, wrote = 0, False
+        pending_before = list(st.get("udev_pending", []))
         try:
             if nsname not in st["ns"]:
                 raise Fail('Cannot open network namespace "%s": No such file or directory' % nsname)
@@ -773,12 +792,22 @@ def main():
                 wrote = True
             elif tool == "vtysh":
                 pass
+            elif tool == "udevadm":
+                if args[:1] == ["settle"]:
+                    wrote = udev_apply(k) or wrote
+                else:
+                    raise Fail("unknown udevadm verb " + " ".join(args))
             else:
                 raise Fail("unknown tool " + tool)
         except Fail as e:
             err.append(str(e))
             rc = e.code
             wrote = False
+        if tool != "udevadm" and pending_before and wrote:
+            # the host's udev handled the add event of a device created by an EARLIER call while this call ran: its
+            # sysctl.d defaults land after this call's own write (the race measured at a blade's boot, 2026-11-07:
+            # the apply's read, then its write, then udev's)
+            udev_apply(k, pending_before)
         if wrote:
             with open(os.environ["FAKE_STATE"] + ".tmp", "w") as f:
                 json.dump(st, f, indent=1, sort_keys=True)

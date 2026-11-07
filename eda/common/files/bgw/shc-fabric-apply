@@ -112,7 +112,8 @@
 #   noprefixroute: IS-IS announces the locator as the passive lo's prefix, on every start of FRR's daemons) and the
 #   locator blackholed in the main table at metric 4278198272 (an unallocated SID is dropped without an answer; the
 #   last anchor is remembered in <instance>.locator6 next to the JSON, and a run with mpls, or the root's down, removes
-#   it; a gateway's goes with its namespace); on the root every network VRF e<n> gets no reverse path filtering (rp_filter=0: decapsulated IPv4
+#   it; a gateway's goes with its namespace); on the root every network VRF e<n> gets no reverse path filtering (rp_filter=0, set once udev
+#   has applied the host's sysctl.d defaults to the new device, and set again by the guard action: decapsulated IPv4
 #   enters with the VRF device as input while its source's route leads to the core bridge, outside the VRF, which
 #   strict and loose mode both refuse; the egress VRF and the circuits' devices, strict, are left as they are). The
 #   kernel takes the larger of net.ipv4.conf.all.rp_filter and the device's, and all is the host's: a root with srv6
@@ -660,9 +661,18 @@ guard_check() {
     leg=$(q .bridge)
   fi
   have=$($NSX nft -s list table inet shc_core_guard 2>/dev/null) || have=""
-  if [ -n "$have" ] && [ -r "$GUARDREF" ] && [ "$have" = "$(<"$GUARDREF")" ]; then echo "guard=ok"; return 0; fi
-  srv6_step "the guard table inet shc_core_guard" srv6_guard "$leg"
-  echo "guard=restored"
+  if [ -n "$have" ] && [ -r "$GUARDREF" ] && [ "$have" = "$(<"$GUARDREF")" ]; then echo "guard=ok"; else
+    srv6_step "the guard table inet shc_core_guard" srv6_guard "$leg"
+    echo "guard=restored"
+  fi
+  # the root's network VRFs keep rp_filter 0 (root_vrf): the host's udev or a sysctl run of its own can set it back
+  if [ "$TYPE" = root ]; then
+    for v in $(root_vrfs); do
+      [ "$(sysctl -n "net/ipv4/conf/$v/rp_filter" 2>/dev/null)" = 0 ] && continue
+      srv6_step "no reverse path filtering on $v" sysctl_ensure "net/ipv4/conf/$v/rp_filter=0"
+      echo "rpfilter=restored $v"
+    done
+  fi
 }
 
 snapshot() {
@@ -713,7 +723,13 @@ egress_state() {
 root_vrfs() { ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^e[0-9]+$' || true; }
 
 root_vrf() {  # <vrf> <table>
-  ip link show "$1" >/dev/null 2>&1 || ip link add "$1" type vrf table "$2"
+  if ! ip link show "$1" >/dev/null 2>&1; then
+    ip link add "$1" type vrf table "$2"
+    # the host's udev applies the sysctl.d entries for a new device from its add event, after this command returned
+    # (RHEL: net.ipv4.conf.*.rp_filter = 1): the setting below would be overwritten moments later (measured at a boot,
+    # 2026-11-07). Wait for udev to have handled the event first
+    [ "$TRANSPORT" != srv6 ] || udevadm settle --timeout=15 2>/dev/null || true
+  fi
   # transport srv6: a SID decapsulates IPv4 into the VRF with the VRF device as input, and the source's route there
   # leads to the core bridge, outside the VRF: strict and loose filtering both drop it (measured), so none (0; the
   # kernel takes the larger of all and the device: all is checked to be 0 before the root changes anything). A
