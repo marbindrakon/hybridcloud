@@ -942,14 +942,41 @@ egress6_down() {
   rm -f "$MARK6"
 }
 
+# <dev> <address>...: one ARP announcement per address (a broadcast request with sender = target = the address and
+# the device's MAC), for the device's own address and the proxied ones (iputils arping cannot send from a proxied
+# address): the hand-off router's ARP cache follows the device's MAC. Best effort: a failure is reported, not fatal
+arp_announce() {
+  python3 - "$@" <<'PY' || echo "arp-announce=failed" >&2
+import fcntl, socket, struct, sys
+dev, addrs = sys.argv[1], sys.argv[2:]
+try:
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0806))
+    s.bind((dev, 0))
+    mac = fcntl.ioctl(s.fileno(), 0x8927, struct.pack('256s', dev.encode()))[18:24]
+    for a in addrs:
+        ip = socket.inet_aton(a)
+        arp = struct.pack('!HHBBH6s4s6s4s', 1, 0x0800, 6, 4, 1, mac, ip, b'\x00' * 6, ip)
+        for _ in range(2):
+            s.send(b'\xff' * 6 + mac + b'\x08\x06' + arp)
+except OSError as e:
+    sys.exit(1)
+PY
+}
+
 egress_up() {
-  local ev et par emtu eaddr want nat n v t z xe xo xea xoa a
+  local ev et par emtu eaddr want nat n v t z xe xo xea xoa a emac
   ev=$(q .egress.vrf); et=$(q .egress.table); par=$(q .egress.parent); emtu=$(q .egress.mtu); eaddr=$(q .egress.address)
   wait_link "$par" "$emtu" || { echo "egress parent interface $par missing or below MTU $emtu" >&2; exit 3; }
   modprobe vrf
   ip link show "$ev" >/dev/null 2>&1 || ip link add "$ev" type vrf table "$et"
   ip link set "$ev" up
-  ip link show egress0 >/dev/null 2>&1 || ip link add egress0 link "$par" type macvlan mode bridge
+  # a MAC of its own, from the egress address, the same at every boot: the hand-off router's ARP cache keeps the
+  # MAC it learned for the proxied NAT pool addresses for hours, and a macvlan without one gets a new random MAC
+  # at every creation (after a reboot the pool's return traffic went to the old MAC until the cache expired:
+  # measured 2026-11-07); the announcements below refresh the cache when the MAC did change
+  emac=$(printf '02:e9:%02x:%02x:%02x:%02x' $(echo "${eaddr%/*}" | tr . ' '))
+  ip link show egress0 >/dev/null 2>&1 || ip link add egress0 link "$par" address "$emac" type macvlan mode bridge
+  if [ "$(cat /sys/class/net/egress0/address)" != "$emac" ]; then ip link set egress0 address "$emac"; echo "egress-mac=changed"; fi
   # the hand-off network's routers never configure the egress (its addresses come from the realization)
   [ -z "$V6" ] || v6 "IPv6 settings of egress0" sysctl_ensure net/ipv6/conf/egress0/accept_ra=0 \
     net/ipv6/conf/egress0/autoconf=0
@@ -977,6 +1004,7 @@ egress_up() {
     grep -qx -- "$a" <<<"$nat" || ip neigh del proxy "$a" dev egress0
   done
   for a in $nat; do shows -q "^$a " ip -4 neigh show proxy dev egress0 || ip neigh add proxy "$a" dev egress0; done
+  arp_announce egress0 "${eaddr%/*}" $nat
   egress_nft | nft -f -
   if jq -e '.egress.ipv6' "$CONF" >/dev/null 2>&1; then egress6_up; elif [ -e "$MARK6" ]; then egress6_down "$emtu"; fi
 }

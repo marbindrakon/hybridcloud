@@ -463,7 +463,7 @@ class RootIPv6Test(ApplyCase):
         self.assertTrue(h.has_ll("", "br-core"))
         self.assertEqual(h.addrs6("", "br-core"), [])
         # egress0 never takes RAs or SLAAC: set before it comes up in the egress VRF
-        e_made = index(log, r"^W \[root\] ip link add egress0 link bond1\.237 type macvlan mode bridge$")
+        e_made = index(log, r"^W \[root\] ip link add egress0 link bond1\.237 address \S+ type macvlan mode bridge$")
         e_ra = index(log, r"^W \[root\] sysctl -qw net/ipv6/conf/egress0/accept_ra=0$")
         e_up = index(log, r"^W \[root\] ip link set egress0 master egress mtu 9000 up$")
         self.assertLess(e_made, e_ra)

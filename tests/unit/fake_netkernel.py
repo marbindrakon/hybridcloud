@@ -62,7 +62,8 @@ class Kernel:
         return self.st["ifindex"]
 
     def new_mac(self):
-        i = self.next_index()
+        self.st["macseq"] = self.st.get("macseq", 0) + 1
+        i = self.st["macseq"]
         return "02:00:00:00:%02x:%02x" % (i // 256, i % 256)
 
     MODULE_OF = {"vlan": "8021q", "vrf": "vrf", "veth": "veth", "macvlan": "macvlan", "wireguard": "wireguard",

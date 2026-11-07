@@ -42,9 +42,15 @@ ADDED = [
     (r"^R \[root\] ip netns list$", "F-L1: the gateway's precheck (a namespace that exists already), on mpls too"),
     # F-L6: a VRF other than the configuration's on a table it will use, both transports
     (r"^R %s ip -j -d link show type vrf$" % NS, "F-L6: the namespace's VRFs and their tables, read by the precheck"),
+    # egress0's own MAC (2026-11-07: a random one per boot left the hand-off router's ARP cache stale for the NAT pool)
+    (r"^W \[root\] ip link add egress0 link \S+ address 02:e9(:[0-9a-f]{2}){4} type macvlan mode bridge$",
+     "egress0 created with a MAC derived from the egress address"),
+    (r"^R \[root\] cat /sys/class/net/egress0/address$", "egress0's MAC, checked on every run"),
 ]
 # Calls of BASE the script no longer issues.
-REMOVED = []
+REMOVED = [
+    (r"^W \[root\] ip link add egress0 link \S+ type macvlan mode bridge$", "egress0 is created with its MAC now"),
+]
 
 # nftables text the script loads differently: (table, regular expression on BASE's text, replacement, reason, always).
 # Each applies once wherever BASE loaded that table (always: it must; else: where the text has it, at most once); the
@@ -143,7 +149,21 @@ def assert_state_like_base(case, what, old, new, root_down=False, used=None):
     for ns in old["ns"].values():  # the base script never touches what the fixes add
         case.assertNotIn("rules4", ns, what)
         case.assertNotIn("routes4", ns, what)
-    case.assertEqual(base_edited(case, what, old, used), normalize(case, what, new, root_down), what)
+    old, new = base_edited(case, what, old, used), normalize(case, what, new, root_down)
+    # egress0's MAC: random from the fake kernel under BASE, derived from the egress address now; the fake kernel's
+    # generated MACs of the devices created after it shift by one
+    for st in (old, new):
+        st.pop("macseq", None)
+        for ns in st["ns"].values():
+            for name, link in ns["links"].items():
+                if name == "egress0" and st is new:
+                    case.assertRegex(link["address"], r"^02:e9(:[0-9a-f]{2}){4}$", what)
+                if name == "egress0" or re.match(r"^02:00:00:00:", link["address"] or ""):
+                    link["address"] = "MAC"
+                    for a in link.get("addrs", []):  # the link-local address the fake kernel derives from the MAC
+                        if str(a.get("local", "")).startswith("fe80::"):
+                            a["local"] = "LL"
+    case.assertEqual(old, new, what)
 
 
 class AgainstBase(ApplyCase):
