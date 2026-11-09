@@ -1,0 +1,28 @@
+---
+# The fabric's configuration lease fabric-config-<fabric> as it is now (read only): fh_lease {holder, held (a holder
+# that renewed it within its duration), stamp (holder, acquire and renew time: changes whenever a job takes or renews
+# it)}. Input: fh_name, fh_ns.
+- name: "{{ fh_name }}: read the lease"
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: coordination.k8s.io/v1
+    kind: Lease
+    name: "fabric-config-{{ fh_name }}"
+    namespace: "{{ fh_ns }}"
+  register: _fh_lease
+
+- name: "{{ fh_name }}: the lease"
+  vars:
+    _s: "{{ ((_fh_lease.resources | default([]) | first | default({})).spec | default({}, true)) }}"
+    _holder: "{{ _s.holderIdentity | default('', true) | string }}"
+    _renew: "{{ _s.renewTime | default(_s.acquireTime | default('', true), true) | string }}"
+    _age: >-
+      {{ ((now(utc=true) - (_renew[:19] | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds() | int)
+         if _renew | length >= 19 else 999999999 }}
+  ansible.builtin.set_fact:
+    fh_lease:
+      holder: "{{ _holder }}"
+      held: "{{ _holder | length > 0 and (_age | int) < (_s.leaseDurationSeconds | default(600, true) | int) }}"
+      stamp: "{{ _holder ~ '|' ~ (_s.acquireTime | default('', true)) ~ '|' ~ _renew }}"

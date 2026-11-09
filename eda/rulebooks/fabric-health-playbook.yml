@@ -1,0 +1,10 @@
+---
+# shc: fabric health (job template fabric-health, on the realization's schedule): reads the border gateway nodes and
+# the platform address pools, writes what it found into the fabric's and the gateways' status, raises events and wakes
+# the fabric or gateway job for what only a full run repairs. Changes nothing on the nodes.
+- name: Fabric health
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - fabric_health

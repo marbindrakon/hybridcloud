@@ -1,0 +1,69 @@
+---
+# Fabric health, read only (realization health; the job template's schedule is health.intervalSeconds). For every
+# HybridFabric, one at a time (fabric.yml):
+# 1. the platform address pools as the ledger holds them now (blocks leave hold-down with time): status rows
+#    refreshed when they changed; more free blocks wake the networks waiting for platform address space;
+# 2. unless the fabric's lease fabric-config-<fabric> is held or its last event is in flight (then the node reads
+#    are skipped, and a read a job overlapped is discarded), each border gateway node is read once over SSH
+#    (files/shc_node_health.py, bounded on the node): units, the configuration's start at boot, routing daemons and
+#    their crashes, drift against what the last apply and FRR reload left, the IPv6 egress, the gateways' site
+#    sessions. Gateways of paused sites are not read;
+# 3. files/shc_fabric_health.py judges the reads: status.health and the conditions NodesHealthy and Degraded on
+#    the fabric and its gateways, the fabric's IPv6 egress state (status.realization.egress.ipv6, condition
+#    IPv6EgressUpstream), events on transitions, and the wakes: the fabric's or a gateway's job for what a full run
+#    repairs, the networks with IPv6 egress when a node's IPv6 egress state changed.
+# Status writes are partial (no delivery, generation or job bookkeeping); nothing on a node changes. The job fails
+# only when it cannot do its own work (a fabric it could not check); findings are status, not failures.
+- name: Resolve services cluster API connection from Vault
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+- name: The platform's realization parameters (installation-wide)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+  vars:
+    fab_real_fabric: ""
+
+- name: The health settings
+  ansible.builtin.set_fact:
+    fh_enabled: "{{ (fab_real.health | default({}, true)).enabled | default(true) | string | lower in ['true', 'yes', '1'] }}"
+
+- name: End when the fabric health check is off
+  ansible.builtin.meta: end_play
+  when: not (fh_enabled | bool)
+
+- name: Read the fabric objects
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ item }}"
+    namespace: "{{ fabric_platform_namespace }}"
+  loop: [HybridFabric, CloudGateway, CloudInfrastructure]
+  register: _fh_objs
+
+- name: Keep the objects
+  ansible.builtin.set_fact:
+    fh_fabrics: "{{ _fh_objs.results[0].resources }}"
+    fh_gateways: "{{ _fh_objs.results[1].resources }}"
+    # the sites whose CloudInfrastructure is paused: their gateways are neither read nor judged
+    fh_paused_sites: >-
+      {{ _fh_objs.results[2].resources | selectattr('spec.paused', 'defined')
+         | selectattr('spec.paused', 'equalto', true) | map(attribute='metadata.name') | list }}
+    fh_failed: []
+
+- name: Check each fabric
+  ansible.builtin.include_tasks: fabric.yml
+  loop: "{{ fh_fabrics | rejectattr('metadata.deletionTimestamp', 'defined') | list }}"
+  loop_control:
+    loop_var: fh_fabric
+    label: "{{ fh_fabric.metadata.name }}"
+
+- name: Record the result for the job
+  ansible.builtin.set_stats:
+    data:
+      fabric_health_not_checked: "{{ fh_failed }}"
+
+- name: Fail when a fabric could not be checked
+  ansible.builtin.fail:
+    msg: "fabric health: not checked: {{ fh_failed | join('; ') }}"
+  when: fh_failed | length > 0
