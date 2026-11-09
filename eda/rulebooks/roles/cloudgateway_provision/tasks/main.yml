@@ -237,15 +237,16 @@
         cg_root_pe: >-
           {{ cg_root_pe if _cg_on | bool else cg_root_pe | combine({'loopback6': '', 'loopbackIp6': '', 'sid6': 0}) }}
 
-    # each node announces its ICMPv6 source to the site (gateway.announceIcmpSource6, per site
-    # announceIcmpSource6BySite), only with the IPv6 core and core.icmpSource6; off: nothing of it is rendered
+    # each node announces its ICMPv6 source to the site (gateway.announceIcmpSource6, on by default, per site
+    # announceIcmpSource6BySite), only with the IPv6 core and core.icmpSource6; off: nothing of it is rendered in FRR
+    # (the VRFs' input filter comes with the IPv6 core either way)
     - name: Announce the nodes' ICMPv6 sources to the site or not
       vars:
         _cg_gw: "{{ fab_real.gateway | default({}, true) }}"
         _cg_by: "{{ _cg_gw.announceIcmpSource6BySite | default({}, true) }}"
       ansible.builtin.set_fact:
         cg_icmp6_announce: >-
-          {{ ((_cg_by[cg_site_name] if cg_site_name in _cg_by else _cg_gw.announceIcmpSource6 | default(false)) | bool)
+          {{ ((_cg_by[cg_site_name] if cg_site_name in _cg_by else _cg_gw.announceIcmpSource6 | default(true)) | bool)
              and (cg_ipv6_core | bool) and (fab_real.core.icmpSource6 | default('', true) | length > 0) }}
 
     # the networks placed at this site: every NetworkPlacement that names this gateway (status.cloudGateway) and
