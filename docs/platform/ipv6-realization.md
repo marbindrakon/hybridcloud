@@ -597,8 +597,11 @@ the primary's upstream sessions fail, the sites' default moves to the standby an
 the prefixes the standby still announces; flows where the tenant sends next recover, receive-only flows reset.
 
 The filter is the nftables table `inet shc_egress6` on every node (IPv6 rules only; the IPv4 table stays as it is):
-outbound from a network only from its platform block and the node's /112 of `core.icmpSource6` (the ICMPv6 sources
-of the node's root and gateway namespaces, so a gateway's Packet Too Big toward the internet passes), not to the
+outbound from a network only from its platform block, the node's /112 of `core.icmpSource6` (the ICMPv6 sources
+of the node's root and gateway namespaces, so a gateway's Packet Too Big toward the internet passes) and the ICMPv6
+sources of the AWS or Google Cloud edge routers the network's IPv6 placements use (each router's /128, as its
+CloudGateway reports them in `status.realization.edgeRouterIcmpSources6`, so a router's Time Exceeded or Unreachable
+for a flow from the internet passes), not to the
 translator-embedded forms of `egress.denyDestinations` (from `translation.<site>.pref64`), then `allowDestinations6`
 and the resolvers on port 53 (`resolverDestinations6` and every `translation.<site>.dns64Resolvers`), then not to
 `denyDestinations6`; a TCP MSS clamp at `wanMtu - 60` both ways
@@ -996,8 +999,11 @@ index), at node ordinal 100 + the router's position by name (100 for the first r
 nodes use their position in `borderGateway.nodes` from 1, so the two never meet while a fabric has fewer than 100
 border gateway nodes. The routers install their fabric-side routes with that address as source, so Packet Too Big
 and Time Exceeded toward the fabric come from it; toward the VPC they come from the GRE device's /125 address, which
-the transit gateway delivers. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table
-also gets an unreachable IPv6 default, so a destination nothing routes fails at once. The routers' VRFs keep the site
+the transit gateway delivers. The CloudGateway reports the routers' addresses in
+`status.realization.edgeRouterIcmpSources6`, and the IPv6 egress admits them as sources of the networks placed on the
+site ([IPv6 internet egress](#ipv6-internet-egress-egressipv6)), so a router's error for a flow from the internet
+reaches it. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an
+unreachable IPv6 default, so a destination nothing routes fails at once. The routers' VRFs keep the site
 leg's MTU (1370 behind the WireGuard tunnels) for both families.
 
 **State.** `shc_aws_edge.py status` lists per VRF its IPv6 settings and, under `ipv6`, per router the sessions that
@@ -1066,8 +1072,9 @@ with the same formula as on AWS: node ordinal 100 + the router's position by nam
 index. The gateway job computes them and hands them to the routers with the gateway nodes' keys. The routers install
 their fabric-side routes with that address as source, so Packet Too Big and Time Exceeded toward the fabric come from
 it; toward the VPC they come from the XFRM device's /126 address. The routers send Packet Too Big without a rate
-limit. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an unreachable
-IPv6 default, so a destination nothing routes fails at once. The VRFs keep the site leg's MTU (1370 behind the
+limit. The CloudGateway reports the routers' addresses in `status.realization.edgeRouterIcmpSources6`, as on AWS.
+Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an unreachable IPv6
+default, so a destination nothing routes fails at once. The VRFs keep the site leg's MTU (1370 behind the
 WireGuard tunnels) and the XFRM devices the VPN MTU, for both families.
 
 **State.** `shc_gcp_edge.py status` lists per VRF its IPv6 settings and, under `ipv6`, per router the tunnels' /126
