@@ -210,7 +210,13 @@ class MplsApplyConfigUnchanged(unittest.TestCase):
             for extra in ({}, {"fab_node_transport": "mpls"}, {"cg_node_icmp6_announce": "x", "cg_ipv6_core": True}):
                 v = dict(common, fab_real={"core": core}, **extra)
                 old, new = self.contents(GW, P + "gateway instance config", v)
-                self.assertEqual(new, old)
+                if "cg_node_icmp6_announce" in extra:
+                    # the one intended difference: the file no longer carries icmp6Announced (the apply loads the
+                    # VRFs' input filter with the IPv6 core whatever the announcement)
+                    self.assertEqual(json.loads(new), {k: x for k, x in json.loads(old).items() if k != "icmp6Announced"})
+                    self.assertNotIn("icmp6Announced", new)
+                else:
+                    self.assertEqual(new, old)
                 self.assertNotIn("srv6", json.loads(new))
 
 
@@ -1322,9 +1328,10 @@ class DirectApplyReason(unittest.TestCase):
         # the steps' outcome is untouched: their failed_when is the base commit's
         if not have_base():
             self.skipTest("base commit missing")
+        # (the gateway's second apply, "without the filter", is gone with the turn-off sequence: the VRFs' input
+        # filter comes with the IPv6 core and never leaves with the announcement)
         for path, name in ((RT, P + "apply the root instance"),
-                           (GW, P + "apply the gateway instance (namespace, site leg, core leg)"),
-                           (GW, P + "apply the gateway instance without the filter")):
+                           (GW, P + "apply the gateway instance (namespace, site leg, core leg)")):
             self.assertEqual(by_name(load(path), name), by_name(base_tasks(path), name), name)
 
 
