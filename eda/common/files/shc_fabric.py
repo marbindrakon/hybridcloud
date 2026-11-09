@@ -39,7 +39,8 @@ actions:
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
   orphan-report   {crs, ledgers, sites, nodes}  the fabric orphan check's findings (see orphan_report)
   egress-plan     {egress: realization egress, nodes: [node names], networks: [{network, vpnTarget, index,
-                  internet?, ipv4?, platform?, ipv6?: {block, prefixes}}], domainAsn, core?, translation?}
+                  internet?, ipv4?, platform?, ipv6?: {block, prefixes, edgeSources6?}}], domainAsn, core?,
+                  translation?}
                   per node: the hand-off (egress VRF on the node's site network) and per network a VRF e<vpnTarget>
                   with a veth pair xe/xo into the egress VRF; internet (default true) with ipv4 (default true): a
                   default route and one source NAT address per node (the node's natPool + the network's egress
@@ -52,8 +53,9 @@ actions:
                   egress.ipv6.routedPrefixes) the IPv6 session over the veth, the announced prefixes, whether the
                   node is the network's standby (index mod nodes) and the sources the node's filter admits from the
                   network (src6: the block and, with core.icmpSource6, the node's /112 of it, which holds the ICMPv6
-                  sources of all of that node's namespaces; the node's position is its place in nodes, 1-based);
-                  errors for an unusable configuration
+                  sources of all of that node's namespaces; the node's position is its place in nodes, 1-based; and
+                  edgeSources6, the ICMPv6 sources of the cloud edge routers the network's placements use, as /128s,
+                  each only when it lies in core.icmpSource6); errors for an unusable configuration
   circuit-plan    {attachments: realization attachments, nodes: [node names], index, ipv6?}  an attachment circuit's
                   link subnet (the index-th of attachments.linkPool), each node's address and the CE's; with ipv6 (the
                   circuit has IPv6 accept entries) also its IPv6 link under ipv6 (the index-th /64 of
@@ -579,6 +581,29 @@ def icmp6_slices(core, node_names, errors):
     return out
 
 
+def edge_sources6(v6, core):
+    """A network's edgeSources6 (the cloud edge routers' ICMPv6 sources, from their gateways' status) as canonical
+    addresses, each once and in order: only the ones inside core.icmpSource6 (anything else is left out, so a source
+    set never admits more than the platform's own ICMPv6 sources); [] without the pool"""
+    try:
+        pool = core6(core or {}, "icmpSource6", 96)
+    except ValueError:
+        return []
+    if pool is None:
+        return []
+    out = []
+    for a in v6.get("edgeSources6") or []:
+        try:
+            ip = ipaddress.ip_interface(str(a))
+        except ValueError:
+            continue
+        if ip.version != 6 or ip.network.prefixlen != 128 or ip.ip not in pool:
+            continue
+        if str(ip.ip) not in out:
+            out.append(str(ip.ip))
+    return sorted(out, key=ipaddress.ip_address)
+
+
 def egress_plan(req):
     eg, node_names = req.get("egress") or {}, req.get("nodes") or []
     chk = egress_check(eg, node_names, req.get("domainAsn"), req.get("core"))
@@ -596,6 +621,8 @@ def egress_plan(req):
     v6_on = bool((eg.get("ipv6") or {}).get("enabled"))
     nodes6, nets6 = egress6_plan(eg, req, node_names, errors) if v6_on else ({}, {})
     icmp_slices = icmp6_slices(req.get("core") or {}, node_names, errors) if v6_on else {}
+    edge6 = {w["network"]: edge_sources6(w["ipv6"], req.get("core")) for w in req.get("networks") or []
+             if v6_on and w.get("ipv6")}
     seen = []
     for w in req.get("networks") or []:
         for c in w.get("platform") or []:
@@ -638,8 +665,11 @@ def egress_plan(req):
                 # network's block and the node's slice of core.icmpSource6 (the ICMPv6 sources of the node's own
                 # namespaces, so a gateway's Packet Too Big or Time Exceeded toward the internet passes; the root's
                 # own is in it, and the node's job also adds that one by itself)
+                # and the ICMPv6 sources of the cloud edge routers the network's placements use: their Time Exceeded
+                # and Unreachable for a flow from the internet leave the network toward it by this node too
                 e["ipv6"] = {"block": v6["block"], "prefixes": v6["prefixes"], "standby": v6["primary"] != name,
-                             "src6": [v6["block"]] + ([icmp_slices[name]] if name in icmp_slices else [])}
+                             "src6": [v6["block"]] + ([icmp_slices[name]] if name in icmp_slices else [])
+                             + edge6.get(w["network"], [])}
             out.append(e)
             entry = networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": [],
                                                        "internet": internet, "platform": platform,
