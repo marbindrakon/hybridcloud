@@ -325,6 +325,18 @@ controller_templates:
     execution_environment: de-cloudoso
     credentials:
       - sovereign-vault-admin-credential
+  # fabric health (read only, on the schedule fabric-health in schedules.yml): one run at a time; a run that hangs is
+  # ended by the timeout (the next run starts on schedule; the stale alert covers runs that do not happen)
+  - name: fabric-health
+    organization: sovereign
+    project: sovereign-eda-project
+    playbook: rulebooks/fabric-health-playbook.yml
+    inventory: sovereign-localhost
+    execution_environment: de-cloudoso
+    allow_simultaneous: false
+    timeout: 900
+    credentials:
+      - sovereign-vault-admin-credential
   - name: networkplacement-provision
     organization: sovereign
     project: sovereign-eda-project
