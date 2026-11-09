@@ -43,6 +43,40 @@ The same two checks run in a gateway namespace that exists already. A refusal pr
 and exits with status 4; the job's failure and the object's status message carry that line. What only the SRv6 core
 refuses is printed as `transport srv6: <reason>` ([SRv6 core transport](srv6-core-transport.md#what-a-node-needs)).
 
+## What a network reaches of the node itself
+
+Some addresses of the node do sit inside a network's VRFs, and FRR listens in every VRF that has a BGP instance (BGP
+on TCP 179, BFD on UDP 3784, 3785 and 4784): a gateway VRF holds the node's ICMPv6 source (`core.icmpSource6`); a
+root VRF `e<n>` holds the node's ICMPv6 source, the node's end of the network's egress veth and its circuits'
+addresses; the egress VRF holds the hand-off address. A network's hosts reach these through the VRF: at a gateway
+from the site, at the root from the core, and into the egress VRF through the network's egress veth. No session of
+the node runs there with a tenant host, so the node answers such traffic like a host with no open port:
+
+- **Gateway namespaces**, with the dual-stack core: table `ip6 shc_gw_in6`, input hook, every VRF device of the
+  namespace. ICMPv6 passes (echo, errors, neighbour discovery); TCP segments with ACK or RST pass (the replies to
+  connections the node opened; any other such segment is answered as a closed port would); every other TCP segment
+  (a connection request, FIN, NULL or XMAS probes) gets a reset, so a port where FRR listens looks closed; UDP gets
+  a port unreachable; every other protocol, and a fragment without its transport header, is dropped. It is loaded
+  before the VRF devices take the ICMPv6 source and stays whether or not the node announces that address to the site
+  (`gateway.announceIcmpSource6`, [IPv6 realization](ipv6-realization.md#transport-dual-stack-core)).
+- **The root**, for a packet delivered to the node in the egress VRF or a network's VRF that did not arrive on one
+  of that VRF's own legs: the hand-off device, a network's egress veth (its own stateful filter admits only replies
+  and ICMPv6 errors from the internet) or a circuit's device (its own filter admits BGP from the circuit's link, BFD
+  and ICMP from the customer edge router). Table `ip shc_root_in` (always, while the root has VRFs): ICMP and TCP
+  segments with ACK or RST pass, everything else is dropped without an answer. Table `ip6 shc_root_in6` (with the
+  dual-stack core): link-local sources pass (the sessions over the egress veths), then the same answers as in a
+  gateway namespace.
+
+The filters are stateless: they keep no connection state ("a TCP segment with ACK or RST" stands in for
+"established"; a stateful rule would make the namespace track and reassemble every network's forwarded traffic), and
+forwarded traffic never meets them. Being stateless, they also refuse the UDP replies to requests the node itself
+sends from such a VRF (a DNS query, NTP or `iperf -u` run on the node inside a VRF gets no answer) and drop TCP that
+reaches the node fragmented. The answers are the ones a closed port gets: resets are not rate-limited, unreachables
+only by the kernel's global ICMP limit; both are no larger than the probe plus 48 bytes and go only toward addresses
+routed in that VRF. Each refusing rule counts its packets (`nft list table ip6 shc_gw_in6` in the gateway's
+namespace, `nft list table ip shc_root_in` and `nft list table ip6 shc_root_in6` on the node). A table follows the
+VRFs on every run and goes with the last of them (and an IPv6 table with the dual-stack core).
+
 ## TCP MSS clamps
 
 The node clamps the MSS of TCP connection setups where a packet is about to leave on a link smaller than the path it
