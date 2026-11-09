@@ -133,6 +133,13 @@ REASONS = {
     "ControllerUnavailable": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
     "ControllerRestarting": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
     "ControllerOutOfMemory": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
+    # ---- node health (NodesHealthy and Degraded of a HybridFabric or CloudGateway; worst first) ----------------------
+    "NodeUnreachable": _r("P", FAILED, "A network node does not answer. Traffic takes the other nodes; the platform team is alerted."),
+    "StartFailed": _r("P", FAILED, "The network configuration did not start on a node. The platform team is alerted."),
+    "ServiceFailed": _r("P", FAILED, "A network service on a node is not running. The platform team is alerted."),
+    "RoutingDaemonDown": _r("P", FAILED, "Routing on a node is partly down. The platform team is alerted."),
+    "StartIncomplete": _r("P", FAILED, "The network configuration was applied in part on a node. The platform team is alerted."),
+    "SiteSessionsDown": _r("P", FAILED, "The site's routing sessions are down on a node. The platform team is alerted."),
 }
 
 # Reasons written on a part of an object's status (an egress family of a network, its translation to IPv4, the IPv6
@@ -150,6 +157,18 @@ PART_REASONS = {
     "DNSReconcileFailed": _r("P", READY, "The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it."),
     # the same condition when the site no longer reports a tenant DNS controller, or its report cannot be read
     "NotReported": _r("A", READY, "The site does not report this health check."),
+    # node health that does not reduce service (NodesHealthy only), and the health job's events
+    "ConfigurationDrift": _r("A", READY, "A node's network state differs from its configuration; a repair run is requested."),
+    "RoutingDaemonRestarted": _r("P", READY, "A routing process on a node restarted after a crash; the platform team is alerted."),
+    "NotChecked": _r("A", READY, "The nodes have not been checked yet."),
+    # why a health check left the nodes alone this time (status.health.skipped.reason)
+    "LeaseHeld": _r("A", READY, "A change to the nodes was in progress; they are checked next time."),
+    "JobInFlight": _r("A", READY, "A change is queued; the nodes are checked next time."),
+    "NodeStartFailed": _r("P", READY, "The network configuration did not start on a node."),
+    "NodeServiceFailed": _r("P", READY, "A network service on a node is not running."),
+    "NodeRebooted": _r("A", READY, "A node restarted."),
+    "NodeHealthRecovered": _r("A", READY, "Every node is healthy again."),
+    "HealthWake": _r("A", READY, "A repair run was requested for what the health check found."),
 }
 
 # Deletion requests written by the operator are named <Kind>DeleteRequested.

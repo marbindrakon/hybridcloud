@@ -181,6 +181,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NoAccount` | No cloud account is set up for this environment. | You (the tenant) |
 | `NoDefaultConfig` | No default connection is configured for this service. Ask the platform team. | The platform team |
 | `NoProject` | No cloud project is set up for this environment. | You (the tenant) |
+| `NodeUnreachable` | A network node does not answer. Traffic takes the other nodes; the platform team is alerted. | The platform team |
 | `NotRealizable` | The request cannot be realized on the chosen site. | You (the tenant) |
 | `OperatorFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
 | `PeerAsnReserved` | This AS number is reserved by the platform. Configure your router with another AS number. | You (the tenant) |
@@ -194,11 +195,16 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `PublishFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
 | `RegionNotSupported` | This region is not supported. | You (the tenant) |
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
+| `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
+| `ServiceFailed` | A network service on a node is not running. The platform team is alerted. | The platform team |
 | `SiteNotAllowed` | This site is not available to this tenant. | You (the tenant) |
 | `SiteNotEvpnCapable` | The chosen site cannot join hybrid networks. | You (the tenant) |
 | `SiteNotVirtualizationCapable` | The chosen site does not offer virtual machines. | You (the tenant) |
+| `SiteSessionsDown` | The site's routing sessions are down on a node. The platform team is alerted. | The platform team |
 | `SiteTypeMismatch` | This kind of environment cannot be created on the chosen site. | You (the tenant) |
 | `SiteUnreachable` | The site does not answer. The platform team is looking at it. | The platform team |
+| `StartFailed` | The network configuration did not start on a node. The platform team is alerted. | The platform team |
+| `StartIncomplete` | The network configuration was applied in part on a node. The platform team is alerted. | The platform team |
 | `TeardownFailed` | Deleting did not complete. The platform team is looking at it. | The platform team |
 | `TransportNotSupported` | This transport is not supported. | You (the tenant) |
 | `TypeNotSupported` | This type is not supported here. | You (the tenant) |
@@ -209,10 +215,20 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | Reason | What it means | Who acts |
 |---|---|---|
 | `AddressChoice` | Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4. | You (the tenant) |
+| `ConfigurationDrift` | A node's network state differs from its configuration; a repair run is requested. | Nobody: it continues by itself |
 | `DNSReconcileFailed` | The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it. | The platform team |
 | `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
+| `HealthWake` | A repair run was requested for what the health check found. | Nobody: it continues by itself |
 | `IPv6EgressUpstreamDown` | IPv6 internet access works through the other node; a node's upstream sessions are down. | The platform team |
+| `JobInFlight` | A change is queued; the nodes are checked next time. | Nobody: it continues by itself |
+| `LeaseHeld` | A change to the nodes was in progress; they are checked next time. | Nobody: it continues by itself |
+| `NodeHealthRecovered` | Every node is healthy again. | Nobody: it continues by itself |
+| `NodeRebooted` | A node restarted. | Nobody: it continues by itself |
+| `NodeServiceFailed` | A network service on a node is not running. | The platform team |
+| `NodeStartFailed` | The network configuration did not start on a node. | The platform team |
+| `NotChecked` | The nodes have not been checked yet. | Nobody: it continues by itself |
 | `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 | `NotReported` | The site does not report this health check. | Nobody: it continues by itself |
+| `RoutingDaemonRestarted` | A routing process on a node restarted after a crash; the platform team is alerted. | The platform team |
 | `UpstreamDown` | IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted. | The platform team |
 <!-- reasons:end -->
