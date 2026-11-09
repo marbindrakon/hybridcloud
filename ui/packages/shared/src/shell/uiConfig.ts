@@ -44,6 +44,12 @@ export const HELP_PAGES: { id: string; labelKey: string; path: string; platformO
   { id: 'all-docs', labelKey: 'shell.help.allDocs', path: 'README.md' },
 ];
 
+/** A help page's URL: the path joined to the base, with "../" segments resolved (pages outside docs/). */
 export function helpUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, '')}/${path}`;
+  const joined = `${base.replace(/\/+$/, '')}/${path}`;
+  try {
+    return new URL(joined).href;
+  } catch {
+    return joined;
+  }
 }

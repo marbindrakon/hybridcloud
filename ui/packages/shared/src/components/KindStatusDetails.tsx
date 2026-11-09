@@ -27,7 +27,7 @@ import { formatRelativeTime } from '../list/listColumns';
 import { deletionBlockers } from '../status/phase';
 import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHiddenPaths';
 import { ToolSignInPanel } from './ToolSignInPanel';
-import { Ipv6CloudInitSnippet } from './Ipv6CloudInitSnippet';
+import { Ipv6GuestReference } from './Ipv6GuestReference';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
 import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, networkProviderPrefixes, placementSubnets, placementTranslation } from '../forms/ipv6';
 
@@ -931,7 +931,7 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
           <RelativeTime iso={st.lastValidatedAt} />
         </Fact>
       </Facts>
-      <Ipv6CloudInitSnippet item={item} caps={siteCaps.capsFor(st.site)} />
+      <Ipv6GuestReference item={item} caps={siteCaps.capsFor(st.site)} />
     </>
   );
 }
