@@ -28,6 +28,7 @@ reference (config accountRef, where the account comes from) and the Keystone tha
 is also written to the container's termination message, so the failed pod shows it without its log.
 """
 import argparse
+import ipaddress
 import os
 import sys
 from urllib.parse import urlsplit
@@ -87,12 +88,25 @@ class Account:
             return "the credential is wrong, expired or rotated, or the account has no role on the domain"
         if st == 403:
             return "the account's role does not allow this read"
+        if st == 404:
+            return "the cloud does not have it (deleted, or a wrong id in the configuration)"
+        if st is None:
+            return "no answer from the cloud (connection, TLS or endpoint error, or a missing resource), not a refusal"
         return "the cloud did not answer as expected"
 
 
 def oso_cloud(o):
     st = o.get("status") or {}
     return st.get("cloudInfrastructure") or ((o.get("spec") or {}).get("cloudRef") or {}).get("name") or ""
+
+
+def canon_ip(text):
+    """An address in one textual form (so 2001:DB8:0::1 and 2001:db8::1 compare equal); other text lower-cased."""
+    t = (text or "").strip()
+    try:
+        return str(ipaddress.ip_address(t))
+    except ValueError:
+        return t.lower()
 
 
 def published_names(objs):
@@ -103,7 +117,7 @@ def published_names(objs):
             rd = (((o.get("status") or {}).get("realization") or {}).get("reverseDns") or {})
             ref = f"{kind} {'/'.join(x for x in (o['metadata'].get('namespace'), o['metadata']['name']) if x)}"
             for n in rd.get("names") or []:
-                name, addr = (n.get("name") or "").lower().rstrip("."), (n.get("address") or "").lower()
+                name, addr = (n.get("name") or "").lower().rstrip("."), canon_ip(n.get("address"))
                 if name and addr:
                     addrs, owners = out.setdefault(name + ".", (set(), set()))
                     addrs.add(addr)
@@ -124,7 +138,8 @@ def check(cfg, acct, connect, all_osos, pos, platform_objs=()):
         domain_id = conn_d.session.auth.get_access(conn_d.session).domain_id
         projects = {p.id: p.name for p in conn_d.identity.projects(domain_id=domain_id)}
     except ACCESS_ERRORS as e:
-        problems.append(f"{acct}: Keystone refused a token for domain {cfg['domain']} ({refusal(e)}): "
+        what = "refused a token for" if http_status(e) in (401, 403) else "could not give a token for"
+        problems.append(f"{acct}: Keystone {what} domain {cfg['domain']} ({refusal(e)}): "
                         f"{acct.hint(e, 'domain')}; nothing was checked")
         return (f"tenant-orphan-check: domain {cfg['domain']} on {acct.cloud}: not checked, the account was refused",
                 findings, problems, 2)
@@ -178,7 +193,7 @@ def check(cfg, acct, connect, all_osos, pos, platform_objs=()):
                 if (rs.name, rs.type) in recorded_names:
                     continue
                 own = published.get((rs.name or "").lower()) if rs.type == "AAAA" else None
-                if own and rs.records and {r.lower() for r in rs.records} <= own[0]:
+                if own and rs.records and {canon_ip(r) for r in rs.records} <= own[0]:
                     continue
                 if own:
                     findings.append(f"DNS {rs.name} {rs.type} {','.join(rs.records or [])}: {', '.join(sorted(own[1]))} "

@@ -111,7 +111,7 @@ class PlatformNames(unittest.TestCase):
                                   ("node-2.site-a.gateways.tenants.example.test.", "2001:db8::2:2")])]
         sets = [rs(ZONE, "SOA", "x"), rs(ZONE, "NS", "ns."),
                 rs("node-1.site-a.gateways.tenants.example.test.", "AAAA", "2001:db8::1:2"),
-                rs("node-2.site-a.gateways.tenants.example.test.", "AAAA", "2001:DB8::2:2")]
+                rs("node-2.site-a.gateways.tenants.example.test.", "AAAA", "2001:DB8:0:0:0:0:2:2")]
         summary, findings, problems, rc = self.run_check(sets, gws)
         self.assertEqual((findings, problems, rc), ([], [], 0))
 
@@ -182,6 +182,21 @@ class OrphanCheck(unittest.TestCase):
         self.assertIn("domain tenants", problems[0])
         self.assertIn("expired or rotated", problems[0])
         self.assertIn("not checked", summary)
+
+    def test_connection_error_is_not_called_a_refusal(self):
+        class ConnectFailure(T.ACCESS_ERRORS[0]):
+            pass
+        summary, findings, problems, rc = T.check(
+            CFG, self.acct, connector({}, domain_fail=ConnectFailure("Unable to establish connection")), [], [])
+        self.assertEqual(rc, 2)
+        self.assertIn("could not give a token for domain tenants", problems[0])
+        self.assertIn("not a refusal", problems[0])
+        self.assertNotIn("refused", problems[0])
+
+    def test_canonical_addresses(self):
+        self.assertEqual(T.canon_ip("2001:DB8:0000::0001"), "2001:db8::1")
+        self.assertEqual(T.canon_ip(" 192.0.2.1 "), "192.0.2.1")
+        self.assertEqual(T.canon_ip("Not-An-IP"), "not-an-ip")
 
     def test_account_without_reference(self):
         self.assertIn("(account reference not configured)", str(T.Account({}, {"auth": {}})))

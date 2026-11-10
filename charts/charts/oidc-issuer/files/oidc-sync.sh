@@ -17,6 +17,7 @@
 # available (or whose ManagedCluster cannot be read), or oidc-documents that cannot be read or written. An acm cluster
 # whose ManagedCluster is not available (powered off, paused, unreachable) is reported and is not a fault.
 # Annotation <ANN_PREFIX><name> on oidc-documents records when each issuer's documents were last fetched.
+# The age of kept documents is recorded there and deliberately not judged: a site may be off or paused for days.
 set -o pipefail
 SA_CA=${SA_CA:-/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt}
 ANN_PREFIX=${ANN_PREFIX:-shc.signal9.gg/oidc-fetched-}
