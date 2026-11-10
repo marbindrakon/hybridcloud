@@ -45,7 +45,12 @@ def frr_pending_difference(run, pathspace, desired, note=None, ignore=(), checke
     text, err = c.run_test(desired, pathspace, c.RELOAD)
     if err:
         return None
-    left = c.left_over(text, list(ignore or ()))
+    try:
+        with open(desired) as f:
+            conf_text = f.read()
+    except OSError:
+        conf_text = ""
+    left = c.left_over(text, list(ignore or ()), conf_text)
     known = c.read_note(note) if note else set()
     return [l for l in left if l not in known]
 
