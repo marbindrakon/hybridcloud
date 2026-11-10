@@ -105,14 +105,18 @@ lose IPv4 path MTU discovery and see a silent hop.
 With `core.icmpSource4` (default `192.0.0.8`, the IPv4 dummy address of RFC 7600, which the site gateways' kernels
 already answer from) every root VRF device (the egress VRF and each network's and circuit's VRF) holds that address as
 a /32 on every node. The kernel prefers it for every route whose next hop lies outside the VRF, which is every route
-back to a network's hosts (over the core); the egress VRF's routes back to the networks (each network's source NAT
-address, each platform prefix) name it as their source. Errors toward a circuit's customer edge router keep the
+back to a network's hosts (over the core). The egress VRF's routes back to the networks (each network's source NAT
+address, each platform prefix) name the node's hand-off address (`egress.nodes.<node>.address`) as their source:
+the error crosses the network's VRF on its way, and a VRF drops an arriving packet whose source is one of its own
+addresses, so it cannot be `icmpSource4`. The hand-off address must lie outside the ranges the sites reserve
+(OVN-Kubernetes: its masquerade, join and transit subnets). Errors toward a circuit's customer edge router keep the
 circuit's address (its own link), and errors toward the internet the egress link's or hand-off address as before.
 The address is never announced and is local in every root VRF, so what a network sends to it meets the root's input
 filter; a tenant prefix that overlaps it is refused (`PrefixReserved`). The HybridFabric refuses (`InvalidSpec`) a
 value that is no single IPv4 address, is link-local or loopback, or lies inside `core.loopbackPool` or
 `core.linkSubnet`. Source NAT is unchanged. Setting or changing it adds the address and replaces the egress VRF's
-routes with their source, without an interruption.
+routes with their source, without an interruption. A node that drops such errors counts them as martian sources
+(`in_martian_src` in `/proc/net/stat/rt_cache`, per CPU).
 
 ## TCP MSS clamps
 

@@ -91,8 +91,12 @@ class Template(unittest.TestCase):
         self.assertTrue(egress.startswith(" ip protocol static route-map SHC-EGRESS-SRC4\n"), egress)
         self.assertIn("ip prefix-list SHC-EGRESS-NETS4 seq 5 permit %s/32\n" % nat, out)
         self.assertIn("ip prefix-list SHC-EGRESS-NETS4 seq 10 permit 10.60.9.0/24\n", out)
+        # the hand-off address, not icmpSource4: the error crosses the network's VRF, which holds icmpSource4 as a
+        # local address and would drop it as a martian source (RealKernelEgress)
+        handoff = self.vars(SRC)["hf_node_egress"]["address"].split("/")[0]
         self.assertIn("route-map SHC-EGRESS-SRC4 permit 10\n match ip address prefix-list SHC-EGRESS-NETS4\n"
-                      " set src %s\nexit\nroute-map SHC-EGRESS-SRC4 permit 20\nexit\n" % SRC, out)
+                      " set src %s\nexit\nroute-map SHC-EGRESS-SRC4 permit 20\nexit\n" % handoff, out)
+        self.assertNotIn("set src %s" % SRC, out)
         # only in the egress VRF (a network's VRF takes the address from the VRF device, kernel)
         self.assertEqual(out.count("ip protocol static route-map"), 1)
 
@@ -247,6 +251,103 @@ class RealKernel(unittest.TestCase):
         self.assertEqual(self.run_probe("inside", ""), "11 10.255.1.1,3 10.255.1.1")
         self.assertEqual(self.run_probe("inside", SRC), "11 10.255.1.1,3 10.255.1.1")
         self.assertEqual(self.run_probe("inside", SRC, "src"), "11 %s,3 %s" % (SRC, SRC))
+
+
+EGRESS_PROBE = r'''"""argv: vrfaddr(on e1 VRF dev or "") egressvrfaddr("" or addr on egr VRF dev) src(route src in egress VRF or "")"""
+import socket, subprocess, sys, time
+e1addr, egaddr, src = sys.argv[1], sys.argv[2], sys.argv[3]
+def sh(*a): subprocess.run(a, check=True, capture_output=True)
+def mac(d): return subprocess.run(["ip", "-br", "link", "show", d], capture_output=True, text=True).stdout.split()[2]
+sh("ip", "link", "set", "lo", "up")
+for k in ("net.ipv4.ip_forward=1", "net.ipv4.conf.all.rp_filter=0", "net.ipv4.conf.default.rp_filter=0"):
+    sh("sysctl", "-qw", k)
+for v, t in (("e1", "110001"), ("egr", "9000"), ("ten", "100"), ("inet", "300")):
+    sh("ip", "link", "add", v, "type", "vrf", "table", t); sh("ip", "link", "set", v, "up")
+sh("ip", "addr", "add", "10.74.0.6/32", "dev", "ten")
+# into e1 from the tenant (a slave), back to it over a device outside the VRF (the core)
+sh("ip", "link", "add", "tr", "type", "veth", "peer", "name", "cr0")
+sh("ip", "link", "set", "tr", "master", "ten", "up"); sh("ip", "link", "set", "cr0", "master", "e1", "up")
+sh("ip", "addr", "add", "10.9.0.2/30", "dev", "tr"); sh("ip", "addr", "add", "10.9.0.1/30", "dev", "cr0")
+sh("ip", "route", "add", "default", "via", "10.9.0.1", "dev", "tr", "table", "100")
+sh("ip", "link", "add", "c0", "type", "veth", "peer", "name", "t0")
+sh("ip", "addr", "add", "10.255.1.1/24", "dev", "c0"); sh("ip", "link", "set", "c0", "up")
+sh("ip", "link", "set", "t0", "master", "ten", "up"); sh("ip", "addr", "add", "10.255.1.2/24", "dev", "t0")
+sh("ip", "route", "add", "10.74.0.0/24", "via", "10.255.1.2", "dev", "c0", "onlink", "table", "110001")
+sh("ip", "neigh", "replace", "10.255.1.2", "lladdr", mac("t0"), "dev", "c0", "nud", "permanent")
+# the egress veth: xe1 in e1, xo1 in the egress VRF
+sh("ip", "link", "add", "xe1", "type", "veth", "peer", "name", "xo1")
+sh("ip", "link", "set", "xe1", "master", "e1", "up"); sh("ip", "link", "set", "xo1", "master", "egr", "up")
+sh("ip", "addr", "add", "169.254.0.3/31", "dev", "xe1"); sh("ip", "addr", "add", "169.254.0.2/31", "dev", "xo1")
+sh("ip", "route", "add", "default", "via", "169.254.0.2", "dev", "xe1", "table", "110001")
+# the hand-off: egress0 in the egress VRF toward the internet host 1.1.1.1 (VRF inet)
+sh("ip", "link", "add", "egress0", "type", "veth", "peer", "name", "up0")
+sh("ip", "link", "set", "egress0", "master", "egr", "up"); sh("ip", "link", "set", "up0", "master", "inet", "up")
+sh("ip", "addr", "add", "172.18.237.13/24", "dev", "egress0"); sh("ip", "addr", "add", "172.18.237.1/24", "dev", "up0")
+sh("ip", "addr", "add", "1.1.1.1/32", "dev", "inet")
+sh("ip", "route", "add", "default", "via", "172.18.237.1", "dev", "egress0", "table", "9000")
+if e1addr: sh("ip", "addr", "add", e1addr + "/32", "dev", "e1")
+if egaddr: sh("ip", "addr", "add", egaddr + "/32", "dev", "egr")
+# as on the node: the network's traffic is source-NATed where it leaves its VRF (xe1), the egress VRF routes the NAT
+# address back over the veth
+nat = subprocess.run(["nft", "-f", "-"], input="table ip shc_egress {\n chain zone_output {\n  type filter hook output priority raw; policy accept;\n  ct zone set oifname map { \"xe1\" : 1 }\n }\n chain zone_prerouting {\n  type filter hook prerouting priority raw; policy accept;\n  ct zone set iifname map { \"xe1\" : 1, \"e1\" : 1, \"cr0\" : 1 }\n }\n chain source_nat {\n  type nat hook postrouting priority srcnat; policy accept;\n  oifname \"xe1\" snat to 172.18.237.64\n }\n}\n", text=True, capture_output=True)
+assert nat.returncode == 0, nat.stderr
+sh("ip", "route", "add", "172.18.237.64/32", "via", "169.254.0.3", "dev", "xo1", "table", "9000", *(["src", src] if src else []))
+time.sleep(1)
+def martian():
+    rows = open("/proc/net/stat/rt_cache").read().splitlines()
+    i = rows[0].split().index("in_martian_src")
+    return sum(int(r.split()[i], 16) for r in rows[1:])
+def probe(ttl):
+    r = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    r.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"ten"); r.settimeout(1.5)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"ten")
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, ttl)
+    s.bind(("10.74.0.6", 0)); s.sendto(b"x" * 20, ("1.1.1.1", 33434))
+    end = time.time() + 1.5
+    while time.time() < end:
+        try: d, p = r.recvfrom(2048)
+        except socket.timeout: break
+        if d[(d[0] & 15) * 4] == 11: return p[0]
+    return "none"
+m0 = martian()
+h1, h2 = probe(1), probe(2)
+print("hop1=%s hop2=%s martian_src+%d" % (h1, h2, martian() - m0))
+'''
+
+
+class RealKernelEgress(unittest.TestCase):
+    """The egress VRF's hop end to end, as on a node: the network's VRF e1 (icmpSource4 on its device, the way back to
+    the tenant over a device outside it), the egress veth xe1/xo1 into the egress VRF, the hand-off egress0 toward
+    1.1.1.1, the network's conntrack zone and source NAT on xe1, the egress VRF's route back to the NAT address over
+    the veth. The tenant sends TTL 1 (the error from the network's VRF) and TTL 2 (from the egress VRF, translated
+    back by conntrack and forwarded through the network's VRF); prints which source each answer came from and the
+    growth of the kernel's martian source counter (in_martian_src, /proc/net/stat/rt_cache)."""
+
+    def run_probe(self, *args):
+        tmp = os.path.join(os.environ.get("TMPDIR", "/tmp"), "shc-icmp4e-%d" % os.getpid())
+        os.makedirs(tmp, exist_ok=True)
+        self.addCleanup(shutil.rmtree, tmp, True)
+        script = os.path.join(tmp, "probe.py")
+        with open(script, "w") as f:
+            f.write(EGRESS_PROBE)
+        p = subprocess.run(["unshare", "-rn", sys.executable, "-I", script] + list(args), capture_output=True,
+                           text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr[-2000:])
+        return p.stdout.strip()
+
+    def test_both_hops_reach_the_tenant(self):
+        import test_icmp_source_announce as G
+        if not G.can_probe() or not os.path.exists("/proc/net/stat/rt_cache"):
+            self.skipTest("no unprivileged user and network namespace with VRF devices, nft and ip here")
+        # before: the second hop from the egress veth's link-local side
+        self.assertEqual(self.run_probe("", "", ""), "hop1=10.9.0.1 hop2=169.254.0.2 martian_src+0")
+        # icmpSource4 also as the egress VRF's source: the network's VRF drops the error (a local source arriving)
+        r = self.run_probe(SRC, SRC, SRC)
+        self.assertTrue(r.startswith("hop1=%s hop2=none martian_src+" % SRC) and not r.endswith("+0"), r)
+        # the release: icmpSource4 on both VRF devices, the egress VRF's routes back from the hand-off address
+        self.assertEqual(self.run_probe(SRC, SRC, "172.18.237.13"),
+                         "hop1=%s hop2=172.18.237.13 martian_src+0" % SRC)
 
 
 if __name__ == "__main__":

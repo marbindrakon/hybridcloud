@@ -64,8 +64,9 @@ fabric_realization_defaults:
     # prefix may not overlap it (it is one of the exclusive ranges below, added automatically). Empty = none
     icmpSource6: ""
     # source of the IPv4 ICMP errors the root's VRFs send toward a network (fragmentation needed, time exceeded): one
-    # IPv4 address, held on every root VRF device of every node and named as the source of the egress VRF's routes
-    # back to the networks, so the errors never leave from a link-local address of the egress link (sites drop some:
+    # IPv4 address, held on every root VRF device of every node; with it the egress VRF's errors toward a network
+    # leave from the node's hand-off address (egress.nodes.<node>.address). So the errors never leave from a
+    # link-local address of the egress link (sites drop some:
     # OVN-Kubernetes reserves part of 169.254.0.0/16). Never announced; a tenant prefix may not overlap it (added to
     # the exclusive ranges automatically). Default 192.0.0.8, the IPv4 dummy address (RFC 7600) the gateways' kernels
     # already send their errors from. Empty = the kernel's choice (the first address of the VRF's devices)
