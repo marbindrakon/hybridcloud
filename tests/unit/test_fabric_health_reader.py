@@ -202,6 +202,24 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(out["instances"]["gw-atuin"]["frr"]["notTaken"], ["router bgp 65010: bgp graceful-restart-disable"])
         self.assertEqual(out["instances"]["root"]["frr"]["notTaken"], [])
 
+    def test_link_state_and_link_local_are_not_drift(self):
+        # the root's boot apply records its bridge before any gateway port exists (down, no link-local)
+        n = Node()
+        n.files["/etc/shc-fabric/root.applied"] = "br-core          DOWN           10.255.1.1/24\nmtu 9100\nstate DOWN\n"
+        n.snap["root"] = "br-core          UP             10.255.1.1/24 fe80::fa:aff:fe01:101/64\nmtu 9100\nstate UP\n"
+        self.assertEqual(n.read_node()["instances"]["root"]["kernelDrift"], [])
+        n.snap["root"] = "br-core          UP             10.255.1.9/24\nmtu 9100\nstate UP\n"
+        self.assertEqual(n.read_node()["instances"]["root"]["kernelDrift"],
+                         ["-br-core 10.255.1.1/24", "+br-core 10.255.1.9/24"])
+
+    def test_site_sessions_count_the_upstream_route_reflectors(self):
+        n = Node()
+        n.site = {"10.99.0.1": {"state": "Established"}, "10.255.0.1": {"state": "Established"}}
+        inp = {"instances": [{"name": "gw-atuin", "kind": "gateway", "siteCidr": "172.18.103.0/24",
+                              "sitePeers": ["10.99.0.1"]}], "transport": "mpls"}
+        out = R.read_node(inp, n.run, n.read, now=NOW)
+        self.assertEqual(out["instances"]["gw-atuin"]["siteSessions"], {"established": 1, "known": 1})
+
     def test_no_record_is_not_drift(self):
         n = Node()
         del n.files["/etc/shc-fabric/root.applied"]

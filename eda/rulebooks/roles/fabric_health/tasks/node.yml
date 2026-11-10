@@ -20,17 +20,21 @@
   changed_when: false
   failed_when: false
   ignore_unreachable: true
-  timeout: "{{ (fh_health.nodeReadTimeoutSeconds | default(60, true) | int) + 45 }}"
+  # the node's limit (the reader's own plus 15 s, bgw_node_limit) plus the SSH client's dead-peer time and a margin
+  timeout: "{{ (fh_health.nodeReadTimeoutSeconds | default(60, true) | int) + 15 + 60 }}"
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: keep the read"
   vars:
     _out: "{{ (_fh_read.stdout | default('', true) | trim).split('\n') | last }}"
-    _ok: "{{ not (_fh_read.unreachable | default(false)) and _fh_read.rc | default(1) == 0 and _out.startswith('{') }}"
+    _unreachable: "{{ _fh_read.unreachable | default(false) | bool }}"
+    _ok: "{{ not (_unreachable | bool) and _fh_read.rc | default(1) == 0 and _out.startswith('{') }}"
+  # an unreachable node (SSH) and a node that answered but whose read failed or ran out of time are told apart: the
+  # second has no read (the judge reports ReadFailed, not NodeUnreachable)
   ansible.builtin.set_fact:
     fh_nodes: >-
-      {{ fh_nodes + [{'name': bgw_node.name, 'reachable': _ok | bool}
+      {{ fh_nodes + [{'name': bgw_node.name, 'reachable': not (_unreachable | bool)}
                      | combine({'read': _out | from_json} if _ok | bool else
-                               {'error': ('the node did not answer over SSH' if _fh_read.unreachable | default(false)
+                               {'error': ('the node did not answer over SSH' if _unreachable | bool
                                           else ('the read ran out of time' if _fh_read.rc | default(0) == 124
                                                 else 'the read failed (exit ' ~ _fh_read.rc | default('?') ~ ')'))})] }}

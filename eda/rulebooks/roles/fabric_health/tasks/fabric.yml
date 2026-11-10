@@ -24,6 +24,21 @@
              | selectattr('spec.fabricRef.name', 'equalto', fh_fabric.metadata.name) | list }}
         fh_nodes: []
         fh_skipped: null
+        # the fabric's own switch (fabrics.<name>.health.enabled false: nodes that are off on purpose)
+        fh_fabric_enabled: "{{ _h.enabled | default(true) | string | lower in ['true', 'yes', '1'] }}"
+        # a gateway is read and judged once its job realized it on the nodes and while no change of its own is in
+        # flight; otherwise it reads NodesHealthy Unknown/NotChecked (new, Waiting, Failed, Updating)
+        fh_judged_gateways: >-
+          {%- set out = [] -%}
+          {%- for g in fh_gateways if (g.spec.fabricRef | default({})).name | default('') == fh_fabric.metadata.name -%}
+            {%- set st = g.status | default({}, true) -%}
+            {%- set d = st.delivery | default({}, true) -%}
+            {%- if (st.nodes | default([], true) | length > 0) and st.phase | default('') in ['Ready', 'Degraded']
+                  and not (d.eventId | default('', true) | length > 0 and d.eventId != d.completedEventId | default('', true)) -%}
+              {%- set _ = out.append(g.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
 
     # 1. the pools (read only: ipam-pool-get answers the usage at this moment, hold-down included)
     - name: "{{ fh_name }}: the platform address pools"
@@ -86,7 +101,7 @@
                    else none) }}
 
     - name: "{{ fh_name }}: read the nodes"
-      when: fh_skipped is none
+      when: fh_skipped is none and fh_fabric_enabled | bool
       block:
         - name: "{{ fh_name }}: connect to the border gateway nodes"
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
@@ -112,10 +127,13 @@
               instances: >-
                 {%- set out = [{'name': 'root', 'kind': 'root'}] -%}
                 {%- for g in fh_my_gateways if g.metadata.deletionTimestamp is not defined
-                      and (g.spec.cloudRef | default({})).name | default('') not in fh_paused_sites -%}
+                      and (g.spec.cloudRef | default({})).name | default('') not in fh_paused_sites
+                      and g.metadata.name in fh_judged_gateways -%}
                   {%- set e = {'name': 'gw-' ~ g.metadata.name, 'kind': 'gateway'} -%}
-                  {%- set cidr = (g.spec.siteUnderlay | default({}, true)).cidr | default('', true) -%}
-                  {%- set _ = out.append(e | combine({'siteCidr': cidr} if cidr else {})) -%}
+                  {%- set su = g.spec.siteUnderlay | default({}, true) -%}
+                  {%- set cidr = su.cidr | default('', true) -%}
+                  {%- set _ = out.append(e | combine({'siteCidr': cidr} if cidr else {})
+                                           | combine({'sitePeers': su.upstreamRouteReflectors | default([], true)})) -%}
                 {%- endfor -%}
                 {{ out }}
 
@@ -130,10 +148,10 @@
         - name: "{{ fh_name }}: remove the SSH key"
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
 
-    # a job that took or renewed the lease while the nodes were read may have changed them under the read
+    # a job that took, renewed or released the lease while the nodes were read may have changed them under the read
     - name: "{{ fh_name }}: read the lease again"
       ansible.builtin.include_tasks: lease.yml
-      when: fh_skipped is none
+      when: fh_skipped is none and fh_fabric_enabled | bool
 
     - name: "{{ fh_name }}: discard a read a job overlapped"
       ansible.builtin.set_fact:
@@ -141,7 +159,6 @@
         fh_nodes: []
       when:
         - fh_skipped is none
-        - fh_lease.holder | length > 0
         - fh_lease.stamp != fh_lease_before.stamp
 
     # 3. judge
@@ -157,6 +174,7 @@
                                           | default({}, true)).enabled | default(false) | bool,
                           'sessionDownAlertMinutes': ((fab_real.egress | default({}, true)).ipv6 | default({}, true)).sessionDownAlertMinutes | default(5),
                           'eventRepeatMinutes': fh_health.eventRepeatMinutes | default(60)},
+              'enabled': fh_fabric_enabled | bool,
               'fabric': {'name': fh_name, 'namespace': fh_ns, 'ready': fh_ready | bool, 'status': fh_status},
               'gateways': fh_gateway_rows,
               'nodes': fh_nodes,
@@ -169,7 +187,8 @@
             {%- set _ = out.append({'name': g.metadata.name, 'namespace': g.metadata.namespace,
                                     'ready': (st.ready | default(false) | bool) and (st.status | default('') | string == 'ready'),
                                     'paused': (g.spec.cloudRef | default({})).name | default('') in fh_paused_sites,
-                                    'deleting': g.metadata.deletionTimestamp is defined, 'status': st}) -%}
+                                    'deleting': g.metadata.deletionTimestamp is defined,
+                                    'judged': g.metadata.name in fh_judged_gateways, 'status': st}) -%}
           {%- endfor -%}
           {{ out }}
       register: _fh_judge

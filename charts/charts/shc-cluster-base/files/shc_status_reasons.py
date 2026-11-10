@@ -163,6 +163,9 @@ PART_REASONS = {
     "RoutingDaemonRestarted": _r("P", READY, "A routing process on a node restarted after a crash; the platform team is alerted."),
     "NotChecked": _r("A", READY, "The nodes have not been checked yet."),
     # why a health check left the nodes alone this time (status.health.skipped.reason)
+    "NotEnabled": _r("A", READY, "Not turned on for this fabric."),
+    "ReadFailed": _r("P", READY, "A node answered but could not be checked this time."),
+    "NodeReadFailed": _r("P", READY, "A node answered but could not be checked this time."),
     "LeaseHeld": _r("A", READY, "A change to the nodes was in progress; they are checked next time."),
     "JobInFlight": _r("A", READY, "A change is queued; the nodes are checked next time."),
     "NodeStartFailed": _r("P", READY, "The network configuration did not start on a node."),

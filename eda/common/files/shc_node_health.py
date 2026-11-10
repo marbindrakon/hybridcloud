@@ -6,8 +6,9 @@ file; nothing is left on the node). It changes nothing: every command below only
 limit (CMD_TIMEOUT, or the input's cmdTimeout), inside the job's limit on the whole reader.
 
 Input (JSON, base64 in argv[1]):
-  instances      [{name: root|gw-<gateway>, kind: root|gateway, siteCidr?: <site underlay CIDR>}] (gateways of sites
-                 that are paused or being deleted are not listed)
+  instances      [{name: root|gw-<gateway>, kind: root|gateway, siteCidr?: <site underlay CIDR>, sitePeers?: [upstream
+                 route reflectors]}] (gateways of sites
+                 that are paused, being deleted, or not realized yet are not listed)
   transport      mpls|srv6 (the SRv6 core guard units exist only with srv6)
   windowSeconds  how far back a routing daemon crash counts
   cmdTimeout     limit of each command (s)
@@ -146,16 +147,33 @@ def coredumps(run, since):
     return found
 
 
+OPERSTATE = re.compile(r"^(\S+)\s+(UP|DOWN|UNKNOWN|LOWERLAYERDOWN|DORMANT|NOTPRESENT|TESTING)(\s|$)")
+LINKLOCAL = re.compile(r"\s+fe80::\S+")
+
+
+def comparable_state(text):
+    """The apply's state text without what follows the links rather than the configuration: a device's operational
+    state (a bridge is down until its first port comes up, which the gateways add after the root's boot apply) and
+    the kernel's IPv6 link-local addresses."""
+    out = []
+    for line in (text or "").splitlines():
+        if re.match(r"^state [A-Z-]+$", line.strip()):
+            continue
+        line = LINKLOCAL.sub("", OPERSTATE.sub(lambda m: m.group(1) + m.group(3), line))
+        out.append(" ".join(line.split()))
+    return out
+
+
 def kernel_drift(run, name, read=read_file):
     """What changed in the state the apply manages since its last successful up: None when the apply left no record
     (an older release, or never applied since), else the changed lines (empty: no drift)."""
     rec = read("%s/%s.applied" % (ETC, name))
     if rec is None:
         return None
-    rc, now = run([APPLY, name, "snapshot"], 60)
+    rc, now = run([APPLY, name, "snapshot"], 20)
     if rc != 0:
         return ["the state could not be read (exit %d)" % rc]
-    diff = [l for l in difflib.unified_diff(rec.splitlines(), now.splitlines(), lineterm="", n=0)
+    diff = [l for l in difflib.unified_diff(comparable_state(rec), comparable_state(now), lineterm="", n=0)
             if l[:1] in "+-" and not l.startswith(("+++", "---"))]
     return diff[:MAX_LINES]
 
@@ -236,7 +254,9 @@ def site_sessions(run, inst):
     try:
         peers = json.loads(out or "{}").get("peers", {})
         net = ipaddress.ip_network(inst["siteCidr"], strict=False)
-        site = [p for p in peers if ipaddress.ip_address(p) in net]
+        # the site's own routers (the listen range) and the upstream route reflectors that serve some sites
+        rrs = {str(ipaddress.ip_address(a)) for a in inst.get("sitePeers") or []}
+        site = [p for p in peers if ipaddress.ip_address(p) in net or str(ipaddress.ip_address(p)) in rrs]
     except (ValueError, KeyError, TypeError):
         return None
     return {"established": sum(1 for p in site if peers[p].get("state") == "Established"), "known": len(site)}

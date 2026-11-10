@@ -172,7 +172,14 @@ CloudGateway (its instance; only when something changed), the conditions `NodesH
 `Degraded` (True while a finding reduces service: an unreachable node, a failed start or service, a routing daemon
 down, a start without IPv6, no site session), and refreshes the IPv6 egress state
 (`status.realization.egress.ipv6`, condition `IPv6EgressUpstream`) and the pool rows
-(`status.realization.ipam.pools`). A gateway whose site is paused reads `NodesHealthy` Unknown/`SitePaused`. Events
+(`status.realization.ipam.pools`). A finding that reduces service, or that wakes a run at once, counts in the
+conditions, events and wakes only once two consecutive checks found it (a unit that restarts by itself, a daemon in
+watchfrr's restart, a node rebooted on purpose); `status.health` lists it from the first check, with `checks`. A
+read that did not complete on a node that answered is `ReadFailed`, not `NodeUnreachable`. A gateway whose site is
+paused reads `NodesHealthy` Unknown/`SitePaused`; one not realized on the nodes yet, or with a change of its own in
+progress (its phase not Ready or Degraded, an event of its own in flight), Unknown/`NotChecked`. For a fabric whose
+nodes are off on purpose, turn the check off for it (realization `fabrics.<name>.health.enabled: false`): its
+objects read Unknown/`NotChecked` and the stale alerts stay quiet. Events
 come on transitions only (`NodeStartFailed`, `NodeServiceFailed`, `RoutingDaemonDown`, `RoutingDaemonRestarted`,
 `ConfigurationDrift`, `SiteSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
 

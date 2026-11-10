@@ -72,7 +72,7 @@ TESTS = {
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "edge1"},
                   "exp_annotations": {
                       "summary": "CloudGateway sovereign-cloud/edge1: no routing session with its site",
-                      "description": "No node holds a session with the site. A site that is off on purpose is paused "
+                      "description": "A node holds no session with the site. A site that is off on purpose is paused "
                                      "(CloudInfrastructure spec.paused), which this alert ignores."}}]},
              {"eval_time": "6m", "alertname": "ShcFabricIPv6EgressUpstreamDown", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab"},
@@ -99,6 +99,11 @@ TESTS = {
               "values": "600x120"},
              {"series": 'shc_fabric_info{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="new",phase="Ready"}',
               "values": "1x120"},
+             # a fabric whose check the realization turned off: neither stale nor never checked
+             {"series": 'shc_fabric_info{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="off",phase="Ready"}',
+              "values": "1x120"},
+             {"series": 'shc_fabric_health_enabled{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="off"}',
+              "values": "0x120"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-1"}', "values": "0x20"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-2"}', "values": "0x20"},
          ],

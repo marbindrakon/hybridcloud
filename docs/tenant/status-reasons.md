@@ -224,12 +224,15 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `JobInFlight` | A change is queued; the nodes are checked next time. | Nobody: it continues by itself |
 | `LeaseHeld` | A change to the nodes was in progress; they are checked next time. | Nobody: it continues by itself |
 | `NodeHealthRecovered` | Every node is healthy again. | Nobody: it continues by itself |
+| `NodeReadFailed` | A node answered but could not be checked this time. | The platform team |
 | `NodeRebooted` | A node restarted. | Nobody: it continues by itself |
 | `NodeServiceFailed` | A network service on a node is not running. | The platform team |
 | `NodeStartFailed` | The network configuration did not start on a node. | The platform team |
 | `NotChecked` | The nodes have not been checked yet. | Nobody: it continues by itself |
+| `NotEnabled` | Not turned on for this fabric. | Nobody: it continues by itself |
 | `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 | `NotReported` | The site does not report this health check. | Nobody: it continues by itself |
+| `ReadFailed` | A node answered but could not be checked this time. | The platform team |
 | `RoutingDaemonRestarted` | A routing process on a node restarted after a crash; the platform team is alerted. | The platform team |
 | `UpstreamDown` | IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted. | The platform team |
 <!-- reasons:end -->
