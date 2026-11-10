@@ -1,0 +1,36 @@
+---
+# The events the judge asked for (fh_event_rows: [{type, reason, message, kind, name, namespace, uid}]): transitions
+# only. Never fails the job.
+- name: "{{ fh_name }}: report"
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Event
+      metadata:
+        name: "{{ item.name }}-{{ item.reason | lower }}-{{ _stamp }}"
+        namespace: "{{ item.namespace }}"
+      involvedObject:
+        apiVersion: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+        uid: "{{ item.uid }}"
+      type: "{{ item.type }}"
+      reason: "{{ item.reason }}"
+      message: "{{ item.message }}"
+      source: {component: shc-fabric-health}
+      reportingComponent: shc-fabric-health
+      firstTimestamp: "{{ _now }}"
+      lastTimestamp: "{{ _now }}"
+      count: 1
+  vars:
+    _now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+    _stamp: "{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S%N') }}"
+  loop: "{{ fh_event_rows }}"
+  loop_control:
+    label: "{{ item.kind }} {{ item.name }}: {{ item.reason }}"
+  failed_when: false

@@ -2,8 +2,8 @@
 
 For the platform team. What the fabric and gateway jobs do on a border gateway node whatever the fabric's core
 transport: how a network's VRFs are kept apart from the node's own addresses, what the host must not have, the TCP
-MSS clamps, what a network that leaves the node leaves behind, what the orphan check reports, and what a teardown
-removes. The transport itself (MPLS or
+MSS clamps, what a network that leaves the node leaves behind, what the health check reads and reports, what the
+orphan check reports, and what a teardown removes. The transport itself (MPLS or
 SRv6) is on its own page ([SRv6 core transport](srv6-core-transport.md)); the dual-stack core and the IPv6 egress
 are in [IPv6 realization](ipv6-realization.md).
 
@@ -43,6 +43,81 @@ The same two checks run in a gateway namespace that exists already. A refusal pr
 and exits with status 4; the job's failure and the object's status message carry that line. What only the SRv6 core
 refuses is printed as `transport srv6: <reason>` ([SRv6 core transport](srv6-core-transport.md#what-a-node-needs)).
 
+## What a network reaches of the node itself
+
+Some addresses of the node do sit inside a network's VRFs, and FRR listens in every VRF that has a BGP instance (BGP
+on TCP 179, BFD on UDP 3784, 3785 and 4784): a gateway VRF holds the node's ICMPv6 source (`core.icmpSource6`); a
+root VRF `e<n>` holds the node's ICMPv6 source, the node's end of the network's egress veth and its circuits'
+addresses; the egress VRF holds the hand-off address. A network's hosts reach these through the VRF: at a gateway
+from the site, at the root from the core, and into the egress VRF through the network's egress veth. No session of
+the node runs there with a tenant host, so the node answers such traffic like a host with no open port:
+
+- **Gateway namespaces**, with the dual-stack core: table `ip6 shc_gw_in6`, input hook, every VRF device of the
+  namespace. ICMPv6 passes (echo, errors, neighbour discovery); TCP segments with ACK or RST pass (the replies to
+  connections the node opened; any other such segment is answered as a closed port would); every other TCP segment
+  (a connection request, FIN, NULL or XMAS probes) gets a reset, so a port where FRR listens looks closed; UDP gets
+  a port unreachable; every other protocol, and a fragment without its transport header, is dropped. It is loaded
+  before the VRF devices take the ICMPv6 source and stays whether or not the node announces that address to the site
+  (`gateway.announceIcmpSource6`, [IPv6 realization](ipv6-realization.md#transport-dual-stack-core)).
+- **The root**, for a packet delivered to the node in the egress VRF or a network's VRF that did not arrive on one
+  of that VRF's own legs: a network's egress veth (its own stateful filter admits only replies and ICMPv6 errors
+  from the internet) or a circuit's device (its own filter admits BGP from the circuit's link, BFD and ICMP from the
+  customer edge router). What arrives on the hand-off device (the internet, the other node's networks) is filtered
+  too; only the upstream routers' BGP sessions of the IPv6 egress are admitted there. Table `ip shc_root_in`
+  (always, while the root has VRFs): ICMP and TCP segments with ACK or RST pass, everything else is dropped without
+  an answer. Table `ip6 shc_root_in6` (with the dual-stack core): the upstream routers' BGP on the hand-off device
+  and link-local sources from a network's egress veth (the sessions over the veths) pass, then the same answers as
+  in a gateway namespace. A run that leaves the dual-stack core out because a host interface takes router
+  advertisements keeps the IPv6 table as it was.
+
+- **The edge routers of an AWS or Google Cloud site** (part of the site's gateway): table `inet shc_edge_in`, input
+  hook, every network VRF of the router. From a VRF device only BGP with the cloud's own peers on their own leg
+  (the transit gateway's Connect peers, the Cloud Router), ICMP, ICMPv6 and TCP segments with ACK or RST reach the
+  router; everything else is dropped. The router's agent loads it on every run; a router takes it with the agent it
+  was created with, so routers created before it carry none until they are replaced (a new gateway, or the edge
+  helper's `replace`).
+
+The filters are stateless: they keep no connection state ("a TCP segment with ACK or RST" stands in for
+"established"; a stateful rule would make the namespace track and reassemble every network's forwarded traffic), and
+forwarded traffic never meets them. Being stateless, they also refuse the UDP replies to requests the node itself
+sends from such a VRF (a DNS query, NTP or `iperf -u` run on the node inside a VRF gets no answer) and drop TCP that
+reaches the node fragmented. The answers are the ones a closed port gets: resets are not rate-limited, unreachables
+only by the kernel's global ICMP limit; both are no larger than the probe plus 48 bytes and go only toward addresses
+routed in that VRF. Each refusing rule counts its packets (`nft list table ip6 shc_gw_in6` in the gateway's
+namespace, `nft list table ip shc_root_in` and `nft list table ip6 shc_root_in6` on the node). A table follows the
+VRFs on every run and goes with the last of them (and an IPv6 table with the dual-stack core).
+
+## The root's IPv4 ICMP errors toward a network
+
+```yaml
+core:
+  icmpSource4: 192.0.0.8   # the IPv4 source of the root VRFs' ICMP errors; empty = the kernel's choice
+```
+
+A network's IPv4 traffic that crosses the root (toward a circuit, or out through the egress link) meets the root
+twice: in the network's VRF and in the egress VRF. When it does not fit the next link or its TTL runs out there, the
+root answers with "fragmentation needed" or "time exceeded". Without `core.icmpSource4` the kernel takes the
+answer's source from the VRF's devices, which for these VRFs is an address of the egress link (`egress.linkPool`,
+169.254.0.0/16 by default) or a circuit's, depending on the order the devices were created in; some sites drop such
+sources (OpenShift Virtualization: OVN-Kubernetes reserves part of 169.254.0.0/17), and the guests behind them then
+lose IPv4 path MTU discovery and see a silent hop.
+
+With `core.icmpSource4` (default `192.0.0.8`, the IPv4 dummy address of RFC 7600, which the site gateways' kernels
+already answer from) every root VRF device (the egress VRF and each network's and circuit's VRF) holds that address as
+a /32 on every node. The kernel prefers it for every route whose next hop lies outside the VRF, which is every route
+back to a network's hosts (over the core). The egress VRF's routes back to the networks (each network's source NAT
+address, each platform prefix) name the node's hand-off address (`egress.nodes.<node>.address`) as their source:
+the error crosses the network's VRF on its way, and a VRF drops an arriving packet whose source is one of its own
+addresses, so it cannot be `icmpSource4`. The hand-off address must lie outside the ranges the sites reserve
+(OVN-Kubernetes: its masquerade, join and transit subnets). Errors toward a circuit's customer edge router keep the
+circuit's address (its own link), and errors toward the internet the egress link's or hand-off address as before.
+The address is never announced and is local in every root VRF, so what a network sends to it meets the root's input
+filter; a tenant prefix that overlaps it is refused (`PrefixReserved`). The HybridFabric refuses (`InvalidSpec`) a
+value that is no single IPv4 address, is link-local or loopback, or lies inside `core.loopbackPool` or
+`core.linkSubnet`. Source NAT is unchanged. Setting or changing it adds the address and replaces the egress VRF's
+routes with their source, without an interruption. A node that drops such errors counts them as martian sources
+(`in_martian_src` in `/proc/net/stat/rt_cache`, per CPU).
+
 ## TCP MSS clamps
 
 The node clamps the MSS of TCP connection setups where a packet is about to leave on a link smaller than the path it
@@ -73,6 +148,64 @@ as inactive, that the rendered configuration does not name and that has no BGP i
 and resets no session. A VRF that FRR refuses to remove is named in the job's output and stays: it has no device and
 no routes, and the next job tries again.
 
+## The health check
+
+The job template `fabric-health` runs on a schedule (realization `health.intervalSeconds`, default 600 s, at least
+300 s) and reads every node of every fabric once over SSH. It changes nothing on a node and takes no lease: while the
+fabric's lease is held, or a fabric event is queued, it leaves the nodes alone (`status.health.skipped`), and a read
+that a job overlapped is discarded. Every command on a node has its own time limit and the whole read has
+`health.nodeReadTimeoutSeconds`.
+
+What it reads, per instance (the root, and each gateway whose site is not paused):
+
+- the units of the instance and whether they start at boot: the root's apply unit, FRR, the IPv6 egress guard's and
+  the SRv6 core guard's timers; a gateway's instance unit and its core guard's timer; any other unit of the
+  fabric that failed;
+- the instance's start at boot: a failed apply, with the apply's own lines from the journal of that start, and a root
+  started without its IPv6 side (a `warning:` line);
+- the routing daemons (`show watchfrr`) and their crashes in the last `health.daemonRestartWindowMinutes`
+  (systemd-coredump's journal entries; a gateway's by its pathspace);
+- drift: the state the apply manages now (`shc-fabric-apply <instance> snapshot`) against the record a successful
+  apply leaves (`/etc/shc-fabric/<instance>.applied`), and the FRR files against the record of what FRR last loaded.
+  A node without the records (applied by an earlier release and not since) is not judged for drift;
+- what FRR's running configuration still lacks of its file, as the post-reload verification (`shc-frr-check`,
+  realization `nodes.frrLoadCheck`) computes it, read without writing its note; the lines that note keeps (FRR did
+  not take them after two loads) are reported as `ConfigurationNotTaken` and never wake a run;
+- the IPv6 egress as the root's own file names it (the hand-off address, the filter table, the upstream sessions,
+  the default route in the egress VRF and in each network VRF with IPv6 egress), and a gateway's site sessions.
+
+Every run writes `status.health.lastRunAt` on the HybridFabric, also a run that left the nodes alone;
+`status.health.checkedAt` is when the nodes were last read. It writes `status.health` on the HybridFabric (the root's
+findings and the node-wide units; every run) and on each
+CloudGateway (its instance; only when something changed), the conditions `NodesHealthy` (the worst finding) and
+`Degraded` (True while a finding reduces service: an unreachable node, a failed start or service, a routing daemon
+down, a start without IPv6, no site session), and refreshes the IPv6 egress state
+(`status.realization.egress.ipv6`, condition `IPv6EgressUpstream`) and the pool rows
+(`status.realization.ipam.pools`). A finding counts in the conditions, events and wakes
+(`confirmed`) at once when it is a lasting state (a start that failed, a unit failed or not started at boot), and only
+once a second consecutive check found it when it may be a moment (a node not answering, a unit restarting by itself,
+a daemon in watchfrr's restart); `status.health` lists it from the first check, with `checks`, and `healthy` is
+false as soon as anything is listed. An instance whose configuration did not start reports that, not the drift it
+causes, and the gateways on a node whose own configuration did not start report it too. Each node row carries its
+worst counted finding (`reason`, `message`), which the alerts name together with the node. A
+read that did not complete on a node that answered is `ReadFailed`, not `NodeUnreachable`. A gateway whose site is
+paused reads `NodesHealthy` Unknown/`SitePaused`; one not realized on the nodes yet, or with a change of its own in
+progress (its phase not Ready or Degraded, an event of its own in flight), Unknown/`NotChecked`. For a fabric whose
+nodes are off on purpose, turn the check off for it (realization `fabrics.<name>.health.enabled: false`): its
+objects read Unknown/`NotChecked` and the stale alerts stay quiet. Two alerts watch the check itself:
+`ShcFabricHealthStale` when no run reported (`lastRunAt`) for `ops.fabricHealth.alerts.staleIntervals` intervals (the
+schedule, AAP or the job is broken), and `ShcFabricNodesNotRead`, lower, when runs report but have not read the nodes
+(`checkedAt`) for `ops.fabricHealth.alerts.notReadIntervals` intervals because changes to the nodes held them off. Events
+come on transitions only (`NodeStartFailed`, `NodeServiceFailed`, `RoutingDaemonDown`, `RoutingDaemonRestarted`,
+`ConfigurationDrift`, `SiteSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
+
+What a full run repairs wakes the job of the object it belongs to (the fabric for the root, the gateway for its
+instance) when that object is ready: a failed or inactive start, a unit not running or not started at boot at once,
+drift once `health.wakeAfterChecks` consecutive checks found it; not again within `health.wakeBackoffMinutes`. An
+unreachable node, a daemon crash or site sessions down wake nothing: a full run would not repair them. A change of
+the nodes without IPv6 upstream wakes the networks with IPv6 egress; more free blocks in a pool (blocks leaving
+hold-down) wake the networks waiting for platform address space.
+
 ## The orphan check on a node
 
 The fabric orphan check (report only) reads every border gateway node of a fabric. Besides the namespaces, VRFs,
@@ -80,7 +213,10 @@ circuit devices and BFD sessions that no object accounts for, it reports what th
 VRF or instance any more, judged by the fabric's core transport:
 - on both transports: an IPv4 or IPv6 unreachable route at the apply's metric in a table no VRF uses (a VRF removed
   behind the jobs), an ICMPv6 source address on a device that is no VRF, and an IPv4 `lookup local` rule anywhere but
-  at 32765 (a namespace where a VRF reaches the default VRF's addresses);
+  at 32765 (a namespace where a VRF reaches the default VRF's addresses), and the root VRFs' input filters judged
+  against the root's VRFs and the dual-stack core: `ip shc_root_in` or `ip6 shc_root_in6` loaded with no root VRF
+  (or the IPv6 one without the dual-stack core) is left over, root VRFs without their table are reported as
+  unprotected;
 - on `srv6`: the SID block's unreachable route and rule for another block than the fabric's, a guard unit or guard
   file of an instance that is not on the node, and MPLS routes or the MPLS module file (left from `mpls`);
 - on `mpls`: every SRv6 piece (the block's route and rule, the guard table, an encapsulation source, the guard units

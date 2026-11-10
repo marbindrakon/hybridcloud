@@ -1,8 +1,7 @@
 // Per-family addressing (forms/ipv6.ts): the CRD mirror, the derived mode, the hints, the site
-// capability gate of the placement IPv6 inputs and the cloud-init snippet.
+// capability gate of the placement IPv6 inputs and the guest configuration reference.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -16,10 +15,6 @@ const tOf = (cat) => (key, opts = {}) => {
 const tEn = tOf(load('en'));
 const KIND_NAME = /\b(HybridNetwork|NetworkPlacement|CloudVirt|CloudOSO|HybridFabric)\b/;
 const codes = (errs) => errs.map((e) => e.code).sort();
-// YAML as cloud-init and the cluster's tooling read it: PyYAML (already needed by these tests, terms-json.py)
-const yamlLoad = (text) =>
-  JSON.parse(execFileSync('python3', ['-I', '-c', 'import json, sys, yaml; json.dump(yaml.safe_load(sys.stdin), sys.stdout)'], { input: text, encoding: 'utf8' }));
-const bytes = (text) => Buffer.byteLength(text, 'utf8');
 
 test('mode follows the fields: platform block, tenant IPv6 prefix, neither', () => {
   assert.equal(m.deriveIpv6Mode({ prefixes: ['10.60.0.0/16'] }), 'None');
@@ -183,284 +178,6 @@ test('placement subnets: status.subnets, else status.prefixes', () => {
   assert.equal(m.familyUnavailable({ status: { conditions: [{ reason: 'Ready' }] } }), null);
 });
 
-test('cloud-init snippet: none without an IPv6 subnet; dual-stack DHCP; IPv6-only adds a CLAT', () => {
-  const mac = '02:5c:12:34:56:78';
-  const v4only = { metadata: { name: 'p' }, spec: { network: 'n' }, status: { subnets: [{ family: 4, prefix: '10.60.1.0/24' }] } };
-  assert.equal(m.cloudInitSnippet(v4only), null);
-  assert.equal(m.cloudInitSnippet(v4only, { macAddress: mac }), null);
-  const dual = {
-    metadata: { name: 'p' },
-    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
-    status: { subnets: [{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }] },
-  };
-  const d = m.cloudInitSnippet(dual, { macAddress: mac });
-  assert.equal(
-    d.networkData,
-    ['version: 2', 'ethernets:', '  primary:', `    match: {macaddress: "${mac}"}`, '    dhcp4: true', '    dhcp6: true', '    accept-ra: true', ''].join('\n'),
-  );
-  assert.equal(d.userData, null);
-  assert.deepEqual([d.tenantNetworkData, d.macAddress, d.clat, d.ignoreAutoDns], [true, mac, false, false]);
-  const only = {
-    metadata: { name: 'p' },
-    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
-    status: {
-      subnets: [{ family: 6, prefix: '2001:db8:0:2::/64' }],
-      ipv6: { translation: { pref64: '64:ff9b::/96', resolvers: ['2001:db8::53'] } },
-    },
-  };
-  const o = m.cloudInitSnippet(only, { macAddress: mac });
-  assert.match(o.networkData, /dhcp4: false/);
-  assert.match(o.networkData, /\n {4}nameservers:\n {6}addresses: \["2001:db8::53"\]\n$/);
-  assert.match(o.userData, /^#cloud-config\n/);
-  assert.match(o.userData, /plat-prefix=64:ff9b::\/96/);
-  assert.equal(o.clat, true);
-});
-
-test('cloud-init snippet: the network data matches the NIC by the MAC address the VM interface is given', () => {
-  const p = (kind, subnets, translation) => ({
-    metadata: { name: 'p' },
-    spec: { network: 'n', ...(kind ? { backend: { kind, name: 'e' } } : {}) },
-    status: { subnets, ipv6: { translation } },
-  });
-  const only6 = [{ family: 6, prefix: '2001:db8:0:2::/64' }];
-  const dual = [{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }];
-  const tr = { path: 'Fabric', pref64: '64:ff9b::/96', resolvers: ['2001:db8::53', '2001:db8::54'] };
-  // the tenant's text: either separator, any case, spaces around; stored lowercase with colons
-  const s = m.cloudInitSnippet(p('CloudVirt', only6, tr), { macAddress: ' 02-5C-AB-00-00-01 ' });
-  assert.equal(s.macAddress, '02:5c:ab:00:00:01');
-  assert.match(s.networkData, /^ {2}primary:\n {4}match: \{macaddress: "02:5c:ab:00:00:01"\}\n/m);
-  // the VM's interface on the pod network carries the same address (quoted: an unquoted MAC can read as a number)
-  assert.equal(s.vmInterface, 'interfaces:\n  - name: default\n    binding: {name: l2bridge}\n    macAddress: "02:5c:ab:00:00:01"\n');
-  // no interface name anywhere: no eth0 key, no rename, no name match; the guest script finds the NIC at runtime
-  for (const text of [s.networkData, s.vmInterface, s.userData]) {
-    assert.doesNotMatch(text, /\beth\d\b|\benp\d|\bens\d|set-name|\bname: "?e/);
-  }
-  assert.match(s.userData, /ip -6 route show default/);
-  // no MAC address, or one that is not a unicast address: no network data and no VM interface, the user data stays
-  for (const bad of [undefined, '', 'eth0', '02:5c:ab:00:00', '02:5c:ab:00:00:01:02', '02:5c-ab:00:00:01', '01:00:5e:00:00:01', '00:00:00:00:00:00', 'g2:5c:ab:00:00:01']) {
-    const n = m.cloudInitSnippet(p('CloudVirt', only6, tr), { macAddress: bad });
-    assert.deepEqual([n.tenantNetworkData, n.macAddress, n.networkData, n.vmInterface], [true, null, null, null], String(bad));
-    assert.match(n.userData, /packages: \[clatd\]/);
-  }
-  // the environment type unknown: as on OpenShift Virtualization (the tenant gives the network data)
-  assert.equal(m.cloudInitSnippet(p(undefined, dual, null), { macAddress: '02:00:00:00:00:01' }).tenantNetworkData, true);
-  // OpenStack: the config drive carries the network configuration; only the user data, whatever MAC address is given
-  const oso = m.cloudInitSnippet(p('CloudOSO', only6, tr), { macAddress: '02:00:00:00:00:01' });
-  assert.deepEqual([oso.tenantNetworkData, oso.macAddress, oso.networkData, oso.vmInterface], [false, null, null, null]);
-  // the placement's subnet hands out the translation resolvers by DHCPv6 and in the config drive: the CLAT only
-  assert.deepEqual([oso.clat, oso.ignoreAutoDns], [true, false]);
-  assert.doesNotMatch(oso.userData, /ignore-auto-dns/);
-  // AWS, the platform's translation: the VPC's DHCP option set hands out the resolvers; the CLAT only
-  const aws = m.cloudInitSnippet(p('CloudAWS', only6, tr));
-  assert.deepEqual([aws.networkData, aws.clat, aws.ignoreAutoDns], [null, true, false]);
-  assert.equal(aws.userData, '#cloud-config\npackages: [clatd]\nwrite_files:\n  - path: /etc/clatd.conf\n    content: |\n      plat-prefix=64:ff9b::/96\nruncmd:\n  - [systemctl, enable, --now, clatd]\n');
-  // OpenShift Virtualization keeps the step: DHCPv6 there also hands out the cluster's DNS service
-  assert.equal(m.cloudInitSnippet(p('CloudVirt', only6, tr), { macAddress: '02:00:00:00:00:01' }).ignoreAutoDns, true);
-  // ... and nothing to show where there is no user data either
-  assert.equal(m.cloudInitSnippet(p('CloudOSO', dual, null), { macAddress: '02:00:00:00:00:01' }), null);
-  assert.equal(m.cloudInitSnippet(p('CloudAWS', dual, null)), null);
-  // Google Cloud, the provider's path: the CLAT only
-  const gcp = m.cloudInitSnippet(p('CloudGCP', [{ family: 6, prefix: '2001:db8:0:4::/64', source: 'Provider' }], { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['169.254.169.254'] }));
-  assert.deepEqual([gcp.networkData, gcp.clat, gcp.ignoreAutoDns], [null, true, false]);
-  assert.equal(m.showsCloudInitSnippet(p('CloudOSO', dual, null), { ipv6: true, ipv6Only: false, sources: [], translation: false }), false);
-  assert.equal(m.showsCloudInitSnippet(p('CloudOSO', only6, tr), { ipv6: true, ipv6Only: true, sources: [], translation: true }), true);
-  assert.equal(m.showsCloudInitSnippet(p('CloudVirt', dual, null), { ipv6: true, ipv6Only: false, sources: [], translation: false }), true);
-});
-
-test('cloud-init snippet: every resolver quoted (an address may start or end with "::"), the prefix one token', () => {
-  const at = (translation) => ({
-    metadata: { name: 'p' },
-    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
-    status: { subnets: [{ family: 6, prefix: '2001:db8:0:2::/64' }], ipv6: { translation } },
-  });
-  const mac = '02:00:00:00:00:01';
-  const s = m.cloudInitSnippet(at({ path: 'Fabric', pref64: ' 64:ff9b::/96 ', resolvers: ['2001:db8:53::', ' ::ffff:10.0.0.1 ', '2001:db8::53', '', 7] }), { macAddress: mac });
-  // unquoted, "2001:db8:53::" reads as a mapping in a YAML flow sequence and "::ffff:10.0.0.1" does not parse
-  assert.equal(
-    s.networkData,
-    [
-      'version: 2',
-      'ethernets:',
-      '  primary:',
-      `    match: {macaddress: "${mac}"}`,
-      '    dhcp4: false',
-      '    dhcp6: true',
-      '    accept-ra: true',
-      '    nameservers:',
-      '      addresses: ["2001:db8:53::", "::ffff:10.0.0.1", "2001:db8::53"]',
-      '',
-    ].join('\n'),
-  );
-  assert.match(s.userData, /\n {4}content: \|\n {6}plat-prefix=64:ff9b::\/96\n {2}- path: /);
-  // a prefix that is not a single token would break the literal block of clatd.conf: no CLAT then
-  const bad = m.cloudInitSnippet(at({ path: 'Fabric', pref64: '64:ff9b::/96\nruncmd: [reboot]', resolvers: [] }), { macAddress: mac });
-  assert.deepEqual([bad.clat, bad.userData], [false, null]);
-});
-
-test('cloud-init snippet on OpenShift Virtualization: interface, volume and Secret agree; nothing inline over the limit', () => {
-  assert.equal(m.CLOUD_INIT_INLINE_MAX_BYTES, 2048); // KubeVirt's limit on inline userData and networkData
-  const mac = '02:5c:12:34:56:78';
-  const at = (subnets, translation, namespaces) => ({
-    metadata: { name: 'example-p', namespace: 'entity-example-corp' },
-    spec: { network: 'n', backend: { kind: 'CloudVirt', name: 'vm' } },
-    status: { subnets, namespaces, ipv6: { translation } },
-  });
-  const only = [{ family: 6, prefix: '2001:db8:0:2::/64' }];
-  const dual = [{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }];
-  const tr = { path: 'Fabric', pref64: '64:ff9b::/96', resolvers: ['2001:db8:53::10', '2001:db8:53::11'] };
-  const long = Array.from({ length: 8 }, (_, i) => `2001:0db8:ffff:ffff:ffff:ffff:ffff:${String(i).padStart(4, '0')}`);
-  const cases = {
-    v6onlyTranslation: at(only, tr, ['example-vms']),
-    v6onlyLongResolvers: at(only, { ...tr, resolvers: long }, ['example-vms']),
-    v6onlyNoResolvers: at(only, { ...tr, resolvers: [] }, ['a', 'b']),
-    dualResolvers: at(dual, { path: 'Fabric', resolvers: ['2001:db8:53::10'] }, []),
-    dualPlain: at(dual, null, ['example-vms']),
-    v6onlyPlain: at(only, null, undefined),
-  };
-  for (const [name, p] of Object.entries(cases)) {
-    const s = m.cloudInitSnippet(p, { macAddress: mac });
-    const iface = yamlLoad(s.vmInterface).interfaces[0];
-    assert.equal(iface.macAddress, mac, name);
-    const vol = yamlLoad(s.vmVolume).volumes;
-    assert.equal(vol.length, 1, name);
-    assert.equal(vol[0].name, 'cloudinitdisk', name);
-    const src = vol[0].cloudInitNoCloud;
-    // the network data inline, as the snippet builds it, under KubeVirt's limit; it matches the interface's MAC address
-    assert.equal(src.networkData, s.networkData, name);
-    assert.ok(bytes(src.networkData) <= m.CLOUD_INIT_INLINE_MAX_BYTES, `${name}: ${bytes(src.networkData)} bytes inline`);
-    assert.equal(yamlLoad(src.networkData).ethernets.primary.match.macaddress, iface.macAddress, name);
-    // the user data never inline: in the Secret the volume references, byte for byte
-    assert.equal(src.userData, undefined, name);
-    assert.equal(src.userDataBase64, undefined, name);
-    if (!s.userData) {
-      assert.deepEqual([s.userDataSecret, s.secretName, src.secretRef], [null, null, undefined], name);
-      continue;
-    }
-    const secret = yamlLoad(s.userDataSecret);
-    assert.deepEqual([secret.apiVersion, secret.kind, secret.type], ['v1', 'Secret', 'Opaque'], name);
-    assert.equal(secret.metadata.name, 'example-p-cloud-init', name);
-    assert.equal(src.secretRef.name, secret.metadata.name, name);
-    assert.equal(s.secretName, secret.metadata.name, name);
-    assert.deepEqual(Object.keys(secret.stringData), ['userdata'], name);
-    assert.equal(secret.stringData.userdata, s.userData, name);
-    // the manifest names the namespace only when the placement serves exactly one
-    assert.equal(secret.metadata.namespace, p.status.namespaces?.length === 1 ? p.status.namespaces[0] : undefined, name);
-  }
-  // the user data with the resolver step is over the inline limit (why it is in a Secret); the CLAT alone is not
-  assert.ok(bytes(m.cloudInitSnippet(cases.v6onlyTranslation, { macAddress: mac }).userData) > m.CLOUD_INIT_INLINE_MAX_BYTES);
-  assert.ok(bytes(m.cloudInitSnippet(cases.v6onlyNoResolvers, { macAddress: mac }).userData) <= m.CLOUD_INIT_INLINE_MAX_BYTES);
-  // without a valid MAC address: no interface, the volume takes only the user data from the Secret
-  const nomac = m.cloudInitSnippet(cases.v6onlyTranslation, { macAddress: 'x' });
-  assert.equal(nomac.vmInterface, null);
-  assert.deepEqual(yamlLoad(nomac.vmVolume).volumes[0].cloudInitNoCloud, { secretRef: { name: 'example-p-cloud-init' } });
-  // network data over the limit (far more resolvers than any site has) moves into the Secret as well
-  const many = Array.from({ length: 60 }, (_, i) => `2001:db8:ffff:ffff:ffff:ffff:ffff:${i.toString(16)}`);
-  const big = m.cloudInitSnippet(at(only, { ...tr, resolvers: many }, ['example-vms']), { macAddress: mac });
-  assert.ok(bytes(big.networkData) > m.CLOUD_INIT_INLINE_MAX_BYTES);
-  assert.equal(big.networkDataInSecret, true);
-  const bigSrc = yamlLoad(big.vmVolume).volumes[0].cloudInitNoCloud;
-  assert.deepEqual(bigSrc, { secretRef: { name: 'example-p-cloud-init' }, networkDataSecretRef: { name: 'example-p-cloud-init' } });
-  assert.deepEqual(yamlLoad(big.userDataSecret).stringData, { userdata: big.userData, networkdata: big.networkData });
-  // the other environment types: the user data alone (their APIs take 16 KB and more), no volume, no Secret
-  for (const kind of ['CloudOSO', 'CloudAWS', 'CloudGCP']) {
-    const c = m.cloudInitSnippet({ ...cases.v6onlyTranslation, spec: { network: 'n', backend: { kind, name: 'e' } } }, { macAddress: mac });
-    assert.deepEqual([c.vmVolume, c.userDataSecret, c.secretName], [null, null, null], kind);
-    assert.ok(bytes(c.userData) < 16 * 1024, kind);
-    assert.equal(yamlLoad(c.userData).packages[0], 'clatd', kind);
-  }
-  // the panel's words in both catalogues, the limit named
-  for (const l of ['en', 'fr']) {
-    const t = tOf(load(l));
-    for (const k of ['vmVolume', 'vmVolumeHelp', 'vmVolumeHelpNetworkInSecret', 'userDataSecret', 'userDataSecretHelp']) {
-      assert.notEqual(t(`ipv6.cloudInit.${k}`), `ipv6.cloudInit.${k}`, `${l}: ${k}`);
-      assert.doesNotMatch(t(`ipv6.cloudInit.${k}`), KIND_NAME, `${l}: ${k}`);
-    }
-    assert.match(t('ipv6.cloudInit.userDataSecretHelp', { name: 'example-p-cloud-init' }), /example-p-cloud-init.*userdata.*2048/);
-  }
-});
-
-test('MAC addresses: the tenant\'s text normalised, a proposed address locally administered and unicast', () => {
-  assert.equal(m.normalizeMacAddress('0A:58:0A:6E:09:04'), '0a:58:0a:6e:09:04');
-  assert.equal(m.normalizeMacAddress('02-00-00-00-00-01'), '02:00:00:00:00:01');
-  for (const bad of [null, undefined, '', '02:00:00:00:00', '0200.0000.0001', '03:00:00:00:00:01', '00:00:00:00:00:00', '02:00:00:00:00:0g']) {
-    assert.equal(m.normalizeMacAddress(bad), null, String(bad));
-  }
-  assert.equal(m.proposeMacAddress(() => [0xab, 1, 2, 3, 0xff]), '02:ab:01:02:03:ff');
-  const a = m.proposeMacAddress();
-  const b = m.proposeMacAddress();
-  for (const x of [a, b]) {
-    assert.match(x, /^02(:[0-9a-f]{2}){5}$/);
-    assert.equal(m.normalizeMacAddress(x), x);
-  }
-  assert.notEqual(a, b);
-  // the panel's words in both catalogues, in display terms
-  for (const l of ['en', 'fr']) {
-    const t = tOf(load(l));
-    for (const k of ['macAddress', 'macAddressHelp', 'macAddressInvalid', 'newMac', 'vmInterface', 'vmInterfaceHelp', 'networkFromConfigDrive', 'networkFromCloud']) {
-      assert.notEqual(t(`ipv6.cloudInit.${k}`), `ipv6.cloudInit.${k}`, `${l}: ${k}`);
-      assert.doesNotMatch(t(`ipv6.cloudInit.${k}`), KIND_NAME, `${l}: ${k}`);
-    }
-  }
-});
-
-test('cloud-init snippet: with resolvers the guest ignores the resolvers DHCP hands out', () => {
-  const at = (subnets, translation) => ({ metadata: { name: 'p' }, spec: { network: 'n' }, status: { subnets, ipv6: { translation } } });
-  const only = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:2::/64' }], { pref64: '64:ff9b::/96', resolvers: ['2001:db8::53', '2001:db8::54'] }));
-  assert.equal(only.ignoreAutoDns, true);
-  const ud = only.userData;
-  // one write_files list: clatd.conf, the script, its unit; runcmd enables the unit before clatd
-  assert.deepEqual(ud.match(/^ {2}- path: .*$/gm), [
-    '  - path: /etc/clatd.conf',
-    '  - path: /usr/local/sbin/ignore-auto-dns',
-    '  - path: /etc/systemd/system/ignore-auto-dns.service',
-  ]);
-  assert.equal(ud.split('\n').filter((l) => /^\S/.test(l)).join('|'), '#cloud-config|packages: [clatd]|write_files:|runcmd:');
-  assert.match(ud, /runcmd:\n {2}- \[systemctl, daemon-reload\]\n {2}- \[systemctl, enable, --now, ignore-auto-dns.service\]\n {2}- \[systemctl, enable, --now, clatd\]\n$/);
-  // every line of a literal block is indented six spaces or empty (no tabs, no stray indentation)
-  const script = m.ignoreAutoDnsScript('ipv6 ipv4');
-  for (const l of script.replace(/\n$/, '').split('\n')) assert.ok(ud.includes(l ? `\n      ${l}\n` : '\n\n'), l);
-  assert.match(script, /^#!\/bin\/bash\n/);
-  assert.match(script, /^FAMILIES="ipv6 ipv4"$/m);
-  assert.match(script, /nmcli connection modify "\$con" "\$@"/);
-  // a full reactivation: before NetworkManager 1.58 "device reapply" keeps a running DHCPv6 lease's DNS
-  assert.match(script, /\n {2}nmcli connection up "\$con" \|\| exit 1\n/);
-  assert.doesNotMatch(script, /^[^#]*device reapply/m);
-  assert.match(ud, /\n {6}StandardOutput=journal\+console\n/);
-  assert.match(script, /\[DHCPv6\]\\nUseDNS=false/);
-  // the IPv6 translation probe (a test tool) ships the same script
-  const sample = fs.readFileSync(path.join(process.env.UI_ROOT, '..', 'tests/connectivity/ipv6-translation-probe/probe-user-data.yaml'), 'utf8');
-  const from = sample.indexOf('  - path: /usr/local/sbin/ignore-auto-dns\n');
-  assert.ok(from > 0);
-  const lines = sample.slice(from).split('\n').slice(3);
-  const body = [];
-  for (const l of lines) {
-    if (l && !l.startsWith('      ')) break;
-    body.push(l.slice(6));
-  }
-  assert.equal(`${body.join('\n').replace(/\n+$/, '')}\n`, script);
-  // an IPv6-only placement without translation resolvers: nothing to keep, no user data
-  const bare = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:3::/64' }], null));
-  assert.deepEqual([bare.userData, bare.clat, bare.ignoreAutoDns], [null, false, false]);
-  // dual-stack with resolvers: only the IPv6 resolvers handed out are ignored, no CLAT
-  const dual = m.cloudInitSnippet(at([{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }], { resolvers: ['2001:db8::53'] }));
-  assert.deepEqual([dual.clat, dual.ignoreAutoDns], [false, true]);
-  assert.match(dual.userData, /\n {6}FAMILIES="ipv6"\n/);
-  assert.doesNotMatch(dual.userData, /clatd/);
-  // the provider's path: its DHCP hands out the provider's own DNS64 resolver; only the CLAT
-  const prov = m.cloudInitSnippet(at([{ family: 6, prefix: '2001:db8:0:4::/64' }], { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'] }), {
-    macAddress: '02:00:00:00:00:01',
-  });
-  assert.deepEqual([prov.clat, prov.ignoreAutoDns], [true, false]);
-  assert.doesNotMatch(prov.userData, /ignore-auto-dns/);
-  assert.match(prov.networkData, /addresses: \["fd00:db8::253"\]/);
-  // the help reads in both catalogues
-  for (const l of ['en', 'fr']) {
-    const t = tOf(load(l));
-    for (const k of ['ipv6.cloudInit.userData', 'ipv6.cloudInit.userDataDns', 'ipv6.cloudInit.userDataHelp']) assert.notEqual(t(k), k, `${l}: ${k}`);
-    assert.doesNotMatch(t('ipv6.cloudInit.userDataDns'), KIND_NAME);
-  }
-});
-
 test('placement translation: path and the provider translator source when reported, nothing without a prefix', () => {
   const at = (translation) => ({ metadata: { name: 'p' }, spec: { network: 'n' }, status: { ipv6: { translation } } });
   assert.deepEqual(m.placementTranslation(at({ path: 'Fabric', pref64: '2001:db8:64::/96', resolvers: ['2001:db8::53'] })), {
@@ -503,14 +220,6 @@ test('placement families: IPv4 stays unless the site offers IPv6-only; IPv6-only
   assert.equal(m.placementFamilies({ offer: only, networkHasIpv4: true, includeIpv4: false, includeIpv6: false }).ipv4, true);
 });
 
-test('the cloud-init snippet ships behind the site capability check (no site reports IPv6 today)', () => {
-  const p = { metadata: { name: 'p' }, spec: { network: 'n' }, status: { subnets: [{ family: 6, prefix: '2001:db8:0:1::/64' }] } };
-  assert.equal(m.showsCloudInitSnippet(p, m.NO_IPV6), false);
-  assert.equal(m.showsCloudInitSnippet(p, undefined), false);
-  assert.equal(m.showsCloudInitSnippet(p, { ipv6: true, ipv6Only: false, sources: [], translation: false }), true);
-  assert.equal(m.showsCloudInitSnippet({ ...p, status: { prefixes: ['10.0.0.0/24'] } }, { ipv6: true, ipv6Only: false, sources: [], translation: false }), false);
-});
-
 test('IPv6ModeInUse on the network page: the job message once, with the modes, in display words', () => {
   const msg = "HybridNetwork g6-v6only: the network's IPv6 mode can't change while it has placements; remove them or create a new network (it is Tenant, the spec asks for Platform)";
   const out = m.ipv6ReasonText(tEn, 'IPv6ModeInUse', msg);
@@ -548,4 +257,153 @@ test('Address family not available: the catalogue words with the job message in 
   assert.equal(m.familyUnavailableText(tEn, { status: { conditions: [{ reason: 'FamilyUnavailable' }] } }),
     `${load('en').ipv6.familyUnavailableBody} ${load('en').ipv6.familyUnavailableFix}`);
   assert.equal(m.familyUnavailableText(tEn, { status: { conditions: [{ reason: 'Ready' }] } }), null);
+});
+
+// ------------------------------------------------------------------ guest configuration reference
+
+const placementAt = (kind, subnets, ipv6 = {}, extra = {}) => ({
+  metadata: { name: 'p' },
+  spec: { network: 'n', backend: kind ? { kind, name: 'e' } : undefined },
+  status: { subnets, ipv6, ...extra },
+});
+const ONLY6 = [{ family: 6, prefix: '2001:db8:0:2::/64', source: 'Network' }];
+const DUAL = [{ family: 4, prefix: '10.60.1.0/24' }, { family: 6, prefix: '2001:db8:0:1::/64' }];
+const FABRIC_TR = { path: 'Fabric', pref64: ' 2001:db8:64::/96 ', resolvers: ['2001:db8:53::10', ' 2001:db8:53::11 ', ''] };
+const allFacts = (r) => [...r.facts.environment, ...r.facts.resolvers, ...r.facts.clat, ...r.facts.every];
+
+test('guest reference: none without an IPv6 subnet; values only from the placement status', () => {
+  assert.equal(m.guestReference(placementAt('CloudVirt', [{ family: 4, prefix: '10.60.1.0/24' }])), null);
+  assert.equal(m.guestReference(undefined), null);
+  const r = m.guestReference(placementAt('CloudVirt', ONLY6, { addressing: 'DHCPv6', translation: FABRIC_TR }, { mtu: 1400 }));
+  assert.equal(r.environment, 'CloudVirt');
+  assert.equal(r.ipv6Only, true);
+  assert.equal(r.addressing, 'DHCPv6');
+  assert.equal(r.mtu, 1400);
+  assert.equal(r.translationState, 'available');
+  assert.deepEqual(r.translation, { path: 'Fabric', pref64: '2001:db8:64::/96', resolvers: ['2001:db8:53::10', '2001:db8:53::11'] });
+  // nothing the status does not report: no MTU, no addressing
+  const bare = m.guestReference(placementAt('CloudVirt', ONLY6, { translation: FABRIC_TR }, { mtu: 'x' }));
+  assert.equal('mtu' in bare, false);
+  assert.equal('addressing' in bare, false);
+  assert.equal('mtu' in m.guestReference(placementAt('CloudVirt', ONLY6, {}, { mtu: 0 })), false);
+  // written before subnets existed: status.prefixes
+  assert.equal(m.guestReference({ spec: { backend: { kind: 'CloudOSO' } }, status: { prefixes: ['2001:db8:0:9::/64'] } }).ipv6Only, true);
+});
+
+test('guest reference: translation available, none, not needed (the states the placement status can carry)', () => {
+  const st = (subnets, ipv6) => m.guestReference(placementAt('CloudVirt', subnets, ipv6)).translationState;
+  assert.equal(st(ONLY6, { translation: FABRIC_TR }), 'available');
+  // the job writes no translation key when none is offered and while a provider's translator is pending (its
+  // merge patch drops the empty value): both read as none
+  assert.equal(st(ONLY6, {}), 'none');
+  assert.equal(st(ONLY6, { addressing: 'DHCPv6', internet: { state: 'unavailable', path: 'Fabric', reason: 'NotOffered' } }), 'none');
+  // a translation without a prefix is not usable
+  assert.equal(st(ONLY6, { translation: { path: 'Provider' } }), 'none');
+  // dual-stack: IPv4 is native, translation is never shown even if the status had one
+  const dual = m.guestReference(placementAt('CloudVirt', DUAL, { translation: FABRIC_TR }));
+  assert.deepEqual([dual.translationState, dual.translation, dual.ipv6Only], ['notNeeded', null, false]);
+  assert.deepEqual(dual.facts.resolvers, ['dualStack']);
+  assert.deepEqual(dual.facts.clat, []);
+  assert.deepEqual(m.guestReference(placementAt('CloudVirt', ONLY6, {})).facts.resolvers, ['noTranslation']);
+  // the CLAT facts only with translation
+  assert.deepEqual(m.guestReference(placementAt('CloudOSO', ONLY6, {})).facts.clat, []);
+  assert.deepEqual(m.guestReference(placementAt('CloudOSO', ONLY6, { translation: FABRIC_TR })).facts.clat, [
+    'clat.when',
+    'clat.prefix',
+    'clat.noPref64',
+    'clat.address',
+    'clat.mtu',
+    'clat.package',
+    'clat.dnssec',
+  ]);
+});
+
+test('guest reference: the facts follow the environment type and the translation path', () => {
+  const PROVIDER_TR = { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['169.254.169.254'], ipv4Source: '192.0.2.7' };
+  const facts = (kind, subnets, ipv6) => m.guestReference(placementAt(kind, subnets, ipv6)).facts;
+  const virt = facts('CloudVirt', ONLY6, { translation: FABRIC_TR });
+  assert.ok(virt.environment.includes('virt.eui64') && virt.environment.includes('virt.matchByMac') && virt.environment.includes('virt.inlineLimit'));
+  assert.deepEqual(virt.resolvers, ['virt.onlyTranslation']);
+  assert.deepEqual(virt.every, ['icmpv6']);
+  // the tenant writes the network configuration on OpenShift Virtualization only
+  for (const kind of ['CloudOSO', 'CloudAWS', 'CloudGCP', 'Other']) assert.ok(!allFacts(m.guestReference(placementAt(kind, ONLY6, { translation: FABRIC_TR }))).some((k) => k.startsWith('virt.')), kind);
+  const oso = facts('CloudOSO', ONLY6, { translation: FABRIC_TR });
+  assert.deepEqual(oso.environment, ['oso.address', 'oso.configDrive', 'oso.noRaResolvers', 'oso.foreignRa']);
+  assert.deepEqual(oso.resolvers, ['oso.resolvers']);
+  assert.deepEqual(facts('CloudAWS', ONLY6, { translation: FABRIC_TR }).resolvers, ['aws.resolversFabric']);
+  assert.deepEqual(facts('CloudAWS', ONLY6, { translation: PROVIDER_TR }).resolvers, ['aws.resolversProvider']);
+  assert.deepEqual(facts('CloudAWS', ONLY6, { translation: FABRIC_TR }).environment, ['aws.address', 'aws.metadata']);
+  assert.deepEqual(facts('CloudAWS', DUAL, {}).environment, ['aws.address']);
+  const gcp = m.guestReference(placementAt('CloudGCP', [{ family: 6, prefix: '2001:db8:0:4::/64', source: 'Provider' }], { translation: PROVIDER_TR }));
+  assert.deepEqual(gcp.facts.environment, ['gcp.address', 'gcp.images']);
+  assert.deepEqual(gcp.facts.resolvers, ['gcp.resolvers']);
+  assert.equal(gcp.translation.ipv4Source, '192.0.2.7');
+  // the provider's router advertisements are not the platform's: no claim about PREF64 there
+  assert.ok(gcp.facts.clat.includes('clat.prefix') && !gcp.facts.clat.includes('clat.noPref64'));
+  const other = m.guestReference(placementAt(undefined, ONLY6, { translation: FABRIC_TR }));
+  assert.equal(other.environment, 'other');
+  assert.deepEqual(other.facts.environment, ['other.address']);
+  assert.deepEqual(other.facts.resolvers, []);
+});
+
+test('guest reference: shown behind the site capability check, for every environment type', () => {
+  const p = placementAt('CloudOSO', DUAL, {});
+  const on = { ipv6: true, ipv6Only: false, sources: [], translation: false };
+  assert.equal(m.showsGuestReference(p, m.NO_IPV6), false);
+  assert.equal(m.showsGuestReference(p, undefined), false);
+  assert.equal(m.showsGuestReference(p, on), true);
+  assert.equal(m.showsGuestReference(placementAt('CloudOSO', [{ family: 4, prefix: '10.0.0.0/24' }], {}), on), false);
+});
+
+test('guest reference: every label and fact reads in both catalogues, with no configuration to paste', () => {
+  const kinds = ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP', undefined];
+  const variants = [
+    [ONLY6, { translation: FABRIC_TR }],
+    [ONLY6, { translation: { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'] } }],
+    [ONLY6, {}],
+    [DUAL, {}],
+  ];
+  const keys = new Set();
+  const envs = new Set();
+  for (const kind of kinds) {
+    for (const [subnets, ipv6] of variants) {
+      const r = m.guestReference(placementAt(kind, subnets, ipv6));
+      envs.add(r.environment);
+      for (const k of allFacts(r)) keys.add(`ipv6.guest.fact.${k}`);
+      keys.add(`ipv6.guest.translation_${r.translationState}`);
+    }
+  }
+  for (const e of envs) keys.add(`ipv6.guest.environment_${e}`);
+  for (const k of ['title', 'help', 'environment', 'mtu', 'translation', 'pref64', 'resolvers', 'factsEnvironment', 'factsResolvers', 'factsClat', 'factsEvery', 'docLink', 'docText', 'copy', 'copied']) {
+    keys.add(`ipv6.guest.${k}`);
+  }
+  // the guest has no cloud-config, script or manifest to copy any more
+  const pasteable = /#cloud-config|runcmd|write_files|packages:|apiVersion|stringData|plat-prefix=|\n/;
+  for (const l of ['en', 'fr']) {
+    const cat = load(l);
+    const t = tOf(cat);
+    for (const k of keys) {
+      assert.notEqual(t(k), k, `${l}: ${k}`);
+      assert.doesNotMatch(t(k), KIND_NAME, `${l}: ${k}`);
+      assert.doesNotMatch(t(k), pasteable, `${l}: ${k}`);
+    }
+    assert.equal(cat.ipv6.cloudInit, undefined, `${l}: the old snippet's strings are gone`);
+    // the CLAT package note: subscriptions or additional repositories
+    assert.match(t('ipv6.guest.fact.clat.package'), l === 'en' ? /subscription/ : /abonnement/);
+  }
+  assert.match(tEn('ipv6.guest.fact.clat.mtu'), /1260/);
+});
+
+test('guest reference: the snippet builders are gone; the documentation link names a page and heading that exist', () => {
+  for (const name of ['cloudInitSnippet', 'showsCloudInitSnippet', 'proposeMacAddress', 'normalizeMacAddress', 'ignoreAutoDnsScript', 'CLOUD_INIT_INLINE_MAX_BYTES']) {
+    assert.equal(m[name], undefined, name);
+  }
+  const [file, anchor] = m.GUEST_REFERENCE_DOC.split('#');
+  const docs = path.join(process.env.UI_ROOT, '..', 'docs');
+  const page = fs.readFileSync(path.join(docs, file), 'utf8');
+  const slugs = page
+    .split('\n')
+    .filter((l) => /^#{1,6} /.test(l))
+    .map((l) => l.replace(/^#+ /, '').trim().toLowerCase().replace(/[^\w\- ]/g, '').replace(/ /g, '-'));
+  assert.ok(slugs.includes(anchor), `${file}#${anchor}`);
 });

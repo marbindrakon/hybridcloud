@@ -14,12 +14,13 @@
 # for address space.
 # IPv6 (design/IPV6-PLAN.md §2.1, §2.2; OD63, OD65, OD66, OD73): the mode comes from the fields (ipv6_mode.yml) and
 # can't change while the network has placements (IPv6ModeInUse); a tenant prefix overlapping the platform's own
-# space (realization network.exclusiveRanges and the public pools) is refused (PrefixReserved); a mode-Tenant IPv6
-# prefix may not overlap another network of the same tenant (PrefixInUse, in the IPAM); mode Platform takes a block
-# from the fabric's public pool (pending WaitingForAddressSpace while none is free, the tenant's allowance is used
-# or the pinned block is held back), given back when the mode changes or the network goes (hold-down); status.ipv6
-# and the per-family status.egress (egress_status.yml). status.ipv6.providerPrefixes lists the IPv6 subnets cloud
-# providers assigned to the placements (read-only, outside the address space).
+# space (realization network.exclusiveRanges, the public pools, core.icmpSource6 and 4, core.srv6.block) is refused
+# (PrefixReserved); a mode-Tenant IPv6 prefix may not overlap another network of the same tenant (PrefixInUse, in
+# the IPAM); mode Platform takes a block from the fabric's public pool (pending WaitingForAddressSpace while none is
+# free, the tenant's allowance is used or the pinned block is held back), given back when the mode changes or the
+# network goes (hold-down); status.ipv6 and the per-family status.egress (egress_status.yml).
+# status.ipv6.providerPrefixes lists the IPv6 subnets cloud providers assigned to the placements (read-only, outside
+# the address space).
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -229,7 +230,10 @@
     # address space the platform keeps for itself (its own globally routed space, translation prefixes) and every
     # public pool: no tenant prefix may overlap it
     # the SRv6 SID block is exclusive too: inside every provider edge a destination in it is looked up outside the
-    # VRFs, so a network could never use a prefix that overlaps it
+    # VRFs, so a network could never use a prefix that overlaps it. So is core.icmpSource6: the gateways refuse every
+    # route inside it from a site (the nodes' own addresses, announced to the sites) and the cloud edge routers hold
+    # addresses from it, so a tenant prefix overlapping it would lose its site routes. And core.icmpSource4, local in
+    # every root VRF
     - name: The platform's exclusive ranges
       ansible.builtin.set_fact:
         hn_exclusive: >-
@@ -237,7 +241,11 @@
              + ((fab_real.ipam | default({}, true)).publicPools | default({}, true) | dict2items
                 | map(attribute='value') | map(attribute='prefixes', default=[]) | flatten)
              + ([((fab_real.core | default({}, true)).srv6 | default({}, true)).block]
-                if ((fab_real.core | default({}, true)).srv6 | default({}, true)).block | default('', true) else []) }}
+                if ((fab_real.core | default({}, true)).srv6 | default({}, true)).block | default('', true) else [])
+             + ([(fab_real.core | default({}, true)).icmpSource6]
+                if (fab_real.core | default({}, true)).icmpSource6 | default('', true) else [])
+             + ([(fab_real.core | default({}, true)).icmpSource4 | regex_replace('/32$', '') ~ '/32']
+                if (fab_real.core | default({}, true)).icmpSource4 | default('', true) else []) }}
 
     - name: Check the address space against the platform's ranges and the circuits
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"

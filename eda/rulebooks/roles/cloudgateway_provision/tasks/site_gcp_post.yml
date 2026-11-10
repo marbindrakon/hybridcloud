@@ -70,7 +70,7 @@
       when: cg_gcp_icmp6_errors | length > 0
 
     # like the border gateway nodes' (node_gateway.yml), the routers' sources get forward-confirmed names
-    # (reverse_dns.yml): only while the routers carry them
+    # (reverse_dns.yml), and the fabric admits them (status edgeRouterIcmpSources6): only while the routers carry them
     - name: Remember the routers' ICMPv6 sources for their names
       ansible.builtin.set_fact:
         cg_rdns_nodes: >-
@@ -79,6 +79,16 @@
             {%- set res = r.stdout | from_json -%}
             {%- if res.errors | default([]) | length == 0 and res.icmp6 | default('', true) | length > 0 -%}
               {%- set _ = out.append({'node': r.item.name, 'address': res.icmp6 | regex_replace('/.*$', '')}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        # and for the fabric: the root admits them as sources of the networks placed here (status, main.yml)
+        cg_edge_icmp6: >-
+          {%- set out = [] -%}
+          {%- for r in (_cg_gcp_icmp6 | default({})).results | default([]) if not (r.skipped | default(false)) -%}
+            {%- set res = r.stdout | from_json -%}
+            {%- if res.errors | default([]) | length == 0 and res.icmp6 | default('', true) | length > 0 -%}
+              {%- set _ = out.append(res.icmp6 | regex_replace('/.*$', '')) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out }}

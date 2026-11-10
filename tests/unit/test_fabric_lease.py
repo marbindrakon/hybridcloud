@@ -599,7 +599,7 @@ LONG_WAITS = {
     "node_gateway.yml": "wait for the core (IS-IS, VPNv4 and VPNv6) and the upstream route reflectors",
 }
 # roles that reach the nodes outside the lease: reads only
-READ_ONLY = {"attachmentcircuit_provision", "networkplacement_provision", "fabric_orphan_check"}
+READ_ONLY = {"attachmentcircuit_provision", "networkplacement_provision", "fabric_orphan_check", "fabric_health"}
 STEP_TIMEOUT = "{{ fab_lease_step_timeout }}"
 
 

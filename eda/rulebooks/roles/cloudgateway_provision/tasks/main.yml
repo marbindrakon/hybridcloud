@@ -216,6 +216,7 @@
         cg_holder: "CloudGateway/{{ fab_name }} job {{ tower_job_id | default(awx_job_id | default(lookup('pipe', 'date +%s'))) }}"
         cg_node_results: []
         cg_rdns_nodes: []
+        cg_edge_icmp6: []
         cg_changed_nodes: []
         cg_bgp_password: ""
 
@@ -237,15 +238,16 @@
         cg_root_pe: >-
           {{ cg_root_pe if _cg_on | bool else cg_root_pe | combine({'loopback6': '', 'loopbackIp6': '', 'sid6': 0}) }}
 
-    # each node announces its ICMPv6 source to the site (gateway.announceIcmpSource6, per site
-    # announceIcmpSource6BySite), only with the IPv6 core and core.icmpSource6; off: nothing of it is rendered
+    # each node announces its ICMPv6 source to the site (gateway.announceIcmpSource6, on by default, per site
+    # announceIcmpSource6BySite), only with the IPv6 core and core.icmpSource6; off: nothing of it is rendered in FRR
+    # (the VRFs' input filter comes with the IPv6 core either way)
     - name: Announce the nodes' ICMPv6 sources to the site or not
       vars:
         _cg_gw: "{{ fab_real.gateway | default({}, true) }}"
         _cg_by: "{{ _cg_gw.announceIcmpSource6BySite | default({}, true) }}"
       ansible.builtin.set_fact:
         cg_icmp6_announce: >-
-          {{ ((_cg_by[cg_site_name] if cg_site_name in _cg_by else _cg_gw.announceIcmpSource6 | default(false)) | bool)
+          {{ ((_cg_by[cg_site_name] if cg_site_name in _cg_by else _cg_gw.announceIcmpSource6 | default(true)) | bool)
              and (cg_ipv6_core | bool) and (fab_real.core.icmpSource6 | default('', true) | length > 0) }}
 
     # the networks placed at this site: every NetworkPlacement that names this gateway (status.cloudGateway) and
@@ -368,6 +370,10 @@
     # release run even when the lease is short
     - name: Configure the gateway on the nodes, one at a time
       timeout: "{{ fab_lease_step_timeout }}"
+      # the node ends each step's commands by the same limit (common/vars/fabric_lease.yml); through hostvars: a
+      # delegated step's become command is templated with the node's variables, which lack this job's facts
+      vars:
+        ansible_become_exe: "{{ hostvars[inventory_hostname].fab_lease_node_become }}"
       block:
         - name: Connect to the border gateway nodes
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
@@ -450,6 +456,7 @@
                                                    'nodeSid': cg_pe.sid, 'routeReflector': cg_root_pe.loopbackIp,
                                                    'netns': 'gw-' ~ fab_name,
                                                    'icmpSource6Announced': cg_icmp6_announce | default(false) | bool,
+                                                   'edgeRouterIcmpSources6': cg_edge_icmp6 | default([], true) | unique | sort,
                                                    'coreTransport': (fab_real.core | default({}, true)).transport | default('mpls', true),
                                                    'vrfs': cg_vrfs | map('dict2items')
                                                            | map('rejectattr', 'key', 'in', ['mtu', 'prefixes4', 'prefixes6', 'covering6'])
@@ -466,6 +473,16 @@
       vars:
         nudge_crs: [{kind: CloudGateway, namespace: "{{ fab_namespace }}", name: "{{ fab_name }}"}]
       when: (ci_type == 'aws' and cg_aws_recheck | default(false) | bool) or (ci_type == 'gcp' and cg_gcp_recheck | default(false) | bool)
+
+    # the edge routers' ICMPv6 sources came, went or changed: the fabric admits them in the source sets of the
+    # networks placed here (the root's IPv6 egress filter), so wake it
+    - name: Wake the fabric when the edge routers' ICMPv6 sources changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: [{kind: HybridFabric, namespace: "{{ fab_namespace }}", name: "{{ cg_fabric_name }}"}]
+      when: >-
+        (cg_edge_icmp6 | default([], true) | unique | sort)
+        != (((fab_st.realization | default({}, true)).edgeRouterIcmpSources6 | default([], true)) | unique | sort)
 
     # the placements this run added or removed wait for it (pending / deletion): wake them
     - name: Wake the placements whose VRF changed

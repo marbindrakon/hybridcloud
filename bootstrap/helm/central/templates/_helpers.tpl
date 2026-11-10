@@ -91,7 +91,11 @@ On central (the ACM hub), in the managed cluster's namespace:
   PushSecret             a kubeconfig (cluster API + token) to central Vault (vaultKey, property kubeconfig),
                          re-pushed when ACM rotates the token; deletionPolicy Delete removes the Vault key with it
 The cluster API serves a publicly trusted certificate, so the kubeconfig carries no CA.
-Parameters (dict): root, cluster, sa, wave, tokenValidity, rules, server, vaultKey, deletionPolicy.
+The PushSecret does not watch its source Secret: a rotated token reaches Vault at the next refresh, so the interval
+bounds how long jobs read a stale token after a cluster that was off comes back (ACM re-issues expired tokens then).
+A refresh with an unchanged kubeconfig reads Vault and writes nothing (no new KV version).
+Parameters (dict): root, cluster, sa, wave, tokenValidity, rules, server, vaultKey, deletionPolicy, refreshInterval
+(default: root Values managedAccounts.pushRefreshInterval, else 5m).
 */}}
 {{- define "sovereign-central.managedAccount" -}}
 ---
@@ -141,7 +145,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: {{ .wave | quote }}
 spec:
-  refreshInterval: 1h
+  refreshInterval: {{ .refreshInterval | default ((.root.Values.managedAccounts | default dict).pushRefreshInterval) | default "5m" | quote }}
   updatePolicy: Replace
   deletionPolicy: {{ .deletionPolicy | default "Delete" }}
   secretStoreRefs:

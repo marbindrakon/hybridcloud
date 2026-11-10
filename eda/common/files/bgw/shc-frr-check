@@ -1,0 +1,201 @@
+#!/usr/bin/python3
+"""shc-frr-check: does a running FRR instance hold the whole configuration file it was given?
+
+Installed by the platform's HybridFabric/CloudGateway jobs next to shc-fabric-apply and run by them after FRR started
+or reloaded the file, before they record the file as what FRR loaded (/etc/shc-fabric/<instance>.frr-loaded). A
+reload can end with exit 0 and part of the file not applied (a line a daemon refused or never received, a "no" line
+cut short until something was accepted), and a record then claims the whole file, so no later run reloads.
+
+  shc-frr-check --conf FILE [--pathspace NAME] --note FILE [--ignore REGEX]... [--reload-script PATH]
+
+frr-reload.py --test compares the file with the running configuration ("Lines To Delete", "Lines To Add"). Lines that
+never match by design are left out: frr version/defaults (not configurable), hostname and domainname (FRR shows the
+kernel's), service integrated-vtysh-config (vtysh's own), mpls enable (zebra mirrors the kernel's MPLS input), a
+stanza's exit line, an EVPN route target of a VRF equal to the one FRR derives (<AS>:<the VRF's L3 VNI in the
+file>: FRR keeps it as its own automatic entry and does not show it), and each --ignore pattern (matched against the line and against "<context>: <line>").
+
+What is left decides, printed as the first line, then one "line: <context>: <line>" per line left (passwords hidden):
+  result=applied     nothing left (the note is removed)
+  result=unapplied   lines left that the last check on this node did not leave: the caller does not record the file,
+                     so the next run reloads again; they are kept in the note
+  result=accepted    every line left was left by the last check as well, after another start or reload: FRR does not
+                     take them. The caller records the file, so no run reloads for them again; the note keeps them
+                     and the caller reports them
+A check that could not run (frr-reload.py --test failed or did not answer) compares nothing: it prints its reason on
+stderr, writes no note and exits 3, so the caller records nothing and fails, and the next run reloads and checks
+again. Exit 0 with a result, 2 on wrong arguments.
+"""
+import argparse
+import os
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+
+RELOAD = "/usr/libexec/frr/frr-reload.py"
+TIMEOUT = 90
+# lines that never match by design (left out of the comparison)
+NORMAL = [r"^(no )?frr (version|defaults)\b", r"^(no )?hostname\b", r"^(no )?domainname\b",
+          r"^(no )?service integrated-vtysh-config$", r"^(no )?mpls enable$",
+          # zebra shows the kernel's forwarding switches ("no ipv6 forwarding" in a namespace without it)
+          r"^(no )?ip(v6)? forwarding$",
+          # a stanza's closing line, listed with the stanza it closes (which is compared on its own)
+          r"^exit(-vrf|-address-family)?$"]
+SECRET = re.compile(r"\b(password|authentication-key|message-digest-key \d+ md5)\s+\S.*$")
+
+
+def diff_lines(text):
+    """The --test output as lines: (section, context path, line). A line followed by deeper ones is their context; a
+    line with nothing deeper is an entry (a whole stanza when it has no children)."""
+    out, section, rows = [], None, []
+    for raw in text.splitlines():
+        if raw.strip() in ("Lines To Delete", "Lines To Add"):
+            section = "delete" if "Delete" in raw else "add"
+            continue
+        if section is None or not raw.strip() or set(raw.strip()) == {"="} or raw.strip() == "!":
+            continue
+        rows.append((section, len(raw) - len(raw.lstrip(" ")), raw.strip()))
+    stack = []
+    for i, (section, depth, text) in enumerate(rows):
+        stack = [s for s in stack if s[0] < depth and s[2] == section]
+        nxt = rows[i + 1] if i + 1 < len(rows) else None
+        if nxt and nxt[0] == section and nxt[1] > depth:
+            stack.append((depth, text, section))
+            continue
+        out.append((section, [s[1] for s in stack], text))
+    return out
+
+
+def shown(ctx, line):
+    text = SECRET.sub(lambda m: m.group(1) + " <hidden>", line)
+    return ": ".join([SECRET.sub(lambda m: m.group(1) + " <hidden>", c) for c in ctx] + [text])
+
+
+def vrf_vnis(conf_text):
+    """{VRF name: its L3 VNI} from the file's vrf stanzas ("vrf X" / " vni N")."""
+    out, cur = {}, None
+    for raw in (conf_text or "").splitlines():
+        words = raw.split()
+        if raw[:1] not in (" ", "\t") and words:
+            cur = words[1] if words[0] == "vrf" and len(words) > 1 else None
+        elif cur and len(words) >= 2 and words[0] == "vni" and words[1].isdigit():
+            out[cur] = int(words[1])
+    return out
+
+
+ROUTER_VRF = re.compile(r"^router bgp (\d+) vrf (\S+)$")
+EVPN_RT = re.compile(r"^route-target (import|export) (\d+):(\d+)$")
+
+
+def derived_rt(section, ctx, line, vnis):
+    """A route target FRR derives itself and therefore never shows: FRR 8.5 adds <AS>:<L3 VNI> to a VRF's EVPN import
+    and export lists (flagged automatic) once the L3 VNI is up; a "route-target import|export" with that same value
+    is then refused as already there ("RT specified already configured for this VRF") and stays the automatic
+    entry, which the running configuration leaves out. In effect, so not missing. Only that value: the AS a 2-byte
+    one (FRR derives from the AS's low 16 bits), the VNI the file's own for the VRF; any other route target counts."""
+    if section != "add" or len(ctx) != 2 or ctx[1] != "address-family l2vpn evpn":
+        return False
+    r, m = ROUTER_VRF.match(ctx[0]), EVPN_RT.match(line)
+    if not (r and m):
+        return False
+    asn, vrf = int(r.group(1)), r.group(2)
+    return asn <= 65535 and int(m.group(2)) == asn and vrf in vnis and int(m.group(3)) == vnis[vrf]
+
+
+def left_over(text, ignore, conf_text=None):
+    """The lines left of a --test output; conf_text (the file compared) tells the VRFs' L3 VNIs for the route targets
+    FRR derives itself. Without it those count as left."""
+    pats = [re.compile(p) for p in NORMAL + list(ignore)]
+    vnis = vrf_vnis(conf_text)
+    left = []
+    for section, ctx, line in diff_lines(text):
+        full = ": ".join(ctx + [line])
+        if any(p.search(line) or p.search(full) for p in pats) or derived_rt(section, ctx, line, vnis):
+            continue
+        left.append(shown(ctx, line))
+    return sorted(set(left))
+
+
+def read_text(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def run_test(conf, pathspace, script):
+    cmd = [script, "--test"] + (["--pathspace", pathspace] if pathspace else []) + [conf]
+    # in a process group of its own: a run out of time ends frr-reload.py and the vtysh it started (a daemon that does
+    # not answer would otherwise leave a blocked vtysh behind on every run)
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    except OSError as e:
+        return None, "frr-reload.py --test could not run (%s)" % (e.__class__.__name__,)
+    try:
+        out, err_text = p.communicate(timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.communicate()
+        return None, "frr-reload.py --test could not run (TimeoutExpired)"
+    p = subprocess.CompletedProcess(cmd, p.returncode, out, err_text)
+    if p.returncode != 0:
+        err = (p.stderr.strip().splitlines() or ["no reason given"])[-1]
+        return None, "frr-reload.py --test failed (rc %d; last line: %s)" % (p.returncode, shown([], err)[:200])
+    return p.stdout, None
+
+
+def read_note(path):
+    try:
+        with open(path) as f:
+            return {x.rstrip("\n") for x in f if x.strip()}
+    except OSError:
+        return set()
+
+
+def write_note(path, lines):
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".frr-check-")
+    with os.fdopen(fd, "w") as f:
+        f.write("".join(x + "\n" for x in lines))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="does FRR hold the whole configuration file")
+    ap.add_argument("--conf", required=True)
+    ap.add_argument("--pathspace", default="")
+    ap.add_argument("--note", required=True)
+    ap.add_argument("--ignore", action="append", default=[])
+    ap.add_argument("--reload-script", default=RELOAD)
+    a = ap.parse_args(argv)
+    try:
+        [re.compile(p) for p in a.ignore]
+    except re.error as e:
+        ap.error("--ignore: %s" % e)
+    text, err = run_test(a.conf, a.pathspace, a.reload_script)
+    if err:
+        print("shc-frr-check: nothing compared, nothing recorded: %s" % err, file=sys.stderr)
+        return 3
+    left = left_over(text, a.ignore, read_text(a.conf))
+    if not left:
+        if os.path.exists(a.note):
+            os.remove(a.note)
+        print("result=applied")
+        return 0
+    seen = read_note(a.note)
+    result = "accepted" if set(left) <= seen else "unapplied"
+    write_note(a.note, left)
+    print("result=" + result)
+    for x in left:
+        print("line: " + x)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

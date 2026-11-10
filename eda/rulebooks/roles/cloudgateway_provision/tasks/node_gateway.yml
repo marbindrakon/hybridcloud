@@ -84,6 +84,7 @@
     group: root
   loop:
     - {src: shc-fabric-apply, dest: /usr/local/sbin/shc-fabric-apply, mode: "0755"}
+    - {src: shc-frr-check, dest: /usr/local/sbin/shc-frr-check, mode: "0755"}
     - {src: shc-gw@.service, dest: /etc/systemd/system/shc-gw@.service, mode: "0644"}
   loop_control:
     label: "{{ item.dest }}"
@@ -131,24 +132,12 @@
     - fab_check_result.icmp6 | default('', true) | length > 0
 
 # with the announcement on (cg_icmp6_announce, main.yml) the node announces its own ICMPv6 source to the site in every
-# IPv6 VRF (frr-gateway.conf.j2) and the apply loads the input filter of the VRFs (icmp6Announced) before FRR takes it
+# IPv6 VRF (frr-gateway.conf.j2). The apply loads the VRFs' input filter with the IPv6 core whether or not the node
+# announces, so the filter is in place before the route is announced and stays after it is withdrawn
 - name: "{{ bgw_node.name }}: the ICMPv6 source this node announces to the site"
   ansible.builtin.set_fact:
     cg_node_icmp6_announce: >-
       {{ (fab_check_result.icmp6 | default('', true)) if cg_icmp6_announce | default(false) | bool else '' }}
-
-# turning it off: the filter stays (icmp6Announced kept) until the instance's running configuration announces no
-# ICMPv6 source any more, then goes (after the VPN label check below); a run that stops in between keeps the filter
-- name: "{{ bgw_node.name }}: is the VRFs' input filter loaded"
-  ansible.builtin.stat:
-    path: "/etc/shc-fabric/gw-{{ fab_name }}.in6"
-  register: _cg_in6_marker
-  when: cg_node_icmp6_announce | default('', true) | length == 0
-  delegate_to: "{{ bgw_node.name }}"
-
-- name: "{{ bgw_node.name }}: keep the filter until the announcement is withdrawn"
-  ansible.builtin.set_fact:
-    cg_node_in6_keep: "{{ ((_cg_in6_marker | default({})).stat | default({})).exists | default(false) | bool }}"
 
 # the core's IPv6 keys are empty strings on an IPv4-only core and until the fabric offers the IPv6 core;
 # loopbackPool6 and icmpSource6 let the apply remove addresses an earlier configuration left inside those ranges. On
@@ -167,8 +156,6 @@
                                 'icmpSource6': fab_real.core.icmpSource6 | default('', true),
                                 'icmp6RateLimitMs': ('' if (fab_real.gateway | default({}, true)).icmp6RateLimitMs | default(none) is none
                                                      else (fab_real.gateway.icmp6RateLimitMs | string))})
-         | combine({'icmp6Announced': true} if (cg_node_icmp6_announce | default('', true) | length > 0
-                                               or cg_node_in6_keep | default(false) | bool) else {})
          | combine({'transport': 'srv6', 'srv6': {'block': fab_real.core.srv6.block, 'locator': cg_pe.locator}}
                    if fab_node_transport | default('mpls') == 'srv6' else {})
          | to_nice_json }}
@@ -310,6 +297,16 @@
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# a running instance whose running configuration still differs from the file: the reload is due too, so a woken
+# run repairs it (common/tasks/frr_pending.yml)
+- name: "{{ bgw_node.name }}: what the instance still lacks of its file"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/frr_pending.yml"
+  vars:
+    frr_pending_pathspace: "gw-{{ fab_name }}"
+    frr_pending_note: "/etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied"
+    frr_pending_file: "/etc/frr/gw-{{ fab_name }}/frr.conf.shc"
+    frr_pending_when: "{{ _cg_active.stdout == 'active' }}"
+
 - name: "{{ bgw_node.name }}: the lease lasts for the instance's start"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
   vars:
@@ -342,7 +339,7 @@
   when:
     - _cg_active.stdout == 'active'
     - _cg_daemons is not changed and not (_cg_unit_changed | bool)
-    - _cg_frrconf is changed or 'reload=due' in _cg_frr_due.stdout
+    - _cg_frrconf is changed or 'reload=due' in _cg_frr_due.stdout or (frr_pending_lines | default([]) | length > 0)
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_reload
   retries: 1
@@ -353,7 +350,10 @@
 # job started or restarted it; a step above that failed ended the job before this. An instance that was starting or
 # reloading on its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read an
 # older file, so then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload
-# due. A reload only the record made due changed the node too: it counts as a configuration change (_cg_frrconf)
+# due. A reload only the record made due changed the node too: it counts as a configuration change (_cg_frrconf).
+# A start or reload can also end without an error and part of the file unapplied: before the record, the running
+# configuration must hold the whole file (shc-frr-check, realization nodes.frrLoadCheck); with lines left nothing is
+# recorded and the job fails after the next step, so the next one reloads again
 - name: "{{ bgw_node.name }}: record what the instance loaded"
   ansible.builtin.shell: |
     f=/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded
@@ -361,11 +361,38 @@
     state=$(systemctl is-active "$u"); job=$(systemctl show -p Job --value "$u")
     if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: $u $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
+    # a start, restart or reload of this run is checked although the file is unchanged (a reload made due by lines the
+    # running configuration of the instance lacked, frr_pending.yml; a start that a daemon not up yet left short): the
+    # note of the check then learns what FRR does not take, and no later run reloads for it
+    {% if frr_pending_lines | default([]) | length == 0 and not (_cg_reload | default({}) is changed)
+          and not (_cg_state | default({}) is changed) %}
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    {% endif %}
+    {% if fab_real.nodes.frrLoadCheck.enabled | default(true) | bool %}
+    chk() { /usr/local/sbin/shc-frr-check --conf /etc/frr/gw-{{ fab_name }}/frr.conf.shc --pathspace gw-{{ fab_name }} --note /etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied{% for p in fab_real.nodes.frrLoadCheck.ignore | default([]) %} --ignore {{ p | quote }}{% endfor %}; }
+    {% if frr_pending_lines | default([]) | length > 0 %}
+    known=$( { printf '%s\n' {{ frr_pending_lines | map('quote') | join(' ') }}; cat /etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied 2>/dev/null; } )
+    {% endif %}
+    check=$(chk) || exit 1
+    {% if frr_pending_lines | default([]) | length > 0 %}
+    # lines missing before this reload although FRR had loaded this very file (it is recorded as loaded) and still
+    # missing after it: two loads left them, so FRR keeps them; the second check accepts them and the file is
+    # recorded (no run reloads for them again). A line of a changed file, or one this reload left that was not missing
+    # before, stays unapplied as usual
+    if [ "${check%%$'\n'*}" = result=unapplied ] && [ "$now" = "$(cat "$f" 2>/dev/null)" ] \
+       && [ -z "$(printf '%s\n' "$check" | sed -n 's/^line: //p' | grep -vxF -f <(printf '%s\n' "$known"))" ]; then
+      check=$(chk) || exit 1
+    fi
+    {% endif %}
+    echo "$check"
+    [ "${check%%$'\n'*}" = result=unapplied ] && exit 0
+    {% endif %}
     echo "$now" > "$f.new" && mv "$f.new" "$f"
     echo recorded
+  args:
+    executable: /bin/bash
   register: _cg_frr_recorded
-  changed_when: _cg_frr_recorded.stdout == 'recorded'
+  changed_when: "'recorded' in _cg_frr_recorded.stdout_lines"
   when: _cg_active.stdout == 'active' or (_cg_active.stdout in ['inactive', 'failed'] and _cg_state is changed)
   delegate_to: "{{ bgw_node.name }}"
 
@@ -373,6 +400,23 @@
   ansible.builtin.set_fact:
     _cg_frrconf: "{{ _cg_frrconf | combine({'changed': true}) }}"
   when: _cg_reload is changed and _cg_frrconf is not changed
+
+- name: "{{ bgw_node.name }}: the instance holds the whole configuration"
+  ansible.builtin.fail:
+    msg: >-
+      The gateway instance gw-{{ fab_name }} on {{ bgw_node.name }} did not apply all of its configuration
+      (frr.conf.shc) after its start or reload ({{ _cg_frr_recorded.stdout_lines | select('match', '^line: ')
+      | map('regex_replace', '^line: ', '') | join('; ') }}). What it loaded is not recorded, so the next run reloads
+      again; lines a second start or reload leaves as well are recorded as loaded and shown by the step after this
+  when: "'result=unapplied' in (_cg_frr_recorded.stdout_lines | default([]))"
+
+- name: "{{ bgw_node.name }}: lines the instance does not take"
+  ansible.builtin.debug:
+    msg: >-
+      The gateway instance gw-{{ fab_name }} on {{ bgw_node.name }} left these lines of its configuration unapplied
+      after two starts or reloads; the file is recorded as loaded, so no run reloads for them again: {{
+      _cg_frr_recorded.stdout_lines | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}
+  when: "'result=accepted' in (_cg_frr_recorded.stdout_lines | default([]))"
 
 # A VRF the configuration no longer has (a network no longer placed here) stays in FRR after the reload: frr-reload
 # removes the lines of its vrf stanza but never sends "no vrf", so zebra and the other daemons keep it as configured
@@ -995,80 +1039,6 @@
   when: fab_node_transport == 'srv6'
   delegate_to: "{{ bgw_node.name }}"
 
-# the announcement turned off (cg_node_in6_keep): the instance must no longer announce an ICMPv6 source (a reload
-# first when its running configuration still holds one, e.g. after a run that stopped before its reload); only then
-# does the apply configuration lose icmp6Announced and the apply remove the filter. Any step failing keeps the filter
-- name: "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn"
-  when: cg_node_in6_keep | default(false) | bool
-  block:
-    - name: "{{ bgw_node.name }}: does the instance still announce an ICMPv6 source"
-      ansible.builtin.shell: &cg_in6_announced |
-        set -o pipefail
-        c=$(vtysh -N gw-{{ fab_name }} -c 'show running-config') || { echo "the instance's configuration is unreadable" >&2; exit 1; }
-        if printf '%s\n' "$c" | grep -qE '^ +network [0-9A-Fa-f:]+/128 route-map GW-LOCAL$'; then echo announced=yes; else echo announced=no; fi
-      args:
-        executable: /bin/bash
-      register: _cg_in6_ann
-      changed_when: false
-      delegate_to: "{{ bgw_node.name }}"
-
-    - name: "{{ bgw_node.name }}: the lease lasts for the FRR reload (it still announces)"
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
-      vars:
-        fab_lease_step: "the FRR reload on {{ bgw_node.name }}"
-      when: "'announced=yes' in _cg_in6_ann.stdout"
-      timeout: 0
-
-    - name: "{{ bgw_node.name }}: reload the FRR configuration (it still announces)"
-      ansible.builtin.systemd:
-        name: "shc-gw@{{ fab_name }}.service"
-        state: reloaded
-      when: "'announced=yes' in _cg_in6_ann.stdout"
-      delegate_to: "{{ bgw_node.name }}"
-
-    - name: "{{ bgw_node.name }}: the instance announces no ICMPv6 source"
-      ansible.builtin.shell: *cg_in6_announced
-      args:
-        executable: /bin/bash
-      register: _cg_in6_gone
-      changed_when: false
-      failed_when: _cg_in6_gone.rc != 0 or 'announced=no' not in _cg_in6_gone.stdout
-      retries: 3
-      delay: 5
-      until: _cg_in6_gone is succeeded
-      delegate_to: "{{ bgw_node.name }}"
-
-    - name: "{{ bgw_node.name }}: the apply configuration as it was written"
-      ansible.builtin.slurp:
-        src: "/etc/shc-fabric/gw-{{ fab_name }}.json"
-      register: _cg_conf_now
-      delegate_to: "{{ bgw_node.name }}"
-
-    # the same bytes the configuration task writes without the key
-    - name: "{{ bgw_node.name }}: gateway instance config without the filter"
-      ansible.builtin.copy:
-        dest: "/etc/shc-fabric/gw-{{ fab_name }}.json"
-        content: >
-          {{ _cg_conf_now.content | b64decode | from_json | dict2items | rejectattr('key', 'equalto', 'icmp6Announced')
-             | items2dict | to_nice_json }}
-        mode: "0644"
-      delegate_to: "{{ bgw_node.name }}"
-
-    - name: "{{ bgw_node.name }}: the lease lasts for the apply without the filter"
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
-      vars:
-        fab_lease_step: "the apply on {{ bgw_node.name }}"
-      timeout: 0
-
-    # under the same limit on the node as the first apply (15 s below the step's own)
-    - name: "{{ bgw_node.name }}: apply the gateway instance without the filter"
-      ansible.builtin.command: >-
-        timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} /usr/local/sbin/shc-fabric-apply gw-{{ fab_name }} up
-      register: _cg_in6_off
-      changed_when: "'changed=yes' in _cg_in6_off.stdout"
-      failed_when: _cg_in6_off.rc != 0 or 'IPv6 core not applied' in _cg_in6_off.stdout
-      delegate_to: "{{ bgw_node.name }}"
-
 - name: "{{ bgw_node.name }}: read the gateway's sessions"
   ansible.builtin.shell: |
     vtysh -N gw-{{ fab_name }} -c 'show bgp l2vpn evpn summary json' 2>/dev/null | python3 -c '
@@ -1159,6 +1129,6 @@
       {{ (cg_wg_nodes | default([])) + ([_tun | combine({'name': bgw_node.name})] if _tun | length > 0 else []) }}
     cg_changed_nodes: >-
       {{ cg_changed_nodes + ([bgw_node.name] if [_cg_files, _cg_conf, _cg_apply, _cg_daemons, _cg_frrconf, _cg_state,
-                                                 _cg_vrfs_gone | default({}), _cg_in6_off | default({}),
+                                                 _cg_vrfs_gone | default({}),
                                                  _cgu_files | default({}), _cgu_timer | default({})]
          | select('changed') | list | length > 0 else []) }}

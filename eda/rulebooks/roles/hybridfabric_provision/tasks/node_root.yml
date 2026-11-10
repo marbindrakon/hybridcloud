@@ -76,6 +76,7 @@
     group: root
   loop:
     - {src: shc-fabric-apply, dest: /usr/local/sbin/shc-fabric-apply, mode: "0755"}
+    - {src: shc-frr-check, dest: /usr/local/sbin/shc-frr-check, mode: "0755"}
     - {src: shc-fabric-apply@.service, dest: /etc/systemd/system/shc-fabric-apply@.service, mode: "0644"}
   loop_control:
     label: "{{ item.dest }}"
@@ -141,6 +142,8 @@
          | combine({'loopback6': hf_pe.loopback6 | default(''), 'icmp6': _hf_icmp6,
                     'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
                     'icmpSource6': fab_real.core.icmpSource6 | default('', true)})
+         | combine({'icmp4': fab_real.core.icmpSource4 | regex_replace('/32$', '')}
+                   if fab_real.core.icmpSource4 | default('', true) | length > 0 else {})
          | combine({'transport': 'srv6', 'srv6': {'block': fab_real.core.srv6.block, 'locator': hf_pe.locator}}
                    if fab_node_transport | default('mpls') == 'srv6' else {}) | to_nice_json }}
     mode: "0644"
@@ -184,7 +187,8 @@
     daemon_reload: "{{ _hf_files is changed }}"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_unit
-  failed_when: false
+  # a module the node ended at its limit (no result) is a failure; a start that failed is judged by the next step
+  failed_when: _hf_unit.module_stdout is defined
 
 # the unit is active (its apply succeeded), or the job fails with the apply's own reason: the lines it printed under
 # this start ("shc-fabric-apply: …", what the apply refuses on either transport, or "transport srv6: …", what only
@@ -287,6 +291,16 @@
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# a running FRR whose running configuration still differs from the files (a hand change, part of a reload not
+# taken): the reload is due too, so a woken run repairs it (common/tasks/frr_pending.yml)
+- name: "{{ bgw_node.name }}: what FRR still lacks of its files"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/frr_pending.yml"
+  vars:
+    frr_pending_pathspace: ""
+    frr_pending_note: /etc/shc-fabric/root.frr-unapplied
+    frr_pending_file: /etc/frr/frr.conf
+    frr_pending_when: "{{ _hf_frr_active.stdout == 'active' }}"
+
 - name: "{{ bgw_node.name }}: the lease lasts for the FRR start"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
   vars:
@@ -320,27 +334,76 @@
   when:
     - _hf_frr_active.stdout == 'active'
     - "'bridge-mac=changed' not in _hf_apply.stdout"
-    - _hf_frrconf is changed or _hf_daemons is changed or 'reload=due' in _hf_frr_due.stdout
+    - >-
+      _hf_frrconf is changed or _hf_daemons is changed or 'reload=due' in _hf_frr_due.stdout
+      or (frr_pending_lines | default([]) | length > 0)
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_reload
 
 # FRR runs the files when this job found it active and the reload (when one was due) succeeded, or when this job
 # started or restarted it; a step above that failed ended the job before this. FRR that was starting or reloading on
 # its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read older files, so
-# then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload due
+# then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload due. A start or
+# reload can also end without an error and part of the file unapplied: before the record, the running configuration
+# must hold the whole file (shc-frr-check, realization nodes.frrLoadCheck); with lines left nothing is recorded and the
+# step after this fails the job, so the next one reloads again
 - name: "{{ bgw_node.name }}: record what FRR loaded"
   ansible.builtin.shell: |
     f=/etc/shc-fabric/root.frr-loaded
     state=$(systemctl is-active frr); job=$(systemctl show -p Job --value frr)
     if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: frr $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/frr.conf /etc/frr/daemons 2>/dev/null | sha256sum | cut -d' ' -f1)
+    # a start, restart or reload of this run is checked although the file is unchanged (a reload made due by lines the running
+    # configuration of FRR lacked, frr_pending.yml; a start that a daemon not up yet left short): the note of the check
+    # then learns what FRR does not take, and no later run reloads for it
+    {% if frr_pending_lines | default([]) | length == 0 and not (_hf_reload | default({}) is changed)
+          and not (_hf_frr_state | default({}) is changed) %}
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    {% endif %}
+    {% if fab_real.nodes.frrLoadCheck.enabled | default(true) | bool %}
+    chk() { /usr/local/sbin/shc-frr-check --conf /etc/frr/frr.conf --note /etc/shc-fabric/root.frr-unapplied{% for p in fab_real.nodes.frrLoadCheck.ignore | default([]) %} --ignore {{ p | quote }}{% endfor %}; }
+    {% if frr_pending_lines | default([]) | length > 0 %}
+    known=$( { printf '%s\n' {{ frr_pending_lines | map('quote') | join(' ') }}; cat /etc/shc-fabric/root.frr-unapplied 2>/dev/null; } )
+    {% endif %}
+    check=$(chk) || exit 1
+    {% if frr_pending_lines | default([]) | length > 0 %}
+    # lines missing before this reload although FRR had loaded this very file (it is recorded as loaded) and still
+    # missing after it: two loads left them, so FRR keeps them; the second check accepts them and the file is
+    # recorded (no run reloads for them again). A line of a changed file, or one this reload left that was not missing
+    # before, stays unapplied as usual
+    if [ "${check%%$'\n'*}" = result=unapplied ] && [ "$now" = "$(cat "$f" 2>/dev/null)" ] \
+       && [ -z "$(printf '%s\n' "$check" | sed -n 's/^line: //p' | grep -vxF -f <(printf '%s\n' "$known"))" ]; then
+      check=$(chk) || exit 1
+    fi
+    {% endif %}
+    echo "$check"
+    [ "${check%%$'\n'*}" = result=unapplied ] && exit 0
+    {% endif %}
     echo "$now" > "$f.new" && mv "$f.new" "$f"
     echo recorded
+  args:
+    executable: /bin/bash
   register: _hf_frr_recorded
-  changed_when: _hf_frr_recorded.stdout == 'recorded'
+  changed_when: "'recorded' in _hf_frr_recorded.stdout_lines"
   when: _hf_frr_active.stdout == 'active' or (_hf_frr_active.stdout in ['inactive', 'failed'] and _hf_frr_state is changed)
   delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: FRR holds the whole configuration"
+  ansible.builtin.fail:
+    msg: >-
+      FRR on {{ bgw_node.name }} did not apply all of /etc/frr/frr.conf after its start or reload ({{
+      _hf_frr_recorded.stdout_lines | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}).
+      What FRR loaded is not recorded, so the next run reloads again; lines a second start or reload leaves as well
+      are recorded as loaded and shown by the step after this
+  when: "'result=unapplied' in (_hf_frr_recorded.stdout_lines | default([]))"
+
+- name: "{{ bgw_node.name }}: lines FRR does not take"
+  ansible.builtin.debug:
+    msg: >-
+      FRR on {{ bgw_node.name }} left these lines of /etc/frr/frr.conf unapplied after two starts or reloads; the file
+      is recorded as loaded, so no run reloads for them again: {{ _hf_frr_recorded.stdout_lines
+      | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}
+  when: "'result=accepted' in (_hf_frr_recorded.stdout_lines | default([]))"
 
 # A root VRF the configuration no longer has (the egress VRF, or a network that lost its egress) stays in FRR after the
 # reload: frr-reload removes the lines of its vrf stanza but never sends "no vrf", so zebra and the other daemons keep

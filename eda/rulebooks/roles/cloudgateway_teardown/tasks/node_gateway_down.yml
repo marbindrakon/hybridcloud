@@ -16,7 +16,9 @@
     name: "shc-gw@{{ fab_name }}.service"
     state: stopped
     enabled: false
-  failed_when: false
+  register: _cgt_stop
+  # a stop that failed is left to the steps after it; a module the node ended at its limit (no result) is a failure
+  failed_when: _cgt_stop.module_stdout is defined
   delegate_to: "{{ bgw_node.name }}"
 
 # the instance's SRv6 core guard timer (installed only on the SRv6 core: nothing to do without the unit template)
@@ -49,7 +51,8 @@
     path: "{{ item }}"
     state: absent
   loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/etc/shc-fabric/gw-{{ fab_name }}.wgkey",
-         "/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded", "/var/run/frr/gw-{{ fab_name }}"]
+         "/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded", "/etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied",
+         "/var/run/frr/gw-{{ fab_name }}"]
   delegate_to: "{{ bgw_node.name }}"
 
 # the last instance on the node (the fabric's root went before it): the root unit stopped, the apply script and the

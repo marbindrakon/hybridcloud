@@ -210,7 +210,13 @@ class MplsApplyConfigUnchanged(unittest.TestCase):
             for extra in ({}, {"fab_node_transport": "mpls"}, {"cg_node_icmp6_announce": "x", "cg_ipv6_core": True}):
                 v = dict(common, fab_real={"core": core}, **extra)
                 old, new = self.contents(GW, P + "gateway instance config", v)
-                self.assertEqual(new, old)
+                if "cg_node_icmp6_announce" in extra:
+                    # the one intended difference: the file no longer carries icmp6Announced (the apply loads the
+                    # VRFs' input filter with the IPv6 core whatever the announcement)
+                    self.assertEqual(json.loads(new), {k: x for k, x in json.loads(old).items() if k != "icmp6Announced"})
+                    self.assertNotIn("icmp6Announced", new)
+                else:
+                    self.assertEqual(new, old)
                 self.assertNotIn("srv6", json.loads(new))
 
 
@@ -1267,7 +1273,10 @@ class RootUnitStartReason(unittest.TestCase):
 
     def test_the_start_itself_no_longer_fails_but_a_timeout_does(self):
         t = by_name(load(RT), P + "run the root instance at boot (and now)")
-        self.assertIs(t["failed_when"], False)
+        # a unit that fails to start is judged by the next step; only a module that died (the node ended the step at
+        # its limit: module_stdout instead of a result) fails here, so the lease is not released under a running start
+        self.assertEqual(t["failed_when"], "_hf_unit.module_stdout is defined")
+        self.assertEqual(t["register"], "_hf_unit")
         names = [x.get("name", "") for x in load(RT)]
         i = names.index(t["name"])
         self.assertEqual(names[i + 1:i + 3], [P + "the root instance runs, or why not",
@@ -1322,9 +1331,10 @@ class DirectApplyReason(unittest.TestCase):
         # the steps' outcome is untouched: their failed_when is the base commit's
         if not have_base():
             self.skipTest("base commit missing")
+        # (the gateway's second apply, "without the filter", is gone with the turn-off sequence: the VRFs' input
+        # filter comes with the IPv6 core and never leaves with the announcement)
         for path, name in ((RT, P + "apply the root instance"),
-                           (GW, P + "apply the gateway instance (namespace, site leg, core leg)"),
-                           (GW, P + "apply the gateway instance without the filter")):
+                           (GW, P + "apply the gateway instance (namespace, site leg, core leg)")):
             self.assertEqual(by_name(load(path), name), by_name(base_tasks(path), name), name)
 
 

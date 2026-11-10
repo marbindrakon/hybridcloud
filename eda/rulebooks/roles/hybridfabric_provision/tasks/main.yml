@@ -172,6 +172,19 @@
         kind: NetworkPlacement
       register: _hf_placements
 
+    # the cloud edge routers' ICMPv6 sources (CloudGateway status.realization.edgeRouterIcmpSources6): a network's
+    # source set at the root admits those of the gateways its IPv6 placements use (egress.ipv6 only)
+    - name: List the CloudGateways for their edge routers' ICMPv6 sources
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudGateway
+        namespace: "{{ fab_namespace }}"
+      register: _hf_edge_gateways
+      when: (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool
+
     # platform reach (P8 §13): annotation shc.signal9.gg/platform-reach on a HybridNetwork (a JSON list of the
     # network's prefixes the platform's own sources must reach, e.g. a private cluster's API) is written by the
     # platform's automation, never by tenants.
@@ -179,10 +192,19 @@
     # enabled): the network wants internet egress and holds a platform block (status.ipv6 mode Platform): its block
     # and the IPv6 prefixes of its placements (status.subnets), the ones that are not being deleted and that come
     # from the network's space (a provider-assigned prefix is never announced upstream nor part of the network's block)
+    # and the edge routers' ICMPv6 sources of the gateways those placements use (status.cloudGateway)
     - name: Set the networks with internet egress or platform reach
       vars:
         _alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
         _v6on: "{{ (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool }}"
+        _edge6: >-
+          {%- set out = {} -%}
+          {%- for g in (_hf_edge_gateways | default({})).resources | default([])
+                if (g.spec.fabricRef | default({})).name | default('') == fab_name -%}
+            {%- set _ = out.update({g.metadata.name: ((g.status | default({}, true)).realization | default({}, true)).edgeRouterIcmpSources6
+                                                     | default([], true)}) -%}
+          {%- endfor -%}
+          {{ out }}
       ansible.builtin.set_fact:
         hf_egress_networks: >-
           {%- set out = [] -%}
@@ -203,21 +225,26 @@
                   and n.metadata.deletionTimestamp is not defined
                   and owner in (_alloc.egress | default({})) and owner in (_alloc.vpnTarget | default({})) -%}
               {%- set p6 = [] -%}
+              {%- set e6 = [] -%}
               {%- if v6 -%}
                 {%- for p in _hf_placements.resources | default([])
                       if p.metadata.namespace == n.metadata.namespace
                          and (p.spec | default({})).network | default('') == n.metadata.name
                          and p.metadata.deletionTimestamp is not defined -%}
-                  {%- for s in (p.status | default({}, true)).subnets | default([], true)
+                  {%- set ps = p.status | default({}, true) -%}
+                  {%- for s in ps.subnets | default([], true)
                             if (s.family | default(4) | int) == 6 and (s.source | default('Network')) != 'Provider' -%}
                     {%- set _ = p6.append(s.prefix) -%}
+                    {%- set _ = e6.extend(_edge6.get(ps.cloudGateway | default('', true), [])) -%}
                   {%- endfor -%}
                 {%- endfor -%}
               {%- endif -%}
               {%- set _ = out.append({'network': n.metadata.namespace ~ '/' ~ n.metadata.name,
                                       'vpnTarget': _alloc.vpnTarget[owner] | int, 'index': _alloc.egress[owner] | int,
                                       'internet': internet, 'ipv4': has4, 'platform': platform}
-                                     | combine({'ipv6': {'block': block, 'prefixes': p6 | unique | list}} if v6 else {})) -%}
+                                     | combine({'ipv6': {'block': block, 'prefixes': p6 | unique | list}
+                                                        | combine({'edgeSources6': e6 | unique | sort | list}
+                                                                  if e6 | length > 0 else {})} if v6 else {})) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out if fab_real.egress.enabled | default(false) | bool else [] }}
@@ -362,6 +389,10 @@
     # release run even when the lease is short
     - name: Configure the nodes, one at a time
       timeout: "{{ fab_lease_step_timeout }}"
+      # the node ends each step's commands by the same limit (common/vars/fabric_lease.yml); through hostvars: a
+      # delegated step's become command is templated with the node's variables, which lack this job's facts
+      vars:
+        ansible_become_exe: "{{ hostvars[inventory_hostname].fab_lease_node_become }}"
       block:
         - name: Configure the root instance on each node
           ansible.builtin.include_tasks: node_root.yml
@@ -420,7 +451,8 @@
     # the IPv6 egress as the nodes report it (node_root.yml egressIpv6): per node the hand-off address, the upstream
     # sessions and the default route; degraded while a node has no upstream session or no default (its networks'
     # traffic takes the other node); degradedSince is kept across runs, and a node down for
-    # egress.ipv6.sessionDownAlertMinutes is reported as an event below
+    # egress.ipv6.sessionDownAlertMinutes is reported as an event below (once, then at most every
+    # health.eventRepeatMinutes)
     - name: Set the IPv6 egress status
       vars:
         _on: "{{ hf_egress.ipv6 | default(false) | bool }}"
@@ -435,14 +467,43 @@
         _since: >-
           {{ (_prev.degradedSince | default('', true) or _now) if (_down | length > 0 and _prev.degraded | default(false) | bool)
              else (_now if _down | length > 0 else '') }}
+        # (merge patch: a node no longer in the fabric (every node is in hf_node_results on a ready run), and with
+        # IPv6 egress off the whole state, is removed with null)
+        _gone: >-
+          {{ dict((_prev.nodes | default({}, true)).keys() | list
+                  | reject('in', hf_node_results | map(attribute='name') | list) | list
+                  | zip_longest([], fillvalue=none)) }}
       ansible.builtin.set_fact:
         hf_egress6_status: >-
-          {{ {'enabled': _on | bool, 'nodes': _nodes, 'degraded': _down | length > 0,
-              'degradedNodes': _down | sort, 'degradedSince': _since | trim} if _on | bool else {'enabled': false} }}
+          {{ {'enabled': _on | bool, 'nodes': _nodes | combine(_gone), 'degraded': _down | length > 0,
+              'degradedNodes': _down | sort, 'degradedSince': _since | trim} if _on | bool
+             else {'enabled': false, 'nodes': none, 'degraded': none, 'degradedNodes': none, 'degradedSince': none,
+                   'reportedAt': none} }}
         hf_egress6_alert: >-
           {{ _on | bool and _down | length > 0 and (_since | trim) | length > 0
              and (((_now | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - ((_since | trim) | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds()
                   >= (fab_real.egress.ipv6.sessionDownAlertMinutes | default(5) | int) * 60) }}
+
+    # an outage is reported once it lasted sessionDownAlertMinutes, then again at most every health.eventRepeatMinutes
+    # (the fabric health check reports it the same way): reportedAt records the last report
+    - name: Decide whether the IPv6 egress upstream outage is reported now
+      vars:
+        _prev: "{{ (((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)) }}"
+        _last: "{{ _prev.reportedAt | default('', true) | string }}"
+        _now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        _repeat: "{{ (fab_real.health | default({}, true)).eventRepeatMinutes | default(60, true) | int }}"
+        _due: >-
+          {{ (hf_egress6_alert | bool)
+             and (_last | length < 19
+                  or ((_now | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (_last[:19] | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds()
+                     >= (_repeat | int) * 60) }}
+      ansible.builtin.set_fact:
+        hf_egress6_report: "{{ _due | bool }}"
+        hf_egress6_status: >-
+          {{ hf_egress6_status | combine({'reportedAt': (_now if _due | bool
+                                                         else (_last if (hf_egress6_status.degraded | default(false)) and _last
+                                                               else none))})
+             if hf_egress6_status.enabled | default(false) else hf_egress6_status }}
 
     - name: Report the IPv6 egress upstream outage as an event
       kubernetes.core.k8s:
@@ -474,7 +535,7 @@
           lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
           count: 1
       failed_when: false
-      when: hf_egress6_alert | bool
+      when: hf_egress6_report | bool
 
     # what tenants see of the fabric changed since the Entities were last told (status.realization.ipam.tenantOffer,
     # stored below; absent before the first run that stores it): its IPv6 offer, or its spec (who may use it). The
@@ -529,7 +590,11 @@
                'message': (('no upstream session or default route on ' ~ hf_egress6_status.degradedNodes | join(', ')
                             ~ ' since ' ~ hf_egress6_status.degradedSince) if hf_egress6_status.degraded | default(false)
                            else 'every node has an upstream session and the default route')}]
-             if hf_egress6_status.enabled | default(false) else []) }}
+             if hf_egress6_status.enabled | default(false)
+             else ([{'type': 'IPv6EgressUpstream', 'status': 'Unknown', 'reason': 'NotEnabled',
+                     'message': 'IPv6 internet egress is off on this fabric'}]
+                   if fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'IPv6EgressUpstream')
+                      | list | length > 0 else [])) }}
         # coreTransport: the core's transport (mpls or srv6); srv6Locators (SRv6 core): {node: the root's locator}.
         # status.realization.translation is no longer written: the null removes what an earlier release recorded there
         # (the status is merge-patched and keeps unknown fields; a no-op once it is gone). Its former condition,
@@ -559,9 +624,12 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         _now6: "{{ hf_egress_status | selectattr('ipv6') | map(attribute='network') | list }}"
+        _prev6: "{{ (((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)) }}"
+        # degraded came or went, or the set of nodes without upstream changed (one node down -> all down: the networks'
+        # rows go from Degraded to UpstreamDown)
         _degraded_flip: >-
-          {{ (hf_egress6_status.degraded | default(false) | bool)
-             != ((((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)).degraded | default(false) | bool) }}
+          {{ (hf_egress6_status.degraded | default(false) | bool) != (_prev6.degraded | default(false) | bool)
+             or (hf_egress6_status.degradedNodes | default([]) | sort) != (_prev6.degradedNodes | default([], true) | sort) }}
         nudge_crs: >-
           {%- set out = [] -%}
           {%- for k in ((hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before))

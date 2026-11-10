@@ -195,12 +195,15 @@
                                      for a in l.get("addr_info") or []
                                      if not str(a.get("local") or "").lower().startswith("fe80:"))
             attach6 = bool(run(["nft", "list", "table", "ip6", "shc_attach6"]).strip())
+            # the input filters of the root VRFs (what a network reaches of the node itself): loaded or not
+            root_in = {"ipv4": bool(run(["nft", "list", "table", "ip", "shc_root_in"]).strip()),
+                       "ipv6": bool(run(["nft", "list", "table", "ip6", "shc_root_in6"]).strip())}
             # the root bfdd sessions: one whose VRF no longer exists outlived a circuit teardown
             peers = loads(run(["vtysh", "-c", "show bfd peers json"]))
             bfd = [{"peer": p.get("peer"), "vrf": p.get("vrf") or "default", "interface": p.get("interface") or "",
                     "status": p.get("status") or ""} for p in peers if isinstance(p, dict)]
-            return {"netns": out, "rootDevices": devices, "rootBfd": bfd, "rootAttach6": attach6, "ipv6Orphans": left,
-                    "coreOrphans": core}
+            return {"netns": out, "rootDevices": devices, "rootBfd": bfd, "rootAttach6": attach6, "rootInputFilters": root_in,
+                    "ipv6Orphans": left, "coreOrphans": core}
 
 
         if __name__ == "__main__":
@@ -230,6 +233,7 @@
         {%- set _ = out.append({'fabric': foc_fabric.metadata.name, 'node': r.item.name, 'netns': n.netns,
                                 'rootDevices': n.rootDevices, 'rootBfd': n.rootBfd | default([]),
                                 'rootAttach6': n.rootAttach6 | default(false),
+                                'rootInputFilters': n.rootInputFilters | default({}),
                                 'ipv6Orphans': n.ipv6Orphans | default([]) | map('regex_replace', '^', 'node ' ~ r.item.name ~ ': ') | list,
                                 'coreOrphans': n.coreOrphans | default([]) | map('regex_replace', '^', 'node ' ~ r.item.name ~ ': ') | list}) -%}
       {%- endfor -%}

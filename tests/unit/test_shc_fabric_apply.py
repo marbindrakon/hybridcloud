@@ -735,6 +735,13 @@ class IPv6StepFailureTest(ApplyCase):
         # IPv4 state equal to the keyless run's (the IPv6 settings the step did not reach untouched too)
         self.assertEqual(state, h.get_state())
 
+    def assert_v4_writes_but_one_load(self, log, log4):
+        """the IPv4 writes of a run with the IPv6 keys are the keyless run's, but for one table load: the IPv6 input
+        filter (its nft -f - looks like an IPv4 write in the call log), loaded before the step that failed"""
+        a, b = v4_writes(log), v4_writes(log4)
+        self.assertEqual(len(a), len(b) + 1, (a, b))
+        self.assertTrue(any(a[:i] + a[i + 1:] == b for i, l in enumerate(a) if l.endswith(" nft -f -")), (a, b))
+
     def test_root_later_ipv6_step_refused(self):
         h = self.h
         refuse = r"^\[root\] ip -6 route replace unreachable default .* table 110000$"
@@ -754,7 +761,7 @@ class IPv6StepFailureTest(ApplyCase):
         self.assertIn("warning: IPv6 in VRF e10000 failed; IPv6 core not applied\n", out2)
         self.assertTrue(out2.strip().endswith("changed=no"), out2)
         _, log4 = self.keyless_root()
-        self.assertEqual(v4_writes(log), v4_writes(log4))
+        self.assert_v4_writes_but_one_load(log, log4)
 
     def gateway(self, gw, fail=None):
         """the root as with the keys, then the gateway (gw: its JSON), from a fresh blade"""
@@ -799,7 +806,7 @@ class IPv6StepFailureTest(ApplyCase):
         self.assertEqual(h.addrs6(ns, "t51002"), [])
         self.assertIn("vx51002", h.get_state()["ns"][ns]["links"])
         _, log4 = self.gateway(GW_CONF)
-        self.assertEqual(v4_writes(log), v4_writes(log4))
+        self.assert_v4_writes_but_one_load(log, log4)
 
 
 if __name__ == "__main__":

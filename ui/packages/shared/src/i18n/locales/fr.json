@@ -1528,27 +1528,75 @@
     "listPlatformAsked": "IPv6 de la plateforme (pas encore attribué)",
     "platformPrefixesField": "Espace IPv6 de la plateforme",
     "platformPrefixesFieldHelp": "Espace IPv6 attribué par la plateforme (famille 6 ; taille de bloc /48 à /64 par pas de 4, vide pour la valeur par défaut de la fabric ; éventuellement un bloc précis). Une entrée ne peut pas être modifiée ; supprimez-la et ajoutez-en une autre tant que le réseau n'a aucun placement. Pas en même temps que vos propres préfixes IPv6.",
-    "cloudInit": {
-      "title": "Configuration réseau de l'invité (cloud-init)",
-      "help": "Configuration d'une VM sur les sous-réseaux de ce placement, construite à partir de l'état du placement.",
-      "macAddress": "Adresse MAC de la carte réseau de la VM",
-      "macAddressHelp": "Les données réseau trouvent la carte réseau de la VM par cette adresse, quel que soit le nom que l'invité lui donne. Chaque visite de cette page propose une nouvelle adresse administrée localement : donnez à chaque VM la sienne. Pour garder l'adresse qu'une VM a déjà, saisissez cette adresse à la place.",
-      "macAddressInvalid": "Saisissez une adresse MAC unicast : six paires de chiffres hexadécimaux, par exemple 02:00:00:00:00:01. Sans adresse, il n'y a pas de données réseau.",
-      "newMac": "Proposer une autre adresse",
-      "vmInterface": "Interface de la VM",
-      "vmInterfaceHelp": "L'interface de la VM sur le réseau du pod (le réseau nommé default, avec pod: {}) avec cette adresse MAC, sous spec.template.spec.domain.devices de la VM. Définissez-la à la création de la VM : cloud-init applique les données réseau au premier démarrage.",
-      "vmVolume": "Volume cloud-init",
-      "vmVolumeHelp": "Le volume cloud-init de la VM, sous spec.template.spec, avec un disque du même nom sous domain.devices.disks (les modèles OpenShift Virtualization nomment les deux cloudinitdisk : remplacez ce volume). Les données réseau sont en ligne et trouvent la carte réseau par l'adresse MAC ci-dessus ; une VM avec plusieurs cartes réseau a besoin d'une entrée avec sa propre adresse MAC pour chacune.",
-      "vmVolumeHelpNetworkInSecret": "Le volume cloud-init de la VM, sous spec.template.spec, avec un disque du même nom sous domain.devices.disks (les modèles OpenShift Virtualization nomment les deux cloudinitdisk : remplacez ce volume). Les données réseau dépassent les 2048 octets que KubeVirt accepte en ligne : elles viennent du Secret ci-dessous, avec les données utilisateur ; elles trouvent la carte réseau par l'adresse MAC ci-dessus.",
-      "userDataSecret": "Secret avec les données utilisateur",
-      "userDataSecretHelp": "Le volume prend les données utilisateur dans le Secret {{name}} (clé userdata), car KubeVirt refuse plus de 2048 octets de données utilisateur en ligne dans la VM. Créez le Secret dans le namespace de la VM avant de démarrer la VM, par exemple avec oc apply -n <namespace> -f <fichier> ; un seul Secret sert à toutes les VM de ce placement.",
-      "networkFromConfigDrive": "Sur OpenStack, le config drive porte la configuration réseau de l'invité, et le sous-réseau du placement fournit ses résolveurs (DHCPv6 et le config drive) : créez le serveur avec un config drive et donnez-lui seulement ces données utilisateur.",
-      "networkFromCloud": "Le cloud fournit la configuration réseau de l'invité et ses résolveurs : donnez à l'instance seulement ces données utilisateur.",
-      "userData": "Données utilisateur",
-      "userDataDns": "Les données utilisateur maintiennent l'invité sur les résolveurs des données réseau : les résolveurs fournis par DHCP sont ignorés, car ils ne traduisent pas forcément les noms uniquement IPv4. Les noms internes au site ne sont alors pas résolus.",
-      "userDataHelp": "Ce placement n'a pas d'IPv4 : un CLAT dans l'invité joint les destinations uniquement IPv4 par le préfixe de traduction.",
+    "guest": {
+      "title": "Référence de configuration de l'invité",
+      "help": "Ce dont un invité sur ce placement a besoin, d'après l'état du placement, et ce qui vaut pour ce type d'environnement. La plateforme ne configure pas les invités : définissez ces valeurs avec les outils qui construisent et configurent vos VM.",
+      "environment": "Type d'environnement",
+      "environment_CloudVirt": "OpenShift Virtualization",
+      "environment_CloudOSO": "OpenStack",
+      "environment_CloudAWS": "AWS",
+      "environment_CloudGCP": "Google Cloud",
+      "environment_other": "Non décrit sur cette page",
+      "mtu": "MTU",
+      "translation": "Traduction vers IPv4",
+      "translation_available": "Disponible : les noms par les résolveurs DNS64, les adresses IPv4 par un CLAT dans l'invité",
+      "translation_none": "Aucune dans l'état du placement",
+      "translation_notNeeded": "Inutile : le placement a de l'IPv4",
+      "pref64": "Préfixe de traduction (NAT64, préfixe PLAT du CLAT)",
+      "resolvers": "Résolveurs DNS64",
+      "factsEnvironment": "Adresse et configuration réseau",
+      "factsResolvers": "Résolveurs",
+      "factsClat": "CLAT (adresses IPv4)",
+      "factsEvery": "Tout invité",
+      "docLink": "Invités en IPv6, traduction et CLAT dans la documentation",
+      "docText": "Le tutoriel des réseaux hybrides (Guests on IPv6) décrit tout cela en détail.",
       "copy": "Copier",
-      "copied": "Copié"
+      "copied": "Copié",
+      "fact": {
+        "virt": {
+          "address": "L'invité obtient son adresse IPv6 par DHCPv6 avec état et sa route par défaut par les annonces de routeur ; l'adresse est conservée aux redémarrages et aux migrations à chaud.",
+          "eui64": "L'adresse IPv6 lien-local de l'invité doit être celle en EUI-64, dérivée de l'adresse MAC : le réseau rejette DHCPv6 et la découverte de voisins depuis toute autre adresse lien-local. Certaines images utilisent par défaut des identifiants d'interface stable-privacy ou aléatoires (RHEL avec NetworkManager, Windows).",
+          "networkData": "La configuration réseau de l'invité vous appartient : la plateforme n'en écrit aucune. Avec cloud-init, donnez des données réseau qui activent DHCPv6 (sans elles, cloud-init peut laisser IPv6 désactivé) ; cloud-init n'applique les données réseau qu'au premier démarrage.",
+          "matchByMac": "Les images nomment la carte réseau différemment (eth0, enp1s0). Les moteurs de rendu NetworkManager et sysconfig de cloud-init lient une entrée des données réseau à son adresse MAC, sinon à l'interface dont le nom est la clé de l'entrée ; ils ignorent une correspondance par nom, et une entrée qui ne se lie à aucune interface est écartée sans erreur. Une correspondance par adresse MAC demande l'adresse avant le premier démarrage : définissez macAddress sur l'interface de la VM (en minuscules, entre guillemets en YAML, une adresse différente par VM).",
+          "inlineLimit": "KubeVirt refuse une VM dont le volume cloud-init porte en ligne plus de 2048 octets de données utilisateur ou de données réseau ; au-delà, les données vont dans un Secret que le volume référence (secretRef, networkDataSecretRef).",
+          "rhelProfile": "Sur les images RHEL, quand le profil par défaut de NetworkManager a pris l'interface (pas de données réseau, ou aucune qui corresponde à la carte réseau), ce profil lui-même doit avoir ipv6.addr-gen-mode eui64 ; une valeur par défaut dans NetworkManager.conf ne suffit pas.",
+          "searchDomain": "DHCPv6 ne fournit pas de domaine de recherche DNS.",
+          "onlyTranslation": "N'utilisez que les résolveurs DNS64 ci-dessus, dans la configuration réseau propre de l'invité. DHCPv6 fournit aussi le service DNS du cluster, qui ne fait pas de DNS64 : un invité qui le garde bascule dessus après toute brève panne des résolveurs DNS64 et n'obtient plus d'adresses traduites. Faites ignorer à la connexion de la carte réseau les résolveurs fournis (NetworkManager ipv4.ignore-auto-dns et ipv6.ignore-auto-dns, puis une réactivation complète de la connexion ; systemd-networkd UseDNS=false) ; le moteur de rendu NetworkManager de cloud-init ignore dhcp6-overrides use-dns. Les noms internes au cluster (services, autres VM) ne sont alors pas résolus."
+        },
+        "oso": {
+          "address": "L'adresse, la route par défaut et les résolveurs parviennent à l'invité depuis le sous-réseau IPv6 du placement (selon l'adressage IPv6 ci-dessus) et dans le config drive : le cloud fournit la configuration réseau de l'invité.",
+          "configDrive": "Démarrez avec un config drive les VM qui utilisent IPv6, toujours sur un placement uniquement IPv6 : cloud-init standard ne joint pas le service de métadonnées lien-local en IPv6.",
+          "noRaResolvers": "Le site n'envoie pas de résolveurs dans les annonces de routeur : un invité configuré par les seules annonces de routeur (SLAAC) n'a pas de résolveur IPv6.",
+          "foreignRa": "Les annonces de routeur d'autres VM du placement peuvent atteindre l'invité ; un invité qui garde les paramètres du config drive les ignore.",
+          "resolvers": "Le sous-réseau du placement fournit les résolveurs DNS64 par DHCPv6 et dans le config drive."
+        },
+        "aws": {
+          "address": "Le cloud fournit la configuration réseau de l'invité par les métadonnées d'instance et le DHCP du VPC.",
+          "metadata": "Sur un placement uniquement IPv6, les instances joignent le service de métadonnées d'instance en IPv6 (fd00:ec2::254) sur les types d'instance Nitro, avec HttpProtocolIpv6 activé sur l'instance.",
+          "resolversFabric": "Les options DHCP du VPC fournissent les résolveurs DNS64.",
+          "resolversProvider": "Le résolveur du VPC répond avec DNS64 sur les sous-réseaux du placement."
+        },
+        "gcp": {
+          "address": "Le cloud fournit la configuration réseau de l'invité par le serveur de métadonnées.",
+          "images": "Google Cloud ne propose des instances uniquement IPv6 qu'avec des images Debian et Ubuntu ; les autres images demandent un placement double pile.",
+          "resolvers": "Le résolveur est le serveur de métadonnées, qui applique DNS64 : les noms des destinations uniquement IPv4 fonctionnent sans réglage dans l'invité."
+        },
+        "other": {
+          "address": "Cette page ne décrit pas ce type d'environnement : voir la documentation."
+        },
+        "dualStack": "L'invité garde les résolveurs IPv4 qu'il obtient par DHCP et n'utilise pas de traduction : les noms uniquement IPv4 sont joints en IPv4 natif. La plateforme ne fournit des résolveurs IPv6 qu'aux placements uniquement IPv6.",
+        "noTranslation": "Sans traduction, l'invité ne joint les destinations uniquement IPv4 ni par nom ni par adresse. La ligne de traduction IPv4 du réseau indique pourquoi : aucune n'est proposée pour ce placement, ou le traducteur d'un fournisseur cloud est encore en cours de mise en place (le préfixe et les résolveurs apparaissent alors ici).",
+        "clat": {
+          "when": "Un CLAT n'est utile que pour les adresses IPv4 (littérales) ; les noms des destinations uniquement IPv4 se résolvent en adresses traduites par les résolveurs DNS64.",
+          "prefix": "Le préfixe PLAT du CLAT est le préfixe de traduction ci-dessus : configurez-le dans le CLAT, ou laissez le CLAT le découvrir par la requête RFC 7050 (ipv4only.arpa) via les résolveurs DNS64.",
+          "noPref64": "Les sites de la plateforme ne mettent pas de PREF64 dans les annonces de routeur : un CLAT qui en attend une ne trouve pas de préfixe.",
+          "address": "Le CLAT doit émettre depuis l'adresse IPv6 propre de l'invité (clatd 2.1 ou ultérieur le fait par défaut, clat-v6-addr=shared) : le réseau rejette le trafic des adresses qu'il n'a pas attribuées.",
+          "mtu": "Gardez la MTU de la route IPv4 du CLAT à 1260 (la valeur par défaut de clatd) : le traducteur fragmente les réponses traduites de plus de 1280 octets, et ces fragments se perdent en entrant dans le CLAT. TCP n'est pas concerné.",
+          "package": "Le paquet du CLAT peut demander un abonnement ou un dépôt supplémentaire sur certaines distributions, et certaines distributions ne le fournissent pas.",
+          "dnssec": "Un invité qui valide lui-même DNSSEC n'obtient pas d'adresses traduites pour les noms signés uniquement IPv4."
+        },
+        "icmpv6": "Laissez ICMPv6 ouvert dans les pare-feu des invités et les groupes de sécurité : la découverte de voisins et Packet Too Big sont indispensables."
+      }
     },
     "requestProvider": "IPv6 attribué par le fournisseur cloud",
     "requestSiteDefault": "IPv{{family}}, taille par défaut du site",

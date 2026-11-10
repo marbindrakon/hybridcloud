@@ -1,21 +1,26 @@
-"""The border gateway nodes' ICMPv6 sources announced to the site (realization gateway.announceIcmpSource6, per site
-gateway.announceIcmpSource6BySite) and the input filter that comes with it.
+"""The border gateway nodes' ICMPv6 sources announced to the site (realization gateway.announceIcmpSource6, on by
+default, per site gateway.announceIcmpSource6BySite) and the VRFs' input filter, which comes with the IPv6 core
+whether the node announces or not.
 
-- Off (false, absent, or no IPv6 core): the gateway's FRR configuration, the apply configuration and the apply's
-  calls and nftables state are byte-identical to the release before the switch (BASE, read from Git; those
-  comparisons are skipped without it).
-- On: only lines are added. Each IPv6 VRF announces this node's /128 (route-map GW-LOCAL); FROM-SITE refuses the
+- Off (false, or no IPv6 core): the gateway's FRR configuration and the apply configuration are byte-identical to the
+  release before the switch (BASE, read from Git; those comparisons are skipped without it).
+- On: only lines are added to FRR. Each IPv6 VRF announces this node's /128 (route-map GW-LOCAL); FROM-SITE refuses the
   whole core.icmpSource6 range from the site; an IPv4-only VRF gets nothing. A small evaluator of the rendered
   route-maps shows where the route can go: never into the network's VPN (so never to another site, a circuit's CE
   or the IPv6 egress upstreams, which are all behind it), to the site as Type-5 with the gateways' community, and
   never back in at the other node, even from a site that strips communities and with the site-import filter off.
+  The apply configuration is the same on and off (the filter does not depend on the switch), so no turn-off sequence
+  is left in the job.
 - The apply loads table ip6 shc_gw_in6 (input hook, stateless, IPv6 to the node from a VRF: ICMPv6 and TCP that
   carries ACK or RST passes, every other TCP segment is reset, UDP refused with a port unreachable, the rest
-  dropped) before the VRFs take the ICMP source, removes it with the key, and keeps it after a failed IPv6 step. The
-  same ruleset is loaded into a real kernel (an unprivileged user and network namespace; skipped where that is not
-  possible) and probed with packets: echo and the replies of a connection the node opened pass, a connection request
-  to a listening port is reset and UDP to an open port refused, another protocol gets no answer, every answer is
-  routed back in the VRF (a decoy route in the main table stays unused), forwarded traffic is untouched.
+  dropped) with the IPv6 core, before the VRFs take the ICMP source, whatever icmp6Announced says; removes it with
+  the IPv6 core, and keeps it after a failed IPv6 step. Against the release before this change (BASE_FILTER) the
+  gateway instance makes, with the IPv6 core and no key, exactly the calls and leaves exactly the state the release
+  before made with the switch on, and the same as before IPv4 only. The ruleset is loaded into a real kernel (an
+  unprivileged user and network namespace; skipped where that is not possible) and probed with packets: echo and the
+  replies of a connection the node opened pass, a connection request to a listening port is reset and UDP to an open
+  port refused, another protocol gets no answer, every answer is routed back in the VRF (a decoy route in the main
+  table stays unused), forwarded traffic is untouched.
 
 Documentation and private ranges only."""
 import collections
@@ -43,14 +48,16 @@ import shc_fabric as F  # noqa: E402
 
 # the release before the switch
 BASE = "74720c7a"
+# the release before the filter came with the IPv6 core
+BASE_FILTER = "07487753"
 CG = os.path.join(ROOT, "eda", "rulebooks", "roles", "cloudgateway_provision", "tasks")
 NODE1_ICMP6 = "2001:db8:4005:1::1:2/128"
 NODE2_ICMP6 = "2001:db8:4005:1::2:2/128"
 
 
-def git_show(rel):
+def git_show(rel, base=BASE):
     try:
-        p = subprocess.run(["git", "-C", ROOT, "show", f"{BASE}:{rel}"], capture_output=True, text=True, timeout=30)
+        p = subprocess.run(["git", "-C", ROOT, "show", f"{base}:{rel}"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     return p.stdout if p.returncode == 0 else None
@@ -297,13 +304,15 @@ class Switch(unittest.TestCase):
         return run_play([t, write_out("cg_icmp6_announce | bool")],
                         {"fab_real": real, "cg_site_name": site, "cg_ipv6_core": ipv6_core})
 
-    def test_default_off(self):
+    def test_default_on(self):
         real = load(os.path.join(ROOT, "eda", "common", "vars", "fabric_realization.yml"))["fabric_realization_defaults"]
-        self.assertIs(real["gateway"]["announceIcmpSource6"], False)
+        self.assertIs(real["gateway"]["announceIcmpSource6"], True)
         self.assertEqual(real["gateway"]["announceIcmpSource6BySite"], {})
-        self.assertFalse(self.decide(real["gateway"]))
-        self.assertFalse(self.decide(None))
-        self.assertFalse(self.decide({}))
+        self.assertTrue(self.decide(real["gateway"]))
+        self.assertTrue(self.decide(None))
+        self.assertTrue(self.decide({}))
+        # a single site off
+        self.assertFalse(self.decide(dict(real["gateway"], announceIcmpSource6BySite={"site-osp": False})))
 
     def test_fleet_and_per_site(self):
         self.assertTrue(self.decide({"announceIcmpSource6": True}))
@@ -332,8 +341,8 @@ class Switch(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class ApplyConfig(unittest.TestCase):
-    """the apply configuration (gw-<site>.json) gains icmp6Announced only while the node announces; otherwise the file
-    is byte-identical to the release before's"""
+    """the apply configuration (gw-<site>.json) never carries icmp6Announced: on or off, the file is
+    byte-identical to the release before's switch-off file"""
 
     TASK = "{{ bgw_node.name }}: gateway instance config"
 
@@ -359,139 +368,42 @@ class ApplyConfig(unittest.TestCase):
         self.assertEqual(self.content(new_tasks, {"cg_node_icmp6_announce": ""}), old)
         self.assertNotIn("icmp6Announced", old)
 
-    def test_on(self):
-        c = json.loads(self.content(load(os.path.join(CG, "node_gateway.yml")), {"cg_node_icmp6_announce": NODE1_ICMP6}))
-        self.assertIs(c["icmp6Announced"], True)
-        self.assertEqual(c["icmp6"], NODE1_ICMP6)
+    def test_on_the_same(self):
+        """the apply configuration does not depend on the switch (the filter comes with the IPv6 core)"""
+        tasks = load(os.path.join(CG, "node_gateway.yml"))
+        on = self.content(tasks, {"cg_node_icmp6_announce": NODE1_ICMP6})
+        self.assertEqual(on, self.content(tasks, {}))
+        self.assertNotIn("icmp6Announced", on)
+        self.assertEqual(json.loads(on)["icmp6"], NODE1_ICMP6)
 
 
-class TurnOffOrder(unittest.TestCase):
-    """Turning the switch off withdraws the route before the filter goes: the apply configuration keeps icmp6Announced
-    while the node's filter marker exists (so the first apply keeps the table), FRR is rendered and reloaded without the
-    route, and only after the VPN label check, once the instance's running configuration announces no ICMPv6 source
-    (reloading once more if it still does), is the key dropped and the apply run again. Any step failing in between
-    ends the run with the filter in place."""
+class NoTurnOffSequence(unittest.TestCase):
+    """The filter never leaves with the switch, so the job has no turn-off sequence: no marker read, no extra reload,
+    no second apply, no key that keeps the filter."""
 
-    def tasks(self):
-        return load(os.path.join(CG, "node_gateway.yml"))
-
-    def names(self):
-        out = []
-        for t in self.tasks():
-            out.append(t.get("name", ""))
-            for b in t.get("block") or []:
-                out.append(b.get("name", ""))
-        return out
-
-    def test_order(self):
-        n = self.names()
-        at = lambda frag: next(i for i, x in enumerate(n) if frag in x)
-        self.assertLess(at("is the VRFs' input filter loaded"), at("gateway instance config"))
-        self.assertLess(at("keep the filter until the announcement is withdrawn"), at("gateway instance config"))
-        self.assertLess(at("gateway instance config"), at("apply the gateway instance (namespace"))
-        self.assertLess(at("apply the gateway instance (namespace"), at("FRR configuration"))
-        self.assertLess(at("reload the FRR configuration"), at("remove the VRFs' input filter once"))
-        self.assertLess(at("every VRF's VPN label leads into it"), at("remove the VRFs' input filter once"))
-        block = [b["name"] for b in by_name(self.tasks(), "{{ bgw_node.name }}: remove the VRFs' input filter once the "
-                                                          "announcement is withdrawn")["block"]]
-        # each long step (the reload, the apply) is preceded by the lease check that renews when little is left
-        self.assertEqual([x.split(": ", 1)[1] for x in block], [
-            "does the instance still announce an ICMPv6 source",
-            "the lease lasts for the FRR reload (it still announces)",
-            "reload the FRR configuration (it still announces)",
-            "the instance announces no ICMPv6 source", "the apply configuration as it was written",
-            "gateway instance config without the filter", "the lease lasts for the apply without the filter",
-            "apply the gateway instance without the filter"])
-
-    def test_guards(self):
-        tasks = self.tasks()
-        blk = by_name(tasks, "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn")
-        self.assertEqual(blk["when"], "cg_node_in6_keep | default(false) | bool")
-        b = {x["name"].split(": ", 1)[1]: x for x in blk["block"]}
-        self.assertEqual(b["reload the FRR configuration (it still announces)"]["when"], "'announced=yes' in _cg_in6_ann.stdout")
-        # the re-check fails the run (filter kept) while the route is still in the running configuration
-        expr = b["the instance announces no ICMPv6 source"]["failed_when"]
-        for rc, out, failed in ((0, "announced=no\n", False), (0, "announced=yes\n", True), (1, "", True)):
-            ok = eval(expr.replace("_cg_in6_gone.rc", repr(rc)).replace("_cg_in6_gone.stdout", repr(out)))
-            self.assertIs(ok, failed, (rc, out))
-        stat = by_name(tasks, "{{ bgw_node.name }}: is the VRFs' input filter loaded")
-        self.assertEqual(stat["ansible.builtin.stat"]["path"], "/etc/shc-fabric/gw-{{ fab_name }}.in6")
-        self.assertEqual(stat["when"], "cg_node_icmp6_announce | default('', true) | length == 0")
-
-    def check_script(self, vtysh_body):
-        """the withdrawal check (the block's first and third task share it) against a stand-in vtysh"""
-        t = by_name(self.tasks(), "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn")
-        b = {x["name"].split(": ", 1)[1]: x for x in t["block"]}
-        script = b["does the instance still announce an ICMPv6 source"]["ansible.builtin.shell"]
-        self.assertEqual(script, b["the instance announces no ICMPv6 source"]["ansible.builtin.shell"])
-        tmp = tempfile.mkdtemp(prefix="shc-in6-check-")
-        self.addCleanup(shutil.rmtree, tmp, True)
-        with open(os.path.join(tmp, "vtysh"), "w") as f:
-            f.write("#!/bin/bash\n" + vtysh_body)
-        os.chmod(os.path.join(tmp, "vtysh"), 0o755)
-        env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"])
-        p = subprocess.run(["bash", "-c", script.replace("{{ fab_name }}", "site1")], env=env, capture_output=True,
-                           text=True, timeout=30)
-        return p.returncode, p.stdout.strip()
-
-    def test_withdrawal_check(self):
-        conf = ("router bgp 65010 vrf t51000\n address-family ipv6 unicast\n  network ::/0 route-map GW-LOCAL\n"
-                "  network 2001:db8:100::/56 route-map GW-LOCAL\n%s  label vpn export auto\n exit-address-family\nexit\n")
-        on = conf % "  network 2001:db8:4005:1::1:2/128 route-map GW-LOCAL\n"
-        self.assertEqual(self.check_script("[ \"$2\" = gw-site1 ] || exit 3\ncat <<'E'\n%sE\n" % on), (0, "announced=yes"))
-        self.assertEqual(self.check_script("cat <<'E'\n%sE\n" % (conf % "")), (0, "announced=no"))
-        # FRR unreadable: the check fails (the filter stays)
-        self.assertEqual(self.check_script("exit 1\n")[0], 1)
-
-    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
-    def test_keep_fact(self):
-        t = by_name(self.tasks(), "{{ bgw_node.name }}: keep the filter until the announcement is withdrawn")
-        for marker, want in (({"stat": {"exists": True}}, True), ({"stat": {"exists": False}}, False),
-                             ({"skipped": True, "changed": False}, False), (None, False)):
-            v = {} if marker is None else {"_cg_in6_marker": marker}
-            self.assertIs(run_play([t, write_out("cg_node_in6_keep | bool")], v), want, marker)
-
-    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
-    def test_config_while_keeping_and_after(self):
-        """keeping: the key stays; the configuration written after the withdrawal is byte for byte the switch-off one"""
-        cfg = ApplyConfig("test_on")
-        tasks = self.tasks()
-        off = cfg.content(tasks, {})
-        keeping = cfg.content(tasks, {"cg_node_in6_keep": True})
-        self.assertIs(json.loads(keeping)["icmp6Announced"], True)
-        self.assertEqual({k: v for k, v in json.loads(keeping).items() if k != "icmp6Announced"}, json.loads(off))
-        blk = by_name(tasks, "{{ bgw_node.name }}: remove the VRFs' input filter once the announcement is withdrawn")
-        final = next(x for x in blk["block"] if "without the filter" in x["name"] and "ansible.builtin.copy" in x)
-        import base64
-        out = run_play([{"ansible.builtin.set_fact": {"_f": final["ansible.builtin.copy"]["content"]}}, write_out("_f")],
-                       {"_cg_conf_now": {"content": base64.b64encode(keeping.encode()).decode()}})
-        self.assertEqual(out, off)
-        self.assertEqual(final["ansible.builtin.copy"]["dest"], "/etc/shc-fabric/gw-{{ fab_name }}.json")
+    def test_gone(self):
+        with open(os.path.join(CG, "node_gateway.yml")) as f:
+            text = f.read()
+        for word in ("icmp6Announced", ".in6", "cg_node_in6_keep", "_cg_in6_", "announced=yes"):
+            self.assertNotIn(word, text)
 
 
-class TurnOffApply(A.ApplyCase):
-    """the node script under the turn-off sequence: the first apply (key kept) keeps the table, the final apply (key
-    gone) removes it; a run that stops after the first leaves the table, and the next first apply keeps it again"""
+class FilterStaysApply(A.ApplyCase):
+    """the node script: with the IPv6 core the table is there whatever the key says, and a key that comes or goes
+    changes nothing on the node"""
 
-    def test_sequence(self):
+    def test_independent_of_the_key(self):
         h = self.h
         h.conf("root", dict(A.ROOT_CONF, **A.ROOT6))
         h.ok(self, "root")
         h.conf("gw-iaas1", GW_ON)
         h.ok(self, "gw-iaas1")
-        table = h.get_state()["ns"]["gw-iaas1"]["nft"]["ip6 shc_gw_in6"]
-        # the turn-off run's first apply: the job keeps the key (the marker exists); nothing changes
-        out, _ = h.ok(self, "gw-iaas1")
-        self.assertTrue(out.strip().endswith("changed=no"), out)
-        self.assertEqual(h.get_state()["ns"]["gw-iaas1"]["nft"]["ip6 shc_gw_in6"], table)
-        # (the run stops here: reload failed) the next run's first apply: still kept
-        out, _ = h.ok(self, "gw-iaas1")
-        self.assertIn("ip6 shc_gw_in6", h.get_state()["ns"]["gw-iaas1"]["nft"])
-        # after the withdrawal: the key gone, the table and its marker go
-        h.conf("gw-iaas1", dict(A.GW_CONF, **A.GW6))
-        out, _ = h.ok(self, "gw-iaas1")
-        self.assertNotIn("ip6 shc_gw_in6", h.get_state()["ns"]["gw-iaas1"]["nft"])
-        self.assertFalse(os.path.exists(os.path.join(h.etc, "gw-iaas1.in6")))
+        table = h.get_state()["ns"]["gw-iaas1"]["nft"][TABLE]
+        for conf in (dict(A.GW_CONF, icmp6Announced=False, **A.GW6), dict(A.GW_CONF, **A.GW6), GW_ON):
+            h.conf("gw-iaas1", conf)
+            out, log = h.ok(self, "gw-iaas1")
+            self.assertTrue(out.strip().endswith("changed=no"), out)
+            self.assertEqual(h.get_state()["ns"]["gw-iaas1"]["nft"][TABLE], table)
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -509,7 +421,7 @@ class Status(unittest.TestCase):
 
 
 # -------------------------------------------------------------------------------------------- apply (fake kernel)
-GW_ON = dict(A.GW_CONF, icmp6Announced=True, **A.GW6)
+GW_ON = dict(A.GW_CONF, **A.GW6)
 TABLE = "ip6 shc_gw_in6"
 
 
@@ -565,21 +477,25 @@ class ApplyFilter(A.ApplyCase):
         self.assertNotIn(TABLE, self.nft())
         self.assertFalse(os.path.exists(self.marker()))
 
-    def test_removed_with_the_key(self):
+    def test_not_with_the_key(self):
+        """icmp6Announced false or absent: the table stays (it comes with the IPv6 core)"""
         self.up(GW_ON)
-        for conf in (dict(A.GW_CONF, icmp6Announced=False, **A.GW6), dict(A.GW_CONF, **A.GW6)):
-            self.h.conf("gw-iaas1", dict(GW_ON))
-            self.h.ok(self, "gw-iaas1")
+        for conf in (dict(A.GW_CONF, icmp6Announced=False, **A.GW6), dict(A.GW_CONF, icmp6Announced=True, **A.GW6)):
             self.h.conf("gw-iaas1", conf)
             out, log = self.h.ok(self, "gw-iaas1")
-            self.assertNotIn(TABLE, self.nft())
-            self.assertFalse(os.path.exists(self.marker()))
-            self.assertTrue(out.strip().endswith("changed=yes"), out)
-            # the ICMP sources stay (they were there before the announcement)
-            self.assertEqual(self.h.addrs6("gw-iaas1", "t51000"), ["2001:db8:4005:1::1:2/128"])
-            out2, log2 = self.h.ok(self, "gw-iaas1")
-            self.assertTrue(out2.strip().endswith("changed=no"), out2)
-            self.assertEqual([l for l in log2 if "shc_gw_in6" in l or ("nft" in l and "delete" in l)], [])
+            self.assertIn(TABLE, self.nft())
+            self.assertTrue(os.path.exists(self.marker()))
+            self.assertTrue(out.strip().endswith("changed=no"), out)
+
+    def test_ipv4_only_gateway(self):
+        """an IPv4-only gateway: no table and no command for it"""
+        self.h.conf("root", A.ROOT_CONF)
+        self.h.ok(self, "root")
+        self.h.conf("gw-iaas1", dict(A.GW_CONF, icmp6Announced=True))
+        out, log = self.h.ok(self, "gw-iaas1")
+        self.assertNotIn(TABLE, self.nft())
+        self.assertEqual([l for l in log if "shc_gw_in6" in l], [])
+        self.assertFalse(os.path.exists(self.marker()))
 
     def test_ipv6_core_rolled_back(self):
         """the job writes no key without the IPv6 core: the table goes with the ICMP sources"""
@@ -620,34 +536,32 @@ class ApplyFilter(A.ApplyCase):
         self.assertTrue(os.path.exists(self.marker()))
 
 
-class ApplyOffAsBefore(A.ApplyCase):
-    """L6 for the node: with the key absent or false, the release before's script and this one make the same calls in
-    the same order and leave the same kernel state (nftables included), on a fresh blade and on a second run (but for
-    the differences listed in test_fix_base_script)."""
+class ApplyAsBefore(A.ApplyCase):
+    """The gateway instance against the release before the filter came with the IPv6 core (BASE_FILTER): with the IPv6
+    core and no key it makes exactly the calls, prints exactly the output and leaves exactly the state (nftables and
+    files included) the release before made with icmp6Announced true, on a fresh blade and on a second run; IPv4 only
+    exactly as before. The root runs this script in both (its own filters are new; test_root_input_filter)."""
 
     def test_same_calls_and_state(self):
-        import test_fix_base_script as B
-        old = git_show(A.SCRIPT_REL)
+        old = git_show(A.SCRIPT_REL, BASE_FILTER)
         if old is None:
-            self.skipTest(f"{BASE} not in this checkout")
+            self.skipTest(f"{BASE_FILTER} not in this checkout")
         self.h.scripts["old"] = self.h.copy_script(old, "apply-old")
-        for gw6 in (A.GW6, dict(A.GW6, icmp6Announced=False), {}):
+        for core6, old_gw, new_gw in ((True, dict(A.GW6, icmp6Announced=True), A.GW6), (False, {}, {})):
             results = {}
-            for which in ("old", "new"):
+            for which, gw6 in (("old", old_gw), ("new", new_gw)):
                 self.h.set_state(A.blade())
                 for f in os.listdir(self.h.etc):
                     os.unlink(os.path.join(self.h.etc, f))
-                self.h.conf("root", dict(A.ROOT_CONF, **(A.ROOT6 if gw6 else {})))
+                self.h.conf("root", dict(A.ROOT_CONF, **(A.ROOT6 if core6 else {})))
+                self.h.ok(self, "root")
                 self.h.conf("gw-iaas1", dict(A.GW_CONF, **gw6))
-                runs = [self.h.ok(self, "root", script=which)]
-                for _ in range(2):
-                    runs.append(self.h.ok(self, "gw-iaas1", script=which))
-                results[which] = (runs, self.h.get_state(), sorted(os.listdir(self.h.etc)))
-            # (but for the differences the fixes on both transports made, listed in test_fix_base_script)
-            B.assert_runs_like_base(self, str(gw6), results["old"][0], results["new"][0])
-            B.assert_state_like_base(self, str(gw6), results["old"][1], results["new"][1])
-            self.assertEqual(results["old"][2], results["new"][2], gw6)
-            self.assertNotIn(TABLE, results["new"][1]["ns"]["gw-iaas1"]["nft"])
+                runs = [self.h.ok(self, "gw-iaas1", script=which) for _ in range(2)]
+                results[which] = (runs, self.h.get_state(), sorted(f for f in os.listdir(self.h.etc) if not f.endswith((".applied", ".incomplete"))))
+            self.assertEqual(results["old"][0], results["new"][0], core6)
+            self.assertEqual(results["old"][1], results["new"][1], core6)
+            self.assertEqual(results["old"][2], results["new"][2], core6)
+            self.assertEqual(TABLE in results["new"][1]["ns"]["gw-iaas1"]["nft"], core6)
 
 
 # -------------------------------------------------------------------------------------------- apply (real kernel)

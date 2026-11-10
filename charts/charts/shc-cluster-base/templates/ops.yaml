@@ -420,9 +420,11 @@ spec:
 
 {{- if $o.tenantOrphanCheck.enabled }}
 {{- $c := $o.tenantOrphanCheck }}
+{{- /* the account reference goes into the report, so a refusal names where the account comes from */}}
+{{- $cfg := mergeOverwrite (deepCopy $c.config) (dict "accountRef" (printf "%s (ClusterSecretStore %s)" $c.accountVaultKey $c.secretStore)) }}
 ---
 # Tenant cloud orphan check (LAB-PLAN §11.6 phase D): files/tenant_orphan_check.py, report-only.
-# Reads the CloudOSO/PlatformOpenshift CRs (get/list only) and the tenant domain/zone with the
+# Reads the CloudOSO/PlatformOpenshift/CloudGateway/NetworkPlacement CRs (get/list only) and the tenant domain/zone with the
 # tenant admin account (a domain manager).
 apiVersion: v1
 kind: ServiceAccount
@@ -436,7 +438,8 @@ metadata:
   name: shc-ops-tenant-orphan-check
 rules:
   - apiGroups: [hybridsovereign.redhat]
-    resources: [cloudosos, platformopenshifts]
+    # cloudgateways, networkplacements: the names the platform publishes for its own addresses
+    resources: [cloudosos, platformopenshifts, cloudgateways, networkplacements]
     verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -480,7 +483,7 @@ data:
   tenant_orphan_check.py: |
     {{- $.Files.Get "files/tenant_orphan_check.py" | nindent 4 }}
   config.yaml: |
-    {{- toYaml $c.config | nindent 4 }}
+    {{- toYaml $cfg | nindent 4 }}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -488,7 +491,8 @@ metadata:
   name: tenant-orphan-check
   namespace: {{ $o.namespace }}
   annotations:
-    # Report-only: Argo CD reports the CronJob Degraded while its last check has findings. In the last
+    # Report-only: Argo CD reports the CronJob Degraded while its last check has findings (exit 1) or was
+    # incomplete (exit 2: the account was refused); the failed pod's message says which. In the last
     # sync wave that health cannot hold back the resources of later waves (it did: wave 1 was never
     # applied while a finding was open).
     argocd.argoproj.io/sync-wave: "10"
@@ -505,7 +509,7 @@ spec:
       template:
         metadata:
           annotations:
-            shc/config-hash: {{ printf "%s%s" ($.Files.Get "files/tenant_orphan_check.py") (toYaml $c.config) | sha256sum | trunc 16 | quote }}
+            shc/config-hash: {{ printf "%s%s" ($.Files.Get "files/tenant_orphan_check.py") (toYaml $cfg) | sha256sum | trunc 16 | quote }}
         spec:
           serviceAccountName: tenant-orphan-check
           restartPolicy: Never
@@ -514,6 +518,8 @@ spec:
               image: {{ required "ops.tenantOrphanCheck.image is required" $c.image }}
               command: [python3, /etc/tenant-orphan-check/tenant_orphan_check.py,
                         --config, /etc/tenant-orphan-check/config.yaml, --clouds, /etc/tenant-account/clouds.yaml]
+              # the report's summary (or, on a crash, the log's tail) stays in the failed pod's status
+              terminationMessagePolicy: FallbackToLogsOnError
               volumeMounts:
                 - name: config
                   mountPath: /etc/tenant-orphan-check
@@ -628,7 +634,7 @@ spec:
             severity: warning
           annotations:
             summary: "{{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.cronjob {{ "}}" }}: the last run failed"
-            description: "The most recent run of CronJob {{ "{{" }} $labels.cronjob {{ "}}" }} did not succeed. Check its Job logs."
+            description: "The most recent run of CronJob {{ "{{" }} $labels.cronjob {{ "}}" }} did not succeed. The failed pod's termination message or its log says why."
         - alert: ShcOidcIssuerProbeFailed
           expr: >-
             max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace="{{ $o.namespace }}", cronjob="oidc-issuer-probe"})

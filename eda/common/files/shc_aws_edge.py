@@ -523,6 +523,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/sbin/shc-edge-agent
+# a run that hangs (a command that never returns) is ended, so the timer runs the agent again
+TimeoutStartSec=5min
 EOF
 cat > /etc/systemd/system/shc-edge-agent.timer <<'EOF'
 [Unit]

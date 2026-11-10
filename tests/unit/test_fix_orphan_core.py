@@ -84,7 +84,8 @@ def node(transport, root_v6=None, gw_v6=None, rule6=None, rule4=None, guard=Fals
     the root, t51000 and t51003 in the gateway)."""
     rule4 = rule4 if rule4 is not None else text("srv6-ip4-rule.txt")
     a = {"ip netns list": "%s (id: 0)\n" % gw,
-         "ip -j -d link show type vlan": "[]", "vtysh -c show bfd peers json": "[]", "nft list table ip6 shc_attach6": "",
+         "ip -j -d link show type vlan": "[]", "vtysh -c show bfd peers json": "[]", "nft list table ip6 shc_attach6": "", "nft list table ip shc_root_in": "",
+         "nft list table ip6 shc_root_in6": "",
          FIND: files, UNITS: units}
     per = {"": (vrf_links(("egress", 9000), ("e10000", 110000)),
                 root_v6 if root_v6 is not None else text("srv6-root-ip6-unreachable.txt"),

@@ -36,11 +36,11 @@ fabric_realization_defaults:
     # announce each border gateway node's ICMPv6 source (core.icmpSource6) to the site in every VRF with IPv6: a /128
     # route that stays out of the network's VPN, so the site returns traffic for a node's own address to that node
     # rather than to whichever node its ECMP picks (ping and traceroute from a gateway node, ping to a node's ICMPv6
-    # source name). With it, IPv6 to the node itself from a VRF is filtered statelessly, as a host with no open port
-    # answers: ICMPv6 and TCP segments with ACK or RST pass (no connection tracking: "with ACK or RST" stands in for
-    # "established"), every other TCP segment gets a reset, UDP a port unreachable, the rest is dropped. Only with
-    # the IPv6 core and core.icmpSource6; off: nothing of it exists
-    announceIcmpSource6: false
+    # source name). Only with the IPv6 core and core.icmpSource6. Whether on or off, IPv6 to the node itself from a
+    # VRF is filtered statelessly, as a host with no open port answers: ICMPv6 and TCP segments with ACK or RST pass
+    # (no connection tracking: "with ACK or RST" stands in for "established"), every other TCP segment gets a reset,
+    # UDP a port unreachable, the rest is dropped
+    announceIcmpSource6: true
     # per site (CloudInfrastructure name: true or false): overrides announceIcmpSource6 for that site's gateway
     announceIcmpSource6BySite: {}
   core:
@@ -59,9 +59,18 @@ fabric_realization_defaults:
     # inside the SRGB
     sidOffset6: 1000
     # source of the ICMPv6 errors a VRF sends (Packet Too Big, Time Exceeded, Unreachable): a /128 per namespace
-    # per node on every VRF device (network address + (node position << 16) + provider-edge index); not
-    # announced unless gateway.announceIcmpSource6. At least a /96, clear of loopbackPool6. Empty = none
+    # per node on every VRF device (network address + (node position << 16) + provider-edge index); announced to
+    # the sites while gateway.announceIcmpSource6 is on for them. At least a /96, clear of loopbackPool6. A tenant
+    # prefix may not overlap it (it is one of the exclusive ranges below, added automatically). Empty = none
     icmpSource6: ""
+    # source of the IPv4 ICMP errors the root's VRFs send toward a network (fragmentation needed, time exceeded): one
+    # IPv4 address, held on every root VRF device of every node; with it the egress VRF's errors toward a network
+    # leave from the node's hand-off address (egress.nodes.<node>.address). So the errors never leave from a
+    # link-local address of the egress link (sites drop some:
+    # OVN-Kubernetes reserves part of 169.254.0.0/16). Never announced; a tenant prefix may not overlap it (added to
+    # the exclusive ranges automatically). Default 192.0.0.8, the IPv4 dummy address (RFC 7600) the gateways' kernels
+    # already send their errors from. Empty = the kernel's choice (the first address of the VRF's devices)
+    icmpSource4: 192.0.0.8
     # VPN transport of the core, one for the fabric (every node's root and all its gateway namespaces): mpls = IS-IS
     # segment routing and MPLS L3VPN (labels over the loopbacks' node SIDs); srv6 = SRv6 L3VPN, one SID per VRF
     # (End.DT46, IPv4 and IPv6) from the provider edge's locator in core.srv6.block, the VPN sessions over the IPv6
@@ -97,6 +106,43 @@ fabric_realization_defaults:
       waitSeconds: 1200
       stepTimeoutSeconds: 180
       systemdJobSeconds: 360
+    # after FRR (the root or a gateway instance) started or reloaded its configuration file, the job records the file
+    # as loaded only when the running configuration holds all of it (frr-reload.py --test): a reload can end without
+    # an error and part of the file unapplied. Lines left fail the job and the next run reloads again; lines that a
+    # second start or reload leaves as well are recorded as loaded and reported (FRR does not take them). ignore: more
+    # patterns (Python regular expressions) for lines the nodes' FRR always shows differently, matched against the
+    # line and against "<context>: <line>"; enabled false records after any successful start or reload, unchecked
+    frrLoadCheck:
+      enabled: true
+      ignore: []
+  # the fabric health check (job template fabric-health): every intervalSeconds it reads each border gateway node
+  # once over SSH (no lease; never while the lease is held or a fabric event is in flight; a read a job overlapped is
+  # discarded) and changes nothing there: the units of the configuration and whether they start at boot, the
+  # configuration's start at boot and why it failed, the routing daemons and their crashes, drift against what the
+  # last apply and the last routing configuration load left on the node, the IPv6 egress sessions, the gateways'
+  # site sessions; and the platform address pools. It writes status.health and the conditions NodesHealthy and
+  # Degraded on the HybridFabric and its CloudGateways (a gateway of a paused site reads Unknown/SitePaused and is
+  # not read), refreshes the IPv6 egress state and the pool rows, raises events on transitions, and wakes the
+  # fabric's or a gateway's job for what a full run repairs. Cost per run: one job for all fabrics, one SSH session
+  # per node, one status write per fabric (the gateways' only when their health changed).
+  health:
+    # off for one fabric (fabrics.<name>.health.enabled false) while its border gateway nodes are off on purpose:
+    # nothing is read, the fabric and its gateways read NodesHealthy Unknown/NotChecked and no alert fires
+    enabled: true
+    # the job template's schedule (one value for the installation; at least 300) and the base of the stale alert
+    intervalSeconds: 600
+    # the limit on one node's read, on the node (each command in it has its own limit of 15 s)
+    nodeReadTimeoutSeconds: 60
+    # drift wakes the job only after this many consecutive checks found it (a failed or disabled unit at once)
+    wakeAfterChecks: 2
+    # no second wake of the same object within this
+    wakeBackoffMinutes: 60
+    # a routing daemon crash is reported for this long
+    daemonRestartWindowMinutes: 60
+    # a Warning event of an outage that lasts is repeated at most this often (IPv6EgressUpstreamDown)
+    eventRepeatMinutes: 60
+    # what is checked (each true by default)
+    checks: {units: true, routingDaemons: true, drift: true, upstream: true, siteSessions: true, pools: true}
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric
@@ -130,7 +176,8 @@ fabric_realization_defaults:
     publicPools: {}
     holdDownDays: 7
   # HybridNetwork address space: a tenant prefix (spec.prefixes) overlapping one of these ranges, in either
-  # direction, is refused (PrefixReserved). Every ipam.publicPools prefix is added to the list automatically.
+  # direction, is refused (PrefixReserved). Every ipam.publicPools prefix, core.icmpSource6 and core.srv6.block are
+  # added to the list automatically.
   # An installation lists the platform's own globally routed space and its translation prefixes here.
   network:
     exclusiveRanges: []

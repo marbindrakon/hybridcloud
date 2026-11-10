@@ -1,0 +1,15 @@
+---
+# Scheduled job templates. fabric-health runs every health.intervalSeconds of the fabric realization (env
+# FABRIC_REALIZATION, as the inventory variable fabric_realization; default and minimum as in
+# eda/common/vars/fabric_realization.yml: 600 s, at least 300 s), in whole minutes; off with health.enabled false.
+shc_fabric_health: >-
+  {{ ((lookup('env', 'FABRIC_REALIZATION') | default('{}', true) | from_json).health | default({}, true)) }}
+shc_fabric_health_minutes: >-
+  {{ ([shc_fabric_health.intervalSeconds | default(600, true) | int, 300] | max) // 60 }}
+controller_schedules:
+  - name: fabric-health
+    description: Fabric health check (read only)
+    unified_job_template: fabric-health
+    organization: sovereign
+    rrule: "DTSTART:20260101T000000Z RRULE:FREQ=MINUTELY;INTERVAL={{ shc_fabric_health_minutes }}"
+    enabled: "{{ shc_fabric_health.enabled | default(true) | string | lower in ['true', 'yes', '1'] }}"

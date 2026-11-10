@@ -229,8 +229,9 @@ class Placement(unittest.TestCase):
                                "V=(vtysh -N gw-{{ fab_name }})")
 
     def test_after_the_reload_and_its_record_on_both_transports(self):
-        for path, after, before in ((RT, "record what FRR loaded", "install the IPv6 egress guard"),
-                                    (GW, "a reload the record made due changed the node", "keep the SRv6 core guard")):
+        # after the record and the two steps on what the load check found (a failure, the lines FRR does not take)
+        for path, after, before in ((RT, "lines FRR does not take", "install the IPv6 egress guard"),
+                                    (GW, "lines the instance does not take", "keep the SRv6 core guard")):
             tasks = load(path)
             names = [t.get("name", "") for t in tasks]
             i = names.index(T)

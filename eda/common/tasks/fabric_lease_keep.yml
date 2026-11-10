@@ -9,6 +9,10 @@
 #   skipped) and runs out by itself at fab_lease.until; every step starts only with enough of the lease left for all
 #   it can still do on the node (common/vars/fabric_lease.yml, fabric_lease_ensure.yml), so nothing of it outlives
 #   the lease.
+# - a step the node ended at its own limit (timeout(1) around every node command, common/tasks/bgw_connect.yml): the
+#   module died without a result (rc 124 after TERM, 137 after KILL). Its commands are gone, but a systemd job it
+#   started runs on until its unit's limit, as after a timeout: the lease is kept the same way. (An apply that its
+#   own timeout ended returns rc 124 as a result: an ordinary failure.)
 # - a node that stopped answering mid-step: ansible ends the job there (no rescue, no always), so the lease is kept
 #   the same way, and the operator's in-flight limit runs the object again.
 # - anything else (a step that returned an error, a step the lease was too short to start, a renewal that found the
@@ -25,19 +29,27 @@
          | selectattr('timedout', 'defined') | list
          + ([ansible_failed_result] + (ansible_failed_result.results | default([], true) | list))
          | select('mapping')
-         | selectattr('msg', 'defined') | selectattr('msg', 'search', 'failed to execute in the expected time frame') | list }}
+         | selectattr('msg', 'defined') | selectattr('msg', 'search', 'failed to execute in the expected time frame') | list
+         + ([ansible_failed_result] + (ansible_failed_result.results | default([], true) | list))
+         | select('mapping')
+         | selectattr('module_stdout', 'defined') | selectattr('rc', 'defined') | selectattr('rc', 'in', [124, 137])
+         | list }}
   ansible.builtin.set_fact:
     fab_lease_keep: "{{ _fab_timedout | length > 0 }}"
     fab_lease_keep_item: >-
       {{ (('item ' ~ (_fab_timedout[0]._ansible_item_label | default(_fab_timedout[0].item) | string) ~ ': '
-           ~ (_fab_timedout[0].msg | default('')))
+           ~ (('the node ended it at its time limit (rc ' ~ _fab_timedout[0].rc ~ ')')
+              if _fab_timedout[0].module_stdout is defined else (_fab_timedout[0].msg | default(''))))
           if _fab_timedout | length > 0 and _fab_timedout[0].item is defined else '') }}
   timeout: 0
 
 - name: The reason
   ansible.builtin.set_fact:
     fab_lease_keep_msg: >-
-      {{ ansible_failed_task.name | default('a node step') }}: {{ ansible_failed_result.msg | default('failed') }}{{
+      {{ ansible_failed_task.name | default('a node step') }}: {{
+      ('the node ended the step at its time limit (rc ' ~ ansible_failed_result.rc ~ ')')
+      if ansible_failed_result.module_stdout is defined and ansible_failed_result.rc | default(0) in [124, 137]
+      else ansible_failed_result.msg | default('failed') }}{{
       (' (' ~ fab_lease_keep_item ~ ')') if fab_lease_keep_item | default('') | length > 0 else '' }}{{
       ('. The step may still be running there: the border gateway configuration lease fabric-config-'
        ~ fab_lease.fabric ~ ' is kept until it runs out at '
