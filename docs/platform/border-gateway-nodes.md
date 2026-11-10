@@ -170,7 +170,9 @@ What it reads, per instance (the root, and each gateway whose site is not paused
 - the IPv6 egress as the root's own file names it (the hand-off address, the filter table, the upstream sessions,
   the default route in the egress VRF and in each network VRF with IPv6 egress), and a gateway's site sessions.
 
-It writes `status.health` on the HybridFabric (the root's findings and the node-wide units; every run) and on each
+Every run writes `status.health.lastRunAt` on the HybridFabric, also a run that left the nodes alone;
+`status.health.checkedAt` is when the nodes were last read. It writes `status.health` on the HybridFabric (the root's
+findings and the node-wide units; every run) and on each
 CloudGateway (its instance; only when something changed), the conditions `NodesHealthy` (the worst finding) and
 `Degraded` (True while a finding reduces service: an unreachable node, a failed start or service, a routing daemon
 down, a start without IPv6, no site session), and refreshes the IPv6 egress state
@@ -182,7 +184,10 @@ read that did not complete on a node that answered is `ReadFailed`, not `NodeUnr
 paused reads `NodesHealthy` Unknown/`SitePaused`; one not realized on the nodes yet, or with a change of its own in
 progress (its phase not Ready or Degraded, an event of its own in flight), Unknown/`NotChecked`. For a fabric whose
 nodes are off on purpose, turn the check off for it (realization `fabrics.<name>.health.enabled: false`): its
-objects read Unknown/`NotChecked` and the stale alerts stay quiet. Events
+objects read Unknown/`NotChecked` and the stale alerts stay quiet. Two alerts watch the check itself:
+`ShcFabricHealthStale` when no run reported (`lastRunAt`) for `ops.fabricHealth.alerts.staleIntervals` intervals (the
+schedule, AAP or the job is broken), and `ShcFabricNodesNotRead`, lower, when runs report but have not read the nodes
+(`checkedAt`) for `ops.fabricHealth.alerts.notReadIntervals` intervals because changes to the nodes held them off. Events
 come on transitions only (`NodeStartFailed`, `NodeServiceFailed`, `RoutingDaemonDown`, `RoutingDaemonRestarted`,
 `ConfigurationDrift`, `SiteSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
 

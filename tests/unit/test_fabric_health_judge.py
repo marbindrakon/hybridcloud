@@ -242,6 +242,8 @@ class JudgeTest(unittest.TestCase):
         f = a["fabric"]["status"]
         self.assertEqual(cond(f, "NodesHealthy")["reason"], "NotChecked")
         self.assertFalse(f["realization"]["health"]["enabled"])
+        self.assertTrue(f["health"]["lastRunAt"])
+        self.assertNotIn("lastRunAt", a["gateways"][0]["status"]["health"])
         self.assertEqual(cond(a["gateways"][0]["status"], "NodesHealthy")["reason"], "NotChecked")
 
     def test_a_paused_gateway_keeps_its_last_wake_and_is_not_rewritten(self):
@@ -312,10 +314,11 @@ class JudgeTest(unittest.TestCase):
         a = J.judge(req([], fab_status=st, now=LATER, skipped={"reason": "LeaseHeld"}))
         body = a["fabric"]["status"]
         self.assertEqual(set(body), {"health", "realization"})
-        self.assertEqual(body["health"], {"skipped": {"reason": "LeaseHeld", "since": LATER}})
+        # a skipped run reports (lastRunAt) without claiming a read (checkedAt)
+        self.assertEqual(body["health"], {"skipped": {"reason": "LeaseHeld", "since": LATER}, "lastRunAt": LATER})
         self.assertEqual(a["gateways"], [])
         st2 = apply(st, body)
-        self.assertEqual(st2["health"]["checkedAt"], NOW)
+        self.assertEqual((st2["health"]["checkedAt"], st2["health"]["lastRunAt"]), (NOW, LATER))
         self.assertEqual(st2["health"]["nodes"], st["health"]["nodes"])
         self.assertFalse(a["fabric"]["wake"])
 

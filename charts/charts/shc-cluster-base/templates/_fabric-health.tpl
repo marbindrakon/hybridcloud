@@ -37,6 +37,13 @@ spec:
               path: [status, health]
               valueFrom: [checkedAt]
         {{- if eq $kind "HybridFabric" }}
+        - name: health_last_run_at
+          help: When the health check last ran for the fabric, whether or not it read the nodes (Unix seconds).
+          each:
+            type: Gauge
+            gauge:
+              path: [status, health]
+              valueFrom: [lastRunAt]
         - name: health_interval_seconds
           help: The health check's interval.
           each:
@@ -138,21 +145,35 @@ spec:
         summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no node has an IPv6 upstream"
         description: "IPv6 internet egress is down for every network of the fabric."
     # the check itself: not run (AAP, the schedule or the job broken, the nodes' lease held for long) or never run
+    # the check itself: no run reported (AAP, the schedule or the job broken)
     - alert: ShcFabricHealthStale
       expr: >-
-        (time() - shc_fabric_health_checked_at{customresource_kind="HybridFabric"})
+        (time() - shc_fabric_health_last_run_at{customresource_kind="HybridFabric"})
         > on (namespace, name) ({{ $f.alerts.staleIntervals }} * shc_fabric_health_interval_seconds{customresource_kind="HybridFabric"})
         unless on (namespace, name) (shc_fabric_health_enabled == 0)
       for: 10m
       labels:
         severity: warning
       annotations:
-        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: the fabric health check has not read the nodes for {{ $f.alerts.staleIntervals }} intervals"
-        description: "Check the fabric-health job template's schedule and its last runs; status.health.skipped says when a change to the nodes kept it away."
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no fabric health run for {{ $f.alerts.staleIntervals }} intervals"
+        description: "The fabric health check has not run. Check the fabric-health job template's schedule and its last runs."
+    # runs report but leave the nodes alone: changes to them held the configuration lease for that long (a long
+    # rollout, or a lease that is not released)
+    - alert: ShcFabricNodesNotRead
+      expr: >-
+        (time() - shc_fabric_health_checked_at{customresource_kind="HybridFabric"})
+        > on (namespace, name) ({{ $f.alerts.notReadIntervals }} * shc_fabric_health_interval_seconds{customresource_kind="HybridFabric"})
+        unless on (namespace, name) (shc_fabric_health_enabled == 0)
+      for: 10m
+      labels:
+        severity: info
+      annotations:
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: the nodes have not been health-checked for {{ $f.alerts.notReadIntervals }} intervals"
+        description: "The health check runs but leaves the nodes alone while a change to them holds the configuration lease (status.health.skipped). Expected during a long rollout; otherwise check which job holds the lease fabric-config-<fabric>."
     - alert: ShcFabricHealthNeverChecked
       expr: >-
         shc_fabric_info{customresource_kind="HybridFabric"}
-        unless on (namespace, name) shc_fabric_health_checked_at{customresource_kind="HybridFabric"}
+        unless on (namespace, name) shc_fabric_health_last_run_at{customresource_kind="HybridFabric"}
         unless on (namespace, name) (shc_fabric_health_enabled == 0)
       for: 1h
       labels:

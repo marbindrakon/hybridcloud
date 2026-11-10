@@ -340,7 +340,7 @@ def comparable(body, cap=2):
     """What decides whether a gateway's write is needed (the check time alone never is)."""
     # (a null in the merge patch removes the key: absent and null are the same here)
     h = {k: v for k, v in json.loads(json.dumps(body.get("health") or {})).items()
-         if v is not None and k != "checkedAt"}
+         if v is not None and k not in ("checkedAt", "lastRunAt")}
     # the count matters until it reached what any rule waits for (two sightings, wakeAfterChecks): written until then
     for n in h.get("nodes") or []:
         for f in n.get("findings") or []:
@@ -378,7 +378,7 @@ def judge(req):
                "conditions": [{"type": "NodesHealthy", "status": "Unknown", "reason": "NotChecked",
                                "message": "the health check is off for this fabric"},
                               {"type": "Degraded", "status": "False", "reason": "AsExpected", "message": ""}]}
-        answer["fabric"]["status"] = dict(off, realization=real)
+        answer["fabric"]["status"] = dict(off, realization=real, health=dict(off["health"], lastRunAt=now))
         for g in req.get("gateways") or []:
             if not g.get("deleting"):
                 answer["gateways"].append({"name": g["name"], "namespace": g.get("namespace"), "status": off,
@@ -388,13 +388,15 @@ def judge(req):
 
     if skipped:
         health = {"skipped": {"reason": skipped.get("reason") or "LeaseHeld",
-                              "since": (fprev.get("skipped") or {}).get("since") or now}}
+                              "since": (fprev.get("skipped") or {}).get("since") or now},
+                  # every run reports, also one that left the nodes alone
+                  "lastRunAt": now}
         answer["fabric"]["status"] = {"health": health, "realization": real}
         return answer
 
     fnodes, fevents = node_entries(nodes_in, "root", "root", fprev, now, cfg)
     fwake = wake(fnodes, fprev, bool(fab.get("ready")), now_dt, cfg)
-    fhealth = {"checkedAt": now, "healthy": worst(fnodes) is None, "nodes": fnodes, "skipped": None,
+    fhealth = {"checkedAt": now, "lastRunAt": now, "healthy": worst(fnodes) is None, "nodes": fnodes, "skipped": None,
                "lastWakeAt": now if fwake else fprev.get("lastWakeAt")}
     fconds = conditions(fnodes, "fabric")
     e6prev = ((fstatus.get("realization") or {}).get("egress") or {}).get("ipv6") or {}
