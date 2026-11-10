@@ -10,8 +10,12 @@ Checks:
   1. projects in the domain without a CloudOSO (config ignoreProjects excepted);
   2. CloudOSOs whose recorded project no longer exists;
   3. unattached floating IPs in a CloudOSO's project other than its recorded API/ingress pair;
-  4. records in the tenant zone that no PlatformOpenshift recorded and that are not the NS delegation
-     a CloudOSO recorded (status.dns.zone/nameservers) (zone apex SOA/NS excepted).
+  4. records in the tenant zone that no PlatformOpenshift recorded, that are not the NS delegation
+     a CloudOSO recorded (status.dns.zone/nameservers) and that are not a name the platform published for
+     its own addresses (zone apex SOA/NS excepted). The platform's names are the AAAA records a CloudGateway
+     or NetworkPlacement records in status.realization.reverseDns.names ({name, address}): a record counts
+     only with the recorded name and only the recorded addresses, so the name of a gateway that no longer
+     exists, or an address its gateway no longer has, is still a finding.
 
 Checks 1-3 look at one cloud: the account's. With config cloudInfrastructure set, only CloudOSOs on
 that CloudInfrastructure (status.cloudInfrastructure, else spec.cloudRef.name) are compared with its
@@ -91,8 +95,26 @@ def oso_cloud(o):
     return st.get("cloudInfrastructure") or ((o.get("spec") or {}).get("cloudRef") or {}).get("name") or ""
 
 
-def check(cfg, acct, connect, all_osos, pos):
-    """Run the checks. Returns (summary line, findings, problems, exit code)."""
+def published_names(objs):
+    """{name with trailing dot: (set of addresses, owner refs)} from status.realization.reverseDns.names."""
+    out = {}
+    for kind, items in objs:
+        for o in items:
+            rd = (((o.get("status") or {}).get("realization") or {}).get("reverseDns") or {})
+            ref = f"{kind} {'/'.join(x for x in (o['metadata'].get('namespace'), o['metadata']['name']) if x)}"
+            for n in rd.get("names") or []:
+                name, addr = (n.get("name") or "").lower().rstrip("."), (n.get("address") or "").lower()
+                if name and addr:
+                    addrs, owners = out.setdefault(name + ".", (set(), set()))
+                    addrs.add(addr)
+                    owners.add(ref)
+    return out
+
+
+def check(cfg, acct, connect, all_osos, pos, platform_objs=()):
+    """Run the checks. Returns (summary line, findings, problems, exit code).
+    platform_objs: [(kind, objects)] of the platform's own objects that record published names
+    (CloudGateway, NetworkPlacement)."""
     cloud_name = cfg.get("cloudInfrastructure") or ""
     osos = [o for o in all_osos if not cloud_name or oso_cloud(o) == cloud_name]
     findings, problems = [], []
@@ -146,14 +168,24 @@ def check(cfg, acct, connect, all_osos, pos):
             dns = (o.get("status") or {}).get("dns") or {}
             if dns.get("zone") and dns.get("delegated") and dns.get("globalZoneId", cfg["dnsZoneId"]) == cfg["dnsZoneId"]:
                 recorded_names.add((dns["zone"].rstrip(".") + ".", "NS"))
+        published = published_names(platform_objs)
         try:
             conn_z = connect(project_id=cfg["dnsProjectId"])
             zone = conn_z.dns.get_zone(cfg["dnsZoneId"])
             for rs in conn_z.dns.recordsets(zone):
                 if rs.name == zone.name and rs.type in ("SOA", "NS"):
                     continue
-                if (rs.name, rs.type) not in recorded_names:
-                    findings.append(f"DNS {rs.name} {rs.type} {','.join(rs.records or [])}: no PlatformOpenshift or CloudOSO recorded it")
+                if (rs.name, rs.type) in recorded_names:
+                    continue
+                own = published.get((rs.name or "").lower()) if rs.type == "AAAA" else None
+                if own and rs.records and {r.lower() for r in rs.records} <= own[0]:
+                    continue
+                if own:
+                    findings.append(f"DNS {rs.name} {rs.type} {','.join(rs.records or [])}: {', '.join(sorted(own[1]))} "
+                                    f"recorded this name with {','.join(sorted(own[0]))} only")
+                else:
+                    findings.append(f"DNS {rs.name} {rs.type} {','.join(rs.records or [])}: no PlatformOpenshift, CloudOSO, "
+                                    f"CloudGateway or NetworkPlacement recorded it")
         except ACCESS_ERRORS as e:
             problems.append(f"DNS zone {cfg['dnsZoneId']} (project {cfg['dnsProjectId']}) not readable with {acct} "
                             f"({refusal(e)}): {acct.hint(e, 'project')}; its records were not checked")
@@ -202,8 +234,9 @@ def main():
     except config.ConfigException:  # outside a pod (manual run): KUBECONFIG
         config.load_kube_config()
     api = client.CustomObjectsApi()
+    platform_objs = [("CloudGateway", crs(api, "cloudgateways")), ("NetworkPlacement", crs(api, "networkplacements"))]
     summary, findings, problems, rc = check(cfg, Account(cfg, cloud), connect,
-                                            crs(api, "cloudosos"), crs(api, "platformopenshifts"))
+                                            crs(api, "cloudosos"), crs(api, "platformopenshifts"), platform_objs)
     report(summary, findings, problems, os.environ.get("TERMINATION_LOG", TERMINATION_LOG))
     return rc
 

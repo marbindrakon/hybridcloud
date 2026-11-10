@@ -424,7 +424,7 @@ spec:
 {{- $cfg := mergeOverwrite (deepCopy $c.config) (dict "accountRef" (printf "%s (ClusterSecretStore %s)" $c.accountVaultKey $c.secretStore)) }}
 ---
 # Tenant cloud orphan check (LAB-PLAN §11.6 phase D): files/tenant_orphan_check.py, report-only.
-# Reads the CloudOSO/PlatformOpenshift CRs (get/list only) and the tenant domain/zone with the
+# Reads the CloudOSO/PlatformOpenshift/CloudGateway/NetworkPlacement CRs (get/list only) and the tenant domain/zone with the
 # tenant admin account (a domain manager).
 apiVersion: v1
 kind: ServiceAccount
@@ -438,7 +438,8 @@ metadata:
   name: shc-ops-tenant-orphan-check
 rules:
   - apiGroups: [hybridsovereign.redhat]
-    resources: [cloudosos, platformopenshifts]
+    # cloudgateways, networkplacements: the names the platform publishes for its own addresses
+    resources: [cloudosos, platformopenshifts, cloudgateways, networkplacements]
     verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
