@@ -1273,7 +1273,10 @@ class RootUnitStartReason(unittest.TestCase):
 
     def test_the_start_itself_no_longer_fails_but_a_timeout_does(self):
         t = by_name(load(RT), P + "run the root instance at boot (and now)")
-        self.assertIs(t["failed_when"], False)
+        # a unit that fails to start is judged by the next step; only a module that died (the node ended the step at
+        # its limit: module_stdout instead of a result) fails here, so the lease is not released under a running start
+        self.assertEqual(t["failed_when"], "_hf_unit.module_stdout is defined")
+        self.assertEqual(t["register"], "_hf_unit")
         names = [x.get("name", "") for x in load(RT)]
         i = names.index(t["name"])
         self.assertEqual(names[i + 1:i + 3], [P + "the root instance runs, or why not",
