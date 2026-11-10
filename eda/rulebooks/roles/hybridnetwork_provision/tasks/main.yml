@@ -14,7 +14,7 @@
 # for address space.
 # IPv6 (design/IPV6-PLAN.md §2.1, §2.2; OD63, OD65, OD66, OD73): the mode comes from the fields (ipv6_mode.yml) and
 # can't change while the network has placements (IPv6ModeInUse); a tenant prefix overlapping the platform's own
-# space (realization network.exclusiveRanges, the public pools, core.icmpSource6, core.srv6.block) is refused
+# space (realization network.exclusiveRanges, the public pools, core.icmpSource6 and 4, core.srv6.block) is refused
 # (PrefixReserved); a mode-Tenant IPv6 prefix may not overlap another network of the same tenant (PrefixInUse, in
 # the IPAM); mode Platform takes a block from the fabric's public pool (pending WaitingForAddressSpace while none is
 # free, the tenant's allowance is used or the pinned block is held back), given back when the mode changes or the
@@ -232,7 +232,8 @@
     # the SRv6 SID block is exclusive too: inside every provider edge a destination in it is looked up outside the
     # VRFs, so a network could never use a prefix that overlaps it. So is core.icmpSource6: the gateways refuse every
     # route inside it from a site (the nodes' own addresses, announced to the sites) and the cloud edge routers hold
-    # addresses from it, so a tenant prefix overlapping it would lose its site routes
+    # addresses from it, so a tenant prefix overlapping it would lose its site routes. And core.icmpSource4, local in
+    # every root VRF
     - name: The platform's exclusive ranges
       ansible.builtin.set_fact:
         hn_exclusive: >-
@@ -242,7 +243,9 @@
              + ([((fab_real.core | default({}, true)).srv6 | default({}, true)).block]
                 if ((fab_real.core | default({}, true)).srv6 | default({}, true)).block | default('', true) else [])
              + ([(fab_real.core | default({}, true)).icmpSource6]
-                if (fab_real.core | default({}, true)).icmpSource6 | default('', true) else []) }}
+                if (fab_real.core | default({}, true)).icmpSource6 | default('', true) else [])
+             + ([(fab_real.core | default({}, true)).icmpSource4 | regex_replace('/32$', '') ~ '/32']
+                if (fab_real.core | default({}, true)).icmpSource4 | default('', true) else []) }}
 
     - name: Check the address space against the platform's ranges and the circuits
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"

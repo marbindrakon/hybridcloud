@@ -333,6 +333,37 @@ def write_if_changed(path, content, mode=0o640, owner=None):
     return True
 
 
+def input_nft(vrfs, peers):
+    """The router's input filter for its network VRFs (table inet shc_edge_in, replaced as a whole; "" without VRFs):
+    what a cloud workload or a fabric host reaches of the router itself through a VRF. The router's addresses in a
+    VRF (the cloud leg's, the test address, the ICMPv6 source) are local there, and FRR (and, with tcp_l3mdev_accept,
+    any default-VRF listener) would answer. Passes: BGP with the cloud's peers on their own leg (peers: [(device,
+    IPv4 address)], both directions), ICMP and ICMPv6, TCP segments with ACK or RST (replies to connections the router
+    opened; stateless, so forwarded traffic is never tracked); everything else to the router from a VRF is dropped.
+    The default VRF (the WireGuard tunnel, EVPN to the gateways, management) is not matched; forwarded traffic never
+    meets the input hook."""
+    if not vrfs:
+        return ""
+    m = "    iifname { %s }" % ", ".join('"%s"' % v for v in sorted(vrfs))
+    out = ["table inet shc_edge_in", "delete table inet shc_edge_in", "table inet shc_edge_in {", "  chain input {",
+           "    type filter hook input priority filter; policy accept;"]
+    for dev, addr in sorted(set(peers)):
+        for d in ("dport", "sport"):
+            out.append('%s meta sdifname "%s" ip saddr %s tcp %s 179 accept' % (m, dev, addr, d))
+    out += ["%s meta l4proto { icmp, ipv6-icmp } accept" % m, "%s tcp flags & (ack | rst) != 0 accept" % m,
+            '%s counter drop comment "to the router from a network: only ICMP, TCP with ACK or RST and the cloud\'s BGP"' % m,
+            "  }", "}"]
+    return "\n".join(out) + "\n"
+
+
+def input_filter(text):
+    """load the input filter, or remove it when there is none"""
+    if text:
+        sh(["nft", "-f", "-"], inp=text)
+    else:
+        sh(["nft", "delete", "table", "inet", "shc_edge_in"], check=False)
+
+
 def apply(cfg, me):
     node = cfg["nodes"][me]
     t = cfg["tunnel"]
@@ -361,6 +392,9 @@ def apply(cfg, me):
             "net.ipv6.icmp.ratelimit=0"])  # Packet Too Big for every oversized packet, like the border gateways
     # one VRF per network: L3VNI bridge + VXLAN over the tunnel, the HA VPN's XFRM interfaces, a test loopback
     want_vrfs = {v["name"] for v in cfg.get("vrfs", [])}
+    # the router's own input filter first (iifname and sdifname match by name, so before the devices exist)
+    input_filter(input_nft(want_vrfs, [("ipsec%d" % t["ifId"], b) for v in cfg.get("vrfs", [])
+                                       for t in v.get("vpn", {}).get(me, []) for b in t["bgp"]]))
     for line in sh("ip -o link show type vrf").splitlines():
         name = line.split(":")[1].strip().split("@")[0]
         if name.startswith("t") and name not in want_vrfs:

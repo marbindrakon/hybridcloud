@@ -251,7 +251,8 @@ class RootConfig(unittest.TestCase):
 
     def test_ipv4_core(self):
         self.assertEqual(self.config(REAL["core"], "bgw-1"),
-                         {"type": "root", "loopback6": "", "icmp6": "", "loopbackPool6": "", "icmpSource6": ""})
+                         {"type": "root", "loopback6": "", "icmp6": "", "loopbackPool6": "", "icmpSource6": "",
+                          "icmp4": "192.0.0.8"})
 
     def test_dual_stack_core(self):
         c = self.config(CORE6, "bgw-1")

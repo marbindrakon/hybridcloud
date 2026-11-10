@@ -142,6 +142,8 @@
          | combine({'loopback6': hf_pe.loopback6 | default(''), 'icmp6': _hf_icmp6,
                     'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
                     'icmpSource6': fab_real.core.icmpSource6 | default('', true)})
+         | combine({'icmp4': fab_real.core.icmpSource4 | regex_replace('/32$', '')}
+                   if fab_real.core.icmpSource4 | default('', true) | length > 0 else {})
          | combine({'transport': 'srv6', 'srv6': {'block': fab_real.core.srv6.block, 'locator': hf_pe.locator}}
                    if fab_node_transport | default('mpls') == 'srv6' else {}) | to_nice_json }}
     mode: "0644"
