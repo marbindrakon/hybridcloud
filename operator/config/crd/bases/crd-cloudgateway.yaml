@@ -344,7 +344,8 @@ spec:
                                   type: string
                                   description: >-
                                     NodeUnreachable, StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
-                                    RoutingDaemonRestarted, ConfigurationDrift or SiteSessionsDown.
+                                    RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
+                                    routing configuration the node does not take) or SiteSessionsDown.
                                 message:
                                   type: string
                                 since:

@@ -159,6 +159,7 @@ PART_REASONS = {
     "NotReported": _r("A", READY, "The site does not report this health check."),
     # node health that does not reduce service (NodesHealthy only), and the health job's events
     "ConfigurationDrift": _r("A", READY, "A node's network state differs from its configuration; a repair run is requested."),
+    "ConfigurationNotTaken": _r("P", READY, "A node's routing does not take part of its configuration; the platform team is looking at it."),
     "RoutingDaemonRestarted": _r("P", READY, "A routing process on a node restarted after a crash; the platform team is alerted."),
     "NotChecked": _r("A", READY, "The nodes have not been checked yet."),
     # why a health check left the nodes alone this time (status.health.skipped.reason)

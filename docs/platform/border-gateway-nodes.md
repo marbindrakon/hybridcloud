@@ -93,6 +93,9 @@ What it reads, per instance (the root, and each gateway whose site is not paused
 - drift: the state the apply manages now (`shc-fabric-apply <instance> snapshot`) against the record a successful
   apply leaves (`/etc/shc-fabric/<instance>.applied`), and the FRR files against the record of what FRR last loaded.
   A node without the records (applied by an earlier release and not since) is not judged for drift;
+- what FRR's running configuration still lacks of its file, as the post-reload verification (`shc-frr-check`,
+  realization `nodes.frrLoadCheck`) computes it, read without writing its note; the lines that note keeps (FRR did
+  not take them after two loads) are reported as `ConfigurationNotTaken` and never wake a run;
 - the IPv6 egress as the root's own file names it (the hand-off address, the filter table, the upstream sessions,
   the default route in the egress VRF and in each network VRF with IPv6 egress), and a gateway's site sessions.
 

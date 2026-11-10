@@ -93,6 +93,8 @@
           vars:
             bgw_fabric_spec: "{{ fh_fabric.spec }}"
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
+            # the node's own limit on each step, above the reader's (which ends first and says so)
+            bgw_node_limit: "{{ (fh_health.nodeReadTimeoutSeconds | default(60, true) | int) + 15 }}"
 
         - name: "{{ fh_name }}: what to read on each node"
           ansible.builtin.set_fact:

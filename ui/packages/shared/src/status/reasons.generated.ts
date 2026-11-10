@@ -125,6 +125,7 @@ export const REASONS: Record<string, ReasonEntry> = {
 export const PART_REASONS: Record<string, ReasonEntry> = {
   "AddressChoice": { actor: "T", class: "ready", summary: "Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4." },
   "ConfigurationDrift": { actor: "A", class: "ready", summary: "A node's network state differs from its configuration; a repair run is requested." },
+  "ConfigurationNotTaken": { actor: "P", class: "ready", summary: "A node's routing does not take part of its configuration; the platform team is looking at it." },
   "DNSReconcileFailed": { actor: "P", class: "ready", summary: "The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it." },
   "Degraded": { actor: "A", class: "ready", summary: "IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path." },
   "HealthWake": { actor: "A", class: "ready", summary: "A repair run was requested for what the health check found." },

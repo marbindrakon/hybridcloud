@@ -26,7 +26,7 @@ import sys
 
 # reasons of the NodesHealthy condition, worst first
 ORDER = ("NodeUnreachable", "StartFailed", "ServiceFailed", "RoutingDaemonDown", "StartIncomplete", "SiteSessionsDown",
-         "ConfigurationDrift", "RoutingDaemonRestarted")
+         "ConfigurationDrift", "ConfigurationNotTaken", "RoutingDaemonRestarted")
 # the object works with reduced health (Degraded=True, phase Degraded)
 DEGRADING = {"NodeUnreachable", "StartFailed", "ServiceFailed", "RoutingDaemonDown", "StartIncomplete",
              "SiteSessionsDown"}
@@ -35,10 +35,12 @@ WAKE_NOW = {"StartFailed", "StartIncomplete", "ServiceFailed"}
 WAKE_LATER = {"ConfigurationDrift"}
 CHECK_OF = {"NodeUnreachable": "Reachability", "StartFailed": "Start", "StartIncomplete": "Start",
             "ServiceFailed": "Service", "RoutingDaemonDown": "RoutingDaemon", "RoutingDaemonRestarted": "RoutingDaemon",
-            "ConfigurationDrift": "Configuration", "SiteSessionsDown": "SiteSessions"}
+            "ConfigurationDrift": "Configuration", "ConfigurationNotTaken": "Configuration",
+            "SiteSessionsDown": "SiteSessions"}
 EVENT_OF = {"NodeUnreachable": "NodeUnreachable", "StartFailed": "NodeStartFailed", "StartIncomplete": "NodeStartFailed",
             "ServiceFailed": "NodeServiceFailed", "RoutingDaemonDown": "RoutingDaemonDown",
             "RoutingDaemonRestarted": "RoutingDaemonRestarted", "ConfigurationDrift": "ConfigurationDrift",
+            "ConfigurationNotTaken": "ConfigurationNotTaken",
             "SiteSessionsDown": "SiteSessionsDown"}
 DEFAULTS = {"intervalSeconds": 600, "wakeAfterChecks": 2, "wakeBackoffMinutes": 60, "daemonRestartWindowMinutes": 60,
             "eventRepeatMinutes": 60, "checks": {}}
@@ -139,6 +141,10 @@ def instance_findings(inst, kind, cfg):
         frr = inst.get("frr") or {}
         if frr.get("reloadDue"):
             found.append(("ConfigurationDrift", "the routing configuration on the node is not the one loaded"))
+        if frr.get("notTaken"):
+            # FRR refused these after two loads; no run reloads for them (reported, never woken for)
+            found.append(("ConfigurationNotTaken", "the routing configuration has lines the node's FRR does not take: "
+                          + "; ".join(frr["notTaken"][:5])))
         if frr.get("pending"):
             found.append(("ConfigurationDrift", "the running routing configuration differs from the desired one: "
                           + "; ".join(frr["pending"][:5])))

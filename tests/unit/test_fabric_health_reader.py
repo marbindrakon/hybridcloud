@@ -118,7 +118,7 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(root["start"]["active"], "active")
         self.assertEqual(root["start"]["lines"], [])
         self.assertEqual(root["kernelDrift"], [])
-        self.assertEqual(root["frr"], {"reloadDue": False, "recorded": True, "pending": None})
+        self.assertEqual(root["frr"], {"reloadDue": False, "recorded": True, "pending": None, "notTaken": []})
         self.assertEqual(set(root["routing"]["daemons"].values()), {"Up"})
         self.assertTrue(root["egress6"]["healthy"])
         self.assertEqual(root["egress6"]["networks"], 1)
@@ -191,6 +191,13 @@ class ReaderTest(unittest.TestCase):
         root = n.read_node()["instances"]["root"]
         self.assertEqual(root["kernelDrift"], ["-lo 10.255.0.1/32", "+lo 10.255.0.1/32 10.255.0.250/32"])
         self.assertTrue(root["frr"]["reloadDue"])
+
+    def test_lines_frr_does_not_take(self):
+        n = Node()
+        n.files["/etc/shc-fabric/gw-atuin.frr-unapplied"] = "router bgp 65010: bgp graceful-restart-disable\n\n"
+        out = n.read_node()
+        self.assertEqual(out["instances"]["gw-atuin"]["frr"]["notTaken"], ["router bgp 65010: bgp graceful-restart-disable"])
+        self.assertEqual(out["instances"]["root"]["frr"]["notTaken"], [])
 
     def test_no_record_is_not_drift(self):
         n = Node()

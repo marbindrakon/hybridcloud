@@ -150,6 +150,14 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(cond(f3["status"], "NodesHealthy")["status"], "True")
         self.assertEqual([e["reason"] for e in f3["events"]], ["NodeHealthRecovered"])
 
+    def test_lines_not_taken_are_reported_never_woken(self):
+        g = inst("gateway", frr={"reloadDue": False, "recorded": True, "pending": [], "notTaken": ["router bgp 1: x"]})
+        a = J.judge(req([node("bgw-1", gw=g)], health={"wakeAfterChecks": 1}))
+        atuin = {x["name"]: x for x in a["gateways"]}["atuin"]
+        self.assertEqual(cond(atuin["status"], "NodesHealthy")["reason"], "ConfigurationNotTaken")
+        self.assertEqual(cond(atuin["status"], "Degraded")["status"], "False")
+        self.assertFalse(atuin["wake"])
+
     def test_gateway_drift_wakes_the_gateway_not_the_fabric(self):
         g = inst("gateway", frr={"reloadDue": True, "recorded": True, "pending": None})
         a = J.judge(req([node("bgw-1", gw=g)], health={"wakeAfterChecks": 1}))

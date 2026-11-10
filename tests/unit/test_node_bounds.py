@@ -40,7 +40,7 @@ HOLDERS = {"hybridfabric_provision": ("Configure the nodes, one at a time", "nod
            "cloudgateway_provision": ("Configure the gateway on the nodes, one at a time", "node_gateway.yml"),
            "cloudgateway_teardown": ("One node at a time", "node_gateway_down.yml"),
            "hybridfabric_teardown": ("Remove the root instance, one node at a time", "node_root_down.yml")}
-READERS = {"attachmentcircuit_provision", "networkplacement_provision", "fabric_orphan_check"}
+READERS = {"attachmentcircuit_provision", "networkplacement_provision", "fabric_orphan_check", "fabric_health"}
 # files of a holder included from its node file (the includes run inside the node loop)
 NODE_INCLUDES = {"hybridfabric_provision": {"node_transport.yml", "core_guard_unit.yml"},
                  "hybridfabric_teardown": {"node_programs_down.yml"}}

@@ -216,6 +216,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 |---|---|---|
 | `AddressChoice` | Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4. | You (the tenant) |
 | `ConfigurationDrift` | A node's network state differs from its configuration; a repair run is requested. | Nobody: it continues by itself |
+| `ConfigurationNotTaken` | A node's routing does not take part of its configuration; the platform team is looking at it. | The platform team |
 | `DNSReconcileFailed` | The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it. | The platform team |
 | `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
 | `HealthWake` | A repair run was requested for what the health check found. | Nobody: it continues by itself |

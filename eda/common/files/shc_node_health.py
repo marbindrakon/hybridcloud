@@ -285,7 +285,10 @@ def read_node(inp, run, read=read_file, now=None):
                          "crashes": [c for c in crashes if c["pathspace"] == pathspace]},
              "kernelDrift": kernel_drift(run, i["name"], read),
              "frr": {"reloadDue": bool(loaded) and digest(files, read) != loaded, "recorded": bool(loaded),
-                     "pending": frr_pending(run, i, inp.get("frrPendingHelper"), inp.get("frrIgnore") or ())}}
+                     "pending": frr_pending(run, i, inp.get("frrPendingHelper"), inp.get("frrIgnore") or ()),
+                     # the post-reload verification's note: lines FRR did not take after two loads (kept, reported)
+                     "notTaken": [l.strip() for l in (read("%s/%s.frr-unapplied" % (ETC, i["name"])) or "").splitlines()
+                                  if l.strip()][:MAX_LINES]}}
         if i["kind"] == "root":
             d["egress6"] = egress6(run, root_conf)
         elif i.get("siteCidr"):
