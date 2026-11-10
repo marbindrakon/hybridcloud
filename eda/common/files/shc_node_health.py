@@ -11,6 +11,8 @@ Input (JSON, base64 in argv[1]):
   transport      mpls|srv6 (the SRv6 core guard units exist only with srv6)
   windowSeconds  how far back a routing daemon crash counts
   cmdTimeout     limit of each command (s)
+  frrPendingHelper  optional: the source of files/shc_frr_pending.py (FRR running configuration vs file)
+  frrIgnore      the realization's nodes.frrLoadCheck.ignore patterns
 Output: one JSON line (see read_node).
 
 Python 3.9 (the nodes' python3): standard library only. tests/unit/test_fabric_health_reader.py runs it with every
@@ -164,11 +166,21 @@ def frr_files(inst):
     return ["/etc/frr/%s/frr.conf.shc" % inst["name"]], "%s/%s.frr-loaded" % (ETC, inst["name"])
 
 
-def frr_pending(run, inst):
-    """FRR's running configuration against the desired file: the lines a reload would still change (None: not
-    checked). The difference itself is the fabric's post-reload verification helper's (one call site, see the
-    record): until it is in this release the reader reports none."""
-    return None
+def frr_pending(run, inst, helper=None, ignore=()):
+    """FRR's running configuration against the desired file: the lines a reload would still change, as the fabric's
+    post-reload verification computes them (files/shc_frr_pending.py, whose source the job passes in the input; it
+    uses shc-frr-check on the node and reads its note without writing it). None: not checked."""
+    if not helper:
+        return None
+    ns = {"__name__": "shc_frr_pending"}
+    note = "%s/%s.frr-unapplied" % (ETC, inst["name"])
+    try:
+        exec(compile(helper, "shc_frr_pending.py", "exec"), ns)  # noqa: S102 - the platform's own helper
+        lines = ns["frr_pending_difference"](run, "" if inst["kind"] == "root" else inst["name"], frr_files(inst)[0][0],
+                                             note=note, ignore=ignore)
+    except Exception:  # noqa: BLE001 - a helper that fails tells nothing; the record check still runs
+        return None
+    return None if lines is None else [str(l) for l in lines][:MAX_LINES]
 
 
 def egress6(run, conf):
@@ -273,7 +285,7 @@ def read_node(inp, run, read=read_file, now=None):
                          "crashes": [c for c in crashes if c["pathspace"] == pathspace]},
              "kernelDrift": kernel_drift(run, i["name"], read),
              "frr": {"reloadDue": bool(loaded) and digest(files, read) != loaded, "recorded": bool(loaded),
-                     "pending": frr_pending(run, i)}}
+                     "pending": frr_pending(run, i, inp.get("frrPendingHelper"), inp.get("frrIgnore") or ())}}
         if i["kind"] == "root":
             d["egress6"] = egress6(run, root_conf)
         elif i.get("siteCidr"):

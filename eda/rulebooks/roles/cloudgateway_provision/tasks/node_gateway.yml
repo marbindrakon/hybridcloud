@@ -310,6 +310,16 @@
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# a running instance whose running configuration still differs from the file: the reload is due too, so a woken
+# run repairs it (common/tasks/frr_pending.yml)
+- name: "{{ bgw_node.name }}: what the instance still lacks of its file"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/frr_pending.yml"
+  vars:
+    frr_pending_pathspace: "gw-{{ fab_name }}"
+    frr_pending_note: "/etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied"
+    frr_pending_file: "/etc/frr/gw-{{ fab_name }}/frr.conf.shc"
+    frr_pending_when: "{{ _cg_active.stdout == 'active' }}"
+
 - name: "{{ bgw_node.name }}: the lease lasts for the instance's start"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
   vars:
@@ -342,7 +352,7 @@
   when:
     - _cg_active.stdout == 'active'
     - _cg_daemons is not changed and not (_cg_unit_changed | bool)
-    - _cg_frrconf is changed or 'reload=due' in _cg_frr_due.stdout
+    - _cg_frrconf is changed or 'reload=due' in _cg_frr_due.stdout or (frr_pending_lines | default([]) | length > 0)
   delegate_to: "{{ bgw_node.name }}"
   register: _cg_reload
   retries: 1

@@ -1,0 +1,33 @@
+---
+# What FRR's running configuration on a node still lacks of the desired file: the lines a reload would change (a hand
+# change through vtysh, part of a file a reload did not take), as the post-reload verification computes them
+# (shc-frr-check on the node, through files/shc_frr_pending.py: its tolerance for FRR's normalisations, the
+# realization's nodes.frrLoadCheck.ignore, and without the lines FRR already refused to take after two loads, so no
+# reload loops on them). Read only (the check's note is read, never written), bounded on the node. Nothing is pending
+# while the check is not installed on the node or nodes.frrLoadCheck.enabled is false: the callers behave as before.
+# Input: bgw_node, frr_pending_pathspace ("" for the root's FRR), frr_pending_file (the desired file),
+# frr_pending_note (the check's note of the instance), frr_pending_when (read only when true: FRR runs).
+# Always sets frr_pending_lines (list; empty when nothing is pending or it could not be told).
+- name: "{{ bgw_node.name }}: what FRR's running configuration still lacks of the file"
+  vars:
+    _check: "{{ (fab_real.nodes | default({}, true)).frrLoadCheck | default({}, true) }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['timeout', '-k', '5', '30', 'python3', '-', '--note', frr_pending_note]
+         + (['--pathspace', frr_pending_pathspace] if frr_pending_pathspace | default('') | length > 0 else [])
+         + ((_check.ignore | default([], true)) | map('regex_replace', '^', '--ignore=') | list)
+         + [frr_pending_file] }}
+    stdin: "{{ lookup('ansible.builtin.file', role_path ~ '/../../../common/files/shc_frr_pending.py') }}"
+  register: _frr_pending
+  changed_when: false
+  failed_when: false
+  when:
+    - frr_pending_when | bool
+    - _check.enabled | default(true) | string | lower in ['true', 'yes', '1']
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: keep the pending lines"
+  ansible.builtin.set_fact:
+    frr_pending_lines: >-
+      {{ (_frr_pending.stdout_lines | default([]) | select | list)
+         if (_frr_pending is not skipped and _frr_pending.rc | default(1) == 0) else [] }}

@@ -50,13 +50,17 @@ class RoleTest(unittest.TestCase):
     def test_what_is_read(self):
         t, v = self.facts()
         inp = by_name(load(FAB), "{{ fh_name }}: what to read on each node")
-        got = run_play([t, inp, write_out("[fh_my_gateways | map(attribute='metadata.name') | list, fh_reader_input, fh_ready]")], v)
+        got = run_play([t, inp, write_out("[fh_my_gateways | map(attribute='metadata.name') | list, fh_reader_input, fh_ready]")],
+                       dict(v, role_path=ROLE))
         self.assertEqual(got[0], ["atuin", "iaas1", "old"])
         self.assertEqual(got[1]["instances"], [{"name": "root", "kind": "root"},
                                                {"name": "gw-atuin", "kind": "gateway", "siteCidr": "172.18.103.0/24"}])
         self.assertEqual(got[1]["transport"], "srv6")
         self.assertEqual(int(got[1]["windowSeconds"]), 1800)
         self.assertTrue(got[2])
+        # without the post-reload verification's helper in this release no source is passed
+        helper = os.path.join(ROOT, "eda/common/files/shc_frr_pending.py")
+        self.assertEqual(bool(got[1]["frrPendingHelper"]), os.path.exists(helper))
 
     def test_lease_gate(self):
         t, v = self.facts()

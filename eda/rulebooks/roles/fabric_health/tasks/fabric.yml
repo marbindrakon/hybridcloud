@@ -100,6 +100,13 @@
               transport: "{{ (fab_real.core | default({}, true)).transport | default('mpls', true) }}"
               windowSeconds: "{{ (fh_health.daemonRestartWindowMinutes | default(60, true) | int) * 60 }}"
               cmdTimeout: 15
+              # the post-reload verification's difference of FRR's running configuration against the file
+              # (files/shc_frr_pending.py; nothing while shc-frr-check is not on the node)
+              frrPendingHelper: >-
+                {{ lookup('ansible.builtin.file', role_path ~ '/../../../common/files/shc_frr_pending.py')
+                   if (((fab_real.nodes | default({}, true)).frrLoadCheck | default({}, true)).enabled | default(true)
+                       | string | lower in ['true', 'yes', '1']) else '' }}
+              frrIgnore: "{{ ((fab_real.nodes | default({}, true)).frrLoadCheck | default({}, true)).ignore | default([], true) }}"
               instances: >-
                 {%- set out = [{'name': 'root', 'kind': 'root'}] -%}
                 {%- for g in fh_my_gateways if g.metadata.deletionTimestamp is not defined
