@@ -290,22 +290,23 @@ test('guest reference: none without an IPv6 subnet; values only from the placeme
   assert.equal(m.guestReference({ spec: { backend: { kind: 'CloudOSO' } }, status: { prefixes: ['2001:db8:0:9::/64'] } }).ipv6Only, true);
 });
 
-test('guest reference: translation available, not offered, not reported, not needed', () => {
+test('guest reference: translation available, none, not needed (the states the placement status can carry)', () => {
   const st = (subnets, ipv6) => m.guestReference(placementAt('CloudVirt', subnets, ipv6)).translationState;
   assert.equal(st(ONLY6, { translation: FABRIC_TR }), 'available');
-  assert.equal(st(ONLY6, { translation: null }), 'notOffered');
-  assert.equal(st(ONLY6, {}), 'notReported');
-  // the provider's translation while the provider allocates it: no prefix yet
-  assert.equal(st(ONLY6, { translation: { path: 'Provider' } }), 'notReported');
+  // the job writes no translation key when none is offered and while a provider's translator is pending (its
+  // merge patch drops the empty value): both read as none
+  assert.equal(st(ONLY6, {}), 'none');
+  assert.equal(st(ONLY6, { addressing: 'DHCPv6', internet: { state: 'unavailable', path: 'Fabric', reason: 'NotOffered' } }), 'none');
+  // a translation without a prefix is not usable
+  assert.equal(st(ONLY6, { translation: { path: 'Provider' } }), 'none');
   // dual-stack: IPv4 is native, translation is never shown even if the status had one
   const dual = m.guestReference(placementAt('CloudVirt', DUAL, { translation: FABRIC_TR }));
   assert.deepEqual([dual.translationState, dual.translation, dual.ipv6Only], ['notNeeded', null, false]);
   assert.deepEqual(dual.facts.resolvers, ['dualStack']);
   assert.deepEqual(dual.facts.clat, []);
-  assert.deepEqual(m.guestReference(placementAt('CloudVirt', ONLY6, { translation: null })).facts.resolvers, ['noTranslation']);
-  assert.deepEqual(m.guestReference(placementAt('CloudVirt', ONLY6, {})).facts.resolvers, ['translationNotReported']);
+  assert.deepEqual(m.guestReference(placementAt('CloudVirt', ONLY6, {})).facts.resolvers, ['noTranslation']);
   // the CLAT facts only with translation
-  for (const ipv6 of [{ translation: null }, {}]) assert.deepEqual(m.guestReference(placementAt('CloudOSO', ONLY6, ipv6)).facts.clat, []);
+  assert.deepEqual(m.guestReference(placementAt('CloudOSO', ONLY6, {})).facts.clat, []);
   assert.deepEqual(m.guestReference(placementAt('CloudOSO', ONLY6, { translation: FABRIC_TR })).facts.clat, [
     'clat.when',
     'clat.prefix',
@@ -359,7 +360,6 @@ test('guest reference: every label and fact reads in both catalogues, with no co
   const variants = [
     [ONLY6, { translation: FABRIC_TR }],
     [ONLY6, { translation: { path: 'Provider', pref64: '64:ff9b::/96', resolvers: ['fd00:db8::253'] } }],
-    [ONLY6, { translation: null }],
     [ONLY6, {}],
     [DUAL, {}],
   ];

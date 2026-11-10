@@ -1540,8 +1540,7 @@
       "mtu": "MTU",
       "translation": "Traduction vers IPv4",
       "translation_available": "Disponible : les noms par les résolveurs DNS64, les adresses IPv4 par un CLAT dans l'invité",
-      "translation_notOffered": "Non proposée",
-      "translation_notReported": "Pas encore indiquée",
+      "translation_none": "Aucune dans l'état du placement",
       "translation_notNeeded": "Inutile : le placement a de l'IPv4",
       "pref64": "Préfixe de traduction (NAT64, préfixe PLAT du CLAT)",
       "resolvers": "Résolveurs DNS64",
@@ -1586,8 +1585,7 @@
           "address": "Cette page ne décrit pas ce type d'environnement : voir la documentation."
         },
         "dualStack": "L'invité garde les résolveurs IPv4 qu'il obtient par DHCP et n'utilise pas de traduction : les noms uniquement IPv4 sont joints en IPv4 natif. La plateforme ne fournit des résolveurs IPv6 qu'aux placements uniquement IPv6.",
-        "noTranslation": "Sans traduction, l'invité ne joint les destinations uniquement IPv4 ni par nom ni par adresse. La sortie internet du réseau indique pourquoi.",
-        "translationNotReported": "L'état du placement n'a pas encore de traduction ; le traducteur d'un fournisseur cloud apparaît une fois que le fournisseur l'a mis en place.",
+        "noTranslation": "Sans traduction, l'invité ne joint les destinations uniquement IPv4 ni par nom ni par adresse. La ligne de traduction IPv4 du réseau indique pourquoi : aucune n'est proposée pour ce placement, ou le traducteur d'un fournisseur cloud est encore en cours de mise en place (le préfixe et les résolveurs apparaissent alors ici).",
         "clat": {
           "when": "Un CLAT n'est utile que pour les adresses IPv4 (littérales) ; les noms des destinations uniquement IPv4 se résolvent en adresses traduites par les résolveurs DNS64.",
           "prefix": "Le préfixe PLAT du CLAT est le préfixe de traduction ci-dessus : configurez-le dans le CLAT, ou laissez le CLAT le découvrir par la requête RFC 7050 (ipv4only.arpa) via les résolveurs DNS64.",

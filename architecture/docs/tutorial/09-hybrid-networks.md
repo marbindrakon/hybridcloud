@@ -553,7 +553,7 @@ Tenants:
 - **A placement's page** shows each family's subnet and source, how guests get their IPv6 address, the internet
   path and, on IPv6-only placements with translation, the translation prefix and resolvers. Placements with an IPv6
   subnet also have a **Guest configuration reference**: the environment type, the IPv6 addressing, the MTU, whether
-  translation applies (available, not offered, not reported yet, or not needed on a dual-stack placement) and, with
+  translation applies (available, none in the status, or not needed on a dual-stack placement) and, with
   translation, the translation prefix and the DNS64 resolvers to copy, followed by the facts of
   [Guests on IPv6](#guests-on-ipv6) for that environment type and, with translation, what a CLAT needs. It offers no
   configuration to paste: the platform doesn't build the VMs, and one guest configuration doesn't suit every image.
