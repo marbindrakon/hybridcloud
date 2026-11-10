@@ -68,7 +68,7 @@ class Apply(A.ApplyCase):
         self.assertEqual(self.nft()[T4].splitlines(), [
             "table ip shc_root_in", "delete table ip shc_root_in", "table ip shc_root_in {", "  chain input {",
             "    type filter hook input priority filter; policy accept;",
-            '    iifname { "e10000", "egress" } meta sdifname { "egress0", "xe10000" } accept comment "a leg of the VRF: its own filter and sessions"',
+            '    iifname { "e10000", "egress" } meta sdifname { "xe10000" } accept comment "a leg of the VRF: its own filter and sessions"',
             '    iifname { "e10000", "egress" } meta l4proto icmp accept',
             '    iifname { "e10000", "egress" } tcp flags & (ack | rst) != 0 accept',
             '    iifname { "e10000", "egress" } counter drop comment "from a network to the node: only ICMP and TCP with ACK or RST"',
@@ -91,8 +91,8 @@ class Apply(A.ApplyCase):
         self.assertEqual(text.splitlines(), [
             "table ip6 shc_root_in6", "delete table ip6 shc_root_in6", "table ip6 shc_root_in6 {", "  chain input {",
             "    type filter hook input priority filter; policy accept;",
-            '    iifname { "e10000", "egress" } meta sdifname { "egress0", "xe10000" } accept comment "a leg of the VRF: its own filter and sessions"',
-            '    iifname { "e10000", "egress" } ip6 saddr fe80::/10 accept comment "link-local: the veth sessions"',
+            '    iifname { "e10000", "egress" } meta sdifname { "xe10000" } accept comment "a leg of the VRF: its own filter and sessions"',
+            '    iifname { "e10000", "egress" } meta sdifname { "xo10000" } ip6 saddr fe80::/10 accept comment "link-local: the veth sessions"',
             '    iifname { "e10000", "egress" } meta l4proto ipv6-icmp accept',
             '    iifname { "e10000", "egress" } tcp flags & (ack | rst) != 0 accept',
             '    iifname { "e10000", "egress" } tcp flags & (ack | rst) == 0 counter reject with tcp reset comment "TCP without ACK or RST: reset"',
@@ -112,7 +112,7 @@ class Apply(A.ApplyCase):
     def test_circuits_are_legs(self):
         self.up(with_circuit(root6()))
         for t in (T4, T6):
-            self.assertIn('iifname { "e10000", "e10001", "egress" } meta sdifname { "egress0", "xe10000", "ce1" } accept',
+            self.assertIn('iifname { "e10000", "e10001", "egress" } meta sdifname { "xe10000", "ce1" } accept',
                           self.nft()[t])
 
     def test_circuit_only_root(self):
@@ -128,7 +128,9 @@ class Apply(A.ApplyCase):
         c = root6()
         c["egress"]["networks"] = []
         self.up(c)
-        self.assertIn('iifname { "egress" } meta sdifname { "egress0" } accept', self.nft()[T4])
+        # the egress VRF alone: no leg left to exempt (egress0 is filtered like the rest)
+        self.assertNotIn("meta sdifname", self.nft()[T4])
+        self.assertIn('iifname { "egress" } counter drop', self.nft()[T4])
         del c["egress"]
         out, log = self.up(c)
         self.assertNotIn(T4, self.nft())
@@ -159,6 +161,38 @@ class Apply(A.ApplyCase):
         self.assertEqual(self.nft()[T6], before)
         self.assertTrue(os.path.exists(self.marker(6)))
 
+    def test_router_advertisements_leave_it(self):
+        """mpls: a host interface that takes routes from router advertisements leaves the IPv6 core out; what a run
+        before applied stays (the VRFs' ICMP sources), so the IPv6 table stays as well (review R1 M3)"""
+        self.up(root6())
+        before = self.nft()[T6]
+        st = self.h.get_state()
+        st["ns"][""]["routes6"].append({"dst": "default", "dev": "bond0.10", "proto": "ra", "table": "main",
+                                        "type": "unicast", "metric": 1024, "gateway": "fe80::1"})
+        self.h.set_state(st)
+        rc, out, err, log = self.h.run("root")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("IPv6 core not applied", out)
+        self.assertEqual(self.nft()[T6], before)
+        self.assertTrue(os.path.exists(self.marker(6)))
+        self.assertEqual([l for l in log if "shc_root_in6" in l and l.startswith("W ")], [])
+
+    def test_upstream_sessions_on_the_hand_off(self):
+        """egress0 is no leg: from it only the upstream routers' BGP (IPv6 egress) besides the common answers; the
+        link-local exception only from a network's veth xo<n> (review R1 L1, L2)"""
+        import test_egress_ipv6 as E
+        out, log = self.up(E.root_conf6())
+        t6, t4 = self.nft()[T6], self.nft()[T4]
+        m = '    iifname { "e10000", "egress" }'
+        for a in ("2001:db8:237::2", "2001:db8:237::3"):
+            for d in ("dport", "sport"):
+                self.assertIn('%s meta sdifname "egress0" ip6 saddr %s tcp %s 179 accept' % (m, a, d), t6)
+        self.assertIn('%s meta sdifname { "xo10000" } ip6 saddr fe80::/10 accept' % m, t6)
+        self.assertNotIn("egress0", t6.split("tcp sport 179 accept")[-1])
+        self.assertNotIn("egress0", t4)
+        # the upstream sessions before the common rules
+        self.assertLess(t6.index('meta sdifname "egress0"'), t6.index("meta l4proto ipv6-icmp accept"))
+
     def test_refused_ipv6_load(self):
         """mpls: the IPv6 core is left out (no ICMP source on the VRFs), IPv4 as always"""
         with mock.patch.dict(os.environ, {"FAKE_FAIL_STDIN": r"table ip6 shc_root_in6 \{"}):
@@ -167,6 +201,18 @@ class Apply(A.ApplyCase):
         self.assertNotIn(T6, self.nft())
         self.assertIn(T4, self.nft())
         self.assertEqual(self.h.addrs6("", "e10000"), [])
+
+    def test_refused_ipv6_load_with_the_ipv6_egress(self):
+        """the same with the IPv6 egress (review R1 L7): no root VRF takes the ICMP source, so no IPv6 address of the
+        node is local in a VRF while the table is missing (the IPv6 loopback, set before, is on lo in the default
+        VRF, whose sockets never take a VRF's traffic: tcp_l3mdev_accept is 0)"""
+        import test_egress_ipv6 as E
+        with mock.patch.dict(os.environ, {"FAKE_FAIL_STDIN": r"table ip6 shc_root_in6 \{"}):
+            out, log = self.up(E.root_conf6())
+        self.assertIn("warning: the input filter of the root VRFs failed; IPv6 core not applied\n", out)
+        self.assertNotIn(T6, self.nft())
+        for v in ("e10000", "egress"):
+            self.assertEqual(self.h.addrs6("", v), [], v)
 
     def test_down(self):
         self.up(with_circuit(root6()))
@@ -444,6 +490,95 @@ class RealKernel(A.ApplyCase):
         self.assertGreaterEqual(counts.get("UDP: port unreachable", 0), 1, r["ruleset"])
         self.assertGreaterEqual(counts.get("from a network to the node: only ICMP and TCP with ACK or RST", 0), 2,
                                 r["ruleset"])
+
+
+SRV6_PROBE = r'''set -e
+D=$3
+mount -t tmpfs tmpfs /run; mkdir -p /run/netns; ip netns add gw
+G="ip netns exec gw"
+for X in "" "$G"; do
+  $X ip link set lo up
+  $X sysctl -qw net.ipv6.conf.all.forwarding=1 net.ipv4.ip_forward=1 net.vrf.strict_mode=1 \
+    net.ipv6.conf.all.seg6_enabled=1 net.ipv6.conf.default.seg6_enabled=1
+done
+ip link add core type veth peer name gwc; ip link set gwc netns gw
+ip addr add 2001:db8:ff::1/64 dev core nodad; ip link set core up
+$G ip addr add 2001:db8:ff::2/64 dev gwc nodad; $G ip link set gwc up
+sysctl -qw net.ipv6.conf.core.seg6_enabled=1; $G sysctl -qw net.ipv6.conf.gwc.seg6_enabled=1
+# the root: VRF e10000 with its addresses, a SID decapsulating into it, the way back encapsulated
+ip link add e10000 type vrf table 110000; ip link set e10000 up
+sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0 net.ipv4.conf.e10000.rp_filter=0
+ip link add xe10000 type dummy; ip link set xe10000 master e10000 up; ip addr add 169.254.0.1/31 dev xe10000
+ip addr add 2001:db8:4005:1::1:1/128 dev e10000 nodad
+ip -6 route add 5f00:1:101:1::/64 encap seg6local action End.DT46 vrftable 110000 dev e10000
+ip -6 route add 2001:db8:a::2/128 encap seg6 mode encap segs 5f00:1:102:1:: via 2001:db8:ff::2 dev core table 110000
+ip route add 10.9.0.2/32 encap seg6 mode encap segs 5f00:1:102:1:: via inet6 2001:db8:ff::2 dev core table 110000
+# the "gateway" with the tenant in VRF ten
+$G ip link add ten type vrf table 100; $G ip link set ten up
+$G ip addr add 2001:db8:a::2/128 dev ten nodad; $G ip addr add 10.9.0.2/32 dev ten
+$G ip -6 route add 5f00:1:102:1::/64 encap seg6local action End.DT46 vrftable 100 dev ten
+$G ip -6 route add 2001:db8:4005:1::1:1/128 encap seg6 mode encap segs 5f00:1:101:1:: via 2001:db8:ff::1 dev gwc table 100
+$G ip route add 169.254.0.1/32 encap seg6 mode encap segs 5f00:1:101:1:: via inet6 2001:db8:ff::1 dev gwc table 100
+$G ip -6 route add 5f00:1:101::/48 via 2001:db8:ff::1 dev gwc
+ip -6 route add 5f00:1:102::/48 via 2001:db8:ff::2 dev core
+sleep 1
+cat > "$D/l.py" <<'PY'
+import socket, time
+ls = []
+for fam, a in ((socket.AF_INET6, "::"), (socket.AF_INET, "0.0.0.0")):
+    s = socket.socket(fam); s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"e10000")
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if fam == socket.AF_INET6: s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+    s.bind((a, 179)); s.listen(4); ls.append(s)
+time.sleep(30)
+PY
+cat > "$D/c.py" <<'PY'
+import socket
+def conn(fam, src, dst):
+    s = socket.socket(fam); s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"ten"); s.settimeout(1.5)
+    try: s.bind((src, 0)); s.connect((dst, 179)); return "connected"
+    except socket.timeout: return "timeout"
+    except ConnectionRefusedError: return "reset"
+    except OSError as e: return "error %s" % e
+print({"tcp6": conn(socket.AF_INET6, "2001:db8:a::2", "2001:db8:4005:1::1:1"), "tcp4": conn(socket.AF_INET, "10.9.0.2", "169.254.0.1")})
+PY
+python3 "$D/l.py" & sleep 1
+echo -n "before: "; $G python3 "$D/c.py"
+[ -n "$1" ] && nft -f "$1" && nft -f "$2"
+echo -n "after: "; $G python3 "$D/c.py"
+kill %1
+'''
+
+
+class RealKernelSrv6(A.ApplyCase):
+    """A network's packet as the root gets it on srv6: encapsulated by a gateway (a second namespace) toward the root's
+    End.DT46 SID and decapsulated into e10000, so the VRF itself is its input device and no leg is its slave. Without
+    the tables BGP on 179 in the VRF is reached over both families; with them IPv6 is reset, IPv4 dropped (the
+    decapsulation path, not a slave standing in for the core)."""
+
+    def test_decapsulated(self):
+        import test_icmp_source_announce as G
+        if not G.can_probe():
+            self.skipTest("no unprivileged user and network namespace with VRF devices, nft and ip here")
+        probe = subprocess.run(["unshare", "-rnm", "sh", "-c", "mount -t tmpfs tmpfs /run"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("no unprivileged mount namespace here")
+        self.h.conf("root", root6())
+        self.h.ok(self, "root")
+        files = []
+        for t in (T6, T4):
+            files.append(os.path.join(self.tmp, t.split()[1] + ".nft"))
+            with open(files[-1], "w") as f:
+                f.write(self.h.get_state()["ns"][""]["nft"][t])
+        script = os.path.join(self.tmp, "srv6.sh")
+        with open(script, "w") as f:
+            f.write(SRV6_PROBE)
+        p = subprocess.run(["unshare", "-rnm", "bash", script] + files + [self.tmp], capture_output=True, text=True,
+                           timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr[-2000:])
+        lines = [l for l in p.stdout.splitlines() if l.startswith(("before: ", "after: "))]
+        self.assertEqual(lines, ["before: {'tcp6': 'connected', 'tcp4': 'connected'}",
+                                 "after: {'tcp6': 'reset', 'tcp4': 'timeout'}"], p.stdout + p.stderr)
 
 
 if __name__ == "__main__":
