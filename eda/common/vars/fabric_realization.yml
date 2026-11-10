@@ -97,6 +97,15 @@ fabric_realization_defaults:
       waitSeconds: 1200
       stepTimeoutSeconds: 180
       systemdJobSeconds: 360
+    # after FRR (the root or a gateway instance) started or reloaded its configuration file, the job records the file
+    # as loaded only when the running configuration holds all of it (frr-reload.py --test): a reload can end without
+    # an error and part of the file unapplied. Lines left fail the job and the next run reloads again; lines that a
+    # second start or reload leaves as well are recorded as loaded and reported (FRR does not take them). ignore: more
+    # patterns (Python regular expressions) for lines the nodes' FRR always shows differently, matched against the
+    # line and against "<context>: <line>"; enabled false records after any successful start or reload, unchecked
+    frrLoadCheck:
+      enabled: true
+      ignore: []
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric

@@ -1,0 +1,139 @@
+#!/usr/bin/python3
+"""shc-frr-check: does a running FRR instance hold the whole configuration file it was given?
+
+Installed by the platform's HybridFabric/CloudGateway jobs next to shc-fabric-apply and run by them after FRR started
+or reloaded the file, before they record the file as what FRR loaded (/etc/shc-fabric/<instance>.frr-loaded). A
+reload can end with exit 0 and part of the file not applied (a line a daemon refused or never received, a "no" line
+cut short until something was accepted), and a record then claims the whole file, so no later run reloads.
+
+  shc-frr-check --conf FILE [--pathspace NAME] --note FILE [--ignore REGEX]... [--reload-script PATH]
+
+frr-reload.py --test compares the file with the running configuration ("Lines To Delete", "Lines To Add"). Lines that
+never match by design are left out: frr version/defaults (not configurable), hostname and domainname (FRR shows the
+kernel's), service integrated-vtysh-config (vtysh's own), mpls enable (zebra mirrors the kernel's MPLS input), a
+stanza's exit line, and each --ignore pattern (matched against the line and against "<context>: <line>").
+
+What is left decides, printed as the first line, then one "line: <context>: <line>" per line left (passwords hidden):
+  result=applied     nothing left (the note is removed)
+  result=unapplied   lines left that the last check on this node did not leave: the caller does not record the file,
+                     so the next run reloads again; they are kept in the note
+  result=accepted    every line left was left by the last check as well, after another start or reload: FRR does not
+                     take them. The caller records the file, so no run reloads for them again; the note keeps them
+                     and the caller reports them
+A check that could not run counts as one line ("check: <reason>"), under the same rules. Exit 0 with a result, 2 on
+wrong arguments.
+"""
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+RELOAD = "/usr/libexec/frr/frr-reload.py"
+TIMEOUT = 90
+# lines that never match by design (left out of the comparison)
+NORMAL = [r"^(no )?frr (version|defaults)\b", r"^(no )?hostname\b", r"^(no )?domainname\b",
+          r"^(no )?service integrated-vtysh-config$", r"^(no )?mpls enable$",
+          # a stanza's closing line, listed with the stanza it closes (which is compared on its own)
+          r"^exit(-vrf|-address-family)?$"]
+SECRET = re.compile(r"\b(password|authentication-key|message-digest-key \d+ md5)\s+\S.*$")
+
+
+def diff_lines(text):
+    """The --test output as lines: (section, context path, line). A line followed by deeper ones is their context; a
+    line with nothing deeper is an entry (a whole stanza when it has no children)."""
+    out, section, rows = [], None, []
+    for raw in text.splitlines():
+        if raw.strip() in ("Lines To Delete", "Lines To Add"):
+            section = "delete" if "Delete" in raw else "add"
+            continue
+        if section is None or not raw.strip() or set(raw.strip()) == {"="} or raw.strip() == "!":
+            continue
+        rows.append((section, len(raw) - len(raw.lstrip(" ")), raw.strip()))
+    stack = []
+    for i, (section, depth, text) in enumerate(rows):
+        stack = [s for s in stack if s[0] < depth and s[2] == section]
+        nxt = rows[i + 1] if i + 1 < len(rows) else None
+        if nxt and nxt[0] == section and nxt[1] > depth:
+            stack.append((depth, text, section))
+            continue
+        out.append((section, [s[1] for s in stack], text))
+    return out
+
+
+def shown(ctx, line):
+    text = SECRET.sub(lambda m: m.group(1) + " <hidden>", line)
+    return ": ".join([SECRET.sub(lambda m: m.group(1) + " <hidden>", c) for c in ctx] + [text])
+
+
+def left_over(text, ignore):
+    pats = [re.compile(p) for p in NORMAL + list(ignore)]
+    left = []
+    for _, ctx, line in diff_lines(text):
+        full = ": ".join(ctx + [line])
+        if any(p.search(line) or p.search(full) for p in pats):
+            continue
+        left.append(shown(ctx, line))
+    return sorted(set(left))
+
+
+def run_test(conf, pathspace, script):
+    cmd = [script, "--test"] + (["--pathspace", pathspace] if pathspace else []) + [conf]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, "check: frr-reload.py --test could not run (%s)" % (e.__class__.__name__,)
+    if p.returncode != 0:
+        err = (p.stderr.strip().splitlines() or ["no reason given"])[-1]
+        return None, "check: frr-reload.py --test failed (rc %d): %s" % (p.returncode, shown([], err)[:200])
+    return p.stdout, None
+
+
+def read_note(path):
+    try:
+        with open(path) as f:
+            return {x.rstrip("\n") for x in f if x.strip()}
+    except OSError:
+        return set()
+
+
+def write_note(path, lines):
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".frr-check-")
+    with os.fdopen(fd, "w") as f:
+        f.write("".join(x + "\n" for x in lines))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="does FRR hold the whole configuration file")
+    ap.add_argument("--conf", required=True)
+    ap.add_argument("--pathspace", default="")
+    ap.add_argument("--note", required=True)
+    ap.add_argument("--ignore", action="append", default=[])
+    ap.add_argument("--reload-script", default=RELOAD)
+    a = ap.parse_args(argv)
+    try:
+        [re.compile(p) for p in a.ignore]
+    except re.error as e:
+        ap.error("--ignore: %s" % e)
+    text, err = run_test(a.conf, a.pathspace, a.reload_script)
+    left = [err] if err else left_over(text, a.ignore)
+    if not left:
+        if os.path.exists(a.note):
+            os.remove(a.note)
+        print("result=applied")
+        return 0
+    seen = read_note(a.note)
+    result = "accepted" if set(left) <= seen else "unapplied"
+    write_note(a.note, left)
+    print("result=" + result)
+    for x in left:
+        print("line: " + x)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

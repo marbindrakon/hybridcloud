@@ -84,6 +84,7 @@
     group: root
   loop:
     - {src: shc-fabric-apply, dest: /usr/local/sbin/shc-fabric-apply, mode: "0755"}
+    - {src: shc-frr-check, dest: /usr/local/sbin/shc-frr-check, mode: "0755"}
     - {src: shc-gw@.service, dest: /etc/systemd/system/shc-gw@.service, mode: "0644"}
   loop_control:
     label: "{{ item.dest }}"
@@ -353,7 +354,10 @@
 # job started or restarted it; a step above that failed ended the job before this. An instance that was starting or
 # reloading on its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read an
 # older file, so then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload
-# due. A reload only the record made due changed the node too: it counts as a configuration change (_cg_frrconf)
+# due. A reload only the record made due changed the node too: it counts as a configuration change (_cg_frrconf).
+# A start or reload can also end without an error and part of the file unapplied: before the record, the running
+# configuration must hold the whole file (shc-frr-check, realization nodes.frrLoadCheck); with lines left nothing is
+# recorded and the job fails after the next step, so the next one reloads again
 - name: "{{ bgw_node.name }}: record what the instance loaded"
   ansible.builtin.shell: |
     f=/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded
@@ -362,10 +366,17 @@
     if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: $u $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    {% if fab_real.nodes.frrLoadCheck.enabled | default(true) | bool %}
+    check=$(/usr/local/sbin/shc-frr-check --conf /etc/frr/gw-{{ fab_name }}/frr.conf.shc --pathspace gw-{{ fab_name }} --note /etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied{% for p in fab_real.nodes.frrLoadCheck.ignore | default([]) %} --ignore {{ p | quote }}{% endfor %}) || exit 1
+    echo "$check"
+    [ "${check%%$'\n'*}" = result=unapplied ] && exit 0
+    {% endif %}
     echo "$now" > "$f.new" && mv "$f.new" "$f"
     echo recorded
+  args:
+    executable: /bin/bash
   register: _cg_frr_recorded
-  changed_when: _cg_frr_recorded.stdout == 'recorded'
+  changed_when: "'recorded' in _cg_frr_recorded.stdout_lines"
   when: _cg_active.stdout == 'active' or (_cg_active.stdout in ['inactive', 'failed'] and _cg_state is changed)
   delegate_to: "{{ bgw_node.name }}"
 
@@ -373,6 +384,23 @@
   ansible.builtin.set_fact:
     _cg_frrconf: "{{ _cg_frrconf | combine({'changed': true}) }}"
   when: _cg_reload is changed and _cg_frrconf is not changed
+
+- name: "{{ bgw_node.name }}: the instance holds the whole configuration"
+  ansible.builtin.fail:
+    msg: >-
+      The gateway instance gw-{{ fab_name }} on {{ bgw_node.name }} did not apply all of its configuration
+      (frr.conf.shc) after its start or reload ({{ _cg_frr_recorded.stdout_lines | select('match', '^line: ')
+      | map('regex_replace', '^line: ', '') | join('; ') }}). What it loaded is not recorded, so the next run reloads
+      again; lines a second start or reload leaves as well are recorded as loaded and shown by the step after this
+  when: "'result=unapplied' in (_cg_frr_recorded.stdout_lines | default([]))"
+
+- name: "{{ bgw_node.name }}: lines the instance does not take"
+  ansible.builtin.debug:
+    msg: >-
+      The gateway instance gw-{{ fab_name }} on {{ bgw_node.name }} left these lines of its configuration unapplied
+      after two starts or reloads; the file is recorded as loaded, so no run reloads for them again: {{
+      _cg_frr_recorded.stdout_lines | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}
+  when: "'result=accepted' in (_cg_frr_recorded.stdout_lines | default([]))"
 
 # A VRF the configuration no longer has (a network no longer placed here) stays in FRR after the reload: frr-reload
 # removes the lines of its vrf stanza but never sends "no vrf", so zebra and the other daemons keep it as configured
