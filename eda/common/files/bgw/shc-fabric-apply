@@ -106,8 +106,10 @@
 #   to a network's hosts: over the core) the kernel takes an address of the VRF device before any address of the VRF's
 #   other devices, so the root's "fragmentation needed" and "time exceeded" toward a network leave from it instead of
 #   from whichever device of the VRF comes first (the egress veth's link-local address, a circuit's address). The
-#   egress VRF's routes back to the networks (FRR's) name it as their source. Never announced; what a network sends to
-#   it is the root input filter's (see above).
+#   egress VRF's routes back to the networks (FRR's) name the node's hand-off address as their source, not this one:
+#   the network's VRF holds it as a local address and drops an arriving packet with it as source (martian). The egress
+#   VRF device holds it all the same (a route naming it as source goes when the address goes, so it stays). Never
+#   announced; what a network sends to it is the root input filter's (see above).
 # Core transport (both types): transport (the core's, not a site leg's) "mpls" or "srv6"; absent = mpls, and a run
 #   with mpls issues none of the srv6 commands this paragraph describes. srv6 also reads srv6 {block, locator} (the
 #   SID block; the provider edge's locator, which must lie in it: FRR announces it, nothing here sets it) and needs

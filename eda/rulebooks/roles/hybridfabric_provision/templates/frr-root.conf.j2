@@ -121,9 +121,10 @@ exit
 ! IPv6 internet egress: the platform's routed space is discarded here and in every network VRF (the placement
 ! prefixes learned from the networks are longer), so unallocated space never loops between the upstream and the node
 {% endif %}
-{# the routes back to the networks (each NAT address, each platform prefix) take the root VRFs' IPv4 ICMP source as
-   their source (core.icmpSource4, held on the egress VRF device by shc-fabric-apply): the egress VRF's "time exceeded"
-   and "fragmentation needed" toward a network leave from it, never from the egress veth's link-local address #}
+{# with core.icmpSource4 the routes back to the networks (each NAT address, each platform prefix) take this node's
+   hand-off address as their source, so the egress VRF's "time exceeded" and "fragmentation needed" toward a network
+   leave from it, never from the egress veth's link-local address. Not core.icmpSource4 itself: the network's VRF holds
+   that address as a local one, and the kernel drops a packet arriving there with a local source (martian source) #}
 {% set _src4 = ((fab_real | default({}, true)).core | default({}, true)).icmpSource4 | default('', true) | replace('/32', '') %}
 {% set _nets4 = [] %}
 {% for n in hf_node_egress.networks %}
@@ -181,7 +182,7 @@ ip prefix-list SHC-EGRESS-NETS4 seq {{ loop.index * 5 }} permit {{ p }}
 {% endfor %}
 route-map SHC-EGRESS-SRC4 permit 10
  match ip address prefix-list SHC-EGRESS-NETS4
- set src {{ _src4 }}
+ set src {{ hf_node_egress.address.split('/')[0] }}
 exit
 route-map SHC-EGRESS-SRC4 permit 20
 exit
