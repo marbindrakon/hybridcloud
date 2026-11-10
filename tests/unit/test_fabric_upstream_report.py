@@ -53,6 +53,18 @@ class Report(unittest.TestCase):
         self.assertFalse(out["report"])
         self.assertIsNone(out["status"]["reportedAt"])
 
+    def test_a_removed_node_and_egress_off_are_cleared(self):
+        out = self.run_tasks([node("bgw-1", True)], {"degraded": True, "degradedNodes": ["bgw-3"],
+                                                     "nodes": {"bgw-1": {}, "bgw-3": {"healthy": False}}})
+        self.assertEqual(out["status"]["nodes"]["bgw-3"], None)
+        self.assertFalse(out["status"]["degraded"])
+        t = by_name(load(MAIN), "Set the IPv6 egress status")
+        off = run_play([t, write_out("hf_egress6_status")],
+                       {"hf_egress": {"ipv6": False}, "hf_node_results": [{"name": "bgw-1"}], "fab_st": {},
+                        "fab_real": {"egress": {}}})
+        self.assertEqual(off, {"enabled": False, "nodes": None, "degraded": None, "degradedNodes": None,
+                               "degradedSince": None, "reportedAt": None})
+
     def test_networks_woken_when_the_down_set_changes(self):
         t = by_name(load(MAIN), "Wake the networks whose egress changed")
         expr = {"name": "flip", "ansible.builtin.set_fact": {"flip": "{{ _degraded_flip }}"}, "vars": t["vars"]}
