@@ -25,11 +25,14 @@ fab_lease_step_timeout: >-
   the border gateway lease fabric-config-{{ fab_lease.fabric | default('') }} has {{ fab_lease_left }} s left, too little for this step: stopped before it
   {%- endif -%}
 # what runs each node step's commands on the node (the become command, see common/tasks/bgw_connect.yml), set as
-# ansible_become_exe on the holders' node-loop blocks: timeout(1) ends the step's commands there 5 s before the step's
-# own limit, and kills them 5 s later, whether or not the job is still connected. So a node that stops answering
-# mid-step keeps nothing running past the lease: the job's kept lease outlasts it by the margin, as for a timeout
+# ansible_become_exe on the holders' node-loop blocks: timeout(1) ends the step's commands there 2 s after the step's
+# own limit, and kills them 3 s later, whether or not the job is still connected. The node's limit comes after the
+# job's on purpose: while the job is connected its own timeout fires first, with its meaning (the step fails even
+# under failed_when, is not retried, the lease is kept); the node's limit is the backstop for a job that lost the
+# node, and a node that stops answering mid-step keeps nothing running past the lease (the work ends at most 5 s
+# after the job's limit plus the connection's set-up, inside the margin)
 fab_lease_node_become: >-
-  sudo -H -S -n /usr/bin/timeout -k 5 {{ [fab_lease_step_timeout | int - 5, 1] | max }} /usr/bin/env
+  sudo -H -S -n /usr/bin/timeout -k 3 {{ [fab_lease_step_timeout | int + 2, 1] | max }} /usr/bin/env
 # what a step that can run for minutes (a systemd start, restart or reload; an apply) needs left before it starts: the
 # longest its work can run on a node (its step timeout, or a systemd job it starts) plus the margin; with less, the job
 # renews first (fabric_lease_ensure.yml)

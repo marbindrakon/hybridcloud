@@ -21,8 +21,9 @@ What is left decides, printed as the first line, then one "line: <context>: <lin
   result=accepted    every line left was left by the last check as well, after another start or reload: FRR does not
                      take them. The caller records the file, so no run reloads for them again; the note keeps them
                      and the caller reports them
-A check that could not run counts as one line ("check: <reason>"), under the same rules. Exit 0 with a result, 2 on
-wrong arguments.
+A check that could not run (frr-reload.py --test failed or did not answer) compares nothing: it prints its reason on
+stderr, writes no note and exits 3, so the caller records nothing and fails, and the next run reloads and checks
+again. Exit 0 with a result, 2 on wrong arguments.
 """
 import argparse
 import os
@@ -36,6 +37,8 @@ TIMEOUT = 90
 # lines that never match by design (left out of the comparison)
 NORMAL = [r"^(no )?frr (version|defaults)\b", r"^(no )?hostname\b", r"^(no )?domainname\b",
           r"^(no )?service integrated-vtysh-config$", r"^(no )?mpls enable$",
+          # zebra shows the kernel's forwarding switches ("no ipv6 forwarding" in a namespace without it)
+          r"^(no )?ip(v6)? forwarding$",
           # a stanza's closing line, listed with the stanza it closes (which is compared on its own)
           r"^exit(-vrf|-address-family)?$"]
 SECRET = re.compile(r"\b(password|authentication-key|message-digest-key \d+ md5)\s+\S.*$")
@@ -126,10 +129,10 @@ def run_test(conf, pathspace, script):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
     except (OSError, subprocess.SubprocessError) as e:
-        return None, "check: frr-reload.py --test could not run (%s)" % (e.__class__.__name__,)
+        return None, "frr-reload.py --test could not run (%s)" % (e.__class__.__name__,)
     if p.returncode != 0:
         err = (p.stderr.strip().splitlines() or ["no reason given"])[-1]
-        return None, "check: frr-reload.py --test failed (rc %d): %s" % (p.returncode, shown([], err)[:200])
+        return None, "frr-reload.py --test failed (rc %d; last line: %s)" % (p.returncode, shown([], err)[:200])
     return p.stdout, None
 
 
@@ -163,7 +166,10 @@ def main(argv=None):
     except re.error as e:
         ap.error("--ignore: %s" % e)
     text, err = run_test(a.conf, a.pathspace, a.reload_script)
-    left = [err] if err else left_over(text, a.ignore, read_text(a.conf))
+    if err:
+        print("shc-frr-check: nothing compared, nothing recorded: %s" % err, file=sys.stderr)
+        return 3
+    left = left_over(text, a.ignore, read_text(a.conf))
     if not left:
         if os.path.exists(a.note):
             os.remove(a.note)

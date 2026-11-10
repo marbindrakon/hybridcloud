@@ -86,7 +86,9 @@
   ansible.builtin.systemd:
     name: shc-fabric-apply@root.service
     enabled: false
-  failed_when: false
+  register: _hft_unit_off
+  # a module the node ended at its limit (no result) is a failure; anything else is left to the steps after it
+  failed_when: _hft_unit_off.module_stdout is defined
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: remove the root instance config"

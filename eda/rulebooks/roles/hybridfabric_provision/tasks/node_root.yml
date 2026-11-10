@@ -187,7 +187,8 @@
     daemon_reload: "{{ _hf_files is changed }}"
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_unit
-  failed_when: false
+  # a module the node ended at its limit (no result) is a failure; a start that failed is judged by the next step
+  failed_when: _hf_unit.module_stdout is defined
 
 # the unit is active (its apply succeeded), or the job fails with the apply's own reason: the lines it printed under
 # this start ("shc-fabric-apply: …", what the apply refuses on either transport, or "transport srv6: …", what only
