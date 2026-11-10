@@ -198,6 +198,42 @@ class ApplySrv6(A.ApplyCase):
         self.assertIn("transport srv6: the input filter of the root VRFs failed", err)
 
 
+class Orphan(unittest.TestCase):
+    """the fabric orphan check reads whether the root's tables are loaded and judges them against the root's VRFs and
+    the fabric's IPv6 core"""
+
+    def report(self, vrfs, rin, core6=True):
+        import shc_fabric as F
+        fabric = {"kind": "HybridFabric", "metadata": {"namespace": "sovereign-cloud", "name": "lab"},
+                  "status": {"realization": {"ipv6Core": core6, "egress": {"networks": [{"vpnTarget": 10000}]}}}}
+        node = {"fabric": "lab", "node": "bgw-1", "netns": {"root": vrfs}}
+        if rin is not None:
+            node["rootInputFilters"] = rin
+        return F.orphan_report({"crs": {"fabrics": [fabric]}, "nodes": [node]})["findings"]
+
+    def test_read(self):
+        import test_fabric_orphan_nodes as O
+        out, calls = O.execute(dict(O.ANSWERS, **{"nft list table ip shc_root_in": "table ip shc_root_in {\n}\n"}))
+        self.assertEqual(out["rootInputFilters"], {"ipv4": True, "ipv6": False})
+        self.assertIn(["nft", "list", "table", "ip6", "shc_root_in6"], calls)
+
+    def test_judged(self):
+        both = {"ipv4": True, "ipv6": True}
+        self.assertEqual(self.report(["e10000", "egress"], both), [])
+        self.assertEqual(self.report(["e10000", "egress"], {"ipv4": True, "ipv6": False}, core6=False), [])
+        self.assertEqual(self.report([], {"ipv4": False, "ipv6": False}), [])
+        # a node read from before the tables: not judged
+        self.assertEqual(self.report(["e10000", "egress"], None), [])
+        self.assertEqual(self.report([], both), [
+            "node bgw-1: the root VRFs' IPv4 input filter (ip shc_root_in) is loaded, but the root has no VRF",
+            "node bgw-1: the root VRFs' IPv6 input filter (ip6 shc_root_in6) is loaded, but the root has no VRF"])
+        self.assertEqual(self.report(["e10000", "egress"], both, core6=False), [
+            "node bgw-1: the root VRFs' IPv6 input filter (ip6 shc_root_in6) is loaded, but the fabric has no IPv6 core"])
+        self.assertEqual(self.report(["e10000", "egress"], {"ipv4": False, "ipv6": False}), [
+            "node bgw-1: the root has VRFs (e10000, egress), but their IPv4 input filter (ip shc_root_in) is not loaded",
+            "node bgw-1: the root has VRFs (e10000, egress), but their IPv6 input filter (ip6 shc_root_in6) is not loaded"])
+
+
 # -------------------------------------------------------------------------------------------- apply (real kernel)
 PROBE = textwrap.dedent(r'''
     """Runs as root of a new user and network namespace. A root VRF e10000 with the node's ICMP source and the egress

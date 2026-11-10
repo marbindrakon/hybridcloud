@@ -70,6 +70,9 @@ ANSWERS = {
     # the circuit device: IPv6 off (no address at all); the circuits' IPv6 table not loaded (nft prints nothing)
     "ip -j -6 addr show dev bond1.3001": json.dumps([]),
     "nft list table ip6 shc_attach6": "",
+    # the root VRFs' input filters: not loaded
+    "nft list table ip shc_root_in": "",
+    "nft list table ip6 shc_root_in6": "",
 }
 
 

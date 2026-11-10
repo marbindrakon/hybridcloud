@@ -1381,7 +1381,11 @@ def orphan_report(req):
     namespaces: [{name, labels}], networks: [{name, sharedTo}], routers: [{name, evpnVni}]}],
     nodes [{fabric, node, netns: {name: [vrf]}, rootDevices: [{name, master, addrs6}] (the root's VLAN devices in root
     VRFs or on a bearer interface within the attachment VLAN pool, with their global IPv6 addresses), rootBfd: [{peer,
-    vrf, interface, status}] (the root bfdd's sessions), rootAttach6 (the circuits' IPv6 filter table is loaded)}].
+    vrf, interface, status}] (the root bfdd's sessions), rootAttach6 (the circuits' IPv6 filter table is loaded),
+    rootInputFilters {ipv4, ipv6} (the root VRFs' input filters ip shc_root_in, ip6 shc_root_in6 are loaded; absent in
+    a node read from before them: not judged)}]. The input filters are judged against the root's VRFs on the node and
+    the fabric's IPv6 core (status.realization.ipv6Core): a table without root VRFs (or the IPv6 one without the IPv6
+    core) is left over; root VRFs without the table are reported as unprotected.
     A circuit has an IPv6 session when its realization entry lists family 6. Returns {findings: [str], counts}."""
     crs, findings = req.get("crs") or {}, []
 
@@ -1500,6 +1504,19 @@ def orphan_report(req):
                     elif d.get("addrs6") and d.get("name") not in devs6:
                         findings.append(f"node {n['node']}: circuit device {d.get('name')} holds IPv6 address(es) "
                                         f"{', '.join(d['addrs6'])}, but its circuit has no IPv6 session")
+                rin = n.get("rootInputFilters")
+                if isinstance(rin, dict) and rin:
+                    have_vrfs = bool(vrfs)
+                    core6 = bool(real.get("ipv6Core"))
+                    for fam, name, table, want in (("ipv4", "IPv4", "ip shc_root_in", have_vrfs),
+                                                   ("ipv6", "IPv6", "ip6 shc_root_in6", have_vrfs and core6)):
+                        if rin.get(fam) and not want:
+                            findings.append(f"node {n['node']}: the root VRFs' {name} input filter ({table}) is "
+                                            "loaded, but " + ("the root has no VRF" if not have_vrfs
+                                                              else "the fabric has no IPv6 core"))
+                        elif want and not rin.get(fam):
+                            findings.append(f"node {n['node']}: the root has VRFs ({', '.join(sorted(vrfs))}), but their "
+                                            f"{name} input filter ({table}) is not loaded")
                 if n.get("rootAttach6") and not att6:
                     findings.append(f"node {n['node']}: the attachment circuits' IPv6 filter table (ip6 shc_attach6) is "
                                     "loaded, but no circuit on the node has an IPv6 session")
