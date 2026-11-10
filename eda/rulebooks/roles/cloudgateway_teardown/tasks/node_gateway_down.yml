@@ -16,7 +16,9 @@
     name: "shc-gw@{{ fab_name }}.service"
     state: stopped
     enabled: false
-  failed_when: false
+  register: _cgt_stop
+  # a stop that failed is left to the steps after it; a module the node ended at its limit (no result) is a failure
+  failed_when: _cgt_stop.module_stdout is defined
   delegate_to: "{{ bgw_node.name }}"
 
 # the instance's SRv6 core guard timer (installed only on the SRv6 core: nothing to do without the unit template)

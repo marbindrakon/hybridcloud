@@ -61,7 +61,7 @@ UNIT_ACTIONS_ALLOWED = {
     ("hybridfabric_teardown", "{{ bgw_node.name }}: remove the SRv6 core guard units"),
     ("hybridfabric_teardown", "{{ bgw_node.name }}: remove the IPv6 egress guard"),
 }
-BECOME = re.compile(r"^sudo -H -S -n /usr/bin/timeout -k 5 (?P<limit>.+) /usr/bin/env$")
+BECOME = re.compile(r"^sudo -H -S -n /usr/bin/timeout -k (?P<kill>\d+) (?P<limit>.+) /usr/bin/env$")
 
 
 def task_lists(base):
@@ -77,13 +77,17 @@ def task_lists(base):
                     yield path, doc
 
 
+BECOME_KEYS = ("become", "become_user", "become_exe", "become_flags", "become_method")
+
+
 def walk_inherit(tasks, keys=("delegate_to", "become", "vars", "async"), parent=None):
-    """Every task with what it inherits from its blocks."""
+    """Every task with what it inherits from its blocks (become_keys: the become keywords set on it or its blocks)."""
     parent = parent or {}
     for t in tasks or []:
         if not isinstance(t, dict):
             continue
         own = dict(parent)
+        own["become_keys"] = tuple(parent.get("become_keys", ())) + tuple(k for k in BECOME_KEYS if k in t)
         for k in keys:
             if k in t:
                 own[k] = (dict(parent.get(k) or {}, **t[k]) if k == "vars" else t[k])
@@ -142,7 +146,7 @@ class Connection(unittest.TestCase):
         lease = load(os.path.join(COMMON, "vars/fabric_lease.yml"))
         m = BECOME.match(" ".join(lease["fab_lease_node_become"].split()))
         self.assertTrue(m, lease["fab_lease_node_become"])
-        self.assertEqual(m.group("limit"), "{{ [fab_lease_step_timeout | int - 5, 1] | max }}")
+        self.assertEqual(m.group("limit"), "{{ [fab_lease_step_timeout | int + 2, 1] | max }}")
         for role, (block, node_file) in HOLDERS.items():
             with self.subTest(role=role):
                 b = by_name(load(os.path.join(ROLES, role, "tasks/main.yml")), block)
@@ -177,6 +181,11 @@ class NodeTasks(unittest.TestCase):
                 self.assertIn(mods[0], MODULES)
                 self.assertIsNot(inh.get("become", True), False)
                 self.assertNotIn("async", inh)
+                # no become settings of its own (a become_user would land on env and still run as root)
+                self.assertFalse([k for k in inh.get("become_keys", ()) if k != "become"], inh.get("become_keys"))
+                # a unit step may tolerate a failed unit, not a module the node ended at its limit (no result)
+                if mods[0] == "ansible.builtin.systemd" and "failed_when" in t:
+                    self.assertIn("module_stdout is defined", str(t["failed_when"]), t["name"])
                 self.assertFalse([k for k in (inh.get("vars") or {}) if OWN_SETTINGS.match(k)
                                   and not (role in HOLDERS and k == "ansible_become_exe")])
                 if mods[0] == "ansible.builtin.copy":
@@ -207,14 +216,18 @@ class NodeTasks(unittest.TestCase):
 
 
 class Numbers(unittest.TestCase):
-    def test_the_node_ends_a_holders_step_by_the_steps_own_limit(self):
-        # TERM at the step's limit less 5 s, KILL 5 s later: the commands end on the node no later than the job
-        # stops waiting (plus the connection's set-up before the module started), inside the lease's margin
+    def test_the_node_ends_a_holders_step_just_after_the_steps_own_limit(self):
+        # TERM 2 s after the step's limit, KILL 3 s later: while the job is connected its own timeout comes first
+        # (the step fails even under failed_when, is not retried, the lease is kept); the node's is the backstop for a
+        # job that lost the node. Its work ends by 5 s after the job's limit plus the connection's set-up (15 s at
+        # most), inside the lease's 60 s margin with 40 s left for the pods' clocks
         lease = load(os.path.join(COMMON, "vars/fabric_lease.yml"))
-        term, kill = 5, 5
-        self.assertIn("-k %d " % kill, lease["fab_lease_node_become"])
-        self.assertIn("- %d," % term, lease["fab_lease_node_become"])
-        self.assertLessEqual(kill - term, 0)
+        m = BECOME.match(" ".join(lease["fab_lease_node_become"].split()))
+        after, kill = 2, int(m.group("kill"))
+        self.assertIn("int + %d," % after, m.group("limit"))
+        self.assertGreater(after, 0)
+        margin = lease["fab_lease_margin"]
+        self.assertLessEqual(after + kill + 15, margin - 40)
         # the provision applies keep their own limit inside it (TERM 15 s before the step's, KILL 10 s later), so their
         # own rc 124 comes first
         for role, node_file in (("hybridfabric_provision", "node_root.yml"), ("cloudgateway_provision", "node_gateway.yml")):
@@ -222,7 +235,7 @@ class Numbers(unittest.TestCase):
                 cmd = str(t.get("ansible.builtin.command") or "")
                 if "shc-fabric-apply" in cmd and cmd.strip().endswith(" up"):
                     self.assertTrue(cmd.startswith("timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} "))
-        self.assertLess(15 - 10, term + 1)
+        self.assertLess(-15 + 10, after)
 
 
 FAKE_SUDO = """#!/bin/sh
@@ -300,28 +313,58 @@ class OnANode(unittest.TestCase):
         echo none""")}
 
     def test_the_limit_on_the_node_follows_the_lease(self):
-        self.assertEqual(self.run_loop(self.SHOW, 600)["step"]["stdout"], "5 175")
+        self.assertEqual(self.run_loop(self.SHOW, 600)["step"]["stdout"], "3 182")
         kill, term = self.run_loop(self.SHOW, 150)["step"]["stdout"].split()
-        self.assertEqual(kill, "5")
-        self.assertIn(int(term), (84, 85))      # 150 - 60 - 5, the template runs a moment later
+        self.assertEqual(kill, "3")
+        self.assertIn(int(term), (91, 92))      # 150 - 60 + 2, the template runs a moment later
 
-    def test_a_step_that_hangs_ends_on_the_node_at_its_limit_and_keeps_the_lease(self):
-        # a step limit of 12 s: the node ends the step at 7 s, before the job would stop waiting, as when the job can
-        # no longer reach the node; the command's background child goes with it (the same process group)
-        marker = os.path.join(self.tmp, "finished")
-        tag = "shc-node-bound-%d" % os.getpid()
-        step = {"ansible.builtin.shell": "sh -c 'sleep 40; touch %s' %s & sleep 40; touch %s" % (marker, tag, marker)}
-        out = self.run_loop(dict(step), 600, step_timeout=12)
+    def gone(self, tag, within=25):
+        """No process naming tag is left within the given seconds."""
+        import time
+        end = time.time() + within
+        while True:
+            running = []
+            for pid in filter(str.isdigit, os.listdir("/proc")):
+                try:
+                    with open("/proc/%s/cmdline" % pid, "rb") as f:
+                        running.append(f.read().replace(b"\0", b" ").decode(errors="replace"))
+                except OSError:
+                    pass
+            if not [a for a in running if tag in a] or time.time() > end:
+                return not [a for a in running if tag in a]
+            time.sleep(0.5)
+
+    def hang(self, marker, tag):
+        return {"ansible.builtin.shell": "sh -c 'sleep 40; touch %s' %s & sleep 40; touch %s" % (marker, tag, marker)}
+
+    def test_a_connected_job_times_out_first_then_the_node_ends_the_step(self):
+        # step limit 12 s: the job's own timeout at 12 s (kept lease, its usual message), the node's at 14 s ends the
+        # step's commands and their background child (the same process group): the local connection does not end
+        # them on a timeout, like a lost ssh session
+        marker, tag = os.path.join(self.tmp, "finished"), "shc-node-bound-a-%d" % os.getpid()
+        out = self.run_loop(self.hang(marker, tag), 600, step_timeout=12)
+        self.assertTrue(out["kept"], out)
+        self.assertNotIn("the node ended the step", out["why"])
+        self.assertTrue(self.gone(tag))
+        self.assertFalse(os.path.exists(marker))
+
+    def test_a_timeout_still_fails_a_step_that_tolerates_failure_and_is_not_retried(self):
+        # failed_when: false and until/retries: the job's timeout (first) fails the step at once (review: the node's
+        # limit before it turned the hang into an ordinary, tolerated or retried, result)
+        marker, tag = os.path.join(self.tmp, "finished"), "shc-node-bound-b-%d" % os.getpid()
+        step = dict(self.hang(marker, tag), failed_when=False, retries=3, delay=1, until="_step is succeeded")
+        out = self.run_loop(step, 600, step_timeout=6)
+        self.assertTrue(out["kept"], out)
+        self.assertTrue(self.gone(tag))
+
+    def test_without_the_jobs_timeout_the_node_ends_the_step_and_the_lease_is_kept(self):
+        # the backstop: the job's limit out of play (a step timeout of its own, 0), as when the job lost the node; the
+        # node ends the step at 12 + 2 s with no result, which keeps the lease
+        marker, tag = os.path.join(self.tmp, "finished"), "shc-node-bound-c-%d" % os.getpid()
+        out = self.run_loop(dict(self.hang(marker, tag), timeout=0), 600, step_timeout=12)
         self.assertTrue(out["kept"], out)
         self.assertIn("the node ended the step at its time limit (rc 124)", out["why"])
-        running = []
-        for pid in filter(str.isdigit, os.listdir("/proc")):
-            try:
-                with open("/proc/%s/cmdline" % pid, "rb") as f:
-                    running.append(f.read().replace(b"\0", b" ").decode(errors="replace"))
-            except OSError:
-                pass
-        self.assertFalse([a for a in running if tag in a])
+        self.assertTrue(self.gone(tag))
         self.assertFalse(os.path.exists(marker))
 
 
