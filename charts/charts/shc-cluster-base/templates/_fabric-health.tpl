@@ -29,6 +29,19 @@ spec:
                 status: [status]
                 reason: [reason]
               valueFrom: [lastTransitionTime]
+        - name: node_reachable
+          help: >-
+            Per node of the latest health check, 1 while the node answered; labels node and the node's worst counted
+            finding (reason, message; empty when none).
+          each:
+            type: Gauge
+            gauge:
+              path: [status, health, nodes]
+              labelsFromPath:
+                node: [name]
+                reason: [reason]
+                message: [message]
+              valueFrom: [reachable]
         - name: health_checked_at
           help: When the health check last read the nodes (Unix seconds).
           each:
@@ -85,46 +98,47 @@ spec:
 {{- $f := .Values.ops.fabricHealth -}}
 - name: shc-fabric-health
   rules:
-    # a node or the configuration on it does not work (a fabric's unreachable node: only on the HybridFabric, its
-    # gateways read the same). A gateway of a paused site reads Unknown and never matches
+    # per node (shc_fabric_node_reachable carries the node's worst counted finding: reason and message): a node or
+    # the configuration on it does not work (a fabric's unreachable node: only on the HybridFabric, its gateways read
+    # the same). A gateway of a paused or not-checked site has no node rows and never matches
     - alert: ShcFabricNodeUnhealthy
       expr: >-
-        max by (customresource_kind, namespace, name, reason) (
-          shc_fabric_condition{type="NodesHealthy", status="False", reason=~"StartFailed|StartIncomplete|ServiceFailed|RoutingDaemonDown"}
-          or shc_fabric_condition{customresource_kind="HybridFabric", type="NodesHealthy", status="False", reason="NodeUnreachable"}
+        max by (customresource_kind, namespace, name, node, reason, message) (
+          shc_fabric_node_reachable{reason=~"StartFailed|StartIncomplete|ServiceFailed|RoutingDaemonDown"}
+          or shc_fabric_node_reachable{customresource_kind="HybridFabric", reason="NodeUnreachable"}
         )
       for: {{ $f.alerts.nodeUnhealthyFor }}
       labels:
         severity: critical
       annotations:
-        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: {{ "{{" }} $labels.reason {{ "}}" }} on a border gateway node"
-        description: "The fabric health check found {{ "{{" }} $labels.reason {{ "}}" }}. status.health names the node and the finding; a full run was requested where one repairs it."
+        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: {{ "{{" }} $labels.reason {{ "}}" }} on {{ "{{" }} $labels.node {{ "}}" }}"
+        description: "{{ "{{" }} $labels.message {{ "}}" }}. The fabric health check requested a full run where one repairs it; status.health has every finding."
     - alert: ShcFabricRoutingDaemonRestarted
       expr: >-
-        max by (customresource_kind, namespace, name) (shc_fabric_condition{type="NodesHealthy", status="False", reason="RoutingDaemonRestarted"})
+        max by (customresource_kind, namespace, name, node, message) (shc_fabric_node_reachable{reason="RoutingDaemonRestarted"})
       labels:
         severity: warning
       annotations:
-        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a routing daemon crashed on a border gateway node"
-        description: "A routing daemon crashed and was restarted (a core dump is on the node). status.health names the node, the daemon and the time."
+        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a routing daemon crashed on {{ "{{" }} $labels.node {{ "}}" }}"
+        description: "{{ "{{" }} $labels.message {{ "}}" }}. A core dump is on the node."
     - alert: ShcFabricDriftNotRepaired
       expr: >-
-        max by (customresource_kind, namespace, name) (shc_fabric_condition{type="NodesHealthy", status="False", reason="ConfigurationDrift"})
+        max by (customresource_kind, namespace, name, node) (shc_fabric_node_reachable{reason="ConfigurationDrift"})
       for: {{ $f.alerts.driftFor }}
       labels:
         severity: warning
       annotations:
-        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a border gateway node differs from its configuration"
+        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: {{ "{{" }} $labels.node {{ "}}" }} differs from its configuration"
         description: "The node's state differs from what the last apply or routing configuration load left, and a full run did not repair it. status.health has the lines that differ."
     - alert: ShcFabricSiteSessionsDown
       expr: >-
-        max by (namespace, name) (shc_fabric_condition{customresource_kind="CloudGateway", type="NodesHealthy", status="False", reason="SiteSessionsDown"})
+        max by (namespace, name, node) (shc_fabric_node_reachable{customresource_kind="CloudGateway", reason="SiteSessionsDown"})
       for: {{ $f.alerts.siteSessionsFor }}
       labels:
         severity: warning
       annotations:
-        summary: "CloudGateway {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no routing session with its site"
-        description: "A node holds no session with the site. A site that is off on purpose is paused (CloudInfrastructure spec.paused), which this alert ignores."
+        summary: "CloudGateway {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no routing session with its site on {{ "{{" }} $labels.node {{ "}}" }}"
+        description: "The node holds no session with the site. A site that is off on purpose is paused (CloudInfrastructure spec.paused), which this alert ignores."
     - alert: ShcFabricIPv6EgressUpstreamDown
       expr: >-
         max by (namespace, name) (shc_fabric_condition{customresource_kind="HybridFabric", type="IPv6EgressUpstream", status="False"})
@@ -155,8 +169,8 @@ spec:
       labels:
         severity: warning
       annotations:
-        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no fabric health run for {{ $f.alerts.staleIntervals }} intervals"
-        description: "The fabric health check has not run. Check the fabric-health job template's schedule and its last runs."
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no fabric health run for {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
+        description: "The fabric health check has not run for {{ "{{" }} $value | humanizeDuration {{ "}}" }} (more than {{ $f.alerts.staleIntervals }} intervals). Check the fabric-health job template's schedule and its last runs."
     # runs report but leave the nodes alone: changes to them held the configuration lease for that long (a long
     # rollout, or a lease that is not released)
     - alert: ShcFabricNodesNotRead
@@ -168,7 +182,7 @@ spec:
       labels:
         severity: info
       annotations:
-        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: the nodes have not been health-checked for {{ $f.alerts.notReadIntervals }} intervals"
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: the nodes have not been health-checked for {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
         description: "The health check runs but leaves the nodes alone while a change to them holds the configuration lease (status.health.skipped). Expected during a long rollout; otherwise check which job holds the lease fabric-config-<fabric>."
     - alert: ShcFabricHealthNeverChecked
       expr: >-

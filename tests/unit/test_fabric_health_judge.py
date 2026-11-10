@@ -123,15 +123,11 @@ class JudgeTest(unittest.TestCase):
                          now=LATER))
         self.assertFalse(a2["gateways"][0]["changed"])
 
-    def test_boot_apply_failure_wakes_at_once_and_backs_off(self):
+    def test_boot_apply_failure_counts_at_once_and_backs_off(self):
+        # a failed oneshot is a state, not a moment: StartFailed counts at its first sighting
         bad = inst(start=dict(unit("failed", result="exit-code"), unit="shc-fabric-apply@root.service",
-                              lines=["transport srv6: net.vrf.strict_mode=1 refused"]))
-        # the first check lists it, unconfirmed: no condition, no event, no wake (a unit restarting by itself)
-        a, first = twice([node("bgw-1"), node("bgw-2", root=bad)])
-        self.assertEqual(cond(first["fabric"]["status"], "NodesHealthy")["status"], "True")
-        self.assertEqual((first["fabric"]["wake"], first["fabric"]["events"]), (False, []))
-        self.assertEqual(first["fabric"]["status"]["health"]["nodes"][1]["findings"][0]["reason"], "StartFailed")
-        f = a["fabric"]
+                              lines=["transport srv6: net.vrf.strict_mode=1 refused"], incomplete=[]))
+        f = J.judge(req([node("bgw-1"), node("bgw-2", root=bad)]))["fabric"]
         c = cond(f["status"], "NodesHealthy")
         self.assertEqual((c["status"], c["reason"]), ("False", "StartFailed"))
         self.assertIn("net.vrf.strict_mode=1 refused", c["message"])
@@ -139,19 +135,48 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(cond(f["status"], "Degraded")["reason"], "StartFailed")
         self.assertTrue(f["wake"])
         self.assertEqual({e["reason"] for e in f["events"]}, {"NodeStartFailed", "HealthWake"})
-        st = apply(apply({}, first["fabric"]["status"]), f["status"])
+        n2 = f["status"]["health"]["nodes"][1]
+        self.assertEqual((n2["reason"], n2["findings"][0]["confirmed"]), ("StartFailed", True))
+        st = apply({}, f["status"])
         # the woken run did not fix it: no second wake within the backoff, no second event
-        f2 = J.judge(req([node("bgw-1"), node("bgw-2", root=bad)], fab_status=st, now="2026-11-10T10:20:00Z"))["fabric"]
+        f2 = J.judge(req([node("bgw-1"), node("bgw-2", root=bad)], fab_status=st, now=LATER))["fabric"]
         self.assertFalse(f2["wake"])
         self.assertEqual(f2["events"], [])
         st2 = apply(st, f2["status"])
         f3 = J.judge(req([node("bgw-1"), node("bgw-2", root=bad)], fab_status=st2, now=MUCH_LATER))["fabric"]
         self.assertTrue(f3["wake"])
-        # since is kept, the count goes up
-        fnd = [x for x in J.judge(req([node("bgw-1"), node("bgw-2", root=bad)], fab_status=st2,
-                                      now=LATER))["fabric"]["status"]["health"]["nodes"] if x["name"] == "bgw-2"][0]
-        self.assertEqual(fnd["findings"][0]["since"], NOW)
-        self.assertEqual(fnd["findings"][0]["checks"], 4)
+        fnd = [x for x in f2["status"]["health"]["nodes"] if x["name"] == "bgw-2"][0]
+        self.assertEqual((fnd["findings"][0]["since"], fnd["findings"][0]["checks"]), (NOW, 2))
+
+    def test_gate_h9_a_reboot_whose_apply_fails(self):
+        """As captured: the first check finds the node rebooting (unreachable), the next one the failed boot apply
+        with the node's state unapplied (drift lines) and the gateways down with it."""
+        prev = J.judge(req([node("bgw-1"), node("bgw-2", reachable=False)]))
+        self.assertFalse(prev["fabric"]["status"]["health"]["healthy"])          # a first sighting is listed
+        self.assertEqual(cond(prev["fabric"]["status"], "NodesHealthy")["status"], "True")
+        fst = apply({}, prev["fabric"]["status"])
+        gst = apply({}, {x["name"]: x for x in prev["gateways"]}["atuin"]["status"])
+        bad = inst(start=dict(unit("failed", result="exit-code"), unit="shc-fabric-apply@root.service",
+                              lines=["shc-fabric-apply: gate H9 injected failure"], incomplete=[]),
+                   kernelDrift=["-lo 127.0.0.1/8 10.255.0.1/32", "-br-core 10.255.1.1/24"],
+                   frr={"reloadDue": False, "recorded": True, "pending": ["router bgp 65011 vrf egress: x"],
+                        "notTaken": []})
+        gw = inst("gateway", kernelDrift=["-gw-atuin"])
+        a = J.judge(req([node("bgw-1"), node("bgw-2", root=bad, gw=gw, booted=1_800_100_000)], fab_status=fst,
+                        gws=[{"name": "atuin", "namespace": "sovereign-cloud", "ready": True, "paused": False,
+                              "status": gst}], now=LATER))
+        f = a["fabric"]
+        c = cond(f["status"], "NodesHealthy")
+        self.assertEqual((c["status"], c["reason"]), ("False", "StartFailed"))
+        self.assertIn("gate H9 injected failure", c["message"])
+        self.assertEqual(cond(f["status"], "Degraded")["reason"], "StartFailed")
+        n2 = [x for x in f["status"]["health"]["nodes"] if x["name"] == "bgw-2"][0]
+        self.assertEqual([x["reason"] for x in n2["findings"]], ["StartFailed"])   # not also drift
+        self.assertTrue(f["wake"])
+        self.assertIn("NodeStartFailed", [e["reason"] for e in f["events"]])
+        g = a["gateways"][0]
+        self.assertEqual(cond(g["status"], "NodesHealthy")["reason"], "StartFailed")
+        self.assertEqual(cond(g["status"], "Degraded")["status"], "True")
 
     def test_drift_wakes_on_the_second_sighting_then_recovers(self):
         drift = inst(kernelDrift=["+lo 10.255.0.250/32"])
@@ -305,7 +330,7 @@ class JudgeTest(unittest.TestCase):
         r = inst()
         r["units"]["frr.service"] = unit(enabled="disabled")
         r["units"]["shc-egress6-guard.timer"] = unit("inactive")
-        f = twice([node("bgw-1", root=r)])[0]["fabric"]
+        f = J.judge(req([node("bgw-1", root=r)]))["fabric"]          # a disabled unit is a state: counts at once
         msg = cond(f["status"], "NodesHealthy")["message"]
         self.assertIn("not started at boot", msg)
         self.assertIn("a guard of the configuration is inactive", msg)

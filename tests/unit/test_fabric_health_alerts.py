@@ -37,6 +37,11 @@ def promtool():
     return None
 
 
+def node_row(kind, name, node, reason, message, ns="sovereign-cloud"):
+    return ('shc_fabric_node_reachable{customresource_kind="%s",namespace="%s",name="%s",node="%s",reason="%s",message="%s"}'
+            % (kind, ns, name, node, reason, message))
+
+
 def cond(kind, name, type_, status, reason, ns="sovereign-cloud"):
     return ('shc_fabric_condition{customresource_kind="%s",namespace="%s",name="%s",type="%s",status="%s",reason="%s"}'
             % (kind, ns, name, type_, status, reason))
@@ -48,10 +53,12 @@ TESTS = {
     "tests": [
         {"interval": "1m",
          "input_series": [
-             {"series": cond("HybridFabric", "lab", "NodesHealthy", "False", "StartFailed"), "values": "1000x20"},
-             {"series": cond("CloudGateway", "iaas1", "NodesHealthy", "Unknown", "SitePaused"), "values": "1000x20"},
-             {"series": cond("CloudGateway", "iaas1", "NodesHealthy", "False", "NodeUnreachable"), "values": "1000x20"},
-             {"series": cond("CloudGateway", "edge1", "NodesHealthy", "False", "SiteSessionsDown"), "values": "1000x20"},
+             {"series": node_row("HybridFabric", "lab", "bgw-2", "StartFailed",
+                                 "the configuration is not applied on the node (failed, exit-code): gate H9 injected failure"),
+              "values": "1x20"},
+             {"series": node_row("HybridFabric", "lab", "bgw-1", "", ""), "values": "1x20"},
+             {"series": node_row("CloudGateway", "iaas1", "bgw-2", "NodeUnreachable", "x"), "values": "0x20"},
+             {"series": node_row("CloudGateway", "edge1", "bgw-1", "SiteSessionsDown", "no session"), "values": "1x20"},
              {"series": cond("HybridFabric", "lab", "IPv6EgressUpstream", "False", "Degraded"), "values": "1000x20"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-1"}', "values": "1x20"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-2"}', "values": "0x20"},
@@ -63,16 +70,18 @@ TESTS = {
              {"eval_time": "1m", "alertname": "ShcFabricNodeUnhealthy", "exp_alerts": []},
              {"eval_time": "3m", "alertname": "ShcFabricNodeUnhealthy", "exp_alerts": [
                  {"exp_labels": {"severity": "critical", "customresource_kind": "HybridFabric",
-                                 "namespace": "sovereign-cloud", "name": "lab", "reason": "StartFailed"},
+                                 "namespace": "sovereign-cloud", "name": "lab", "reason": "StartFailed", "node": "bgw-2",
+                                 "message": "the configuration is not applied on the node (failed, exit-code): gate H9 injected failure"},
                   "exp_annotations": {
-                      "summary": "HybridFabric sovereign-cloud/lab: StartFailed on a border gateway node",
-                      "description": "The fabric health check found StartFailed. status.health names the node and the "
-                                     "finding; a full run was requested where one repairs it."}}]},
+                      "summary": "HybridFabric sovereign-cloud/lab: StartFailed on bgw-2",
+                      "description": "the configuration is not applied on the node (failed, exit-code): gate H9 "
+                                     "injected failure. The fabric health check requested a full run where one "
+                                     "repairs it; status.health has every finding."}}]},
              {"eval_time": "11m", "alertname": "ShcFabricSiteSessionsDown", "exp_alerts": [
-                 {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "edge1"},
+                 {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "edge1", "node": "bgw-1"},
                   "exp_annotations": {
-                      "summary": "CloudGateway sovereign-cloud/edge1: no routing session with its site",
-                      "description": "A node holds no session with the site. A site that is off on purpose is paused "
+                      "summary": "CloudGateway sovereign-cloud/edge1: no routing session with its site on bgw-1",
+                      "description": "The node holds no session with the site. A site that is off on purpose is paused "
                                      "(CloudInfrastructure spec.paused), which this alert ignores."}}]},
              {"eval_time": "6m", "alertname": "ShcFabricIPv6EgressUpstreamDown", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab"},
@@ -114,9 +123,9 @@ TESTS = {
              {"eval_time": "41m", "alertname": "ShcFabricHealthStale", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab"},
                   "exp_annotations": {
-                      "summary": "HybridFabric sovereign-cloud/lab: no fabric health run for 3 intervals",
-                      "description": "The fabric health check has not run. Check the fabric-health job template's "
-                                     "schedule and its last runs."}}]},
+                      "summary": "HybridFabric sovereign-cloud/lab: no fabric health run for 41m 0s",
+                      "description": "The fabric health check has not run for 41m 0s (more than 3 intervals). Check "
+                                     "the fabric-health job template's schedule and its last runs."}}]},
              {"eval_time": "61m", "alertname": "ShcFabricHealthNeverChecked", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "customresource_kind": "HybridFabric",
                                  "namespace": "sovereign-cloud", "name": "new", "phase": "Ready"},
@@ -149,7 +158,7 @@ TESTS = {
              {"eval_time": "101m", "alertname": "ShcFabricNodesNotRead", "exp_alerts": [
                  {"exp_labels": {"severity": "info", "namespace": "sovereign-cloud", "name": "busy"},
                   "exp_annotations": {
-                      "summary": "HybridFabric sovereign-cloud/busy: the nodes have not been health-checked for 9 intervals",
+                      "summary": "HybridFabric sovereign-cloud/busy: the nodes have not been health-checked for 1h 41m 0s",
                       "description": "The health check runs but leaves the nodes alone while a change to them holds the "
                                      "configuration lease (status.health.skipped). Expected during a long rollout; "
                                      "otherwise check which job holds the lease fabric-config-<fabric>."}}]},
@@ -176,6 +185,7 @@ class Chart(unittest.TestCase):
         cfg = yaml.safe_load(by[("ConfigMap", "shc-fabric-metrics")]["data"]["config.yaml"])
         kinds = [r["groupVersionKind"]["kind"] for r in cfg["spec"]["resources"]]
         self.assertEqual(kinds, ["HybridFabric", "CloudGateway"])
+        self.assertTrue(by[("ServiceMonitor", "shc-fabric-metrics")]["spec"]["endpoints"][0]["honorLabels"])
         rules = by[("PrometheusRule", "shc-fabric")]["spec"]["groups"][0]["rules"]
         self.assertIn("ShcFabricHealthStale", [r["alert"] for r in rules])
         role = by[("ClusterRole", "shc-ops-fabric-metrics")]
