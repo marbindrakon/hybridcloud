@@ -2,8 +2,20 @@
 # shc (design/P7-PLAN.md P7.3.4): reach a fabric's border gateway nodes over SSH. Reads the key from Vault into a
 # private temporary directory (never logged) and adds every node to the inventory (become, accept-new host keys
 # into a per-job known_hosts). Included from a role (paths are role_path-relative).
-# Inputs: bgw_fabric_spec (the HybridFabric spec), bgw_ssh_user (realization nodes.sshUser). Sets bgw_keydir.
-# Remove the key with bgw_disconnect.yml.
+# Inputs: bgw_fabric_spec (the HybridFabric spec), bgw_ssh_user (realization nodes.sshUser), bgw_node_limit (optional:
+# the longest one command may run on a node, default the realization's nodes.configLease.stepTimeoutSeconds). Sets
+# bgw_keydir. Remove the key with bgw_disconnect.yml.
+#
+# A node that stops answering must not keep a command running there (the job and its lease may be long gone when it
+# answers again). Both ends are bounded:
+# - the connection: the SSH client gives up on a peer silent for 3 x 15 s (ServerAlive), so the job notices;
+# - the node: every command a job runs there (each module, so every task: shell, command, systemd, copy, ...) runs as
+#   root under timeout(1), which ends it and every process it started (its process group) after bgw_node_limit
+#   seconds, KILL 5 s after TERM, whether or not the job is still connected. sudo runs timeout, timeout runs the
+#   module's shell through env (env takes the "-u root" that ansible appends for the become user: it unsets a variable
+#   named root), so the become flags live in the become command and the become user is always root. The lease holders
+#   override the limit per step with what their lease leaves (common/vars/fabric_lease.yml fab_lease_node_become, set
+#   on their node-loop blocks).
 - name: Read the border gateway SSH key
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
   vars:
@@ -42,8 +54,12 @@
     ansible_ssh_private_key_file: "{{ bgw_keydir.path }}/id"
     ansible_ssh_common_args: >-
       -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={{ bgw_keydir.path }}/known_hosts
-      -o ConnectTimeout=15 -o ServerAliveInterval=15
+      -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3
     ansible_become: true
+    ansible_become_exe: >-
+      sudo -H -S -n /usr/bin/timeout -k 5
+      {{ bgw_node_limit | default(fab_real.nodes.configLease.stepTimeoutSeconds | default(180), true) | int }} /usr/bin/env
+    ansible_become_flags: ""
     ansible_python_interpreter: /usr/bin/python3
   loop: "{{ bgw_fabric_spec.borderGateway.nodes }}"
   loop_control:

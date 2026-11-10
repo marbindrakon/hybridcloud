@@ -24,6 +24,12 @@ fab_lease_step_timeout: >-
   {%- else -%}
   the border gateway lease fabric-config-{{ fab_lease.fabric | default('') }} has {{ fab_lease_left }} s left, too little for this step: stopped before it
   {%- endif -%}
+# what runs each node step's commands on the node (the become command, see common/tasks/bgw_connect.yml), set as
+# ansible_become_exe on the holders' node-loop blocks: timeout(1) ends the step's commands there 5 s before the step's
+# own limit, and kills them 5 s later, whether or not the job is still connected. So a node that stops answering
+# mid-step keeps nothing running past the lease: the job's kept lease outlasts it by the margin, as for a timeout
+fab_lease_node_become: >-
+  sudo -H -S -n /usr/bin/timeout -k 5 {{ [fab_lease_step_timeout | int - 5, 1] | max }} /usr/bin/env
 # what a step that can run for minutes (a systemd start, restart or reload; an apply) needs left before it starts: the
 # longest its work can run on a node (its step timeout, or a systemd job it starts) plus the margin; with less, the job
 # renews first (fabric_lease_ensure.yml)
