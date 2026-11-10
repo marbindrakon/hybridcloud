@@ -60,12 +60,15 @@ the node runs there with a tenant host, so the node answers such traffic like a 
   before the VRF devices take the ICMPv6 source and stays whether or not the node announces that address to the site
   (`gateway.announceIcmpSource6`, [IPv6 realization](ipv6-realization.md#transport-dual-stack-core)).
 - **The root**, for a packet delivered to the node in the egress VRF or a network's VRF that did not arrive on one
-  of that VRF's own legs: the hand-off device, a network's egress veth (its own stateful filter admits only replies
-  and ICMPv6 errors from the internet) or a circuit's device (its own filter admits BGP from the circuit's link, BFD
-  and ICMP from the customer edge router). Table `ip shc_root_in` (always, while the root has VRFs): ICMP and TCP
-  segments with ACK or RST pass, everything else is dropped without an answer. Table `ip6 shc_root_in6` (with the
-  dual-stack core): link-local sources pass (the sessions over the egress veths), then the same answers as in a
-  gateway namespace.
+  of that VRF's own legs: a network's egress veth (its own stateful filter admits only replies and ICMPv6 errors
+  from the internet) or a circuit's device (its own filter admits BGP from the circuit's link, BFD and ICMP from the
+  customer edge router). What arrives on the hand-off device (the internet, the other node's networks) is filtered
+  too; only the upstream routers' BGP sessions of the IPv6 egress are admitted there. Table `ip shc_root_in`
+  (always, while the root has VRFs): ICMP and TCP segments with ACK or RST pass, everything else is dropped without
+  an answer. Table `ip6 shc_root_in6` (with the dual-stack core): the upstream routers' BGP on the hand-off device
+  and link-local sources from a network's egress veth (the sessions over the veths) pass, then the same answers as
+  in a gateway namespace. A run that leaves the dual-stack core out because a host interface takes router
+  advertisements keeps the IPv6 table as it was.
 
 - **The edge routers of an AWS or Google Cloud site** (part of the site's gateway): table `inet shc_edge_in`, input
   hook, every network VRF of the router. From a VRF device only BGP with the cloud's own peers on their own leg

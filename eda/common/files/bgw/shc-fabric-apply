@@ -91,11 +91,12 @@
 #   was loaded) and with the last VRF; an IPv6 step that failed leaves it as it was.
 #   The root VRFs' input filters (root): the same answers for what a tenant network reaches of the root itself. A
 #   packet delivered to the node in a root VRF (the egress VRF, a network's VRF e<n>) that did not arrive on one of
-#   the VRF's own legs - egress0, a network's veth xe<n>, a circuit's device (each has its own filter or session) -
-#   came from a network: from the core (popped from MPLS or decapsulated into e<n>) or through a network's veth
-#   xo<n> into the egress VRF. With the IPv6 core, table ip6 shc_root_in6 (IPv6 rules only, input hook only; loaded
-#   before the root VRFs take the ICMP source): link-local sources pass (the veth sessions), then as the gateway's
-#   filter above. Always, table ip shc_root_in (IPv4 rules only, input hook only): ICMP and TCP segments with ACK or
+#   the VRF's own legs - a network's veth xe<n>, a circuit's device (each has its own filter or session) - came from
+#   a network (from the core, popped from MPLS or decapsulated into e<n>, or through a network's veth xo<n> into the
+#   egress VRF) or from the hand-off network on egress0 (the other node's networks, the internet), where only the
+#   upstream routers' BGP sessions (IPv6 egress) are admitted besides the common answers. With the IPv6 core, table ip6 shc_root_in6 (IPv6 rules only, input hook only; loaded
+#   before the root VRFs take the ICMP source): link-local sources from a network's veth xo<n> pass (the veth
+#   sessions), then as the gateway's filter above. Always, table ip shc_root_in (IPv4 rules only, input hook only): ICMP and TCP segments with ACK or
 #   RST pass, everything else is dropped (no reset or unreachable is sent: those would be routed outside the VRF on
 #   some kernels). Both stateless; each goes with the last root VRF (and the IPv6 one with the IPv6 core).
 # icmp4 (root, optional; absent or "" = none of this is read or set, but for removing such addresses a run before
@@ -291,7 +292,7 @@ sysctl_ensure() {
 # with errexit off (its subshells too), so errexit is switched off around the subshell instead. On failure: the
 # marker line on stdout (the jobs fail on "IPv6 core not applied"), every later IPv6 step left out, IPv4 as a run
 # without the IPv6 keys; the exit status stays 0. The helpers below run only through it.
-V6FAILED=""
+V6FAILED=""; V6RA=""
 v6() {
   local what=$1 rc
   shift
@@ -1219,7 +1220,11 @@ a = doc.get("attachments")
 nets = (e.get("networks") or []) if e.get("vrf") else []
 cs = (a.get("circuits") or []) if isinstance(a, dict) else []
 vrfs = sorted({x["vrf"] for x in nets + cs} | ({e["vrf"]} if e.get("vrf") else set()))
-legs = (["egress0"] if e.get("vrf") else []) + [n["xe"] for n in nets] + [c["device"] for c in cs]
+# the legs with a filter or a session of their own: the networks' veths (stateful inbound filter), the circuits'
+# devices (shc_attach); egress0 is no such leg (it reaches the hand-off network: the other node, the internet)
+legs = [n["xe"] for n in nets] + [c["device"] for c in cs]
+ups = [u["address"] for u in (e.get("ipv6") or {}).get("upstream") or []] if e.get("vrf") else []
+xos = [n["xo"] for n in nets]
 if not vrfs:
     sys.exit(0)
 def names(xs):
@@ -1227,11 +1232,17 @@ def names(xs):
 m = f"    iifname {names(vrfs)}"
 t = "ip6 shc_root_in6" if fam == "6" else "ip shc_root_in"
 out = [f"table {t}", f"delete table {t}", f"table {t} {{", "  chain input {",
-       "    type filter hook input priority filter; policy accept;",
-       f'{m} meta sdifname {names(legs)} accept comment "a leg of the VRF: its own filter and sessions"']
+       "    type filter hook input priority filter; policy accept;"]
+if legs:
+    out.append(f'{m} meta sdifname {names(legs)} accept comment "a leg of the VRF: its own filter and sessions"')
 if fam == "6":
-    out += [f'{m} ip6 saddr fe80::/10 accept comment "link-local: the veth sessions"',
-            f"{m} meta l4proto ipv6-icmp accept",
+    # the upstream routers' BGP sessions on the hand-off device (IPv6 egress; no other session runs there)
+    for a in ups:
+        for d in ("dport", "sport"):
+            out.append(f'{m} meta sdifname "egress0" ip6 saddr {a} tcp {d} 179 accept')
+    if xos:
+        out.append(f'{m} meta sdifname {names(xos)} ip6 saddr fe80::/10 accept comment "link-local: the veth sessions"')
+    out += [f"{m} meta l4proto ipv6-icmp accept",
             f"{m} tcp flags & (ack | rst) != 0 accept",
             f'{m} tcp flags & (ack | rst) == 0 counter reject with tcp reset comment "TCP without ACK or RST: reset"',
             f'{m} udp dport 0-65535 counter reject with icmpv6 type port-unreachable comment "UDP: port unreachable"',
@@ -1357,6 +1368,8 @@ root)
     if [ -n "$V6" ] && ! ra_precheck; then
       [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: a host interface relies on router advertisements" >&2; exit 4; }
       V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
+      # the IPv6 core is left out, not rolled back: what a run before applied stays, the IPv6 input filter with it
+      V6RA=1
     fi
     if [ "$TRANSPORT" = srv6 ]; then
       srv6_up "$BR"
@@ -1387,7 +1400,7 @@ root)
     root_in4
     if [ -n "$V6" ]; then
       v6 "the input filter of the root VRFs" root_in6
-    elif [ -z "$V6FAILED" ]; then
+    elif [ -z "$V6FAILED" ] && [ -z "${V6RA:-}" ]; then
       root_in_down "ip6 shc_root_in6" "$MARKI6"
     fi
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
