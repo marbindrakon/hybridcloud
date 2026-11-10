@@ -206,6 +206,12 @@ class Parse(unittest.TestCase):
         self.assertEqual(self.m.left_over(ROOT_LEFT, [r"^router isis CORE: segment-routing"]), [])
         self.assertEqual(len(self.m.left_over(ROOT_LEFT, [r"^router bgp"])), 1)
 
+    def test_the_kernels_forwarding_switches_are_left_out(self):
+        # FRR 8.5.3 in a namespace with IPv4 and IPv6 forwarding off: zebra shows "no ip(v6) forwarding"
+        out = ("\nLines To Delete\n===============\nno domainname example\nip forwarding\nipv6 forwarding\n\n"
+               "Lines To Add\n============\nservice integrated-vtysh-config\n")
+        self.assertEqual(self.m.left_over(out, []), [])
+
     def test_no_output_is_nothing_left(self):
         self.assertEqual(self.m.left_over("", []), [])
 
@@ -268,11 +274,21 @@ class Note(unittest.TestCase):
         self.answer(ROOT_LEFT)
         self.assertEqual(self.check()[0], "result=accepted")
 
-    def test_a_check_that_cannot_run_counts_as_a_line(self):
+    def test_a_check_that_cannot_run_compares_nothing_and_records_nothing(self):
+        # exit 3 (the record step fails on it, the next run reloads and checks again); no note, so a changing
+        # stderr line can neither fail a later run as "new" nor be accepted as "seen before"
+        import contextlib
+        self.answer(ROOT_LEFT)
+        self.check()                                  # a note from an earlier check
+        before = open(self.note).read()
         self.answer("", rc=1)
-        out = self.check()
-        self.assertEqual(out, ["result=unapplied", "line: check: frr-reload.py --test failed (rc 1): vtysh: no"])
-        self.assertEqual(self.check()[0], "result=accepted")
+        err, buf = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf), contextlib.redirect_stderr(err):
+            rc = self.m.main(["--conf", "/etc/frr/frr.conf", "--note", self.note, "--reload-script", self.fake])
+        self.assertEqual((rc, buf.getvalue()), (3, ""))
+        self.assertIn("nothing compared, nothing recorded: frr-reload.py --test failed (rc 1; last line: vtysh: no)",
+                      err.getvalue())
+        self.assertEqual(open(self.note).read(), before)
 
     def test_the_note_keeps_no_password(self):
         self.answer(NESTED)
