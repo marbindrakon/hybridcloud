@@ -24,7 +24,7 @@
       systemctl stop "$u"; systemctl reset-failed "$u" 2>/dev/null; changed=yes
     fi
     if systemctl -q is-enabled "$u" 2>/dev/null; then systemctl disable "$u"; changed=yes; fi
-    for f in /usr/local/sbin/shc-fabric-apply /etc/systemd/system/shc-fabric-apply@.service \
+    for f in /usr/local/sbin/shc-fabric-apply /usr/local/sbin/shc-frr-check /etc/systemd/system/shc-fabric-apply@.service \
              /etc/systemd/system/shc-gw@.service /etc/systemd/system/shc-core-guard@.service \
              /etc/systemd/system/shc-core-guard@.timer; do
       [ -e "$f" ] && { rm -f "$f"; changed=yes; }

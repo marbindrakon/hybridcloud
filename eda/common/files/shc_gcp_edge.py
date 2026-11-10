@@ -77,7 +77,7 @@ echo '%(agent)s' | base64 -d | gunzip > /usr/local/sbin/shc-edge-agent
 chmod 0755 /usr/local/sbin/shc-edge-agent
 printf '%%s\n' '[Unit]' 'Description=SHC edge router agent (config from Secret Manager)' 'After=network-online.target' \
   'Wants=network-online.target' '[Service]' 'Type=oneshot' 'ExecStart=/usr/bin/python3 /usr/local/sbin/shc-edge-agent' \
-  > /etc/systemd/system/shc-edge-agent.service
+  'TimeoutStartSec=5min' > /etc/systemd/system/shc-edge-agent.service
 printf '%%s\n' '[Unit]' 'Description=SHC edge router agent every 30 s' '[Timer]' 'OnBootSec=5' 'OnUnitActiveSec=30' \
   'AccuracySec=5' '[Install]' 'WantedBy=timers.target' > /etc/systemd/system/shc-edge-agent.timer
 systemctl daemon-reload
