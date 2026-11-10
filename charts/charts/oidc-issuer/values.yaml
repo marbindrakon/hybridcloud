@@ -22,7 +22,8 @@ tls:
 # An issuer that cannot be fetched keeps its last published documents. The job fails only for a fault: a local, url
 # or static issuer that fails, or an acm cluster that fails while its ManagedCluster is available. An acm cluster that
 # is not available (powered off, paused) is reported in the job log and is not a fault. Annotations
-# shc.signal9.gg/oidc-fetched-<name> on ConfigMap oidc-documents record when each issuer was last fetched.
+# shc.signal9.gg/oidc-fetched-<name> on ConfigMap oidc-documents record when each issuer was last fetched; the age of
+# kept documents is recorded, not judged (a site may be off or paused for days).
 sync:
   schedule: "*/15 * * * *"
   image: registry.redhat.io/openshift4/ose-tools-rhel9:latest  # has oc + jq (ose-cli lacks jq)
