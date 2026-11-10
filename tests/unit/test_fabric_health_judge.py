@@ -33,7 +33,7 @@ def unit(active="active", **kw):
 def inst(kind="root", **kw):
     su = "shc-fabric-apply@root.service" if kind == "root" else "shc-gw@atuin.service"
     ru = "frr.service" if kind == "root" else su
-    d = {"start": dict(unit(), unit=su, lines=[]), "units": {su: unit(), ru: unit()},
+    d = {"start": dict(unit(), unit=su, lines=[], incomplete=[]), "units": {su: unit(), ru: unit()},
          "routing": {"unit": ru, "daemons": {"zebra": "Up", "bgpd": "Up"}, "crashes": []},
          "kernelDrift": [], "frr": {"reloadDue": False, "recorded": True, "pending": None}}
     if kind == "root":
@@ -149,6 +149,17 @@ class JudgeTest(unittest.TestCase):
         f3 = J.judge(req([node("bgw-1")], fab_status=st, now=MUCH_LATER))["fabric"]
         self.assertEqual(cond(f3["status"], "NodesHealthy")["status"], "True")
         self.assertEqual([e["reason"] for e in f3["events"]], ["NodeHealthRecovered"])
+
+    def test_start_incomplete_until_an_apply_without_warnings(self):
+        r = inst(start=dict(unit(), unit="shc-fabric-apply@root.service", lines=[],
+                            incomplete=["warning: interface eno1 relies on router advertisements; IPv6 core not applied"]))
+        f = J.judge(req([node("bgw-1", root=r)]))["fabric"]
+        c = cond(f["status"], "NodesHealthy")
+        self.assertEqual(c["reason"], "StartIncomplete")
+        self.assertNotIn("warning:", c["message"])
+        st = apply({}, f["status"])
+        f2 = J.judge(req([node("bgw-1")], fab_status=st, now=LATER))["fabric"]
+        self.assertEqual(cond(f2["status"], "NodesHealthy")["status"], "True")
 
     def test_lines_not_taken_are_reported_never_woken(self):
         g = inst("gateway", frr={"reloadDue": False, "recorded": True, "pending": [], "notTaken": ["router bgp 1: x"]})

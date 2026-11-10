@@ -160,12 +160,15 @@ class ReaderTest(unittest.TestCase):
         self.assertTrue(any("_SYSTEMD_INVOCATION_ID=inv-shc-fabric-apply@root.service" in c for c, _ in
                             [(" ".join(x), t) for x, t in n.calls]))
 
-    def test_root_applied_without_ipv6_keeps_the_warning(self):
+    def test_the_start_is_judged_by_the_last_successful_apply(self):
         n = Node()
-        n.journal["shc-fabric-apply@root.service"] = ["warning: router advertisements on eno1; IPv6 core not applied",
-                                                      "changed=yes"]
+        # the boot unit's journal still has the warning, but a later apply (a job's) succeeded without it
+        n.journal["shc-fabric-apply@root.service"] = ["warning: interface eno1 relies on router advertisements; IPv6 core not applied"]
         st = n.read_node()["instances"]["root"]["start"]
-        self.assertEqual(st["lines"], ["warning: router advertisements on eno1; IPv6 core not applied"])
+        self.assertEqual((st["lines"], st["incomplete"]), ([], []))
+        n.files["/etc/shc-fabric/root.incomplete"] = "warning: interface eno1 relies on router advertisements; IPv6 core not applied\n"
+        st = n.read_node()["instances"]["root"]["start"]
+        self.assertEqual(st["incomplete"], ["warning: interface eno1 relies on router advertisements; IPv6 core not applied"])
 
     def test_gateway_crash_loop_daemon_down_and_coredump(self):
         n = Node()

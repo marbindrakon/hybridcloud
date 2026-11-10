@@ -5,7 +5,8 @@
 #   shc-fabric-apply <instance> [up|down]   (and post, guard, snapshot: see below)
 #   shc-fabric-apply <instance> snapshot   read only: prints the state this script manages for the instance; a
 #   successful up records the same text in /etc/shc-fabric/<instance>.applied (down removes it), so a reader can
-#   tell what changed on the node since the last apply
+#   tell what changed on the node since the last apply. A successful up that left IPv6 out records its warning lines in
+#   /etc/shc-fabric/<instance>.incomplete (an up without warnings, and down, remove it)
 # instance type "root" (the border gateway's own instance, root namespace):
 #   MPLS (modules, platform_labels; transport mpls, see below), the node-local core bridge with the link address and a
 #   fixed MAC (a Linux bridge
@@ -175,6 +176,8 @@
 #   the one at 32765 is deleted); a gateway's go with its namespace.
 set -euo pipefail
 NSX=""
+# what a successful up left out (its warning lines), recorded in <instance>.incomplete (see the end)
+INCOMPLETE=""
 I=${1:?usage: shc-fabric-apply <instance> [up|down|post|guard]}; ACT=${2:-up}
 CONF=/etc/shc-fabric/$I.json
 [ -r "$CONF" ] || { echo "no $CONF" >&2; exit 2; }
@@ -304,6 +307,7 @@ v6() {
   # transport srv6: both families ride the IPv6 core, so IPv4 alone is no working state: the apply fails
   [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: $what failed (the IPv6 core carries both families)" >&2; exit 4; }
   echo "warning: $what failed; IPv6 core not applied"
+  INCOMPLETE+="warning: $what failed; IPv6 core not applied"$'\n'
   V6FAILED=1; V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
 }
 
@@ -404,6 +408,7 @@ ra_precheck() {
     m=$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty') || continue
     if [ -n "$m" ] && shows -q ' vrf table ' ip -d link show "$m" 2>/dev/null; then continue; fi
     echo "warning: interface $d relies on router advertisements; IPv6 core not applied"
+    INCOMPLETE+="warning: interface $d relies on router advertisements; IPv6 core not applied"$'\n'
     return 1
   done
 }
@@ -1656,5 +1661,12 @@ if [ "$ACT" = up ] && ! cmp -s "$APPLIED.new" "$APPLIED"; then
 else
   rm -f "$APPLIED.new"
   [ "$ACT" = up ] || rm -f "$APPLIED"
+fi
+# the last successful up's warnings, whoever ran it (the boot unit or a job): a reader judges the start by this, not by
+# one invocation's journal; an up without warnings, and down, remove it
+if [ "$ACT" = up ] && [ -n "$INCOMPLETE" ]; then
+  printf '%s' "$INCOMPLETE" > "/etc/shc-fabric/$I.incomplete"
+else
+  rm -f "/etc/shc-fabric/$I.incomplete"
 fi
 [ "$before" = "$after" ] && echo "changed=no" || echo "changed=yes"

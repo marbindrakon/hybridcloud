@@ -274,9 +274,11 @@ def read_node(inp, run, read=read_file, now=None):
         start = dict(units[su], unit=su)
         if start["active"] != "active":
             start["lines"] = start_lines(run, su, shown.get(su, {}).get("InvocationID", ""))
-        elif i["kind"] == "root":
-            start["lines"] = [l for l in start_lines(run, su, shown.get(su, {}).get("InvocationID", ""))
-                              if l.startswith("warning: ")]
+        else:
+            start["lines"] = []
+        # what the last successful apply left out (its warnings), whoever ran it: the boot unit or a job's direct apply
+        start["incomplete"] = [l.strip() for l in (read("%s/%s.incomplete" % (ETC, i["name"])) or "").splitlines()
+                               if l.strip()][:5]
         pathspace = "" if i["kind"] == "root" else i["name"]
         files, record = frr_files(i)
         loaded = (read(record) or "").strip()

@@ -361,9 +361,25 @@
     state=$(systemctl is-active "$u"); job=$(systemctl show -p Job --value "$u")
     if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: $u $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/gw-{{ fab_name }}/frr.conf.shc 2>/dev/null | sha256sum | cut -d' ' -f1)
+    # a reload for lines FRR's running configuration lacked (frr_pending.yml) is checked although the file is unchanged
+    {% if frr_pending_lines | default([]) | length == 0 %}
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    {% endif %}
     {% if fab_real.nodes.frrLoadCheck.enabled | default(true) | bool %}
-    check=$(/usr/local/sbin/shc-frr-check --conf /etc/frr/gw-{{ fab_name }}/frr.conf.shc --pathspace gw-{{ fab_name }} --note /etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied{% for p in fab_real.nodes.frrLoadCheck.ignore | default([]) %} --ignore {{ p | quote }}{% endfor %}) || exit 1
+    chk() { /usr/local/sbin/shc-frr-check --conf /etc/frr/gw-{{ fab_name }}/frr.conf.shc --pathspace gw-{{ fab_name }} --note /etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied{% for p in fab_real.nodes.frrLoadCheck.ignore | default([]) %} --ignore {{ p | quote }}{% endfor %}; }
+    {% if frr_pending_lines | default([]) | length > 0 %}
+    known=$( { printf '%s\n' {{ frr_pending_lines | map('quote') | join(' ') }}; cat /etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied 2>/dev/null; } )
+    {% endif %}
+    check=$(chk) || exit 1
+    {% if frr_pending_lines | default([]) | length > 0 %}
+    # lines that were missing before this reload (or noted by an earlier check) and are still missing after it: two
+    # loads left them, so they are FRR's to keep; the second check accepts them and the file is recorded (no run
+    # reloads for them again). A line this reload left that was not missing before stays unapplied as usual
+    if [ "${check%%$'\n'*}" = result=unapplied ] \
+       && [ -z "$(printf '%s\n' "$check" | sed -n 's/^line: //p' | grep -vxF -f <(printf '%s\n' "$known"))" ]; then
+      check=$(chk) || exit 1
+    fi
+    {% endif %}
     echo "$check"
     [ "${check%%$'\n'*}" = result=unapplied ] && exit 0
     {% endif %}

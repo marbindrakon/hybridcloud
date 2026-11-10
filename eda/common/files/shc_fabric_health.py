@@ -109,8 +109,10 @@ def instance_findings(inst, kind, cfg):
                 found.append(("StartFailed", "the configuration is not applied on the node (%s%s)%s"
                               % (start.get("active"), ", " + start["result"] if start.get("result") not in (None, "", "success") else "",
                                  why)))
-        elif lines and kind == "root":
-            found.append(("StartIncomplete", "the configuration was applied in part" + why))
+        elif start.get("incomplete"):
+            # the last successful apply's own record (a later repair by a job clears it)
+            found.append(("StartIncomplete", "the configuration was applied in part: "
+                          + "; ".join(clean(start["incomplete"]))))
         routing = (inst.get("routing") or {}).get("unit")
         units = inst.get("units") or {}
         for name, u in sorted(units.items()):

@@ -391,6 +391,31 @@ class _Unapplied(_States):
         self.assertIsNone(self.note())
         self.assertEqual(self.job("conf A\nline X\n"), ([], False))
 
+    def test_a_pending_line_a_reload_does_not_fix_converges_in_one_run(self):
+        # a record from before the load check: file and record agree, FRR lacks a line it never takes; the run that
+        # reloads for it checks although the file is unchanged, and since the line was missing before and after the
+        # reload it is accepted at once: recorded, noted, not failed, no reload again
+        self.node.running("conf A\nline X\n")
+        self.assertEqual(self.job("conf A\nline X\n"), ([], False))
+        self.node.put("loaded", "conf A\n")
+        self.node.put("never", "line X\n")
+        self.node.put("pending", "line X\n")
+        actions, failed, out = self.job("conf A\nline X\n", probe=self.RECORDED + ".stdout_lines")
+        self.assertEqual((actions, failed), (["reloaded"], False))
+        self.assertEqual(out[0], "result=accepted")
+        note = os.path.join(self.node.r, "etc/shc-fabric", ("gw-site1" if self.GATEWAY else "root") + ".frr-unapplied")
+        self.assertIn("line X", self.node.get(note) or "")
+        os.remove(self.node.p("pending"))            # the reader leaves noted lines out from now on
+        self.assertEqual(self.job("conf A\nline X\n"), ([], False))
+
+    def test_a_pending_line_and_a_new_one_left_still_fails(self):
+        self.node.running("conf A\n")
+        self.assertEqual(self.job("conf A\n"), ([], False))
+        self.node.put("never", "line Y\n")
+        self.node.put("pending", "line Z\n")
+        actions, failed = self.job("conf A\nline Y\n")
+        self.assertTrue(failed)
+
     def test_a_line_frr_never_takes_is_recorded_after_the_second_reload_and_reported(self):
         self.node.running("conf A\n")
         self.job("conf A\n")

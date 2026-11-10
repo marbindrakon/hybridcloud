@@ -72,6 +72,19 @@ class SnapshotCase(T.ApplyCase):
                 self.skipTest("srv6 root not runnable on this fake: %s" % str(e)[:200])
             raise
 
+    def test_the_last_up_records_what_it_left_out(self):
+        self.h.conf("root", dict(T.ROOT_CONF, **T.ROOT6))
+        inc = os.path.join(self.h.etc, "root.incomplete")
+        # an IPv6 step the kernel refuses: the up succeeds without IPv6 and records the warning
+        rc, out, err, _ = self.h.run("root", fail=r"^\[root\] sysctl -qw net/ipv6/conf/br-core/accept_ra=0$")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("IPv6 core not applied", out)
+        with open(inc) as f:
+            self.assertEqual(f.read(), "warning: IPv6 settings of the core bridge br-core failed; IPv6 core not applied\n")
+        # the next up without warnings (a job's direct apply) clears it
+        self.h.ok(self, "root")
+        self.assertFalse(os.path.exists(inc))
+
     def test_failed_up_leaves_the_record_alone(self):
         self.h.conf("root", T.ROOT_CONF)
         self.h.ok(self, "root")
