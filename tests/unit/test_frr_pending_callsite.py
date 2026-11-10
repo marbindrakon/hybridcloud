@@ -49,12 +49,22 @@ router bgp 65010 vrf egress
 def fake_checker(left, note_lines=(), err=None):
     c = types.SimpleNamespace(RELOAD="/x/frr-reload.py", TIMEOUT=90, calls=[])
     c.run_test = lambda conf, ps, script: (c.calls.append((conf, ps, script)) or (None if err else "text", err))
-    c.left_over = lambda text, ignore: [l for l in left if not any(i in l for i in ignore)]
+    c.left_over = lambda text, ignore, conf_text=None: [l for l in left if not any(i in l for i in ignore)]
     c.read_note = lambda path: set(note_lines) if path else set()
     return c
 
 
 class Pending(unittest.TestCase):
+    def test_the_desired_file_is_passed_for_the_derived_route_targets(self):
+        c = fake_checker([])
+        seen = []
+        c.left_over = lambda text, ignore, conf_text=None: seen.append(conf_text) or []
+        with tempfile.NamedTemporaryFile("w", suffix=".conf") as f:
+            f.write("vrf t1\n vni 1\nexit-vrf\n")
+            f.flush()
+            P.frr_pending_difference(None, "gw-a", f.name, checker=c)
+        self.assertEqual(seen, ["vrf t1\n vni 1\nexit-vrf\n"])
+
     def test_lines_minus_the_note_and_ignore(self):
         c = fake_checker(["a: x", "b: y", "c: z"], note_lines=["b: y"])
         self.assertEqual(P.frr_pending_difference(None, "gw-a", "/f", note="/n", ignore=["c:"], checker=c), ["a: x"])
@@ -124,7 +134,7 @@ class CallSite(unittest.TestCase):
             with open(chk, "w") as f:
                 f.write("RELOAD = 'x'\nTIMEOUT = 90\n"
                         "def run_test(conf, ps, script):\n    return 'text', None\n"
-                        "def left_over(text, ignore):\n    return [l for l in %r if not any(i in l for i in ignore)]\n"
+                        "def left_over(text, ignore, conf_text=None):\n    return [l for l in %r if not any(i in l for i in ignore)]\n"
                         "def read_note(path):\n    return set(%r)\n" % (list(left), list(note)))
         src = src.replace('CHECKER = "/usr/local/sbin/shc-frr-check"', "CHECKER = %r" % chk)
         # role_path/../../../common/files: role = tmp/a/b/c -> tmp/common/files

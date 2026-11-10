@@ -88,6 +88,100 @@ router bgp 65010 vrf t51009
 """
 
 
+# a gateway instance with two tenant VRFs as the blades' FRR 8.5.3 (RHEL build) showed it on a fully loaded instance
+# (D.pre.check, both blades, every gateway): the EVPN route targets of each VRF, <AS>:<its L3 VNI>, never show in the
+# running configuration (FRR holds them as its own automatic ones)
+GW_BLADE = """
+Lines To Delete
+===============
+no hostname bgw-1.example
+
+Lines To Add
+============
+router bgp 65010 vrf t51003
+ address-family l2vpn evpn
+  route-target import 65010:51003
+router bgp 65010 vrf t51003
+ address-family l2vpn evpn
+  route-target export 65010:51003
+router bgp 65010 vrf t51004
+ address-family l2vpn evpn
+  route-target import 65010:51004
+router bgp 65010 vrf t51004
+ address-family l2vpn evpn
+  route-target export 65010:51004
+frr version 8.5
+hostname bgw-1-gw-site1
+service integrated-vtysh-config
+"""
+# the same instance's file, as the gateway template renders its VRFs
+GW_BLADE_CONF = """frr version 8.5
+frr defaults traditional
+hostname bgw-1-gw-site1
+!
+vrf t51003
+ vni 51003
+exit-vrf
+!
+vrf t51004
+ vni 51004
+exit-vrf
+!
+router bgp 65010 vrf t51003
+ address-family l2vpn evpn
+  route-target import 65010:51003
+  route-target export 65010:51003
+ exit-address-family
+exit
+"""
+
+
+class DerivedRouteTargets(unittest.TestCase):
+    def setUp(self):
+        self.m = load()
+
+    def test_the_blades_gateway_output_is_all_held(self):
+        self.assertEqual(self.m.left_over(GW_BLADE, [], GW_BLADE_CONF), [])
+
+    def test_without_the_file_they_count(self):
+        self.assertEqual(len(self.m.left_over(GW_BLADE, [])), 4)
+
+    def test_only_the_derived_value(self):
+        def left(entry, conf=GW_BLADE_CONF):
+            return self.m.left_over("\nLines To Add\n============\n" + entry, [], conf)
+        # another value missing still fails
+        self.assertEqual(left("router bgp 65010 vrf t51003\n address-family l2vpn evpn\n  route-target import 65010:9999\n"),
+                         ["router bgp 65010 vrf t51003: address-family l2vpn evpn: route-target import 65010:9999"])
+        # another VRF's VNI, a VRF the file gives no VNI, another AS: all count
+        self.assertEqual(len(left("router bgp 65010 vrf t51003\n address-family l2vpn evpn\n  route-target export 65010:51004\n")), 1)
+        self.assertEqual(len(left("router bgp 65010 vrf t51009\n address-family l2vpn evpn\n  route-target import 65010:51009\n")), 1)
+        self.assertEqual(len(left("router bgp 65011 vrf t51003\n address-family l2vpn evpn\n  route-target import 65010:51003\n")), 1)
+        # a 4-byte AS (FRR derives from its low 16 bits), the VPN address family, a deletion: all count
+        conf4 = GW_BLADE_CONF.replace("65010", "4200000001")
+        self.assertEqual(len(left("router bgp 4200000001 vrf t51003\n address-family l2vpn evpn\n  route-target import 4200000001:51003\n", conf4)), 1)
+        self.assertEqual(len(left("router bgp 65010 vrf t51003\n address-family ipv4 unicast\n  route-target import 65010:51003\n")), 1)
+        self.assertEqual(self.m.left_over("\nLines To Delete\n===============\nrouter bgp 65010 vrf t51003\n address-family l2vpn evpn\n"
+                                          "  no route-target import 65010:51003\n", [], GW_BLADE_CONF),
+                         ["router bgp 65010 vrf t51003: address-family l2vpn evpn: no route-target import 65010:51003"])
+
+    def test_the_vnis_of_the_file(self):
+        self.assertEqual(self.m.vrf_vnis(GW_BLADE_CONF), {"t51003": 51003, "t51004": 51004})
+        self.assertEqual(self.m.vrf_vnis("vrf a\n vni 7 prefix-routes-only\nexit-vrf\nvrf b\nexit-vrf\n"), {"a": 7})
+
+    def test_main_reads_the_file(self):
+        d = tempfile.mkdtemp(prefix="shc-frr-check-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, True))
+        conf, out, fake = (os.path.join(d, x) for x in ("frr.conf.shc", "out", "frr-reload.py"))
+        open(conf, "w").write(GW_BLADE_CONF)
+        open(out, "w").write(GW_BLADE)
+        open(fake, "w").write("#!%s\nimport sys\nsys.stdout.write(open(%r).read())\n" % (sys.executable, out))
+        os.chmod(fake, 0o755)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.m.main(["--conf", conf, "--note", os.path.join(d, "n"), "--reload-script", fake])
+        self.assertEqual(buf.getvalue().splitlines(), ["result=applied"])
+
+
 class Parse(unittest.TestCase):
     def setUp(self):
         self.m = load()
