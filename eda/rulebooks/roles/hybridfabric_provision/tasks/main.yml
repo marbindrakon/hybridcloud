@@ -172,6 +172,19 @@
         kind: NetworkPlacement
       register: _hf_placements
 
+    # the cloud edge routers' ICMPv6 sources (CloudGateway status.realization.edgeRouterIcmpSources6): a network's
+    # source set at the root admits those of the gateways its IPv6 placements use (egress.ipv6 only)
+    - name: List the CloudGateways for their edge routers' ICMPv6 sources
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudGateway
+        namespace: "{{ fab_namespace }}"
+      register: _hf_edge_gateways
+      when: (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool
+
     # platform reach (P8 §13): annotation shc.signal9.gg/platform-reach on a HybridNetwork (a JSON list of the
     # network's prefixes the platform's own sources must reach, e.g. a private cluster's API) is written by the
     # platform's automation, never by tenants.
@@ -179,10 +192,19 @@
     # enabled): the network wants internet egress and holds a platform block (status.ipv6 mode Platform): its block
     # and the IPv6 prefixes of its placements (status.subnets), the ones that are not being deleted and that come
     # from the network's space (a provider-assigned prefix is never announced upstream nor part of the network's block)
+    # and the edge routers' ICMPv6 sources of the gateways those placements use (status.cloudGateway)
     - name: Set the networks with internet egress or platform reach
       vars:
         _alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
         _v6on: "{{ (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool }}"
+        _edge6: >-
+          {%- set out = {} -%}
+          {%- for g in (_hf_edge_gateways | default({})).resources | default([])
+                if (g.spec.fabricRef | default({})).name | default('') == fab_name -%}
+            {%- set _ = out.update({g.metadata.name: ((g.status | default({}, true)).realization | default({}, true)).edgeRouterIcmpSources6
+                                                     | default([], true)}) -%}
+          {%- endfor -%}
+          {{ out }}
       ansible.builtin.set_fact:
         hf_egress_networks: >-
           {%- set out = [] -%}
@@ -203,21 +225,26 @@
                   and n.metadata.deletionTimestamp is not defined
                   and owner in (_alloc.egress | default({})) and owner in (_alloc.vpnTarget | default({})) -%}
               {%- set p6 = [] -%}
+              {%- set e6 = [] -%}
               {%- if v6 -%}
                 {%- for p in _hf_placements.resources | default([])
                       if p.metadata.namespace == n.metadata.namespace
                          and (p.spec | default({})).network | default('') == n.metadata.name
                          and p.metadata.deletionTimestamp is not defined -%}
-                  {%- for s in (p.status | default({}, true)).subnets | default([], true)
+                  {%- set ps = p.status | default({}, true) -%}
+                  {%- for s in ps.subnets | default([], true)
                             if (s.family | default(4) | int) == 6 and (s.source | default('Network')) != 'Provider' -%}
                     {%- set _ = p6.append(s.prefix) -%}
+                    {%- set _ = e6.extend(_edge6.get(ps.cloudGateway | default('', true), [])) -%}
                   {%- endfor -%}
                 {%- endfor -%}
               {%- endif -%}
               {%- set _ = out.append({'network': n.metadata.namespace ~ '/' ~ n.metadata.name,
                                       'vpnTarget': _alloc.vpnTarget[owner] | int, 'index': _alloc.egress[owner] | int,
                                       'internet': internet, 'ipv4': has4, 'platform': platform}
-                                     | combine({'ipv6': {'block': block, 'prefixes': p6 | unique | list}} if v6 else {})) -%}
+                                     | combine({'ipv6': {'block': block, 'prefixes': p6 | unique | list}
+                                                        | combine({'edgeSources6': e6 | unique | sort | list}
+                                                                  if e6 | length > 0 else {})} if v6 else {})) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ out if fab_real.egress.enabled | default(false) | bool else [] }}

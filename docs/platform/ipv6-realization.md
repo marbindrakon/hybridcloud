@@ -101,8 +101,8 @@ ipam:
 network:
   exclusiveRanges: []   # prefixes no tenant prefix may overlap, in either direction
 ```
-A tenant prefix that overlaps an entry (either way round) is refused with `PrefixReserved`. Every pool's prefixes are
-added automatically. List here the rest of the platform's own space: the installation's whole public IPv6
+A tenant prefix that overlaps an entry (either way round) is refused with `PrefixReserved`. Every pool's prefixes,
+`core.icmpSource6` and the SRv6 SID block (`core.srv6.block`) are added automatically. List here the rest of the platform's own space: the installation's whole public IPv6
 allocation, infrastructure ranges, and the translation prefixes the sites use. A tenant GUA outside these ranges is
 accepted as the tenant's own; the platform can't check ownership, and mode-1 prefixes never reach a shared path.
 
@@ -593,8 +593,11 @@ the primary's upstream sessions fail, the sites' default moves to the standby an
 the prefixes the standby still announces; flows where the tenant sends next recover, receive-only flows reset.
 
 The filter is the nftables table `inet shc_egress6` on every node (IPv6 rules only; the IPv4 table stays as it is):
-outbound from a network only from its platform block and the node's /112 of `core.icmpSource6` (the ICMPv6 sources
-of the node's root and gateway namespaces, so a gateway's Packet Too Big toward the internet passes), not to the
+outbound from a network only from its platform block, the node's /112 of `core.icmpSource6` (the ICMPv6 sources
+of the node's root and gateway namespaces, so a gateway's Packet Too Big toward the internet passes) and the ICMPv6
+sources of the AWS or Google Cloud edge routers the network's IPv6 placements use (each router's /128, as its
+CloudGateway reports them in `status.realization.edgeRouterIcmpSources6`, so a router's Time Exceeded or Unreachable
+for a flow from the internet passes), not to the
 translator-embedded forms of `egress.denyDestinations` (from `translation.<site>.pref64`), then `allowDestinations6`
 and the resolvers on port 53 (`resolverDestinations6` and every `translation.<site>.dns64Resolvers`), then not to
 `denyDestinations6`; a TCP MSS clamp at `wanMtu - 60` both ways
@@ -644,7 +647,7 @@ gateway:
   siteImportFilter:   # per address family: only the placements' prefixes enter a VRF from the site
     ipv4: false
     ipv6: true
-  announceIcmpSource6: false    # each node announces its icmpSource6 address to the site (with an input filter)
+  announceIcmpSource6: true     # each node announces its icmpSource6 address to the site
   announceIcmpSource6BySite: {} # <site>: true or false; overrides announceIcmpSource6 for that site's gateway
 ```
 - **`core.loopbackPool6`:** an IPv6 network of at least a /120, never advertised outside the core (the egress
@@ -659,9 +662,10 @@ gateway:
   namespace gets `network + (node position << 16) + provider-edge index` as a /128 (the node position is 1-based in
   `borderGateway.nodes`), so the kernel can send Packet Too Big, Time Exceeded and Unreachable from inside a VRF.
   Example: `2001:db8:4005:1::/64` gives the root on the first node `2001:db8:4005:1::1:1` and the gateway with index 2
-  on the second node `2001:db8:4005:1::2:2`. These addresses are not announced unless `gateway.announceIcmpSource6`
-  is on for the site (below). Take them from a range the platform routes (an ICMP error with an unroutable source
-  never reaches the sender).
+  on the second node `2001:db8:4005:1::2:2`. A gateway node's address is announced to its site while
+  `gateway.announceIcmpSource6` is on for the site (below). Take them from a range the platform routes (an ICMP error
+  with an unroutable source never reaches the sender). The range is one of the exclusive ranges: a tenant prefix that
+  overlaps it is refused (`PrefixReserved`).
 - **`gateway.siteImportFilter`:** the gateways' import filter on the routes a site announces (`FROM-SITE`). For a
   family that is on, a route of that family enters only when its prefix lies inside one of the prefixes of the
   site's placements on that gateway (host routes inside them included); every other prefix of that family is
@@ -707,7 +711,7 @@ IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
   is answered with "destination unreachable"; the kernel's default of one message per second per destination (even one
   every 20 ms) leaves a guest connecting to a name with many addresses waiting a full retransmit for the answers that
   were limited. Empty keeps the kernel default.
-- **`gateway.announceIcmpSource6`** (default false) and **`gateway.announceIcmpSource6BySite`** (per site: `true` or
+- **`gateway.announceIcmpSource6`** (default true) and **`gateway.announceIcmpSource6BySite`** (per site: `true` or
   `false`, overriding the default for that site's gateway): each border gateway node announces its own
   `core.icmpSource6` address to the site as a /128 route, in every VRF whose placement holds IPv6 (only with the
   dual-stack core and `core.icmpSource6` set).
@@ -720,35 +724,23 @@ IPv6 sysctls and `unreachable` defaults stay, inert: they don't affect IPv4.
     sites, attachment circuits and the upstream routers of the IPv6 egress never see it. A gateway never takes a
     node's address back from the site (`FROM-SITE` refuses the whole `icmpSource6` range), also from a site that
     drops the gateways' community. The site gains one route per node in each IPv6 VRF; the edge routers of an AWS or
-    Google Cloud site keep it and pass it neither to the transit gateway nor to the Cloud Router.
-  - **The input filter.** With the announcement on, the gateway namespace filters IPv6 addressed to the node itself
-    from a VRF, and answers like a host with no open port. ICMPv6 passes (echo, errors, neighbour discovery), and so
-    do TCP segments with ACK or RST (the replies to connections the node opened; the node answers any other such
-    segment as a closed port would). Every other TCP segment (a connection request, FIN, NULL or XMAS probes) gets a
-    reset, so a port where the node listens looks closed, and UDP gets a port unreachable, both sent back to the
-    source through the VRF the packet came from, so ping and traceroute (UDP, TCP or ICMP) to a node's address get
-    their last hop. Every other protocol, and a fragment without its transport header, is dropped. The filter is
-    stateless: it keeps no connection state, "a TCP segment with ACK or RST" stands in for "established", and
-    forwarded traffic never meets it. Being stateless, it also refuses the UDP replies to requests the node itself
-    sends from a VRF (a DNS query, NTP or `iperf -u` run on the node inside a VRF gets no answer) and drops TCP that
-    reaches the node fragmented; the node itself sends nothing of the kind from a VRF (its own traffic there is
-    ICMPv6 and TCP). The answers are
-    the ones a closed port gets: resets are not rate-limited, unreachables only by the kernel's global ICMP
-    limit (`gateway.icmp6RateLimitMs` 0 lifts the per-destination one); an unreachable carries the probe plus 48
-    bytes of headers (at most 1280 bytes), a reset is no larger than the request, and both go only toward addresses
-    routed in that VRF.
-  - **Turning it on or off.** Change the realization, then run the site's CloudGateway (Retry now). The job
-    configures one node at a time. Turning it on, the filter is in place before the route is announced; turning it
-    off, the filter stays until the node's routing configuration no longer announces the route, and goes after that.
-    A run that stops in between leaves the filter in place (with the route or without it), and the next run finishes
-    the change. The routing change adds or removes one line per IPv6 VRF (no session resets).
+    Google Cloud site keep it and pass it neither to the transit gateway nor to the Cloud Router. Since
+    `core.icmpSource6` is an exclusive range, no placement prefix can overlap it, so the range entry never refuses a
+    tenant's own routes.
+  - **The input filter.** IPv6 addressed to a node itself from a VRF is filtered whether the switch is on or off:
+    the node answers like a host with no open port, and FRR's per-VRF listeners are never reachable from a tenant
+    network ([Border gateway nodes](border-gateway-nodes.md#what-a-network-reaches-of-the-node-itself)). The filter
+    comes with the dual-stack core and is in place before a VRF device holds the address.
+  - **Turning it off or on for a site.** Set `gateway.announceIcmpSource6BySite.<site>` (or the default), then run
+    the site's CloudGateway (Retry now). The job configures one node at a time; the routing change adds or removes
+    one line per IPv6 VRF (no session resets), and the filter stays in place throughout.
     `status.realization.icmpSource6Announced` of the CloudGateway says whether its nodes announce their addresses.
   - **While the nodes are switched one after the other**, the node not yet switched has no range entry in
     `FROM-SITE`. If the site sends the first node's address back with the gateways' communities stripped and
     `gateway.siteImportFilter.ipv6` is off, that node takes the route and puts it into the network's VPN until its own
     turn (in a run that turns the switch on, and the same in reverse when it turns it off), for as long as the job
     spends on the nodes before it. Keep the IPv6 site-import filter on while switching (the default): it refuses the
-    range as long as no placement prefix covers `core.icmpSource6`.
+    range.
 
 ## Reverse DNS (`dns.reverse6`)
 
@@ -1003,8 +995,11 @@ index), at node ordinal 100 + the router's position by name (100 for the first r
 nodes use their position in `borderGateway.nodes` from 1, so the two never meet while a fabric has fewer than 100
 border gateway nodes. The routers install their fabric-side routes with that address as source, so Packet Too Big
 and Time Exceeded toward the fabric come from it; toward the VPC they come from the GRE device's /125 address, which
-the transit gateway delivers. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table
-also gets an unreachable IPv6 default, so a destination nothing routes fails at once. The routers' VRFs keep the site
+the transit gateway delivers. The CloudGateway reports the routers' addresses in
+`status.realization.edgeRouterIcmpSources6`, and the IPv6 egress admits them as sources of the networks placed on the
+site ([IPv6 internet egress](#ipv6-internet-egress-egressipv6)), so a router's error for a flow from the internet
+reaches it. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an
+unreachable IPv6 default, so a destination nothing routes fails at once. The routers' VRFs keep the site
 leg's MTU (1370 behind the WireGuard tunnels) for both families.
 
 **State.** `shc_aws_edge.py status` lists per VRF its IPv6 settings and, under `ipv6`, per router the sessions that
@@ -1073,8 +1068,9 @@ with the same formula as on AWS: node ordinal 100 + the router's position by nam
 index. The gateway job computes them and hands them to the routers with the gateway nodes' keys. The routers install
 their fabric-side routes with that address as source, so Packet Too Big and Time Exceeded toward the fabric come from
 it; toward the VPC they come from the XFRM device's /126 address. The routers send Packet Too Big without a rate
-limit. Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an unreachable
-IPv6 default, so a destination nothing routes fails at once. The VRFs keep the site leg's MTU (1370 behind the
+limit. The CloudGateway reports the routers' addresses in `status.realization.edgeRouterIcmpSources6`, as on AWS.
+Without the IPv6 core or `core.icmpSource6` the routers get no /128. Each VRF table also gets an unreachable IPv6
+default, so a destination nothing routes fails at once. The VRFs keep the site leg's MTU (1370 behind the
 WireGuard tunnels) and the XFRM devices the VPN MTU, for both families.
 
 **State.** `shc_gcp_edge.py status` lists per VRF its IPv6 settings and, under `ipv6`, per router the tunnels' /126

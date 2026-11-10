@@ -1,4 +1,5 @@
-"""The SRv6 SID block is one of the platform's exclusive ranges in the network job (hybridnetwork_provision)."""
+"""The SRv6 SID block and core.icmpSource6 are among the platform's exclusive ranges in the network job
+(hybridnetwork_provision): a tenant prefix that overlaps either is refused (PrefixReserved)."""
 import os
 import unittest
 
@@ -24,6 +25,17 @@ class ExclusiveRanges(unittest.TestCase):
     def test_the_block_is_exclusive_when_set(self):
         real = {"network": {"exclusiveRanges": ["2001:db8:1::/48"]}, "core": {"srv6": {"block": "5f00:db8::/32"}}}
         self.assertEqual(self.exclusive(real), ["2001:db8:1::/48", "5f00:db8::/32"])
+
+    def test_the_icmp_source_pool_is_exclusive_when_set(self):
+        """the gateways refuse every site route inside it (the nodes' own addresses, announced to the sites by
+        default) and the cloud edge routers hold addresses from it, so no tenant prefix may overlap it, whether or not
+        the installation lists it"""
+        real = {"network": {"exclusiveRanges": ["2001:db8:1::/48"]},
+                "core": {"icmpSource6": "2001:db8:4005:1::/64", "srv6": {"block": "5f00:db8::/32"}}}
+        self.assertEqual(self.exclusive(real), ["2001:db8:1::/48", "5f00:db8::/32", "2001:db8:4005:1::/64"])
+        self.assertEqual(self.exclusive(dict(real, core={"icmpSource6": ""})), ["2001:db8:1::/48"])
+        # the realization defaults: none
+        self.assertEqual(self.exclusive({"core": {"icmpSource6": ""}, "network": {"exclusiveRanges": []}}), [])
 
 
 if __name__ == "__main__":

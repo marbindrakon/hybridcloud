@@ -36,11 +36,11 @@ fabric_realization_defaults:
     # announce each border gateway node's ICMPv6 source (core.icmpSource6) to the site in every VRF with IPv6: a /128
     # route that stays out of the network's VPN, so the site returns traffic for a node's own address to that node
     # rather than to whichever node its ECMP picks (ping and traceroute from a gateway node, ping to a node's ICMPv6
-    # source name). With it, IPv6 to the node itself from a VRF is filtered statelessly, as a host with no open port
-    # answers: ICMPv6 and TCP segments with ACK or RST pass (no connection tracking: "with ACK or RST" stands in for
-    # "established"), every other TCP segment gets a reset, UDP a port unreachable, the rest is dropped. Only with
-    # the IPv6 core and core.icmpSource6; off: nothing of it exists
-    announceIcmpSource6: false
+    # source name). Only with the IPv6 core and core.icmpSource6. Whether on or off, IPv6 to the node itself from a
+    # VRF is filtered statelessly, as a host with no open port answers: ICMPv6 and TCP segments with ACK or RST pass
+    # (no connection tracking: "with ACK or RST" stands in for "established"), every other TCP segment gets a reset,
+    # UDP a port unreachable, the rest is dropped
+    announceIcmpSource6: true
     # per site (CloudInfrastructure name: true or false): overrides announceIcmpSource6 for that site's gateway
     announceIcmpSource6BySite: {}
   core:
@@ -59,8 +59,9 @@ fabric_realization_defaults:
     # inside the SRGB
     sidOffset6: 1000
     # source of the ICMPv6 errors a VRF sends (Packet Too Big, Time Exceeded, Unreachable): a /128 per namespace
-    # per node on every VRF device (network address + (node position << 16) + provider-edge index); not
-    # announced unless gateway.announceIcmpSource6. At least a /96, clear of loopbackPool6. Empty = none
+    # per node on every VRF device (network address + (node position << 16) + provider-edge index); announced to
+    # the sites while gateway.announceIcmpSource6 is on for them. At least a /96, clear of loopbackPool6. A tenant
+    # prefix may not overlap it (it is one of the exclusive ranges below, added automatically). Empty = none
     icmpSource6: ""
     # VPN transport of the core, one for the fabric (every node's root and all its gateway namespaces): mpls = IS-IS
     # segment routing and MPLS L3VPN (labels over the loopbacks' node SIDs); srv6 = SRv6 L3VPN, one SID per VRF
@@ -139,7 +140,8 @@ fabric_realization_defaults:
     publicPools: {}
     holdDownDays: 7
   # HybridNetwork address space: a tenant prefix (spec.prefixes) overlapping one of these ranges, in either
-  # direction, is refused (PrefixReserved). Every ipam.publicPools prefix is added to the list automatically.
+  # direction, is refused (PrefixReserved). Every ipam.publicPools prefix, core.icmpSource6 and core.srv6.block are
+  # added to the list automatically.
   # An installation lists the platform's own globally routed space and its translation prefixes here.
   network:
     exclusiveRanges: []

@@ -77,15 +77,24 @@
 #   next to the JSON: a run whose pools are empty (the IPv6 core rolled back) still removes the addresses taken from
 #   them, then forgets them; the IPv6 sysctls and unreachable defaults stay (they don't affect IPv4). A VRF removed
 #   while the keys or pools are known takes its table's IPv6 unreachable default with it.
-#   icmp6Announced (gateway, optional, with icmp6; absent or false = none of this is read or set): the node announces
-#   its ICMP source to the site (FRR's), so the site's hosts reach the node's own address in a VRF every time. The
-#   nftables table ip6 shc_gw_in6 in the namespace (IPv6 rules only, input hook only; loaded before the VRFs' ICMP
-#   sources are set): IPv6 addressed to the node from a VRF is answered as by a host with no open port: ICMPv6 and
-#   TCP segments with ACK or RST pass, every other TCP segment gets a reset, UDP a port unreachable, the rest is
-#   dropped. Stateless: no connection tracking ("a TCP segment with ACK or RST" stands in for "established"; a
-#   stateful rule would make the namespace track and reassemble every tenant's forwarded IPv6 too).
-#   The table goes when the key does (a run that never had it issues no command for it); an IPv6 step that failed
-#   leaves it as it was.
+#   The VRFs' input filter (gateway, with loopback6 and VRFs; part of the IPv6 core): the nftables table ip6 shc_gw_in6
+#   in the namespace (IPv6 rules only, input hook only; loaded before the VRFs' ICMP sources are set): IPv6 addressed
+#   to the node from a VRF is answered as by a host with no open port: ICMPv6 and TCP segments with ACK or RST pass,
+#   every other TCP segment gets a reset, UDP a port unreachable, the rest is dropped. So FRR's per-VRF listeners (BGP,
+#   BFD) are never reachable from a tenant network, whether or not the node announces its ICMP source to the site
+#   (icmp6Announced, FRR's; the key is not read here). Stateless: no connection tracking ("a TCP segment with ACK or
+#   RST" stands in for "established"; a stateful rule would make the namespace track and reassemble every tenant's
+#   forwarded IPv6 too). The table goes with the IPv6 core (a run without loopback6 issues no command for it unless it
+#   was loaded) and with the last VRF; an IPv6 step that failed leaves it as it was.
+#   The root VRFs' input filters (root): the same answers for what a tenant network reaches of the root itself. A
+#   packet delivered to the node in a root VRF (the egress VRF, a network's VRF e<n>) that did not arrive on one of
+#   the VRF's own legs - egress0, a network's veth xe<n>, a circuit's device (each has its own filter or session) -
+#   came from a network: from the core (popped from MPLS or decapsulated into e<n>) or through a network's veth
+#   xo<n> into the egress VRF. With the IPv6 core, table ip6 shc_root_in6 (IPv6 rules only, input hook only; loaded
+#   before the root VRFs take the ICMP source): link-local sources pass (the veth sessions), then as the gateway's
+#   filter above. Always, table ip shc_root_in (IPv4 rules only, input hook only): ICMP and TCP segments with ACK or
+#   RST pass, everything else is dropped (no reset or unreachable is sent: those would be routed outside the VRF on
+#   some kernels). Both stateless; each goes with the last root VRF (and the IPv6 one with the IPv6 core).
 # Core transport (both types): transport (the core's, not a site leg's) "mpls" or "srv6"; absent = mpls, and a run
 #   with mpls issues none of the srv6 commands this paragraph describes. srv6 also reads srv6 {block, locator} (the
 #   SID block; the provider edge's locator, which must lie in it: FRR announces it, nothing here sets it) and needs
@@ -175,10 +184,10 @@ POOLS6=/etc/shc-fabric/$I.pools6; POOLS6_USED=""
 MARK6=/etc/shc-fabric/$I.egress6
 # the circuits' IPv6 filter table was loaded (attach_up): a run without a circuit with address6 removes it
 MARKA6=/etc/shc-fabric/$I.attach6
-# the gateway announces its ICMP source ("true" or ""); the VRFs' input filter was loaded (gw_in6): a run without the
-# key removes it
-ICMP6ANN=$(opt .icmp6Announced)
+# the VRFs' input filter was loaded (gw_in6; root: root_in6): a run without the IPv6 core removes it
 MARKI6=/etc/shc-fabric/$I.in6
+# the root VRFs' IPv4 input filter was loaded (root_in4): a run without root VRFs removes it
+MARKI4=/etc/shc-fabric/$I.in4
 # the core transport (see the header)
 TRANSPORT=$(opt .transport); TRANSPORT=${TRANSPORT:-mpls}
 case "$TRANSPORT" in mpls|srv6) ;; *) echo "unknown transport $TRANSPORT" >&2; exit 2 ;; esac
@@ -682,6 +691,8 @@ snapshot() {
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
     egress_state; attach_state; local4_state; srv6_state "$BR"
+    [ ! -e "$MARKI4" ] || nft -s list table ip shc_root_in 2>/dev/null || true
+    [ ! -e "$MARKI6" ] || nft -s list table ip6 shc_root_in6 2>/dev/null || true
     if [ -n "$V6KNOWN" ]; then  # the devices this sets up (never the management interface)
       ip -br -6 addr show | grep -E "^(lo|$BR|egress0|e[0-9]+${EV:+|$EV})[@ ]" || true
       sysctl -n "net/ipv6/conf/$BR/disable_ipv6" "net/ipv6/conf/$BR/accept_ra" "net/ipv6/conf/$BR/autoconf" \
@@ -1178,6 +1189,62 @@ print("\n".join(out))
 PY
 }
 
+# --- the root VRFs' input filters (see the header): what a network reaches of the root itself
+# <4|6>: the table for the root VRFs of this run (replaced as a whole); prints nothing without root VRFs. iifname and
+# meta sdifname match by name, so the table may come before the devices.
+root_in_nft() {
+  python3 - "$CONF" "$1" <<'PY'
+import json, sys
+doc, fam = json.load(open(sys.argv[1])), sys.argv[2]
+e = doc.get("egress") or {}
+a = doc.get("attachments")
+nets = (e.get("networks") or []) if e.get("vrf") else []
+cs = (a.get("circuits") or []) if isinstance(a, dict) else []
+vrfs = sorted({x["vrf"] for x in nets + cs} | ({e["vrf"]} if e.get("vrf") else set()))
+legs = (["egress0"] if e.get("vrf") else []) + [n["xe"] for n in nets] + [c["device"] for c in cs]
+if not vrfs:
+    sys.exit(0)
+def names(xs):
+    return "{ " + ", ".join(f'"{x}"' for x in xs) + " }"
+m = f"    iifname {names(vrfs)}"
+t = "ip6 shc_root_in6" if fam == "6" else "ip shc_root_in"
+out = [f"table {t}", f"delete table {t}", f"table {t} {{", "  chain input {",
+       "    type filter hook input priority filter; policy accept;",
+       f'{m} meta sdifname {names(legs)} accept comment "a leg of the VRF: its own filter and sessions"']
+if fam == "6":
+    out += [f'{m} ip6 saddr fe80::/10 accept comment "link-local: the veth sessions"',
+            f"{m} meta l4proto ipv6-icmp accept",
+            f"{m} tcp flags & (ack | rst) != 0 accept",
+            f'{m} tcp flags & (ack | rst) == 0 counter reject with tcp reset comment "TCP without ACK or RST: reset"',
+            f'{m} udp dport 0-65535 counter reject with icmpv6 type port-unreachable comment "UDP: port unreachable"',
+            f'{m} counter drop comment "other protocols and fragments without a transport header"']
+else:
+    out += [f"{m} meta l4proto icmp accept",
+            f"{m} tcp flags & (ack | rst) != 0 accept",
+            f'{m} counter drop comment "from a network to the node: only ICMP and TCP with ACK or RST"']
+out += ["  }", "}"]
+print("\n".join(out))
+PY
+}
+# <4|6> <table> <marker>: load the table for this run's root VRFs, or remove it (and its marker) without them
+root_in() {
+  local t
+  t=$(root_in_nft "$1")
+  if [ -n "$t" ]; then
+    printf '%s\n' "$t" | nft -f -
+    [ -e "$3" ] || : > "$3"
+  else
+    root_in_down "$2" "$3"
+  fi
+}
+root_in_down() {
+  [ -e "$2" ] || return 0
+  nft delete table "$1" 2>/dev/null || true
+  rm -f "$2"
+}
+root_in4() { root_in 4 "ip shc_root_in" "$MARKI4"; }
+root_in6() { root_in 6 "ip6 shc_root_in6" "$MARKI6"; }
+
 attach_up() {
   local c dev par vlan mtu v t addr a a6 want want6
   modprobe vrf; modprobe 8021q
@@ -1285,6 +1352,14 @@ root)
       srv6_locator
     fi
     [ "$TRANSPORT" = srv6 ] || sysctl -qw "net.mpls.conf.$BR.input=1" net.mpls.conf.lo.input=1
+    # the root VRFs' input filters before the VRFs and their addresses: IPv4 always, IPv6 with the IPv6 core (an
+    # IPv6 step; without the core it goes, after a failed IPv6 step it stays as it was)
+    root_in4
+    if [ -n "$V6" ]; then
+      v6 "the input filter of the root VRFs" root_in6
+    elif [ -z "$V6FAILED" ]; then
+      root_in_down "ip6 shc_root_in6" "$MARKI6"
+    fi
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
     root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf] | unique | .[]' "$CONF")"
@@ -1308,6 +1383,7 @@ root)
     egress_down
     attach_down
     root_vrfs_prune ""
+    root_in_down "ip shc_root_in" "$MARKI4"; root_in_down "ip6 shc_root_in6" "$MARKI6"
     ip link show "$BR" >/dev/null 2>&1 && ip link del "$BR"
     for a in $(stray lo "$LOPOOL" none); do ip addr del "$a" dev lo; done
     LO6=""; v6 "the IPv6 loopback removal" lo6
@@ -1351,7 +1427,7 @@ gateway)
         NSX=$X srv6_state core0
       fi; } | sha1sum
   }
-  # the VRFs' input filter (icmp6Announced): IPv6 addressed to the node itself from a VRF device. Past prerouting such
+  # the VRFs' input filter (with the IPv6 core): IPv6 addressed to the node itself from a VRF device. Past prerouting such
   # a packet shows the VRF as its input interface (neighbour discovery keeps its slave device and passes as before).
   # It answers like a host with no open port, so ping and traceroute (UDP, TCP SYN, ICMP) to the node's address get
   # their answer from it: ICMPv6 passes (echo, errors, neighbour discovery, MLD; also a non-first fragment of it); TCP
@@ -1374,7 +1450,7 @@ gateway)
       "$m counter drop comment \"other protocols and fragments without a transport header\"" \
       '  }' '}'
   }
-  # load the filter for the VRFs of this run (replaced as a whole); none without VRFs (no ICMP source to protect)
+  # load the filter for the VRFs of this run (replaced as a whole); none without VRFs (nothing local to protect)
   gw_in6() {
     if [ -z "$WANT" ]; then gw_in6_down; return 0; fi
     gw_in6_nft | $X nft -f -
@@ -1465,11 +1541,11 @@ gateway)
     VTEP=${ADDR%/*}
     WANT=$(jq -r '.vrfs // [] | .[].name' "$CONF")
     [ -z "$WANT" ] || modprobe vrf
-    # the VRFs' input filter before the VRFs take the ICMP source (icmp6Announced; an IPv6 step); without the key
-    # it goes, after a failed IPv6 step (V6 cleared) it stays as it was
-    if [ "$ICMP6ANN" = true ]; then
-      [ -z "$V6" ] || [ -z "$ICMP6" ] || v6 "the input filter of the VRFs" gw_in6
-    else
+    # the VRFs' input filter before the VRFs take the ICMP source (part of the IPv6 core; an IPv6 step); without
+    # the IPv6 core it goes, after a failed IPv6 step (V6 cleared) it stays as it was
+    if [ -n "$V6" ]; then
+      v6 "the input filter of the VRFs" gw_in6
+    elif [ -z "$V6FAILED" ]; then
       gw_in6_down
     fi
     for v in $(jq -r '.vrfs // [] | .[] | [.name, .vni, (.mtu // 9000)] | join(":")' "$CONF"); do

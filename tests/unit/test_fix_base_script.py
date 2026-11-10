@@ -46,7 +46,18 @@ ADDED = [
     (r"^W \[root\] ip link add egress0 link \S+ address 02:e9(:[0-9a-f]{2}){4} type macvlan mode bridge$",
      "egress0 created with a MAC derived from the egress address"),
     (r"^R \[root\] cat /sys/class/net/egress0/address$", "egress0's MAC, checked on every run"),
+    # the input filters on what a network reaches of the node itself (test_root_input_filter, test_icmp_source_announce)
+    (r"^W \[root\] nft -f -$", "the root VRFs' input filters (ip shc_root_in; ip6 shc_root_in6 with the IPv6 core)"),
+    (r"^W \[root\] nft delete table (ip shc_root_in|ip6 shc_root_in6)$", "the root VRFs' input filters, removed"),
+    (r"^R \[root\] nft -s list table (ip shc_root_in|ip6 shc_root_in6)$", "the root VRFs' input filters, in the snapshot"),
+    (r"^R \[gw-[a-z0-9]+\] nft -s list table ip6 shc_gw_in6$",
+     "the VRFs' input filter in the snapshot with the IPv6 core, also without icmp6Announced"),
+    (r"^W \[gw-[a-z0-9]+\] nft -f -$",
+     "the VRFs' input filter ip6 shc_gw_in6 with the IPv6 core, also without icmp6Announced"),
 ]
+# tables and files the input filters add (BASE never had the root's; a gateway's only with icmp6Announced)
+NEW_TABLES = ("ip shc_root_in", "ip6 shc_root_in6", "ip6 shc_gw_in6")
+NEW_FILES = re.compile(r"^(root\.in[46]|gw-[a-z0-9]+\.in6)$")
 # Calls of BASE the script no longer issues.
 REMOVED = [
     (r"^W \[root\] ip link add egress0 link \S+ type macvlan mode bridge$", "egress0 is created with its MAC now"),
@@ -150,6 +161,10 @@ def assert_state_like_base(case, what, old, new, root_down=False, used=None):
         case.assertNotIn("rules4", ns, what)
         case.assertNotIn("routes4", ns, what)
     old, new = base_edited(case, what, old, used), normalize(case, what, new, root_down)
+    for name, ns in new["ns"].items():
+        for t in NEW_TABLES:
+            if t in ns["nft"] and t not in old["ns"].get(name, {}).get("nft", {}):
+                case.assertTrue(ns["nft"].pop(t).startswith("table %s\ndelete table %s\n" % (t, t)), what)
     # egress0's MAC: random from the fake kernel under BASE, derived from the egress address now; the fake kernel's
     # generated MACs of the devices created after it shift by one
     for st in (old, new):
@@ -210,7 +225,7 @@ class AgainstBase(ApplyCase):
             what = "%s %s %s" % (which, extra or "absent", n["what"])
             compare_logs(self, what, o["log"], n["log"])
             self.assertEqual(o["out"], n["out"], what)
-            self.assertEqual(o["files"], n["files"], what)
+            self.assertEqual(o["files"], [f for f in n["files"] if f in o["files"] or not NEW_FILES.match(f)], what)
             assert_state_like_base(self, what, o["state"], n["state"], n["what"] == "root down", used)
 
     def test_dual_stack(self):
