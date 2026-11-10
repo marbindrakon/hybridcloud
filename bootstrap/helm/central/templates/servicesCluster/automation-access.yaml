@@ -12,5 +12,5 @@ policies exempt it by that exact name. Rendered only when servicesCluster.automa
      "tokenValidity" $a.tokenValidity "rules" (required "servicesCluster.automation.rules is required" $a.rules)
      "server" .Values.servicesCluster.server
      "vaultKey" (required "servicesCluster.automation.vaultKey is required" $a.vaultKey)
-     "deletionPolicy" $a.pushDeletionPolicy) }}
+     "deletionPolicy" $a.pushDeletionPolicy "refreshInterval" $a.pushRefreshInterval) }}
 {{- end }}
