@@ -152,6 +152,8 @@ spec:
   endpoints:
     - port: metrics
       interval: {{ $f.scrapeInterval | quote }}
+      # the objects' own namespace label (not the metrics instance's): kube-state-metrics sets it from the object
+      honorLabels: true
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule

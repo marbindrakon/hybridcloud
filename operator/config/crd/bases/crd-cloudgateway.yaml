@@ -303,7 +303,10 @@ spec:
                         leaves them alone while a change to them is in progress; skipped says so). HybridFabric only.
                     healthy:
                       type: boolean
-                      description: True when the last check found nothing; absent while the site is paused.
+                      description: >-
+                        True when the last check found nothing at all on any node. A finding that waits for its
+                        second sighting already makes it false, before it counts in the conditions; absent while the
+                        object is not checked.
                     lastWakeAt:
                       type: string
                       format: date-time
@@ -335,6 +338,12 @@ spec:
                             type: string
                             format: date-time
                             description: When the node last started.
+                          reason:
+                            type: string
+                            description: The reason of the node's worst finding that counts; absent when none does.
+                          message:
+                            type: string
+                            description: That finding's message.
                           findings:
                             type: array
                             description: What is wrong on the node, worst first; empty when healthy.
@@ -360,11 +369,16 @@ spec:
                                   type: string
                                   format: date-time
                                   description: The first check that found it, without a check in between that did not.
+                                confirmed:
+                                  type: boolean
+                                  description: >-
+                                    The finding counts in the conditions, events and wakes: a lasting state (a start
+                                    that failed, a unit not started at boot) at once, a moment (a node not answering, a
+                                    unit restarting, a daemon down) once a second check found it too.
                                 checks:
                                   type: integer
                                   description: >-
-                                    The number of consecutive checks that found it. A finding that reduces service
-                                    counts in the conditions once two checks found it.
+                                    The number of consecutive checks that found it (see confirmed).
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)

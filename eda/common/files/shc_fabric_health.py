@@ -111,13 +111,15 @@ def instance_findings(inst, kind, cfg):
                 found.append(("ServiceFailed", "the instance keeps restarting (%s, %d restarts)"
                               % (start.get("sub") or start.get("active"), start.get("restarts") or 0)))
             else:
+                # a failed or never started oneshot is a state, not a moment: it counts at once (unlike a unit
+                # caught activating)
                 found.append(("StartFailed", "the configuration is not applied on the node (%s%s)%s"
                               % (start.get("active"), ", " + start["result"] if start.get("result") not in (None, "", "success") else "",
-                                 why)))
+                                 why), start.get("active") in ("failed", "inactive")))
         elif start.get("incomplete"):
             # the last successful apply's own record (a later repair by a job clears it)
             found.append(("StartIncomplete", "the configuration was applied in part: "
-                          + "; ".join(clean(start["incomplete"]))))
+                          + "; ".join(clean(start["incomplete"])), True))
         routing = (inst.get("routing") or {}).get("unit")
         units = inst.get("units") or {}
         for name, u in sorted(units.items()):
@@ -125,10 +127,10 @@ def instance_findings(inst, kind, cfg):
                 pass
             elif u.get("active") != "active":
                 what = "the routing service" if name == routing else "a guard of the configuration"
-                found.append(("ServiceFailed", "%s is %s" % (what, u.get("active"))))
+                found.append(("ServiceFailed", "%s is %s" % (what, u.get("active")), u.get("active") == "failed"))
             if u.get("enabled") not in ("enabled", "enabled-runtime", "static", "indirect", "generated", "alias"):
                 found.append(("ServiceFailed", "a service of the configuration is not started at boot (%s)"
-                              % (u.get("enabled") or "unknown")))
+                              % (u.get("enabled") or "unknown"), True))
     if chk["routingDaemons"]:
         r = inst.get("routing") or {}
         down = sorted(d for d, s in (r.get("daemons") or {}).items() if str(s).lower() != "up")
@@ -164,23 +166,31 @@ def instance_findings(inst, kind, cfg):
 
 def merge_findings(found, prev_findings, now, cfg):
     """One finding per reason (messages joined), with since and checks carried from the previous check."""
-    by = {}
-    for reason, msg in found:
+    by, stable = {}, set()
+    for item in found:
+        reason, msg = item[0], item[1]
         by.setdefault(reason, []).append(msg)
+        if len(item) > 2 and item[2]:
+            stable.add(reason)
     prev = {f.get("reason"): f for f in prev_findings or []}
     out = []
     for reason in ORDER:
         if reason not in by:
             continue
         p = prev.get(reason)
+        checks = (num(p.get("checks"), 1) + 1) if p else 1
         out.append({"check": CHECK_OF[reason], "reason": reason, "message": "; ".join(dict.fromkeys(by[reason]))[:1000],
-                    "since": p.get("since") if p and p.get("since") else now,
-                    "checks": (num(p.get("checks"), 1) + 1) if p else 1})
+                    "since": p.get("since") if p and p.get("since") else now, "checks": checks,
+                    # counts in the conditions, events and wakes: a state seen once, or a moment seen twice
+                    "confirmed": reason not in CONFIRM or reason in stable or checks >= 2
+                                 or bool(p and p.get("confirmed"))})
     return out
 
 
 def effective(f):
-    """A finding that counts: confirmed by a second check when its reason needs it."""
+    """A finding that counts: a lasting state at once, a moment once a second check found it too."""
+    if "confirmed" in f:
+        return bool(f["confirmed"])
     return f.get("reason") not in CONFIRM or num(f.get("checks"), 1) >= 2
 
 
@@ -236,6 +246,14 @@ def node_entries(nodes_in, part, kind, prev, now, cfg, gateway=None):
         else:
             read = n.get("read") or {}
             found = instance_findings((read.get("instances") or {}).get(part), kind, cfg)
+            # an instance whose configuration did not start is not applied at all: its differences from the last
+            # applied state are that, not drift. A gateway on a node whose root did not start cannot run either
+            root_start = ((read.get("instances") or {}).get("root") or {}).get("start") or {}
+            root_down = cfg["checks"]["units"] and bool(root_start) and root_start.get("active") in ("failed", "inactive")
+            if kind == "gateway" and root_down:
+                found.append(("StartFailed", "the node's own fabric configuration did not start", True))
+            if any(f[0] == "StartFailed" for f in found):
+                found = [f for f in found if f[0] != "ConfigurationDrift"]
             # a failed unit of ours that is no instance's own (e.g. a guard's run) belongs to the root, or to the
             # gateway it names
             for u in read.get("failedUnits") or []:
@@ -253,6 +271,10 @@ def node_entries(nodes_in, part, kind, prev, now, cfg, gateway=None):
                                "message": "%s booted at %s (before: %s)" % (n["name"], booted, p.get("bootedAt"))})
         entry = {"name": n["name"], "reachable": bool(n.get("reachable")),
                  "findings": merge_findings(found, p.get("findings"), now, cfg)}
+        # the node's worst counted finding, for views and alerts that show one line per node (null: none)
+        top = next((f for r in ORDER for f in entry["findings"] if f["reason"] == r and effective(f)), None)
+        entry["reason"] = top["reason"] if top else None
+        entry["message"] = top["message"][:300] if top else None
         if booted:
             entry["bootedAt"] = booted
         out.append(entry)
@@ -406,7 +428,8 @@ def judge(req):
 
     fnodes, fevents = node_entries(nodes_in, "root", "root", fprev, now, cfg)
     fwake = wake(fnodes, fprev, bool(fab.get("ready")), now_dt, cfg)
-    fhealth = {"checkedAt": now, "lastRunAt": now, "healthy": worst(fnodes) is None, "nodes": fnodes, "skipped": None,
+    # healthy: the check found nothing at all (a finding still waiting for its second sighting is something)
+    fhealth = {"checkedAt": now, "lastRunAt": now, "healthy": not any(n["findings"] for n in fnodes), "nodes": fnodes, "skipped": None,
                "lastWakeAt": now if fwake else fprev.get("lastWakeAt")}
     fconds = conditions(fnodes, "fabric")
     e6prev = ((fstatus.get("realization") or {}).get("egress") or {}).get("ipv6") or {}
@@ -453,7 +476,8 @@ def judge(req):
             gevents.append({"type": "Normal", "reason": "HealthWake",
                             "message": "a full run is requested to repair: " + ", ".join(
                                 sorted({f["reason"] for n in gnodes for f in counted(n)}))})
-        body = {"health": {"checkedAt": now, "healthy": worst(gnodes) is None, "nodes": gnodes, "skipped": None,
+        body = {"health": {"checkedAt": now, "healthy": not any(n["findings"] for n in gnodes), "nodes": gnodes,
+                           "skipped": None,
                            "lastWakeAt": now if gwake else gprev.get("lastWakeAt")},
                 "conditions": conditions(gnodes, "gateway")}
         answer["gateways"].append({"name": g["name"], "namespace": g.get("namespace"), "status": body,
