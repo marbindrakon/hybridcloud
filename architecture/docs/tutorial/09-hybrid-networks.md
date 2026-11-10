@@ -336,105 +336,53 @@ spec:
 
 ### Guests on IPv6
 
+The platform doesn't build or configure guests: you configure each guest's network with your own tooling (cloud-init,
+an image build, configuration management). A placement's page shows, under **Guest configuration reference**, the
+values a guest needs from the placement's status (the IPv6 addressing, the MTU, whether translation applies and, with
+translation, its prefix and resolvers) and the facts below for the placement's environment type.
+
 **OpenShift Virtualization environments**
 - VMs get their IPv6 address by stateful DHCPv6 (the router advertisement sets the M flag and gives the default
   route); the address stays across restarts and live migration.
 - **The guest's IPv6 link-local address must be the EUI-64 one** (derived from the MAC address). The network drops
   DHCPv6 and neighbour discovery from any other link-local address, so a guest that uses stable-privacy or random
   interface identifiers gets no IPv6 address. Some images do that by default (RHEL with NetworkManager, Windows).
-- Always give cloud-init `networkData` with `dhcp6: true` (without it, cloud-init may leave IPv6 off), and let it
-  find the VM's NIC by its MAC address. Give the VM's interface an address of your own, so that it is known when you
-  write the network data (cloud-init applies `networkData` at the first boot), and match that address in the network
-  data of the VM's cloud-init volume:
-  ```yaml
-  # in the VM, under spec.template.spec
-  domain:
-    devices:
-      interfaces:
-        - name: default
-          binding: {name: l2bridge}
-          macAddress: "02:00:00:00:00:01"           # locally administered, a different one for every VM
-      disks:
-        - name: cloudinitdisk
-          disk: {bus: virtio}
-  networks:
-    - name: default
-      pod: {}
-  volumes:
-    - name: cloudinitdisk
-      cloudInitNoCloud:
-        secretRef:
-          name: core-virt1-cloud-init               # the user data, in a Secret (below)
-        networkData: |
-          version: 2
-          ethernets:
-            primary:
-              match: {macaddress: "02:00:00:00:00:01"}
-              dhcp4: true
-              dhcp6: true
-  ```
-  The network data's MAC address is the interface's, lowercase and quoted; `dhcp4` is `false` on an IPv6-only
-  placement.
-  Don't name the interface: images name it differently (`eth0` on some, `enp1s0` on others). cloud-init's
-  NetworkManager and sysconfig renderers (Fedora, RHEL) bind an entry to its MAC address, or else to the interface
-  whose name is exactly the entry's key; they ignore `match: {name: ...}`, a pattern or not. An entry that binds to
-  no interface is ignored without an error: NetworkManager's own default profile takes the interface, without the
-  network data's resolvers and, on some RHEL images, with a stable-privacy link-local address (no IPv6 address).
-  Leave out `set-name`: the match alone binds, and the guest keeps its own name for the NIC. A VM with more than one
-  NIC needs one entry per NIC, each with that NIC's MAC address. The placement page offers this snippet built from
-  the placement's status, with a MAC address it proposes (a new one on each visit) or one you enter.
-- **Put the user data in a Secret.** KubeVirt refuses a VM whose cloud-init volume carries more than 2048 bytes of
-  user data inline (`userData`, or `userDataBase64` once decoded), and the same for network data. The user data the
-  placement page offers on IPv6-only placements with translation is larger (clatd and the `ignore-auto-dns` step,
-  below), so keep it in a Secret in the VM's namespace under the key `userdata` and reference it with `secretRef`, as
-  above; the network data stays inline (it is far smaller). One Secret serves every VM on the placement, since the
-  user data is the same for all of them. The placement page shows the Secret ready to apply
-  (`oc apply -n <namespace> -f <file>` before you start the VM):
-  ```yaml
-  apiVersion: v1
-  kind: Secret
-  metadata:
-    name: core-virt1-cloud-init
-    namespace: example-corp-virt1-vms
-  type: Opaque
-  stringData:
-    userdata: |
-      #cloud-config
-      packages: [clatd]
-      write_files:
-        - path: /etc/clatd.conf
-          content: |
-            plat-prefix=2001:db8:64::/96
-      runcmd:
-        - [systemctl, enable, --now, clatd]
-  ```
-  This example has clatd only; the page's user data adds the `ignore-auto-dns` script and unit. Network data over
-  the limit would go into the same Secret under `networkdata`, referenced with `networkDataSecretRef`.
-- **RHEL images:** also switch the interface's profile to EUI-64 at first boot, in case NetworkManager's default
-  profile has taken the interface (no network data, or none that matches the NIC); a `NetworkManager.conf` default
-  for `ipv6.addr-gen-mode` is not enough on these images, the profile itself has to change. The DHCPv6 lease arrives
-  as soon as the profile comes up again, and the setting stays across reboots:
-  ```yaml
-  #cloud-config
-  runcmd:
-    - |
-      for c in $(nmcli -g UUID,TYPE connection show --active | awk -F: '$2 == "802-3-ethernet" {print $1}'); do
-        nmcli connection modify "$c" ipv6.addr-gen-mode eui64 ipv6.method auto && nmcli connection up "$c"
-      done
-  ```
-- DHCPv6 gives no DNS search domain; set it in cloud-init.
+- **The guest's network configuration is yours.** The platform writes none into the VM. With cloud-init:
+  - Network data has to turn DHCPv6 on (`dhcp6: true`); without it cloud-init may leave IPv6 off. cloud-init
+    applies network data at the first boot only.
+  - Images name the NIC differently (`eth0` on some, `enp1s0` on others). cloud-init's NetworkManager and sysconfig
+    renderers (Fedora, RHEL) bind a network data entry to its MAC address (`match: {macaddress: ...}`), or else to the
+    interface whose name is exactly the entry's key; they ignore `match: {name: ...}`, a pattern or not. An entry
+    that binds to no interface is ignored without an error: NetworkManager's own default profile takes the
+    interface, without the network data's resolvers and, on some RHEL images, with a stable-privacy link-local
+    address (no IPv6 address). `set-name` isn't needed for the match to bind.
+  - A MAC address match needs the address before the first boot, so give the VM's interface one of your own
+    (`macAddress`, a locally administered address, a different one for every VM on the network). netplan takes it
+    lowercase; quote it in YAML (YAML 1.1 reads some unquoted MAC addresses as numbers). A VM with more than one NIC
+    needs one entry per NIC.
+  - KubeVirt refuses a VM whose cloud-init volume carries more than 2048 bytes of user data inline (`userData`, or
+    `userDataBase64` once decoded), and the same for network data. Larger data goes in a Secret in the VM's
+    namespace (keys `userdata` and `networkdata`) that the volume references (`secretRef`,
+    `networkDataSecretRef`).
+- **RHEL images:** when NetworkManager's default profile has taken the interface (no network data, or none that
+  matches the NIC), that profile itself needs `ipv6.addr-gen-mode eui64`; a `NetworkManager.conf` default for
+  `ipv6.addr-gen-mode` is not enough on these images. The DHCPv6 lease arrives as soon as the profile comes up again
+  with that mode, and the setting stays across reboots.
+- DHCPv6 gives no DNS search domain.
 - **Resolvers on IPv6-only placements:** the guest must use only the translation resolvers of
   `status.ipv6.translation`. The cluster network also hands every guest the cluster's own DNS service over DHCPv6,
   and that resolver does no DNS64. A guest that keeps it next to the translation resolvers switches to it after any
   brief outage of the translation resolvers and stays there: IPv4-only names stop resolving while the translation
-  resolvers themselves still answer. The user data on the placement page installs `ignore-auto-dns`, a boot-time
-  unit that makes the guest ignore resolvers handed out by DHCP on the NIC with the IPv6 default route
-  (NetworkManager `ipv6.ignore-auto-dns` and `ipv4.ignore-auto-dns`, or systemd-networkd `UseDNS=false` in a
-  drop-in), as long as that NIC has resolvers of its own from the network data. `dhcp6-overrides: {use-dns: false}`
-  in `networkData` is not enough: cloud-init's NetworkManager renderer ignores it. Names inside the cluster
-  (services, other VMs) are therefore not resolved on IPv6-only placements; publish names in the
-  [environment zone](#dns-names-in-the-environment-zone) instead. Check a guest with `resolvectl status`: its NIC
-  lists the translation resolvers only.
+  resolvers themselves still answer. So name the translation resolvers in the guest's own network configuration and
+  make the NIC's connection ignore the resolvers handed out by DHCP and router advertisements: NetworkManager
+  `ipv6.ignore-auto-dns` and `ipv4.ignore-auto-dns` followed by a full reactivation of the connection (before
+  NetworkManager 1.58 `nmcli device reapply` keeps the DNS of a running DHCPv6 lease), or systemd-networkd
+  `UseDNS=false` in the `[DHCPv6]`, `[IPv6AcceptRA]` and `[DHCPv4]` sections. `dhcp6-overrides: {use-dns: false}`
+  in cloud-init network data is not enough: cloud-init's NetworkManager renderer ignores it. cloud-init's sysconfig
+  renderer (RHEL 9) writes the network data's resolvers to `/etc/resolv.conf` and turns NetworkManager's DNS
+  handling off, so DHCP resolvers aren't used there. Names inside the cluster (services, other VMs) are therefore
+  not resolved on IPv6-only placements; publish names in the [environment zone](#dns-names-in-the-environment-zone)
+  instead. Check a guest with `resolvectl status`: its NIC lists the translation resolvers only.
 
 **OpenStack environments**
 - Subnets are DHCPv6-stateful: the address, the default route and the resolvers reach the guest by DHCPv6 and in
@@ -450,6 +398,15 @@ spec:
   of the placement. Guests configured from the config drive ignore them; a guest that accepts router advertisements
   can be misled by a neighbour of the same network. Keep guests on the config drive's settings, or filter router
   advertisements in the guest.
+
+**AWS and Google Cloud environments**
+- The cloud provides the guest's network configuration (the instance metadata and the VPC's DHCP).
+- AWS: on an IPv6-only placement instances reach the instance metadata service over IPv6 (`fd00:ec2::254`) on
+  Nitro instance types with `HttpProtocolIpv6` turned on for the instance; cloud-init works with it. The guests'
+  resolvers come from the VPC's DHCP options: the translation resolvers while the placement has translation from the
+  network, the VPC resolver (with DNS64) on the provider's path.
+- Google Cloud offers IPv6-only instances with Debian and Ubuntu images only; other images need a dual-stack
+  placement. The resolver is the metadata server.
 
 **IPv6-only guests and translation**
 - **When a placement gets translation:** it has no IPv4 subnet, its network has IPv6 from the platform and
@@ -488,31 +445,29 @@ spec:
 - **What reaches IPv4 how:** names of IPv4-only services through the DNS64 resolvers in the status, on either path;
   IPv4 literals only through a CLAT in the guest (below), which uses the status's `pref64`. On Google Cloud the
   resolver is the VM's metadata server, so names work with no setup in the guest.
-- Translation needs a CLAT in the guest: **clatd** (2.1 or later) with its default `clat-v6-addr=shared`, which needs
-  no second address on the port (the network drops traffic from addresses it did not assign). Some distributions
-  package it (Fedora, Debian); on others build it yourself. Windows guests are not covered.
-- **Debian 13:** the `clatd` package needs two fixes. Install `libjson-perl` with it (without it clatd stops with
-  "Can't locate JSON.pm"), and disable the `tayga` service the `tayga` dependency starts on its own (it runs a
-  translator of its own; clatd starts tayga itself):
-  ```yaml
-  #cloud-config
-  packages: [clatd, libjson-perl]
-  runcmd:
-    - [systemctl, disable, --now, tayga.service]
-    - [systemctl, enable, --now, clatd]
-  ```
-  On Debian with netplan, a guest configured from router advertisements alone (SLAAC) also needs the resolvers
-  written into its network configuration (`nameservers:`); DHCPv6 (the default of OpenStack sites) carries them.
-- clatd finds the translation prefix by the standard DNS query (RFC 7050) through the resolvers in
-  `status.ipv6.translation`; the sites put no translation prefix in router advertisements.
-- **Keep clatd's IPv4 route MTU of 1260.** The translator fragments translated replies larger than 1280 bytes, and
-  those fragments are lost on the way into the CLAT: with a larger MTU, IPv4 datagrams that must not be fragmented
-  are lost above 1232 bytes of payload. TCP is not affected.
-- On OpenStack the placement's IPv6 subnet hands the resolvers out (DHCPv6 and the config drive). On OpenShift
-  Virtualization they come from the placement's status: the placement page offers cloud-init `networkData` (matched
-  to the VM's interface by its MAC address) and user data built from it (clatd, and the guest kept on the translation
-  resolvers, see [Guests on IPv6](#guests-on-ipv6)), to copy into the VM, the user data in a Secret. Names inside the
-  cluster (services, other VMs) are not resolved on IPv6-only placements.
+- **Where the resolvers reach the guest:** on OpenStack the placement's IPv6 subnet hands them out (DHCPv6 and the
+  config drive); on AWS the VPC's DHCP options; on Google Cloud the metadata server. On OpenShift Virtualization
+  nothing hands them out: put the resolvers of the placement's status into the guest's network configuration and
+  keep the guest on them ([Guests on IPv6](#guests-on-ipv6)). Names inside the cluster (services, other VMs) are not
+  resolved on IPv6-only placements.
+- **A CLAT in the guest** (for IPv4 literals) needs:
+  - the **translation prefix**, `status.ipv6.translation.pref64` (the placement page's **Translation prefix**), as
+    the CLAT's PLAT prefix. Configure it in the CLAT, or let the CLAT discover it by the standard DNS query
+    (RFC 7050, `ipv4only.arpa`) through the translation resolvers, which needs the guest on those resolvers. The
+    platform's sites put no translation prefix (PREF64) in router advertisements.
+  - the guest's **own IPv6 address** as the CLAT's source: the network drops traffic from addresses it did not
+    assign, so a CLAT that takes a second IPv6 address gets nothing through. clatd 2.1 or later does this with its
+    default `clat-v6-addr=shared`.
+  - an **IPv4 route MTU of 1260** (clatd's default). The translator fragments translated replies larger than 1280
+    bytes, and those fragments are lost on the way into the CLAT: with a larger MTU, IPv4 datagrams that must not be
+    fragmented are lost above 1232 bytes of payload. TCP is not affected.
+  - **a CLAT package.** Some distributions package clatd (Fedora, Debian); others don't, and then it has to be built.
+    The package may require a subscription or an additional repository on some distributions: an unregistered RHEL
+    image, for example, can't install it. Debian 13's `clatd` package doesn't pull in `libjson-perl`, without which
+    clatd stops with "Can't locate JSON.pm", and its `tayga` dependency starts a `tayga` service with a translator
+    of its own, which must not run next to clatd (clatd starts tayga itself). Windows guests are not covered.
+- On Debian with netplan, a guest configured from router advertisements alone (SLAAC) also needs the resolvers
+  written into its network configuration; DHCPv6 (the default of OpenStack sites) carries them.
 - A guest that validates DNSSEC itself gets no translated addresses for signed IPv4-only names. Reach those by an
   IPv4 address through the CLAT, or let the resolver validate.
 
@@ -597,15 +552,11 @@ Tenants:
   with the reason.
 - **A placement's page** shows each family's subnet and source, how guests get their IPv6 address, the internet
   path and, on IPv6-only placements with translation, the translation prefix and resolvers. Placements with an IPv6
-  subnet also offer a cloud-init snippet to copy ([Guests on IPv6](#guests-on-ipv6)). On OpenShift Virtualization
-  placements it has a MAC address for the VM's interface (proposed anew on each visit, or one you enter), the VM
-  interface with that address and the VM's cloud-init volume with the network data that matches it. On IPv6-only
-  placements with translation it also has user data, clatd and the guest kept on the translation resolvers
-  (`ignore-auto-dns`), as a Secret ready to apply that the volume references (KubeVirt takes at most 2048 bytes of
-  user data inline). On OpenStack, AWS and
-  Google Cloud placements the cloud provides the guest's network configuration and its resolvers (on OpenStack, the
-  placement's subnet by DHCPv6 and the config drive; on AWS, the VPC's DHCP options), so the snippet has only user
-  data for clatd and is not shown when there is none.
+  subnet also have a **Guest configuration reference**: the environment type, the IPv6 addressing, the MTU, whether
+  translation applies (available, not offered, not reported yet, or not needed on a dual-stack placement) and, with
+  translation, the translation prefix and the DNS64 resolvers to copy, followed by the facts of
+  [Guests on IPv6](#guests-on-ipv6) for that environment type and, with translation, what a CLAT needs. It offers no
+  configuration to paste: the platform doesn't build the VMs, and one guest configuration doesn't suit every image.
 - **Environments → OpenShift Virtualization:** environments with their site, VM namespaces (network, ready), quota,
   DNS zone and API endpoint. The site picker offers the sites of the tenant profile.
 - Platform objects aren't shown to tenants.

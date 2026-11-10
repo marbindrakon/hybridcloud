@@ -10,7 +10,7 @@
  *   overlap with the tenant's other networks, offered block sizes, pinned blocks): hints, never blocks.
  * - Placement IPv6 inputs are offered only where the environment's site reports IPv6
  *   (CloudInfrastructure status.capabilities, or the tenant's view of it in TenantProfile).
- * - cloudInitNetworkConfig builds a guest network snippet from a placement's status.
+ * - guestReference lists what a guest on a placement needs from its status (no configuration to paste).
  *
  * Nothing here describes a particular installation: sizes the platform offers come from the
  * platform's status, never from constants.
@@ -519,307 +519,106 @@ export function ipv6ReasonText(
   return `${words} ${message}`;
 }
 
-/* ------------------------------------------------------------------ cloud-init */
-
-export interface CloudInitSnippet {
-  /**
-   * Whether the tenant gives the VM its network configuration: on OpenShift Virtualization, the networkData of the
-   * VM's NoCloud or config drive volume. Elsewhere the cloud provides it (OpenStack: the config drive the compute
-   * service builds; AWS and Google Cloud: the instance metadata) and only the user data applies.
-   */
-  tenantNetworkData: boolean;
-  /** The MAC address the network data matches, lowercase; null when none was given or it is not a unicast address */
-  macAddress: string | null;
-  /** The VM's interface on the pod network with that MAC address (the VM's domain.devices.interfaces); null without */
-  vmInterface: string | null;
-  /**
-   * cloud-init network configuration, version 2, matching the VM's NIC by its MAC address (every renderer binds by
-   * MAC; a name match is ignored by the NetworkManager, sysconfig and networkd renderers); null without a MAC address
-   * or where the tenant does not give network data
-   */
-  networkData: string | null;
-  /**
-   * cloud-config user data: keep the guest on the network data's resolvers (where the snippet gives network data and
-   * the platform reports resolvers of its own) and, for an IPv6-only placement with translation, a CLAT; null when
-   * neither applies
-   */
-  userData: string | null;
-  /** whether userData configures a CLAT */
-  clat: boolean;
-  /** whether userData keeps the guest on the network data's resolvers (ignoring those handed out by DHCP) */
-  ignoreAutoDns: boolean;
-  /**
-   * The VM's cloud-init volume (spec.template.spec.volumes) where the tenant gives the network data: the network data
-   * inline, the user data from `userDataSecret` (KubeVirt refuses inline cloud-init data over
-   * CLOUD_INIT_INLINE_MAX_BYTES; the user data with the resolver step is larger, so it always goes in the Secret);
-   * null elsewhere or when there is neither
-   */
-  vmVolume: string | null;
-  /** A Secret manifest (stringData) with the user data under `userdata`, which `vmVolume` references; null without */
-  userDataSecret: string | null;
-  /** The Secret's name; null without a Secret */
-  secretName: string | null;
-  /** whether the network data is in the Secret too (key `networkdata`), being over KubeVirt's inline limit */
-  networkDataInSecret: boolean;
-}
-
-/** KubeVirt's limit on cloud-init user data and network data given inline in a VM, in bytes (decoded for base64). */
-export const CLOUD_INIT_INLINE_MAX_BYTES = 2048;
-
-/** The cloud-init volume's name: what OpenShift Virtualization templates call it. */
-const CLOUD_INIT_VOLUME = 'cloudinitdisk';
+/* ------------------------------------------------------------------ guest configuration reference */
 
 /**
- * The guest script of the user data: on the NIC with the IPv6 default route, ignore the resolvers the network hands
- * out (DHCP, router advertisements) and keep those of the network data, for the families given ("ipv6", or "ipv6
- * ipv4" on an IPv6-only placement). NetworkManager or systemd-networkd; a connection without resolvers of its own is
- * left alone. The IPv6 translation probe (tests/connectivity/ipv6-translation-probe/probe-user-data.yaml) ships the
- * same script with "ipv6 ipv4".
+ * The placement page does not offer guest configuration to paste: the platform does not build the VMs, and a
+ * configuration that suits one image misleads on another. It shows what a guest needs from the placement's status
+ * and the facts that hold for the placement's environment type; the tenant configures the guest.
  */
-export function ignoreAutoDnsScript(families: string): string {
-  return String.raw`#!/bin/bash
-# Use only the resolvers of the guest's own network configuration (the cloud-init network data) on the NIC with the
-# IPv6 default route: resolvers the network hands out (DHCP, router advertisements) are ignored, so a resolver the
-# configuration does not name never takes over. NetworkManager or systemd-networkd; runs at every boot.
-FAMILIES="${families}"
-dev=""
-for _ in $(seq 1 60); do
-  dev=$(ip -6 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
-  [ -n "$dev" ] && break
-  sleep 2
-done
-[ -n "$dev" ] || { echo "no IPv6 default route: nothing changed"; exit 0; }
-if command -v nmcli >/dev/null && [ "$(nmcli -g RUNNING general 2>/dev/null)" = running ]; then
-  con=$(nmcli -g GENERAL.CON-UUID device show "$dev")
-  [ -n "$con" ] || { echo "$dev: no NetworkManager connection: nothing changed"; exit 0; }
-  # only a connection with resolvers of its own, so the guest is never left without one
-  [ -n "$(nmcli -g ipv4.dns,ipv6.dns connection show "$con" | tr -d '[:space:]')" ] || { echo "$dev: no resolvers configured: nothing changed"; exit 0; }
-  set --
-  for f in $FAMILIES; do
-    [ "$(nmcli -g "$f.ignore-auto-dns" connection show "$con")" = yes ] || set -- "$@" "$f.ignore-auto-dns" yes
-  done
-  [ $# -gt 0 ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
-  nmcli connection modify "$con" "$@" || exit 1
-  # a full reactivation, not "nmcli device reapply": before NetworkManager 1.58 a reapply keeps the DNS of a running
-  # DHCPv6 lease
-  nmcli connection up "$con" || exit 1
-  echo "$dev: ignores the resolvers handed out from now on"
-elif command -v networkctl >/dev/null && networkctl status "$dev" >/dev/null 2>&1; then
-  file=$(networkctl status "$dev" | sed -n 's/^ *Network File: *//p' | head -n 1)
-  if [ -z "$file" ] || ! grep -q '^DNS=' "$file"; then echo "$dev: no resolvers configured: nothing changed"; exit 0; fi
-  dir="/etc/systemd/network/$(basename "$file").d"
-  want=$(printf '[DHCPv6]\nUseDNS=false\n\n[IPv6AcceptRA]\nUseDNS=false\n'
-    case " $FAMILIES " in *" ipv4 "*) printf '\n[DHCPv4]\nUseDNS=false\n' ;; esac)
-  [ "$(cat "$dir/90-ignore-auto-dns.conf" 2>/dev/null)" != "$want" ] || { echo "$dev: already ignores the resolvers handed out"; exit 0; }
-  mkdir -p "$dir" && printf '%s\n' "$want" > "$dir/90-ignore-auto-dns.conf" || exit 1
-  networkctl reload && networkctl reconfigure "$dev" || exit 1
-  echo "$dev: ignores the resolvers handed out from now on"
-else
-  echo "$dev: managed by neither NetworkManager nor systemd-networkd: nothing changed"
-fi
-command -v resolvectl >/dev/null && resolvectl dns "$dev"
-exit 0
-`;
-}
 
-const IGNORE_AUTO_DNS_UNIT = [
-  '[Unit]',
-  'Description=Use only the configured resolvers on the NIC with the default route',
-  'Wants=network-online.target',
-  'After=network-online.target',
-  '',
-  '[Service]',
-  'Type=oneshot',
-  'ExecStart=/usr/local/sbin/ignore-auto-dns',
-  'StandardOutput=journal+console',
-  '',
-  '[Install]',
-  'WantedBy=multi-user.target',
-  '',
-].join('\n');
+/** Environment types the guest reference describes; `other` for a backend kind it does not know. */
+export type GuestEnvironment = 'CloudVirt' | 'CloudOSO' | 'CloudAWS' | 'CloudGCP' | 'other';
 
-/** A text as the lines of a literal block `depth` spaces deep (blank lines left empty). */
-function indentedBlock(text: string, depth: number): string[] {
-  const pad = ' '.repeat(depth);
-  return text
-    .replace(/\n$/, '')
-    .split('\n')
-    .map((l) => (l ? `${pad}${l}` : ''));
-}
-
-/** A file's content as a literal block of a write_files entry (six spaces deep, blank lines left empty). */
-function contentBlock(text: string): string[] {
-  return indentedBlock(text, 6);
-}
-
-/** Size in bytes as KubeVirt counts it (UTF-8). */
-function byteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
-}
-
-/** The Secret's name for a placement: one Secret serves every VM on the placement (the user data is the same). */
-function cloudInitSecretName(p: NetworkPlacement | undefined | null): string {
-  const base = String(p?.metadata?.name ?? '').slice(0, 253 - '-cloud-init'.length).replace(/[-.]+$/, '');
-  return base ? `${base}-cloud-init` : 'cloud-init';
-}
-
-/** Environment types whose cloud provides the guest's network configuration: the tenant gives only user data. */
-const CLOUD_NETWORK_CONFIG = new Set(['CloudOSO', 'CloudAWS', 'CloudGCP']);
+const GUEST_ENVIRONMENTS: GuestEnvironment[] = ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'];
 
 /**
- * A MAC address as cloud-init and the VM spec take it (six colon-separated pairs, lowercase as netplan requires),
- * from the tenant's text (colons or hyphens, any case); null unless it is a unicast address other than all zeros.
+ * Translation to IPv4 as a guest sees it: `available` (status.ipv6.translation with a prefix), `notOffered`
+ * (status.ipv6.translation null: the network's internet egress says why), `notReported` (an IPv6-only placement whose
+ * status has no translation yet, for example while the cloud provider allocates it), `notNeeded` (the placement has
+ * IPv4).
  */
-export function normalizeMacAddress(text: string | undefined | null): string | null {
-  const m = String(text ?? '')
-    .trim()
-    .toLowerCase()
-    .match(/^([0-9a-f]{2})([:-])([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})\2([0-9a-f]{2})$/);
-  if (!m) return null;
-  const octets = [m[1], m[3], m[4], m[5], m[6], m[7]];
-  if (parseInt(octets[0], 16) & 1) return null; // a group address
-  if (octets.every((o) => o === '00')) return null;
-  return octets.join(':');
+export type GuestTranslationState = 'available' | 'notOffered' | 'notReported' | 'notNeeded';
+
+export interface GuestReference {
+  environment: GuestEnvironment;
+  /** no IPv4 subnet in status */
+  ipv6Only: boolean;
+  /** status.ipv6.addressing: DHCPv6 or SLAAC */
+  addressing?: string;
+  /** status.mtu: the effective MTU of the placement */
+  mtu?: number;
+  translationState: GuestTranslationState;
+  /** status.ipv6.translation (prefix, resolvers, path, IPv4 source) while translationState is available */
+  translation: PlacementTranslation | null;
+  /**
+   * Facts for the guest, as catalogue keys under `ipv6.guest.fact.`: how the guest gets its address and network
+   * configuration on this environment type, where its resolvers come from, what a CLAT needs (an IPv6-only placement
+   * with translation only) and what holds for every guest.
+   */
+  facts: { environment: string[]; resolvers: string[]; clat: string[]; every: string[] };
 }
 
-/**
- * A locally administered unicast MAC address for a new VM: 02 and five random octets. Two VMs with the same address on
- * one network break each other, so the page proposes a new one each time. `randomOctets` is for tests.
- */
-export function proposeMacAddress(randomOctets?: (n: number) => ArrayLike<number>): string {
-  const octets =
-    randomOctets?.(5) ??
-    (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
-      ? crypto.getRandomValues(new Uint8Array(5))
-      : Uint8Array.from({ length: 5 }, () => Math.floor(Math.random() * 256)));
-  return ['02', ...Array.from(octets, (o) => (o & 255).toString(16).padStart(2, '0'))].join(':');
-}
+/** The guest configuration reference of a placement with an IPv6 subnet, from its status only; null without one. */
+export function guestReference(p: NetworkPlacement | undefined | null): GuestReference | null {
+  if (!placementSubnet(p, 6)?.prefix) return null;
+  const kind = String(p?.spec?.backend?.kind ?? '');
+  const environment: GuestEnvironment = (GUEST_ENVIRONMENTS as string[]).includes(kind) ? (kind as GuestEnvironment) : 'other';
+  const ipv6Only = !placementSubnet(p, 4)?.prefix;
+  const rawTr = p?.status?.ipv6?.translation;
+  const translation = ipv6Only ? placementTranslation(p) : null;
+  const translationState: GuestTranslationState = !ipv6Only
+    ? 'notNeeded'
+    : translation
+      ? 'available'
+      : rawTr === null
+        ? 'notOffered'
+        : 'notReported';
+  const addressing = typeof p?.status?.ipv6?.addressing === 'string' ? p.status.ipv6.addressing.trim() || undefined : undefined;
+  const mtuRaw = Number(p?.status?.mtu);
+  const mtu = Number.isInteger(mtuRaw) && mtuRaw > 0 ? mtuRaw : undefined;
 
-/**
- * Guest network configuration for a VM on the placement's subnet, built from status only: DHCPv4 when the
- * placement has IPv4, DHCPv6 and router advertisements for IPv6, the resolvers the platform reports. With
- * the platform's resolvers in the network data, user data makes the guest ignore resolvers handed out by DHCP (they
- * need not translate: on an OpenShift Virtualization site DHCPv6 hands out the cluster's DNS service, without
- * DNS64); for an
- * IPv6-only placement with translation it also configures a CLAT (clatd) with the translation prefix.
- *
- * The network data matches the VM's NIC by `macAddress`, the address the VM's interface is given (the guest's own
- * name for the NIC differs between images: eth0, enp1s0, ...); without a valid one there is no network data. It is
- * built only where the tenant gives the VM its network configuration (OpenShift Virtualization; also when the
- * environment type is unknown). On OpenStack, AWS and Google Cloud the cloud provides it and only the user data
- * applies, so there is no snippet at all when there is no user data. Null when the placement has no IPv6 subnet yet.
- */
-export function cloudInitSnippet(p: NetworkPlacement | undefined | null, opts: { macAddress?: string } = {}): CloudInitSnippet | null {
-  const v6 = placementSubnet(p, 6);
-  if (!v6?.prefix) return null;
-  const v4 = placementSubnet(p, 4);
-  const tenantNetworkData = !CLOUD_NETWORK_CONFIG.has(String(p?.spec?.backend?.kind ?? ''));
-  const mac = tenantNetworkData ? normalizeMacAddress(opts.macAddress) : null;
-  const tr = p?.status?.ipv6?.translation;
-  const resolvers = Array.isArray(tr?.resolvers)
-    ? (tr?.resolvers ?? []).filter((r): r is string => typeof r === 'string').map((r) => r.trim()).filter(Boolean)
-    : [];
-  const pref64 = typeof tr?.pref64 === 'string' ? tr.pref64.trim() : '';
-  let networkData: string | null = null;
-  let vmInterface: string | null = null;
-  if (mac) {
-    // no set-name: every renderer binds the entry by the MAC address, and the guest keeps its own name for the NIC
-    const net = [
-      'version: 2',
-      'ethernets:',
-      '  primary:',
-      `    match: {macaddress: "${mac}"}`,
-      `    dhcp4: ${v4?.prefix ? 'true' : 'false'}`,
-      '    dhcp6: true',
-      '    accept-ra: true',
-    ];
-    // quoted: unquoted, an address that starts or ends with "::" is not a string in a YAML flow sequence
-    if (resolvers.length) net.push('    nameservers:', `      addresses: [${resolvers.map((r) => JSON.stringify(r)).join(', ')}]`);
-    networkData = `${net.join('\n')}\n`;
-    vmInterface = ['interfaces:', '  - name: default', '    binding: {name: l2bridge}', `    macAddress: "${mac}"`, ''].join('\n');
-  }
-  // the prefix is the one line of a literal block (clatd.conf), so a single token
-  const clat = !v4?.prefix && /^\S+$/.test(pref64);
-  // Only where the snippet's network data names the resolvers (OpenShift Virtualization: DHCPv6 also hands out the
-  // cluster's DNS service, without DNS64). Elsewhere the cloud's own DHCP hands out the translation resolvers and
-  // the guest's connection has none of its own: the placement's subnet on OpenStack (the config drive carries the
-  // same list, so the step would only pin the guest to the list it booted with), the VPC's DHCP option set on AWS,
-  // the provider's resolver on the provider's path.
-  const keepResolvers = tenantNetworkData && resolvers.length > 0 && tr?.path !== 'Provider';
-  let userData: string | null = null;
-  if (clat || keepResolvers) {
-    const ud = ['#cloud-config'];
-    const runcmd: string[] = [];
-    if (clat) ud.push('packages: [clatd]');
-    ud.push('write_files:');
-    if (clat) ud.push('  - path: /etc/clatd.conf', '    content: |', `      plat-prefix=${pref64}`);
-    if (keepResolvers) {
-      ud.push(
-        '  - path: /usr/local/sbin/ignore-auto-dns',
-        '    permissions: "0755"',
-        '    content: |',
-        ...contentBlock(ignoreAutoDnsScript(v4?.prefix ? 'ipv6' : 'ipv6 ipv4')),
-        '  - path: /etc/systemd/system/ignore-auto-dns.service',
-        '    content: |',
-        ...contentBlock(IGNORE_AUTO_DNS_UNIT),
-      );
-      runcmd.push('  - [systemctl, daemon-reload]', '  - [systemctl, enable, --now, ignore-auto-dns.service]');
-    }
-    if (clat) runcmd.push('  - [systemctl, enable, --now, clatd]');
-    userData = [...ud, 'runcmd:', ...runcmd, ''].join('\n');
-  }
-  if (!tenantNetworkData && !userData) return null;
-  // OpenShift Virtualization: the VM's cloud-init volume, with the user data (and network data over the inline limit)
-  // in a Secret the volume references
-  let vmVolume: string | null = null;
-  let userDataSecret: string | null = null;
-  let secretName: string | null = null;
-  const networkDataInSecret = !!networkData && byteLength(networkData) > CLOUD_INIT_INLINE_MAX_BYTES;
-  if (tenantNetworkData && (networkData || userData)) {
-    const inSecret: [string, string][] = [];
-    if (userData) inSecret.push(['userdata', userData]);
-    if (networkData && networkDataInSecret) inSecret.push(['networkdata', networkData]);
-    if (inSecret.length) {
-      secretName = cloudInitSecretName(p);
-      // the namespace when the placement serves exactly one, so the manifest applies as it is
-      const namespaces = (p?.status?.namespaces ?? []).filter((n): n is string => typeof n === 'string' && !!n.trim());
-      userDataSecret = [
-        'apiVersion: v1',
-        'kind: Secret',
-        'metadata:',
-        `  name: ${JSON.stringify(secretName)}`,
-        ...(namespaces.length === 1 ? [`  namespace: ${JSON.stringify(namespaces[0].trim())}`] : []),
-        'type: Opaque',
-        'stringData:',
-        ...inSecret.flatMap(([key, text]) => [`  ${key}: |`, ...indentedBlock(text, 4)]),
-        '',
-      ].join('\n');
-    }
-    const vol = ['volumes:', `  - name: ${CLOUD_INIT_VOLUME}`, '    cloudInitNoCloud:'];
-    if (userData) vol.push('      secretRef:', `        name: ${JSON.stringify(secretName)}`);
-    if (networkData && networkDataInSecret) vol.push('      networkDataSecretRef:', `        name: ${JSON.stringify(secretName)}`);
-    else if (networkData) vol.push('      networkData: |', ...indentedBlock(networkData, 8));
-    vmVolume = `${vol.join('\n')}\n`;
-  }
+  const environmentFacts: Record<GuestEnvironment, string[]> = {
+    CloudVirt: ['virt.address', 'virt.eui64', 'virt.networkData', 'virt.matchByMac', 'virt.inlineLimit', 'virt.rhelProfile', 'virt.searchDomain'],
+    CloudOSO: ['oso.address', 'oso.configDrive', 'oso.noRaResolvers', 'oso.foreignRa'],
+    CloudAWS: ipv6Only ? ['aws.address', 'aws.metadata'] : ['aws.address'],
+    CloudGCP: ipv6Only ? ['gcp.address', 'gcp.images'] : ['gcp.address'],
+    other: ['other.address'],
+  };
+  let resolvers: string[] = [];
+  if (!ipv6Only) resolvers = ['dualStack'];
+  else if (translationState === 'notOffered') resolvers = ['noTranslation'];
+  else if (translationState === 'notReported') resolvers = ['translationNotReported'];
+  else if (environment === 'CloudVirt') resolvers = translation?.path === 'Provider' ? [] : ['virt.onlyTranslation'];
+  else if (environment === 'CloudOSO') resolvers = ['oso.resolvers'];
+  else if (environment === 'CloudAWS') resolvers = [translation?.path === 'Provider' ? 'aws.resolversProvider' : 'aws.resolversFabric'];
+  else if (environment === 'CloudGCP') resolvers = ['gcp.resolvers'];
+  // the platform's sites announce no PREF64; on the provider's path the router advertisements are the provider's
+  const clat =
+    translationState === 'available'
+      ? ['clat.when', 'clat.prefix', ...(translation?.path === 'Provider' ? [] : ['clat.noPref64']), 'clat.address', 'clat.mtu', 'clat.package', 'clat.dnssec']
+      : [];
   return {
-    tenantNetworkData,
-    macAddress: mac,
-    vmInterface,
-    networkData,
-    userData,
-    clat,
-    ignoreAutoDns: keepResolvers,
-    vmVolume,
-    userDataSecret,
-    secretName,
-    networkDataInSecret,
+    environment,
+    ipv6Only,
+    ...(addressing ? { addressing } : {}),
+    ...(mtu ? { mtu } : {}),
+    translationState,
+    translation,
+    facts: { environment: environmentFacts[environment], resolvers, clat, every: ['icmpv6'] },
   };
 }
 
 /**
- * Whether the placement page shows the snippet: an IPv6 subnet in status, a site that reports IPv6, and something to
- * give the VM (network data on OpenShift Virtualization, else user data).
+ * Whether the placement page shows the guest configuration reference: an IPv6 subnet in status and a site that
+ * reports IPv6 (the capability check that gates the placement form's IPv6 inputs).
  */
-export function showsCloudInitSnippet(p: NetworkPlacement | undefined | null, caps: SiteIpv6Caps | undefined | null): boolean {
-  return !!caps?.ipv6 && !!cloudInitSnippet(p);
+export function showsGuestReference(p: NetworkPlacement | undefined | null, caps: SiteIpv6Caps | undefined | null): boolean {
+  return !!caps?.ipv6 && !!guestReference(p);
 }
+
+/**
+ * The documentation page the guest reference links to, relative to the help base URL (the repository's docs/ tree):
+ * the guest notes per environment type, translation and the CLAT.
+ */
+export const GUEST_REFERENCE_DOC = '../architecture/docs/tutorial/09-hybrid-networks.md#guests-on-ipv6';

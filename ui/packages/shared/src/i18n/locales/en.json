@@ -1528,27 +1528,77 @@
     "listPlatformAsked": "IPv6 from the platform (not assigned yet)",
     "platformPrefixesField": "Platform IPv6 space",
     "platformPrefixesFieldHelp": "IPv6 space the platform assigns (family 6; block size /48 to /64 in steps of 4, empty for the fabric's default; optionally a specific block). An entry cannot be changed; remove it and add another while the network has no placements. Not together with IPv6 prefixes of your own.",
-    "cloudInit": {
-      "title": "Guest network configuration (cloud-init)",
-      "help": "Configuration for a VM on this placement's subnets, built from the placement's status.",
-      "macAddress": "MAC address of the VM's NIC",
-      "macAddressHelp": "The network data finds the VM's NIC by this address, whatever name the guest gives the NIC. Each visit to this page proposes a new locally administered address: give every VM its own. To keep the address a VM already has, enter that address instead.",
-      "macAddressInvalid": "Enter a unicast MAC address: six pairs of hexadecimal digits, such as 02:00:00:00:00:01. Without one there is no network data.",
-      "newMac": "Propose another address",
-      "vmInterface": "VM interface",
-      "vmInterfaceHelp": "The VM's interface on the pod network (the network named default, with pod: {}) with this MAC address, under spec.template.spec.domain.devices of the VM. Set it when you create the VM: cloud-init applies the network data at the first boot.",
-      "vmVolume": "Cloud-init volume",
-      "vmVolumeHelp": "The VM's cloud-init volume, under spec.template.spec, with a disk of the same name under domain.devices.disks (OpenShift Virtualization templates name both cloudinitdisk: replace that volume). The network data is inline and finds the NIC by the MAC address above; a VM with more than one NIC needs an entry with its own MAC address for each.",
-      "vmVolumeHelpNetworkInSecret": "The VM's cloud-init volume, under spec.template.spec, with a disk of the same name under domain.devices.disks (OpenShift Virtualization templates name both cloudinitdisk: replace that volume). The network data is larger than the 2048 bytes KubeVirt takes inline, so it comes from the Secret below with the user data; it finds the NIC by the MAC address above.",
-      "userDataSecret": "Secret with the user data",
-      "userDataSecretHelp": "The volume takes the user data from the Secret {{name}} (key userdata), because KubeVirt refuses user data over 2048 bytes inline in the VM. Create the Secret in the VM's namespace before you start the VM, for example with oc apply -n <namespace> -f <file>; one Secret serves every VM on this placement.",
-      "networkFromConfigDrive": "On OpenStack the config drive carries the guest's network configuration, and the placement's subnet hands out its resolvers (DHCPv6 and the config drive): create the server with a config drive and give it only this user data.",
-      "networkFromCloud": "The cloud provides the guest's network configuration and its resolvers: give the instance only this user data.",
-      "userData": "User data",
-      "userDataDns": "The user data keeps the guest on the resolvers in the network data: resolvers handed out by DHCP are ignored, because they need not translate IPv4-only names. Names internal to the site are then not resolved.",
-      "userDataHelp": "This placement has no IPv4: a CLAT in the guest reaches IPv4-only destinations through the translation prefix.",
+    "guest": {
+      "title": "Guest configuration reference",
+      "help": "What a guest on this placement needs, from the placement's status, and what holds on this environment type. The platform does not configure guests: set these values with the tools you build and configure your VMs with.",
+      "environment": "Environment type",
+      "environment_CloudVirt": "OpenShift Virtualization",
+      "environment_CloudOSO": "OpenStack",
+      "environment_CloudAWS": "AWS",
+      "environment_CloudGCP": "Google Cloud",
+      "environment_other": "Not described on this page",
+      "mtu": "MTU",
+      "translation": "Translation to IPv4",
+      "translation_available": "Available: names through the DNS64 resolvers, IPv4 addresses through a CLAT in the guest",
+      "translation_notOffered": "Not offered",
+      "translation_notReported": "Not reported yet",
+      "translation_notNeeded": "Not needed: the placement has IPv4",
+      "pref64": "Translation prefix (NAT64, the CLAT's PLAT prefix)",
+      "resolvers": "DNS64 resolvers",
+      "factsEnvironment": "Address and network configuration",
+      "factsResolvers": "Resolvers",
+      "factsClat": "CLAT (IPv4 addresses)",
+      "factsEvery": "Every guest",
+      "docLink": "Guests on IPv6, translation and the CLAT in the documentation",
+      "docText": "The hybrid networks tutorial (Guests on IPv6) describes these in full.",
       "copy": "Copy",
-      "copied": "Copied"
+      "copied": "Copied",
+      "fact": {
+        "virt": {
+          "address": "The guest gets its IPv6 address by stateful DHCPv6 and its default route from router advertisements; the address stays across restarts and live migration.",
+          "eui64": "The guest's IPv6 link-local address must be the EUI-64 one, derived from the MAC address: the network drops DHCPv6 and neighbour discovery from any other link-local address. Some images use stable-privacy or random interface identifiers by default (RHEL with NetworkManager, Windows).",
+          "networkData": "The guest's network configuration is yours: the platform writes none. With cloud-init, give network data that turns DHCPv6 on (without it cloud-init may leave IPv6 off); cloud-init applies network data at the first boot only.",
+          "matchByMac": "Images name the NIC differently (eth0, enp1s0). cloud-init's NetworkManager and sysconfig renderers bind a network data entry to its MAC address, or else to the interface whose name is the entry's key; they ignore a name match, and an entry that binds no interface is dropped without an error. A MAC address match needs the address before the first boot: set macAddress on the VM's interface (lowercase, quoted in YAML, a different one for every VM).",
+          "inlineLimit": "KubeVirt refuses a VM whose cloud-init volume carries more than 2048 bytes of user data or of network data inline; larger data goes in a Secret that the volume references (secretRef, networkDataSecretRef).",
+          "rhelProfile": "On RHEL images, when NetworkManager's default profile has taken the interface (no network data, or none that matches the NIC), that profile itself needs ipv6.addr-gen-mode eui64; a NetworkManager.conf default is not enough.",
+          "searchDomain": "DHCPv6 gives no DNS search domain.",
+          "onlyTranslation": "Use only the DNS64 resolvers above, in the guest's own network configuration. DHCPv6 also hands out the cluster's DNS service, which does no DNS64: a guest that keeps it falls over to it after any brief outage of the DNS64 resolvers and from then on gets no translated addresses. Make the NIC's connection ignore the resolvers handed out (NetworkManager ipv4.ignore-auto-dns and ipv6.ignore-auto-dns, then a full reactivation of the connection; systemd-networkd UseDNS=false); cloud-init's NetworkManager renderer ignores dhcp6-overrides use-dns. Names inside the cluster (services, other VMs) are then not resolved."
+        },
+        "oso": {
+          "address": "The address, the default route and the resolvers reach the guest from the placement's IPv6 subnet (by the IPv6 addressing above) and in the config drive: the cloud provides the guest's network configuration.",
+          "configDrive": "Boot VMs that use IPv6 with a config drive, always on an IPv6-only placement: stock cloud-init can't reach the link-local metadata service over IPv6.",
+          "noRaResolvers": "The site sends no resolvers in router advertisements: a guest configured from router advertisements alone (SLAAC) gets no IPv6 resolver.",
+          "foreignRa": "Router advertisements from other VMs of the placement can reach the guest; a guest kept on the config drive's settings ignores them.",
+          "resolvers": "The placement's subnet hands out the DNS64 resolvers by DHCPv6 and in the config drive."
+        },
+        "aws": {
+          "address": "The cloud provides the guest's network configuration through the instance metadata and the VPC's DHCP.",
+          "metadata": "On an IPv6-only placement, instances reach the instance metadata service over IPv6 (fd00:ec2::254) on Nitro instance types with the instance's HttpProtocolIpv6 turned on.",
+          "resolversFabric": "The VPC's DHCP options hand out the DNS64 resolvers.",
+          "resolversProvider": "The VPC resolver answers with DNS64 on the placement's subnets."
+        },
+        "gcp": {
+          "address": "The cloud provides the guest's network configuration through the metadata server.",
+          "images": "Google Cloud offers IPv6-only instances with Debian and Ubuntu images only; other images need a dual-stack placement.",
+          "resolvers": "The resolver is the metadata server, which applies DNS64: names of IPv4-only destinations work with no setup in the guest."
+        },
+        "other": {
+          "address": "This page does not describe this environment type: see the documentation."
+        },
+        "dualStack": "The guest keeps the IPv4 resolvers it gets by DHCP and uses no translation: IPv4-only names are reached over native IPv4. The platform hands out IPv6 resolvers only to IPv6-only placements.",
+        "noTranslation": "Without translation the guest reaches IPv4-only destinations neither by name nor by address. The network's internet egress says why.",
+        "translationNotReported": "The placement's status has no translation yet; a cloud provider's translator appears once the provider has set it up.",
+        "clat": {
+          "when": "A CLAT is needed only for IPv4 addresses (literals); names of IPv4-only destinations resolve to translated addresses through the DNS64 resolvers.",
+          "prefix": "The CLAT's PLAT prefix is the translation prefix above: configure it in the CLAT, or let the CLAT discover it by the RFC 7050 query (ipv4only.arpa) through the DNS64 resolvers.",
+          "noPref64": "The platform's sites put no PREF64 in router advertisements, so a CLAT that waits for one finds no prefix.",
+          "address": "The CLAT must send from the guest's own IPv6 address (clatd 2.1 or later does by default, clat-v6-addr=shared): the network drops traffic from addresses it did not assign.",
+          "mtu": "Keep the CLAT's IPv4 route MTU at 1260 (clatd's default): the translator fragments translated replies larger than 1280 bytes, and those fragments are lost on the way into the CLAT. TCP is not affected.",
+          "package": "The CLAT package may require a subscription or an additional repository on some distributions, and some distributions don't package it.",
+          "dnssec": "A guest that validates DNSSEC itself gets no translated addresses for signed IPv4-only names."
+        },
+        "icmpv6": "Keep ICMPv6 open in guest firewalls and security groups: neighbour discovery and Packet Too Big are required."
+      }
     },
     "requestProvider": "IPv6 from the cloud provider",
     "requestSiteDefault": "IPv{{family}}, the site's default size",
