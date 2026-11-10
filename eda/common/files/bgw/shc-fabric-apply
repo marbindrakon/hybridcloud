@@ -1548,12 +1548,14 @@ elif [ "$ACT" = down ] || [ -n "$POOLS6_USED" ]; then
   [ -n "$V6FAILED" ] || rm -f "$POOLS6"
 fi
 # what a successful up left (rewritten only when it differs), for the read-only check against the node's state now
-# (action snapshot); down forgets it
+# (action snapshot); down forgets it. The state is read once, as before: its hash decides changed=
 APPLIED=/etc/shc-fabric/$I.applied
-after=$(snapshot_text)
-if [ "$ACT" = up ]; then
-  { [ -r "$APPLIED" ] && [ "$(<"$APPLIED")" = "$after" ]; } || printf '%s\n' "$after" > "$APPLIED"
+snapshot_text > "$APPLIED.new"
+after=$(sha1sum < "$APPLIED.new")
+if [ "$ACT" = up ] && ! cmp -s "$APPLIED.new" "$APPLIED"; then
+  mv -f "$APPLIED.new" "$APPLIED"
 else
-  rm -f "$APPLIED"
+  rm -f "$APPLIED.new"
+  [ "$ACT" = up ] || rm -f "$APPLIED"
 fi
-[ "$before" = "$(snapshot)" ] && echo "changed=no" || echo "changed=yes"
+[ "$before" = "$after" ] && echo "changed=no" || echo "changed=yes"

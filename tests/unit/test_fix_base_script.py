@@ -201,7 +201,8 @@ class AgainstBase(ApplyCase):
                 h.conf(name, dict(conf, **extra))
             out, log = h.ok(self, name, act, script=script)
             runs.append({"what": "%s %s" % (name, act), "out": out, "log": log, "state": h.get_state(),
-                         "files": sorted(os.listdir(h.etc))})
+                         # (a listed difference: the newer apply also records what it left, <instance>.applied)
+                         "files": sorted(f for f in os.listdir(h.etc) if not f.endswith(".applied"))})
         return runs
 
     def check(self, which, extra, used=None):

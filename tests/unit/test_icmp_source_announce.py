@@ -642,7 +642,7 @@ class ApplyOffAsBefore(A.ApplyCase):
                 runs = [self.h.ok(self, "root", script=which)]
                 for _ in range(2):
                     runs.append(self.h.ok(self, "gw-iaas1", script=which))
-                results[which] = (runs, self.h.get_state(), sorted(os.listdir(self.h.etc)))
+                results[which] = (runs, self.h.get_state(), sorted(f for f in os.listdir(self.h.etc) if not f.endswith(".applied")))
             # (but for the differences the fixes on both transports made, listed in test_fix_base_script)
             B.assert_runs_like_base(self, str(gw6), results["old"][0], results["new"][0])
             B.assert_state_like_base(self, str(gw6), results["old"][1], results["new"][1])

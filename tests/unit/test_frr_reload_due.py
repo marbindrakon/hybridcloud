@@ -44,6 +44,7 @@ ROOT_STEPS = ["what FRR last loaded (a node without the record: the files as the
               "FRR configuration",
               "is a reload due (the files differ from what FRR last loaded)",
               "is FRR running",
+              "what FRR still lacks of its files",
               "the lease lasts for the FRR start",
               "start FRR (enabled at boot)",
               "the lease lasts for the FRR reload",
@@ -55,6 +56,7 @@ GW_STEPS = ["what the instance last loaded (without the record: the file as it i
             "FRR configuration",
             "is a reload due (the file differs from what the instance last loaded)",
             "is the gateway instance running",
+            "what the instance still lacks of its file",
             "the lease lasts for the instance's start",
             "start the gateway instance (enabled at boot)",
             "the lease lasts for the FRR reload",
@@ -144,6 +146,11 @@ def stub(task, node):
     swap = lambda s: s.replace("/etc/frr/", node.r + "/etc/frr/").replace("/etc/shc-fabric/", node.r + "/etc/shc-fabric/")  # noqa: E731
     if str(t.get("ansible.builtin.include_tasks", "")).endswith("fabric_lease_ensure.yml"):
         return {"name": t["name"], "ansible.builtin.debug": {"msg": "the lease lasts"}}
+    # FRR's pending difference (common/tasks/frr_pending.yml): the lines in <root>/pending, one per line
+    if str(t.get("ansible.builtin.include_tasks", "")).endswith("frr_pending.yml"):
+        return {"name": t["name"], "ansible.builtin.set_fact": {
+            "frr_pending_lines": "{{ (lookup('ansible.builtin.file', '%s', errors='ignore') | default('', true)).splitlines() | select | list }}"
+                                 % node.p("pending")}}
     if "ansible.builtin.set_fact" in t or "ansible.builtin.fail" in t or "ansible.builtin.debug" in t:
         return t
     if "ansible.builtin.shell" in t:
@@ -233,6 +240,17 @@ class _Case(unittest.TestCase):
         return conf + (self.node.get(self.node.daemons) if self.node.daemons else "")
 
     # ---- the cases, for the root and for a gateway ----
+
+    def test_a_pending_difference_makes_the_reload_due(self):
+        # files and record agree, but FRR's running configuration still lacks a line (a hand change): the job reloads
+        self.node.running("conf A\n")
+        self.assertEqual(self.job("conf A\n"), ([], False))
+        self.node.put("pending", "neighbor X shutdown\n")
+        actions, failed = self.job("conf A\n")
+        self.assertFalse(failed)
+        self.assertIn("reload", " ".join(actions))
+        os.remove(self.node.p("pending"))
+        self.assertEqual(self.job("conf A\n"), ([], False))
 
     def test_nothing_pending_reloads_nothing(self):
         self.node.running("conf A\n")
