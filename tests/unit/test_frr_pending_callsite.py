@@ -180,6 +180,22 @@ class CheckTimeout(unittest.TestCase):
             self.fail("the child of the timed-out test is still running")
 
 
+class NoBytecode(unittest.TestCase):
+    @unittest.skipUnless(CHECK, "the post-reload verification (shc-frr-check) is not in reach")
+    def test_loading_the_check_writes_nothing_next_to_it(self):
+        tmp = tempfile.mkdtemp(prefix="shc-pending-pyc-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        dst = os.path.join(tmp, "shc-frr-check")
+        shutil.copy(CHECK, dst)
+        old = sys.dont_write_bytecode
+        sys.dont_write_bytecode = False
+        try:
+            self.assertIsNotNone(P.load_checker(dst))
+        finally:
+            sys.dont_write_bytecode = old
+        self.assertEqual(os.listdir(tmp), ["shc-frr-check"])
+
+
 class Reader(unittest.TestCase):
     def test_reader_passes_instance_note_and_ignore(self):
         src = ("SEEN = {}\n"

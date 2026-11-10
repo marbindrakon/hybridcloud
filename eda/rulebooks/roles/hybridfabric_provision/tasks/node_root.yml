@@ -352,8 +352,11 @@
     state=$(systemctl is-active frr); job=$(systemctl show -p Job --value frr)
     if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: frr $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/frr.conf /etc/frr/daemons 2>/dev/null | sha256sum | cut -d' ' -f1)
-    # a reload for lines FRR's running configuration lacked (frr_pending.yml) is checked although the file is unchanged
-    {% if frr_pending_lines | default([]) | length == 0 %}
+    # a start, restart or reload of this run is checked although the file is unchanged (a reload made due by lines the running
+    # configuration of FRR lacked, frr_pending.yml; a start that a daemon not up yet left short): the note of the check
+    # then learns what FRR does not take, and no later run reloads for it
+    {% if frr_pending_lines | default([]) | length == 0 and not (_hf_reload | default({}) is changed)
+          and not (_hf_frr_state | default({}) is changed) %}
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
     {% endif %}
     {% if fab_real.nodes.frrLoadCheck.enabled | default(true) | bool %}
@@ -363,10 +366,11 @@
     {% endif %}
     check=$(chk) || exit 1
     {% if frr_pending_lines | default([]) | length > 0 %}
-    # lines that were missing before this reload (or noted by an earlier check) and are still missing after it: two
-    # loads left them, so they are FRR's to keep; the second check accepts them and the file is recorded (no run
-    # reloads for them again). A line this reload left that was not missing before stays unapplied as usual
-    if [ "${check%%$'\n'*}" = result=unapplied ] \
+    # lines missing before this reload although FRR had loaded this very file (it is recorded as loaded) and still
+    # missing after it: two loads left them, so FRR keeps them; the second check accepts them and the file is
+    # recorded (no run reloads for them again). A line of a changed file, or one this reload left that was not missing
+    # before, stays unapplied as usual
+    if [ "${check%%$'\n'*}" = result=unapplied ] && [ "$now" = "$(cat "$f" 2>/dev/null)" ] \
        && [ -z "$(printf '%s\n' "$check" | sed -n 's/^line: //p' | grep -vxF -f <(printf '%s\n' "$known"))" ]; then
       check=$(chk) || exit 1
     fi

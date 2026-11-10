@@ -26,6 +26,7 @@ TIMEOUT = 20
 def load_checker(path=CHECKER):
     if not os.path.exists(path):
         return None
+    sys.dont_write_bytecode = True  # read only: no bytecode cache next to the check on the node
     loader = importlib.machinery.SourceFileLoader("shc_frr_check", path)
     spec = importlib.util.spec_from_loader("shc_frr_check", loader)
     mod = importlib.util.module_from_spec(spec)

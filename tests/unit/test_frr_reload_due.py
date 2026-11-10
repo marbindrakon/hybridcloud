@@ -146,11 +146,15 @@ def stub(task, node):
     swap = lambda s: s.replace("/etc/frr/", node.r + "/etc/frr/").replace("/etc/shc-fabric/", node.r + "/etc/shc-fabric/")  # noqa: E731
     if str(t.get("ansible.builtin.include_tasks", "")).endswith("fabric_lease_ensure.yml"):
         return {"name": t["name"], "ansible.builtin.debug": {"msg": "the lease lasts"}}
-    # FRR's pending difference (common/tasks/frr_pending.yml): the lines in <root>/pending, one per line
+    # FRR's pending difference (common/tasks/frr_pending.yml), as the check computes it: the file's lines FRR does not
+    # run, less those its note holds (a hand change on top: <root>/pending). Only while FRR runs
     if str(t.get("ansible.builtin.include_tasks", "")).endswith("frr_pending.yml"):
-        return {"name": t["name"], "ansible.builtin.set_fact": {
-            "frr_pending_lines": "{{ (lookup('ansible.builtin.file', '%s', errors='ignore') | default('', true)).splitlines() | select | list }}"
-                                 % node.p("pending")}}
+        note = os.path.join(node.r, "etc/shc-fabric", ("gw-site1" if node.gateway else "root") + ".frr-unapplied")
+        rd = "(lookup('ansible.builtin.file', '%s', errors='ignore') | default('', true)).splitlines()"
+        expr = ("{{ ((%s | reject('in', %s) | reject('in', %s) | select | list) + (%s | select | list)) | unique | list"
+                " if (%s) else [] }}") % (rd % node.conf, rd % node.p("loaded"), rd % note, rd % node.p("pending"),
+                                          "frr_pending_when | bool")
+        return {"name": t["name"], "vars": t.get("vars", {}), "ansible.builtin.set_fact": {"frr_pending_lines": expr}}
     if "ansible.builtin.set_fact" in t or "ansible.builtin.fail" in t or "ansible.builtin.debug" in t:
         return t
     if "ansible.builtin.shell" in t:
@@ -406,6 +410,31 @@ class _Unapplied(_States):
         note = os.path.join(self.node.r, "etc/shc-fabric", ("gw-site1" if self.GATEWAY else "root") + ".frr-unapplied")
         self.assertIn("line X", self.node.get(note) or "")
         os.remove(self.node.p("pending"))            # the reader leaves noted lines out from now on
+        self.assertEqual(self.job("conf A\nline X\n"), ([], False))
+
+    def test_review_reproduction_a_line_never_taken_with_an_unchanged_file_reloads_once(self):
+        # the reviewers' case: the record equals the file's digest and FRR always leaves one line (the stand-in
+        # frr-reload.py --test reports it every time); the pending difference is derived from what FRR runs, less
+        # the note. One reload, the note takes the line, then nothing is due on any later run
+        self.node.running("conf A\nline X\n")
+        self.assertEqual(self.job("conf A\nline X\n"), ([], False))
+        self.node.put("never", "line X\n")
+        self.node.put("loaded", "conf A\n")
+        runs = [self.job("conf A\nline X\n") for _ in range(3)]
+        self.assertEqual(runs, [(["reloaded"], False), ([], False), ([], False)])
+        note = os.path.join(self.node.r, "etc/shc-fabric", ("gw-site1" if self.GATEWAY else "root") + ".frr-unapplied")
+        self.assertEqual((self.node.get(note) or "").strip(), "line X")
+
+    def test_a_start_with_an_unchanged_file_is_checked(self):
+        # FRR found stopped, the file and the record unchanged, a daemon that leaves a line out: the start is checked,
+        # the job fails once naming it; the next run (the line noted) reloads nothing
+        self.node.running("conf A\nline X\n")
+        self.assertEqual(self.job("conf A\nline X\n"), ([], False))
+        self.node.put("state", "inactive\n")
+        self.node.put("never", "line X\n")
+        actions, failed = self.job("conf A\nline X\n")
+        self.assertEqual(len(actions), 1)
+        self.assertTrue(failed)
         self.assertEqual(self.job("conf A\nline X\n"), ([], False))
 
     def test_a_pending_line_and_a_new_one_left_still_fails(self):
