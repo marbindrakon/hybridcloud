@@ -23,7 +23,7 @@
           {{ fh_gateways | selectattr('spec.fabricRef.name', 'defined')
              | selectattr('spec.fabricRef.name', 'equalto', fh_fabric.metadata.name) | list }}
         fh_nodes: []
-        fh_skipped: null
+        fh_skip_reason: ""
         # the fabric's own switch (fabrics.<name>.health.enabled false: nodes that are off on purpose)
         fh_fabric_enabled: "{{ _h.enabled | default(true) | string | lower in ['true', 'yes', '1'] }}"
         # a gateway is read and judged once its job realized it on the nodes and while no change of its own is in
@@ -94,14 +94,16 @@
         _d: "{{ fh_status.delivery | default({}, true) }}"
       ansible.builtin.set_fact:
         fh_lease_before: "{{ fh_lease }}"
-        fh_skipped: >-
-          {{ {'reason': 'LeaseHeld'} if fh_lease.held | bool
-             else ({'reason': 'JobInFlight'} if (_d.eventId | default('', true) | length > 0
-                                                   and _d.eventId != _d.completedEventId | default('', true))
-                   else none) }}
+        # why the nodes are left alone this run, "" when they are read. A string, never None: ansible-core 2.16 (no
+        # native types) renders a None from an expression as "", which no "is none" test would see
+        fh_skip_reason: >-
+          {{ 'LeaseHeld' if fh_lease.held | bool
+             else ('JobInFlight' if (_d.eventId | default('', true) | length > 0
+                                     and _d.eventId != _d.completedEventId | default('', true))
+                   else '') }}
 
     - name: "{{ fh_name }}: read the nodes"
-      when: fh_skipped is none and fh_fabric_enabled | bool
+      when: fh_skip_reason | length == 0 and fh_fabric_enabled | bool
       block:
         - name: "{{ fh_name }}: connect to the border gateway nodes"
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
@@ -110,6 +112,22 @@
             bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
             # the node's own limit on each step, above the reader's (which ends first and says so)
             bgw_node_limit: "{{ (fh_health.nodeReadTimeoutSeconds | default(60, true) | int) + 15 }}"
+
+        # (a list built by a loop is a fact of its own: a top-level fact is a list on every ansible-core version)
+        - name: "{{ fh_name }}: the instances to read on each node"
+          ansible.builtin.set_fact:
+            fh_instances: >-
+                {%- set out = [{'name': 'root', 'kind': 'root'}] -%}
+                {%- for g in fh_my_gateways if g.metadata.deletionTimestamp is not defined
+                      and (g.spec.cloudRef | default({})).name | default('') not in fh_paused_sites
+                      and g.metadata.name in fh_judged_gateways -%}
+                  {%- set e = {'name': 'gw-' ~ g.metadata.name, 'kind': 'gateway'} -%}
+                  {%- set su = g.spec.siteUnderlay | default({}, true) -%}
+                  {%- set cidr = su.cidr | default('', true) -%}
+                  {%- set _ = out.append(e | combine({'siteCidr': cidr} if cidr else {})
+                                           | combine({'sitePeers': su.upstreamRouteReflectors | default([], true)})) -%}
+                {%- endfor -%}
+                {{ out }}
 
         - name: "{{ fh_name }}: what to read on each node"
           ansible.builtin.set_fact:
@@ -124,18 +142,7 @@
                    if (((fab_real.nodes | default({}, true)).frrLoadCheck | default({}, true)).enabled | default(true)
                        | string | lower in ['true', 'yes', '1']) else '' }}
               frrIgnore: "{{ ((fab_real.nodes | default({}, true)).frrLoadCheck | default({}, true)).ignore | default([], true) }}"
-              instances: >-
-                {%- set out = [{'name': 'root', 'kind': 'root'}] -%}
-                {%- for g in fh_my_gateways if g.metadata.deletionTimestamp is not defined
-                      and (g.spec.cloudRef | default({})).name | default('') not in fh_paused_sites
-                      and g.metadata.name in fh_judged_gateways -%}
-                  {%- set e = {'name': 'gw-' ~ g.metadata.name, 'kind': 'gateway'} -%}
-                  {%- set su = g.spec.siteUnderlay | default({}, true) -%}
-                  {%- set cidr = su.cidr | default('', true) -%}
-                  {%- set _ = out.append(e | combine({'siteCidr': cidr} if cidr else {})
-                                           | combine({'sitePeers': su.upstreamRouteReflectors | default([], true)})) -%}
-                {%- endfor -%}
-                {{ out }}
+              instances: "{{ fh_instances }}"
 
         - name: "{{ fh_name }}: read each node"
           ansible.builtin.include_tasks: node.yml
@@ -151,15 +158,29 @@
     # a job that took, renewed or released the lease while the nodes were read may have changed them under the read
     - name: "{{ fh_name }}: read the lease again"
       ansible.builtin.include_tasks: lease.yml
-      when: fh_skipped is none and fh_fabric_enabled | bool
+      when: fh_skip_reason | length == 0 and fh_fabric_enabled | bool
 
     - name: "{{ fh_name }}: discard a read a job overlapped"
       ansible.builtin.set_fact:
-        fh_skipped: {reason: LeaseHeld}
+        fh_skip_reason: LeaseHeld
         fh_nodes: []
       when:
-        - fh_skipped is none
+        - fh_skip_reason | length == 0
         - fh_lease.stamp != fh_lease_before.stamp
+
+    # the nodes count as read only when every node of the fabric gave a result (a read, or why there is none); a run
+    # that neither read them nor has a reason to leave them alone is an error of this job, never a healthy check
+    - name: "{{ fh_name }}: the nodes were read, or why not"
+      ansible.builtin.assert:
+        that: >-
+          (not (fh_fabric_enabled | bool)) or (fh_skip_reason | length > 0)
+          or ((fh_nodes | map(attribute='name') | sort | list)
+              == (fh_fabric.spec.borderGateway.nodes | map(attribute='name') | sort | list))
+        fail_msg: >-
+          HybridFabric {{ fh_name }}: the health check read {{ fh_nodes | map(attribute='name') | join(', ') or 'no node' }}
+          of {{ fh_fabric.spec.borderGateway.nodes | map(attribute='name') | join(', ') }} and has no reason to skip
+          them; nothing is written
+        quiet: true
 
     # 3. judge
     - name: "{{ fh_name }}: judge"
@@ -178,7 +199,8 @@
               'fabric': {'name': fh_name, 'namespace': fh_ns, 'ready': fh_ready | bool, 'status': fh_status},
               'gateways': fh_gateway_rows,
               'nodes': fh_nodes,
-              'skipped': fh_skipped} | to_json }}
+              'skipped': ({'reason': fh_skip_reason} if fh_skip_reason | length > 0 else none),
+              'expectedNodes': fh_fabric.spec.borderGateway.nodes | map(attribute='name') | list} | to_json }}
       vars:
         fh_gateway_rows: >-
           {%- set out = [] -%}

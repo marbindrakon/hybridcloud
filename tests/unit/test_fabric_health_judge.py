@@ -179,6 +179,20 @@ class JudgeTest(unittest.TestCase):
         f2 = J.judge(req([node("bgw-1")], fab_status=st, now=LATER))["fabric"]
         self.assertEqual(cond(f2["status"], "NodesHealthy")["status"], "True")
 
+    def test_a_check_without_reads_or_a_reason_is_refused(self):
+        r = req([node("bgw-1")])
+        r["expectedNodes"] = ["bgw-1", "bgw-2"]
+        with self.assertRaises(ValueError):
+            J.judge(r)
+        r["nodes"] = []
+        with self.assertRaises(ValueError):
+            J.judge(r)
+        r["skipped"] = ""            # what ansible-core 2.16 made of a None: refused, never "not skipped"
+        with self.assertRaises(ValueError):
+            J.judge(r)
+        r["skipped"] = {"reason": "LeaseHeld"}
+        self.assertNotIn("checkedAt", J.judge(r)["fabric"]["status"]["health"])
+
     def test_a_read_that_failed_is_not_unreachable(self):
         a = J.judge(req([node("bgw-1"), {"name": "bgw-2", "reachable": True, "error": "the read ran out of time"}]))
         c = cond(a["fabric"]["status"], "NodesHealthy")
