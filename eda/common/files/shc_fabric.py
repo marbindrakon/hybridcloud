@@ -152,6 +152,7 @@ def check_fabric(req):
     except ValueError:
         pass
     errors += core6_check(core, srgb, pe_max, len((spec.get("borderGateway") or {}).get("nodes") or []))
+    errors += icmp4_check(core)
     node_names = [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []]
     errors += srv6_check(core, real, node_names, pe_max)
     eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []],
@@ -262,6 +263,29 @@ def core6(core, key, min_len):
     if n.prefixlen > min_len:
         raise ValueError(f"realization core.{key} {n} is too small (at least a /{min_len})")
     return n
+
+
+def icmp4_check(core):
+    """core.icmpSource4: empty, or one IPv4 address (a /32 written out is the same) that is neither link-local nor
+    inside the core's own IPv4 ranges (it is local in every root VRF)"""
+    v = str(core.get("icmpSource4") or "").strip()
+    if not v:
+        return []
+    try:
+        a = ipaddress.ip_interface(v)
+    except ValueError:
+        return [f"realization core.icmpSource4 {v!r} is no IPv4 address"]
+    if a.version != 4 or a.network.prefixlen != 32:
+        return [f"realization core.icmpSource4 {v} is no single IPv4 address"]
+    if a.ip.is_link_local or a.ip.is_loopback or a.ip.is_multicast or a.ip.is_unspecified:
+        return [f"realization core.icmpSource4 {v} is link-local, loopback, multicast or unspecified"]
+    for key in ("loopbackPool", "linkSubnet"):
+        try:
+            if a.ip in ipaddress.ip_network(str(core.get(key) or "0.0.0.0/32"), strict=False):
+                return [f"realization core.icmpSource4 {v} lies inside core.{key}"]
+        except ValueError:
+            pass
+    return []
 
 
 def core6_check(core, srgb, pe_max, node_count):

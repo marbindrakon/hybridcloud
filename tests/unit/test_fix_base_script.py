@@ -52,6 +52,11 @@ ADDED = [
     (r"^R \[root\] nft -s list table (ip shc_root_in|ip6 shc_root_in6)$", "the root VRFs' input filters, in the snapshot"),
     (r"^R \[gw-[a-z0-9]+\] nft -s list table ip6 shc_gw_in6$",
      "the VRFs' input filter in the snapshot with the IPv6 core, also without icmp6Announced"),
+    # the root VRFs' IPv4 ICMP source (test_root_icmp4_source): read on every run, written only with icmp4
+    (r"^R \[root\] ip -br -4 addr show type vrf$", "the root VRFs' IPv4 ICMP source, in the snapshot"),
+    (r"^R \[root\] ip -j link show type vrf$", "the root VRFs' IPv4 ICMP source: the VRF devices"),
+    (r"^R \[root\] ip link show (egress|e\d+)$", "the root VRFs' IPv4 ICMP source: a VRF device there"),
+    (r"^R \[root\] ip -j -4 addr show dev (egress|e\d+)$", "the root VRFs' IPv4 ICMP source: a VRF device's addresses"),
     (r"^W \[gw-[a-z0-9]+\] nft -f -$",
      "the VRFs' input filter ip6 shc_gw_in6 with the IPv6 core, also without icmp6Announced"),
 ]

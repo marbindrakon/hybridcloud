@@ -84,6 +84,33 @@ routed in that VRF. Each refusing rule counts its packets (`nft list table ip6 s
 namespace, `nft list table ip shc_root_in` and `nft list table ip6 shc_root_in6` on the node). A table follows the
 VRFs on every run and goes with the last of them (and an IPv6 table with the dual-stack core).
 
+## The root's IPv4 ICMP errors toward a network
+
+```yaml
+core:
+  icmpSource4: 192.0.0.8   # the IPv4 source of the root VRFs' ICMP errors; empty = the kernel's choice
+```
+
+A network's IPv4 traffic that crosses the root (toward a circuit, or out through the egress link) meets the root
+twice: in the network's VRF and in the egress VRF. When it does not fit the next link or its TTL runs out there, the
+root answers with "fragmentation needed" or "time exceeded". Without `core.icmpSource4` the kernel takes the
+answer's source from the VRF's devices, which for these VRFs is an address of the egress link (`egress.linkPool`,
+169.254.0.0/16 by default) or a circuit's, depending on the order the devices were created in; some sites drop such
+sources (OpenShift Virtualization: OVN-Kubernetes reserves part of 169.254.0.0/17), and the guests behind them then
+lose IPv4 path MTU discovery and see a silent hop.
+
+With `core.icmpSource4` (default `192.0.0.8`, the IPv4 dummy address of RFC 7600, which the site gateways' kernels
+already answer from) every root VRF device (the egress VRF and each network's and circuit's VRF) holds that address as
+a /32 on every node. The kernel prefers it for every route whose next hop lies outside the VRF, which is every route
+back to a network's hosts (over the core); the egress VRF's routes back to the networks (each network's source NAT
+address, each platform prefix) name it as their source. Errors toward a circuit's customer edge router keep the
+circuit's address (its own link), and errors toward the internet the egress link's or hand-off address as before.
+The address is never announced and is local in every root VRF, so what a network sends to it meets the root's input
+filter; a tenant prefix that overlaps it is refused (`PrefixReserved`). The HybridFabric refuses (`InvalidSpec`) a
+value that is no single IPv4 address, is link-local or loopback, or lies inside `core.loopbackPool` or
+`core.linkSubnet`. Source NAT is unchanged. Setting or changing it adds the address and replaces the egress VRF's
+routes with their source, without an interruption.
+
 ## TCP MSS clamps
 
 The node clamps the MSS of TCP connection setups where a packet is about to leave on a link smaller than the path it

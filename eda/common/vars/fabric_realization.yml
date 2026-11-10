@@ -63,6 +63,13 @@ fabric_realization_defaults:
     # the sites while gateway.announceIcmpSource6 is on for them. At least a /96, clear of loopbackPool6. A tenant
     # prefix may not overlap it (it is one of the exclusive ranges below, added automatically). Empty = none
     icmpSource6: ""
+    # source of the IPv4 ICMP errors the root's VRFs send toward a network (fragmentation needed, time exceeded): one
+    # IPv4 address, held on every root VRF device of every node and named as the source of the egress VRF's routes
+    # back to the networks, so the errors never leave from a link-local address of the egress link (sites drop some:
+    # OVN-Kubernetes reserves part of 169.254.0.0/16). Never announced; a tenant prefix may not overlap it (added to
+    # the exclusive ranges automatically). Default 192.0.0.8, the IPv4 dummy address (RFC 7600) the gateways' kernels
+    # already send their errors from. Empty = the kernel's choice (the first address of the VRF's devices)
+    icmpSource4: 192.0.0.8
     # VPN transport of the core, one for the fabric (every node's root and all its gateway namespaces): mpls = IS-IS
     # segment routing and MPLS L3VPN (labels over the loopbacks' node SIDs); srv6 = SRv6 L3VPN, one SID per VRF
     # (End.DT46, IPv4 and IPv6) from the provider edge's locator in core.srv6.block, the VPN sessions over the IPv6

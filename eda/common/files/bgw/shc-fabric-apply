@@ -95,6 +95,14 @@
 #   filter above. Always, table ip shc_root_in (IPv4 rules only, input hook only): ICMP and TCP segments with ACK or
 #   RST pass, everything else is dropped (no reset or unreachable is sent: those would be routed outside the VRF on
 #   some kernels). Both stateless; each goes with the last root VRF (and the IPv6 one with the IPv6 core).
+# icmp4 (root, optional; absent or "" = none of this is read or set, but for removing such addresses a run before
+#   left): the IPv4 source of the ICMP errors the root's VRFs send toward a network, as a /32 on every root VRF device
+#   (the egress VRF, each network's VRF e<n>). For a route whose next hop device lies outside the VRF (every route back
+#   to a network's hosts: over the core) the kernel takes an address of the VRF device before any address of the VRF's
+#   other devices, so the root's "fragmentation needed" and "time exceeded" toward a network leave from it instead of
+#   from whichever device of the VRF comes first (the egress veth's link-local address, a circuit's address). The
+#   egress VRF's routes back to the networks (FRR's) name it as their source. Never announced; what a network sends to
+#   it is the root input filter's (see above).
 # Core transport (both types): transport (the core's, not a site leg's) "mpls" or "srv6"; absent = mpls, and a run
 #   with mpls issues none of the srv6 commands this paragraph describes. srv6 also reads srv6 {block, locator} (the
 #   SID block; the provider edge's locator, which must lie in it: FRR announces it, nothing here sets it) and needs
@@ -178,6 +186,8 @@ LOPOOL6=$(opt .loopbackPool6); ICMPPOOL6=$(opt .icmpSource6)
 # the namespace's ICMPv6 error rate per destination (ms between messages; "" = the kernel default): a gateway
 # answers a whole site's unreachable IPv6 traffic, so a guest's connection attempts must each get their error
 ICMP6RATE=$(opt .icmp6RateLimitMs)
+# the root VRFs' IPv4 ICMP source (root only; "" = none)
+ICMP4=$(opt .icmp4); ICMP4=${ICMP4%/32}
 # the pools a run without them still cleans up (line 1 loopbackPool6, line 2 icmpSource6)
 POOLS6=/etc/shc-fabric/$I.pools6; POOLS6_USED=""
 # the IPv6 egress was applied (egress6_up): a run without egress.ipv6 removes it
@@ -692,6 +702,7 @@ snapshot() {
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
     egress_state; attach_state; local4_state; srv6_state "$BR"
     [ ! -e "$MARKI4" ] || nft -s list table ip shc_root_in 2>/dev/null || true
+    ip -br -4 addr show type vrf 2>/dev/null || true
     [ ! -e "$MARKI6" ] || nft -s list table ip6 shc_root_in6 2>/dev/null || true
     if [ -n "$V6KNOWN" ]; then  # the devices this sets up (never the management interface)
       ip -br -6 addr show | grep -E "^(lo|$BR|egress0|e[0-9]+${EV:+|$EV})[@ ]" || true
@@ -1243,6 +1254,17 @@ root_in_down() {
   rm -f "$2"
 }
 root_in4() { root_in 4 "ip shc_root_in" "$MARKI4"; }
+
+# the root VRFs' IPv4 ICMP source: exactly icmp4/32 on every root VRF device (the VRF devices hold no other IPv4
+# address; without the key none)
+root_icmp4() {
+  local v a
+  for v in $(ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^(e[0-9]+)$' || true) ${EV:+"$EV"}; do
+    ip link show "$v" >/dev/null 2>&1 || continue
+    for a in $(stray "$v" 0.0.0.0/0 "${ICMP4:+$ICMP4/32}"); do ip addr del "$a" dev "$v"; done
+    [ -z "$ICMP4" ] || addr_ensure "$v" "$ICMP4/32"
+  done
+}
 root_in6() { root_in 6 "ip6 shc_root_in6" "$MARKI6"; }
 
 attach_up() {
@@ -1363,6 +1385,7 @@ root)
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
     root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf] | unique | .[]' "$CONF")"
+    step "the root VRFs' IPv4 ICMP source" root_icmp4
     if [ -n "$V6KNOWN" ]; then  # the egress VRF and the networks' VRFs, as created above
       for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
           | map("\(.vrf):\(.table)") | unique | .[]' "$CONF"); do
