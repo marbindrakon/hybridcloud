@@ -33,7 +33,7 @@ def unit(active="active", **kw):
 def inst(kind="root", **kw):
     su = "shc-fabric-apply@root.service" if kind == "root" else "shc-gw@atuin.service"
     ru = "frr.service" if kind == "root" else su
-    d = {"start": dict(unit(), unit=su, lines=[]), "units": {su: unit(), ru: unit()},
+    d = {"start": dict(unit(), unit=su, lines=[], incomplete=[]), "units": {su: unit(), ru: unit()},
          "routing": {"unit": ru, "daemons": {"zebra": "Up", "bgpd": "Up"}, "crashes": []},
          "kernelDrift": [], "frr": {"reloadDue": False, "recorded": True, "pending": None}}
     if kind == "root":
@@ -76,6 +76,20 @@ def apply(status, body):
     return S._merge_patch(obj["status"], patch["status"]) if patch else obj["status"]
 
 
+def twice(nodes, **kw):
+    """(the second check's answer, the first's): the same reads two checks running, statuses written in between"""
+    r = req(nodes, **kw)
+    first = J.judge(r)
+    r2 = copy.deepcopy(r)
+    r2["now"] = LATER
+    r2["fabric"]["status"] = apply(r["fabric"]["status"], first["fabric"]["status"])
+    by = {g["name"]: g for g in first["gateways"]}
+    for g in r2["gateways"]:
+        if g["name"] in by:
+            g["status"] = apply(g.get("status") or {}, by[g["name"]]["status"])
+    return J.judge(r2), first
+
+
 class JudgeTest(unittest.TestCase):
     def test_healthy(self):
         a = J.judge(req([node("bgw-1"), node("bgw-2")]))
@@ -112,7 +126,11 @@ class JudgeTest(unittest.TestCase):
     def test_boot_apply_failure_wakes_at_once_and_backs_off(self):
         bad = inst(start=dict(unit("failed", result="exit-code"), unit="shc-fabric-apply@root.service",
                               lines=["transport srv6: net.vrf.strict_mode=1 refused"]))
-        a = J.judge(req([node("bgw-1"), node("bgw-2", root=bad)]))
+        # the first check lists it, unconfirmed: no condition, no event, no wake (a unit restarting by itself)
+        a, first = twice([node("bgw-1"), node("bgw-2", root=bad)])
+        self.assertEqual(cond(first["fabric"]["status"], "NodesHealthy")["status"], "True")
+        self.assertEqual((first["fabric"]["wake"], first["fabric"]["events"]), (False, []))
+        self.assertEqual(first["fabric"]["status"]["health"]["nodes"][1]["findings"][0]["reason"], "StartFailed")
         f = a["fabric"]
         c = cond(f["status"], "NodesHealthy")
         self.assertEqual((c["status"], c["reason"]), ("False", "StartFailed"))
@@ -121,9 +139,9 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(cond(f["status"], "Degraded")["reason"], "StartFailed")
         self.assertTrue(f["wake"])
         self.assertEqual({e["reason"] for e in f["events"]}, {"NodeStartFailed", "HealthWake"})
-        st = apply({}, f["status"])
+        st = apply(apply({}, first["fabric"]["status"]), f["status"])
         # the woken run did not fix it: no second wake within the backoff, no second event
-        f2 = J.judge(req([node("bgw-1"), node("bgw-2", root=bad)], fab_status=st, now=LATER))["fabric"]
+        f2 = J.judge(req([node("bgw-1"), node("bgw-2", root=bad)], fab_status=st, now="2026-11-10T10:20:00Z"))["fabric"]
         self.assertFalse(f2["wake"])
         self.assertEqual(f2["events"], [])
         st2 = apply(st, f2["status"])
@@ -133,7 +151,7 @@ class JudgeTest(unittest.TestCase):
         fnd = [x for x in J.judge(req([node("bgw-1"), node("bgw-2", root=bad)], fab_status=st2,
                                       now=LATER))["fabric"]["status"]["health"]["nodes"] if x["name"] == "bgw-2"][0]
         self.assertEqual(fnd["findings"][0]["since"], NOW)
-        self.assertEqual(fnd["findings"][0]["checks"], 3)
+        self.assertEqual(fnd["findings"][0]["checks"], 4)
 
     def test_drift_wakes_on_the_second_sighting_then_recovers(self):
         drift = inst(kernelDrift=["+lo 10.255.0.250/32"])
@@ -149,6 +167,90 @@ class JudgeTest(unittest.TestCase):
         f3 = J.judge(req([node("bgw-1")], fab_status=st, now=MUCH_LATER))["fabric"]
         self.assertEqual(cond(f3["status"], "NodesHealthy")["status"], "True")
         self.assertEqual([e["reason"] for e in f3["events"]], ["NodeHealthRecovered"])
+
+    def test_start_incomplete_until_an_apply_without_warnings(self):
+        r = inst(start=dict(unit(), unit="shc-fabric-apply@root.service", lines=[],
+                            incomplete=["warning: interface eno1 relies on router advertisements; IPv6 core not applied"]))
+        f = twice([node("bgw-1", root=r)])[0]["fabric"]
+        c = cond(f["status"], "NodesHealthy")
+        self.assertEqual(c["reason"], "StartIncomplete")
+        self.assertNotIn("warning:", c["message"])
+        st = apply({}, f["status"])
+        f2 = J.judge(req([node("bgw-1")], fab_status=st, now=LATER))["fabric"]
+        self.assertEqual(cond(f2["status"], "NodesHealthy")["status"], "True")
+
+    def test_a_read_that_failed_is_not_unreachable(self):
+        a = J.judge(req([node("bgw-1"), {"name": "bgw-2", "reachable": True, "error": "the read ran out of time"}]))
+        c = cond(a["fabric"]["status"], "NodesHealthy")
+        self.assertEqual((c["status"], c["reason"]), ("False", "ReadFailed"))
+        self.assertEqual(cond(a["fabric"]["status"], "Degraded")["status"], "False")
+        self.assertFalse(a["fabric"]["wake"])
+
+    def test_a_transient_state_seen_once_counts_for_nothing(self):
+        g = inst("gateway", start=dict(unit("activating", sub="auto-restart", restarts=1), unit="shc-gw@atuin.service",
+                                       lines=[], incomplete=[]))
+        a = J.judge(req([node("bgw-1", gw=g)]))
+        atuin = {x["name"]: x for x in a["gateways"]}["atuin"]
+        self.assertEqual(cond(atuin["status"], "NodesHealthy")["status"], "True")
+        self.assertEqual((atuin["wake"], atuin["events"]), (False, []))
+        self.assertEqual(atuin["status"]["health"]["nodes"][0]["findings"][0]["checks"], 1)
+        # gone at the next check: never a condition, never an event
+        st = apply({}, atuin["status"])
+        b = J.judge(req([node("bgw-1")], gws=[{"name": "atuin", "namespace": "sovereign-cloud", "ready": True,
+                                                "paused": False, "status": st}], now=LATER))
+        self.assertEqual(b["gateways"][0]["events"], [])
+
+    def test_gateways_not_realized_or_busy_are_not_checked(self):
+        g = inst("gateway", start=dict(unit("inactive"), unit="shc-gw@new.service", lines=[], incomplete=[]))
+        n = node("bgw-1")
+        n["read"]["instances"]["gw-new"] = g
+        gws = [{"name": "new", "namespace": "sovereign-cloud", "ready": False, "paused": False, "judged": False,
+                "status": {}}]
+        a = twice([n], gws=gws)[0]
+        c = cond(a["gateways"][0]["status"], "NodesHealthy")
+        self.assertEqual((c["status"], c["reason"]), ("Unknown", "NotChecked"))
+        self.assertEqual(cond(a["gateways"][0]["status"], "Degraded")["status"], "False")
+        self.assertFalse(a["gateways"][0]["changed"])
+
+    def test_gateway_drift_with_more_checks_still_wakes(self):
+        g = inst("gateway", frr={"reloadDue": True, "recorded": True, "pending": None, "notTaken": []})
+        gws = [{"name": "atuin", "namespace": "sovereign-cloud", "ready": True, "paused": False, "status": {}}]
+        st, woke = {}, []
+        for i, now in enumerate(("2026-11-10T10:00:00Z", "2026-11-10T10:10:00Z", "2026-11-10T10:20:00Z",
+                                 "2026-11-10T10:30:00Z")):
+            a = J.judge(req([node("bgw-1", gw=g)], gws=[dict(gws[0], status=st)], now=now,
+                            health={"wakeAfterChecks": 3}))
+            gw = a["gateways"][0]
+            if gw["changed"]:
+                st = apply(st, gw["status"])
+            woke.append(gw["wake"])
+        self.assertEqual(woke, [False, False, True, False])
+
+    def test_a_removed_node_leaves_the_egress_state(self):
+        prev = {"realization": {"egress": {"ipv6": {"enabled": True, "degraded": True, "degradedNodes": ["bgw-3"],
+                                                    "nodes": {"bgw-1": {"healthy": True}, "bgw-3": {"healthy": False}}}}}}
+        a = J.judge(req([node("bgw-1")], fab_status=prev))
+        e6 = a["fabric"]["status"]["realization"]["egress"]["ipv6"]
+        self.assertEqual((e6["nodes"]["bgw-3"], e6["degradedNodes"], e6["degraded"]), (None, [], False))
+        self.assertTrue(a["wakeNetworks"])
+
+    def test_a_fabric_with_the_check_off(self):
+        r = req([], gws=[{"name": "atuin", "namespace": "sovereign-cloud", "ready": True, "paused": False,
+                          "status": {}}])
+        r["enabled"] = False
+        a = J.judge(r)
+        f = a["fabric"]["status"]
+        self.assertEqual(cond(f, "NodesHealthy")["reason"], "NotChecked")
+        self.assertFalse(f["realization"]["health"]["enabled"])
+        self.assertEqual(cond(a["gateways"][0]["status"], "NodesHealthy")["reason"], "NotChecked")
+
+    def test_a_paused_gateway_keeps_its_last_wake_and_is_not_rewritten(self):
+        gws = [{"name": "iaas1", "namespace": "x", "ready": True, "paused": True,
+                "status": {"health": {"lastWakeAt": NOW, "checkedAt": NOW, "nodes": []},
+                           "conditions": [{"type": "NodesHealthy", "status": "Unknown", "reason": "SitePaused"},
+                                          {"type": "Degraded", "status": "False", "reason": "AsExpected"}]}}]
+        a = J.judge(req([node("bgw-1")], gws=gws, now=LATER))
+        self.assertFalse(a["gateways"][0]["changed"])
 
     def test_lines_not_taken_are_reported_never_woken(self):
         g = inst("gateway", frr={"reloadDue": False, "recorded": True, "pending": [], "notTaken": ["router bgp 1: x"]})
@@ -172,7 +274,7 @@ class JudgeTest(unittest.TestCase):
                                        lines=[]), siteSessions={"established": 0, "known": 2})
         r = inst(routing={"unit": "frr.service", "daemons": {"zebra": "Down", "bgpd": "Up"},
                           "crashes": [{"daemon": "zebra", "at": 1_800_000_000, "pathspace": ""}]})
-        a = J.judge(req([node("bgw-1", root=r, gw=g)]))
+        a, _ = twice([node("bgw-1", root=r, gw=g)])
         f = a["fabric"]["status"]
         self.assertEqual(cond(f, "NodesHealthy")["reason"], "RoutingDaemonDown")
         reasons = [x["reason"] for x in f["health"]["nodes"][0]["findings"]]
@@ -187,14 +289,15 @@ class JudgeTest(unittest.TestCase):
         r = inst()
         r["units"]["frr.service"] = unit(enabled="disabled")
         r["units"]["shc-egress6-guard.timer"] = unit("inactive")
-        f = J.judge(req([node("bgw-1", root=r)]))["fabric"]
+        f = twice([node("bgw-1", root=r)])[0]["fabric"]
         msg = cond(f["status"], "NodesHealthy")["message"]
         self.assertIn("not started at boot", msg)
         self.assertIn("a guard of the configuration is inactive", msg)
         self.assertTrue(f["wake"])
 
     def test_unreachable_node(self):
-        a = J.judge(req([node("bgw-1"), node("bgw-2", reachable=False)]))
+        a, first = twice([node("bgw-1"), node("bgw-2", reachable=False)])
+        self.assertEqual(cond(first["fabric"]["status"], "NodesHealthy")["status"], "True")   # a reboot on purpose
         f = a["fabric"]
         self.assertEqual(cond(f["status"], "NodesHealthy")["reason"], "NodeUnreachable")
         self.assertFalse(f["wake"])
@@ -271,7 +374,7 @@ class CoexistenceTest(unittest.TestCase):
 
     def health_status(self, bad=True):
         r = inst(start=dict(unit("failed"), unit="shc-fabric-apply@root.service", lines=[])) if bad else inst()
-        return J.judge(req([node("bgw-1", root=r)]))["fabric"]["status"]
+        return twice([node("bgw-1", root=r)])[0]["fabric"]["status"]
 
     def base(self):
         return {"metadata": {"generation": 4, "resourceVersion": "9"},

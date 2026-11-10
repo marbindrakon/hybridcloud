@@ -101,6 +101,101 @@ class Pending(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(tmp)), ["frr-reload.py", "root.frr-unapplied"])
 
 
+EVIDENCE = "/home/aaustin/cc-workspaces/shc-networking-invest/p-ops/evidence/gate/pre/frrtest-bgw-1.txt"
+GW_ATUIN_CONF = """frr version 8.5.3
+frr defaults traditional
+hostname bgw-1-gw-atuin
+vrf t51003
+ vni 51003
+exit-vrf
+vrf t51004
+ vni 51004
+exit-vrf
+router bgp 65010 vrf t51003
+ address-family l2vpn evpn
+  route-target import 65010:51003
+  route-target export 65010:51003
+ exit-address-family
+exit
+router bgp 65010 vrf t51004
+ address-family l2vpn evpn
+  route-target import 65010:51004
+  route-target export 65010:51004
+ exit-address-family
+exit
+"""
+
+
+class LiveOutput(unittest.TestCase):
+    """frr-reload.py --test as FRR 8.5.3 printed it on a gateway instance of the lab (pre-release check): the VRFs'
+    EVPN route targets FRR derives itself are not pending once the compared file's text is passed."""
+
+    @unittest.skipUnless(CHECK and os.path.exists(EVIDENCE), "the check or the recorded output is not in reach")
+    def test_gateway_instance_output_is_nothing_pending(self):
+        with open(EVIDENCE) as f:
+            text = f.read()
+        part = text.split("===== frrtest gw-atuin")[1].split("===== frrtest ")[0]
+        out = part[part.index("Lines To Delete"):part.rindex("rc=")]
+        tmp = tempfile.mkdtemp(prefix="shc-pending-live-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        reload = os.path.join(tmp, "frr-reload.py")
+        with open(reload, "w") as f:
+            f.write("#!/bin/sh\ncat <<'EOF'\n%sEOF\n" % out)
+        os.chmod(reload, 0o755)
+        conf = os.path.join(tmp, "frr.conf.shc")
+        with open(conf, "w") as f:
+            f.write(GW_ATUIN_CONF)
+        c = module(CHECK, "shc_frr_check_live")
+        c.RELOAD = reload
+        self.assertEqual(P.frr_pending_difference(None, "gw-atuin", conf, checker=c), [])
+        # without the file's text the route targets would count (what the release before saw)
+        self.assertTrue(any("route-target" in l for l in c.left_over(c.run_test(conf, "gw-atuin", reload)[0], [])))
+
+
+class CheckTimeout(unittest.TestCase):
+    @unittest.skipUnless(CHECK, "the post-reload verification (shc-frr-check) is not in reach")
+    def test_a_test_out_of_time_ends_what_it_started(self):
+        tmp = tempfile.mkdtemp(prefix="shc-pending-timeout-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        pidf = os.path.join(tmp, "child")
+        reload = os.path.join(tmp, "frr-reload.py")
+        with open(reload, "w") as f:   # a "vtysh" child that hangs, and the script waiting for it
+            f.write("#!/bin/sh\nsleep 60 &\necho $! > %s\nwait\n" % pidf)
+        os.chmod(reload, 0o755)
+        c = module(CHECK, "shc_frr_check_timeout")
+        c.TIMEOUT = 1
+        text, err = c.run_test("/x", "", reload)
+        self.assertIsNone(text)
+        self.assertIn("TimeoutExpired", err)
+        with open(pidf) as f:
+            pid = int(f.read())
+        import time
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("the child of the timed-out test is still running")
+
+
+class NoBytecode(unittest.TestCase):
+    @unittest.skipUnless(CHECK, "the post-reload verification (shc-frr-check) is not in reach")
+    def test_loading_the_check_writes_nothing_next_to_it(self):
+        tmp = tempfile.mkdtemp(prefix="shc-pending-pyc-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        dst = os.path.join(tmp, "shc-frr-check")
+        shutil.copy(CHECK, dst)
+        old = sys.dont_write_bytecode
+        sys.dont_write_bytecode = False
+        try:
+            self.assertIsNotNone(P.load_checker(dst))
+        finally:
+            sys.dont_write_bytecode = old
+        self.assertEqual(os.listdir(tmp), ["shc-frr-check"])
+
+
 class Reader(unittest.TestCase):
     def test_reader_passes_instance_note_and_ignore(self):
         src = ("SEEN = {}\n"

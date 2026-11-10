@@ -222,7 +222,7 @@ class AgainstBase(ApplyCase):
             out, log = h.ok(self, name, act, script=script)
             runs.append({"what": "%s %s" % (name, act), "out": out, "log": log, "state": h.get_state(),
                          # (a listed difference: the newer apply also records what it left, <instance>.applied)
-                         "files": sorted(f for f in os.listdir(h.etc) if not f.endswith(".applied"))})
+                         "files": sorted(f for f in os.listdir(h.etc) if not f.endswith((".applied", ".incomplete")))})
         return runs
 
     def check(self, which, extra, used=None):

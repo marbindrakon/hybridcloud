@@ -658,7 +658,8 @@ class FabricIPv6Status(unittest.TestCase):
         t = by_name(load(os.path.join(HF, "main.yml")), "Set the IPv6 egress status")
         out = run_play([t, write_out("hf_egress6_status")],
                        {"hf_egress": {"ipv6": False}, "hf_node_results": [{"name": "bgw-1"}], "fab_st": {}, "fab_real": {"egress": {}}})
-        self.assertEqual(out, {"enabled": False})
+        self.assertEqual(out["enabled"], False)
+        self.assertIsNone(out["nodes"])
 
     def test_families_of_the_root_vrfs(self):
         t = by_name(load(os.path.join(HF, "main.yml")), "Keep the attachment plan")

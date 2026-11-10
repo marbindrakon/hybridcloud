@@ -125,6 +125,8 @@ fabric_realization_defaults:
   # fabric's or a gateway's job for what a full run repairs. Cost per run: one job for all fabrics, one SSH session
   # per node, one status write per fabric (the gateways' only when their health changed).
   health:
+    # off for one fabric (fabrics.<name>.health.enabled false) while its border gateway nodes are off on purpose:
+    # nothing is read, the fabric and its gateways read NodesHealthy Unknown/NotChecked and no alert fires
     enabled: true
     # the job template's schedule (one value for the installation; at least 300) and the base of the stale alert
     intervalSeconds: 600

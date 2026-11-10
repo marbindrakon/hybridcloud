@@ -28,6 +28,7 @@ again. Exit 0 with a result, 2 on wrong arguments.
 import argparse
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -126,10 +127,22 @@ def read_text(path):
 
 def run_test(conf, pathspace, script):
     cmd = [script, "--test"] + (["--pathspace", pathspace] if pathspace else []) + [conf]
+    # in a process group of its own: a run out of time ends frr-reload.py and the vtysh it started (a daemon that does
+    # not answer would otherwise leave a blocked vtysh behind on every run)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT)
-    except (OSError, subprocess.SubprocessError) as e:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    except OSError as e:
         return None, "frr-reload.py --test could not run (%s)" % (e.__class__.__name__,)
+    try:
+        out, err_text = p.communicate(timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.communicate()
+        return None, "frr-reload.py --test could not run (TimeoutExpired)"
+    p = subprocess.CompletedProcess(cmd, p.returncode, out, err_text)
     if p.returncode != 0:
         err = (p.stderr.strip().splitlines() or ["no reason given"])[-1]
         return None, "frr-reload.py --test failed (rc %d; last line: %s)" % (p.returncode, shown([], err)[:200])

@@ -44,6 +44,13 @@ spec:
             gauge:
               path: [status, realization, health]
               valueFrom: [intervalSeconds]
+        - name: health_enabled
+          help: 1 while the health check is on for the fabric, 0 when the realization turns it off.
+          each:
+            type: Gauge
+            gauge:
+              path: [status, realization, health]
+              valueFrom: [enabled]
         - name: egress6_node_healthy
           help: Per node, 1 while the IPv6 egress has an upstream session and the default route.
           each:
@@ -110,7 +117,7 @@ spec:
         severity: warning
       annotations:
         summary: "CloudGateway {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no routing session with its site"
-        description: "No node holds a session with the site. A site that is off on purpose is paused (CloudInfrastructure spec.paused), which this alert ignores."
+        description: "A node holds no session with the site. A site that is off on purpose is paused (CloudInfrastructure spec.paused), which this alert ignores."
     - alert: ShcFabricIPv6EgressUpstreamDown
       expr: >-
         max by (namespace, name) (shc_fabric_condition{customresource_kind="HybridFabric", type="IPv6EgressUpstream", status="False"})
@@ -135,6 +142,7 @@ spec:
       expr: >-
         (time() - shc_fabric_health_checked_at{customresource_kind="HybridFabric"})
         > on (namespace, name) ({{ $f.alerts.staleIntervals }} * shc_fabric_health_interval_seconds{customresource_kind="HybridFabric"})
+        unless on (namespace, name) (shc_fabric_health_enabled == 0)
       for: 10m
       labels:
         severity: warning
@@ -145,6 +153,7 @@ spec:
       expr: >-
         shc_fabric_info{customresource_kind="HybridFabric"}
         unless on (namespace, name) shc_fabric_health_checked_at{customresource_kind="HybridFabric"}
+        unless on (namespace, name) (shc_fabric_health_enabled == 0)
       for: 1h
       labels:
         severity: warning

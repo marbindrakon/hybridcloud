@@ -22,7 +22,8 @@ LEASE = os.path.join(ROLE, "tasks/lease.yml")
 def gw(name, site, deleting=False, cidr="172.18.103.0/24", status=None):
     g = {"metadata": {"name": name, "namespace": "sovereign-cloud", "uid": "u-" + name},
          "spec": {"fabricRef": {"name": "lab"}, "cloudRef": {"name": site}, "siteUnderlay": {"cidr": cidr}},
-         "status": status or {"ready": True, "status": "ready"}}
+         "status": status or {"ready": True, "status": "ready", "phase": "Ready", "nodes": [{"name": "bgw-1"}],
+                              "delivery": {"eventId": "e", "completedEventId": "e"}}}
     if deleting:
         g["metadata"]["deletionTimestamp"] = "2026-11-10T00:00:00Z"
     return g
@@ -36,6 +37,9 @@ FABRIC = {"metadata": {"name": "lab", "namespace": "sovereign-cloud", "uid": "u-
                                                              {"network": "t2/n2", "ipv6": False}]},
                                      "ipam": {"pools": [{"name": "p6", "blocksFree": 3}]}}}}
 GATEWAYS = [gw("atuin", "atuin"), gw("iaas1", "iaas1"), gw("old", "atuin", deleting=True),
+            gw("new", "atuin", status={"phase": "Creating"}),
+            gw("busy", "atuin", status={"phase": "Ready", "nodes": [{"name": "bgw-1"}],
+                                        "delivery": {"eventId": "e2", "completedEventId": "e1"}}),
             {"metadata": {"name": "other"}, "spec": {"fabricRef": {"name": "lab2"}, "cloudRef": {"name": "x"}}}]
 REAL = {"core": {"transport": "srv6"}, "health": {"daemonRestartWindowMinutes": 30, "nodeReadTimeoutSeconds": 60},
         "egress": {"ipv6": {"enabled": True, "sessionDownAlertMinutes": 5}}, "nodes": {"sshUser": "root"}}
@@ -52,9 +56,10 @@ class RoleTest(unittest.TestCase):
         inp = by_name(load(FAB), "{{ fh_name }}: what to read on each node")
         got = run_play([t, inp, write_out("[fh_my_gateways | map(attribute='metadata.name') | list, fh_reader_input, fh_ready]")],
                        dict(v, role_path=ROLE))
-        self.assertEqual(got[0], ["atuin", "iaas1", "old"])
+        self.assertEqual(got[0], ["atuin", "iaas1", "old", "new", "busy"])
         self.assertEqual(got[1]["instances"], [{"name": "root", "kind": "root"},
-                                               {"name": "gw-atuin", "kind": "gateway", "siteCidr": "172.18.103.0/24"}])
+                                               {"name": "gw-atuin", "kind": "gateway", "siteCidr": "172.18.103.0/24",
+                                                "sitePeers": []}])
         self.assertEqual(got[1]["transport"], "srv6")
         self.assertEqual(int(got[1]["windowSeconds"]), 1800)
         self.assertTrue(got[2])
@@ -95,8 +100,8 @@ class RoleTest(unittest.TestCase):
                                                                                  "read": {"bootedAt": 5}}),
                  ({"unreachable": True, "msg": "x"}, {"name": "bgw-1", "reachable": False,
                                                       "error": "the node did not answer over SSH"}),
-                 ({"rc": 124, "stdout": ""}, {"name": "bgw-1", "reachable": False, "error": "the read ran out of time"}),
-                 ({"rc": 1, "stdout": "Traceback"}, {"name": "bgw-1", "reachable": False,
+                 ({"rc": 124, "stdout": ""}, {"name": "bgw-1", "reachable": True, "error": "the read ran out of time"}),
+                 ({"rc": 1, "stdout": "Traceback"}, {"name": "bgw-1", "reachable": True,
                                                      "error": "the read failed (exit 1)"})]
         for res, want in cases:
             init = {"name": "init", "ansible.builtin.set_fact": {"fh_nodes": []}}  # (an extra var would win over set_fact)
@@ -112,6 +117,15 @@ class RoleTest(unittest.TestCase):
         delegated = [t["name"] for f in ("main.yml", "fabric.yml", "node.yml", "lease.yml", "events.yml")
                      for t in walk(load(os.path.join(ROLE, "tasks", f))) if "delegate_to" in t]
         self.assertEqual(delegated, ["{{ bgw_node.name }}: read the node"])
+
+    def test_a_lease_taken_and_released_during_the_read_discards_it(self):
+        t = by_name(load(FAB), "{{ fh_name }}: discard a read a job overlapped")
+        for before, after, discarded in (("|a|a", "|a|a", False), ("|a|a", "|b|c", True), ("|a|a", "", True)):
+            init = {"name": "init", "ansible.builtin.set_fact": {"fh_skipped": None, "fh_nodes": [{"name": "x"}]}}
+            got = run_play([init, t, write_out("fh_skipped")],
+                           {"fh_lease": {"holder": "", "stamp": after}, "fh_lease_before": {"stamp": before},
+                            "fh_fabric_enabled": True})
+            self.assertEqual(got is not None, discarded, (before, after))
 
     def test_pool_rows(self):
         cmp_ = by_name(load(FAB), "{{ fh_name }}: compare the pool rows")
@@ -131,8 +145,10 @@ class RoleTest(unittest.TestCase):
         nodes = [{"name": "bgw-1", "reachable": False, "error": "x"}]
         got = run_play([t, req, write_out("req")], dict(v, fh_nodes=nodes, fh_skipped=None))
         got = json.loads(got) if isinstance(got, str) else got
-        self.assertEqual([(g["name"], g["paused"], g["deleting"]) for g in got["gateways"]],
-                         [("atuin", False, False), ("iaas1", True, False), ("old", False, True)])
+        self.assertEqual([(g["name"], g["paused"], g["deleting"], g["judged"]) for g in got["gateways"]],
+                         [("atuin", False, False, True), ("iaas1", True, False, True), ("old", False, True, True),
+                          ("new", False, False, False), ("busy", False, False, False)])
+        self.assertTrue(got["enabled"])
         self.assertTrue(got["egress6"]["enabled"])
         self.assertEqual(got["nodes"], nodes)
         self.assertIsNone(got["skipped"])

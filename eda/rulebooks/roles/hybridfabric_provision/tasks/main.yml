@@ -467,10 +467,18 @@
         _since: >-
           {{ (_prev.degradedSince | default('', true) or _now) if (_down | length > 0 and _prev.degraded | default(false) | bool)
              else (_now if _down | length > 0 else '') }}
+        # (merge patch: a node no longer in the fabric (every node is in hf_node_results on a ready run), and with
+        # IPv6 egress off the whole state, is removed with null)
+        _gone: >-
+          {{ dict((_prev.nodes | default({}, true)).keys() | list
+                  | reject('in', hf_node_results | map(attribute='name') | list) | list
+                  | zip_longest([], fillvalue=none)) }}
       ansible.builtin.set_fact:
         hf_egress6_status: >-
-          {{ {'enabled': _on | bool, 'nodes': _nodes, 'degraded': _down | length > 0,
-              'degradedNodes': _down | sort, 'degradedSince': _since | trim} if _on | bool else {'enabled': false} }}
+          {{ {'enabled': _on | bool, 'nodes': _nodes | combine(_gone), 'degraded': _down | length > 0,
+              'degradedNodes': _down | sort, 'degradedSince': _since | trim} if _on | bool
+             else {'enabled': false, 'nodes': none, 'degraded': none, 'degradedNodes': none, 'degradedSince': none,
+                   'reportedAt': none} }}
         hf_egress6_alert: >-
           {{ _on | bool and _down | length > 0 and (_since | trim) | length > 0
              and (((_now | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - ((_since | trim) | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds()
@@ -582,7 +590,11 @@
                'message': (('no upstream session or default route on ' ~ hf_egress6_status.degradedNodes | join(', ')
                             ~ ' since ' ~ hf_egress6_status.degradedSince) if hf_egress6_status.degraded | default(false)
                            else 'every node has an upstream session and the default route')}]
-             if hf_egress6_status.enabled | default(false) else []) }}
+             if hf_egress6_status.enabled | default(false)
+             else ([{'type': 'IPv6EgressUpstream', 'status': 'Unknown', 'reason': 'NotEnabled',
+                     'message': 'IPv6 internet egress is off on this fabric'}]
+                   if fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'IPv6EgressUpstream')
+                      | list | length > 0 else [])) }}
         # coreTransport: the core's transport (mpls or srv6); srv6Locators (SRv6 core): {node: the root's locator}.
         # status.realization.translation is no longer written: the null removes what an earlier release recorded there
         # (the status is merge-patched and keeps unknown fields; a no-op once it is gone). Its former condition,

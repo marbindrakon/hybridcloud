@@ -25,7 +25,7 @@ import json
 import sys
 
 # reasons of the NodesHealthy condition, worst first
-ORDER = ("NodeUnreachable", "StartFailed", "ServiceFailed", "RoutingDaemonDown", "StartIncomplete", "SiteSessionsDown",
+ORDER = ("NodeUnreachable", "ReadFailed", "StartFailed", "ServiceFailed", "RoutingDaemonDown", "StartIncomplete", "SiteSessionsDown",
          "ConfigurationDrift", "ConfigurationNotTaken", "RoutingDaemonRestarted")
 # the object works with reduced health (Degraded=True, phase Degraded)
 DEGRADING = {"NodeUnreachable", "StartFailed", "ServiceFailed", "RoutingDaemonDown", "StartIncomplete",
@@ -33,11 +33,14 @@ DEGRADING = {"NodeUnreachable", "StartFailed", "ServiceFailed", "RoutingDaemonDo
 # a full run of the object's job repairs these: at once, or after the drift was seen wakeAfterChecks times
 WAKE_NOW = {"StartFailed", "StartIncomplete", "ServiceFailed"}
 WAKE_LATER = {"ConfigurationDrift"}
-CHECK_OF = {"NodeUnreachable": "Reachability", "StartFailed": "Start", "StartIncomplete": "Start",
+# reasons that count (conditions, events, wakes) only once two consecutive checks found them: a single read can land
+# on a unit restarting by itself, a daemon in watchfrr's own restart, a node rebooting on purpose
+CONFIRM = DEGRADING | WAKE_NOW
+CHECK_OF = {"NodeUnreachable": "Reachability", "ReadFailed": "Reachability", "StartFailed": "Start", "StartIncomplete": "Start",
             "ServiceFailed": "Service", "RoutingDaemonDown": "RoutingDaemon", "RoutingDaemonRestarted": "RoutingDaemon",
             "ConfigurationDrift": "Configuration", "ConfigurationNotTaken": "Configuration",
             "SiteSessionsDown": "SiteSessions"}
-EVENT_OF = {"NodeUnreachable": "NodeUnreachable", "StartFailed": "NodeStartFailed", "StartIncomplete": "NodeStartFailed",
+EVENT_OF = {"NodeUnreachable": "NodeUnreachable", "ReadFailed": "NodeReadFailed", "StartFailed": "NodeStartFailed", "StartIncomplete": "NodeStartFailed",
             "ServiceFailed": "NodeServiceFailed", "RoutingDaemonDown": "RoutingDaemonDown",
             "RoutingDaemonRestarted": "RoutingDaemonRestarted", "ConfigurationDrift": "ConfigurationDrift",
             "ConfigurationNotTaken": "ConfigurationNotTaken",
@@ -109,8 +112,10 @@ def instance_findings(inst, kind, cfg):
                 found.append(("StartFailed", "the configuration is not applied on the node (%s%s)%s"
                               % (start.get("active"), ", " + start["result"] if start.get("result") not in (None, "", "success") else "",
                                  why)))
-        elif lines and kind == "root":
-            found.append(("StartIncomplete", "the configuration was applied in part" + why))
+        elif start.get("incomplete"):
+            # the last successful apply's own record (a later repair by a job clears it)
+            found.append(("StartIncomplete", "the configuration was applied in part: "
+                          + "; ".join(clean(start["incomplete"]))))
         routing = (inst.get("routing") or {}).get("unit")
         units = inst.get("units") or {}
         for name, u in sorted(units.items()):
@@ -172,8 +177,17 @@ def merge_findings(found, prev_findings, now, cfg):
     return out
 
 
+def effective(f):
+    """A finding that counts: confirmed by a second check when its reason needs it."""
+    return f.get("reason") not in CONFIRM or num(f.get("checks"), 1) >= 2
+
+
+def counted(n):
+    return [f for f in n.get("findings") or [] if effective(f)]
+
+
 def worst(nodes):
-    reasons = [f["reason"] for n in nodes for f in n.get("findings") or []]
+    reasons = [f["reason"] for n in nodes for f in counted(n)]
     for r in ORDER:
         if r in reasons:
             return r
@@ -186,15 +200,15 @@ def conditions(nodes, scope):
         return [{"type": "NodesHealthy", "status": "True", "reason": "AsExpected",
                  "message": "every node is healthy"},
                 {"type": "Degraded", "status": "False", "reason": "AsExpected", "message": ""}]
-    msgs = ["%s: %s" % (n["name"], f["message"]) for n in nodes for f in n.get("findings") or [] if f["reason"] == w]
-    degrading = sorted({f["reason"] for n in nodes for f in n.get("findings") or []} & DEGRADING,
+    msgs = ["%s: %s" % (n["name"], f["message"]) for n in nodes for f in counted(n) if f["reason"] == w]
+    degrading = sorted({f["reason"] for n in nodes for f in counted(n)} & DEGRADING,
                        key=ORDER.index)
     conds = [{"type": "NodesHealthy", "status": "False", "reason": w, "message": "; ".join(msgs)[:1000]}]
     if degrading:
         d = degrading[0]
         conds.append({"type": "Degraded", "status": "True", "reason": d,
                       "message": "; ".join("%s: %s" % (n["name"], f["message"]) for n in nodes
-                                           for f in n.get("findings") or [] if f["reason"] == d)[:1000]})
+                                           for f in counted(n) if f["reason"] == d)[:1000]})
     else:
         conds.append({"type": "Degraded", "status": "False", "reason": "AsExpected", "message": ""})
     return conds
@@ -212,6 +226,10 @@ def node_entries(nodes_in, part, kind, prev, now, cfg, gateway=None):
         p = pnodes.get(n["name"]) or {}
         if not n.get("reachable"):
             found = [("NodeUnreachable", n.get("error") or "the node did not answer")]
+            booted = p.get("bootedAt")
+        elif n.get("read") is None:
+            # the node answered but its read failed or ran out of time: nothing is known about it this time
+            found = [("ReadFailed", n.get("error") or "the node's read failed")]
             booted = p.get("bootedAt")
         else:
             read = n.get("read") or {}
@@ -236,12 +254,12 @@ def node_entries(nodes_in, part, kind, prev, now, cfg, gateway=None):
         if booted:
             entry["bootedAt"] = booted
         out.append(entry)
-        old = {f.get("reason") for f in p.get("findings") or []}
+        old = {f.get("reason") for f in p.get("findings") or [] if effective(f)}
         for f in entry["findings"]:
-            if f["reason"] not in old:
+            if effective(f) and f["reason"] not in old:
                 events.append({"type": "Warning", "reason": EVENT_OF[f["reason"]],
                                "message": "%s: %s" % (n["name"], f["message"])[:1000]})
-    if not any(n["findings"] for n in out) and any(n.get("findings") for n in pnodes.values()):
+    if not any(counted(n) for n in out) and any(counted(n) for n in pnodes.values()):
         events.append({"type": "Normal", "reason": "NodeHealthRecovered", "message": "every node is healthy again"})
     return out, events
 
@@ -254,7 +272,8 @@ def wake(nodes, prev, ready, now_dt, cfg):
         return False
     for n in nodes:
         for f in n.get("findings") or []:
-            if f["reason"] in WAKE_NOW or (f["reason"] in WAKE_LATER and f["checks"] >= max(1, cfg["wakeAfterChecks"])):
+            if (f["reason"] in WAKE_NOW and effective(f)) or (
+                    f["reason"] in WAKE_LATER and f["checks"] >= max(1, cfg["wakeAfterChecks"])):
                 return True
     return False
 
@@ -265,7 +284,9 @@ def egress6_status(nodes_in, prev, e6, now, now_dt):
     prev = prev or {}
     if not e6.get("enabled"):
         return None, None, False
-    nodes = dict(prev.get("nodes") or {})
+    # only the fabric's nodes: one removed from the fabric is dropped (null in the merge patch)
+    names = [n["name"] for n in nodes_in]
+    nodes = {k: v for k, v in (prev.get("nodes") or {}).items() if k in names and v}
     read_any = False
     for n in nodes_in:
         r = (((n.get("read") or {}).get("instances") or {}).get("root") or {}).get("egress6") if n.get("reachable") else None
@@ -275,11 +296,13 @@ def egress6_status(nodes_in, prev, e6, now, now_dt):
     if not read_any:
         return None, None, False
     down = sorted(k for k, v in nodes.items() if not v.get("healthy"))
+    gone = {k: None for k in (prev.get("nodes") or {}) if k not in names}
     if down:
         since = (prev.get("degradedSince") or now) if prev.get("degraded") else now
     else:
         since = ""
-    st = {"enabled": True, "nodes": nodes, "degraded": bool(down), "degradedNodes": down, "degradedSince": since}
+    st = {"enabled": True, "nodes": dict(nodes, **gone), "degraded": bool(down), "degradedNodes": down,
+          "degradedSince": since}
     event = None
     if down and since:
         minutes = num(e6.get("sessionDownAlertMinutes"), 5)
@@ -313,24 +336,25 @@ def egress6_condition(st):
              "message": "every node has an upstream session and the default route"}]
 
 
-def comparable(body):
+def comparable(body, cap=2):
     """What decides whether a gateway's write is needed (the check time alone never is)."""
     # (a null in the merge patch removes the key: absent and null are the same here)
     h = {k: v for k, v in json.loads(json.dumps(body.get("health") or {})).items()
          if v is not None and k != "checkedAt"}
+    # the count matters until it reached what any rule waits for (two sightings, wakeAfterChecks): written until then
     for n in h.get("nodes") or []:
         for f in n.get("findings") or []:
-            f.pop("checks", None)
+            f["checks"] = min(num(f.get("checks"), 1), cap)
     return json.dumps({"health": h, "conditions": [{k: c.get(k) for k in ("type", "status", "reason")}
                                                    for c in body.get("conditions") or []]}, sort_keys=True)
 
 
-def current_comparable(status):
+def current_comparable(status, cap=2):
     st = status or {}
     types = ("NodesHealthy", "Degraded")
     conds = [c for c in st.get("conditions") or [] if c.get("type") in types]
     conds.sort(key=lambda c: types.index(c["type"]))
-    return comparable({"health": st.get("health") or {}, "conditions": conds})
+    return comparable({"health": st.get("health") or {}, "conditions": conds}, cap)
 
 
 def judge(req):
@@ -344,6 +368,23 @@ def judge(req):
     skipped = req.get("skipped")
     real = {"health": {"intervalSeconds": cfg["intervalSeconds"], "checks": cfg["checks"]}}
     answer = {"fabric": {"events": [], "wake": False, "changed": True}, "gateways": [], "wakeNetworks": False}
+
+    cap = max(2, cfg["wakeAfterChecks"])
+    real["health"]["enabled"] = bool(req.get("enabled", True))
+    if not req.get("enabled", True):
+        # the fabric's check is off (realization fabrics.<name>.health.enabled false, e.g. nodes that are off on
+        # purpose): nothing is read or judged; the fabric and its gateways read Unknown/NotChecked
+        off = {"health": {"checkedAt": None, "healthy": None, "nodes": [], "skipped": None},
+               "conditions": [{"type": "NodesHealthy", "status": "Unknown", "reason": "NotChecked",
+                               "message": "the health check is off for this fabric"},
+                              {"type": "Degraded", "status": "False", "reason": "AsExpected", "message": ""}]}
+        answer["fabric"]["status"] = dict(off, realization=real)
+        for g in req.get("gateways") or []:
+            if not g.get("deleting"):
+                answer["gateways"].append({"name": g["name"], "namespace": g.get("namespace"), "status": off,
+                                           "changed": comparable(off, cap) != current_comparable(g.get("status"), cap),
+                                           "events": [], "wake": False})
+        return answer
 
     if skipped:
         health = {"skipped": {"reason": skipped.get("reason") or "LeaseHeld",
@@ -370,7 +411,7 @@ def judge(req):
     if fwake:
         fevents.append({"type": "Normal", "reason": "HealthWake",
                         "message": "a full run is requested to repair: " + ", ".join(
-                            sorted({f["reason"] for n in fnodes for f in n["findings"]}))})
+                            sorted({f["reason"] for n in fnodes for f in counted(n)}))})
     answer["fabric"] = {"status": {"health": fhealth, "conditions": fconds, "realization": real},
                         "changed": True, "events": fevents, "wake": fwake}
     answer["wakeNetworks"] = bool(e6st is not None and flip)
@@ -380,13 +421,18 @@ def judge(req):
         gprev = prev_health(gstatus)
         if g.get("deleting"):
             continue
-        if g.get("paused"):
-            body = {"health": {"checkedAt": now, "healthy": None, "nodes": [], "skipped": None},
-                    "conditions": [{"type": "NodesHealthy", "status": "Unknown", "reason": "SitePaused",
-                                    "message": "the site is paused: its gateway is not checked"},
+        # a paused site's gateway, and one not on the nodes yet or with a change of its own in flight (new, Waiting,
+        # Failed, Updating: its job reports it): not read, not judged
+        hold = ("SitePaused", "the site is paused: its gateway is not checked") if g.get("paused") else (
+            None if g.get("judged", True) else
+            ("NotChecked", "the gateway is not realized on the nodes or a change of it is in flight"))
+        if hold:
+            body = {"health": {"checkedAt": now, "healthy": None, "nodes": [], "skipped": None,
+                               "lastWakeAt": gprev.get("lastWakeAt")},
+                    "conditions": [{"type": "NodesHealthy", "status": "Unknown", "reason": hold[0], "message": hold[1]},
                                    {"type": "Degraded", "status": "False", "reason": "AsExpected", "message": ""}]}
             answer["gateways"].append({"name": g["name"], "namespace": g.get("namespace"), "status": body,
-                                       "changed": comparable(body) != current_comparable(gstatus),
+                                       "changed": comparable(body, cap) != current_comparable(gstatus, cap),
                                        "events": [], "wake": False})
             continue
         gnodes, gevents = node_entries(nodes_in, "gw-" + g["name"], "gateway", gprev, now, cfg, gateway=g["name"])
@@ -394,12 +440,12 @@ def judge(req):
         if gwake:
             gevents.append({"type": "Normal", "reason": "HealthWake",
                             "message": "a full run is requested to repair: " + ", ".join(
-                                sorted({f["reason"] for n in gnodes for f in n["findings"]}))})
+                                sorted({f["reason"] for n in gnodes for f in counted(n)}))})
         body = {"health": {"checkedAt": now, "healthy": worst(gnodes) is None, "nodes": gnodes, "skipped": None,
                            "lastWakeAt": now if gwake else gprev.get("lastWakeAt")},
                 "conditions": conditions(gnodes, "gateway")}
         answer["gateways"].append({"name": g["name"], "namespace": g.get("namespace"), "status": body,
-                                   "changed": gwake or bool(gevents) or comparable(body) != current_comparable(gstatus),
+                                   "changed": gwake or bool(gevents) or comparable(body, cap) != current_comparable(gstatus, cap),
                                    "events": gevents, "wake": gwake})
     return answer
 

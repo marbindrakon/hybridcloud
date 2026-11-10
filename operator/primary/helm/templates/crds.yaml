@@ -1898,8 +1898,9 @@ spec:
                   description: >-
                     The latest periodic health check of the border gateway nodes as they serve this object. It reads
                     the nodes and changes nothing on them; what only a full run repairs is handed to one. The
-                    condition NodesHealthy sums it up (Unknown while the object's site is paused) and Degraded is
-                    True while a finding reduces service.
+                    condition NodesHealthy sums it up (Unknown while the object's site is paused, while the object is
+                    not realized on the nodes yet or a change of it is in progress, or while the check is off) and
+                    Degraded is True while a finding reduces service.
                   properties:
                     checkedAt:
                       type: string
@@ -1954,7 +1955,8 @@ spec:
                                 reason:
                                   type: string
                                   description: >-
-                                    NodeUnreachable, StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
+                                    NodeUnreachable, ReadFailed (the node answered, its check did not complete),
+                                    StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
                                     RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
                                     routing configuration the node does not take) or SiteSessionsDown.
                                 message:
@@ -1965,7 +1967,9 @@ spec:
                                   description: The first check that found it, without a check in between that did not.
                                 checks:
                                   type: integer
-                                  description: The number of consecutive checks that found it.
+                                  description: >-
+                                    The number of consecutive checks that found it. A finding that reduces service
+                                    counts in the conditions once two checks found it.
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
@@ -4621,8 +4625,9 @@ spec:
                   description: >-
                     The latest periodic health check of the border gateway nodes as they serve this object. It reads
                     the nodes and changes nothing on them; what only a full run repairs is handed to one. The
-                    condition NodesHealthy sums it up (Unknown while the object's site is paused) and Degraded is
-                    True while a finding reduces service.
+                    condition NodesHealthy sums it up (Unknown while the object's site is paused, while the object is
+                    not realized on the nodes yet or a change of it is in progress, or while the check is off) and
+                    Degraded is True while a finding reduces service.
                   properties:
                     checkedAt:
                       type: string
@@ -4677,7 +4682,8 @@ spec:
                                 reason:
                                   type: string
                                   description: >-
-                                    NodeUnreachable, StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
+                                    NodeUnreachable, ReadFailed (the node answered, its check did not complete),
+                                    StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
                                     RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
                                     routing configuration the node does not take) or SiteSessionsDown.
                                 message:
@@ -4688,7 +4694,9 @@ spec:
                                   description: The first check that found it, without a check in between that did not.
                                 checks:
                                   type: integer
-                                  description: The number of consecutive checks that found it.
+                                  description: >-
+                                    The number of consecutive checks that found it. A finding that reduces service
+                                    counts in the conditions once two checks found it.
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)
