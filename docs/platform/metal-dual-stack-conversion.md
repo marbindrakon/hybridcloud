@@ -141,8 +141,8 @@ The roll is complete when both pools are `UPDATED True` and every node is `Ready
    keep their IPv4-only network annotations across the reboots (daemon set pods keep their objects), so an IPv6
    service address would have no endpoints. Both steps are needed; without them guests on IPv6-only placements
    without translation get no resolver (OVN-Kubernetes offers the DNS service's IPv6 address over DHCPv6 only once it
-   exists). Guests on IPv6-only placements with translation don't use it: the placement page's user data keeps them
-   on the translation resolvers, because the cluster's DNS service does no DNS64
+   exists). Guests on IPv6-only placements with translation must not use it, because the cluster's DNS service does
+   no DNS64: they are configured to keep the translation resolvers only
    ([IPv6 realization, Translation](ipv6-realization.md#translation-translation)):
    ```sh
    oc -n openshift-dns patch svc dns-default --type=merge \

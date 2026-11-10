@@ -368,6 +368,10 @@
     # release run even when the lease is short
     - name: Configure the gateway on the nodes, one at a time
       timeout: "{{ fab_lease_step_timeout }}"
+      # the node ends each step's commands by the same limit (common/vars/fabric_lease.yml); through hostvars: a
+      # delegated step's become command is templated with the node's variables, which lack this job's facts
+      vars:
+        ansible_become_exe: "{{ hostvars[inventory_hostname].fab_lease_node_become }}"
       block:
         - name: Connect to the border gateway nodes
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"

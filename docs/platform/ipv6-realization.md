@@ -520,27 +520,23 @@ Run the fabric job (Retry now on the HybridFabric) after changing an entry.
   subnet's `dns_nameservers` (then the site's IPv6 resolvers from `placement.resolversBySite`, if any), so DHCPv6
   and the config drive carry them; a placement that doesn't qualify keeps the site's resolvers only. A subnet whose
   list differs is updated on the next run of the placement job.
-- **OpenShift Virtualization sites (CloudVirt):** the platform changes nothing on the site. The resolvers reach the
-  guests through the placement's status and the console's cloud-init snippet (the placement page builds `networkData`
-  that finds the VM's NIC by the MAC address the tenant gives the VM's interface, which the page proposes, with
-  `dhcp4: false` and the resolvers as `nameservers`, and user data that configures clatd with the placement's
-  `pref64` as `plat-prefix` and keeps the guest on those resolvers), which the tenant copies into the VM: the network
-  data inline in the VM's cloud-init volume, the user data in a Secret that the volume references (`secretRef`), as
-  KubeVirt refuses more than 2048 bytes of user data inline and this user data is about 3.6 KB. Guests on
-  IPv6-only placements use the translation resolvers only; cluster-internal names (services, other VMs by name) are
-  not resolved there. OVN-Kubernetes also hands every guest the cluster's DNS service (`dns-default` in
+- **OpenShift Virtualization sites (CloudVirt):** the platform changes nothing on the site and writes nothing into
+  the guests. The resolvers reach the guests through the placement's status, which the placement page shows with the
+  translation prefix in its guest configuration reference; the tenant puts them into the guest's own network
+  configuration (cloud-init network data, for example) and configures the CLAT with the prefix. Guests on IPv6-only
+  placements must use the translation resolvers only; cluster-internal names (services, other VMs by name) are not
+  resolved there. OVN-Kubernetes also hands every guest the cluster's DNS service (`dns-default` in
   `openshift-dns`) over DHCPv6 once that service is dual-stack, and that resolver does no DNS64. A guest that keeps
   it next to the translation resolvers falls over to it after any brief outage of the translation resolvers
   (systemd-resolved stays on the server that last answered) and from then on gets no synthesized addresses: IPv4-only
-  names stop working while the guest's explicit resolver checks still pass. The snippet's user data therefore
-  installs `ignore-auto-dns`, a boot-time unit that sets NetworkManager's `ipv6.ignore-auto-dns` and
-  `ipv4.ignore-auto-dns` (or systemd-networkd's `UseDNS=false` in a drop-in) on the connection of the NIC with the
-  IPv6 default route, provided that connection has resolvers of its own, and re-activates the connection (a reapply
-  is not enough before NetworkManager 1.58: the running DHCPv6 lease keeps its resolvers). It writes what it did and
-  the link's resolvers to the guest console (on OpenShift Virtualization, the virt-launcher pod's
-  `guest-console-log` container). cloud-init can't do this from `networkData`:
-  its NetworkManager renderer ignores `dhcp6-overrides: {use-dns: false}`. A guest's resolvers read with
-  `resolvectl status`: the translation resolvers only, none of the cluster's service addresses.
+  names stop working while the guest's explicit resolver checks still pass. The guest therefore has to ignore the
+  resolvers handed out on the NIC with the IPv6 default route: NetworkManager's `ipv6.ignore-auto-dns` and
+  `ipv4.ignore-auto-dns` on that connection, followed by a full reactivation (a reapply is not enough before
+  NetworkManager 1.58: the running DHCPv6 lease keeps its resolvers), or systemd-networkd's `UseDNS=false` in a
+  drop-in. cloud-init can't do this from network data alone: its NetworkManager renderer ignores
+  `dhcp6-overrides: {use-dns: false}`. A guest's resolvers read with `resolvectl status`: the translation resolvers
+  only, none of the cluster's service addresses. The IPv6 translation probe (`tests/connectivity/ipv6-translation-probe`)
+  does this in its own user data.
 
 - **Google Cloud sites (CloudGCP):** source `Provider` only, so the provider's path: the VPC's DNS64 server policy and
   the Cloud NAT for NAT64 ([Google Cloud: IPv6-only placements](#google-cloud-ipv6-only-placements)); the resolver is

@@ -519,8 +519,10 @@ class SiteIcmp6(unittest.TestCase):
         off = e.startup_script()
         e.v6 = True
         on = e.startup_script()
-        # with IPv6 off the script is the one from before IPv6, byte for byte
-        self.assertEqual(hashlib.sha256((E.STARTUP % {"site": "site-g", "project": "p", "agent": "AGENT", "sysctl6": ""})
+        # with IPv6 off the script is the one from before IPv6, byte for byte, but for the agent unit's run limit
+        self.assertIn(" \\\n  'TimeoutStartSec=5min' > /etc/systemd/system/shc-edge-agent.service", E.STARTUP)
+        before = E.STARTUP.replace(" \\\n  'TimeoutStartSec=5min' > ", " \\\n  > ")
+        self.assertEqual(hashlib.sha256((before % {"site": "site-g", "project": "p", "agent": "AGENT", "sysctl6": ""})
                                         .encode()).hexdigest(),
                          "fe1aa5c51fa15a7c656ac6e2ac9b6d4deb11434779950c5cebd1e97a448befbc")
         self.assertNotIn("ipv6", off)

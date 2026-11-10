@@ -76,6 +76,7 @@
     group: root
   loop:
     - {src: shc-fabric-apply, dest: /usr/local/sbin/shc-fabric-apply, mode: "0755"}
+    - {src: shc-frr-check, dest: /usr/local/sbin/shc-frr-check, mode: "0755"}
     - {src: shc-fabric-apply@.service, dest: /etc/systemd/system/shc-fabric-apply@.service, mode: "0644"}
   loop_control:
     label: "{{ item.dest }}"
@@ -339,7 +340,10 @@
 # FRR runs the files when this job found it active and the reload (when one was due) succeeded, or when this job
 # started or restarted it; a step above that failed ended the job before this. FRR that was starting or reloading on
 # its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read older files, so
-# then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload due
+# then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload due. A start or
+# reload can also end without an error and part of the file unapplied: before the record, the running configuration
+# must hold the whole file (shc-frr-check, realization nodes.frrLoadCheck); with lines left nothing is recorded and the
+# step after this fails the job, so the next one reloads again
 - name: "{{ bgw_node.name }}: record what FRR loaded"
   ansible.builtin.shell: |
     f=/etc/shc-fabric/root.frr-loaded
@@ -347,12 +351,36 @@
     if [ "$state" != active ] || [ -n "$job" ]; then echo "not recorded: frr $state${job:+, job $job}"; exit 0; fi
     now=$(cat /etc/frr/frr.conf /etc/frr/daemons 2>/dev/null | sha256sum | cut -d' ' -f1)
     [ "$now" = "$(cat "$f" 2>/dev/null)" ] && exit 0
+    {% if fab_real.nodes.frrLoadCheck.enabled | default(true) | bool %}
+    check=$(/usr/local/sbin/shc-frr-check --conf /etc/frr/frr.conf --note /etc/shc-fabric/root.frr-unapplied{% for p in fab_real.nodes.frrLoadCheck.ignore | default([]) %} --ignore {{ p | quote }}{% endfor %}) || exit 1
+    echo "$check"
+    [ "${check%%$'\n'*}" = result=unapplied ] && exit 0
+    {% endif %}
     echo "$now" > "$f.new" && mv "$f.new" "$f"
     echo recorded
+  args:
+    executable: /bin/bash
   register: _hf_frr_recorded
-  changed_when: _hf_frr_recorded.stdout == 'recorded'
+  changed_when: "'recorded' in _hf_frr_recorded.stdout_lines"
   when: _hf_frr_active.stdout == 'active' or (_hf_frr_active.stdout in ['inactive', 'failed'] and _hf_frr_state is changed)
   delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: FRR holds the whole configuration"
+  ansible.builtin.fail:
+    msg: >-
+      FRR on {{ bgw_node.name }} did not apply all of /etc/frr/frr.conf after its start or reload ({{
+      _hf_frr_recorded.stdout_lines | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}).
+      What FRR loaded is not recorded, so the next run reloads again; lines a second start or reload leaves as well
+      are recorded as loaded and shown by the step after this
+  when: "'result=unapplied' in (_hf_frr_recorded.stdout_lines | default([]))"
+
+- name: "{{ bgw_node.name }}: lines FRR does not take"
+  ansible.builtin.debug:
+    msg: >-
+      FRR on {{ bgw_node.name }} left these lines of /etc/frr/frr.conf unapplied after two starts or reloads; the file
+      is recorded as loaded, so no run reloads for them again: {{ _hf_frr_recorded.stdout_lines
+      | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}
+  when: "'result=accepted' in (_hf_frr_recorded.stdout_lines | default([]))"
 
 # A root VRF the configuration no longer has (the egress VRF, or a network that lost its egress) stays in FRR after the
 # reload: frr-reload removes the lines of its vrf stanza but never sends "no vrf", so zebra and the other daemons keep

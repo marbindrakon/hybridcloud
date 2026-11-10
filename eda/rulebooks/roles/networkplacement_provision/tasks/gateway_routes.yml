@@ -18,6 +18,8 @@
   vars:
     bgw_fabric_spec: "{{ np_fabric.spec }}"
     bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
+    # the read waits up to np_route_wait s on the node
+    bgw_node_limit: "{{ np_route_wait | default(0) | int + fab_real.nodes.configLease.stepTimeoutSeconds | int }}"
 
 - name: Read the VRF on each node
   block:

@@ -49,7 +49,8 @@
     path: "{{ item }}"
     state: absent
   loop: ["/etc/frr/gw-{{ fab_name }}", "/etc/shc-fabric/gw-{{ fab_name }}.json", "/etc/shc-fabric/gw-{{ fab_name }}.wgkey",
-         "/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded", "/var/run/frr/gw-{{ fab_name }}"]
+         "/etc/shc-fabric/gw-{{ fab_name }}.frr-loaded", "/etc/shc-fabric/gw-{{ fab_name }}.frr-unapplied",
+         "/var/run/frr/gw-{{ fab_name }}"]
   delegate_to: "{{ bgw_node.name }}"
 
 # the last instance on the node (the fabric's root went before it): the root unit stopped, the apply script and the
