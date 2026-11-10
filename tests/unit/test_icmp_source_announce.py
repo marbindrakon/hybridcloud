@@ -557,7 +557,7 @@ class ApplyAsBefore(A.ApplyCase):
                 self.h.ok(self, "root")
                 self.h.conf("gw-iaas1", dict(A.GW_CONF, **gw6))
                 runs = [self.h.ok(self, "gw-iaas1", script=which) for _ in range(2)]
-                results[which] = (runs, self.h.get_state(), sorted(os.listdir(self.h.etc)))
+                results[which] = (runs, self.h.get_state(), sorted(f for f in os.listdir(self.h.etc) if not f.endswith(".applied")))
             self.assertEqual(results["old"][0], results["new"][0], core6)
             self.assertEqual(results["old"][1], results["new"][1], core6)
             self.assertEqual(results["old"][2], results["new"][2], core6)

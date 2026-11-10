@@ -233,6 +233,24 @@ ops:
       enabled: true
       fsyncP99Seconds: 0.1   # WAL fsync p99 (5 min rate), sustained for 5 min
       leaderChanges: 2       # within 30 min, outside etcd and machine-config rollouts
+  # fabric health metrics and alerts (templates/fabric-health.yaml): on the cluster that holds the HybridFabric and
+  # CloudGateway objects. A kube-state-metrics instance of its own (custom resource state only) and the rules
+  # shc-fabric-health. Off: nothing of it is rendered.
+  fabricHealth:
+    enabled: false
+    # kube-state-metrics with custom resource state (2.9 or later: it reads RFC 3339 times as Unix seconds); take the
+    # cluster's minor version
+    image: registry.redhat.io/openshift4/ose-kube-state-metrics-rhel9:v4.22
+    scrapeInterval: 60s
+    alerts:
+      nodeUnhealthyFor: 2m
+      driftFor: 30m
+      siteSessionsFor: 10m
+      # as the realization's egress.ipv6.sessionDownAlertMinutes (default 5)
+      upstreamDownFor: 5m
+      # the health check has not read the nodes for this many of its intervals
+      staleIntervals: 3
+      poolFreePercent: 10
 
 # ─── Fabric underlay (P7.2) — layer "certs" ──────────────────────────────────
 # EVPN underlay of an IaaS cluster (templates/fabric.yaml): NMState operator + per-node VTEP VLAN interface and

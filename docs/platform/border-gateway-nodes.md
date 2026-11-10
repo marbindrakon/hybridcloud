@@ -2,8 +2,8 @@
 
 For the platform team. What the fabric and gateway jobs do on a border gateway node whatever the fabric's core
 transport: how a network's VRFs are kept apart from the node's own addresses, what the host must not have, the TCP
-MSS clamps, what a network that leaves the node leaves behind, what the orphan check reports, and what a teardown
-removes. The transport itself (MPLS or
+MSS clamps, what a network that leaves the node leaves behind, what the health check reads and reports, what the
+orphan check reports, and what a teardown removes. The transport itself (MPLS or
 SRv6) is on its own page ([SRv6 core transport](srv6-core-transport.md)); the dual-stack core and the IPv6 egress
 are in [IPv6 realization](ipv6-realization.md).
 
@@ -106,6 +106,48 @@ but never the VRF itself, so FRR would keep it until its next restart (`show vrf
 as inactive, that the rendered configuration does not name and that has no BGP instance left. It touches no other VRF
 and resets no session. A VRF that FRR refuses to remove is named in the job's output and stays: it has no device and
 no routes, and the next job tries again.
+
+## The health check
+
+The job template `fabric-health` runs on a schedule (realization `health.intervalSeconds`, default 600 s, at least
+300 s) and reads every node of every fabric once over SSH. It changes nothing on a node and takes no lease: while the
+fabric's lease is held, or a fabric event is queued, it leaves the nodes alone (`status.health.skipped`), and a read
+that a job overlapped is discarded. Every command on a node has its own time limit and the whole read has
+`health.nodeReadTimeoutSeconds`.
+
+What it reads, per instance (the root, and each gateway whose site is not paused):
+
+- the units of the instance and whether they start at boot: the root's apply unit, FRR, the IPv6 egress guard's and
+  the SRv6 core guard's timers; a gateway's instance unit and its core guard's timer; any other unit of the
+  fabric that failed;
+- the instance's start at boot: a failed apply, with the apply's own lines from the journal of that start, and a root
+  started without its IPv6 side (a `warning:` line);
+- the routing daemons (`show watchfrr`) and their crashes in the last `health.daemonRestartWindowMinutes`
+  (systemd-coredump's journal entries; a gateway's by its pathspace);
+- drift: the state the apply manages now (`shc-fabric-apply <instance> snapshot`) against the record a successful
+  apply leaves (`/etc/shc-fabric/<instance>.applied`), and the FRR files against the record of what FRR last loaded.
+  A node without the records (applied by an earlier release and not since) is not judged for drift;
+- what FRR's running configuration still lacks of its file, as the post-reload verification (`shc-frr-check`,
+  realization `nodes.frrLoadCheck`) computes it, read without writing its note; the lines that note keeps (FRR did
+  not take them after two loads) are reported as `ConfigurationNotTaken` and never wake a run;
+- the IPv6 egress as the root's own file names it (the hand-off address, the filter table, the upstream sessions,
+  the default route in the egress VRF and in each network VRF with IPv6 egress), and a gateway's site sessions.
+
+It writes `status.health` on the HybridFabric (the root's findings and the node-wide units; every run) and on each
+CloudGateway (its instance; only when something changed), the conditions `NodesHealthy` (the worst finding) and
+`Degraded` (True while a finding reduces service: an unreachable node, a failed start or service, a routing daemon
+down, a start without IPv6, no site session), and refreshes the IPv6 egress state
+(`status.realization.egress.ipv6`, condition `IPv6EgressUpstream`) and the pool rows
+(`status.realization.ipam.pools`). A gateway whose site is paused reads `NodesHealthy` Unknown/`SitePaused`. Events
+come on transitions only (`NodeStartFailed`, `NodeServiceFailed`, `RoutingDaemonDown`, `RoutingDaemonRestarted`,
+`ConfigurationDrift`, `SiteSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
+
+What a full run repairs wakes the job of the object it belongs to (the fabric for the root, the gateway for its
+instance) when that object is ready: a failed or inactive start, a unit not running or not started at boot at once,
+drift once `health.wakeAfterChecks` consecutive checks found it; not again within `health.wakeBackoffMinutes`. An
+unreachable node, a daemon crash or site sessions down wake nothing: a full run would not repair them. A change of
+the nodes without IPv6 upstream wakes the networks with IPv6 egress; more free blocks in a pool (blocks leaving
+hold-down) wake the networks waiting for platform address space.
 
 ## The orphan check on a node
 

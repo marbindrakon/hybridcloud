@@ -107,6 +107,32 @@ fabric_realization_defaults:
     frrLoadCheck:
       enabled: true
       ignore: []
+  # the fabric health check (job template fabric-health): every intervalSeconds it reads each border gateway node
+  # once over SSH (no lease; never while the lease is held or a fabric event is in flight; a read a job overlapped is
+  # discarded) and changes nothing there: the units of the configuration and whether they start at boot, the
+  # configuration's start at boot and why it failed, the routing daemons and their crashes, drift against what the
+  # last apply and the last routing configuration load left on the node, the IPv6 egress sessions, the gateways'
+  # site sessions; and the platform address pools. It writes status.health and the conditions NodesHealthy and
+  # Degraded on the HybridFabric and its CloudGateways (a gateway of a paused site reads Unknown/SitePaused and is
+  # not read), refreshes the IPv6 egress state and the pool rows, raises events on transitions, and wakes the
+  # fabric's or a gateway's job for what a full run repairs. Cost per run: one job for all fabrics, one SSH session
+  # per node, one status write per fabric (the gateways' only when their health changed).
+  health:
+    enabled: true
+    # the job template's schedule (one value for the installation; at least 300) and the base of the stale alert
+    intervalSeconds: 600
+    # the limit on one node's read, on the node (each command in it has its own limit of 15 s)
+    nodeReadTimeoutSeconds: 60
+    # drift wakes the job only after this many consecutive checks found it (a failed or disabled unit at once)
+    wakeAfterChecks: 2
+    # no second wake of the same object within this
+    wakeBackoffMinutes: 60
+    # a routing daemon crash is reported for this long
+    daemonRestartWindowMinutes: 60
+    # a Warning event of an outage that lasts is repeated at most this often (IPv6EgressUpstreamDown)
+    eventRepeatMinutes: 60
+    # what is checked (each true by default)
+    checks: {units: true, routingDaemons: true, drift: true, upstream: true, siteSessions: true, pools: true}
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric

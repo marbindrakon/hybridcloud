@@ -451,7 +451,8 @@
     # the IPv6 egress as the nodes report it (node_root.yml egressIpv6): per node the hand-off address, the upstream
     # sessions and the default route; degraded while a node has no upstream session or no default (its networks'
     # traffic takes the other node); degradedSince is kept across runs, and a node down for
-    # egress.ipv6.sessionDownAlertMinutes is reported as an event below
+    # egress.ipv6.sessionDownAlertMinutes is reported as an event below (once, then at most every
+    # health.eventRepeatMinutes)
     - name: Set the IPv6 egress status
       vars:
         _on: "{{ hf_egress.ipv6 | default(false) | bool }}"
@@ -474,6 +475,27 @@
           {{ _on | bool and _down | length > 0 and (_since | trim) | length > 0
              and (((_now | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - ((_since | trim) | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds()
                   >= (fab_real.egress.ipv6.sessionDownAlertMinutes | default(5) | int) * 60) }}
+
+    # an outage is reported once it lasted sessionDownAlertMinutes, then again at most every health.eventRepeatMinutes
+    # (the fabric health check reports it the same way): reportedAt records the last report
+    - name: Decide whether the IPv6 egress upstream outage is reported now
+      vars:
+        _prev: "{{ (((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)) }}"
+        _last: "{{ _prev.reportedAt | default('', true) | string }}"
+        _now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        _repeat: "{{ (fab_real.health | default({}, true)).eventRepeatMinutes | default(60, true) | int }}"
+        _due: >-
+          {{ (hf_egress6_alert | bool)
+             and (_last | length < 19
+                  or ((_now | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (_last[:19] | to_datetime('%Y-%m-%dT%H:%M:%S'))).total_seconds()
+                     >= (_repeat | int) * 60) }}
+      ansible.builtin.set_fact:
+        hf_egress6_report: "{{ _due | bool }}"
+        hf_egress6_status: >-
+          {{ hf_egress6_status | combine({'reportedAt': (_now if _due | bool
+                                                         else (_last if (hf_egress6_status.degraded | default(false)) and _last
+                                                               else none))})
+             if hf_egress6_status.enabled | default(false) else hf_egress6_status }}
 
     - name: Report the IPv6 egress upstream outage as an event
       kubernetes.core.k8s:
@@ -505,7 +527,7 @@
           lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
           count: 1
       failed_when: false
-      when: hf_egress6_alert | bool
+      when: hf_egress6_report | bool
 
     # what tenants see of the fabric changed since the Entities were last told (status.realization.ipam.tenantOffer,
     # stored below; absent before the first run that stores it): its IPv6 offer, or its spec (who may use it). The
@@ -590,9 +612,12 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
         _now6: "{{ hf_egress_status | selectattr('ipv6') | map(attribute='network') | list }}"
+        _prev6: "{{ (((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)) }}"
+        # degraded came or went, or the set of nodes without upstream changed (one node down -> all down: the networks'
+        # rows go from Degraded to UpstreamDown)
         _degraded_flip: >-
-          {{ (hf_egress6_status.degraded | default(false) | bool)
-             != ((((fab_st.realization | default({}, true)).egress | default({}, true)).ipv6 | default({}, true)).degraded | default(false) | bool) }}
+          {{ (hf_egress6_status.degraded | default(false) | bool) != (_prev6.degraded | default(false) | bool)
+             or (hf_egress6_status.degradedNodes | default([]) | sort) != (_prev6.degradedNodes | default([], true) | sort) }}
         nudge_crs: >-
           {%- set out = [] -%}
           {%- for k in ((hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before))

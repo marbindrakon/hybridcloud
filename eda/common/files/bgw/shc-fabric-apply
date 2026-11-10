@@ -2,7 +2,10 @@
 # shc-fabric-apply: realize one fabric instance on a border gateway node from /etc/shc-fabric/<instance>.json.
 # Installed and run by the platform's HybridFabric/CloudGateway jobs, and at boot by shc-fabric-apply@<instance>
 # before FRR starts. Idempotent; the last line says whether anything changed ("changed=yes|no").
-#   shc-fabric-apply <instance> [up|down]   (and post, guard: see below)
+#   shc-fabric-apply <instance> [up|down]   (and post, guard, snapshot: see below)
+#   shc-fabric-apply <instance> snapshot   read only: prints the state this script manages for the instance; a
+#   successful up records the same text in /etc/shc-fabric/<instance>.applied (down removes it), so a reader can
+#   tell what changed on the node since the last apply
 # instance type "root" (the border gateway's own instance, root namespace):
 #   MPLS (modules, platform_labels; transport mpls, see below), the node-local core bridge with the link address and a
 #   fixed MAC (a Linux bridge
@@ -684,7 +687,10 @@ guard_check() {
   fi
 }
 
-snapshot() {
+# the state this script manages for the instance, as text (root here; a gateway's is defined in its branch): what a
+# run compares before and after itself (snapshot, hashed), and what a successful up records in <instance>.applied so
+# a later read (action snapshot) can tell whether the node still holds what the last apply left
+snapshot_text() {
   { ip -br -4 addr show dev lo; ip -br -4 addr show dev "$BR" 2>/dev/null || true
     ip -o link show "$BR" 2>/dev/null | grep -o 'mtu [0-9]*\|state [A-Z]*' || true
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
@@ -698,8 +704,9 @@ snapshot() {
       sysctl -n "net/ipv6/conf/$BR/disable_ipv6" "net/ipv6/conf/$BR/accept_ra" "net/ipv6/conf/$BR/autoconf" \
         net/ipv6/conf/egress0/accept_ra net/ipv6/conf/egress0/autoconf 2>/dev/null || true
       ip -6 route show table all | grep '^unreachable default' || true
-    fi; } | sha1sum
+    fi; }
 }
+snapshot() { snapshot_text | sha1sum; }
 
 # an interface another service creates (NetworkManager's trunk and its VLAN devices): at boot this runs alongside
 # NetworkManager (both before network.target), so wait for it a while. With a minimum MTU, also wait until it has at
@@ -1312,7 +1319,7 @@ post_start() {
 }
 
 case "$ACT" in
-up|down|post) ;;
+up|down|post|snapshot) ;;
 guard) guard_check; exit 0 ;;
 *) echo "unknown action $ACT" >&2; exit 2 ;;
 esac
@@ -1320,6 +1327,7 @@ case "$TYPE" in
 root)
   BR=$(q .bridge); MTU=$(q .mtu); LO=$(q .loopback); LOPOOL=$(q .loopbackPool); LINK=$(q .link)
   EV=$(opt .egress.vrf)
+  if [ "$ACT" = snapshot ]; then snapshot_text; exit 0; fi
   before=$(snapshot)
   if [ "$ACT" = up ]; then
     # the refusals that depend only on the host's state, before the run's first write
@@ -1402,7 +1410,7 @@ gateway)
   fi
   LO=$(q .loopback); LOPOOL=$(q .loopbackPool); BR=$(q .coreBridge); CV=$(q .coreVeth); LINK=$(q .link)
   CMTU=$(q .coreMtu); MTU=$(jq -r '.mtu // empty' "$CONF"); X="ip netns exec $NS"
-  snapshot() {
+  snapshot_text() {
     { ip netns list | grep -w "^$NS" || true; ip -o link show "$CV" 2>/dev/null | grep -o 'mtu [0-9]*\|master [a-z0-9-]*\|state [A-Z]*' || true
       if shows -qw "^$NS" ip netns list; then
         $X ip -br -4 addr show; $X ip -o link show | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|state [A-Z]*' || true
@@ -1425,7 +1433,7 @@ gateway)
         [ ! -e "$MARKI6" ] || $X nft -s list table ip6 shc_gw_in6 2>/dev/null || true
         NSX=$X local4_state
         NSX=$X srv6_state core0
-      fi; } | sha1sum
+      fi; }
   }
   # the VRFs' input filter (with the IPv6 core): IPv6 addressed to the node itself from a VRF device. Past prerouting such
   # a packet shows the VRF as its input interface (neighbour discovery keeps its slave device and passes as before).
@@ -1488,6 +1496,7 @@ gateway)
     [ -n "$MTU" ] || MTU=1420
     $X ip link set "$VDEV" mtu "$MTU" up
   }
+  if [ "$ACT" = snapshot ]; then snapshot_text; exit 0; fi
   before=$(snapshot)
   if [ "$ACT" = up ]; then
     ip link show "$BR" >/dev/null 2>&1 || { echo "core bridge $BR missing: the root instance must be up first" >&2; exit 3; }
@@ -1614,4 +1623,15 @@ if [ "$ACT" = up ] && [ -n "$P6" ]; then
 elif [ "$ACT" = down ] || [ -n "$POOLS6_USED" ]; then
   [ -n "$V6FAILED" ] || rm -f "$POOLS6"
 fi
-[ "$before" = "$(snapshot)" ] && echo "changed=no" || echo "changed=yes"
+# what a successful up left (rewritten only when it differs), for the read-only check against the node's state now
+# (action snapshot); down forgets it. The state is read once, as before: its hash decides changed=
+APPLIED=/etc/shc-fabric/$I.applied
+snapshot_text > "$APPLIED.new"
+after=$(sha1sum < "$APPLIED.new")
+if [ "$ACT" = up ] && ! cmp -s "$APPLIED.new" "$APPLIED"; then
+  mv -f "$APPLIED.new" "$APPLIED"
+else
+  rm -f "$APPLIED.new"
+  [ "$ACT" = up ] || rm -f "$APPLIED"
+fi
+[ "$before" = "$after" ] && echo "changed=no" || echo "changed=yes"

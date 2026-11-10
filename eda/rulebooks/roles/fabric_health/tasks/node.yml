@@ -1,0 +1,36 @@
+---
+# One border gateway node, read only (files/shc_node_health.py on stdin of python3 on the node, its input in argv).
+# The reader bounds each command it runs; the whole read is bounded on the node by timeout (health
+# nodeReadTimeoutSeconds) and here by the same time plus the SSH connect. An unreachable node or a read that failed
+# is recorded as such. Appends {name, reachable, error?, read?} to fh_nodes.
+- name: "{{ bgw_node.name }}: read the node"
+  vars:
+    _limit: "{{ fh_health.nodeReadTimeoutSeconds | default(60, true) | int }}"
+  ansible.builtin.command:
+    argv:
+      - timeout
+      - -k
+      - "5"
+      - "{{ _limit }}"
+      - python3
+      - "-"
+      - "{{ fh_reader_input | to_json | b64encode }}"
+    stdin: "{{ lookup('ansible.builtin.file', role_path ~ '/../../../common/files/shc_node_health.py') }}"
+  register: _fh_read
+  changed_when: false
+  failed_when: false
+  ignore_unreachable: true
+  timeout: "{{ (fh_health.nodeReadTimeoutSeconds | default(60, true) | int) + 45 }}"
+  delegate_to: "{{ bgw_node.name }}"
+
+- name: "{{ bgw_node.name }}: keep the read"
+  vars:
+    _out: "{{ (_fh_read.stdout | default('', true) | trim).split('\n') | last }}"
+    _ok: "{{ not (_fh_read.unreachable | default(false)) and _fh_read.rc | default(1) == 0 and _out.startswith('{') }}"
+  ansible.builtin.set_fact:
+    fh_nodes: >-
+      {{ fh_nodes + [{'name': bgw_node.name, 'reachable': _ok | bool}
+                     | combine({'read': _out | from_json} if _ok | bool else
+                               {'error': ('the node did not answer over SSH' if _fh_read.unreachable | default(false)
+                                          else ('the read ran out of time' if _fh_read.rc | default(0) == 124
+                                                else 'the read failed (exit ' ~ _fh_read.rc | default('?') ~ ')'))})] }}

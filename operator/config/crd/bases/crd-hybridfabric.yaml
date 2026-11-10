@@ -217,6 +217,79 @@ spec:
                         type: string
                         format: date-time
                     x-kubernetes-preserve-unknown-fields: true
+                health:
+                  type: object
+                  description: >-
+                    The latest periodic health check of the border gateway nodes as they serve this object. It reads
+                    the nodes and changes nothing on them; what only a full run repairs is handed to one. The
+                    condition NodesHealthy sums it up (Unknown while the object's site is paused) and Degraded is
+                    True while a finding reduces service.
+                  properties:
+                    checkedAt:
+                      type: string
+                      format: date-time
+                      description: When the nodes were last read.
+                    healthy:
+                      type: boolean
+                      description: True when the last check found nothing; absent while the site is paused.
+                    lastWakeAt:
+                      type: string
+                      format: date-time
+                      description: When the check last asked for a full run to repair what it found.
+                    skipped:
+                      type: object
+                      description: >-
+                        Present while the nodes were left alone because a change to them was in progress or queued;
+                        the findings are those of the last check that read them.
+                      properties:
+                        reason:
+                          type: string
+                          description: LeaseHeld (a change to the nodes was in progress) or JobInFlight (one is queued).
+                        since:
+                          type: string
+                          format: date-time
+                    nodes:
+                      type: array
+                      description: Per node, what the last check found.
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          reachable:
+                            type: boolean
+                            description: The node answered the check.
+                          bootedAt:
+                            type: string
+                            format: date-time
+                            description: When the node last started.
+                          findings:
+                            type: array
+                            description: What is wrong on the node, worst first; empty when healthy.
+                            items:
+                              type: object
+                              properties:
+                                check:
+                                  type: string
+                                  description: >-
+                                    The area: Reachability, Start (the configuration's start at boot), Service,
+                                    RoutingDaemon, Configuration (the node differs from its configuration) or
+                                    SiteSessions.
+                                reason:
+                                  type: string
+                                  description: >-
+                                    NodeUnreachable, StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
+                                    RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
+                                    routing configuration the node does not take) or SiteSessionsDown.
+                                message:
+                                  type: string
+                                since:
+                                  type: string
+                                  format: date-time
+                                  description: The first check that found it, without a check in between that did not.
+                                checks:
+                                  type: integer
+                                  description: The number of consecutive checks that found it.
                 status:
                   type: string
                   description: Lifecycle status (reconciling, pending, ready, failed)

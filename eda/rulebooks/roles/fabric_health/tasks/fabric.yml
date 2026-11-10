@@ -1,0 +1,252 @@
+---
+# One fabric (fh_fabric): pools, lease gate, node reads, judge, writes, events, wakes (main.yml). A failure here is
+# recorded in fh_failed and the next fabric is still checked.
+- name: "{{ fh_fabric.metadata.name }}: check"
+  block:
+    - name: "{{ fh_fabric.metadata.name }}: the realization"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+      vars:
+        fab_real_fabric: "{{ fh_fabric.metadata.name }}"
+
+    - name: "{{ fh_fabric.metadata.name }}: this fabric's objects"
+      vars:
+        _st: "{{ fh_fabric.status | default({}, true) }}"
+        _h: "{{ fab_real.health | default({}, true) }}"
+      ansible.builtin.set_fact:
+        fh_name: "{{ fh_fabric.metadata.name }}"
+        fh_ns: "{{ fh_fabric.metadata.namespace }}"
+        fh_status: "{{ _st }}"
+        fh_ready: "{{ (_st.ready | default(false) | bool) and (_st.status | default('') | string == 'ready') }}"
+        fh_health: "{{ _h }}"
+        fh_checks: "{{ _h.checks | default({}, true) }}"
+        fh_my_gateways: >-
+          {{ fh_gateways | selectattr('spec.fabricRef.name', 'defined')
+             | selectattr('spec.fabricRef.name', 'equalto', fh_fabric.metadata.name) | list }}
+        fh_nodes: []
+        fh_skipped: null
+
+    # 1. the pools (read only: ipam-pool-get answers the usage at this moment, hold-down included)
+    - name: "{{ fh_name }}: the platform address pools"
+      when:
+        - fh_checks.pools | default(true) | string | lower in ['true', 'yes', '1']
+        - (fab_real.ipam | default({}, true)).publicPools | default({}, true) | length > 0
+      block:
+        - name: "{{ fh_name }}: read the pools"
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ipam.yml"
+          vars:
+            fab_ipam: {action: ipam-pool-get, fabric: "{{ fh_name }}"}
+
+        # more free blocks in a pool than the status said (blocks left hold-down): networks may be waiting for them
+        - name: "{{ fh_name }}: compare the pool rows"
+          vars:
+            _old: "{{ ((fh_status.realization | default({}, true)).ipam | default({}, true)).pools | default([], true) }}"
+            _new: "{{ fab_ipam_result.pools | default([]) }}"
+          ansible.builtin.set_fact:
+            fh_pools: "{{ _new }}"
+            fh_pools_changed: "{{ (_new | to_json) != (_old | to_json) }}"
+            fh_pools_freed: >-
+              {%- set ns = namespace(freed=false) -%}
+              {%- for p in _new -%}
+                {%- for o in _old if o.name | default('') == p.name | default('') -%}
+                  {%- if (p.blocksFree | default(0) | int) > (o.blocksFree | default(0) | int) -%}{%- set ns.freed = true -%}{%- endif -%}
+                {%- endfor -%}
+              {%- endfor -%}
+              {{ ns.freed }}
+
+        - name: "{{ fh_name }}: write the pool rows"
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: hybridfabrics
+            cr_name: "{{ fh_name }}"
+            cr_namespace: "{{ fh_ns }}"
+            cr_status_partial: true
+            cr_status_body: {realization: {ipam: {pools: "{{ fh_pools }}"}}}
+          when: fh_pools_changed | bool
+
+        - name: "{{ fh_name }}: wake the networks waiting for platform address space"
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/wake_waiting_networks.yml"
+          vars:
+            wn_fabric: "{{ fh_name }}"
+          when: fh_pools_freed | bool
+
+    # 2. the lease gate: no node read while a job changes the nodes or is about to
+    - name: "{{ fh_name }}: read the configuration lease"
+      ansible.builtin.include_tasks: lease.yml
+
+    - name: "{{ fh_name }}: keep the lease as found"
+      vars:
+        _d: "{{ fh_status.delivery | default({}, true) }}"
+      ansible.builtin.set_fact:
+        fh_lease_before: "{{ fh_lease }}"
+        fh_skipped: >-
+          {{ {'reason': 'LeaseHeld'} if fh_lease.held | bool
+             else ({'reason': 'JobInFlight'} if (_d.eventId | default('', true) | length > 0
+                                                   and _d.eventId != _d.completedEventId | default('', true))
+                   else none) }}
+
+    - name: "{{ fh_name }}: read the nodes"
+      when: fh_skipped is none
+      block:
+        - name: "{{ fh_name }}: connect to the border gateway nodes"
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_connect.yml"
+          vars:
+            bgw_fabric_spec: "{{ fh_fabric.spec }}"
+            bgw_ssh_user: "{{ fab_real.nodes.sshUser }}"
+            # the node's own limit on each step, above the reader's (which ends first and says so)
+            bgw_node_limit: "{{ (fh_health.nodeReadTimeoutSeconds | default(60, true) | int) + 15 }}"
+
+        - name: "{{ fh_name }}: what to read on each node"
+          ansible.builtin.set_fact:
+            fh_reader_input:
+              transport: "{{ (fab_real.core | default({}, true)).transport | default('mpls', true) }}"
+              windowSeconds: "{{ (fh_health.daemonRestartWindowMinutes | default(60, true) | int) * 60 }}"
+              cmdTimeout: 15
+              # the post-reload verification's difference of FRR's running configuration against the file
+              # (files/shc_frr_pending.py; nothing while shc-frr-check is not on the node)
+              frrPendingHelper: >-
+                {{ lookup('ansible.builtin.file', role_path ~ '/../../../common/files/shc_frr_pending.py')
+                   if (((fab_real.nodes | default({}, true)).frrLoadCheck | default({}, true)).enabled | default(true)
+                       | string | lower in ['true', 'yes', '1']) else '' }}
+              frrIgnore: "{{ ((fab_real.nodes | default({}, true)).frrLoadCheck | default({}, true)).ignore | default([], true) }}"
+              instances: >-
+                {%- set out = [{'name': 'root', 'kind': 'root'}] -%}
+                {%- for g in fh_my_gateways if g.metadata.deletionTimestamp is not defined
+                      and (g.spec.cloudRef | default({})).name | default('') not in fh_paused_sites -%}
+                  {%- set e = {'name': 'gw-' ~ g.metadata.name, 'kind': 'gateway'} -%}
+                  {%- set cidr = (g.spec.siteUnderlay | default({}, true)).cidr | default('', true) -%}
+                  {%- set _ = out.append(e | combine({'siteCidr': cidr} if cidr else {})) -%}
+                {%- endfor -%}
+                {{ out }}
+
+        - name: "{{ fh_name }}: read each node"
+          ansible.builtin.include_tasks: node.yml
+          loop: "{{ fh_fabric.spec.borderGateway.nodes }}"
+          loop_control:
+            loop_var: bgw_node
+            label: "{{ bgw_node.name }}"
+
+      always:
+        - name: "{{ fh_name }}: remove the SSH key"
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/bgw_disconnect.yml"
+
+    # a job that took or renewed the lease while the nodes were read may have changed them under the read
+    - name: "{{ fh_name }}: read the lease again"
+      ansible.builtin.include_tasks: lease.yml
+      when: fh_skipped is none
+
+    - name: "{{ fh_name }}: discard a read a job overlapped"
+      ansible.builtin.set_fact:
+        fh_skipped: {reason: LeaseHeld}
+        fh_nodes: []
+      when:
+        - fh_skipped is none
+        - fh_lease.holder | length > 0
+        - fh_lease.stamp != fh_lease_before.stamp
+
+    # 3. judge
+    - name: "{{ fh_name }}: judge"
+      ansible.builtin.command:
+        argv: [python3, "{{ role_path }}/../../../common/files/shc_fabric_health.py"]
+        stdin: >-
+          {{ {'now': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ'),
+              'health': fh_health,
+              'egress6': {'enabled': (((fab_real.egress | default({}, true)).ipv6 | default({}, true)).enabled
+                                      | default(false) | bool)
+                                     and (((fh_status.realization | default({}, true)).egress | default({}, true)).ipv6
+                                          | default({}, true)).enabled | default(false) | bool,
+                          'sessionDownAlertMinutes': ((fab_real.egress | default({}, true)).ipv6 | default({}, true)).sessionDownAlertMinutes | default(5),
+                          'eventRepeatMinutes': fh_health.eventRepeatMinutes | default(60)},
+              'fabric': {'name': fh_name, 'namespace': fh_ns, 'ready': fh_ready | bool, 'status': fh_status},
+              'gateways': fh_gateway_rows,
+              'nodes': fh_nodes,
+              'skipped': fh_skipped} | to_json }}
+      vars:
+        fh_gateway_rows: >-
+          {%- set out = [] -%}
+          {%- for g in fh_my_gateways -%}
+            {%- set st = g.status | default({}, true) -%}
+            {%- set _ = out.append({'name': g.metadata.name, 'namespace': g.metadata.namespace,
+                                    'ready': (st.ready | default(false) | bool) and (st.status | default('') | string == 'ready'),
+                                    'paused': (g.spec.cloudRef | default({})).name | default('') in fh_paused_sites,
+                                    'deleting': g.metadata.deletionTimestamp is defined, 'status': st}) -%}
+          {%- endfor -%}
+          {{ out }}
+      register: _fh_judge
+      changed_when: false
+
+    - name: "{{ fh_name }}: the judgement"
+      ansible.builtin.set_fact:
+        fh_answer: "{{ _fh_judge.stdout | from_json }}"
+
+    - name: "{{ fh_name }}: write the fabric's health"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: hybridfabrics
+        cr_name: "{{ fh_name }}"
+        cr_namespace: "{{ fh_ns }}"
+        cr_status_partial: true
+        cr_status_body: "{{ fh_answer.fabric.status }}"
+
+    - name: "{{ fh_name }}: write the gateways' health (when it changed)"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudgateways
+        cr_name: "{{ fh_gw.name }}"
+        cr_namespace: "{{ fh_gw.namespace }}"
+        cr_status_partial: true
+        cr_status_body: "{{ fh_gw.status }}"
+        patch_ignore_not_found: true
+      loop: "{{ fh_answer.gateways | selectattr('changed') | list }}"
+      loop_control:
+        loop_var: fh_gw
+        label: "{{ fh_gw.name }}"
+
+    - name: "{{ fh_name }}: events"
+      ansible.builtin.include_tasks: events.yml
+      vars:
+        fh_event_rows: >-
+          {%- set out = [] -%}
+          {%- for e in fh_answer.fabric.events -%}
+            {%- set _ = out.append(e | combine({'kind': 'HybridFabric', 'name': fh_name, 'namespace': fh_ns,
+                                                'uid': fh_fabric.metadata.uid})) -%}
+          {%- endfor -%}
+          {%- for g in fh_answer.gateways -%}
+            {%- set obj = (fh_my_gateways | selectattr('metadata.name', 'equalto', g.name) | list + [{}]) | first -%}
+            {%- for e in g.events -%}
+              {%- set _ = out.append(e | combine({'kind': 'CloudGateway', 'name': g.name, 'namespace': g.namespace,
+                                                  'uid': (obj.metadata | default({})).uid | default('')})) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # 4. wakes: the fabric or a gateway for what a full run repairs; the networks with IPv6 egress (their family-6
+    # row is read from the fabric's status, written above) when a node's IPv6 egress state changed
+    - name: "{{ fh_name }}: wake the jobs that repair what was found"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        nudge_crs: >-
+          {%- set out = [] -%}
+          {%- if fh_answer.fabric.wake -%}
+            {%- set _ = out.append({'kind': 'HybridFabric', 'namespace': fh_ns, 'name': fh_name}) -%}
+          {%- endif -%}
+          {%- for g in fh_answer.gateways if g.wake -%}
+            {%- set _ = out.append({'kind': 'CloudGateway', 'namespace': g.namespace, 'name': g.name}) -%}
+          {%- endfor -%}
+          {%- if fh_answer.wakeNetworks -%}
+            {%- for n in ((fh_status.realization | default({}, true)).egress | default({}, true)).networks | default([], true)
+                  if n.ipv6 | default(false) and '/' in n.network | default('') -%}
+              {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': n.network.split('/')[0],
+                                      'name': n.network.split('/')[1]}) -%}
+            {%- endfor -%}
+          {%- endif -%}
+          {{ out }}
+
+  rescue:
+    - name: "{{ fh_fabric.metadata.name }}: not checked"
+      ansible.builtin.set_fact:
+        fh_failed: >-
+          {{ fh_failed + [fh_fabric.metadata.name ~ ': ' ~ (ansible_failed_task.name | default('?')) ~ ': '
+                          ~ (ansible_failed_result.msg | default('failed') | string)[:300]] }}

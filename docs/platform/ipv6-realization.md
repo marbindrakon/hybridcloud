@@ -617,7 +617,9 @@ announced (`prefixes6`) and its primary node. A network with IPv6 egress reads `
 Routed}`, or `reason: Degraded` while some node's upstream sessions are all down, and `state: unavailable, reason:
 UpstreamDown` while no node has an upstream session (translation to IPv4 on the fabric's path then reads
 `UpstreamDown` too); a node down for `sessionDownAlertMinutes` is reported as a Warning event `IPv6EgressUpstreamDown`
-on the HybridFabric, on every fabric run while it lasts. A placement with IPv6 from the network copies the network's
+on the HybridFabric once, then at most every `health.eventRepeatMinutes` while it lasts. The fabric health check
+([Border gateway nodes](border-gateway-nodes.md#the-health-check)) refreshes this state on its schedule, between
+fabric runs. A placement with IPv6 from the network copies the network's
 row into `status.ipv6.internet` (null when the network has no row); the network wakes those placements whenever its
 row changes.
 

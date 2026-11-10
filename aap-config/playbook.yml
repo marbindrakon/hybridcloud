@@ -106,6 +106,12 @@
       ansible.builtin.include_role:
         name: infra.aap_configuration.controller_job_templates
 
+    # shc: after the job templates they run (fabric-health: controller/schedules.yml)
+    - name: Configure AAP Controller schedules
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.controller_schedules
+      when: controller_schedules | default([]) | length > 0
+
     - name: Switch API target to EDA via AAP gateway
       ansible.builtin.set_fact:
         aap_gateway_url: "{{ lookup('env', 'AAP_GATEWAY_URL') | default(lookup('env', 'EDA_CONTROLLER_HOST')) }}"

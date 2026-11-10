@@ -288,6 +288,16 @@
   failed_when: false
   delegate_to: "{{ bgw_node.name }}"
 
+# a running FRR whose running configuration still differs from the files (a hand change, part of a reload not
+# taken): the reload is due too, so a woken run repairs it (common/tasks/frr_pending.yml)
+- name: "{{ bgw_node.name }}: what FRR still lacks of its files"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/frr_pending.yml"
+  vars:
+    frr_pending_pathspace: ""
+    frr_pending_note: /etc/shc-fabric/root.frr-unapplied
+    frr_pending_file: /etc/frr/frr.conf
+    frr_pending_when: "{{ _hf_frr_active.stdout == 'active' }}"
+
 - name: "{{ bgw_node.name }}: the lease lasts for the FRR start"
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_lease_ensure.yml"
   vars:
@@ -321,7 +331,9 @@
   when:
     - _hf_frr_active.stdout == 'active'
     - "'bridge-mac=changed' not in _hf_apply.stdout"
-    - _hf_frrconf is changed or _hf_daemons is changed or 'reload=due' in _hf_frr_due.stdout
+    - >-
+      _hf_frrconf is changed or _hf_daemons is changed or 'reload=due' in _hf_frr_due.stdout
+      or (frr_pending_lines | default([]) | length > 0)
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_reload
 
