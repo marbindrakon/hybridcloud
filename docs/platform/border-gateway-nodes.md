@@ -121,7 +121,10 @@ circuit devices and BFD sessions that no object accounts for, it reports what th
 VRF or instance any more, judged by the fabric's core transport:
 - on both transports: an IPv4 or IPv6 unreachable route at the apply's metric in a table no VRF uses (a VRF removed
   behind the jobs), an ICMPv6 source address on a device that is no VRF, and an IPv4 `lookup local` rule anywhere but
-  at 32765 (a namespace where a VRF reaches the default VRF's addresses);
+  at 32765 (a namespace where a VRF reaches the default VRF's addresses), and the root VRFs' input filters judged
+  against the root's VRFs and the dual-stack core: `ip shc_root_in` or `ip6 shc_root_in6` loaded with no root VRF
+  (or the IPv6 one without the dual-stack core) is left over, root VRFs without their table are reported as
+  unprotected;
 - on `srv6`: the SID block's unreachable route and rule for another block than the fabric's, a guard unit or guard
   file of an instance that is not on the node, and MPLS routes or the MPLS module file (left from `mpls`);
 - on `mpls`: every SRv6 piece (the block's route and rule, the guard table, an encapsulation source, the guard units
