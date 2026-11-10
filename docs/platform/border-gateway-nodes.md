@@ -67,6 +67,13 @@ the node runs there with a tenant host, so the node answers such traffic like a 
   dual-stack core): link-local sources pass (the sessions over the egress veths), then the same answers as in a
   gateway namespace.
 
+- **The edge routers of an AWS or Google Cloud site** (part of the site's gateway): table `inet shc_edge_in`, input
+  hook, every network VRF of the router. From a VRF device only BGP with the cloud's own peers on their own leg
+  (the transit gateway's Connect peers, the Cloud Router), ICMP, ICMPv6 and TCP segments with ACK or RST reach the
+  router; everything else is dropped. The router's agent loads it on every run; a router takes it with the agent it
+  was created with, so routers created before it carry none until they are replaced (a new gateway, or the edge
+  helper's `replace`).
+
 The filters are stateless: they keep no connection state ("a TCP segment with ACK or RST" stands in for
 "established"; a stateful rule would make the namespace track and reassemble every network's forwarded traffic), and
 forwarded traffic never meets them. Being stateless, they also refuse the UDP replies to requests the node itself
