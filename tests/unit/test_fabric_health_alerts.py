@@ -92,8 +92,10 @@ TESTS = {
          "input_series": [
              {"series": 'shc_fabric_info{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="lab",phase="Ready"}',
               "values": "1x120"},
-             # checked at t=0 (Unix 0), interval 600 s: stale past 1800 s plus the rule's 10 minutes
+             # ran and read at t=0 (Unix 0), no run since, interval 600 s: stale past 1800 s plus the rule's 10 minutes
              {"series": 'shc_fabric_health_checked_at{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="lab"}',
+              "values": "0x120"},
+             {"series": 'shc_fabric_health_last_run_at{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="lab"}',
               "values": "0x120"},
              {"series": 'shc_fabric_health_interval_seconds{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="lab"}',
               "values": "600x120"},
@@ -112,9 +114,9 @@ TESTS = {
              {"eval_time": "41m", "alertname": "ShcFabricHealthStale", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab"},
                   "exp_annotations": {
-                      "summary": "HybridFabric sovereign-cloud/lab: the fabric health check has not read the nodes for 3 intervals",
-                      "description": "Check the fabric-health job template's schedule and its last runs; "
-                                     "status.health.skipped says when a change to the nodes kept it away."}}]},
+                      "summary": "HybridFabric sovereign-cloud/lab: no fabric health run for 3 intervals",
+                      "description": "The fabric health check has not run. Check the fabric-health job template's "
+                                     "schedule and its last runs."}}]},
              {"eval_time": "61m", "alertname": "ShcFabricHealthNeverChecked", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "customresource_kind": "HybridFabric",
                                  "namespace": "sovereign-cloud", "name": "new", "phase": "Ready"},
@@ -127,6 +129,30 @@ TESTS = {
                   "exp_annotations": {
                       "summary": "HybridFabric sovereign-cloud/lab: no node has an IPv6 upstream",
                       "description": "IPv6 internet egress is down for every network of the fabric."}}]},
+         ]},
+        {"interval": "1m",
+         "input_series": [
+             # runs every 10 min (lastRunAt follows time: value = the minute's Unix seconds), the nodes last read at
+             # t=0 because jobs held the lease from then on
+             {"series": 'shc_fabric_health_last_run_at{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="busy"}',
+              "values": "0+60x180"},
+             {"series": 'shc_fabric_health_checked_at{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="busy"}',
+              "values": "0x180"},
+             {"series": 'shc_fabric_health_interval_seconds{customresource_kind="HybridFabric",namespace="sovereign-cloud",name="busy"}',
+              "values": "600x180"},
+         ],
+         "alert_rule_test": [
+             {"eval_time": "60m", "alertname": "ShcFabricHealthStale", "exp_alerts": []},
+             {"eval_time": "60m", "alertname": "ShcFabricNodesNotRead", "exp_alerts": []},
+             {"eval_time": "120m", "alertname": "ShcFabricHealthStale", "exp_alerts": []},
+             {"eval_time": "99m", "alertname": "ShcFabricNodesNotRead", "exp_alerts": []},
+             {"eval_time": "101m", "alertname": "ShcFabricNodesNotRead", "exp_alerts": [
+                 {"exp_labels": {"severity": "info", "namespace": "sovereign-cloud", "name": "busy"},
+                  "exp_annotations": {
+                      "summary": "HybridFabric sovereign-cloud/busy: the nodes have not been health-checked for 9 intervals",
+                      "description": "The health check runs but leaves the nodes alone while a change to them holds the "
+                                     "configuration lease (status.health.skipped). Expected during a long rollout; "
+                                     "otherwise check which job holds the lease fabric-config-<fabric>."}}]},
          ]},
     ],
 }

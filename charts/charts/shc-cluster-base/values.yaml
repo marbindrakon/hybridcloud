@@ -248,8 +248,11 @@ ops:
       siteSessionsFor: 10m
       # as the realization's egress.ipv6.sessionDownAlertMinutes (default 5)
       upstreamDownFor: 5m
-      # the health check has not read the nodes for this many of its intervals
+      # no health run reported for this many of its intervals (the schedule, AAP or the job broken)
       staleIntervals: 3
+      # runs report but the nodes were not read for this many intervals (changes held the lease): above an ordinary
+      # rollout's back-to-back jobs (tens of minutes), below a lease that is never released
+      notReadIntervals: 9
       poolFreePercent: 10
 
 # ─── Fabric underlay (P7.2) — layer "certs" ──────────────────────────────────

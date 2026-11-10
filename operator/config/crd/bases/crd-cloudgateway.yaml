@@ -295,6 +295,12 @@ spec:
                       type: string
                       format: date-time
                       description: When the nodes were last read.
+                    lastRunAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the health check last ran for the fabric, whether or not it read the nodes (a check
+                        leaves them alone while a change to them is in progress; skipped says so). HybridFabric only.
                     healthy:
                       type: boolean
                       description: True when the last check found nothing; absent while the site is paused.
