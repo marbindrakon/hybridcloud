@@ -13,6 +13,8 @@ Request:
   gateways      [{name, namespace, ready, paused, deleting, status}]
   nodes         [{name, reachable, error?, read?}] (read: the node reader's output)
   skipped       null or {reason: LeaseHeld|JobInFlight, holder?} (the node reads were skipped or discarded)
+  expectedNodes the fabric's node names: without a skip reason every one of them must be in nodes (else an error:
+                nothing is written for a check that did not read the nodes)
 Answer:
   fabric        {status, changed, events, wake}
   gateways      [{name, namespace, status, changed, events, wake}]
@@ -385,6 +387,14 @@ def judge(req):
                                            "changed": comparable(off, cap) != current_comparable(g.get("status"), cap),
                                            "events": [], "wake": False})
         return answer
+
+    if skipped is not None and not isinstance(skipped, dict):
+        raise ValueError("skipped must be null or {reason}, not %r" % (skipped,))
+    expected = req.get("expectedNodes")
+    if not skipped and expected is not None and sorted(n.get("name") for n in nodes_in) != sorted(expected):
+        # a check is recorded only for nodes that were read: neither read nor a reason to skip is this job's error
+        raise ValueError("the nodes were not read (%s of %s) and there is no reason to skip them"
+                         % (sorted(n.get("name") for n in nodes_in), sorted(expected)))
 
     if skipped:
         health = {"skipped": {"reason": skipped.get("reason") or "LeaseHeld",

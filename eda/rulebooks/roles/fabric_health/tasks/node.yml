@@ -25,16 +25,20 @@
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: keep the read"
+  # (the reader's line is read and parsed within one expression: as a variable of its own, ansible-core 2.16 would
+  # turn the JSON text into a dict before the test for it ran)
   vars:
-    _out: "{{ (_fh_read.stdout | default('', true) | trim).split('\n') | last }}"
     _unreachable: "{{ _fh_read.unreachable | default(false) | bool }}"
-    _ok: "{{ not (_unreachable | bool) and _fh_read.rc | default(1) == 0 and _out.startswith('{') }}"
+    _ok: >-
+      {{ not (_unreachable | bool) and _fh_read.rc | default(1) == 0
+         and ((_fh_read.stdout | default('', true)).splitlines() | last | default('') | string | trim).startswith('{') }}
   # an unreachable node (SSH) and a node that answered but whose read failed or ran out of time are told apart: the
   # second has no read (the judge reports ReadFailed, not NodeUnreachable)
   ansible.builtin.set_fact:
     fh_nodes: >-
       {{ fh_nodes + [{'name': bgw_node.name, 'reachable': not (_unreachable | bool)}
-                     | combine({'read': _out | from_json} if _ok | bool else
+                     | combine({'read': ((_fh_read.stdout | default('', true)).splitlines() | last | default('') | trim) | from_json}
+                               if _ok | bool else
                                {'error': ('the node did not answer over SSH' if _unreachable | bool
                                           else ('the read ran out of time' if _fh_read.rc | default(0) == 124
                                                 else 'the read failed (exit ' ~ _fh_read.rc | default('?') ~ ')'))})] }}
