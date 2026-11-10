@@ -336,7 +336,7 @@ route. Instances reach the instance metadata service over IPv6 at `fd00:ec2::254
 | Objects | the option set | DNS64 on the subnets; `64:ff9b::/96` to the transit gateway in the VPC; in the NAT egress VPC an Amazon /56, a /64 on each of its subnets, IPv6 on its attachment, `64:ff9b::/96` from the attachment subnet to the NAT gateway and the placement's block from the NAT gateway's subnet back to the transit gateway; a static `64:ff9b::/96` to the egress attachment in the network's transit gateway route table |
 
 Translation needs `spec.egress.internet` (and, for source `Provider`, the realization's `translation.<site>.provider`
-and a NAT egress VPC). Without it `status.ipv6.translation` is null and none of the `64:ff9b::/96` objects exist:
+and a NAT egress VPC). Without it `status.ipv6.translation` is absent and none of the `64:ff9b::/96` objects exist:
 they are removed when the network turns internet access off, and come back when it turns it on. Source `Network`
 needs no NAT egress VPC (nothing in the VPC sends IPv4); source `Provider` uses the same NAT egress VPC a dual-stack
 placement uses for IPv4 internet access (the one of the placement's transit gateway route table), with no NAT gateway

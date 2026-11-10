@@ -533,12 +533,13 @@ export type GuestEnvironment = 'CloudVirt' | 'CloudOSO' | 'CloudAWS' | 'CloudGCP
 const GUEST_ENVIRONMENTS: GuestEnvironment[] = ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'];
 
 /**
- * Translation to IPv4 as a guest sees it: `available` (status.ipv6.translation with a prefix), `notOffered`
- * (status.ipv6.translation null: the network's internet egress says why), `notReported` (an IPv6-only placement whose
- * status has no translation yet, for example while the cloud provider allocates it), `notNeeded` (the placement has
- * IPv4).
+ * Translation to IPv4 as a guest sees it: `available` (status.ipv6.translation with a prefix), `none` (an IPv6-only
+ * placement whose status has no translation), `notNeeded` (the placement has IPv4). The placement job writes no
+ * translation both when none is offered and while a cloud provider's translator is still being set up (the status
+ * merge drops an empty value), so the status cannot tell those two apart: the network's IPv4 translation row says
+ * which.
  */
-export type GuestTranslationState = 'available' | 'notOffered' | 'notReported' | 'notNeeded';
+export type GuestTranslationState = 'available' | 'none' | 'notNeeded';
 
 export interface GuestReference {
   environment: GuestEnvironment;
@@ -565,15 +566,12 @@ export function guestReference(p: NetworkPlacement | undefined | null): GuestRef
   const kind = String(p?.spec?.backend?.kind ?? '');
   const environment: GuestEnvironment = (GUEST_ENVIRONMENTS as string[]).includes(kind) ? (kind as GuestEnvironment) : 'other';
   const ipv6Only = !placementSubnet(p, 4)?.prefix;
-  const rawTr = p?.status?.ipv6?.translation;
   const translation = ipv6Only ? placementTranslation(p) : null;
   const translationState: GuestTranslationState = !ipv6Only
     ? 'notNeeded'
     : translation
       ? 'available'
-      : rawTr === null
-        ? 'notOffered'
-        : 'notReported';
+      : 'none';
   const addressing = typeof p?.status?.ipv6?.addressing === 'string' ? p.status.ipv6.addressing.trim() || undefined : undefined;
   const mtuRaw = Number(p?.status?.mtu);
   const mtu = Number.isInteger(mtuRaw) && mtuRaw > 0 ? mtuRaw : undefined;
@@ -587,8 +585,7 @@ export function guestReference(p: NetworkPlacement | undefined | null): GuestRef
   };
   let resolvers: string[] = [];
   if (!ipv6Only) resolvers = ['dualStack'];
-  else if (translationState === 'notOffered') resolvers = ['noTranslation'];
-  else if (translationState === 'notReported') resolvers = ['translationNotReported'];
+  else if (translationState === 'none') resolvers = ['noTranslation'];
   else if (environment === 'CloudVirt') resolvers = translation?.path === 'Provider' ? [] : ['virt.onlyTranslation'];
   else if (environment === 'CloudOSO') resolvers = ['oso.resolvers'];
   else if (environment === 'CloudAWS') resolvers = [translation?.path === 'Provider' ? 'aws.resolversProvider' : 'aws.resolversFabric'];

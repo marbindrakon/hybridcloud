@@ -1540,8 +1540,7 @@
       "mtu": "MTU",
       "translation": "Translation to IPv4",
       "translation_available": "Available: names through the DNS64 resolvers, IPv4 addresses through a CLAT in the guest",
-      "translation_notOffered": "Not offered",
-      "translation_notReported": "Not reported yet",
+      "translation_none": "None in the placement's status",
       "translation_notNeeded": "Not needed: the placement has IPv4",
       "pref64": "Translation prefix (NAT64, the CLAT's PLAT prefix)",
       "resolvers": "DNS64 resolvers",
@@ -1586,8 +1585,7 @@
           "address": "This page does not describe this environment type: see the documentation."
         },
         "dualStack": "The guest keeps the IPv4 resolvers it gets by DHCP and uses no translation: IPv4-only names are reached over native IPv4. The platform hands out IPv6 resolvers only to IPv6-only placements.",
-        "noTranslation": "Without translation the guest reaches IPv4-only destinations neither by name nor by address. The network's internet egress says why.",
-        "translationNotReported": "The placement's status has no translation yet; a cloud provider's translator appears once the provider has set it up.",
+        "noTranslation": "Without translation the guest reaches IPv4-only destinations neither by name nor by address. The network's IPv4 translation row says why: none is offered for this placement, or a cloud provider's translator is still being set up (the prefix and the resolvers then appear here).",
         "clat": {
           "when": "A CLAT is needed only for IPv4 addresses (literals); names of IPv4-only destinations resolve to translated addresses through the DNS64 resolvers.",
           "prefix": "The CLAT's PLAT prefix is the translation prefix above: configure it in the CLAT, or let the CLAT discover it by the RFC 7050 query (ipv4only.arpa) through the DNS64 resolvers.",
