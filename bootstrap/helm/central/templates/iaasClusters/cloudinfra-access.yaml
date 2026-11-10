@@ -10,6 +10,8 @@ Two accounts per cluster in .Values.iaasClusters, each rendered when its block i
 Per account: ManagedServiceAccount, ClusterPermission (<block>.rules) and PushSecret, rendered by the helper
 sovereign-central.managedAccount (_helpers.tpl). <block>.pushDeletionPolicy (default Delete) is the PushSecret's
 deletionPolicy: None keeps the Vault key when the PushSecret goes (an account rename).
+<block>.pushRefreshInterval overrides managedAccounts.pushRefreshInterval (default 5m), how soon a rotated token
+reaches Vault.
 */}}
 {{- if include "sovereign-central.applicationsEnabled" . }}
 {{- range $name, $cluster := .Values.iaasClusters }}
@@ -21,7 +23,7 @@ deletionPolicy: None keeps the Vault key when the PushSecret goes (an account re
 {{- $server := $ci.apiServer | default (printf "https://api.%s.%s:6443" $name $c.clusterBase.values.cluster.baseDomain) }}
 {{ include "sovereign-central.managedAccount" (dict "root" $ "cluster" $name "sa" $sa "wave" $c.syncWaves.base
      "tokenValidity" $ci.tokenValidity "rules" $ci.rules "server" $server
-     "vaultKey" (printf "cloudinfra/%s%s" $name $acc.suffix) "deletionPolicy" $ci.pushDeletionPolicy) }}
+     "vaultKey" (printf "cloudinfra/%s%s" $name $acc.suffix) "deletionPolicy" $ci.pushDeletionPolicy "refreshInterval" $ci.pushRefreshInterval) }}
 {{- end }}
 {{- end }}
 {{- end }}
