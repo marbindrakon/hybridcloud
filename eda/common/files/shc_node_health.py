@@ -246,6 +246,31 @@ def egress6(run, conf):
             "healthy": bool(table and default and up and not errors), "errors": errors}
 
 
+def service_sessions(run, conf):
+    """The platform circuits' sessions in the service VRF as the root's own configuration names them: None without a
+    service VRF on the node, else {vrf, established, known, peers: [{address, state}]} (show bgp vrf <service> summary
+    json; a configured CE missing from it counts as known and not established)."""
+    sv = (conf or {}).get("service") or {}
+    if not isinstance(sv, dict) or not sv.get("vrf") or not sv.get("circuits"):
+        return None
+    want = [str(c.get("ce")) for c in sv["circuits"] if c.get("ce")]
+    rc, out = run(["vtysh", "-c", "show bgp vrf %s summary json" % sv["vrf"]])
+    try:
+        doc = json.loads(out or "{}") if rc == 0 else {}
+    except ValueError:
+        doc = {}
+    # FRR prints the summary per address family ({"ipv4Unicast": {peers}}), or the peers directly
+    peers = {}
+    for v in (doc.values() if isinstance(doc, dict) else []):
+        if isinstance(v, dict) and isinstance(v.get("peers"), dict):
+            peers.update(v["peers"])
+    if isinstance(doc, dict) and isinstance(doc.get("peers"), dict):
+        peers.update(doc["peers"])
+    rows = [{"address": a, "state": (peers.get(a) or {}).get("state", "Missing")} for a in want]
+    return {"vrf": sv["vrf"], "established": sum(1 for r in rows if r["state"] == "Established"), "known": len(rows),
+            "peers": rows, "read": rc == 0}
+
+
 def site_sessions(run, inst):
     import ipaddress
     rc, out = run(["vtysh", "-N", inst["name"], "-c", "show bgp l2vpn evpn summary json"])
@@ -313,6 +338,7 @@ def read_node(inp, run, read=read_file, now=None):
                                   if l.strip()][:MAX_LINES]}}
         if i["kind"] == "root":
             d["egress6"] = egress6(run, root_conf)
+            d["serviceSessions"] = service_sessions(run, root_conf)
         elif i.get("siteCidr"):
             d["siteSessions"] = site_sessions(run, i)
         result["instances"][i["name"]] = d

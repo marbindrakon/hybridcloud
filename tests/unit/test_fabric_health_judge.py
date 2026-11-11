@@ -491,5 +491,37 @@ class CoexistenceTest(unittest.TestCase):
         self.assertEqual(after["phase"], "Degraded")
 
 
+class ServiceSessionsTest(unittest.TestCase):
+    """ServiceSessionsDown: a node with platform circuits and none of their sessions established degrades the fabric
+    once a second check confirms it; no wake; check key serviceSessions."""
+
+    def root(self, established, known=2):
+        return inst(serviceSessions={"vrf": "service", "established": established, "known": known,
+                                     "peers": [{"address": "10.255.128.75", "state": "Active"}]})
+
+    def test_down_confirmed_on_the_second_check(self):
+        first = J.judge(req([node("bgw-1", root=self.root(0))]))["fabric"]
+        f = first["status"]
+        self.assertEqual(cond(f, "NodesHealthy")["status"], "True")
+        self.assertEqual(f["health"]["nodes"][0]["findings"][0]["reason"], "ServiceSessionsDown")
+        a, _ = twice([node("bgw-1", root=self.root(0))])
+        f = a["fabric"]["status"]
+        self.assertEqual(cond(f, "NodesHealthy")["reason"], "ServiceSessionsDown")
+        self.assertEqual(cond(f, "Degraded")["reason"], "ServiceSessionsDown")
+        self.assertIn("no platform circuit session is established in the service VRF service (10.255.128.75 Active)",
+                      cond(f, "NodesHealthy")["message"])
+        self.assertEqual(f["health"]["nodes"][0]["findings"][0]["check"], "ServiceSessions")
+        self.assertFalse(a["fabric"]["wake"])
+
+    def test_one_session_up_or_no_service(self):
+        for r in (self.root(1), inst(serviceSessions=None), self.root(0, known=0)):
+            f = J.judge(req([node("bgw-1", root=r)]))["fabric"]["status"]
+            self.assertEqual(f["health"]["nodes"][0]["findings"], [])
+
+    def test_check_off(self):
+        a = J.judge(req([node("bgw-1", root=self.root(0))], health={"checks": {"serviceSessions": False}}))
+        self.assertEqual(a["fabric"]["status"]["health"]["nodes"][0]["findings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
