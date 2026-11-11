@@ -311,10 +311,26 @@ class PlatformOpenshiftRefusal(unittest.TestCase):
         spec = load(PO_CRD)["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
         with_network = sorted(k for k in spec.get("type", {}).get("enum", [])
                               if "network" in ((spec.get(k) or {}).get("properties") or {}))
-        # an OpenStack cluster gets a network of its own (no spec.openstack.network): nothing to refuse there; a
-        # backend that gains a network field must refuse an IPv6-only placement like these
-        self.assertEqual(with_network, ["aws", "gcp"])
-        for kind in with_network:
+        # a backend that gains a network field must refuse an IPv6-only placement like these; OpenStack (spec.openstack
+        # .network) refuses it in the shared preflight (files/po_preflight.py network: PlacementHasNoIPv4)
+        self.assertEqual(with_network, ["aws", "gcp", "openstack"])
+        import importlib.util
+        spec_ = importlib.util.spec_from_file_location(
+            "po_preflight", os.path.join(os.path.dirname(PO), "files", "po_preflight.py"))
+        pp = importlib.util.module_from_spec(spec_)
+        spec_.loader.exec_module(pp)
+        r = pp.network({"kind": "CloudOSO", "environment": "e", "namespace": "ns", "network": "n",
+                        "networkObj": {"metadata": {"name": "n"}, "status": {}},
+                        "placements": [{"metadata": {"name": "p", "namespace": "ns"},
+                                        "spec": {"network": "n", "backend": {"kind": "CloudOSO", "name": "e"},
+                                                 "use": {"routerAttachments": True}},
+                                        "status": {"ready": True, "subnets": [{"family": 6, "prefix": "2001:db8::/64"}],
+                                                   "use": {"routerAttachments": {"state": "ready"}},
+                                                   "realization": {"site": {"networkId": "i", "networkName": "x"}}}}],
+                        "needPlatform": True, "needRouterAttachments": True})
+        self.assertEqual(r["reason"], "PlacementHasNoIPv4")
+        self.assertIn(REFUSAL, r["message"])
+        for kind in ("aws", "gcp"):
             tasks = load(os.path.join(PO, f"{kind}_clusterbuild_network.yml"))
             t = by_name(tasks, "Refuse a placement without IPv4")
             self.assertIn(REFUSAL, t["ansible.builtin.fail"]["msg"], kind)
