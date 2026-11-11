@@ -167,3 +167,13 @@ test('detailOf: the deciding condition says what the summary does not', () => {
     { type: 'Ready', status: 'False', reason: 'NetworkChoiceRequired', message: 'This site has no default external network. Choose a network.' }] } };
   assert.equal(phase.detailOf(same), undefined);
 });
+
+// gate S8 UX 7: a ready cluster being deleted read "Being deleted · Ready. since 3m"
+test('deletingSummaryOf: nothing for a ready object, the wait otherwise', () => {
+  const ready = { metadata: { name: 'g1e', deletionTimestamp: '2026-11-11T19:33:48Z', generation: 2 },
+    status: { phase: 'Deleting', summary: 'Ready.', conditions: [{ type: 'Ready', status: 'True', reason: 'EDASucceeded' }] } };
+  assert.equal(phase.deletingSummaryOf(ready), '');
+  const blocked = { metadata: { name: 'p1', deletionTimestamp: '2026-11-11T18:00:00Z', generation: 2 },
+    status: { phase: 'Deleting', conditions: [{ type: 'DeletionBlocked', status: 'True', reason: 'ProtectedChildren' }] } };
+  assert.match(phase.deletingSummaryOf(blocked), /deletion protection/);
+});

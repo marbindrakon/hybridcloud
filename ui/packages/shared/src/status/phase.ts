@@ -303,6 +303,14 @@ export function detailOf(item: PhaseSubject | null | undefined): string | undefi
   return msg.length > DETAIL_MAX ? `${msg.slice(0, DETAIL_MAX - 1).trimEnd()}…` : msg;
 }
 
+/**
+ * The line under "Being deleted": what the delete waits for, or nothing when the
+ * object was ready (its stored summary still says "Ready.").
+ */
+export function deletingSummaryOf(item: PhaseSubject | null | undefined): string {
+  return reasonEntry(reasonOf(item))?.class === 'ready' ? '' : summaryOf(item);
+}
+
 /** Who acts next for the deciding reason (A automatic, T the tenant, P the platform team). */
 export function actorOf(item: PhaseSubject | null | undefined): 'A' | 'T' | 'P' | undefined {
   return reasonEntry(reasonOf(item))?.actor;

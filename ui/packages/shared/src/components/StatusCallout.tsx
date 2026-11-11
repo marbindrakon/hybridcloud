@@ -8,6 +8,7 @@ import {
   detailOf,
   phaseOf,
   phaseSinceOf,
+  deletingSummaryOf,
   reasonOf,
   summaryOf,
   type PhaseSubject,
@@ -50,10 +51,12 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
 
   if (phase === 'Deleting') {
     const blockers = deletionBlockers(item);
+    // a delete of a ready object still carries its last summary ("Ready."): the title says what happens now
+    const deletingSummary = displayText(t, deletingSummaryOf(item));
     return (
       <Alert variant="custom" isInline className="sc-mb sc-status-callout" title={t('callout.deleting')}>
         <p>
-          {displayText(t, summary)} {sinceText}
+          {deletingSummary} {sinceText}
         </p>
         {blockers.length > 0 && (
           <>

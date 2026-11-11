@@ -49,6 +49,8 @@ export function PlatformAccessSection({
       })
     : null;
   const prefixes = Array.isArray(st?.prefixes) ? st?.prefixes ?? [] : [];
+  // where the platform offers no connection for clusters on networks there are no platform addresses to admit
+  const offered = !(cond && cond.status !== 'True' && cond.reason === 'ServiceNotOffered');
   return (
     <section style={{ marginBottom: '1.25rem' }} aria-label={t('platformAccess.title')}>
       <h3 className="sc-netov__title" style={{ marginBottom: '0.5rem' }}>{t('platformAccess.title')}</h3>
@@ -77,13 +79,18 @@ export function PlatformAccessSection({
         {st?.state && (
           <Row label={t('platformAccess.state')}>{t(`platformAccess.state_${st.state}`, { defaultValue: st.state })}</Row>
         )}
-        {st?.message && <Row label={t('platformAccess.why')}>{st.message}</Row>}
-        <Row label={t('platformAccess.sources')}>
-          <Mono items={st?.sources} />
-        </Row>
-        <Row label={t('platformAccess.ports')}>
-          <Mono items={st?.ports} />
-        </Row>
+        {/* the reason in words is shown above; the API's own message only when there is none */}
+        {st?.message && !block && <Row label={t('platformAccess.why')}>{st.message}</Row>}
+        {offered && (
+          <Row label={t('platformAccess.sources')}>
+            <Mono items={st?.sources} />
+          </Row>
+        )}
+        {offered && (
+          <Row label={t('platformAccess.ports')}>
+            <Mono items={st?.ports} />
+          </Row>
+        )}
       </DescriptionList>
       {prefixes.length === 0 ? (
         <p className="sc-text-muted">{t('platformAccess.noPrefixes')}</p>
