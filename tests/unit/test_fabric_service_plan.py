@@ -273,11 +273,13 @@ class Plan(unittest.TestCase):
              "message": "192.0.2.15/32 is already in use by another network on the platform's service routing domain"}])
         # the message never names the other tenant's network
         self.assertNotIn("tenant-b", json.dumps(out["status"]["refused"]))
-        # a prefix realized before keeps its place against a later (or reused lower) ledger value
+        # the ledger is the order: what the previous status realized does not change it (a run without a platform
+        # circuit leaves that status empty; the networks keep their entries through it)
         prev = {"networks": [{"network": "tenant-a/a", "prefixes": ["192.0.2.15/32"]}]}
         out = plan(real(), nets, alloc, previous=prev)
-        self.assertEqual([r["network"] for r in out["status"]["refused"]], ["tenant-b/b"])
-        self.assertEqual(sorted(w["network"] for w in out["status"]["networks"]), ["tenant-a/a", "tenant-b/b"])
+        self.assertEqual([r["network"] for r in out["status"]["refused"]], ["tenant-a/a"])
+        out = plan(real(), nets, alloc, previous={})
+        self.assertEqual([r["network"] for r in out["status"]["refused"]], ["tenant-a/a"])
 
     def test_refusals_per_prefix(self):
         nets = [network("n1", ["192.0.2.0/24", "198.51.100.0/24", "100.64.10.0/24"],

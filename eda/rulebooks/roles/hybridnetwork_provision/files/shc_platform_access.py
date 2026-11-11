@@ -28,8 +28,15 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
     A prefix is accepted when the network is eligible and the prefix is IPv4, inside the network's space, inside
     service.attachableRanges (when set), clear of the reserved ranges and of every prefix accepted earlier for another
     network (first come first served: the ledger value, the lower the earlier; a prefix the fabric realizes counts as
-    accepted). Returns {state, reason, message, condition, sources, ports, prefixes, accepted, allocate, release,
-    held, attached, wakeFabric}.
+    accepted). Returns {state, reason, message, condition, sources, ports, prefixes, accepted, kept, allocate,
+    release, held, attached, wakeFabric}.
+
+    The order lives in the ledger: an accepted prefix keeps its entry (and so its place) for as long as a cluster of
+    the network asks for it, whatever happens on the platform's side meanwhile (the service turned off, no platform
+    circuit realized, the hub's or the attachable ranges changed: kept, its row pending with the reason, not realized).
+    It goes back only when no cluster asks for it any more (the cluster's teardown, its refusal, the tenant turning
+    platform access off, which waits for the clusters) or for the tenant's own fault (RELEASE_REASONS: not IPv4, outside
+    the network's space, a network without IPv4) and when it lost to an earlier one (ServicePrefixInUse).
 """
 import ipaddress
 import json
@@ -38,6 +45,9 @@ import sys
 HUB_PURPOSE = "Networks the platform's management connects from"
 KIND = "servicePrefix"
 TENANT_REASONS = ("NoIPv4", "InfrastructureOverlap", "OutsideAttachableRanges")
+# the reasons a prefix gives its ledger entry back for (every other reason keeps it: the prefix keeps its place)
+RELEASE_REASONS = ("InvalidSpec", "FamilyUnavailable", "OutsideAddressSpace", "ServicePrefixInUse", "NoIPv4",
+                   "NotRequested")
 
 
 def net(text):
@@ -176,6 +186,16 @@ def platform_access(req):
             if not any(n == e.get("network") and r == q for n, r, _ in others):
                 others.append((e.get("network"), q, -1))
 
+    kept = []  # accepted before (a ledger entry), not now for a reason that keeps the place
+
+    def keep(row, n):
+        """A prefix not accepted now: it keeps its ledger entry unless the reason gives it back."""
+        if owner(key, str(n)) in ledger and row["reason"] not in RELEASE_REASONS:
+            if str(n) not in kept:
+                kept.append(str(n))
+            row.update(state="pending", message=f"{n} keeps its place (accepted before); not reached now: "
+                                                + row["message"])
+
     for c in clusters:
         for p in c.get("prefixes") or []:
             n = net(p)
@@ -185,9 +205,8 @@ def platform_access(req):
             if n is None:
                 row.update(reason="InvalidSpec", message=f"{p} is not an address prefix")
                 continue
-            if not eligible:
-                row.update(state="refused" if reason in TENANT_REASONS else "pending", reason=reason,
-                           message=message)
+            if reason in ("NotRequested", "NoIPv4"):
+                row.update(state="refused" if reason in TENANT_REASONS else "pending", reason=reason, message=message)
                 continue
             if n.version != 4:
                 row.update(reason="FamilyUnavailable", message=f"{n}: the platform reaches clusters over IPv4 only")
@@ -195,26 +214,34 @@ def platform_access(req):
             if not any(n.subnet_of(s) for s in space4):
                 row.update(reason="OutsideAddressSpace", message=f"{n} is outside the network's address space")
                 continue
+            # first come first served, settled by the ledger whether or not the platform reaches the network now
+            mine_rank = int(ledger[owner(key, str(n))]) if owner(key, str(n)) in ledger else float("inf")
+            if any(overlaps(n, q) and rank < mine_rank for _, q, rank in others) \
+                    or fabric_refused.get(str(n)) == "ServicePrefixInUse":
+                row.update(reason="ServicePrefixInUse",
+                           message=f"{n} is already reached by the platform for another network; a new address "
+                                   "for the cluster resolves it")
+                continue
+            if not eligible:
+                row.update(state="refused" if reason in TENANT_REASONS else "pending", reason=reason,
+                           message=message)
+                keep(row, n)
+                continue
             if attachable and not any(n.subnet_of(a) for a in attachable):
                 row.update(reason="OutsideAttachableRanges",
                            message=f"{n} is outside the ranges for clusters the platform manages ("
                                    + ", ".join(str(a) for a in attachable) + ")")
+                keep(row, n)
                 continue
             hit = next(((r, why) for r, why in reserved if overlaps(n, r)), None)
             if hit:
                 row.update(reason="PrefixReserved",
                            message=f"{n} overlaps {hit[0]}, reserved by the platform: {hit[1]}")
+                keep(row, n)
                 continue
             if str(n) in fabric_refused:
-                row.update(reason=fabric_refused[str(n)],
-                           message=f"{n} is already reached by the platform for another network"
-                           if fabric_refused[str(n)] == "ServicePrefixInUse" else f"{n} is refused by the platform")
-                continue
-            mine_rank = int(ledger[owner(key, str(n))]) if owner(key, str(n)) in ledger else float("inf")
-            if any(overlaps(n, q) and rank < mine_rank for _, q, rank in others):
-                row.update(reason="ServicePrefixInUse",
-                           message=f"{n} is already reached by the platform for another network; a new address "
-                                   "for the cluster resolves it")
+                row.update(reason=fabric_refused[str(n)], message=f"{n} is refused by the platform")
+                keep(row, n)
                 continue
             if str(n) not in accepted:
                 accepted.append(str(n))
@@ -225,8 +252,9 @@ def platform_access(req):
 
     accepted = sorted(accepted, key=lambda s: (ipaddress.ip_network(s).network_address, s))
     allocate = [owner(key, p) for p in accepted if owner(key, p) not in ledger]
+    kept = sorted(p for p in kept if p not in accepted)
     release = sorted(o for o in ledger if (parse_owner(o) or ("",))[0] == key
-                     and parse_owner(o)[1] not in accepted)
+                     and parse_owner(o)[1] not in accepted and parse_owner(o)[1] not in kept)
     waiting = [p for p in accepted if p not in realized]
     attached = mine is not None and bool(realized)
 
@@ -258,7 +286,7 @@ def platform_access(req):
     wake = sorted(accepted) != sorted(realized) or (mine is not None and not accepted)
     return {"state": state, "reason": cond["reason"] if cond["status"] == "False" else "",
             "message": out_message, "condition": cond, "sources": sources, "ports": ports, "prefixes": rows,
-            "accepted": accepted, "allocate": allocate, "release": release,
+            "accepted": accepted, "kept": kept, "allocate": allocate, "release": release,
             "held": held if (not spec_on and clusters) else [], "attached": attached, "wakeFabric": wake}
 
 

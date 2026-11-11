@@ -1382,8 +1382,10 @@ def service_plan(req):
             if led is None:
                 pending.append({"network": key, "prefix": text, "why": "not recorded in the fabric's ledger yet"})
                 continue
-            cands.append({"network": key, "net": net, "text": text, "order": ((key, text) not in prev, int(led), key, text)})
-    # first come first served: a prefix realized before keeps its place, then the ledger's order
+            cands.append({"network": key, "net": net, "text": text, "order": (int(led), (key, text) not in prev, key, text)})
+    # first come first served: the ledger's order (the networks keep a prefix's entry while a cluster asks for it,
+    # through any outage of the platform's side; the previous status is only a tie-break, it is empty after a run
+    # without a platform circuit)
     accepted = {}
     for c in sorted(cands, key=lambda c: c["order"]):
         if any(o["net"].overlaps(c["net"]) for k, lst in accepted.items() if k != c["network"] for o in lst):

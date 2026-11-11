@@ -213,6 +213,31 @@ class Prefixes(unittest.TestCase):
         self.assertEqual((out["prefixes"][0]["state"], out["prefixes"][0]["reason"]), ("refused", "InfrastructureOverlap"))
         self.assertEqual(out["accepted"], [])
 
+    def test_ineligible_keeps_the_ledger_entry(self):
+        led = {"HybridNetwork/tenant-a/net/10.20.1.5/32": 4}
+        for why, kw in (("CircuitNotDeployed", {"serviceStatus": {"circuits": []}}),
+                        ("ServiceNotOffered", {"service": dict(SERVICE, enabled=False)}),
+                        ("InfrastructureOverlap", {"overlaps": [{"prefix": "10.20.0.0/16", "range": "10.20.0.0/24",
+                                                                  "purpose": "x"}]}),
+                        ("OutsideAttachableRanges", {"service": dict(SERVICE, attachableRanges=["10.30.0.0/16"])})):
+            with self.subTest(reason=why):
+                out = run(clusters=[cl("c1", "10.20.1.5/32")], ledger=led, **kw)
+                row = out["prefixes"][0]
+                self.assertEqual((row["state"], row["reason"]), ("pending", why))
+                self.assertIn("keeps its place", row["message"])
+                self.assertEqual((out["accepted"], out["kept"], out["release"]), ([], ["10.20.1.5/32"], []))
+        # the tenant's own reasons give it back, and so does a cluster that no longer asks for it
+        out = run(clusters=[cl("c1", "10.20.1.5/32")], ledger=led, space=["10.30.0.0/16"])
+        self.assertEqual(out["release"], ["HybridNetwork/tenant-a/net/10.20.1.5/32"])
+        out = run(clusters=[], ledger=led, serviceStatus={"circuits": []})
+        self.assertEqual((out["kept"], out["release"]), ([], ["HybridNetwork/tenant-a/net/10.20.1.5/32"]))
+
+    def test_a_conflict_is_refused_during_an_outage(self):
+        led = {"HybridNetwork/tenant-b/web/10.20.1.5/32": 1}
+        out = run(clusters=[cl("c1", "10.20.1.5/32")], ledger=led, serviceStatus={"circuits": []})
+        self.assertEqual((out["prefixes"][0]["state"], out["prefixes"][0]["reason"]), ("refused", "ServicePrefixInUse"))
+        self.assertEqual((out["kept"], out["allocate"]), ([], []))
+
     def test_turning_off_waits_for_the_clusters(self):
         out = run(platformAccess=False, clusters=[cl("c2", "10.20.1.5/32"), cl("c1")])
         self.assertNotEqual(out["state"], "off")
@@ -510,6 +535,104 @@ class CrdText(unittest.TestCase):
         for word in ("DESIGN", "OD1", "2026", "fabric_realization", "infrastructure.hub", "service VRF"):
             self.assertNotIn(word, text)
 
+
+
+class FirstComeFirstServedSurvivesOutages(unittest.TestCase):
+    """Two tenants with the same address space (separate VPNs). Tenant A's cluster has 10.20.1.5/32 accepted; tenant
+    B's cluster asks for the same address. The platform's side goes away for a while (no platform circuit realized,
+    the service turned off) and comes back, with B's network job running first and fabric runs in between that
+    planned nothing: A keeps the prefix, B is refused, and the fabric's plan agrees (the order lives in the ledger)."""
+    A, B = "tenant-a/net", "tenant-b/web"
+    P = "10.20.1.5/32"
+
+    def setUp(self):
+        self.ledger = {}
+        self.realized = []  # the fabric's networks[] (previous status)
+        self.next = 1
+
+    def job(self, who, service_status, service=SERVICE):
+        cluster = cl("c1" if who == self.A else "d1", self.P)
+        out = run(network=who, clusters=[cluster], ledger=dict(self.ledger), serviceStatus=service_status,
+                  service=service)
+        for o in out["allocate"]:
+            self.ledger[o] = self.next
+            self.next += 1
+        for o in out["release"]:
+            self.ledger.pop(o, None)
+        return out
+
+    def fabric(self, rows_by_net, circuits=True):
+        """the fabric's plan (shc_fabric.service_plan) over the networks' rows"""
+        sys.path.insert(0, os.path.join(ROOT, "eda", "common", "files"))
+        import shc_fabric as F
+        nets = []
+        for key, rows in rows_by_net.items():
+            ns, name = key.split("/")
+            nets.append({"metadata": {"namespace": ns, "name": name},
+                         "spec": {"prefixes": ["10.20.0.0/16"]},
+                         "status": {"fabric": "fab", "addressSpace": [{"prefix": "10.20.0.0/16", "family": 4}],
+                                    "platformAccess": {"prefixes": rows}}})
+        real = {"infrastructure": {"hub": HUB}, "attachments": {"enabled": True, "linkPool": "100.127.0.0/20"},
+                "core": {"loopbackPool": "100.126.0.0/24", "linkSubnet": "100.126.1.0/24"},
+                "egress": {"linkPool": "169.254.0.0/16", "networkTableBase": 100000, "vrf": {"name": "egress", "table": 9000}},
+                "service": {"enabled": True, "vrf": {"name": "service", "table": 9001}, "ports": [6443, 443],
+                            "hubEndpoints": [], "attachableRanges": ["10.0.0.0/8"]}}
+        alloc = {"vpnTarget": {"HybridNetwork/" + self.A: 10001, "HybridNetwork/" + self.B: 10002},
+                 "egress": {"HybridNetwork/" + self.A: 1, "HybridNetwork/" + self.B: 2}, "servicePrefix": dict(self.ledger)}
+        circ = [{"circuit": "platform-ns/hub-a", "vlan": 3001, "nodes": {"bgw-1": "100.127.0.2"}, "device": "bond1.3001",
+                 "link": "100.127.0.0/29", "ce": "100.127.0.1", "rev": "r"}] if circuits else []
+        out = F.service_plan({"realization": real, "nodes": ["bgw-1"], "fabric": "fab", "domainAsn": 65010,
+                              "networks": nets, "ledger": alloc, "circuits": circ, "vrfs": {},
+                              "previous": {"networks": self.realized}})
+        self.assertEqual(out["errors"], [])
+        self.realized = out["status"]["networks"]
+        return out["status"]
+
+    def status(self, circuits=True):
+        return {"circuits": [{"circuit": "platform-ns/hub-a", "vlan": 3001}] if circuits else [],
+                "networks": self.realized, "refused": []}
+
+    def walk(self, outage):
+        # A first: accepted and realized; B refused
+        a = self.job(self.A, self.status())
+        self.assertEqual(a["accepted"], [self.P])
+        st = self.fabric({self.A: a["prefixes"]})
+        self.assertEqual([w["network"] for w in st["networks"]], [self.A])
+        b = self.job(self.B, self.status())
+        self.assertEqual(b["prefixes"][0]["reason"], "ServicePrefixInUse")
+        # the outage, with a fabric run that planned nothing in between
+        a = self.job(self.A, *outage())
+        self.assertEqual((a["release"], a["kept"]), ([], [self.P]))
+        st = self.fabric({self.A: a["prefixes"], self.B: b["prefixes"]}, circuits=False)
+        self.assertEqual(st["networks"], [])
+        b = self.job(self.B, *outage())
+        self.assertEqual((b["prefixes"][0]["state"], b["allocate"]), ("refused", []))
+        # the platform's side returns: B's network job runs first
+        b = self.job(self.B, self.status())
+        self.assertEqual((b["prefixes"][0]["reason"], b["allocate"]), ("ServicePrefixInUse", []))
+        a = self.job(self.A, self.status())
+        self.assertEqual((a["accepted"], a["allocate"], a["release"]), ([self.P], [], []))
+        st = self.fabric({self.B: b["prefixes"], self.A: a["prefixes"]})
+        self.assertEqual([(w["network"], w["prefixes"]) for w in st["networks"]], [(self.A, [self.P])])
+        self.assertEqual(list(self.ledger), ["HybridNetwork/" + self.A + "/" + self.P])
+
+    def test_no_platform_circuit_for_a_while(self):
+        self.walk(lambda: (self.status(circuits=False),))
+
+    def test_the_service_turned_off_and_on(self):
+        self.walk(lambda: ({"circuits": [], "networks": [], "refused": []}, dict(SERVICE, enabled=False)))
+
+    def test_a_fabric_run_that_planned_nothing(self):
+        # the fabric's status lost the network (a run without circuits) while the circuits are listed again
+        a = self.job(self.A, self.status())
+        self.fabric({self.A: a["prefixes"]})
+        self.realized = []
+        b = self.job(self.B, self.status())
+        self.assertEqual((b["prefixes"][0]["reason"], b["allocate"]), ("ServicePrefixInUse", []))
+        a = self.job(self.A, self.status())
+        self.assertEqual((a["accepted"], a["release"]), ([self.P], []))
+        st = self.fabric({self.B: b["prefixes"], self.A: a["prefixes"]})
+        self.assertEqual([w["network"] for w in st["networks"]], [self.A])
 
 if __name__ == "__main__":
     unittest.main()
