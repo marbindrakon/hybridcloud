@@ -129,7 +129,7 @@ def root_vars(v6=False, families=None):
     real = copy.deepcopy(REAL)
     if v6:
         real["core"].update(loopbackPool6="2001:db8:4005:ffff::/64", icmpSource6="2001:db8:4005:1::/64")
-    egress = {"vrf": "egress", "gateway": "198.51.100.1", "platformSources": ["198.51.100.128/25"],
+    egress = {"vrf": "egress", "gateway": "198.51.100.1",
               "networks": [{"network": "entity-acme/core", "vrf": "e10000", "vpnTarget": 10000, "nat": "198.51.100.64",
                             "xeIp": "169.254.0.1", "xoIp": "169.254.0.0", "internet": True, "platform": []}]}
     vrf = {"network": "entity-acme/core", "vrf": "e10000", "vpnTarget": 10000, "rd": "65010:10000",

@@ -20,7 +20,15 @@
 #    the network's root VRF on every node, a VLAN device on their bearer and an eBGP session to the CE with the
 #    circuit's routing policy (status.realization.attachments, with what wasn't realized and why under
 #    attachmentsSkipped); the job wakes the circuits whose realization changed.
-# 6. Wakes from other jobs that came during the run waited for it (the controller does not let them supersede a job
+# 6. The service VRF (realization service.enabled): the AttachmentCircuits of ceKind platform hand it off to the hub's
+#    network; each HybridNetwork with cluster prefixes (status.platformAccess.prefixes, written by the network job)
+#    gets a service link on every node with a platform circuit and its accepted prefixes routed there, first come
+#    first served by the ledger (kind servicePrefix) (status.realization.service); the job wakes the networks whose
+#    realized or refused prefixes changed and the platform circuits whose realization changed.
+# 7. The ranges tenants may not use (status.reservedRanges: the realization's infrastructure, core and pool ranges,
+#    and each site's own); when they or the ranges a cluster may take (service.attachableRanges) change, the Entities
+#    are woken to copy them into the tenants' profiles.
+# 8. Wakes from other jobs that came during the run waited for it (the controller does not let them supersede a job
 #    in flight): the job has the controller publish them once it has written its status (deferred_wakes.yml).
 - block:
     - name: Read the HybridFabric
@@ -110,6 +118,9 @@
             # attachment circuits (empty when attachments are off; refused while circuits hold values)
             attachVlan: "{{ hf_pools.attachVlanPool }}"
             attachLink: [0, "{{ (hf_pools.attachLinks | int) - 1 }}"]
+            # the service VRF's prefixes (owner HybridNetwork/<ns>/<name>/<prefix>; the value orders them: first come
+            # first served), recorded by the network job when it accepts a cluster's prefix
+            servicePrefix: [1, 1048575]
           # (dict keys are not templated: build the owner key in an expression)
           reserve: "{{ {'peIndex': {'HybridFabric/' ~ fab_namespace ~ '/' ~ fab_name: 1}} }}"
 
@@ -185,15 +196,12 @@
       register: _hf_edge_gateways
       when: (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool
 
-    # platform reach (P8 §13): annotation shc.signal9.gg/platform-reach on a HybridNetwork (a JSON list of the
-    # network's prefixes the platform's own sources must reach, e.g. a private cluster's API) is written by the
-    # platform's automation, never by tenants.
     # ipv4: the network has IPv4 address space (the IPv4 egress, source NAT, needs it). ipv6 (with egress.ipv6
     # enabled): the network wants internet egress and holds a platform block (status.ipv6 mode Platform): its block
     # and the IPv6 prefixes of its placements (status.subnets), the ones that are not being deleted and that come
     # from the network's space (a provider-assigned prefix is never announced upstream nor part of the network's block)
     # and the edge routers' ICMPv6 sources of the gateways those placements use (status.cloudGateway)
-    - name: Set the networks with internet egress or platform reach
+    - name: Set the networks with internet egress
       vars:
         _alloc: "{{ fab_ledger_result.ledger.alloc | default({}) }}"
         _v6on: "{{ (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool }}"
@@ -212,8 +220,6 @@
             {%- set owner = 'HybridNetwork/' ~ n.metadata.namespace ~ '/' ~ n.metadata.name -%}
             {%- set st = n.status | default({}, true) -%}
             {%- set internet = ((n.spec | default({})).egress | default({})).internet | default(false) | bool -%}
-            {%- set platform = ((n.metadata.annotations | default({}, true))['shc.signal9.gg/platform-reach']
-                                | default('[]', true) | from_json) -%}
             {%- set has4 = ((((n.spec | default({})).prefixes | default([], true)) | reject('search', ':') | list | length > 0)
                             or ((st.addressSpace | default([], true)) | selectattr('family', 'defined')
                                 | selectattr('family', 'equalto', 4) | list | length > 0)) -%}
@@ -221,7 +227,7 @@
             {%- set v6 = _v6on | bool and internet and (st.ipv6 | default({}, true)).mode | default('') == 'Platform'
                          and block | length > 0 -%}
             {%- if st.fabric | default('') == fab_name
-                  and (internet or platform | length > 0)
+                  and internet
                   and n.metadata.deletionTimestamp is not defined
                   and owner in (_alloc.egress | default({})) and owner in (_alloc.vpnTarget | default({})) -%}
               {%- set p6 = [] -%}
@@ -241,7 +247,7 @@
               {%- endif -%}
               {%- set _ = out.append({'network': n.metadata.namespace ~ '/' ~ n.metadata.name,
                                       'vpnTarget': _alloc.vpnTarget[owner] | int, 'index': _alloc.egress[owner] | int,
-                                      'internet': internet, 'ipv4': has4, 'platform': platform}
+                                      'internet': internet, 'ipv4': has4}
                                      | combine({'ipv6': {'block': block, 'prefixes': p6 | unique | list}
                                                         | combine({'edgeSources6': e6 | unique | sort | list}
                                                                   if e6 | length > 0 else {})} if v6 else {})) -%}
@@ -266,6 +272,8 @@
           domainAsn: "{{ fab_spec.domainAsn }}"
           core: "{{ fab_real.core | default({}) }}"
           translation: "{{ fab_real.translation | default({}, true) }}"
+          # with the service VRF the egress links take the link pool's lower half
+          service: "{{ (fab_real.service | default({}, true)).enabled | default(false) | bool }}"
 
     - name: Refuse an unusable egress plan
       ansible.builtin.set_fact:
@@ -281,6 +289,15 @@
     - name: Keep the egress plan
       ansible.builtin.set_fact:
         hf_egress: "{{ fab_check_result }}"
+
+    # the networks the platform's management connects from (realization infrastructure.hub, validated by check-fabric),
+    # by family
+    - name: The hub's ranges
+      ansible.builtin.set_fact:
+        hf_hub4: >-
+          {{ (fab_real.infrastructure | default({}, true)).hub | default([], true) | reject('search', ':') | list }}
+        hf_hub6: >-
+          {{ (fab_real.infrastructure | default({}, true)).hub | default([], true) | select('search', ':') | list }}
 
     # attachment circuits: the circuits, their networks (address space: deny list) and placements (advertise list)
     - name: List the attachment circuits and the placements
@@ -334,27 +351,124 @@
           ledger: "{{ hf_alloc }}"
           egress: "{{ hf_egress.networks }}"
           egressNodes: "{{ hf_egress.nodes }}"
-          # the platform's ranges a CE's routes never reach into (as the circuit job checks the accept list)
+          # the platform's ranges a CE's routes never reach into (as the circuit job checks the accept list), with the
+          # IPv4 ranges of the networks the platform's management connects from (infrastructure.hub); a circuit's
+          # traffic never reaches those (platformSources), and its IPv6 routes never reach into the IPv6 ones (hub6)
           reserved: >-
             {{ ([fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
                  fab_real.egress.linkPool | default('169.254.0.0/16')]
-                + (fab_real.egress.platformSources | default([], true))) if fab_real.attachments.enabled | default(false) | bool
+                + hf_hub4) if fab_real.attachments.enabled | default(false) | bool
                else [] }}
-          platformSources: "{{ fab_real.egress.platformSources | default([], true) }}"
+          platformSources: "{{ hf_hub4 }}"
+          hub6: "{{ hf_hub6 }}"
+          # circuits of ceKind platform: the service VRF's hand-off, in the fabric's namespace only
+          service: "{{ fab_real.service | default({}, true) }}"
+          fabricNamespace: "{{ fab_namespace }}"
           # circuits with IPv6: the helper derives the platform's IPv6 ranges (attachments.linkPool6 and reserved6,
           # the core's IPv6 loopbacks and ICMPv6 sources, the translation prefixes); egress[].ipv6 says which
           # networks have IPv6 internet egress
           core: "{{ fab_real.core | default({}, true) }}"
           translation: "{{ fab_real.translation | default({}, true) }}"
 
+    - name: Keep the circuits' plan
+      ansible.builtin.set_fact:
+        hf_attach_plan: "{{ fab_check_result }}"
+
+    # the service VRF: the networks' cluster prefixes (status.platformAccess) on every node with a platform circuit,
+    # the root VRFs of the networks gaining their service links
+    - name: Plan the service VRF on the nodes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: service-plan
+          realization: "{{ fab_real }}"
+          nodes: "{{ fab_spec.borderGateway.nodes | map(attribute='name') | list }}"
+          fabric: "{{ fab_name }}"
+          domainAsn: "{{ fab_spec.domainAsn }}"
+          networks: "{{ _hf_networks.resources | default([]) }}"
+          ledger: "{{ hf_alloc }}"
+          circuits: "{{ hf_attach_plan.platform | default([]) }}"
+          vrfs: "{{ hf_attach_plan.vrfs | default({}) }}"
+          previous: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
+
+    - name: Refuse an unusable service plan
+      ansible.builtin.set_fact:
+        fab_fail_reason: InvalidSpec
+        fab_fail_msg: "HybridFabric {{ fab_name }}: service: {{ fab_check_result.errors | join('; ') }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Stop on an unusable service plan
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_check_result.errors | length > 0
+
+    - name: Keep the service plan
+      ansible.builtin.set_fact:
+        hf_service: "{{ fab_check_result }}"
+        hf_service_before: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
+
+    # the ranges tenants may not use: the realization's and each site's own (its gateway's underlay and the
+    # realization's placement.siteReserved of the site's kind), for status.reservedRanges (the Entity job copies them)
+    - name: List the gateways and sites for the ranges tenants may not use
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+        namespace: "{{ fab_namespace }}"
+      loop: [CloudGateway, CloudInfrastructure]
+      register: _hf_sites
+
+    - name: The ranges tenants may not use
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        _types: >-
+          {%- set out = {} -%}
+          {%- for c in _hf_sites.results[1].resources | default([]) -%}
+            {%- set _ = out.update({c.metadata.name: (c.spec | default({})).type | default('')}) -%}
+          {%- endfor -%}
+          {{ out }}
+        fab_check:
+          action: reserved-ranges
+          realization: "{{ fab_real }}"
+          sites: >-
+            {%- set out = [] -%}
+            {%- for g in _hf_sites.results[0].resources | default([])
+                  if (g.spec.fabricRef | default({})).name | default('') == fab_name
+                     and g.metadata.deletionTimestamp is not defined -%}
+              {%- set site = (g.spec.cloudRef | default({})).name | default('') -%}
+              {%- set cidr = (g.spec.siteUnderlay | default({})).cidr | default('', true) -%}
+              {%- set _ = out.append({'name': site, 'kind': _types.get(site, ''),
+                                      'ranges': [cidr] if cidr | length > 0 else []}) -%}
+            {%- endfor -%}
+            {{ out | sort(attribute='name') }}
+
+    # what tenants see of these (the ranges and the ranges a managed cluster's prefixes must lie in) joins the offer
+    # the Entities were told (status.realization.ipam.tenantOffer), so a change wakes them
+    - name: Keep the ranges tenants may not use
+      ansible.builtin.set_fact:
+        hf_reserved: "{{ fab_check_result.ranges }}"
+        hf_tenant_offer: >-
+          {{ hf_tenant_offer ~ '; ranges ' ~ ({'reservedRanges': fab_check_result.ranges,
+                                               'managedClusterRanges': hf_service.status.attachableRanges}
+                                              | to_json | hash('sha1'))[:12] }}
+
     # the address families of each root VRF (its FRR VRF's unicast families): IPv4, and IPv6 for a network with IPv6
-    # egress (its default route into the VPN) or a circuit with IPv6. A node's circuit with IPv6 also learns whether
-    # its IPv6 traffic may leave through the network's egress (egress6: the CE is given the IPv6 default route)
+    # egress (its default route into the VPN) or a circuit with IPv6 (a service link is IPv4 only). A node's circuit
+    # with IPv6 also learns whether its IPv6 traffic may leave through the network's egress (egress6: the CE is given
+    # the IPv6 default route)
     - name: Keep the attachment plan
+      vars:
+        # (a step run on its own, as the tests do, has the circuits' plan in fab_check_result and no service plan)
+        _plan: >-
+          {{ (hf_attach_plan | default(fab_check_result))
+             | combine({'vrfs': (hf_service | default({})).vrfs
+                                | default((hf_attach_plan | default(fab_check_result)).vrfs | default({}))}) }}
       ansible.builtin.set_fact:
         hf_attach: >-
           {%- set vrfs = {} -%}
-          {%- for node, vs in (fab_check_result.vrfs | default({})).items() -%}
+          {%- for node, vs in (_plan.vrfs | default({})).items() -%}
             {%- set lst = [] -%}
             {%- for v in vs -%}
               {%- set v6 = v.ipv6 is defined or (v.circuits | default([]) | selectattr('ipv6', 'defined') | list | length > 0) -%}
@@ -363,18 +477,18 @@
             {%- set _ = vrfs.update({node: lst}) -%}
           {%- endfor -%}
           {%- set open6 = {} -%}
-          {%- for c in fab_check_result.circuits | default([]) if c.ipv6 is defined -%}
+          {%- for c in _plan.circuits | default([]) if c.ipv6 is defined -%}
             {%- set _ = open6.update({c.circuit: c.ipv6.advertiseDefault | default(false) | bool}) -%}
           {%- endfor -%}
           {%- set nodes = {} -%}
-          {%- for node, n in (fab_check_result.nodes | default({})).items() -%}
+          {%- for node, n in (_plan.nodes | default({})).items() -%}
             {%- set lst = [] -%}
             {%- for c in n.circuits | default([]) -%}
               {%- set _ = lst.append(c | combine({'egress6': open6.get(c.circuit, false)}) if c.address6 | default('') else c) -%}
             {%- endfor -%}
             {%- set _ = nodes.update({node: n | combine({'circuits': lst})}) -%}
           {%- endfor -%}
-          {{ fab_check_result | combine({'vrfs': vrfs, 'nodes': nodes}) }}
+          {{ _plan | combine({'vrfs': vrfs, 'nodes': nodes}) }}
         hf_attach_restart: "{{ fab_real.attachments.maxPrefixRestart | default(2) }}"
         hf_attach_before: >-
           {{ ((fab_st.realization | default({}, true)).attachments | default([], true)) }}
@@ -442,7 +556,7 @@
           {%- set out = [] -%}
           {%- for k, v in hf_egress.networks | dictsort -%}
             {%- set _ = out.append({'network': k, 'vpnTarget': v.vpnTarget, 'sourceAddresses': v.sourceAddresses,
-                                    'internet': v.internet | default(true), 'platform': v.platform | default([]),
+                                    'internet': v.internet | default(true),
                                     'ipv6': v.ipv6 | default(false), 'prefixes6': v.prefixes6 | default([]),
                                     'primary': v.primary | default('')}) -%}
           {%- endfor -%}
@@ -579,6 +693,10 @@
           ('; ' ~ hf_attach.status | length ~ ' attachment circuit(s)' ~ ((', not realized: ' ~ hf_attach.skipped
              | map(attribute='circuit') | join(', ')) if hf_attach.skipped else ''))
           if fab_real.attachments.enabled | default(false) | bool else '' }}{{
+          ('; service VRF with ' ~ hf_service.status.circuits | length ~ ' platform circuit(s) for '
+           ~ hf_service.status.networks | length ~ ' network(s)'
+           ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else ''))
+          if (hf_service | default({})).enabled | default(false) else '' }}{{
           ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}{{
           '; SRv6 core' if (fab_real.core | default({}, true)).transport | default('mpls', true) == 'srv6' else '' }}
         # the IPv6 egress condition (only with IPv6 egress): True while every node has an upstream session and the
@@ -604,6 +722,7 @@
               'allocated': hf_ledger.allocated,
               'available': hf_ledger.available,
               'nodes': hf_node_results,
+              'reservedRanges': hf_reserved | default(none),
               'realization': {'model': fab_real.model, 'routeReflector': hf_pe.loopbackIp, 'nodeSid': hf_pe.sid,
                               'routeReflector6': hf_pe.loopbackIp6 | default(''),
                               'ipv6Core': hf_pe.loopbackIp6 | default('') | length > 0,
@@ -611,6 +730,7 @@
                               'egress': {'enabled': fab_real.egress.enabled | default(false) | bool,
                                          'networks': hf_egress_status, 'ipv6': hf_egress6_status},
                               'attachments': hf_attach.status, 'attachmentsSkipped': hf_attach.skipped,
+                              'service': (hf_service | default({})).status | default(none),
                               'ipam': hf_ipam,
                               'coreTransport': (fab_real.core | default({}, true)).transport | default('mpls', true),
                               'translation': none}
@@ -635,6 +755,31 @@
           {%- for k in ((hf_egress.networks.keys() | list) | symmetric_difference(hf_egress_before))
                         | union(_now6 | symmetric_difference(hf_egress6_before))
                         | union(_now6 if _degraded_flip | bool else []) -%}
+            {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # a network whose realized or refused service prefixes changed (or whose service came or went with the service
+    # VRF) waits for it: wake it (the network job reads realization.service.networks and .refused back)
+    - name: Wake the networks whose service prefixes changed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+      vars:
+        _now: "{{ hf_service.status.networks + hf_service.status.refused }}"
+        _was: "{{ (hf_service_before.networks | default([], true)) + (hf_service_before.refused | default([], true)) }}"
+        _flip: "{{ (hf_service.status.enabled | bool) != (hf_service_before.enabled | default(false) | bool)
+                   or (hf_service.status.circuits | length > 0) != (hf_service_before.circuits | default([], true) | length > 0) }}"
+        nudge_crs: >-
+          {%- set keys = [] -%}
+          {%- for e in _now if e not in _was -%}{%- set _ = keys.append(e.network) -%}{%- endfor -%}
+          {%- for e in _was if e not in _now -%}{%- set _ = keys.append(e.network) -%}{%- endfor -%}
+          {%- if _flip | bool -%}
+            {%- for n in _hf_networks.resources | default([])
+                  if (n.status | default({}, true)).fabric | default('') == fab_name -%}
+              {%- set _ = keys.append(n.metadata.namespace ~ '/' ~ n.metadata.name) -%}
+            {%- endfor -%}
+          {%- endif -%}
+          {%- set out = [] -%}
+          {%- for k in keys | unique -%}
             {%- set _ = out.append({'kind': 'HybridNetwork', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}
           {%- endfor -%}
           {{ out }}
@@ -670,7 +815,7 @@
       when: hf_ipam_changed | bool
 
     # a circuit added, changed (its realization or its policy) or removed: the circuit job reads the sessions, or
-    # continues the circuit's deletion
+    # continues the circuit's deletion (a platform circuit: its entry under realization.service.circuits)
     - name: Wake the circuits whose realization changed
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
       vars:
@@ -678,6 +823,10 @@
           {%- set keys = [] -%}
           {%- for e in hf_attach.status if e not in hf_attach_before -%}{%- set _ = keys.append(e.circuit) -%}{%- endfor -%}
           {%- for e in hf_attach_before if e not in hf_attach.status -%}{%- set _ = keys.append(e.circuit) -%}{%- endfor -%}
+          {%- set svc_was = (hf_service_before | default({})).circuits | default([], true) -%}
+          {%- set svc_now = ((hf_service | default({})).status | default({})).circuits | default([]) -%}
+          {%- for e in svc_now if e not in svc_was -%}{%- set _ = keys.append(e.circuit) -%}{%- endfor -%}
+          {%- for e in svc_was if e not in svc_now -%}{%- set _ = keys.append(e.circuit) -%}{%- endfor -%}
           {%- set out = [] -%}
           {%- for k in keys | unique -%}
             {%- set _ = out.append({'kind': 'AttachmentCircuit', 'namespace': k.split('/')[0], 'name': k.split('/')[1]}) -%}

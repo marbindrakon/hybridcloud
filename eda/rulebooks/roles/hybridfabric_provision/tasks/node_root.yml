@@ -2,7 +2,8 @@
 # shc (design/P7-PLAN.md P7.3.4): the border gateway root instance on one node (delegated over SSH, become).
 # Input: bgw_node {name, address}, hf_root (instance config), hf_pe (provider-edge addresses), fab_spec, hf_egress,
 # hf_attach (attachments-plan; a node's circuit with IPv6 carries address6, link6, sources6 and egress6 into the apply
-# JSON as they are), hf_circuit_passwords.
+# JSON as they are), hf_service (service-plan: the node's service VRF, absent on a node without a platform circuit),
+# hf_circuit_passwords.
 # Appends {name, ready, message, lastAppliedAt} to hf_node_results and the node's name to hf_changed_nodes when
 # anything on it changed.
 # Runs under the lease fabric-config-<fabric>, renewed here before the node and before and after the wait for BGP and
@@ -22,6 +23,7 @@
     hf_node_egress: "{{ (hf_egress.nodes | default({})).get(bgw_node.name, {}) }}"
     hf_node_attach: "{{ (hf_attach.nodes | default({})).get(bgw_node.name, {}) }}"
     hf_node_vrfs: "{{ (hf_attach.vrfs | default({})).get(bgw_node.name, []) }}"
+    hf_node_service: "{{ ((hf_service | default({})).nodes | default({})).get(bgw_node.name, {}) }}"
 
 # a circuit's IPv6 routes reach the sites only as IPv6 VPN routes, which need the dual-stack core (the IPv6 loopback
 # is their next hop); the planner offers IPv6 on circuits only with it, so this is a guard, not a policy
@@ -139,6 +141,7 @@
                                         if hf_node_egress.ipv6 is defined else hf_node_egress)}
                             if hf_node_egress | length > 0 else {})
          | combine({'attachments': hf_node_attach} if hf_node_attach | length > 0 else {})
+         | combine({'service': hf_node_service | default({})} if hf_node_service | default({}) | length > 0 else {})
          | combine({'loopback6': hf_pe.loopback6 | default(''), 'icmp6': _hf_icmp6,
                     'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
                     'icmpSource6': fab_real.core.icmpSource6 | default('', true)})
@@ -153,13 +156,16 @@
 # bgpd drops a neighbor's BFD session (bfdd) only while the neighbor's VRF still exists in the kernel. When the apply
 # deletes a root VRF first, the reload then removes its BGP instance but the session stays in bfdd for good (FRR 8.5.3,
 # seen after circuit teardowns). So the BGP instances of root VRFs that go away are removed here, before the apply
-# (or a start of the root unit) deletes their kernel VRFs; the reload then has nothing left to remove for them
+# (or a start of the root unit) deletes their kernel VRFs; the reload then has nothing left to remove for them. The same
+# for the service VRF (the realization's name) on a node that no longer has it
 - name: "{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)"
+  vars:
+    _svc_name: "{{ ((fab_real.service | default({}, true)).vrf | default({}, true)).name | default('', true) }}"
   ansible.builtin.shell: |
     set -o pipefail
     systemctl -q is-active frr || exit 0
-    want=" {{ hf_node_vrfs | map(attribute='vrf') | join(' ') }} "
-    for v in $(vtysh -c 'show bgp vrfs json' | jq -r '.vrfs // {} | keys[]' | grep -E '^e[0-9]+$' || true); do
+    want=" {{ (hf_node_vrfs | map(attribute='vrf') | list + ([hf_node_service.vrf] if hf_node_service | default({}) | length > 0 else [])) | join(' ') }} "
+    for v in $(vtysh -c 'show bgp vrfs json' | jq -r '.vrfs // {} | keys[]' | grep -E '^e[0-9]+${{ ('|^' ~ _svc_name ~ '$') if _svc_name | length > 0 else '' }}' || true); do
       case "$want" in *" $v "*) continue ;; esac
       vtysh -c 'configure terminal' -c "no router bgp {{ fab_spec.domainAsn }} vrf $v" && echo "removed $v"
     done
@@ -534,9 +540,6 @@
       ip route show vrf {{ n.vrf }} | grep -Eq '^default (nhid [0-9]+ )?via {{ n.xoIp }} dev {{ n.xe }} '
       vtysh -c 'show bgp vrf {{ n.vrf }} ipv4 unicast 0.0.0.0/0' | grep -q 'Local'
       {% endif %}
-      {% for c in n.platform | default([]) %}
-      ip route show vrf {{ hf_node_egress.vrf }} | grep -Eq '^{{ c }} (nhid [0-9]+ )?via {{ n.xeIp }} '
-      {% endfor %}
       {% endfor %}
       {% if hf_node_egress.ipv6 is defined %}
       # IPv6 egress: the hand-off address is on egress0 and past duplicate address detection, egress0's IPv6 MTU is the
@@ -619,6 +622,21 @@
       {% endif %}
       {% endfor %}
       {% endfor %}
+      {% if hf_node_service | default({}) | length > 0 %}
+      # the service VRF: its device, its filter table, each platform circuit's device in it with the node's address and
+      # its CE configured as a peer, each network's service link (se in the network's VRF, so in the service VRF)
+      [ "$(ip -j -d link show dev {{ hf_node_service.vrf }} | jq -r '.[0].linkinfo.info_data.table')" = {{ hf_node_service.table }} ]
+      nft list table ip shc_service >/dev/null
+      {% for c in hf_node_service.circuits %}
+      [ "$(ip -j link show dev {{ c.device }} | jq -r '.[0].master')" = {{ hf_node_service.vrf }} ]
+      ip -br -4 addr show dev {{ c.device }} | grep -q ' {{ c.address }}'
+      vtysh -c 'show bgp vrf {{ hf_node_service.vrf }} neighbors {{ c.ce }} json' | grep -q '"remoteAs":{{ c.peerAsn }}'
+      {% endfor %}
+      {% for w in hf_node_service.networks %}
+      [ "$(ip -j link show dev {{ w.se }} | jq -r '.[0].master')" = {{ w.vrf }} ]
+      [ "$(ip -j link show dev {{ w.so }} | jq -r '.[0].master')" = {{ hf_node_service.vrf }} ]
+      {% endfor %}
+      {% endif %}
       {% if fab_node_transport | default('mpls') == 'srv6' %}
       # SRv6 core: the root's kernel settings for SRv6 (strict mode, no routing header accepted on all, default and the core
       # bridge, the rule to the SID block, the IPv4 local rule after the l3mdev rule of the VRFs, the guard with its drop rule),
@@ -1197,6 +1215,9 @@
                          if hf_node_attach.circuits | default([]) | length > 0 else '')
                       ~ ((' (' ~ (hf_node_attach.circuits | selectattr('address6', 'defined') | list | length) ~ ' with IPv6)')
                          if hf_node_attach.circuits | default([]) | selectattr('address6', 'defined') | list | length > 0 else '')
+                      ~ ((', service VRF ' ~ hf_node_service.vrf ~ ' (' ~ hf_node_service.circuits | length
+                          ~ ' platform circuit(s), ' ~ hf_node_service.networks | length ~ ' network(s))')
+                         if hf_node_service | default({}) | length > 0 else '')
                       ~ ((', not ready on the SRv6 core: ' ~ _pending | join(', ')) if _pending | length > 0 else ''),
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
            | combine({'egressIpv6': _eg6} if hf_node_egress.ipv6 is defined else {})
