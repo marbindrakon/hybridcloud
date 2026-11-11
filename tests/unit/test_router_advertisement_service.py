@@ -924,6 +924,32 @@ class HttpTest(Base):
         self.assertEqual(resp.status, 400)
         conn.close()
 
+    def test_a_body_that_is_not_read_closes_the_connection(self):
+        # Review R2 L2: the leftover bytes of a POST (or a GET with a body) are never parsed as the next request
+        smuggled = b"GET /v1/router-ports/%s HTTP/1.1\r\nHost: x\r\nX-Auth-Token: %s\r\n\r\n" % (PORT.encode(), TOKEN.encode())
+        for method in (b"POST", b"GET", b"DELETE"):
+            with self.subTest(method=method):
+                s = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+                s.sendall(method + b" /v1/router-ports/" + PORT.encode() + b" HTTP/1.1\r\nHost: x\r\nContent-Length: "
+                          + str(len(smuggled)).encode() + b"\r\n\r\n" + smuggled)
+                data = b""
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                s.close()
+                self.assertEqual(data.count(b"HTTP/1.1 "), 1, data)   # one answer, then the connection closed
+                self.assertIn(b"Connection: close", data)
+        # chunked bodies are refused for PUT and close the connection
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+        s.sendall(b"PUT /v1/router-ports/" + PORT.encode() + b"/nat HTTP/1.1\r\nHost: x\r\nX-Auth-Token: " + TOKEN.encode()
+                  + b"\r\nTransfer-Encoding: chunked\r\n\r\n11\r\n{\"enabled\": true}\r\n0\r\n\r\n")
+        data = s.recv(65536)
+        s.close()
+        self.assertIn(b"400", data.split(b"\r\n")[0])
+        self.assertNotIn("hybrid-fabric-nat", self.db.options("lrp-" + PORT))
+
     def test_concurrent_http_requests(self):
         results = []
 

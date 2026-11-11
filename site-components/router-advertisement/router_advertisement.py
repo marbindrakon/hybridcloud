@@ -759,6 +759,14 @@ def make_handler(service, request_timeout=15.0):
         def _serve(self, method):
             started = time.monotonic()
             body = None
+            # a body is read only for PUT; a request that carries one otherwise (or a chunked one) gets its answer and
+            # the connection closes, so the unread bytes are never parsed as the next request on the connection
+            length = (self.headers.get("Content-Length") or "").strip()
+            unread = bool(self.headers.get("Transfer-Encoding")) or (length not in ("", "0") and method != "PUT")
+            if method == "PUT" and self.headers.get("Transfer-Encoding"):
+                self._reply(400, {"error": "BadRequest", "message": "The body needs a Content-Length, not a "
+                                  "Transfer-Encoding."}, started, method, close=True)
+                return
             if method == "PUT":
                 length = self.headers.get("Content-Length")
                 if length is None or not length.isdigit() or int(length) > MAX_BODY:
@@ -768,7 +776,7 @@ def make_handler(service, request_timeout=15.0):
                     return
                 body = self.rfile.read(int(length))
             status, payload = service.handle(method, self.path, self.headers, body)
-            self._reply(status, payload, started, method)
+            self._reply(status, payload, started, method, close=unread)
 
         def _reply(self, status, payload, started, method, close=False):
             data = json.dumps(payload, sort_keys=True).encode("utf-8")
