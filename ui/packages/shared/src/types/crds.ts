@@ -278,6 +278,8 @@ export interface PlatformOpenshiftStatus extends OperatorStatus {
   serviceNetwork?: string;
   /** What the platform must reach for this cluster */
   platformPrefixes?: string[];
+  /** The install was started (an installed cluster keeps its floating IPs and prefixes on a refusal) */
+  installStarted?: boolean;
   floatingIPs?: { network?: string; api?: ClusterFloatingIP; ingress?: ClusterFloatingIP };
   apiURL?: string;
   consoleURL?: string;

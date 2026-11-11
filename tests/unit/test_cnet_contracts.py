@@ -692,6 +692,51 @@ class ServiceSessionsAndTheTemplate(unittest.TestCase):
                         self.assertNotIn(word, body, f"{role}/{f}")
 
 
+class ClusterJobNamesAreKnown(unittest.TestCase):
+    """cnet-fix's new names reach every reader: each reason the cluster preflight helper and the name check return is
+    registered; the hub label is spelled the same by the claim, the preflight's owner check and the teardown; the
+    site template's ROUTE_ALLOWED_SOURCES is required and documented."""
+
+    def test_preflight_reasons_registered(self):
+        import re
+        sys.path.insert(0, os.path.join(ROOT, "eda", "rulebooks", "collections", "ansible_collections", "hybridsovereign",
+                                        "shc", "plugins", "module_utils"))
+        import shc_status_reasons as R
+        texts = []
+        for rel in (("files", "po_preflight.py"), ("tasks", "preflight_network_name.yml")):
+            with open(os.path.join(ROLES, "platformopenshift_provision", *rel)) as fh:
+                texts.append(fh.read())
+        found = set()
+        for t in texts:
+            found |= set(re.findall(r'result\(\s*"([A-Z][A-Za-z]+)"', t))
+            found |= set(re.findall(r"ps_reason:\s*([A-Z][A-Za-z]+)", t))
+        found |= {v for v in P.PLATFORM_REASONS.values()} | P.WAITING
+        self.assertIn("NetworkNameNotUnique", texts[1])
+        missing = sorted(r for r in found if R.lookup(r) is None)
+        self.assertEqual(missing, [])
+        self.assertIsNotNone(R.lookup("NetworkNameNotUnique"))
+
+    def test_hub_label_spelled_once(self):
+        label = "hybridsovereign.redhat/platformopenshift-uid"
+        for rel in (("platformopenshift_provision", "tasks", "claim_build.yml"),
+                    ("platformopenshift_provision", "files", "po_preflight.py"),
+                    ("platformopenshift_teardown", "tasks", "hub_ownership.yml")):
+            with open(os.path.join(ROLES, *rel)) as fh:
+                self.assertIn(label, fh.read(), "/".join(rel))
+        with open(os.path.join(ROOT, "docs", "platform", "platform-access.md")) as fh:
+            self.assertIn(label, fh.read())
+
+    def test_route_allowed_sources(self):
+        base = os.path.join(ROOT, "site-components", "router-advertisement", "deploy", "rhoso")
+        with open(os.path.join(base, "router-advertisement.yaml")) as fh:
+            doc = yaml.safe_load(fh)
+        params = {p["name"]: p for p in doc.get("parameters") or []}
+        self.assertTrue(params["ROUTE_ALLOWED_SOURCES"].get("required"))
+        for rel in (os.path.join(base, "README.md"), os.path.join(ROOT, "docs", "platform", "router-advertisement-service.md")):
+            with open(rel) as fh:
+                self.assertIn("ROUTE_ALLOWED_SOURCES", fh.read(), rel)
+
+
 # ---- the UI's reads and the CRD bases -----------------------------------------------------------------------------
 BASES = os.path.join(ROOT, "operator", "config", "crd", "bases")
 
@@ -759,6 +804,7 @@ class UiReadsAreDeclared(unittest.TestCase):
                               ("status.publish", "string"), ("status.machineNetwork", "string"),
                               ("status.clusterNetwork", "string"), ("status.serviceNetwork", "string"),
                               ("status.platformPrefixes.[]", "string"), ("status.floatingIPs.network", "string"),
+                              ("status.installStarted", "boolean"),
                               ("status.floatingIPs.api.address", "string"), ("status.floatingIPs.ingress.id", "string")],
         "CloudAWS": [("status.awsRegion", "string")],
         "CloudGCP": [("status.region", "string")],
@@ -782,7 +828,7 @@ class UiReadsAreDeclared(unittest.TestCase):
         block = text[text.index("PlatformOpenshift: ["):]
         block = block[:block.index("],\n};")]
         for key in ("buildName", "network", "externalNetwork", "placement", "publish", "machineNetwork",
-                    "clusterNetwork", "serviceNetwork", "platformPrefixes", "floatingIPs"):
+                    "clusterNetwork", "serviceNetwork", "platformPrefixes", "floatingIPs", "installStarted"):
             self.assertIn(f"'{key}'", block)
 
 

@@ -112,6 +112,14 @@ addresses and session per border gateway node, `advertisedRanges` (the prefix li
 each `service.attachableRanges` entry up to /32) and `acceptedRanges` (the IPv4
 `infrastructure.hub` ranges up to /32). `status.sessions` shows each node's session.
 
+## Cluster builds on the hub
+
+Every OpenShift cluster the platform builds has a build name (`status.buildName`, unique per tenant and cluster) and
+a namespace of that name on the hub, which its first run claims with the label
+`hybridsovereign.redhat/platformopenshift-uid` (the uid of the PlatformOpenshift). A cluster whose build name is held
+by a namespace another object claimed is refused (`NamespaceTaken`), and a teardown deletes only the hub objects of
+the build its own cluster claimed. Do not remove or copy that label by hand.
+
 ## What the hub's network must do
 
 The hub's network must route the tenant cluster addresses through the platform's edge connections. On the

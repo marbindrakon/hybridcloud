@@ -42,7 +42,7 @@ export const TENANT_STATUS_ALLOW = {
     'consoleURL', 'clusterVersion', 'powerState', 'clusterHealth', 'provisionStatus', 'acmAvailable',
     'clusterInstalled', 'buildName', 'awsAccountId', 'awsRegion', 'gcpProject', 'gcpRegion', 'gcpVpc',
     'serviceAccountIssuer', 'network', 'placement', 'publish', 'machineNetwork', 'oidcClientId',
-    'externalNetwork', 'clusterNetwork', 'serviceNetwork', 'platformPrefixes',
+    'externalNetwork', 'clusterNetwork', 'serviceNetwork', 'platformPrefixes', 'installStarted',
     ['floatingIPs', ['network', 'api', 'ingress']],
     ['dns', ['provider', 'projectId', 'records']],
     ['site', ['name', 'console']],

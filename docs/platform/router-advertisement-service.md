@@ -110,7 +110,9 @@ The service has no image of its own: it runs in the site's own Neutron server im
 - OpenStack on OpenShift: [deploy/rhoso](../../site-components/router-advertisement/deploy/rhoso/README.md) (an
   OpenShift template: ServiceAccount without API access, the OVN client certificate from the namespace's OVN CA,
   Service, Route, Deployment; optionally a second template for the Route's certificate from the issuer of the
-  site's public endpoints, so that the CA bundle of the platform's site credential verifies it).
+  site's public endpoints, so that the CA bundle of the platform's site credential verifies it). The template's
+  parameter `ROUTE_ALLOWED_SOURCES` is required: the address ranges the platform's jobs call the service from
+  (space-separated CIDRs); the Route admits no other source.
 - Control planes that run services as containers on hosts:
   [deploy/container](../../site-components/router-advertisement/deploy/container/README.md).
 
