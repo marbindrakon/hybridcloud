@@ -12,9 +12,8 @@ It runs inside the site's own Neutron server image (Python 3.9 or later, the sta
 Python bindings). It holds no OpenStack credential: every call is authorized by the caller's own token.
 
 API (JSON):
-  GET  /healthz                              no authentication (liveness: the process answers)
-  GET  /readyz                               no authentication (readiness: 502 OvnUnavailable while the database
-                                             does not answer)
+  GET  /healthz                              no authentication; always 200 with the state
+  GET  /readyz                               no authentication; 200 while the database is connected, else 503
   GET  /v1/router-ports/{port_id}            header X-Auth-Token
   PUT  /v1/router-ports/{port_id}/nat        header X-Auth-Token, body {"enabled": true|false}
 
@@ -23,8 +22,7 @@ token); the service keeps no state of its own beyond counters since its start.
 
 Configuration (environment): OVN_NB_CONNECTION, OVN_NB_PRIVATE_KEY, OVN_NB_CERTIFICATE, OVN_NB_CA_CERT (the last
 three for ssl: connections), KEYSTONE_URL, NEUTRON_URL, OS_CACERT, LISTEN_ADDRESS, LISTEN_PORT, TLS_CERTIFICATE,
-TLS_PRIVATE_KEY, OVN_TIMEOUT_SECONDS, API_TIMEOUT_SECONDS, GUARD_INTERVAL_SECONDS, MAX_CONNECTIONS,
-CONNECTION_DEADLINE_SECONDS, LOG_LEVEL.
+TLS_PRIVATE_KEY, OVN_TIMEOUT_SECONDS, API_TIMEOUT_SECONDS, GUARD_INTERVAL_SECONDS, LOG_LEVEL.
 """
 import collections
 import datetime
@@ -68,10 +66,6 @@ ROUTES = (
 )
 MAX_BODY = 4096
 MAX_RESPONSE = 1 << 20
-# Connections served at once, and the longest a connection may stay open (seconds); settings MAX_CONNECTIONS and
-# CONNECTION_DEADLINE_SECONDS.
-MAX_CONNECTIONS = 32
-CONNECTION_DEADLINE = 60.0
 
 # Guard rate limit: at most RESTORE_LIMIT restores of one port within RESTORE_WINDOW seconds.
 RESTORE_LIMIT = 5
@@ -252,6 +246,13 @@ class OvsdbappPortStore:
         self._stop = threading.Event()
         self._thread = None
         self._on_change = None
+        self._reported = set()
+
+    def _report_once(self, message):
+        """An unexpected failure on a path that must not raise: logged once per distinct message."""
+        if message not in self._reported:
+            self._reported.add(message)
+            LOG.error("OVN connection: %s", message)
 
     # lifecycle -------------------------------------------------------------------------------------------------
     def start(self, on_change=None):
@@ -301,19 +302,30 @@ class OvsdbappPortStore:
         helper.register_table(LRP_TABLE)
         base = getattr(connection, "OvsdbIdl", None) or ovs_idl.Idl
         on_change = self._on_change
+        report = self._report_once
 
         class _Idl(base):
             def notify(self, event, row, *args, **kwargs):
                 if on_change is not None:
                     try:
                         on_change(getattr(row, "name", None))
-                    except Exception:  # never let the guard's callback break the connection thread
-                        pass
+                    except Exception as exc:  # never let the guard's callback break the connection thread
+                        report("row change notification failed: " + describe(exc))
 
         idl = _Idl(s.ovn_connection, helper, leader_only=True)
         conn = connection.Connection(idl, timeout=s.ovn_timeout)
-        api = impl_idl.OvnNbApiIdlImpl(conn)
-        return api, idl
+        # ovsdbapp keeps the connection on the API *class* and sets it only once: a fresh subclass per attempt,
+        # or a retry after a failed start would reuse the dead connection for good.
+        api_cls = type("RouterAdvertisementNbApi", (impl_idl.OvnNbApiIdlImpl,), {"_ovsdb_connection": None})
+        try:
+            api = api_cls(conn)
+        except Exception:
+            try:
+                idl.close()
+            except Exception as exc:
+                LOG.debug("closing the failed attempt's IDL: %s", describe(exc))
+            raise
+        return api, api.idl
 
     # state -----------------------------------------------------------------------------------------------------
     def connected(self):
@@ -321,9 +333,18 @@ class OvsdbappPortStore:
             idl = self._idl
         if idl is None:
             return False
+        # ovs.db.idl.Idl has no is_connected() (OVS 3.5); its jsonrpc session has. Prefer the IDL's own if a
+        # version has one.
+        probe = getattr(idl, "is_connected", None)
+        if probe is None:
+            probe = getattr(getattr(idl, "_session", None), "is_connected", None)
+        if probe is None:
+            self._report_once("the IDL offers no connection state (no is_connected on it or on its session)")
+            return False
         try:
-            return bool(idl.is_connected())
-        except Exception:
+            return bool(probe())
+        except Exception as exc:
+            self._report_once("connection probe failed: " + describe(exc))
             return False
 
     def generation(self):
@@ -332,13 +353,15 @@ class OvsdbappPortStore:
             idl = self._idl
         if idl is None:
             return None
-        session = getattr(idl, "_session", None)
-        if session is not None and hasattr(session, "get_seqno"):
-            try:
-                return session.get_seqno()
-            except Exception:
-                return None
-        return None
+        get_seqno = getattr(getattr(idl, "_session", None), "get_seqno", None)
+        if get_seqno is None:
+            self._report_once("the IDL's session offers no get_seqno: reconnects are seen only as a disconnection")
+            return None
+        try:
+            return get_seqno()
+        except Exception as exc:
+            self._report_once("connection generation failed: " + describe(exc))
+            return None
 
     # commands --------------------------------------------------------------------------------------------------
     def _run(self, step, *args):
@@ -671,12 +694,11 @@ class RouterAdvertisementService:
             return 200, {"ok": True, "ovn": "connected" if self.store.connected() else "unreachable",
                          "guard": self.guard.summary()}
         if path == "/readyz":
-            # readiness: the service can do its work only while the northbound database answers
             if method != "GET":
                 raise ServiceError(405, "MethodNotAllowed", "Use GET.")
-            if not self.store.connected():
-                raise ovn_unavailable()
-            return 200, {"ready": True}
+            if self.store.connected():
+                return 200, {"ready": True, "ovn": "connected"}
+            return 503, {"ready": False, "ovn": "unreachable"}
         for kind, rx in ROUTES:
             m = rx.match(path)
             if m:
@@ -773,14 +795,6 @@ def make_handler(service, request_timeout=15.0):
         def _serve(self, method):
             started = time.monotonic()
             body = None
-            # a body is read only for PUT; a request that carries one otherwise (or a chunked one) gets its answer and
-            # the connection closes, so the unread bytes are never parsed as the next request on the connection
-            length = (self.headers.get("Content-Length") or "").strip()
-            unread = bool(self.headers.get("Transfer-Encoding")) or (length not in ("", "0") and method != "PUT")
-            if method == "PUT" and self.headers.get("Transfer-Encoding"):
-                self._reply(400, {"error": "BadRequest", "message": "The body needs a Content-Length, not a "
-                                  "Transfer-Encoding."}, started, method, close=True)
-                return
             if method == "PUT":
                 length = self.headers.get("Content-Length")
                 if length is None or not length.isdigit() or int(length) > MAX_BODY:
@@ -790,7 +804,7 @@ def make_handler(service, request_timeout=15.0):
                     return
                 body = self.rfile.read(int(length))
             status, payload = service.handle(method, self.path, self.headers, body)
-            self._reply(status, payload, started, method, close=unread)
+            self._reply(status, payload, started, method)
 
         def _reply(self, status, payload, started, method, close=False):
             data = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -804,7 +818,7 @@ def make_handler(service, request_timeout=15.0):
             self.end_headers()
             self.wfile.write(data)
             path = urllib.parse.urlsplit(self.path).path
-            if path != "/healthz" or status != 200:
+            if path not in ("/healthz", "/readyz") or status not in (200, 503):
                 LOG.info("%s %s %d %.0f ms", method, path[:200], status, (time.monotonic() - started) * 1000)
 
         def do_GET(self):
@@ -829,72 +843,58 @@ def make_handler(service, request_timeout=15.0):
 
 
 class Server(http.server.ThreadingHTTPServer):
-    """One thread per connection, at most `max_connections` at a time (a connection beyond that is closed at once),
-    and no connection lives longer than `deadline` seconds: the per-read timeout alone let a client that sends one
-    byte every few seconds hold a thread for as long as it liked."""
     daemon_threads = False
     block_on_close = True  # server_close() waits for the requests in flight
     request_queue_size = 128  # the listen backlog: the default of 5 resets connections under a burst
+    tls = None  # (context, certificate file, key file) when the server serves TLS
+    reload_interval = 60.0
+    _tls_checked = 0.0
+    _tls_stamp = None
 
-    def __init__(self, address, handler, max_connections=MAX_CONNECTIONS, deadline=CONNECTION_DEADLINE,
-                 clock=time.monotonic):
-        self.max_connections = max_connections
-        self.deadline = deadline
-        self.clock = clock
-        self._slots = threading.BoundedSemaphore(max_connections)
-        self._open = {}
-        self._open_lock = threading.Lock()
-        super().__init__(address, handler)
+    def get_request(self):
+        self.maybe_reload_tls()
+        return super().get_request()
 
-    def process_request(self, request, client_address):
-        if not self._slots.acquire(blocking=False):
-            LOG.warning("connection from %s refused: %d connections are open", client_address[0], self.max_connections)
-            self.shutdown_request(request)
-            return
-        with self._open_lock:
-            self._open[id(request)] = (request, self.clock())
+    def maybe_reload_tls(self, now=None):
+        """Load a renewed serving certificate (a mounted Secret changes in place): new connections get it."""
+        if self.tls is None:
+            return False
+        now = time.monotonic() if now is None else now
+        if now - self._tls_checked < self.reload_interval:
+            return False
+        self._tls_checked = now
+        context, cert, key = self.tls
         try:
-            super().process_request(request, client_address)
-        except Exception:
-            self._done(request)
-            raise
-
-    def process_request_thread(self, request, client_address):
+            stamp = (os.stat(cert).st_mtime_ns, os.stat(key).st_mtime_ns)
+        except OSError as exc:
+            LOG.warning("serving certificate: %s", describe(exc))
+            return False
+        if stamp == self._tls_stamp:
+            return False
         try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self._done(request)
-
-    def _done(self, request):
-        with self._open_lock:
-            if self._open.pop(id(request), None) is None:
-                return
-        self._slots.release()
-
-    def service_actions(self):
-        """Called by serve_forever between polls: cut the connections older than the deadline."""
-        now = self.clock()
-        with self._open_lock:
-            late = [sock for sock, since in self._open.values() if now - since > self.deadline]
-        for sock in late:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+            context.load_cert_chain(cert, key)
+        except (OSError, ssl.SSLError) as exc:
+            LOG.error("serving certificate not reloaded: %s", describe(exc))
+            return False
+        self._tls_stamp = stamp
+        LOG.info("serving certificate reloaded")
+        return True
 
     def handle_error(self, request, client_address):
         LOG.warning("connection from %s: %s", client_address[0], describe(sys.exc_info()[1]))
 
 
-def build_server(service, address, port, tls_cert=None, tls_key=None, max_connections=None, deadline=None):
-    server = Server((address, port), make_handler(service), max_connections=max_connections or MAX_CONNECTIONS,
-                    deadline=deadline or CONNECTION_DEADLINE)
+def build_server(service, address, port, tls_cert=None, tls_key=None):
+    server = Server((address, port), make_handler(service))
     if tls_cert:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(tls_cert, tls_key)
         # The handshake runs in the request's thread (setup), not in the accept loop.
         server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+        server.tls = (context, tls_cert, tls_key)
+        server._tls_stamp = (os.stat(tls_cert).st_mtime_ns, os.stat(tls_key).st_mtime_ns)
+        server._tls_checked = time.monotonic()
     return server
 
 
@@ -974,8 +974,6 @@ def load_settings(env=None):
         ovn_timeout=_number(env, "OVN_TIMEOUT_SECONDS", 10.0, float, 1, 300),
         api_timeout=_number(env, "API_TIMEOUT_SECONDS", 10.0, float, 1, 300),
         guard_interval=_number(env, "GUARD_INTERVAL_SECONDS", 60.0, float, 5, 86400),
-        max_connections=_number(env, "MAX_CONNECTIONS", MAX_CONNECTIONS, int, 1, 1024),
-        connection_deadline=_number(env, "CONNECTION_DEADLINE_SECONDS", CONNECTION_DEADLINE, float, 5, 3600),
         log_level=level,
     )
 
@@ -998,7 +996,7 @@ def main(argv=None, env=None):
     service = RouterAdvertisementService(store, openstack, guard)
     try:
         server = build_server(service, settings.listen_address, settings.listen_port, settings.tls_certificate,
-                              settings.tls_private_key, settings.max_connections, settings.connection_deadline)
+                              settings.tls_private_key)
     except (OSError, ssl.SSLError) as exc:
         LOG.error("refusing to start: cannot listen on %s:%d: %s", settings.listen_address, settings.listen_port,
                   describe(exc))

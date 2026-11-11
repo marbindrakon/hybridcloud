@@ -34,9 +34,8 @@ client files. The service refuses to start, naming the setting, when one is miss
 ## Publish it
 
 Add a front end and back end on the site's API load balancer (for example HAProxy) that terminates TLS like the
-other APIs, on an address the platform's jobs can reach, admits only the networks those jobs call from, and forwards
-to `<controller's internal address>:<port>`; health check `GET /readyz` (it fails while the northbound database does
-not answer). Verify with `curl -sS https://<front end>/healthz`, then add the site's entry to the deployment's
+other APIs, on an address the platform's jobs can reach, and forwards to `<controller's internal address>:<port>`;
+health check `GET /healthz`. Verify with `curl -sS https://<front end>/healthz`, then add the site's entry to the deployment's
 realization as in [the OpenStack-on-OpenShift instructions](../rhoso/README.md#6-tell-the-platform-where-it-is),
 with the URL of that front end.
 

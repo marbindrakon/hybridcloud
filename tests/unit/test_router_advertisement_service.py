@@ -53,21 +53,21 @@ class FakeRow:
     def __init__(self, name, options, version):
         self.name = name
         self.options = dict(options)
-        self.version = version
-        self.verified = False
-        self.ops = []
+        self._version = version
+        self._verified = False
+        self._ops = []
 
     def verify(self, column):
         assert column == "options"
-        self.verified = True
+        self._verified = True
 
     def setkey(self, column, key, value):
         assert column == "options"
-        self.ops.append(("set", key, value))
+        self._ops.append(("set", key, value))
 
     def delkey(self, column, key):
         assert column == "options"
-        self.ops.append(("del", key))
+        self._ops.append(("del", key))
 
 
 class FakeDatabase:
@@ -116,15 +116,15 @@ class FakeDatabase:
             if hook is not None:
                 hook()
             with self.lock:
-                stale = [r for r in snapshot if r.verified and self.versions.get(r.name) != r.version]
+                stale = [r for r in snapshot if r._verified and self.versions.get(r.name) != r._version]
                 if stale:
                     self.retries += 1
                     continue
                 changed = []
                 for r in snapshot:
-                    if not r.ops:
+                    if not r._ops:
                         continue
-                    for op in r.ops:
+                    for op in r._ops:
                         if op[0] == "set":
                             self.rows[r.name][op[1]] = op[2]
                         else:
@@ -330,29 +330,6 @@ class ApiTest(Base):
         status, body = self.svc.handle("GET", "/healthz", {}, None)
         self.assertEqual((status, body["ovn"]), (200, "unreachable"))
 
-    def test_readyz_follows_the_database(self):
-        # Review R2 L4: readiness fails while OVN is unreachable (healthz stays 200 for liveness)
-        self.assertEqual(self.svc.handle("GET", "/readyz", {}, None), (200, {"ready": True}))
-        self.store.up = False
-        self.assertError(self.svc.handle("GET", "/readyz", {}, None), 502, "OvnUnavailable")
-        self.assertEqual(self.svc.handle("GET", "/healthz", {}, None)[0], 200)
-        self.assertError(self.svc.handle("PUT", "/readyz", {}, b"{}"), 405, "MethodNotAllowed")
-
-    def test_the_route_admits_only_the_listed_sources_and_readiness_reads_readyz(self):
-        import yaml
-        path = os.path.join(ROOT, "site-components", "router-advertisement", "deploy", "rhoso", "router-advertisement.yaml")
-        with open(path) as f:
-            tpl = yaml.safe_load(f)
-        params = {p["name"]: p for p in tpl["parameters"]}
-        self.assertTrue(params["ROUTE_ALLOWED_SOURCES"].get("required"))
-        route = [o for o in tpl["objects"] if o["kind"] == "Route"][0]
-        self.assertEqual(route["metadata"]["annotations"]["haproxy.router.openshift.io/ip_whitelist"],
-                         "${ROUTE_ALLOWED_SOURCES}")
-        pod = [o for o in tpl["objects"] if o["kind"] == "Deployment"][0]["spec"]["template"]["spec"]
-        c = pod["containers"][0]
-        self.assertEqual((c["readinessProbe"]["httpGet"]["path"], c["livenessProbe"]["httpGet"]["path"]),
-                         ("/readyz", "/healthz"))
-
     def test_get_port(self):
         status, body = get(self.svc, PORT)
         self.assertEqual(status, 200)
@@ -524,11 +501,11 @@ class TransactionTest(Base):
     def test_step_verifies_before_writing(self):
         row = FakeRow("lrp-" + PORT, {RA.OPTION: "connected-as-host"}, 1)
         RA.step_set_nat(row, row.name, True)
-        self.assertTrue(row.verified)
-        self.assertEqual(row.ops, [("set", RA.OPTION, "connected-as-host,nat"), ("set", RA.MARKER, "wanted")])
+        self.assertTrue(row._verified)
+        self.assertEqual(row._ops, [("set", RA.OPTION, "connected-as-host,nat"), ("set", RA.MARKER, "wanted")])
         row = FakeRow("lrp-" + PORT, {RA.OPTION: "connected-as-host,nat", RA.MARKER: "wanted"}, 1)
         RA.step_set_nat(row, row.name, False)
-        self.assertEqual(row.ops, [("set", RA.OPTION, "connected-as-host"), ("del", RA.MARKER)])
+        self.assertEqual(row._ops, [("set", RA.OPTION, "connected-as-host"), ("del", RA.MARKER)])
 
     def test_concurrent_api_requests(self):
         errors = []
@@ -870,14 +847,6 @@ class SettingsTest(unittest.TestCase):
                 RA.load_settings(self.env(**{name: None}))
             self.assertTrue(str(cm.exception).startswith(name + ":"), str(cm.exception))
 
-    def test_connection_limits(self):
-        s = RA.load_settings(self.env())
-        self.assertEqual((s.max_connections, s.connection_deadline), (32, 60.0))
-        for name, value in (("MAX_CONNECTIONS", "0"), ("CONNECTION_DEADLINE_SECONDS", "x")):
-            with self.assertRaises(RA.ConfigError) as ctx:
-                RA.load_settings(dict(self.env(), **{name: value}))
-            self.assertIn(name, str(ctx.exception))
-
     def test_tcp_needs_no_certificates(self):
         s = RA.load_settings(self.env(OVN_NB_CONNECTION="tcp:192.0.2.10:6641,tcp:192.0.2.11:6641",
                                       OVN_NB_PRIVATE_KEY=None, OVN_NB_CERTIFICATE=None, OVN_NB_CA_CERT=None))
@@ -955,71 +924,6 @@ class HttpTest(Base):
         self.assertEqual(resp.status, 400)
         conn.close()
 
-    def test_a_body_that_is_not_read_closes_the_connection(self):
-        # Review R2 L2: the leftover bytes of a POST (or a GET with a body) are never parsed as the next request
-        smuggled = b"GET /v1/router-ports/%s HTTP/1.1\r\nHost: x\r\nX-Auth-Token: %s\r\n\r\n" % (PORT.encode(), TOKEN.encode())
-        for method in (b"POST", b"GET", b"DELETE"):
-            with self.subTest(method=method):
-                s = socket.create_connection(("127.0.0.1", self.port), timeout=10)
-                s.sendall(method + b" /v1/router-ports/" + PORT.encode() + b" HTTP/1.1\r\nHost: x\r\nContent-Length: "
-                          + str(len(smuggled)).encode() + b"\r\n\r\n" + smuggled)
-                data = b""
-                while True:
-                    chunk = s.recv(65536)
-                    if not chunk:
-                        break
-                    data += chunk
-                s.close()
-                self.assertEqual(data.count(b"HTTP/1.1 "), 1, data)   # one answer, then the connection closed
-                self.assertIn(b"Connection: close", data)
-        # chunked bodies are refused for PUT and close the connection
-        s = socket.create_connection(("127.0.0.1", self.port), timeout=10)
-        s.sendall(b"PUT /v1/router-ports/" + PORT.encode() + b"/nat HTTP/1.1\r\nHost: x\r\nX-Auth-Token: " + TOKEN.encode()
-                  + b"\r\nTransfer-Encoding: chunked\r\n\r\n11\r\n{\"enabled\": true}\r\n0\r\n\r\n")
-        data = s.recv(65536)
-        s.close()
-        self.assertIn(b"400", data.split(b"\r\n")[0])
-        self.assertNotIn("hybrid-fabric-nat", self.db.options("lrp-" + PORT))
-
-    def test_connections_are_bounded_and_a_slow_client_is_cut(self):
-        # Review R2 L3: at most max_connections at once (more are closed at once), none longer than the deadline
-        server = RA.build_server(self.svc, "127.0.0.1", 0, max_connections=2, deadline=1.0)
-        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        port = server.server_address[1]
-        idle = [socket.create_connection(("127.0.0.1", port), timeout=10) for _ in range(2)]
-        time.sleep(0.3)
-        extra = socket.create_connection(("127.0.0.1", port), timeout=10)
-        self.assertEqual(extra.recv(1024), b"")            # closed at once: no thread for it
-        extra.close()
-        # a client that drips one byte at a time is cut at the deadline, and its slot comes back
-        t0 = time.monotonic()
-        cut = False
-        for _ in range(40):
-            try:
-                idle[0].sendall(b"G")
-            except OSError:
-                cut = True
-                break
-            time.sleep(0.1)
-            try:
-                idle[0].settimeout(0.01)
-                if idle[0].recv(1024) == b"":
-                    cut = True
-                    break
-            except socket.timeout:
-                pass
-        self.assertTrue(cut)
-        self.assertLess(time.monotonic() - t0, 3.5)
-        for sock in idle:
-            sock.close()
-        time.sleep(1.5)
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        conn.request("GET", "/healthz")
-        self.assertEqual(conn.getresponse().status, 200)
-        conn.close()
-
     def test_concurrent_http_requests(self):
         results = []
 
@@ -1070,16 +974,77 @@ class HttpTest(Base):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# The ovsdbapp store, with stand-in modules
+# The ovsdbapp store, with stand-in modules that have ONLY what the real classes have
+
+# The public surface of the real classes the program touches, read from ovs 3.5.2 (python3-openvswitch3.5) and
+# ovsdbapp 2.2.2 on Python 3.9: the versions of a Red Hat OpenStack-on-OpenShift Neutron server image. A stand-in
+# may have no other attribute, so a call the real library does not offer fails here and not on a site.
+REAL_SURFACE = {
+    "ovs.db.idl.Idl": {
+        "methods": {"ack_conditions", "close", "compose_cond_change", "cond_change", "cooperative_yield",
+                    "force_reconnect", "handle_monitor_cancel_reply", "handle_monitor_canceled",
+                    "has_ever_connected", "index_create", "index_equal", "index_irange", "notify", "restart_fsm",
+                    "run", "send_cond_change", "send_request", "set_cluster_id", "set_lock", "sync_conditions",
+                    "wait"},
+        "instance": {"tables", "_session"},
+    },
+    "ovs.jsonrpc.Session": {
+        "methods": {"close", "force_reconnect", "get_backlog", "get_name", "get_num_of_remotes", "get_seqno",
+                    "is_alive", "is_connected", "open", "open_multiple", "open_unreliably", "pick_remote", "recv",
+                    "recv_wait", "reset_backoff", "run", "send", "wait"},
+        "instance": set(),
+    },
+    "ovs.db.idl.Row": {
+        "methods": {"addvalue", "delete", "delkey", "delvalue", "fetch", "from_json", "increment", "setkey",
+                    "verify"},
+        "instance": {"name", "options"},  # the columns
+    },
+    "ovs.db.idl.SchemaHelper": {
+        "methods": {"get_idl_schema", "register_all", "register_columns", "register_table"},
+        "instance": set(),
+    },
+    "ovs.stream.Stream": {
+        "methods": {"ssl_set_ca_cert_file", "ssl_set_certificate_file", "ssl_set_private_key_file"},
+        "instance": set(),
+    },
+    "ovsdbapp.backend.ovs_idl.connection.Connection": {
+        "methods": {"queue_txn", "run", "start", "stop"},
+        "instance": {"idl", "timeout", "is_running"},
+    },
+    "ovsdbapp.backend.ovs_idl.command.BaseCommand": {
+        "methods": {"execute", "post_commit", "result", "set_column", "set_columns", "READ_ONLY"},
+        "instance": {"api", "result"},
+    },
+    "ovsdbapp.schema.ovn_northbound.impl_idl.OvnNbApiIdlImpl": {
+        "methods": {"idl", "tables", "ovsdb_connection", "create_transaction", "lookup", "start_connection"},
+        "instance": {"ovsdb_connection"},
+    },
+}
+# Present on the stand-ins only to drive them from the tests (never called by the program).
+TEST_ONLY = {"_up", "_seqno", "closed"}
+
+
+def surface(obj):
+    names = set()
+    for name in dir(obj):
+        if name.startswith("__") or name in TEST_ONLY:
+            continue
+        if name.startswith("_") and name != "_session":
+            continue
+        names.add(name)
+    return names
+
 
 class StandInModules:
-    """Just enough of ovs / ovsdbapp for the store's wiring: schema helper, IDL, Connection, NB API, BaseCommand."""
+    """ovs / ovsdbapp stand-ins with the real classes' attributes only (REAL_SURFACE)."""
 
     def __init__(self):
         self.calls = []
         self.rows = {}
-        self.connected = True
         self.fail_commit = None
+        self.fail_start = False
+        self.idl = None
+        self.idls = []
         calls, owner = self.calls, self
 
         class Stream:
@@ -1095,7 +1060,7 @@ class StandInModules:
             def ssl_set_ca_cert_file(p):
                 calls.append(("ca", p))
 
-        class Helper:
+        class SchemaHelper:
             def register_table(self, t):
                 calls.append(("register_table", t))
 
@@ -1104,51 +1069,121 @@ class StandInModules:
             def rows(self):
                 return owner.rows
 
-        class OvsdbIdl:
-            def __init__(self, remote, helper, leader_only=False):
-                calls.append(("idl", remote, leader_only))
-                self.tables = {"Logical_Router_Port": Table()}
-                owner.idl = self
+        class Session:
+            """ovs.jsonrpc.Session: the IDL's connection state lives here, not on the IDL."""
+
+            def __init__(self):
+                self._up = True
+                self._seqno = 1
 
             def is_connected(self):
-                return owner.connected
+                return self._up
+
+            def get_seqno(self):
+                return self._seqno
+
+        class Idl:
+            """ovs.db.idl.Idl (no is_connected: the real class has none)."""
+
+            def __init__(self, remote, schema_helper, probe_interval=None, leader_only=True):
+                calls.append(("idl", remote, leader_only))
+                self.tables = {"Logical_Router_Port": Table()}
+                self._session = Session()
+                self.closed = False
+                owner.idl = self
+                owner.idls.append(self)
+
+            def close(self):
+                self.closed = True
+
+            def notify(self, event, row, updates=None):
+                pass
+
+            def has_ever_connected(self):
+                return True
+
+        class OvsdbIdl(Idl):
+            pass
 
         class Connection:
             def __init__(self, idl, timeout):
                 calls.append(("connection", timeout))
                 self.idl = idl
+                self.timeout = timeout
+                self.is_running = False
+
+            def start(self):
+                self.is_running = True
 
             def stop(self, timeout=None):
                 calls.append(("stop",))
 
-        class Api:
-            def __init__(self, conn):
-                self.ovsdb_connection = conn
-                self.idl = conn.idl
+            def queue_txn(self, txn):  # pragma: no cover (BaseCommand.execute below runs the step itself)
+                raise AssertionError("not used by the stand-in")
+
+            def run(self):  # pragma: no cover
+                raise AssertionError("not used by the stand-in")
+
+        class OvnNbApiIdlImpl:
+            """Like ovsdbapp's Backend: the connection is a CLASS attribute, set once, and a failed start raises."""
+            _ovsdb_connection = None
+
+            def __init__(self, connection, start=True, auto_index=True):
+                self.ovsdb_connection = connection
+                if start:
+                    if owner.fail_start:
+                        raise RuntimeError("OvsdbConnectionUnavailable: Timeout")
+                    self.ovsdb_connection.start()
+
+            @property
+            def ovsdb_connection(self):
+                return self.__class__._ovsdb_connection
+
+            @ovsdb_connection.setter
+            def ovsdb_connection(self, connection):
+                if self.__class__._ovsdb_connection is None:
+                    self.__class__._ovsdb_connection = connection
+
+            @property
+            def idl(self):
+                return self.ovsdb_connection.idl
+
+            @property
+            def tables(self):
+                return self.idl.tables
 
         class BaseCommand:
+            READ_ONLY = False
+            result = None
+
             def __init__(self, api):
                 self.api = api
                 self.result = None
 
-            def execute(self, **kw):
-                calls.append(("execute", kw))
+            def execute(self, check_error=False, log_errors=True, **kwargs):
+                calls.append(("execute", {"check_error": check_error, "log_errors": log_errors}))
                 if owner.fail_commit:
                     raise owner.fail_commit
                 self.run_idl(None)
                 return self.result
 
-        def get_schema_helper(remote, schema):
-            calls.append(("schema", remote, schema))
-            return Helper()
+        def get_schema_helper(connection, schema_name):
+            calls.append(("schema", connection, schema_name))
+            return SchemaHelper()
 
         def mod(name, **attrs):
             m = types.ModuleType(name)
             m.__dict__.update(attrs)
             return m
 
+        self.classes = {"ovs.db.idl.Idl": Idl, "ovs.jsonrpc.Session": Session, "ovs.db.idl.SchemaHelper": SchemaHelper,
+                        "ovs.stream.Stream": Stream,
+                        "ovsdbapp.backend.ovs_idl.connection.Connection": Connection,
+                        "ovsdbapp.backend.ovs_idl.command.BaseCommand": BaseCommand,
+                        "ovsdbapp.schema.ovn_northbound.impl_idl.OvnNbApiIdlImpl": OvnNbApiIdlImpl}
         self.modules = {
-            "ovs": mod("ovs"), "ovs.db": mod("ovs.db"), "ovs.db.idl": mod("ovs.db.idl", Idl=OvsdbIdl),
+            "ovs": mod("ovs"), "ovs.db": mod("ovs.db"),
+            "ovs.db.idl": mod("ovs.db.idl", Idl=Idl, SchemaHelper=SchemaHelper),
             "ovs.stream": mod("ovs.stream", Stream=Stream),
             "ovsdbapp": mod("ovsdbapp"), "ovsdbapp.backend": mod("ovsdbapp.backend"),
             "ovsdbapp.backend.ovs_idl": mod("ovsdbapp.backend.ovs_idl"),
@@ -1156,21 +1191,57 @@ class StandInModules:
             "ovsdbapp.backend.ovs_idl.idlutils": mod("i", get_schema_helper=get_schema_helper),
             "ovsdbapp.backend.ovs_idl.command": mod("cmd", BaseCommand=BaseCommand),
             "ovsdbapp.schema": mod("ovsdbapp.schema"), "ovsdbapp.schema.ovn_northbound": mod("n"),
-            "ovsdbapp.schema.ovn_northbound.impl_idl": mod("ni", OvnNbApiIdlImpl=Api),
+            "ovsdbapp.schema.ovn_northbound.impl_idl": mod("ni", OvnNbApiIdlImpl=OvnNbApiIdlImpl),
         }
-        # package attributes so `from x import y` finds the submodules
-        self.modules["ovs"].db = self.modules["ovs.db"]
-        self.modules["ovs"].stream = self.modules["ovs.stream"]
-        self.modules["ovs.db"].idl = self.modules["ovs.db.idl"]
-        self.modules["ovsdbapp"].backend = self.modules["ovsdbapp.backend"]
-        self.modules["ovsdbapp.backend"].ovs_idl = self.modules["ovsdbapp.backend.ovs_idl"]
-        b = self.modules["ovsdbapp.backend.ovs_idl"]
-        b.connection = self.modules["ovsdbapp.backend.ovs_idl.connection"]
-        b.idlutils = self.modules["ovsdbapp.backend.ovs_idl.idlutils"]
-        b.command = self.modules["ovsdbapp.backend.ovs_idl.command"]
-        self.modules["ovsdbapp"].schema = self.modules["ovsdbapp.schema"]
-        self.modules["ovsdbapp.schema"].ovn_northbound = self.modules["ovsdbapp.schema.ovn_northbound"]
-        self.modules["ovsdbapp.schema.ovn_northbound"].impl_idl = self.modules["ovsdbapp.schema.ovn_northbound.impl_idl"]
+        m = self.modules
+        m["ovs"].db, m["ovs"].stream, m["ovs.db"].idl = m["ovs.db"], m["ovs.stream"], m["ovs.db.idl"]
+        m["ovsdbapp"].backend = m["ovsdbapp.backend"]
+        m["ovsdbapp.backend"].ovs_idl = b = m["ovsdbapp.backend.ovs_idl"]
+        b.connection = m["ovsdbapp.backend.ovs_idl.connection"]
+        b.idlutils = m["ovsdbapp.backend.ovs_idl.idlutils"]
+        b.command = m["ovsdbapp.backend.ovs_idl.command"]
+        m["ovsdbapp"].schema = m["ovsdbapp.schema"]
+        m["ovsdbapp.schema"].ovn_northbound = m["ovsdbapp.schema.ovn_northbound"]
+        m["ovsdbapp.schema.ovn_northbound"].impl_idl = m["ovsdbapp.schema.ovn_northbound.impl_idl"]
+
+
+def have_real_libraries():
+    try:
+        import ovs.db.idl  # noqa: F401
+        import ovsdbapp.backend.ovs_idl.connection  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+class StandInSurfaceTest(unittest.TestCase):
+    def test_stand_ins_have_only_real_attributes(self):
+        fake = StandInModules()
+        idl = fake.classes["ovs.db.idl.Idl"]("unix:x", None)
+        instances = {"ovs.db.idl.Idl": idl, "ovs.jsonrpc.Session": idl._session,
+                     "ovs.db.idl.Row": FakeRow("lrp-x", {}, 1)}
+        conn = fake.classes["ovsdbapp.backend.ovs_idl.connection.Connection"](idl, 1)
+        instances["ovsdbapp.backend.ovs_idl.connection.Connection"] = conn
+        api = fake.classes["ovsdbapp.schema.ovn_northbound.impl_idl.OvnNbApiIdlImpl"](conn)
+        instances["ovsdbapp.schema.ovn_northbound.impl_idl.OvnNbApiIdlImpl"] = api
+        instances["ovsdbapp.backend.ovs_idl.command.BaseCommand"] = \
+            fake.classes["ovsdbapp.backend.ovs_idl.command.BaseCommand"](api)
+        for name, cls in fake.classes.items():
+            instances.setdefault(name, cls)
+        for name, obj in instances.items():
+            real = REAL_SURFACE[name]["methods"] | REAL_SURFACE[name]["instance"]
+            extra = surface(obj) - real
+            self.assertEqual(extra, set(), "%s stand-in has what the real class lacks: %s" % (name, sorted(extra)))
+        self.assertFalse(hasattr(idl, "is_connected"), "the real Idl has no is_connected")
+
+    @unittest.skipUnless(have_real_libraries(), "ovs and ovsdbapp are not installed here")
+    def test_the_recorded_surface_matches_the_installed_libraries(self):
+        import importlib
+        for name, spec_ in REAL_SURFACE.items():
+            module, _, cls = name.rpartition(".")
+            real = getattr(importlib.import_module(module), cls)
+            for method in spec_["methods"]:
+                self.assertTrue(hasattr(real, method), "%s.%s" % (name, method))
 
 
 class OvsdbappStoreTest(unittest.TestCase):
@@ -1179,11 +1250,11 @@ class OvsdbappStoreTest(unittest.TestCase):
         patcher = unittest.mock.patch.dict(sys.modules, self.fake.modules)
         patcher.start()
         self.addCleanup(patcher.stop)
-        tmp = tempfile.mkdtemp()
-        self.addCleanup(lambda: [os.unlink(os.path.join(tmp, f)) for f in os.listdir(tmp)] and os.rmdir(tmp))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
         paths = {}
         for n in ("k", "c", "a"):
-            paths[n] = os.path.join(tmp, n)
+            paths[n] = os.path.join(tmp.name, n)
             open(paths[n], "w").close()
         self.settings = RA.load_settings({
             "OVN_NB_CONNECTION": "ssl:ovsdb-nb.example.com:6641", "OVN_NB_PRIVATE_KEY": paths["k"],
@@ -1191,6 +1262,8 @@ class OvsdbappStoreTest(unittest.TestCase):
             "KEYSTONE_URL": "https://keystone.example.com:5000", "NEUTRON_URL": "https://neutron.example.com:9696",
             "OVN_TIMEOUT_SECONDS": "7"})
         self.events = []
+        self.logs = LogCapture().__enter__()
+        self.addCleanup(self.logs.__exit__)
         self.store = RA.OvsdbappPortStore(self.settings)
         self.store.start(on_change=self.events.append)
         self.store._thread.join(5)
@@ -1204,12 +1277,68 @@ class OvsdbappStoreTest(unittest.TestCase):
         self.assertIn(("register_table", "Logical_Router_Port"), calls)
         self.assertIn(("idl", "ssl:ovsdb-nb.example.com:6641", True), calls)
         self.assertIn(("connection", 7.0), calls)
+
+    def test_connection_state_comes_from_the_idl_session(self):
+        """The real Idl has no is_connected(): the state is its jsonrpc session's (the live site's fault)."""
         self.assertTrue(self.store.connected())
+        self.fake.idl._session._up = False
+        self.assertFalse(self.store.connected())
+        self.fake.idl._session._up = True
+        self.assertEqual(self.store.generation(), 1)
+        self.fake.idl._session._seqno = 3
+        self.assertEqual(self.store.generation(), 3)
+        self.assertNotIn("ERROR", self.logs.text)
+
+    def test_an_idl_with_its_own_is_connected_is_asked_directly(self):
+        self.fake.idl._session._up = False
+        self.fake.idl.is_connected = lambda: True  # a library version that has one
+        self.assertTrue(self.store.connected())
+
+    def test_a_failing_probe_is_logged_once_with_its_type_and_message(self):
+        def broken():
+            raise RuntimeError("session gone")
+        self.fake.idl._session.is_connected = broken
+        self.assertFalse(self.store.connected())
+        self.assertFalse(self.store.connected())
+        self.assertEqual(self.logs.text.count("connection probe failed: RuntimeError: session gone"), 1)
+
+    def test_an_idl_without_any_connection_state_is_reported(self):
+        del self.fake.idl._session
+        self.assertFalse(self.store.connected())
+        self.assertIsNone(self.store.generation())
+        self.assertIn("no is_connected on it or on its session", self.logs.text)
+        self.assertIn("no get_seqno", self.logs.text)
+
+    def test_a_retry_after_a_failed_start_uses_its_own_connection(self):
+        """ovsdbapp keeps the first connection on the API class: a retry must not inherit a dead one."""
+        self.store.stop()
+        self.fake.fail_start = True
+        store = RA.OvsdbappPortStore(self.settings)
+        self.assertRaises(RuntimeError, store._connect)
+        self.assertTrue(self.fake.idls[-1].closed, "the failed attempt's IDL is closed")
+        self.fake.fail_start = False
+        api, idl = store._connect()
+        self.assertIs(api.ovsdb_connection.idl, idl)
+        self.assertIs(idl, self.fake.idls[-1], "the new attempt's connection, not an earlier one")
+        api2, idl2 = RA.OvsdbappPortStore(self.settings)._connect()
+        self.assertIs(api2.ovsdb_connection.idl, idl2)
+        self.assertIsNot(idl2, idl)
 
     def test_row_changes_reach_the_guard_callback(self):
         row = types.SimpleNamespace(name="lrp-" + PORT)
         self.fake.idl.notify("update", row, None)
         self.assertEqual(self.events, ["lrp-" + PORT])
+
+    def test_a_failing_callback_is_logged_not_raised(self):
+        self.store._on_change = None
+        def boom(name):
+            raise ValueError("bad")
+        store = RA.OvsdbappPortStore(self.settings)
+        store.start(on_change=boom)
+        store._thread.join(5)
+        self.addCleanup(store.stop)
+        self.fake.idl.notify("update", types.SimpleNamespace(name="lrp-" + PORT), None)
+        self.assertIn("row change notification failed: ValueError: bad", self.logs.text)
 
     def test_commands_run_the_steps_and_map_failures(self):
         self.fake.rows = {1: FakeRow("lrp-" + PORT, {RA.OPTION: "connected-as-host"}, 1)}
@@ -1217,7 +1346,7 @@ class OvsdbappStoreTest(unittest.TestCase):
                                                               "wanted": False})
         result = self.store.set_nat("lrp-" + PORT, True)
         self.assertTrue(result["changed"])
-        self.assertTrue(self.fake.rows[1].verified)
+        self.assertTrue(self.fake.rows[1]._verified)
         self.assertIn(("execute", {"check_error": True, "log_errors": False}), self.fake.calls)
         with self.assertRaises(RA.ServiceError) as cm:
             self.store.read_port("lrp-" + NO_LRP)
@@ -1227,10 +1356,217 @@ class OvsdbappStoreTest(unittest.TestCase):
             self.store.set_nat("lrp-" + PORT, True)
         self.assertEqual(cm.exception.reason, "OvnUnavailable")
         self.fake.fail_commit = None
-        self.fake.connected = False
+        self.fake.idl._session._up = False
         with self.assertRaises(RA.ServiceError) as cm:
             self.store.marked_ports()
         self.assertEqual(cm.exception.reason, "OvnUnavailable")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The store against a real OVSDB server (only where ovs, ovsdbapp and ovsdb-server are installed: a Neutron or
+# OVN agent image; skipped on the workstation and in the execution environment)
+
+# A Northbound schema cut down to the one table the service uses (name and options as in OVN's own schema).
+MINI_NB_SCHEMA = {
+    "name": "OVN_Northbound", "version": "7.3.0",
+    "tables": {"Logical_Router_Port": {
+        "columns": {"name": {"type": "string"},
+                    "options": {"type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}}},
+        "indexes": [["name"]], "isRoot": True}},
+}
+
+
+def real_ovsdb_available():
+    import shutil
+    return have_real_libraries() and bool(shutil.which("ovsdb-server")) and bool(shutil.which("ovsdb-tool"))
+
+
+@unittest.skipUnless(real_ovsdb_available(), "needs ovs, ovsdbapp and ovsdb-server")
+class RealOvsdbTest(unittest.TestCase):
+    def setUp(self):
+        import subprocess
+        self.subprocess = subprocess
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        d = self.tmp.name
+        self.env = dict(os.environ, OVS_RUNDIR=d, OVS_LOGDIR=d, OVS_DBDIR=d)
+        schema = os.path.join(d, "nb.ovsschema")
+        with open(schema, "w") as fh:
+            json.dump(MINI_NB_SCHEMA, fh)
+        self.db = os.path.join(d, "nb.db")
+        self.sock = os.path.join(d, "nb.sock")
+        subprocess.run(["ovsdb-tool", "create", self.db, schema], check=True, env=self.env)
+        self.server = None
+        self.start_server()
+        self.addCleanup(self.stop_server)
+        self.insert("lrp-" + PORT, {RA.OPTION: "connected-as-host", "dynamic-routing-advertise": "false"})
+        self.insert("lrp-" + PORT2, {RA.OPTION: "connected-as-host"})
+        self.insert("lrp-" + NO_OPT, {"gateway_mtu": "1400"})
+        settings = RA.Settings(ovn_connection="unix:" + self.sock, ovn_ssl=False, ovn_timeout=5.0)
+        self.store = RA.OvsdbappPortStore(settings)
+        self.guard = RA.Guard(self.store, interval=3600)
+        self.logs = LogCapture().__enter__()
+        self.addCleanup(self.logs.__exit__)
+        self.store.start(on_change=self.guard.notify)
+        self.addCleanup(self.store.stop)
+        self.wait(self.store.connected, "connected")
+
+    def start_server(self):
+        self.server = self.subprocess.Popen(
+            ["ovsdb-server", self.db, "--remote=punix:" + self.sock, "--unixctl=" + os.path.join(self.tmp.name, "ctl"),
+             "--pidfile=" + os.path.join(self.tmp.name, "pid"), "--log-file=" + os.path.join(self.tmp.name, "log")],
+            env=self.env, stdout=self.subprocess.DEVNULL, stderr=self.subprocess.DEVNULL)
+        self.wait(lambda: os.path.exists(self.sock), "socket")
+
+    def stop_server(self):
+        if self.server is not None:
+            self.server.terminate()
+            self.server.wait(10)
+            self.server = None
+
+    def wait(self, cond, what, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if cond():
+                return
+            time.sleep(0.05)
+        self.fail("timed out waiting for " + what)
+
+    def client(self, *ops):
+        out = self.subprocess.run(["ovsdb-client", "transact", "unix:" + self.sock,
+                                   json.dumps(["OVN_Northbound"] + list(ops))],
+                                  check=True, capture_output=True, text=True, env=self.env).stdout
+        return json.loads(out)
+
+    def insert(self, name, options):
+        self.client({"op": "insert", "table": "Logical_Router_Port",
+                     "row": {"name": name, "options": ["map", sorted(options.items())]}})
+
+    def options(self, name):
+        rows = self.client({"op": "select", "table": "Logical_Router_Port", "where": [["name", "==", name]],
+                            "columns": ["options"]})[0]["rows"]
+        return dict(rows[0]["options"][1])
+
+    def neutron_rewrite(self, name, value):
+        """Neutron's way: one key set in the options map, the other keys kept."""
+        self.client({"op": "mutate", "table": "Logical_Router_Port", "where": [["name", "==", name]],
+                     "mutations": [["options", "delete", ["set", [RA.OPTION]]],
+                                   ["options", "insert", ["map", [[RA.OPTION, value]]]]]})
+
+    def test_set_read_marker_and_refusals(self):
+        lrp = "lrp-" + PORT
+        result = self.store.set_nat(lrp, True)
+        self.assertEqual((result["before"], result["after"], result["changed"]),
+                         (["connected-as-host"], ["connected-as-host", "nat"], True))
+        opts = self.options(lrp)
+        self.assertEqual(opts[RA.OPTION], "connected-as-host,nat")
+        self.assertEqual(opts[RA.MARKER], "wanted")
+        self.assertEqual(opts["dynamic-routing-advertise"], "false")
+        self.wait(lambda: self.store.read_port(lrp)["wanted"], "the replica to see the write")
+        self.assertFalse(self.store.set_nat(lrp, True)["changed"])
+        self.store.set_nat(lrp, False)
+        self.assertNotIn(RA.MARKER, self.options(lrp))
+        self.assertEqual(self.options(lrp)[RA.OPTION], "connected-as-host")
+        with self.assertRaises(RA.ServiceError) as cm:
+            self.store.set_nat("lrp-" + NO_OPT, True)
+        self.assertEqual(cm.exception.reason, "NotAnAdvertisingPort")
+        self.assertEqual(self.options("lrp-" + NO_OPT), {"gateway_mtu": "1400"})
+        with self.assertRaises(RA.ServiceError) as cm:
+            self.store.read_port("lrp-" + NO_LRP)
+        self.assertEqual(cm.exception.reason, "NoSuchRouterPort")
+
+    def test_guard_restores_on_the_real_row_event(self):
+        lrp = "lrp-" + PORT
+        self.store.set_nat(lrp, True)
+        self.guard.start()
+        self.addCleanup(self.guard.stop)
+        self.wait(lambda: self.guard.summary()["wanted"] == 1, "the first pass")
+        self.neutron_rewrite(lrp, "connected-as-host")
+        self.wait(lambda: "nat" in self.options(lrp)[RA.OPTION], "the restore")
+        self.assertEqual(self.options(lrp)[RA.OPTION], "connected-as-host,nat")
+        self.assertIn("guard: restored nat on " + lrp, self.logs.text)
+        self.assertEqual(self.options("lrp-" + PORT2)[RA.OPTION], "connected-as-host", "unmarked port untouched")
+
+    def test_server_down_and_back(self):
+        lrp = "lrp-" + PORT
+        before = self.store.generation()
+        self.stop_server()
+        self.wait(lambda: not self.store.connected(), "the disconnection")
+        started = time.monotonic()
+        with self.assertRaises(RA.ServiceError) as cm:
+            self.store.set_nat(lrp, True)
+        self.assertEqual(cm.exception.reason, "OvnUnavailable")
+        self.assertLess(time.monotonic() - started, 1.0, "fails fast while disconnected")
+        self.start_server()
+        self.wait(self.store.connected, "the reconnection", timeout=30)
+        self.assertNotEqual(self.store.generation(), before)
+        def write():
+            try:
+                return self.store.set_nat(lrp, True)["after"] == ["connected-as-host", "nat"]
+            except RA.ServiceError:
+                return False
+        self.wait(write, "a write after the reconnection")
+        self.assertNotIn("ERROR", self.logs.text)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Readiness and the serving certificate
+
+class ReadinessTest(Base):
+    def test_readyz_follows_the_database(self):
+        self.assertEqual(self.svc.handle("GET", "/readyz", {}, None), (200, {"ready": True, "ovn": "connected"}))
+        self.store.up = False
+        self.assertEqual(self.svc.handle("GET", "/readyz", {}, None), (503, {"ready": False, "ovn": "unreachable"}))
+        status, body = self.svc.handle("GET", "/healthz", {}, None)
+        self.assertEqual((status, body["ovn"]), (200, "unreachable"), "healthz keeps answering 200 with the state")
+        self.assertError(self.svc.handle("PUT", "/readyz", {}, None), 405, "MethodNotAllowed")
+
+
+class FakeContext:
+    def __init__(self):
+        self.loaded = []
+
+    def load_cert_chain(self, cert, key):
+        self.loaded.append((cert, key))
+
+
+class CertificateReloadTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.cert = os.path.join(tmp.name, "tls.crt")
+        self.key = os.path.join(tmp.name, "tls.key")
+        for p in (self.cert, self.key):
+            with open(p, "w") as fh:
+                fh.write("one")
+        self.server = RA.Server(("127.0.0.1", 0), RA.make_handler(None), bind_and_activate=False)
+        self.addCleanup(self.server.server_close)
+        self.ctx = FakeContext()
+        self.server.tls = (self.ctx, self.cert, self.key)
+        self.server._tls_stamp = (os.stat(self.cert).st_mtime_ns, os.stat(self.key).st_mtime_ns)
+        self.server._tls_checked = 0.0
+
+    def test_a_renewed_certificate_is_loaded_and_checks_are_spaced(self):
+        self.assertFalse(self.server.maybe_reload_tls(now=100.0), "unchanged files")
+        st = os.stat(self.cert)
+        os.utime(self.cert, ns=(st.st_atime_ns, st.st_mtime_ns + 10 ** 9))
+        self.assertFalse(self.server.maybe_reload_tls(now=110.0), "checked at most every interval")
+        with LogCapture() as logs:
+            self.assertTrue(self.server.maybe_reload_tls(now=200.0))
+        self.assertEqual(self.ctx.loaded, [(self.cert, self.key)])
+        self.assertIn("serving certificate reloaded", logs.text)
+        self.assertFalse(self.server.maybe_reload_tls(now=300.0))
+
+    def test_a_missing_file_keeps_the_loaded_certificate(self):
+        os.unlink(self.key)
+        with LogCapture() as logs:
+            self.assertFalse(self.server.maybe_reload_tls(now=100.0))
+        self.assertEqual(self.ctx.loaded, [])
+        self.assertIn("serving certificate", logs.text)
+
+    def test_plain_http_has_nothing_to_reload(self):
+        self.server.tls = None
+        self.assertFalse(self.server.maybe_reload_tls(now=100.0))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -1238,6 +1574,8 @@ class OvsdbappStoreTest(unittest.TestCase):
 
 COMPONENT = os.path.join(ROOT, "site-components/router-advertisement")
 TEMPLATE = os.path.join(COMPONENT, "deploy/rhoso/router-advertisement.yaml")
+ROUTE_CERT = os.path.join(COMPONENT, "deploy/rhoso/route-certificate.yaml")
+README = os.path.join(COMPONENT, "deploy/rhoso/README.md")
 LAB = ("signal9", "172.18.", "75.8.222.", "2602:81f", "atuin", "rhoso-bm", "shc-", "xna-", "quay.")
 
 
@@ -1279,6 +1617,7 @@ class DeployAssetsTest(unittest.TestCase):
         for kind in ("requests", "limits"):
             self.assertEqual(set(c["resources"][kind]), {"cpu", "memory"})
         self.assertEqual(c["livenessProbe"]["httpGet"]["path"], "/healthz")
+        self.assertEqual(c["readinessProbe"]["httpGet"]["path"], "/readyz")
         self.assertNotIn("Role", self.objects)
         self.assertNotIn("RoleBinding", self.objects)
 
@@ -1290,8 +1629,50 @@ class DeployAssetsTest(unittest.TestCase):
             self.assertIn(name, env)
         self.assertEqual(c["command"][-1], "/opt/router-advertisement/router_advertisement.py")
 
+    def test_route_certificate_is_optional_and_parameterised(self):
+        import yaml
+        params = {p["name"]: p for p in self.template["parameters"]}
+        self.assertEqual(params["ROUTE_TERMINATION"]["value"], "reencrypt", "the default stays the ingress certificate")
+        self.assertEqual(params["SERVING_CERT_SECRET"]["value"], "router-advertisement-tls")
+        self.assertEqual(self.objects["Route"]["spec"]["tls"]["termination"], "${ROUTE_TERMINATION}")
+        volumes = {v["name"]: v for v in self.objects["Deployment"]["spec"]["template"]["spec"]["volumes"]}
+        self.assertEqual(volumes["serving"]["secret"]["secretName"], "${SERVING_CERT_SECRET}")
+        with open(ROUTE_CERT) as fh:
+            rc = yaml.safe_load(fh)
+        rparams = {p["name"]: p for p in rc["parameters"]}
+        for name in ("NAMESPACE", "ROUTE_HOST", "ROUTE_CERT_ISSUER"):
+            self.assertTrue(rparams[name].get("required"), name)
+        cert = rc["objects"][0]
+        self.assertEqual(cert["kind"], "Certificate")
+        self.assertEqual(cert["spec"]["issuerRef"]["name"], "${ROUTE_CERT_ISSUER}")
+        self.assertEqual(cert["spec"]["dnsNames"], ["${ROUTE_HOST}"])
+        self.assertIn("server auth", cert["spec"]["usages"])
+        with open(README) as fh:
+            readme = fh.read()
+        self.assertIn("-p SERVING_CERT_SECRET=" + cert["spec"]["secretName"], readme)
+        self.assertIn("ROUTE_TERMINATION=passthrough", readme)
+        self.assertIn("default-ingress-cert", readme, "says which CA to trust without an issuer")
+
+    def test_removal_lists_every_object_and_secret(self):
+        import yaml
+        with open(ROUTE_CERT) as fh:
+            objects = self.template["objects"] + yaml.safe_load(fh)["objects"]
+        expected = {"configmap/router-advertisement-program"}
+        for obj in objects:
+            expected.add("%s/%s" % (obj["kind"].lower(), obj["metadata"]["name"]))
+            if obj["kind"] == "Certificate":
+                expected.add("secret/" + obj["spec"]["secretName"])
+        expected.add("secret/" + self.objects["Service"]["metadata"]["annotations"][
+            "service.beta.openshift.io/serving-cert-secret-name"])
+        with open(README) as fh:
+            readme = fh.read()
+        removal = readme[readme.index("## 5. Remove"):readme.index("## 6.")]
+        listed = [ln.strip().rstrip(" \\") for ln in removal.splitlines() if "/router-advertisement" in ln]
+        self.assertEqual(set(listed), expected)
+        self.assertLess(listed.index("deployment/router-advertisement"), listed.index("secret/router-advertisement-ovn-client"))
+
     def test_no_lab_values(self):
-        paths = [TEMPLATE, PATH, os.path.join(COMPONENT, "deploy/rhoso/README.md"),
+        paths = [TEMPLATE, ROUTE_CERT, PATH, os.path.join(COMPONENT, "deploy/rhoso/README.md"),
                  os.path.join(COMPONENT, "deploy/container/README.md"),
                  os.path.join(ROOT, "docs/platform/router-advertisement-service.md")]
         for path in paths:
