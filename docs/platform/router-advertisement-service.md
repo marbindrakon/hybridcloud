@@ -90,6 +90,8 @@ Environment variables of the service; a missing required setting stops the start
 | `OVN_TIMEOUT_SECONDS` | default 10: the longest wait for one database transaction |
 | `API_TIMEOUT_SECONDS` | default 10: the longest wait for one Keystone or Neutron call |
 | `GUARD_INTERVAL_SECONDS` | default 60: the guard's full pass |
+| `MAX_CONNECTIONS` | default 32: connections served at once; a connection beyond that is closed at once |
+| `CONNECTION_DEADLINE_SECONDS` | default 60: the longest a connection stays open, however slowly its client sends |
 | `LOG_LEVEL` | default `INFO` |
 
 ## Install

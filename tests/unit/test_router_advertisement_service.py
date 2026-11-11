@@ -847,6 +847,14 @@ class SettingsTest(unittest.TestCase):
                 RA.load_settings(self.env(**{name: None}))
             self.assertTrue(str(cm.exception).startswith(name + ":"), str(cm.exception))
 
+    def test_connection_limits(self):
+        s = RA.load_settings(self.env())
+        self.assertEqual((s.max_connections, s.connection_deadline), (32, 60.0))
+        for name, value in (("MAX_CONNECTIONS", "0"), ("CONNECTION_DEADLINE_SECONDS", "x")):
+            with self.assertRaises(RA.ConfigError) as ctx:
+                RA.load_settings(dict(self.env(), **{name: value}))
+            self.assertIn(name, str(ctx.exception))
+
     def test_tcp_needs_no_certificates(self):
         s = RA.load_settings(self.env(OVN_NB_CONNECTION="tcp:192.0.2.10:6641,tcp:192.0.2.11:6641",
                                       OVN_NB_PRIVATE_KEY=None, OVN_NB_CERTIFICATE=None, OVN_NB_CA_CERT=None))
@@ -949,6 +957,45 @@ class HttpTest(Base):
         s.close()
         self.assertIn(b"400", data.split(b"\r\n")[0])
         self.assertNotIn("hybrid-fabric-nat", self.db.options("lrp-" + PORT))
+
+    def test_connections_are_bounded_and_a_slow_client_is_cut(self):
+        # Review R2 L3: at most max_connections at once (more are closed at once), none longer than the deadline
+        server = RA.build_server(self.svc, "127.0.0.1", 0, max_connections=2, deadline=1.0)
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        idle = [socket.create_connection(("127.0.0.1", port), timeout=10) for _ in range(2)]
+        time.sleep(0.3)
+        extra = socket.create_connection(("127.0.0.1", port), timeout=10)
+        self.assertEqual(extra.recv(1024), b"")            # closed at once: no thread for it
+        extra.close()
+        # a client that drips one byte at a time is cut at the deadline, and its slot comes back
+        t0 = time.monotonic()
+        cut = False
+        for _ in range(40):
+            try:
+                idle[0].sendall(b"G")
+            except OSError:
+                cut = True
+                break
+            time.sleep(0.1)
+            try:
+                idle[0].settimeout(0.01)
+                if idle[0].recv(1024) == b"":
+                    cut = True
+                    break
+            except socket.timeout:
+                pass
+        self.assertTrue(cut)
+        self.assertLess(time.monotonic() - t0, 3.5)
+        for sock in idle:
+            sock.close()
+        time.sleep(1.5)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", "/healthz")
+        self.assertEqual(conn.getresponse().status, 200)
+        conn.close()
 
     def test_concurrent_http_requests(self):
         results = []

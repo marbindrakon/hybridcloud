@@ -21,7 +21,8 @@ token); the service keeps no state of its own beyond counters since its start.
 
 Configuration (environment): OVN_NB_CONNECTION, OVN_NB_PRIVATE_KEY, OVN_NB_CERTIFICATE, OVN_NB_CA_CERT (the last
 three for ssl: connections), KEYSTONE_URL, NEUTRON_URL, OS_CACERT, LISTEN_ADDRESS, LISTEN_PORT, TLS_CERTIFICATE,
-TLS_PRIVATE_KEY, OVN_TIMEOUT_SECONDS, API_TIMEOUT_SECONDS, GUARD_INTERVAL_SECONDS, LOG_LEVEL.
+TLS_PRIVATE_KEY, OVN_TIMEOUT_SECONDS, API_TIMEOUT_SECONDS, GUARD_INTERVAL_SECONDS, MAX_CONNECTIONS,
+CONNECTION_DEADLINE_SECONDS, LOG_LEVEL.
 """
 import collections
 import datetime
@@ -65,6 +66,10 @@ ROUTES = (
 )
 MAX_BODY = 4096
 MAX_RESPONSE = 1 << 20
+# Connections served at once, and the longest a connection may stay open (seconds); settings MAX_CONNECTIONS and
+# CONNECTION_DEADLINE_SECONDS.
+MAX_CONNECTIONS = 32
+CONNECTION_DEADLINE = 60.0
 
 # Guard rate limit: at most RESTORE_LIMIT restores of one port within RESTORE_WINDOW seconds.
 RESTORE_LIMIT = 5
@@ -815,16 +820,66 @@ def make_handler(service, request_timeout=15.0):
 
 
 class Server(http.server.ThreadingHTTPServer):
+    """One thread per connection, at most `max_connections` at a time (a connection beyond that is closed at once),
+    and no connection lives longer than `deadline` seconds: the per-read timeout alone let a client that sends one
+    byte every few seconds hold a thread for as long as it liked."""
     daemon_threads = False
     block_on_close = True  # server_close() waits for the requests in flight
     request_queue_size = 128  # the listen backlog: the default of 5 resets connections under a burst
+
+    def __init__(self, address, handler, max_connections=MAX_CONNECTIONS, deadline=CONNECTION_DEADLINE,
+                 clock=time.monotonic):
+        self.max_connections = max_connections
+        self.deadline = deadline
+        self.clock = clock
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self._open = {}
+        self._open_lock = threading.Lock()
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            LOG.warning("connection from %s refused: %d connections are open", client_address[0], self.max_connections)
+            self.shutdown_request(request)
+            return
+        with self._open_lock:
+            self._open[id(request)] = (request, self.clock())
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._done(request)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._done(request)
+
+    def _done(self, request):
+        with self._open_lock:
+            if self._open.pop(id(request), None) is None:
+                return
+        self._slots.release()
+
+    def service_actions(self):
+        """Called by serve_forever between polls: cut the connections older than the deadline."""
+        now = self.clock()
+        with self._open_lock:
+            late = [sock for sock, since in self._open.values() if now - since > self.deadline]
+        for sock in late:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def handle_error(self, request, client_address):
         LOG.warning("connection from %s: %s", client_address[0], describe(sys.exc_info()[1]))
 
 
-def build_server(service, address, port, tls_cert=None, tls_key=None):
-    server = Server((address, port), make_handler(service))
+def build_server(service, address, port, tls_cert=None, tls_key=None, max_connections=None, deadline=None):
+    server = Server((address, port), make_handler(service), max_connections=max_connections or MAX_CONNECTIONS,
+                    deadline=deadline or CONNECTION_DEADLINE)
     if tls_cert:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -910,6 +965,8 @@ def load_settings(env=None):
         ovn_timeout=_number(env, "OVN_TIMEOUT_SECONDS", 10.0, float, 1, 300),
         api_timeout=_number(env, "API_TIMEOUT_SECONDS", 10.0, float, 1, 300),
         guard_interval=_number(env, "GUARD_INTERVAL_SECONDS", 60.0, float, 5, 86400),
+        max_connections=_number(env, "MAX_CONNECTIONS", MAX_CONNECTIONS, int, 1, 1024),
+        connection_deadline=_number(env, "CONNECTION_DEADLINE_SECONDS", CONNECTION_DEADLINE, float, 5, 3600),
         log_level=level,
     )
 
@@ -932,7 +989,7 @@ def main(argv=None, env=None):
     service = RouterAdvertisementService(store, openstack, guard)
     try:
         server = build_server(service, settings.listen_address, settings.listen_port, settings.tls_certificate,
-                              settings.tls_private_key)
+                              settings.tls_private_key, settings.max_connections, settings.connection_deadline)
     except (OSError, ssl.SSLError) as exc:
         LOG.error("refusing to start: cannot listen on %s:%d: %s", settings.listen_address, settings.listen_port,
                   describe(exc))
