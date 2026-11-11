@@ -9,9 +9,12 @@
 # Inputs:  ra_state (present|absent), ra_router_id, ra_network_id (the placement's status.realization.site.routerId
 #          and networkId), ra_site (the CloudInfrastructure name), ra_domain and ra_platform_project (the platform
 #          project the placement's router is in), optional ra_region, optional ra_held_before (the last record said
-#          the service holds it: a failed call keeps that).
-# Sets:    ra_result (the helper's result), ra_record ({mode, nat, wanted, restores, lastRestoredAt, checkedAt}:
-#          status.realization.site.routerAdvertisement), ra_failed ("" or the reason), ra_message (the reason in
+#          the service holds it: a failed call keeps that), optional ra_before (the last record: a call that got no
+#          answer about the port keeps its nat, restores, lastRestoredAt and confirmedAt, marked stale).
+# Sets:    ra_result (the helper's result), ra_record ({mode, nat, wanted, restores, lastRestoredAt, checkedAt,
+#          confirmedAt, stale}: status.realization.site.routerAdvertisement; with a service, nat and the counters are
+#          the service's answer at confirmedAt, and stale true says this run got no answer, so they are the last
+#          confirmed ones, or absent when there never was one), ra_failed ("" or the reason), ra_message (the reason in
 #          words, "" when fine). present is confirmed only when the service reports nat on the port; a failed
 #          absent keeps wanted true in the record (an absent that failed still counts as held), and so does a failed
 #          present when the last record held it, so the caller asks again (absent included) on its next run.
@@ -54,10 +57,24 @@
                ~ (_r.message | default(_r.error | default('the service did not confirm nat on the router port', true), true))) }}
     # one expression: on ansible-core 2.16 the values of a nested YAML map stay strings
     ra_record: >-
-      {{ {'mode': 'Service' if ra_url | length > 0 else 'Assumed',
-          'nat': _r.nat | default(false) | bool,
-          'wanted': (_r.wanted | default(false) | bool)
-                    or (_reason | trim | length > 0 and (ra_state == 'absent' or (ra_held_before | default(false) | bool))),
-          'restores': _r.restores | default(0) | int,
-          'lastRestoredAt': _r.lastRestoredAt | default('', true) | string,
-          'checkedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')} }}
+      {%- set _now = lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') -%}
+      {%- set rec = {'mode': 'Service' if ra_url | length > 0 else 'Assumed',
+                     'wanted': (_r.wanted | default(false) | bool)
+                               or (_reason | trim | length > 0
+                                   and (ra_state == 'absent' or (ra_held_before | default(false) | bool))),
+                     'checkedAt': _now} -%}
+      {%- if ra_url | length == 0 -%}
+        {%- set _ = rec.update({'nat': false, 'restores': 0, 'lastRestoredAt': ''}) -%}
+      {%- elif _r.error is not defined and (_r.read | default(false) | bool) -%}
+        {%- set _ = rec.update({'nat': _r.nat | default(false) | bool, 'restores': _r.restores | default(0) | int,
+                                'lastRestoredAt': _r.lastRestoredAt | default('', true) | string,
+                                'confirmedAt': _now, 'stale': false}) -%}
+      {%- else -%}
+        {#- no answer about the port: what the last answer said, if any, marked stale; never a guessed nat false -#}
+        {%- set before = ra_before | default({}, true) -%}
+        {%- for k in ['nat', 'restores', 'lastRestoredAt', 'confirmedAt'] if k in before -%}
+          {%- set _ = rec.update({k: before[k]}) -%}
+        {%- endfor -%}
+        {%- set _ = rec.update({'stale': true}) -%}
+      {%- endif -%}
+      {{ rec }}

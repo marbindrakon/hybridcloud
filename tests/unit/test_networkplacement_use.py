@@ -185,9 +185,10 @@ def ra_file():
     return tasks
 
 
-def ra_answer(nat=True, wanted=True, reason="", message="", **kw):
+def ra_answer(nat=True, wanted=True, reason="", message="", read=True, **kw):
+    """The helper's result; read False = the service gave no answer about the port (nat etc. are only defaults)."""
     return {"service": "found", "port_id": "port-v4", "nat": nat, "wanted": wanted, "changed": False, "restores": 1,
-            "lastRestoredAt": "2026-11-11T00:00:00Z", "reason": reason, "message": message, **kw}
+            "lastRestoredAt": "2026-11-11T00:00:00Z", "reason": reason, "message": message, "read": read, **kw}
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -219,6 +220,9 @@ class RouterAdvertisementInTheJob(unittest.TestCase):
         # gate F3: the IPv6-only placement of the gate (router attachments only)
         v6_ra = {"ipv6": {"prefixLength": 64}, "use": {"virtualMachines": False, "routerAttachments": True}}
         held = {"realization": {"site": {"routerAdvertisement": {"mode": "Service", "wanted": True}}}}
+        confirmed = {"realization": {"site": {"routerAdvertisement": {
+            "mode": "Service", "nat": True, "wanted": True, "restores": 3, "lastRestoredAt": "2026-11-11T17:54:55Z",
+            "checkedAt": "2026-11-11T17:55:02Z", "confirmedAt": "2026-11-11T17:55:02Z", "stale": False}}}}
         res = self.run_job([
             # 0 a placement without router attachments: no call at all, nothing recorded (with or without a service)
             {"place": os_result(), "spec": {}, "bysite": site, "answer": {}},
@@ -239,10 +243,10 @@ class RouterAdvertisementInTheJob(unittest.TestCase):
              "before": {"realization": {"site": {"routerAdvertisement": {"mode": "Service", "wanted": False}}}}},
             # 7 the service refuses: the placement stays usable, router attachments pending, re-run
             {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site,
-             "answer": ra_answer(nat=False, wanted=False, reason="NotAnAdvertisingPort", message="no option")},
+             "answer": ra_answer(nat=False, wanted=False, reason="NotAnAdvertisingPort", message="no option", read=False)},
             # 8 absent fails: still held in the record, asked again next run
             {"place": os_result(), "spec": {}, "bysite": site, "before": held,
-             "answer": ra_answer(nat=True, wanted=False, reason="OvnUnavailable", message="ovn down")},
+             "answer": ra_answer(nat=True, wanted=False, reason="OvnUnavailable", message="ovn down", read=False)},
             # 9 present answered without nat: not confirmed
             {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site, "answer": ra_answer(nat=False)},
             # 10 the helper itself failed (soft call)
@@ -251,22 +255,42 @@ class RouterAdvertisementInTheJob(unittest.TestCase):
             # 11 an http URL: the helper refuses, the placement stays usable
             {"place": os_result(ra="ready"), "spec": ra_on, "bysite": {"site-a": {"url": "http://ra.example"}},
              "answer": ra_answer(nat=False, wanted=False, reason="InvalidSetting",
-                                 message="placement.routerAdvertisementBySite[site-a].url must be an https:// URL")},
+                                 message="placement.routerAdvertisementBySite[site-a].url must be an https:// URL",
+                                 read=False)},
             # 12 Review R2 L1: present fails while the last record held it: the record keeps holding it
             {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site, "before": held,
-             "answer": ra_answer(nat=True, wanted=False, reason="ServiceUnavailable", message="no answer")},
+             "answer": ra_answer(nat=True, wanted=False, reason="ServiceUnavailable", message="no answer", read=False)},
             # 13 the next run with router attachments off reads that record: absent is asked
             {"place": os_result(), "spec": {}, "bysite": site, "before": held, "answer": ra_answer(nat=False, wanted=False)},
             # 14 a present that fails without an earlier hold records no hold
             {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site,
-             "answer": ra_answer(nat=False, wanted=False, reason="ServiceUnavailable", message="no answer")},
+             "answer": ra_answer(nat=False, wanted=False, reason="ServiceUnavailable", message="no answer", read=False)},
             # 15 gate F3: IPv6-only, router attachments on, the site has a service: not asked, NotApplicable, ready
             {"place": os_result(vm="off", ra="ready"), "spec": v6_ra, "bysite": site,
              "answer": ra_answer(nat=False, wanted=False, reason="NoRouterInterface",
                                  message="router rtr-1 has no IPv4 interface on network net-1")},
             # 16 the same without a service
             {"place": os_result(vm="off", ra="ready"), "spec": v6_ra, "bysite": {}, "answer": {}},
+            # 17 gate s3s4 (rhoso-bm, service scaled to 0): no answer while the last one said nat on: kept, stale
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site, "before": confirmed,
+             "answer": ra_answer(nat=False, wanted=False, read=False, reason="ServiceUnavailable",
+                                 message="router advertisement service at " + URL + ": [SSL: UNEXPECTED_EOF_WHILE_READING]")},
+            # 18 no answer and never an earlier one: no nat at all, stale
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site,
+             "answer": ra_answer(nat=False, wanted=False, read=False, reason="ServiceUnavailable", message="no answer")},
         ])
+        r17 = res[17]["site"]["routerAdvertisement"]
+        self.assertEqual({k: r17[k] for k in ("mode", "nat", "wanted", "restores", "lastRestoredAt", "confirmedAt", "stale")},
+                         {"mode": "Service", "nat": True, "wanted": True, "restores": 3,
+                          "lastRestoredAt": "2026-11-11T17:54:55Z", "confirmedAt": "2026-11-11T17:55:02Z", "stale": True})
+        self.assertNotEqual(r17["checkedAt"], "2026-11-11T17:55:02Z")
+        self.assertEqual(res[17]["use"]["routerAttachments"]["reason"], "RouterAdvertisementFailed")
+        r18 = res[18]["site"]["routerAdvertisement"]
+        self.assertNotIn("nat", r18)
+        self.assertIs(r18["stale"], True)
+        self.assertIs(res[1]["site"]["routerAdvertisement"]["stale"], False)
+        self.assertEqual(res[1]["site"]["routerAdvertisement"]["confirmedAt"], res[1]["site"]["routerAdvertisement"]["checkedAt"])
+        self.assertNotIn("stale", res[3]["site"]["routerAdvertisement"])      # no service: Assumed as before
         for r in (res[15], res[16]):
             self.assertEqual(r["calls"], [])
             rec = r["site"]["routerAdvertisement"]

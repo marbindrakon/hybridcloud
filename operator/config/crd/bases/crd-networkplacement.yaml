@@ -260,7 +260,9 @@ spec:
                               description: Why the advertisement does not apply (mode NotApplicable).
                             nat:
                               type: boolean
-                              description: The service reports the advertisement on the router port.
+                              description: >-
+                                The service reports the advertisement on the router port (its answer at
+                                confirmedAt). Absent when the service never answered for the port.
                             wanted:
                               type: boolean
                               description: The service holds the advertisement (restores it when the site removes it).
@@ -273,6 +275,15 @@ spec:
                             checkedAt:
                               type: string
                               description: When the platform last asked the service (RFC 3339).
+                            confirmedAt:
+                              type: string
+                              description: When the service last answered for the router port (RFC 3339).
+                            stale:
+                              type: boolean
+                              description: >-
+                                The service did not answer when last asked; nat and the counters are its last answer
+                                (confirmedAt) and may no longer be true. The reason is on router attachments
+                                (status.use).
                 mtu:
                   type: integer
                   description: Effective MTU at this placement.

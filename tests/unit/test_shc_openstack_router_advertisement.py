@@ -216,6 +216,7 @@ class RouterAdvertisement(unittest.TestCase):
         again = self.call()
         self.assertEqual(self.svc.calls[n:], [("GET", f"/v1/router-ports/{PORT4}")])
         self.assertEqual((again["nat"], again["wanted"], again["changed"]), (True, True, False))
+        self.assertIs(out["read"] and again["read"], True)
 
     def test_nat_without_the_services_wish_gets_the_marker(self):
         self.svc.ports[PORT4]["redistribute"].append("nat")
@@ -321,6 +322,7 @@ class RouterAdvertisement(unittest.TestCase):
         self.svc.stop()
         out = self.call()
         self.assertEqual(out["reason"], "ServiceUnavailable")
+        self.assertIs(out["read"], False)       # nat false here is a default, not the port's state
         self.svc = FakeService(self.cert, self.key)
 
     def test_every_call_times_out(self):

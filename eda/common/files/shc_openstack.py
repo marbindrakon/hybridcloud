@@ -906,8 +906,9 @@ def router_advertisement(req):
     """state present|absent, router_id, network_id, service_url (empty = no service), project_id or
     domain + platformProject (the router's project: the token is scoped to it, as the service authorizes by the
     port's project), site (names the realization key in messages), timeout (seconds, default 10).
-    -> {service: found|absent, port_id, nat, wanted, changed, restores, lastRestoredAt, reason, message}; reason ""
-    = done. Service errors come back with the service's reason (Unauthenticated, NotProjectScoped, NotYourPort,
+    -> {service: found|absent, port_id, nat, wanted, changed, restores, lastRestoredAt, reason, message, read}; reason
+    "" = done; read = the service answered with the port's state (nat, wanted, restores and lastRestoredAt are its
+    answer; without read they are only defaults: the caller must not report them as the port's state). Service errors come back with the service's reason (Unauthenticated, NotProjectScoped, NotYourPort,
     NotARouterInterface, NoSuchRouterPort, NotAnAdvertisingPort, BadRequest, OvnUnavailable, IdentityUnavailable,
     NetworkUnavailable, and NotFound, MethodNotAllowed, InternalError); ServiceUnavailable = no answer (or a redirect,
     which is never followed); InvalidSetting = not an https URL, or a site credential that turns certificate
@@ -920,7 +921,7 @@ def router_advertisement(req):
 
 def _router_advertisement(acct, req):
     out = {"service": "absent", "port_id": "", "nat": False, "wanted": False, "changed": False, "restores": 0,
-           "lastRestoredAt": "", "reason": "", "message": ""}
+           "lastRestoredAt": "", "reason": "", "message": "", "read": False}
     url = (req.get("service_url") or "").strip().rstrip("/")
     if not url:
         return out
@@ -952,7 +953,7 @@ def _router_advertisement(acct, req):
     if port is None and state == "absent":
         # no IPv4 interface: no port that could carry nat, so nothing to drop (an IPv6-only placement, or an
         # interface already removed)
-        return out
+        return {**out, "read": True}
     if port is None:
         return {**out, "reason": "NoRouterInterface",
                 "message": f"router {req['router_id']} has no IPv4 interface on network {req['network_id']}"}
@@ -986,10 +987,10 @@ def _router_advertisement(acct, req):
 
     status, body = call("GET")
     if nothing_to_drop(status, body):
-        return out
+        return {**out, "read": True}
     if status != 200:
         return failed(status, body)
-    out.update({"nat": bool(body.get("nat")), "wanted": bool(body.get("wanted")),
+    out.update({"read": True, "nat": bool(body.get("nat")), "wanted": bool(body.get("wanted")),
                 "restores": int(body.get("restores") or 0), "lastRestoredAt": str(body.get("lastRestoredAt") or "")})
     enable = state == "present"
     # present: nat held by the service (wanted); absent: only what the service holds is dropped

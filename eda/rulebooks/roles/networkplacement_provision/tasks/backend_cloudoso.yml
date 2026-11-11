@@ -104,6 +104,7 @@
     ra_platform_project: "{{ fab_real.openstack.platformProject }}"
     ra_region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
     ra_held_before: "{{ np_ra_held | bool }}"
+    ra_before: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerAdvertisement | default({}, true) }}"
   when: (np_ra_want | bool and np_ra_applies | bool) or np_ra_held | bool
 
 - name: Record the router advertisement
