@@ -160,7 +160,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `AsnConflict` | The AS number conflicts with one already in use. | You (the tenant) |
 | `AttachmentNotSupported` | This attachment is not supported on the chosen site. | You (the tenant) |
 | `BearerNotFound` | The provider edge has no bearer of that name. Ask the platform team for the bearer names. | You (the tenant) |
-| `BuildOwnerMismatch` | The cluster's build on the platform is marked for another copy of this cluster (a restored cluster object gets a new identity). The platform team checks it; nothing of the build is changed meanwhile. | The platform team |
+| `BuildOwnerMismatch` | The cluster's build on the platform is marked for another copy of this cluster (a restored copy). The platform team checks it. | The platform team |
 | `CeKindNotAccepted` | The bearer does not accept this kind of router. Choose another bearer or ask the platform team. | You (the tenant) |
 | `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `ClaimMissing` | Members of the granted access groups cannot sign in yet. The platform team is looking at it. | The platform team |
@@ -192,7 +192,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NetworkNameNotUnique` | Your environment sees another network with the name of the cluster's network. Rename or remove the other network. | You (the tenant) |
 | `NetworkNotFound` | The cluster's network or its placement in this environment was not found. | You (the tenant) |
 | `NoAccount` | No cloud account is set up for this environment. | You (the tenant) |
-| `NoBuildRecorded` | This cluster recorded no build on the platform, so its deletion removed nothing there. The platform team looks for a build left from before. | The platform team |
+| `NoBuildRecorded` | The cluster recorded no build on the platform, so its deletion removed nothing there. The platform team checks. | The platform team |
 | `NoDefaultConfig` | No default connection is configured for this service. Ask the platform team. | The platform team |
 | `NoProject` | No cloud project is set up for this environment. | You (the tenant) |
 | `NodeUnreachable` | A network node does not answer. Traffic takes the other nodes; the platform team is alerted. | The platform team |
@@ -217,7 +217,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
 | `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
 | `ServiceFailed` | A network service on a node is not running. The platform team is alerted. | The platform team |
-| `ServiceLinkDown` | On a node, a network does not learn the platform's routes for its clusters; the other nodes carry them. The platform team is alerted. | The platform team |
+| `ServiceLinkDown` | On a node, a network lacks the platform's routes for its clusters; other nodes carry them. The platform team is alerted. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
 | `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
 | `ServiceSessionsDown` | A node has no session with the platform's router for clusters on networks. The platform team is alerted. | The platform team |
