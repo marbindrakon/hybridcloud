@@ -1385,8 +1385,12 @@ cdevs = [c["device"] for c in cs]
 out = ["table ip shc_service", "delete table ip shc_service", "table ip shc_service {"]
 if hub:
     out.append(f"  set hub {{ type ipv4_addr; flags interval; elements = {{ {', '.join(hub)} }}; }}")
+# (each wildcard in a rule of its own: a wildcard inside a set needs a newer nftables than a single one)
 out += ["  chain raw_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
-        f'    iifname {names(["so*", "se*"] + cdevs)} notrack', "  }"]
+        '    iifname "so*" notrack', '    iifname "se*" notrack']
+if cdevs:
+    out.append(f"    iifname {names(cdevs)} notrack")
+out.append("  }")
 # past prerouting a VRF slave's packets show the VRF as their input interface: the device is meta sdifname
 out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
 for c in cs:
@@ -1432,7 +1436,9 @@ for n in ns:
 # the drops: every service link by its name's form, whichever networks this configuration lists
 out.append('    meta sdifname "so*" oifname "so*" counter drop comment "no network reaches another through the service VRF"')
 out.append('    meta sdifname "se*" oifname "xe*" counter drop comment "the hub\'s traffic never leaves by a network\'s internet egress"')
-out.append(f'    meta sdifname {names(["so*"] + cdevs)} counter drop comment "nothing else through the service VRF"')
+out.append('    meta sdifname "so*" counter drop comment "nothing else through the service VRF"')
+if cdevs:
+    out.append(f'    meta sdifname {names(cdevs)} counter drop comment "nothing else through the service VRF"')
 out.append("  }")
 out.append("}")
 print("\n".join(out))

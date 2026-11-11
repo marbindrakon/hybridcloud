@@ -593,7 +593,7 @@ def unfiltered(st, vrf="service"):
     lines = table.splitlines()
 
     def drop(comment):
-        return next((l for l in lines if f'counter drop comment "{comment}' in l), "")
+        return "\n".join(l for l in lines if f'counter drop comment "{comment}' in l)
     between, last = drop("no network reaches another"), drop("nothing else through the service VRF")
     bad = []
     for d, l in sorted(ns["links"].items()):
@@ -919,7 +919,9 @@ class RealKernel(A.ApplyCase):
         self.assertIn("192.0.2.15:6443>40000 12", res["after"]["raw"])
         self.assertNotIn(">40001", res["after"]["raw"])
         self.assertIn("192.0.2.15:6443>40001 02", res["before"]["raw"])
-        counts = dict((c, int(n)) for n, c in re.findall(r'counter packets (\d+) bytes \d+ drop comment "([^"]+)"', p.stdout))
+        counts = {}
+        for n, c in re.findall(r'counter packets (\d+) bytes \d+ drop comment "([^"]+)"', p.stdout):
+            counts[c] = counts.get(c, 0) + int(n)
         self.assertGreaterEqual(counts.get("no network reaches another through the service VRF", 0), 1, p.stdout)
         self.assertGreaterEqual(counts.get("nothing else through the service VRF", 0), 2, p.stdout)
 
