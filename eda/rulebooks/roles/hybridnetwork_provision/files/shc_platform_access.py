@@ -40,6 +40,8 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
     It goes back only when no cluster asks for it any more (the cluster's teardown, its refusal, the tenant turning
     platform access off, which waits for the clusters) or for the tenant's own fault (RELEASE_REASONS: not IPv4, outside
     the network's space, a network without IPv4) and when it lost to an earlier one (ServicePrefixInUse).
+    An AWS/GCP prefix accepted before that is not among the placements' subnets in this run keeps its entry
+    (WaitingForPlacement): the lookup may lack it for a run; an entry never goes back because a lookup came back empty.
 """
 import ipaddress
 import json
@@ -240,6 +242,15 @@ def platform_access(req):
                 row.update(reason="OutsideAddressSpace", message=f"{n} is outside the network's address space")
                 continue
             shape = prefix_shape(c, n, subnets)
+            if shape and str(c.get("type") or "") in ("aws", "gcp") and owner(key, str(n)) in ledger:
+                # accepted before, so it was a placement subnet: the placements read now lack it (a placement made
+                # again, a status not written yet); a lookup never gives a place back while the cluster asks for it
+                row.update(state="pending", reason="WaitingForPlacement",
+                           message=f"{n} keeps its place (accepted before); not reached now: it is not a subnet of "
+                                   "the network's placements at the moment")
+                if str(n) not in kept:
+                    kept.append(str(n))
+                continue
             if shape:
                 row.update(reason="InvalidSpec", message=shape)
                 continue

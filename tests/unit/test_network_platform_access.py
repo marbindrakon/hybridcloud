@@ -235,6 +235,25 @@ class Prefixes(unittest.TestCase):
         out = run(clusters=[], ledger=led, serviceStatus={"circuits": []})
         self.assertEqual((out["kept"], out["release"]), ([], ["HybridNetwork/tenant-a/net/10.20.1.5/32"]))
 
+    def test_a_placement_lookup_without_the_subnet_keeps_the_ledger_entry(self):
+        # Review R3 U2: the network's placements can lack an AWS/GCP cluster's subnet for a run (a placement deleted and
+        # made again, a status not written yet): an entry accepted before is kept while the cluster asks for it
+        led = {"HybridNetwork/tenant-a/net/10.20.4.0/24": 3}
+        for cloud in ("aws", "gcp"):
+            for placements in ([], ["10.20.8.0/24"]):
+                with self.subTest(cloud=cloud, placements=placements):
+                    c = dict(cl("c1", "10.20.4.0/24"), type=cloud)
+                    out = run(clusters=[c], ledger=led, placements=placements)
+                    row = out["prefixes"][0]
+                    self.assertEqual((row["state"], row["reason"]), ("pending", "WaitingForPlacement"))
+                    self.assertIn("keeps its place", row["message"])
+                    self.assertEqual((out["accepted"], out["kept"], out["release"]), ([], ["10.20.4.0/24"], []))
+            # never accepted: the shape is refused as before; no cluster asking: the entry goes back
+            out = run(clusters=[dict(cl("c1", "10.20.4.0/24"), type=cloud)], placements=[])
+            self.assertEqual((out["prefixes"][0]["state"], out["prefixes"][0]["reason"]), ("refused", "InvalidSpec"))
+            out = run(clusters=[], ledger=led, placements=[])
+            self.assertEqual(out["release"], ["HybridNetwork/tenant-a/net/10.20.4.0/24"])
+
     def test_a_conflict_is_refused_during_an_outage(self):
         led = {"HybridNetwork/tenant-b/web/10.20.1.5/32": 1}
         out = run(clusters=[cl("c1", "10.20.1.5/32")], ledger=led, serviceStatus={"circuits": []})
