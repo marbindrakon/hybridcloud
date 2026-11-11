@@ -1130,8 +1130,8 @@ spec:
                       type: array
                       description: >-
                         ceKind platform: the routes the platform advertises over the circuit, as prefix-list entries
-                        the router at the other end can accept with a fixed filter ("any" when the platform does not
-                        limit them).
+                        the router at the other end can accept with a fixed filter; the platform never announces a
+                        route outside them.
                       items:
                         type: string
                     acceptedRanges:
@@ -5384,8 +5384,9 @@ spec:
                           state:
                             type: string
                             description: >-
-                              ready (reached), pending (being connected or waiting for the platform) or refused
-                              (see reason).
+                              ready (reached), pending (being connected or waiting for the platform; an address
+                              accepted before keeps its place while it waits, until its cluster gives it up) or
+                              refused (see reason).
                           reason:
                             type: string
                             description: One-word reason when not ready.
