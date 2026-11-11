@@ -1,0 +1,20 @@
+---
+# Record the cluster's DNS records in status.dns before they are created (Review R2 M4): the teardown deletes what is
+# recorded (a recorded record that was never created is reported missing, nothing more), so a failure between the
+# creation and the job's later status writes (pull secret, SSH key, install-config, Vault) leaves no record behind
+# that points at floating IPs the teardown gives back to the pool. Input: dr_records (the records as the teardown
+# reads them: Designate {zoneId, zone, name, type}, Route53 {zone, name, type}).
+- name: Record the cluster's DNS records (before they are created)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      dns:
+        provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
+        accountVaultPath: null
+        projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
+        records: "{{ dr_records }}"

@@ -240,13 +240,24 @@ export function defaultOverlapHints(input: ClusterNetworkingInput, ctx: Networki
   const out: NetworkingProblem[] = [];
   const reserved = applicableReserved(ctx.reserved, ctx.site);
   const space4 = ctx.networkSpace.filter((p) => parseNetworkPrefix(p)?.family === 4);
+  const machineApplies = machineNetworkApplies(ctx.provider, ctx.hasNetwork);
   for (const field of RANGE_FIELDS) {
     if (input[field].trim()) continue;
-    if (field === 'machineNetwork' && !machineNetworkApplies(ctx.provider, ctx.hasNetwork)) continue;
+    if (field === 'machineNetwork' && !machineApplies) continue;
     const cidr = OPENSHIFT_DEFAULTS[field];
     const net = space4.find((s) => overlaps(cidr, s));
     if (net) {
       out.push({ field, code: 'AddressConflict', cidr, other: `network:${net}` });
+      continue;
+    }
+    // the job fills the empty field with its default first and then checks it against the typed ones
+    const typed = RANGE_FIELDS.filter(
+      (o) => (MUST_NOT_OVERLAP[field].includes(o) || MUST_NOT_OVERLAP[o].includes(field))
+        && (o !== 'machineNetwork' || machineApplies)
+        && parseIpv4Cidr(input[o].trim()),
+    ).find((o) => overlaps(cidr, input[o].trim()));
+    if (typed) {
+      out.push({ field, code: 'AddressConflict', cidr, other: `field:${typed}` });
       continue;
     }
     const r = reservedApplies(field, ctx.provider) ? reservedOverlap(cidr, reserved) : undefined;

@@ -1,0 +1,33 @@
+---
+# Create one object on central and never change an existing one: a POST to the collection, which the API server
+# answers 201 (created now) or 409 (it exists; nothing was written). The caller reads what exists and decides; two
+# jobs that race for one name cannot both get 201. Inputs: cc_path (the collection's API path, e.g.
+# /api/v1/namespaces), cc_body (the object). Uses central_api_host / central_bearer_token. Sets cc_status (201|409).
+- name: "Create {{ cc_body.kind | default('the object') }} {{ cc_body.metadata.name }} on central (only if absent)"
+  ansible.builtin.uri:
+    url: "{{ central_api_host | trim | regex_replace('/$', '') }}{{ cc_path }}"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ central_bearer_token | trim }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ cc_body }}"
+    validate_certs: false
+    timeout: 60
+    status_code: [201, 409]
+  register: _cc_post
+  # the request carries the central token in a header, which the uri module does not mask
+  no_log: true
+  failed_when: false
+
+- name: "Fail when central refused {{ cc_body.metadata.name }}"
+  ansible.builtin.fail:
+    msg: >-
+      Creating {{ cc_body.kind | default('the object') }} {{ cc_body.metadata.name }} on central failed (HTTP
+      {{ _cc_post.status | default('?') }}):
+      {{ (_cc_post.json | default({}, true)).message | default(_cc_post.msg | default(''), true) }}
+  when: (_cc_post.status | default(-1)) not in [201, 409]
+
+- name: Keep the answer
+  ansible.builtin.set_fact:
+    cc_status: "{{ _cc_post.status | int }}"

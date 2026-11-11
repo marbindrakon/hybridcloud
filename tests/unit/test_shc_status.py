@@ -249,6 +249,26 @@ class Patch(unittest.TestCase):
         self.assertIsNone(S.phase_backfill_patch(o, NOW))
 
 
+class RescueKeepsConditions(unittest.TestCase):
+    """Review R2 L8 (not a defect): the PlatformOpenshift rescue writes conditions: [] after a failure that is not a
+    preflight refusal; conditions merge by type, so an empty list removes nothing (Available and Preflight stay)."""
+
+    def test_empty_conditions_remove_nothing(self):
+        cur = {"conditions": [
+            {"type": "Ready", "status": "True", "reason": "Ready", "message": "", "lastTransitionTime": EARLY},
+            {"type": "Available", "status": "True", "reason": "EDASucceeded", "message": "", "lastTransitionTime": EARLY},
+            {"type": "Preflight", "status": "True", "reason": "PreflightPassed", "message": "", "lastTransitionTime": EARLY}]}
+        o = obj(cur)
+        o["kind"] = "PlatformOpenshift"
+        patch, _ = S.compute_status_patch(o, {"status": "failed", "reason": "ProvisionFailed", "ready": False,
+                                              "message": "a transient failure", "conditions": []},
+                                          {"event_id": ""}, NOW)
+        conds = patch["status"]["conditions"]
+        self.assertEqual(S.find_condition(conds, "Available")["status"], "True")
+        self.assertEqual(S.find_condition(conds, "Preflight")["status"], "True")
+        self.assertEqual(S.find_condition(conds, "Ready")["status"], "False")
+
+
 class Registry(unittest.TestCase):
     def test_entries(self):
         for reason, entry in R.REASONS.items():

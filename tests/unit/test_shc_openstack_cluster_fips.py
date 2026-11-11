@@ -186,3 +186,48 @@ class ProvisionWithoutPair(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NetworkNameCheck(unittest.TestCase):
+    """Review R2 M3: the networks of a name the environment's project sees (the installer takes the name)."""
+
+    def check(self, nets, rbac, name="hn51005", want="net-placed"):
+        conn = Obj(network=Obj(
+            networks=lambda **f: [n for n in nets if n.name == f.get("name")],
+            rbac_policies=lambda **f: [r for r in rbac if r.object_id == f.get("object_id")]))
+        acct = mock.Mock()
+        acct.project.return_value = conn
+        with mock.patch.object(S, "Account", return_value=acct):
+            out = S.network_name_check({"clouds_yaml": "/dev/null", "project_id": PROJECT, "name": name, "network_id": want})
+        acct.project.assert_called_with(PROJECT)
+        return out
+
+    def test_only_the_placed_network(self):
+        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False),
+                Obj(id="net-x", name="hn51005", project_id="proj-other", is_shared=False)]   # another project's own
+        rbac = [Obj(object_id="net-placed", target_project_id=PROJECT)]
+        out = self.check(nets, rbac)
+        self.assertEqual([v["id"] for v in out["visible"]], ["net-placed"])
+        self.assertTrue(out["unique"])
+
+    def test_the_tenants_own_network_of_that_name(self):
+        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False),
+                Obj(id="net-mine", name="hn51005", project_id=PROJECT, is_shared=False)]
+        out = self.check(nets, [Obj(object_id="net-placed", target_project_id=PROJECT)])
+        self.assertFalse(out["unique"])
+        self.assertEqual(sorted(v["id"] for v in out["visible"]), ["net-mine", "net-placed"])
+
+    def test_shared_into_the_project_or_to_everyone(self):
+        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False),
+                Obj(id="net-s", name="hn51005", project_id="proj-other", is_shared=False),
+                Obj(id="net-all", name="hn51005", project_id="proj-third", is_shared=True)]
+        rbac = [Obj(object_id="net-placed", target_project_id=PROJECT), Obj(object_id="net-s", target_project_id=PROJECT)]
+        self.assertEqual(len(self.check(nets, rbac)["visible"]), 3)
+        rbac = [Obj(object_id="net-placed", target_project_id=PROJECT), Obj(object_id="net-s", target_project_id="*")]
+        self.assertEqual(len(self.check(nets[:2], rbac)["visible"]), 2)
+
+    def test_not_visible_or_another_one(self):
+        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False)]
+        self.assertEqual(self.check(nets, [])["visible"], [])
+        mine = [Obj(id="net-mine", name="hn51005", project_id=PROJECT, is_shared=False)]
+        self.assertFalse(self.check(mine, [])["unique"])

@@ -6,9 +6,16 @@ request itself is malformed. A refusal is a result, not an error: {"reason": <co
 "wait": <true when nobody needs to act and the job re-checks later>}; reason "" means the check passed.
 
 Actions (request["action"]):
-  build-name     {prefix, entity, name}  the cluster's build name <prefix>-<entity>-<name> (lower case, other
-                 characters as "-"); longer than 53 characters (a Helm release name's limit): cut to 44 plus "-" and
-                 8 hex digits of its SHA-1. -> {buildName}
+  build-name     {prefix, entity, name, max}  the cluster's build name <prefix>-<entity>-<name>-<digest>: the readable
+                 part (lower case, other characters as "-") cut to fit max characters (default 53, a Helm release
+                 name's limit), and 8 hex digits of the SHA-256 of the exact pair (entity, NUL, name), so two pairs
+                 whose readable parts read alike (a hyphen from either side, a cut) still get different names.
+                 Stable for a pair. -> {buildName}
+  hub-owner      {namespace: the hub namespace object or {}, uid, recorded, buildName, claim}  whether the cluster
+                 (PlatformOpenshift uid) owns the build's hub namespace: it carries the owner label with that uid; or,
+                 for a build recorded under that name before the label existed, it has no owner label (claim: true
+                 adopts it); a teardown (claim false) of a recorded build whose namespace is gone owns its leftovers.
+                 -> {owned, adopt, reason, message}
   networking     {spec: spec.networking, defaults: {clusterNetwork, hostPrefix, serviceNetwork, machineNetwork},
                  machineFromPlacement: cidr or ""}  the cluster's ranges in effect (spec over defaults; the placement's
                  subnet as machine network for a cloud cluster on a network); a malformed default names its setting;
@@ -29,8 +36,8 @@ Actions (request["action"]):
   service-wait   {network (namespace/name), prefixes, service, rows: HybridNetwork status.platformAccess.prefixes}
                  -> {done, reason, message}: done when every prefix is carried for the network; a refusal (on the
                  fabric's refused list or a refused row of the network) gives its reason.
-  router-gateway {routers: [router objects], name}  the IPv4 address of the named router's external gateway.
-                 -> {address}
+  router-gateway {routers: [router objects], name, network_id}  the IPv4 address of the named router's external
+                 gateway, when exactly one router has the name and its gateway is on network_id. -> {address, note}
 """
 import hashlib
 import ipaddress
@@ -41,6 +48,9 @@ import sys
 from urllib.parse import urlparse
 
 BUILD_NAME_MAX = 53
+BUILD_NAME_DIGEST = 8
+# the hub namespace of a build carries the uid of the PlatformOpenshift it was made for
+OWNER_LABEL = "hybridsovereign.redhat/platformopenshift-uid"
 
 # HybridNetwork condition PlatformReachable False reason -> the cluster's Preflight reason
 PLATFORM_REASONS = {
@@ -85,10 +95,41 @@ def build_name(req):
     name = str(req.get("name") or "").strip()
     if not entity or not name:
         raise ValueError("build-name needs entity and name")
-    base = re.sub(r"[^a-z0-9-]", "-", f"{req.get('prefix', 'shc-oso')}-{entity}-{name}".lower())
-    if len(base) > BUILD_NAME_MAX:
-        base = base[:BUILD_NAME_MAX - 9].rstrip("-") + "-" + hashlib.sha1(base.encode()).hexdigest()[:8]
-    return {"buildName": base}
+    prefix = re.sub(r"[^a-z0-9-]", "-", str(req.get("prefix") or "shc-oso").lower()).strip("-")
+    limit = int(req.get("max") or BUILD_NAME_MAX)
+    digest = hashlib.sha256(f"{entity}\0{name}".encode()).hexdigest()[:BUILD_NAME_DIGEST]
+    room = limit - len(prefix) - len(digest) - 2
+    if room < 1:
+        raise ValueError(f"build-name: {limit} characters leave no room after {prefix}")
+    readable = re.sub(r"[^a-z0-9-]", "-", f"{entity}-{name}".lower())[:room].strip("-")
+    return {"buildName": "-".join(x for x in (prefix, readable, digest) if x)}
+
+
+def hub_owner(req):
+    """The cluster's claim on its build's hub namespace (see the module's docstring)."""
+    ns = req.get("namespace") or {}
+    uid = str(req.get("uid") or "")
+    build = str(req.get("buildName") or "")
+    recorded = str(req.get("recorded") or "")
+    meta = ns.get("metadata") or {}
+    owner = str((meta.get("labels") or {}).get(OWNER_LABEL) or "")
+    out = {"owned": False, "adopt": False, "reason": "", "message": ""}
+    if not build:
+        return dict(out, reason="NoBuildName", message="the cluster has no build name, so it owns nothing on the hub")
+    if not meta:
+        if flag(req.get("claim")):
+            return dict(out, reason="NotClaimed", message=f"namespace {build} does not exist on the hub")
+        if recorded and recorded == build:
+            return dict(out, owned=True)
+        return dict(out, reason="NotRecorded", message=f"build {build} is not recorded by this cluster")
+    if owner:
+        if uid and owner == uid:
+            return dict(out, owned=True)
+        return dict(out, reason="NamespaceTaken", message=f"namespace {build} on the hub belongs to another cluster")
+    if recorded and recorded == build:
+        return dict(out, owned=True, adopt=flag(req.get("claim")))
+    return dict(out, reason="NamespaceTaken", message=f"namespace {build} on the hub exists and was not made for "
+                "this cluster")
 
 
 def networking(req):
@@ -312,18 +353,23 @@ def service_wait(req):
 
 
 def router_gateway(req):
-    for r in req.get("routers") or []:
-        if not isinstance(r, dict) or r.get("name") != req.get("name"):
-            continue
-        gw = r.get("external_gateway_info") or {}
-        for f in gw.get("external_fixed_ips") or []:
-            a = str((f or {}).get("ip_address") or "")
-            if a and ":" not in a:
-                return {"address": a}
-    return {"address": ""}
+    """The router is found by name in a project the tenant writes to: only a name that is unique there, and a router
+    whose gateway is on the cluster's network (network_id), gives an address (Review R2 L9)."""
+    named = [r for r in req.get("routers") or [] if isinstance(r, dict) and r.get("name") == req.get("name")]
+    if len(named) != 1:
+        return {"address": "", "note": f"{len(named)} routers named {req.get('name')}" if named else ""}
+    gw = named[0].get("external_gateway_info") or {}
+    want = str(req.get("network_id") or "")
+    if want and str(gw.get("network_id") or "") != want:
+        return {"address": "", "note": f"router {req.get('name')} has its gateway on another network"}
+    for f in gw.get("external_fixed_ips") or []:
+        a = str((f or {}).get("ip_address") or "")
+        if a and ":" not in a:
+            return {"address": a, "note": ""}
+    return {"address": "", "note": ""}
 
 
-ACTIONS = {"build-name": build_name, "networking": networking, "network": network, "external": external,
+ACTIONS = {"build-name": build_name, "hub-owner": hub_owner, "networking": networking, "network": network, "external": external,
            "fips-check": fips_check, "service-wait": service_wait, "router-gateway": router_gateway}
 
 

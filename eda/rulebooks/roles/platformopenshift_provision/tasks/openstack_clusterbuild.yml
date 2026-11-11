@@ -85,6 +85,13 @@
       vars:
         vault_kv_path: "{{ cb_route53_vault_path }}"
 
+    - name: Record the Route53 records before they are created
+      ansible.builtin.include_tasks: dns_record.yml
+      vars:
+        dr_records:
+          - {zone: "{{ cb_base_domain }}", name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
+          - {zone: "{{ cb_base_domain }}", name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
+
     - name: Create Route53 A records for the API and apps wildcard
       amazon.aws.route53:
         state: present
@@ -198,6 +205,8 @@
       status: reconciling
       ready: false
       message: "OpenStack cluster build {{ cb_cluster_name }} in progress"
+      # the install starts with the Helm release below: from here on a refusal never gives the floating IPs back
+      installStarted: true
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
         accountVaultPath: null

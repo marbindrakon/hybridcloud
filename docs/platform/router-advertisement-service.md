@@ -47,6 +47,13 @@ platform.
   - A router interface that is removed and added again is a new port without the marker. The platform's network
     placement asks for `nat` again in the same run; a port recreated by hand stays without `nat` until the next
     platform run.
+- **It only makes floating IPs reachable from outside the site.** It changes what the site advertises, not how the
+  site forwards. Whether a tenant router whose gateway is on a placed network (a tunnelled network without a
+  physical network) carries traffic at all depends on the site's Neutron: some versions do not schedule such a
+  gateway on any chassis, and then the router has no internet access and its floating IPs answer nobody, with or
+  without `nat`. An administrator sees it on the router's gateway port: `openstack port list --device-owner
+  network:router_gateway --network <network>` shows its status `DOWN` (and `openstack port show <port id>` no
+  hosting chassis in its binding), where a working gateway is `ACTIVE`.
 
 ## API
 
@@ -55,7 +62,8 @@ JSON over HTTPS; an internal API of the platform, not registered in Keystone. Th
 
 | Call | Result |
 |---|---|
-| `GET /healthz` | 200 `{"ok": true, "ovn": "connected" or "unreachable", "guard": {"wanted": <n>, "restoredSinceStart": <n>, "suspended": [<port id>, ...]}}`; no authentication, port ids only |
+| `GET /healthz` | 200 `{"ok": true, "ovn": "connected" or "unreachable", "guard": {"wanted": <n>, "restoredSinceStart": <n>, "suspended": [<port id>, ...]}}`; no authentication, port ids only; the liveness probe |
+| `GET /readyz` | 200 `{"ready": true, "ovn": "connected"}`, or 503 `{"ready": false, "ovn": "unreachable"}` while the northbound database is not connected; no authentication; the readiness probe |
 | `GET /v1/router-ports/{port_id}` | 200 `{"portId", "lrp", "redistribute": [...], "nat": true or false, "wanted": true or false, "restores": <n since start>, "lastRestoredAt": <time or null>}` |
 | `PUT /v1/router-ports/{port_id}/nat` with `{"enabled": true}` or `{"enabled": false}` | 200 `{"portId", "lrp", "before": [...], "after": [...], "changed": true or false}`; `true` appends `nat` and sets the marker, `false` removes both; repeating a call changes nothing |
 
@@ -86,10 +94,12 @@ Environment variables of the service; a missing required setting stops the start
 | `KEYSTONE_URL`, `NEUTRON_URL` | required: the site's internal identity and network endpoints |
 | `OS_CACERT` | optional: the CA bundle for those endpoints |
 | `LISTEN_ADDRESS`, `LISTEN_PORT` | default `0.0.0.0` and `8080` |
-| `TLS_CERTIFICATE`, `TLS_PRIVATE_KEY` | optional, together: the service serves TLS itself |
+| `TLS_CERTIFICATE`, `TLS_PRIVATE_KEY` | optional, together: the service serves TLS itself (a renewed certificate is loaded within a minute) |
 | `OVN_TIMEOUT_SECONDS` | default 10: the longest wait for one database transaction |
 | `API_TIMEOUT_SECONDS` | default 10: the longest wait for one Keystone or Neutron call |
 | `GUARD_INTERVAL_SECONDS` | default 60: the guard's full pass |
+| `MAX_CONNECTIONS` | default 32: connections served at once; a connection beyond that is closed at once |
+| `CONNECTION_DEADLINE_SECONDS` | default 60: the longest a connection stays open, however slowly its client sends |
 | `LOG_LEVEL` | default `INFO` |
 
 ## Install
@@ -99,7 +109,8 @@ The service has no image of its own: it runs in the site's own Neutron server im
 
 - OpenStack on OpenShift: [deploy/rhoso](../../site-components/router-advertisement/deploy/rhoso/README.md) (an
   OpenShift template: ServiceAccount without API access, the OVN client certificate from the namespace's OVN CA,
-  Service, re-encrypting Route, Deployment).
+  Service, Route, Deployment; optionally a second template for the Route's certificate from the issuer of the
+  site's public endpoints, so that the CA bundle of the platform's site credential verifies it).
 - Control planes that run services as containers on hosts:
   [deploy/container](../../site-components/router-advertisement/deploy/container/README.md).
 

@@ -118,6 +118,7 @@ REASONS = {
     "ServicePrefixInUse": _r("T", FAILED, "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team."),
     "NetworkChoiceRequired": _r("T", FAILED, "This site has no default external network. Choose a network."),
     "ExternalNetworkNotListed": _r("T", FAILED, "The named network is not an external network of this site."),
+    "NetworkNameNotUnique": _r("T", FAILED, "Your environment sees another network with the name of the cluster's network. Rename or remove the other network."),
     # edge connections (AttachmentCircuit): the bearer and the kind of router at the other end
     "BearerNotFound": _r("T", FAILED, "The provider edge has no bearer of that name. Ask the platform team for the bearer names."),
     "CeKindNotAccepted": _r("T", FAILED, "The bearer does not accept this kind of router. Choose another bearer or ask the platform team."),

@@ -64,6 +64,8 @@
         ns_labels: "{{ (ns_info.resources | default([{}]))[0].metadata.labels | default({}) }}"
         ns_annotations: "{{ (ns_info.resources | default([{}]))[0].metadata.annotations | default({}) }}"
         platformopenshift_generation: "{{ platformopenshift_cr.resources[0].metadata.generation | default(0) | int }}"
+        # the identity the build's hub namespace is marked with (claim_build.yml)
+        po_uid: "{{ platformopenshift_cr.resources[0].metadata.uid | default('', true) }}"
 
     - name: Resolve entity label
       ansible.builtin.set_fact:

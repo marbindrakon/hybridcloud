@@ -2,7 +2,7 @@
 # shc (DESIGN cnet §4.2): an OpenStack cluster is published on a hybrid network placed on its environment
 # (spec.openstack.network) or on one of the site's global external networks (spec.openstack.externalNetwork, else the
 # site's default). Its two floating IPs are its own (allocated, recorded and released by these jobs), its build name
-# is shc-oso-<entity>-<name>, and a preflight refuses before anything is created.
+# is shc-oso-<entity>-<name>-<digest> (build_name.yml), and a preflight refuses before anything is created.
 - name: Set OpenStack spec facts
   ansible.builtin.set_fact:
     oso_env_name: "{{ platform_spec.openstack.environment }}"
@@ -81,6 +81,9 @@
   vars:
     bn_entity: "{{ cb_entity }}"
     bn_name: "{{ ansible_operator_meta.name }}"
+    bn_recorded: >-
+      {{ (((platformopenshift_cr | default({})).resources | default([{}], true) | first).status | default({}, true)).buildName
+         | default('', true) }}
 
 # cb_app_name / cb_cluster_name: the build on the hub (Helm release, namespace, ClusterDeployment, ManagedCluster);
 # cb_ocp_name: the OpenShift cluster (install-config metadata.name, DNS api.<name>.<environment domain>)

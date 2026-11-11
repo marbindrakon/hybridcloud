@@ -26,6 +26,14 @@
       domain: "{{ cb_cluster_domain }}"
       vaultPaths: null
 
+# Review R2 H1: the build's namespace on the hub is this cluster's before anything is made under the build name
+- name: Claim the build on the hub
+  ansible.builtin.include_tasks: claim_build.yml
+  vars:
+    cl_recorded: >-
+      {{ (((platformopenshift_cr | default({})).resources | default([{}], true) | first).status | default({}, true)).buildName
+         | default('', true) }}
+
 - name: The cluster's STS preparation
   block:
     - name: Read the cluster's signing key from Vault

@@ -1,8 +1,9 @@
 ---
 # Preflight of an OpenStack cluster (DESIGN cnet §4.2), before anything is created (no floating IP, DNS record, Vault
 # path, Helm release): the cluster's network (a hybrid network placed on the environment with router attachments on,
-# or one of the site's global external networks: the one named, else the site's default), the cluster's address
-# ranges, and its build name being free on the hub. Refusals and waits through preflight_stop.yml.
+# or one of the site's global external networks: the one named, else the site's default), the network's name being
+# unique for the environment's project (the installer takes it by name), the cluster's address ranges, and its build
+# name being free on the hub. Refusals and waits through preflight_stop.yml.
 # Sets cb_external_network (the installer's externalNetwork), cb_fip_network_id, cb_publish, cb_network_record (the
 # status keys of the network choice), cb_platform_path (true: the platform reaches the cluster through the network).
 - name: The hybrid network path
@@ -16,6 +17,7 @@
         pn_network: "{{ oso_network }}"
         pn_need_platform: true
         pn_need_router_attachments: true
+        pn_held: ["{{ cb_api_vip | default('', true) }}", "{{ cb_ingress_vip | default('', true) }}"]
 
     - name: The cluster on the hybrid network
       ansible.builtin.set_fact:
@@ -86,6 +88,13 @@
              | default([], true) }}
         po_network_space: []
 
+- name: The network's name leads the installer to this network alone
+  ansible.builtin.include_tasks: preflight_network_name.yml
+  vars:
+    pnn_name: "{{ cb_external_network }}"
+    pnn_id: "{{ cb_fip_network_id }}"
+    pnn_hybrid: "{{ cb_platform_path | bool }}"
+
 - name: Check the cluster's address ranges
   ansible.builtin.include_tasks: preflight_ranges.yml
   vars:
@@ -94,7 +103,8 @@
     pr_reserved: "{{ po_reserved_ranges }}"
     pr_site: "{{ cb_oso_site }}"
 
-# the build name is the hub namespace: a namespace of that name that this cluster did not record is someone else's
+# the build name is the hub namespace: a namespace of that name that is not marked as this cluster's (its uid), or a
+# legacy one this cluster did not record, is someone else's (the claim itself is claim_build.yml, after the record)
 - name: Look for the build's namespace on the hub
   kubernetes.core.k8s_info:
     host: "{{ central_api_host }}"
@@ -105,6 +115,17 @@
     name: "{{ cb_app_name }}"
   register: _po_build_ns
 
+- name: Whose namespace it is
+  ansible.builtin.include_tasks: po_call.yml
+  vars:
+    po_request:
+      action: hub-owner
+      claim: true
+      namespace: "{{ _po_build_ns.resources | default([]) | first | default({}) }}"
+      uid: "{{ po_uid | default('', true) }}"
+      recorded: "{{ (po_cr_current.resources[0].status | default({}, true)).buildName | default('', true) }}"
+      buildName: "{{ cb_app_name }}"
+
 - name: Refuse a build name in use
   ansible.builtin.include_tasks: preflight_stop.yml
   vars:
@@ -112,9 +133,7 @@
     ps_message: >-
       PlatformOpenshift {{ ansible_operator_meta.name }}: the build name {{ cb_app_name }} is already in use on the
       platform; create the cluster with another name
-  when:
-    - _po_build_ns.resources | default([]) | length > 0
-    - (po_cr_current.resources[0].status | default({}, true)).buildName | default('', true) != cb_app_name
+  when: po_result.reason == 'NamespaceTaken'
 
 # last before the build, on a hybrid network: the site's router advertisement service (where the site has one) holds
 # the advertisement of the cluster's floating IPs on the placed network

@@ -175,3 +175,14 @@ test('a typed network prefix in a refused range gets the PrefixReserved text; st
   assert.equal(nc.refusedPrefixText(t, '10.40.0.0/24', reserved), null);
   assert.equal(nc.refusedPrefixText(t, '10.50.0.0/16', undefined), null);
 });
+
+test('Review R2 L6: a network the platform is still connecting (AttachPending) is offered, as the job accepts it', () => {
+  const list = nc.hybridNetworkOptions(
+    opts({
+      profile: profile({}),
+      networks: [network('pending', reach('False', 'AttachPending')), network('off', reach('False', 'NotRequested'))],
+      placements: ['pending', 'off'].map((n) => placement(n, 'oso', { routers: true, state: 'ready' })),
+    }),
+  );
+  assert.deepEqual(reasons(list), { pending: null, off: 'NotRequested' });
+});

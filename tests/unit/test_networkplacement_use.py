@@ -249,7 +249,18 @@ class RouterAdvertisementInTheJob(unittest.TestCase):
             {"place": os_result(ra="ready"), "spec": ra_on, "bysite": {"site-a": {"url": "http://ra.example"}},
              "answer": ra_answer(nat=False, wanted=False, reason="InvalidSetting",
                                  message="placement.routerAdvertisementBySite[site-a].url must be an https:// URL")},
+            # 12 Review R2 L1: present fails while the last record held it: the record keeps holding it
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site, "before": held,
+             "answer": ra_answer(nat=True, wanted=False, reason="ServiceUnavailable", message="no answer")},
+            # 13 the next run with router attachments off reads that record: absent is asked
+            {"place": os_result(), "spec": {}, "bysite": site, "before": held, "answer": ra_answer(nat=False, wanted=False)},
+            # 14 a present that fails without an earlier hold records no hold
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site,
+             "answer": ra_answer(nat=False, wanted=False, reason="ServiceUnavailable", message="no answer")},
         ])
+        self.assertIs(res[12]["site"]["routerAdvertisement"]["wanted"], True)
+        self.assertEqual([c["state"] for c in res[13]["calls"]], ["absent"])
+        self.assertIs(res[14]["site"]["routerAdvertisement"]["wanted"], False)
         self.assertEqual(res[0]["calls"], [])
         self.assertNotIn("routerAdvertisement", res[0]["site"])
         self.assertEqual((res[0]["failed"], res[0]["waiting"]), ("", []))

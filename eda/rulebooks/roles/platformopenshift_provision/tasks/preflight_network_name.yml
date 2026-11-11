@@ -1,0 +1,54 @@
+---
+# The installer finds the cluster's external network by name (install-config platform.openstack.externalNetwork takes
+# a name only, and the installer fails when the project sees two networks of that name, or takes the only one it
+# sees). Before anything is created (Review R2 M3, DESIGN cnet §10 R2): the networks of that name the environment's
+# project sees (shc_openstack.py network-name-check, site account scoped to the project) must be exactly the chosen
+# one. Inputs: pnn_name, pnn_id (the placed network, or the global external network in effect), pnn_hybrid (true: a
+# placed network, whose policy for the project may still be on its way). Uses cb_oso_project_id, cb_fip_account,
+# cb_app_name. Refuses NetworkNameNotUnique (another network of the name is visible: the tenant renames or removes
+# its own, or the platform team the share), waits WaitingForPlacement (a placed network not visible yet), or refuses
+# ExternalNetworkNotListed (a global external network the project does not see).
+- name: Load the site account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ cb_fip_account }}"
+    os_account_tag: "po-netname-{{ cb_app_name }}"
+
+- name: The networks of that name the environment's project sees
+  block:
+    - name: List them
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_request:
+          action: network-name-check
+          project_id: "{{ cb_oso_project_id }}"
+          name: "{{ pnn_name }}"
+          network_id: "{{ pnn_id }}"
+  always:
+    - name: Remove the account's temp files
+      ansible.builtin.file:
+        path: "/tmp/eda-po-netname-{{ cb_app_name }}-{{ item }}"
+        state: absent
+      loop: [clouds.yaml, ca.crt]
+
+- name: Keep the answer
+  ansible.builtin.set_fact:
+    pnn_visible: "{{ os_result.visible | default([], true) }}"
+    pnn_unique: "{{ os_result.unique | default(false) | bool }}"
+
+- name: Refuse or wait when the name does not lead to the network alone
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: >-
+      {{ 'NetworkNameNotUnique' if pnn_visible | length > 0
+         else ('WaitingForPlacement' if pnn_hybrid | bool else 'ExternalNetworkNotListed') }}
+    ps_message: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}:
+      {{ ('the environment sees ' ~ (pnn_visible | length) ~ ' network(s) named ' ~ pnn_name ~ ' ('
+          ~ (pnn_visible | map(attribute='id') | join(', ')) ~ ') and the installer takes the network by name; '
+          ~ 'rename or remove the other network of that name, or ask the platform team about a network shared with '
+          ~ 'the environment') if pnn_visible | length > 0
+         else ('the environment does not see network ' ~ pnn_name ~ ' (' ~ pnn_id ~ ')'
+               ~ (' yet' if pnn_hybrid | bool else '')) }}
+  when: not (pnn_unique | bool)

@@ -8,6 +8,7 @@
 #   pn_network                    the HybridNetwork (this namespace)
 #   pn_need_platform              true: OpenStack on a network, AWS/GCP Internal
 #   pn_need_router_attachments    true: OpenStack (the cluster's router and floating IPs go on the network)
+#   pn_held                       optional: the addresses the cluster already holds on the network (named in a refusal)
 # Sets pf (po_preflight.py network result: placement, placementName, subnet4, space, networkId, networkName, fabric,
 # service, reserved), pf_placement (the NetworkPlacement object), pf_network_obj (the HybridNetwork object).
 - name: Require the platform namespace setting
@@ -75,9 +76,17 @@
       {{ (_pn_nps.resources | default([]) | selectattr('metadata.name', 'equalto', po_result.placementName | default(''))
           | list + [{}]) | first }}
 
+# a cluster that already holds addresses on the network keeps them through a refusal (the teardown releases them);
+# the message says so and how to go on (Review R2 L10)
 - name: Refuse or wait
   ansible.builtin.include_tasks: preflight_stop.yml
   vars:
+    _held: "{{ pn_held | default([], true) | select | list }}"
     ps_reason: "{{ pf.reason }}"
-    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pf.message }}"
+    ps_message: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pf.message }}{{
+      ('. The cluster keeps its floating IPs ' ~ (_held | join(' and ')) ~ ' on the network; '
+       ~ ('turn router attachments back on for the placement, or delete the cluster'
+          if pf.reason == 'RouterAttachmentsOff' else 'the next run continues with them'))
+      if _held | length > 0 and not (pf.wait | default(false) | bool) else '' }}
   when: pf.reason | length > 0

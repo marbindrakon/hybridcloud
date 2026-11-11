@@ -104,6 +104,8 @@ export function platformReachBlock(
   if (!cond) return { reason: 'PlatformAccessUnknown' };
   if (cond.status === 'True') return null;
   const reason = cond.reason || 'PlatformAccessUnknown';
+  // the platform is still connecting the network: the cluster job accepts it and waits, so the form does too
+  if (reason === 'AttachPending') return null;
   const message = cond.message || undefined;
   if (reason === 'OutsideAttachableRanges') return { reason, message, params: { ranges: (ctx.managedRanges ?? []).join(', ') } };
   if (reason === 'InfrastructureOverlap') {

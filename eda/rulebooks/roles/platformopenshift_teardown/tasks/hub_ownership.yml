@@ -1,0 +1,49 @@
+---
+# What this cluster owns on the hub (Review R2 H1). Only a recorded build name (status.buildName) can be the
+# cluster's: without one the cluster owns nothing there and the teardown deletes nothing on the hub (no ManagedCluster,
+# ACM policies, Helm release, ClusterDeployment, namespace, Vault cluster/<provider>/<build>/ paths, issuer, cloud
+# identity or Keycloak client). With one, the build's namespace on the hub decides
+# (platformopenshift_provision/files/po_preflight.py hub-owner): it carries this object's uid
+# (hybridsovereign.redhat/platformopenshift-uid, written by claim_build.yml), or it predates the label and carries no
+# owner, or it is gone (what is left under the name was this cluster's: every build claims the namespace first).
+# A namespace marked for another object makes the hub steps skip, and says so. Input: po_cr (k8s_info result).
+# Sets po_hub_owned (bool), po_hub_build (the build name when owned, else ''), po_hub_note (why not, '' when owned).
+- name: The cluster's recorded build
+  ansible.builtin.set_fact:
+    _ho_cr: "{{ po_cr.resources | default([]) | first | default({}) }}"
+    _ho_recorded: >-
+      {{ (((po_cr.resources | default([]) | first | default({})).status | default({}, true)).buildName
+         | default('', true)) | string | trim }}
+
+- name: Read the build's namespace on the hub
+  kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    api_version: v1
+    kind: Namespace
+    name: "{{ _ho_recorded }}"
+  register: _ho_ns
+  when: _ho_recorded | length > 0
+
+- name: Whose namespace it is
+  ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/po_call.yml"
+  vars:
+    po_request:
+      action: hub-owner
+      claim: false
+      namespace: "{{ (_ho_ns.resources | default([]) | first | default({})) if _ho_ns is not skipped else {} }}"
+      uid: "{{ (_ho_cr.metadata | default({})).uid | default('', true) }}"
+      recorded: "{{ _ho_recorded }}"
+      buildName: "{{ _ho_recorded }}"
+
+- name: Keep the ownership
+  ansible.builtin.set_fact:
+    po_hub_owned: "{{ po_result.owned | bool }}"
+    po_hub_build: "{{ _ho_recorded if po_result.owned | bool else '' }}"
+    po_hub_note: "{{ po_result.message }}"
+
+- name: Say what the hub steps skip
+  ansible.builtin.debug:
+    msg: "The hub steps of this teardown are skipped: {{ po_hub_note }}"
+  when: not (po_hub_owned | bool)

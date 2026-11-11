@@ -417,6 +417,11 @@ spec:
                 clusterInstalled:
                   type: boolean
                   description: True when the installation is complete.
+                installStarted:
+                  type: boolean
+                  description: >-
+                    True once the installation was started; the cluster's floating IPs are then part of it and are
+                    kept until the cluster is deleted.
                 oidcConfigured:
                   type: boolean
                   description: >-

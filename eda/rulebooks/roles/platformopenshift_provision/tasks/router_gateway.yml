@@ -2,8 +2,9 @@
 # After the install of a cluster on a hybrid network whose fabric admits hub endpoints (DESIGN cnet §3.7, §4.2 step
 # 7): the nodes reach the hub with the source address of the cluster's router (the installer's, named
 # <infraID>-external-router), so that address joins the cluster's prefixes as /32. Read with the site account scoped
-# to the environment's project. A refusal is reported, not fatal: the cluster is built, and ACM's agent falls back to
-# the network's own path. Inputs: rg_infra_id.
+# to the environment's project. The router is found by name in a project the tenant writes to: only a name that is
+# unique there and a gateway on the cluster's network count (Review R2 L9). A refusal is reported, not fatal: the
+# cluster is built, and ACM's agent falls back to the network's own path. Inputs: rg_infra_id.
 - name: Load the site account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
   vars:
@@ -55,11 +56,13 @@
     po_request:
       action: router-gateway
       name: "{{ rg_infra_id }}-external-router"
+      network_id: "{{ pf.networkId }}"
       routers: "{{ _rg_routers.routers | default([]) }}"
 
 - name: Keep the gateway address
   ansible.builtin.set_fact:
     rg_address: "{{ po_result.address }}"
+    rg_note: "{{ po_result.note | default('', true) }}"
 
 - name: Carry the gateway address with the floating IPs
   ansible.builtin.include_tasks: platform_prefixes.yml
@@ -87,7 +90,7 @@
 - name: Say what happened to the gateway address
   ansible.builtin.debug:
     msg: >-
-      {{ ('Router ' ~ rg_infra_id ~ '-external-router has no IPv4 gateway address; the cluster reaches the hub by its '
-          ~ "network's own path") if rg_address | length == 0
+      {{ ('Router ' ~ rg_infra_id ~ '-external-router: ' ~ (rg_note if rg_note | length > 0 else 'no IPv4 gateway address')
+          ~ "; the cluster reaches the hub by its network's own path") if rg_address | length == 0
          else ('Gateway ' ~ rg_address ~ ': ' ~ (pp_outcome.message if pp_outcome.reason | length > 0
                else "carried in the platform's service routing domain")) }}

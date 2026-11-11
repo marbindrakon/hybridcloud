@@ -8,23 +8,32 @@
 #   cfr_ids          the recorded ids
 #   cfr_build        the build name (descriptions <build>-api, <build>-ingress)
 #   cfr_cr_name, cfr_cr_namespace   the PlatformOpenshift
-- name: Load the site account
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
-  vars:
-    os_account_vault_path: "{{ cfr_account }}"
-    os_account_tag: "po-fips-release-{{ cfr_cr_name }}"
+# the site account's clouds.yaml in /tmp goes whatever happens (Review R2 L11)
+- name: Release with the site account
+  block:
+    - name: Load the site account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ cfr_account }}"
+        os_account_tag: "po-fips-release-{{ cfr_cr_name }}"
 
-- name: Release the cluster's floating IPs
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
-  vars:
-    os_call_no_log: false
-    os_request:
-      action: cluster-fips
-      state: absent
-      project_id: "{{ cfr_project_id }}"
-      ids: "{{ cfr_ids | default([], true) | select | list }}"
-      # shc_openstack.py cluster-fips takes the descriptions as {api, ingress}, as for state present
-      descriptions: "{{ {'api': cfr_build ~ '-api', 'ingress': cfr_build ~ '-ingress'} if (cfr_build | default('', true) | length > 0) else {} }}"
+    - name: Release the cluster's floating IPs
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_request:
+          action: cluster-fips
+          state: absent
+          project_id: "{{ cfr_project_id }}"
+          ids: "{{ cfr_ids | default([], true) | select | list }}"
+          # shc_openstack.py cluster-fips takes the descriptions as {api, ingress}, as for state present
+          descriptions: "{{ {'api': cfr_build ~ '-api', 'ingress': cfr_build ~ '-ingress'} if (cfr_build | default('', true) | length > 0) else {} }}"
+  always:
+    - name: Remove the account's temp files
+      ansible.builtin.file:
+        path: "/tmp/eda-po-fips-release-{{ cfr_cr_name }}-{{ item }}"
+        state: absent
+      loop: [clouds.yaml, ca.crt]
 
 - name: Remove the floating IPs from the record
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -37,9 +46,3 @@
     patch_ignore_not_found: true
     cr_status_body:
       floatingIPs: null
-
-- name: Remove the account's temp files
-  ansible.builtin.file:
-    path: "/tmp/eda-po-fips-release-{{ cfr_cr_name }}-{{ item }}"
-    state: absent
-  loop: [clouds.yaml, ca.crt]

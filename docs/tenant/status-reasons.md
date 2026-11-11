@@ -188,6 +188,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NamespaceOperatorImageRejected` | The requested operator version for this tenant is not allowed; the default version is used. | The platform team |
 | `NamespaceTaken` | The namespace name is already in use on the site. Choose another name. | You (the tenant) |
 | `NetworkChoiceRequired` | This site has no default external network. Choose a network. | You (the tenant) |
+| `NetworkNameNotUnique` | Your environment sees another network with the name of the cluster's network. Rename or remove the other network. | You (the tenant) |
 | `NetworkNotFound` | The cluster's network or its placement in this environment was not found. | You (the tenant) |
 | `NoAccount` | No cloud account is set up for this environment. | You (the tenant) |
 | `NoDefaultConfig` | No default connection is configured for this service. Ask the platform team. | The platform team |

@@ -67,6 +67,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "NamespaceOperatorImageRejected": { actor: "P", class: "failed", summary: "The requested operator version for this tenant is not allowed; the default version is used." },
   "NamespaceTaken": { actor: "T", class: "failed", summary: "The namespace name is already in use on the site. Choose another name." },
   "NetworkChoiceRequired": { actor: "T", class: "failed", summary: "This site has no default external network. Choose a network." },
+  "NetworkNameNotUnique": { actor: "T", class: "failed", summary: "Your environment sees another network with the name of the cluster's network. Rename or remove the other network." },
   "NetworkNotFound": { actor: "T", class: "failed", summary: "The cluster's network or its placement in this environment was not found." },
   "NeutronEvpnExtension": { actor: "A", class: "ready", summary: "Ready." },
   "NoAccount": { actor: "T", class: "failed", summary: "No cloud account is set up for this environment." },
