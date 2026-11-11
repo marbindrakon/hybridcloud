@@ -237,6 +237,38 @@ spec:
                   type: object
                   description: How the platform realized the placement (informational; depends on the platform).
                   x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    site:
+                      type: object
+                      description: The placement's objects at the site.
+                      x-kubernetes-preserve-unknown-fields: true
+                      properties:
+                        routerAdvertisement:
+                          type: object
+                          description: >-
+                            CloudOSO with router attachments: whether the site advertises the floating IPs on the
+                            network. mode Service = the site's router advertisement service holds the advertisement
+                            on the network's router port; Assumed = the site has no such service and is expected to
+                            advertise them itself.
+                          properties:
+                            mode:
+                              type: string
+                              description: Service or Assumed.
+                            nat:
+                              type: boolean
+                              description: The service reports the advertisement on the router port.
+                            wanted:
+                              type: boolean
+                              description: The service holds the advertisement (restores it when the site removes it).
+                            restores:
+                              type: integer
+                              description: How often the service restored the advertisement since it started.
+                            lastRestoredAt:
+                              type: string
+                              description: When the service last restored it (RFC 3339), empty when never.
+                            checkedAt:
+                              type: string
+                              description: When the platform last asked the service (RFC 3339).
                 mtu:
                   type: integer
                   description: Effective MTU at this placement.
@@ -343,7 +375,9 @@ spec:
                           description: ready, pending, removing or off.
                         reason:
                           type: string
-                          description: One-word reason when not ready or off (InUse while removing).
+                          description: >-
+                            One-word reason when not ready or off: InUse while removing, RouterAdvertisementFailed
+                            while the site does not confirm that it advertises the network's floating IPs.
                         message:
                           type: string
                           description: What the state means for this placement, in plain words.

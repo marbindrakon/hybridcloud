@@ -61,7 +61,7 @@ class UseStatus(unittest.TestCase):
         steps = [{"ansible.builtin.set_fact": {"os_result": "{{ case }}", "np_status": {"entity": "acme"},
                                                "np_backend": {"status": {"projectId": "proj-tenant"}},
                                                "fab_real": {"openstack": {"platformProject": "platform"}},
-                                               "np_names": {"osNetwork": "hn51001"}}},
+                                               "np_names": {"osNetwork": "hn51001"}, "np_ra_failed": ""}},
                  by_name(tasks, "Record the site side"),
                  by_name(tasks, "The environment's uses of the network")]
         return run_cases(steps, results, "{'status': np_status, 'removing': np_use_removing, 'note': np_use_note, "
@@ -115,6 +115,8 @@ class FinalWrite(unittest.TestCase):
         steps = [{"ansible.builtin.set_fact": {"np_final": {"entity": "acme", "use": "{{ case.use }}"},
                                                "np_status": {"use": "{{ case.use }}"},
                                                "np_use_removing": "{{ case.removing }}",
+                                               "np_use_wait_reason": "{{ case.reason | default('InUse') }}",
+                                               "np_use_wait_messages": "{{ case.messages | default([]) }}",
                                                "np_backend_kind": "{{ case.kind }}",
                                                "fab_st": "{{ case.before }}"}},
                  {"ansible.builtin.set_fact": {"_status": v["fab_status"], "_conds": v["fab_conditions"]},
@@ -130,10 +132,12 @@ class FinalWrite(unittest.TestCase):
                   "routerAttachments": {"state": "off", "reason": "", "message": ""}}
         degraded = {"conditions": [{"type": "Degraded", "status": "True", "reason": "InUse"}]}
         res = self.render([
-            {"use": removing, "removing": ["routerAttachments"], "kind": "CloudOSO", "before": {}},
+            {"use": removing, "removing": ["routerAttachments"], "kind": "CloudOSO", "before": {}, "messages": [msg]},
             {"use": steady, "removing": [], "kind": "CloudOSO", "before": degraded},
             {"use": steady, "removing": [], "kind": "CloudOSO", "before": {}},
             {"use": {}, "removing": [], "kind": "CloudVirt", "before": degraded},
+            {"use": steady, "removing": ["routerAttachments"], "kind": "CloudOSO", "before": {},
+             "reason": "RouterAdvertisementFailed", "messages": ["the service reports NotYourPort: x"]},
         ])
         self.assertEqual(res[0]["status"]["status"], "pending")
         self.assertEqual(res[0]["conds"], [{"type": "Degraded", "status": "True", "reason": "InUse", "message": msg}])
@@ -142,19 +146,187 @@ class FinalWrite(unittest.TestCase):
         self.assertEqual(res[2]["conds"], [])
         self.assertNotIn("status", res[2]["status"])
         self.assertEqual(res[3]["conds"], [])
+        self.assertEqual(res[4]["status"]["status"], "pending")
+        self.assertEqual(res[4]["conds"], [{"type": "Degraded", "status": "True", "reason": "RouterAdvertisementFailed",
+                                            "message": "the service reports NotYourPort: x"}])
 
     def test_previous_wait_is_recognised(self):
         task = by_name(load(MAIN), "Start with nothing to wait for")
         expr = task["ansible.builtin.set_fact"]["np_prev_use_wait"]
         steps = [{"ansible.builtin.set_fact": {"fab_st": "{{ case }}", "fab_entity": "acme"}},
                  {"ansible.builtin.set_fact": {"_w": expr}}]
+        def deg(reason, status="True"):
+            return [{"type": "Ready", "status": "True"}, {"type": "Degraded", "status": status, "reason": reason}]
         res = run_cases(steps, [
             {},
-            {"ready": True, "use": {"virtualMachines": {"state": "ready"}, "routerAttachments": {"state": "off"}}},
-            {"ready": True, "use": {"virtualMachines": {"state": "ready"}, "routerAttachments": {"state": "removing"}}},
-            {"ready": False, "use": {"routerAttachments": {"state": "removing"}}},
+            {"ready": True, "conditions": [{"type": "Ready", "status": "True"}]},
+            {"ready": True, "conditions": deg("InUse")},
+            {"ready": True, "conditions": deg("RouterAdvertisementFailed")},
+            {"ready": True, "conditions": deg("Ready", "False")},
+            {"ready": False, "conditions": deg("InUse")},
         ], "_w | bool")
-        self.assertEqual(res, [False, False, True, False])
+        self.assertEqual(res, [False, False, True, True, False, False])
+
+
+URL = "https://router-advertisement.example:8443"
+RA_TASK = os.path.join(TASKS, "router_advertisement.yml")
+TEARDOWN = os.path.join(ROOT, "eda", "rulebooks", "roles", "networkplacement_teardown", "tasks", "main.yml")
+
+
+def ra_file():
+    """router_advertisement.yml with the helper call replaced by a stub that records the request it would send and
+    answers case.answer (the helper's JSON), under the same condition."""
+    tasks = load(RA_TASK)
+    i = next(n for n, t in enumerate(tasks) if t.get("name", "").startswith("Ask the router advertisement service"))
+    call = tasks[i]
+    tasks[i] = {"name": "stub", "when": call["when"], "vars": call["vars"],
+                "ansible.builtin.set_fact": {"os_result": "{{ case.answer }}",
+                                             "_calls": "{{ _calls | default([]) + [os_request] }}"}}
+    return tasks
+
+
+def ra_answer(nat=True, wanted=True, reason="", message="", **kw):
+    return {"service": "found", "port_id": "port-v4", "nat": nat, "wanted": wanted, "changed": False, "restores": 1,
+            "lastRestoredAt": "2026-11-11T00:00:00Z", "reason": reason, "message": message, **kw}
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RouterAdvertisementInTheJob(unittest.TestCase):
+    """backend_cloudoso.yml: when the job asks the site's service, with which state, what it records, and how a
+    failing service shows (the helper itself: test_shc_openstack_router_advertisement.py)."""
+
+    def run_job(self, cases):
+        tasks = load(BACKEND)
+        steps = [{"ansible.builtin.set_fact": {
+                    "os_result": "{{ case.place }}", "np_status": {"entity": "acme"}, "fab_spec": "{{ case.spec }}",
+                    "fab_st": "{{ case.before | default({}) }}", "np_site": "site-a", "ci_spec": {},
+                    "np_backend": {"status": {"projectId": "proj-tenant"}}, "np_names": {"osNetwork": "hn51001"},
+                    "fab_real": {"openstack": {"platformProject": "platform", "projectDomain": "shc"},
+                                 "placement": {"routerAdvertisementBySite": "{{ case.bysite | default({}) }}"}},
+                    "_calls": []}}]
+        steps += [by_name(tasks, n) for n in (
+            "Record the site side", "Decide on the router advertisement", "The router advertisement on the placed network",
+            "Record the router advertisement", "No router advertisement asked", "The environment's uses of the network")]
+        return run_cases(steps, cases, "{'calls': _calls, 'site': np_backend_status, 'use': np_status.use, "
+                                       "'waiting': np_use_removing, 'reason': np_use_wait_reason, "
+                                       "'messages': np_use_wait_messages, 'failed': np_ra_failed, 'note': np_use_note}",
+                         files={"router_advertisement.yml": ra_file()})
+
+    def test_cases(self):
+        site = {"site-a": {"url": URL}}
+        ra_on = {"use": {"routerAttachments": True}}
+        held = {"realization": {"site": {"routerAdvertisement": {"mode": "Service", "wanted": True}}}}
+        res = self.run_job([
+            # 0 a placement without router attachments: no call at all, nothing recorded (with or without a service)
+            {"place": os_result(), "spec": {}, "bysite": site, "answer": {}},
+            # 1 router attachments on: present, confirmed
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site, "answer": ra_answer()},
+            # 2 the same again (a plain re-run asks again: Neutron may have rewritten the option)
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site, "answer": ra_answer(), "before": held},
+            # 3 router attachments on, the site has no service: Assumed, no call
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": {}, "answer": {}},
+            # 4 turned off while still in use: kept (present)
+            {"place": os_result(ra="removing", ra_users=["floating IP 192.0.2.15"]), "spec": {}, "bysite": site,
+             "answer": ra_answer(), "before": held},
+            # 5 turned off and unused, the service held it: absent
+            {"place": os_result(), "spec": {}, "bysite": site, "answer": ra_answer(nat=False, wanted=False),
+             "before": held},
+            # 6 off, nothing held any more: no call
+            {"place": os_result(), "spec": {},  "bysite": site, "answer": {},
+             "before": {"realization": {"site": {"routerAdvertisement": {"mode": "Service", "wanted": False}}}}},
+            # 7 the service refuses: the placement stays usable, router attachments pending, re-run
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site,
+             "answer": ra_answer(nat=False, wanted=False, reason="NotAnAdvertisingPort", message="no option")},
+            # 8 absent fails: still held in the record, asked again next run
+            {"place": os_result(), "spec": {}, "bysite": site, "before": held,
+             "answer": ra_answer(nat=True, wanted=False, reason="OvnUnavailable", message="ovn down")},
+            # 9 present answered without nat: not confirmed
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site, "answer": ra_answer(nat=False)},
+            # 10 the helper itself failed (soft call)
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site,
+             "answer": {"error": "RuntimeError: platform project platform does not exist"}},
+            # 11 an http URL: the helper refuses, the placement stays usable
+            {"place": os_result(ra="ready"), "spec": ra_on, "bysite": {"site-a": {"url": "http://ra.example"}},
+             "answer": ra_answer(nat=False, wanted=False, reason="InvalidSetting",
+                                 message="placement.routerAdvertisementBySite[site-a].url must be an https:// URL")},
+        ])
+        self.assertEqual(res[0]["calls"], [])
+        self.assertNotIn("routerAdvertisement", res[0]["site"])
+        self.assertEqual((res[0]["failed"], res[0]["waiting"]), ("", []))
+
+        req = res[1]["calls"][0]
+        self.assertEqual({k: req[k] for k in ("action", "state", "router_id", "network_id", "service_url", "site",
+                                              "domain", "platformProject")},
+                         {"action": "router-advertisement", "state": "present", "router_id": "rtr-1",
+                          "network_id": "net-1", "service_url": URL, "site": "site-a", "domain": "shc",
+                          "platformProject": "platform"})
+        rec = res[1]["site"]["routerAdvertisement"]
+        self.assertEqual({k: rec[k] for k in ("mode", "nat", "wanted", "restores", "lastRestoredAt")},
+                         {"mode": "Service", "nat": True, "wanted": True, "restores": 1,
+                          "lastRestoredAt": "2026-11-11T00:00:00Z"})
+        self.assertRegex(rec["checkedAt"], r"^\d{4}-\d\d-\d\dT")
+        self.assertEqual(res[1]["use"]["routerAttachments"]["state"], "ready")
+        self.assertEqual(res[1]["waiting"], [])
+        self.assertEqual([c["state"] for c in res[2]["calls"]], ["present"])
+
+        self.assertEqual(res[3]["calls"], [])
+        self.assertEqual(res[3]["site"]["routerAdvertisement"]["mode"], "Assumed")
+        self.assertEqual(res[3]["failed"], "")
+
+        self.assertEqual([c["state"] for c in res[4]["calls"]], ["present"])
+        self.assertEqual(res[4]["use"]["routerAttachments"]["reason"], "InUse")
+        self.assertEqual([c["state"] for c in res[5]["calls"]], ["absent"])
+        self.assertIs(res[5]["site"]["routerAdvertisement"]["wanted"], False)
+        self.assertEqual(res[5]["waiting"], [])
+        self.assertEqual(res[6]["calls"], [])
+
+        r7 = res[7]
+        self.assertEqual(r7["failed"], "NotAnAdvertisingPort")
+        self.assertEqual(r7["use"]["virtualMachines"]["state"], "ready")
+        self.assertEqual(r7["use"]["routerAttachments"]["state"], "pending")
+        self.assertEqual(r7["use"]["routerAttachments"]["reason"], "RouterAdvertisementFailed")
+        self.assertIn("NotAnAdvertisingPort: no option", r7["use"]["routerAttachments"]["message"])
+        self.assertEqual((r7["waiting"], r7["reason"]), (["routerAttachments"], "RouterAdvertisementFailed"))
+        self.assertEqual(r7["site"]["rbac"]["shared"], "rbac-1")  # the share is untouched
+
+        r8 = res[8]
+        self.assertEqual(r8["failed"], "OvnUnavailable")
+        self.assertIs(r8["site"]["routerAdvertisement"]["wanted"], True)
+        self.assertEqual(r8["use"]["routerAttachments"]["state"], "off")
+        self.assertEqual(r8["waiting"], ["routerAttachments"])
+        self.assertEqual(len(r8["messages"]), 1)
+        self.assertIn("OvnUnavailable: ovn down", r8["messages"][0])
+
+        self.assertEqual(res[9]["failed"], "NotConfirmed")
+        self.assertEqual(res[10]["failed"], "HelperFailed")
+        self.assertIn("does not exist", res[10]["use"]["routerAttachments"]["message"])
+        self.assertEqual(res[11]["failed"], "InvalidSetting")
+        self.assertIn("routerAdvertisementBySite[site-a].url", res[11]["use"]["routerAttachments"]["message"])
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RouterAdvertisementAtTeardown(unittest.TestCase):
+    """networkplacement_teardown: the placement-network absent request carries the service only for a placement that
+    used router attachments (the helper asks it after the busy check, before the interface goes)."""
+
+    def test_request(self):
+        task = by_name(load(TEARDOWN), "Delete the share, router, subnets and network")
+        expr = task["vars"]["os_request"]["routerAdvertisement"]
+        steps = [{"ansible.builtin.set_fact": {"fab_spec": "{{ case.spec }}", "fab_st": "{{ case.st }}",
+                                               "fab_real": {"placement": {"routerAdvertisementBySite":
+                                                                          {"site-a": {"url": URL}}}}}},
+                 {"ansible.builtin.set_fact": {"_ra": expr}}]
+        held = {"site": "site-a", "realization": {"site": {"routerAdvertisement": {"wanted": True}}}}
+        res = run_cases(steps, [
+            {"spec": {}, "st": {"site": "site-a"}},
+            {"spec": {"use": {"routerAttachments": True}}, "st": {"site": "site-a"}},
+            {"spec": {}, "st": held},
+            {"spec": {"use": {"routerAttachments": True}}, "st": {"site": "site-b"}},
+        ], "_ra")
+        self.assertEqual(res[0], {})
+        self.assertEqual(res[1], {"service_url": URL, "site": "site-a"})
+        self.assertEqual(res[2], {"service_url": URL, "site": "site-a"})
+        self.assertEqual(res[3], {"service_url": "", "site": "site-b"})
 
 
 class PhaseOfAWaitingUse(unittest.TestCase):

@@ -1,0 +1,61 @@
+---
+# shc: ask the site's router advertisement service (an optional site component) to hold, or drop, the `nat` token on
+# the EVPN router's IPv4 interface port of a placed network, so the site advertises the floating IPs on that network
+# (files/shc_openstack.py router-advertisement). The service's URL is the realization's
+# placement.routerAdvertisementBySite[<site>].url; a site without one has no service (mode Assumed: the documented
+# site requirement stands and nothing is called). A failing service never fails the caller: ra_failed says why.
+# Shared with the cluster job's preflight (include it with the inputs below; the site account must be loaded first,
+# common/tasks/openstack_account.yml, and fab_real must hold the realization, common/tasks/fabric_realization.yml).
+# Inputs:  ra_state (present|absent), ra_router_id, ra_network_id (the placement's status.realization.site.routerId
+#          and networkId), ra_site (the CloudInfrastructure name), ra_domain and ra_platform_project (the platform
+#          project the placement's router is in), optional ra_region.
+# Sets:    ra_result (the helper's result), ra_record ({mode, nat, wanted, restores, lastRestoredAt, checkedAt}:
+#          status.realization.site.routerAdvertisement), ra_failed ("" or the reason), ra_message (the reason in
+#          words, "" when fine). present is confirmed only when the service reports nat on the port; a failed
+#          absent keeps wanted true in the record (an absent that failed still counts as held), so the caller
+#          asks again on its next run.
+- name: The site's router advertisement service
+  ansible.builtin.set_fact:
+    ra_url: >-
+      {{ (((fab_real.placement | default({}, true)).routerAdvertisementBySite | default({}, true))[ra_site]
+          | default({}, true)).url | default('', true) | string | trim }}
+
+- name: Ask the router advertisement service ({{ ra_state }})
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_call_soft: true
+    os_request:
+      action: router-advertisement
+      state: "{{ ra_state }}"
+      region: "{{ ra_region | default('') }}"
+      router_id: "{{ ra_router_id }}"
+      network_id: "{{ ra_network_id }}"
+      domain: "{{ ra_domain }}"
+      platformProject: "{{ ra_platform_project }}"
+      service_url: "{{ ra_url }}"
+      site: "{{ ra_site }}"
+  when: ra_url | length > 0
+
+- name: Record the router advertisement
+  vars:
+    _r: "{{ os_result if ra_url | length > 0 else {} }}"
+    _reason: >-
+      {{ '' if ra_url | length == 0
+         else (_r.reason | default('', true) if _r.error is not defined else 'HelperFailed')
+              or ('NotConfirmed' if ra_state == 'present' and not (_r.nat | default(false) | bool) else '') }}
+  ansible.builtin.set_fact:
+    ra_result: "{{ _r }}"
+    ra_failed: "{{ _reason | trim }}"
+    ra_message: >-
+      {{ '' if _reason | trim | length == 0
+         else ('the router advertisement service reports ' ~ (_reason | trim) ~ ': '
+               ~ (_r.message | default(_r.error | default('the service did not confirm nat on the router port', true), true))) }}
+    # one expression: on ansible-core 2.16 the values of a nested YAML map stay strings
+    ra_record: >-
+      {{ {'mode': 'Service' if ra_url | length > 0 else 'Assumed',
+          'nat': _r.nat | default(false) | bool,
+          'wanted': (_r.wanted | default(false) | bool) or (ra_state == 'absent' and _reason | trim | length > 0),
+          'restores': _r.restores | default(0) | int,
+          'lastRestoredAt': _r.lastRestoredAt | default('', true) | string,
+          'checkedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')} }}

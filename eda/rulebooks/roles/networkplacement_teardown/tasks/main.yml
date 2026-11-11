@@ -212,6 +212,18 @@
                   platformProject: "{{ fab_real.openstack.platformProject }}"
                   name: "{{ npd_names.osNetwork }}"
                   tag: "{{ npd_names.tag }}"
+                  # the site's router advertisement service drops what it holds for the router port before the
+                  # interface is removed (once nothing blocks the deletion); asked only when the placement used
+                  # router attachments or the last run recorded the service holding the advertisement
+                  routerAdvertisement: >-
+                    {{ {'service_url': (((fab_real.placement | default({}, true)).routerAdvertisementBySite
+                                         | default({}, true))[fab_st.site | default('', true)] | default({}, true)).url
+                                       | default('', true) | string | trim,
+                        'site': fab_st.site | default('', true)}
+                       if ((fab_spec.use | default({}, true)).routerAttachments | default(false) | bool)
+                          or ((((fab_st.realization | default({}, true)).site | default({}, true)).routerAdvertisement
+                               | default({}, true)).wanted | default(false) | bool)
+                       else {} }}
 
             # blocked: ports of other projects (the environment's servers and routers), router gateways and floating
             # IPs of any project on the network (shc_openstack.py placement-network state absent)
