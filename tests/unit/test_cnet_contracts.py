@@ -253,7 +253,7 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
                     d = PA.platform_access(dict(network="acme/n1", fabric=FABRIC, platformAccess=True, space=[space],
                                                 overlaps=[{"prefix": space, "range": HUB, "purpose": "x"}],
                                                 hub=[HUB], service={"enabled": True, "ports": [6443],
-                                                                    "attachableRanges": []},
+                                                                    "attachableRanges": ["0.0.0.0/0"]},
                                                 serviceStatus=kw["service_status"], reserved=[], clusters=[],
                                                 ledger={}))
                     self.assertEqual(d["condition"]["reason"], "InfrastructureOverlap")
@@ -450,6 +450,59 @@ class RouterAdvertisementSetting(unittest.TestCase):
                           "'http://ra.site-a.example.org'"])
         self.assertIn("placement.routerAdvertisementBySite[site-b].url is required", self.errors({"site-b": {}})[0])
         self.assertIn("must be a mapping", self.errors(["https://x.example.org"])[0])
+
+
+class AttachableRangesRequired(unittest.TestCase):
+    """service.attachableRanges is required with the service and 0.0.0.0/0 is the explicit "any": the fabric's
+    check, the network job's decision, the fabric's plan and the cluster preflight all read an empty list as "not
+    offered", never as "any"."""
+
+    SPEC = {"domainAsn": 65010, "vniPool": {"start": 50000, "end": 50999}, "l2vniPool": {"start": 60000, "end": 60999},
+            "borderGateway": {"nodes": [{"name": n} for n in NODES]}}
+
+    def test_empty_is_not_offered_everywhere(self):
+        real = realization(attachable=())
+        errs = F.check_fabric({"spec": self.SPEC, "realization": real})["errors"]
+        self.assertTrue([e for e in errs if "service.attachableRanges is required" in e], errs)
+        led = Ledger()
+        led.network("acme/n1", 10005, 3)
+        d = network_decision("acme/n1", ["192.0.2.15/32"], led, {"circuits": CIRCUIT_STATUS}, real)
+        self.assertEqual((d["condition"]["status"], d["condition"]["reason"]), ("False", "ServiceNotOffered"))
+        self.assertEqual(d["accepted"], [])
+        verdict = F.service_prefix_check({"prefixes": ["192.0.2.15/32"], "space": [SPACE], "ranges": [],
+                                          "attachableRanges": []})
+        self.assertEqual(verdict["prefixes"][0]["reason"], "OutsideAttachableRanges")
+        judged = PlatformReachableAndThePreflight().judge(
+            network_decision("acme/n1", [], led, {"circuits": CIRCUIT_STATUS}, realization()), SPACE)
+        self.assertEqual(judged["reason"], "")
+        fab = {"metadata": {"name": FABRIC}, "status": {"reservedRanges": [], "realization": {"service": {
+            "enabled": True, "sources": [HUB], "attachableRanges": [], "hubEndpoints": [], "circuits": CIRCUIT_STATUS}}}}
+        net = network_object("acme/n1", [])
+        net["status"]["conditions"] = [{"type": "PlatformReachable", "status": "True", "reason": "Attachable"}]
+        placement = {"metadata": {"name": "p1", "namespace": "acme"},
+                     "spec": {"network": "n1", "backend": {"kind": "CloudOSO", "name": "env1"},
+                              "use": {"routerAttachments": True}},
+                     "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
+                                "use": {"routerAttachments": {"state": "ready"}},
+                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+        out = P.network({"kind": "CloudOSO", "environment": "env1", "namespace": "acme", "network": "n1",
+                         "networkObj": net, "placements": [placement], "fabric": fab, "needPlatform": True,
+                         "needRouterAttachments": True, "hubApi": ""})
+        self.assertEqual(out["reason"], "ServiceNotOffered")
+
+    def test_any_written_out(self):
+        real = realization(attachable=("0.0.0.0/0",))
+        self.assertEqual([e for e in F.check_fabric({"spec": self.SPEC, "realization": real})["errors"]
+                          if "attachableRanges" in e], [])
+        led = Ledger()
+        led.network("acme/n1", 10005, 3)
+        d = network_decision("acme/n1", ["192.0.2.15/32"], led, {"circuits": CIRCUIT_STATUS}, real)
+        self.assertEqual([(r["state"], r["reason"]) for r in d["prefixes"]], [("pending", "")])
+        led.apply(d)
+        plan = fabric_plan(real, [network_object("acme/n1", d["prefixes"])], led)
+        self.assertEqual(plan["errors"], [])
+        self.assertEqual(plan["status"]["networks"][0]["prefixes"], ["192.0.2.15/32"])
+        self.assertEqual(plan["status"]["attachableRanges"], ["0.0.0.0/0"])
 
 
 # ---- the UI's reads and the CRD bases -----------------------------------------------------------------------------

@@ -95,9 +95,13 @@ test('a placement subnet outside the managed cluster ranges is refused even when
     }),
   );
   assert.equal(list[0].block.reason, 'OutsideAttachableRanges');
-  // absent list = any range
-  const any = nc.hybridNetworkOptions(opts({ profile: profile({}), networks: [network('n')], placements: [placement('n', 'oso', { routers: true, state: 'ready' })] }));
+  // 0.0.0.0/0 is the platform's explicit "any range"
+  const any = nc.hybridNetworkOptions(opts({ profile: profile({ managedClusterRanges: ['0.0.0.0/0'] }), networks: [network('n')], placements: [placement('n', 'oso', { routers: true, state: 'ready' })] }));
   assert.equal(any[0].block, null);
+  // an absent list (not offered, or the profile not read) is never read as "any": the form filters nothing itself,
+  // the network's PlatformReachable decides (here: the platform does not offer the service)
+  const notOffered = nc.hybridNetworkOptions(opts({ profile: profile({}), networks: [network('n', reach('False', 'ServiceNotOffered'))], placements: [placement('n', 'oso', { routers: true, state: 'ready' })] }));
+  assert.equal(notOffered[0].block.reason, 'ServiceNotOffered');
 });
 
 test('AWS and Google Cloud: External needs only a ready IPv4 placement; Internal also platform access', () => {

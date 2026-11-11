@@ -29,7 +29,7 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
       ledger         the fabric ledger's servicePrefix allocations {owner: value}
       fabric         the fabric's name (messages)
     A prefix is accepted when the network is eligible and the prefix is IPv4, inside the network's space, inside
-    service.attachableRanges (when set), clear of the reserved ranges and of every prefix accepted earlier for another
+    service.attachableRanges (required with the service; 0.0.0.0/0 is the explicit "everything"), clear of the reserved ranges and of every prefix accepted earlier for another
     network (first come first served: the ledger value, the lower the earlier; a prefix the fabric realizes counts as
     accepted). Returns {state, reason, message, condition, sources, ports, prefixes, accepted, kept, allocate,
     release, held, attached, wakeFabric}.
@@ -173,6 +173,11 @@ def platform_access(req):
         reason, message = "ServiceNotOffered", (
             f"HybridFabric {fabric} does not offer the platform's connection for clusters on networks; ask the "
             "platform team.")
+    elif not attachable:
+        # the service needs its attachable ranges (check-fabric refuses it without them); never an implicit "any"
+        reason, message = "ServiceNotOffered", (
+            f"HybridFabric {fabric} names no ranges for clusters on networks (service.attachableRanges); ask the "
+            "platform team.")
     elif not (sst.get("circuits") or []):
         reason, message = "CircuitNotDeployed", (
             "The platform's connection for clusters on networks is not ready: no platform circuit is realized on "
@@ -185,7 +190,7 @@ def platform_access(req):
         reason, message = "InfrastructureOverlap", (
             f"The network's address space {o['prefix']} overlaps {o['range']} ({o['purpose']}); the platform cannot "
             "reach it. Clusters the platform manages need a network clear of that range.")
-    elif attachable and not any(overlaps(n, a) for n in space4 for a in attachable):
+    elif not any(overlaps(n, a) for n in space4 for a in attachable):
         reason, message = "OutsideAttachableRanges", (
             "Clusters the platform manages need a network with addresses inside "
             + ", ".join(str(a) for a in attachable) + " (TenantProfile status.managedClusterRanges).")
@@ -251,7 +256,7 @@ def platform_access(req):
                            message=message)
                 keep(row, n)
                 continue
-            if attachable and not any(n.subnet_of(a) for a in attachable):
+            if not any(n.subnet_of(a) for a in attachable):
                 row.update(reason="OutsideAttachableRanges",
                            message=f"{n} is outside the ranges for clusters the platform manages ("
                                    + ", ".join(str(a) for a in attachable) + ")")

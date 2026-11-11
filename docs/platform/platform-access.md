@@ -57,9 +57,10 @@ service:
   (`HubEndpointNotAdmitted`), because cluster management could not reach the hub from it. With entries set, an
   OpenStack cluster's router gateway address joins the cluster's addresses after the install, so the nodes' own
   traffic to the endpoints is admitted.
-- **`service.attachableRanges`**: IPv4 ranges a cluster's addresses must lie in, clear of the reserved ranges. The
-  platform announces nothing outside them, so the hub's network can accept them with a fixed filter. Empty: any
-  range that passes the other checks. Tenants see the list as "Ranges for clusters managed by the platform"; a
+- **`service.attachableRanges`** (required with `service.enabled`): IPv4 ranges a cluster's addresses must lie in,
+  clear of the reserved ranges. The platform announces nothing outside them, so the hub's network can accept them
+  with a fixed filter. `0.0.0.0/0` is the explicit "any range that passes the other checks" (the hub's network then
+  accepts any prefix up to /32 from the platform); an empty list fails the fabric with `InvalidSpec`. Tenants see the list as "Ranges for clusters managed by the platform"; a
   network with no IPv4 prefix inside it reads `PlatformReachable` False `OutsideAttachableRanges`.
 
 The settings that replace them, `egress.platformSources` and `egress.platformPorts`, are refused by the fabric while
@@ -108,7 +109,7 @@ spec:
 
 The connection's `status.ceConfig` is what the hub-side router needs: the VLAN, the platform's AS number, the link
 addresses and session per border gateway node, `advertisedRanges` (the prefix list of what the platform announces:
-each `service.attachableRanges` entry up to /32, or any when the list is empty) and `acceptedRanges` (the IPv4
+each `service.attachableRanges` entry up to /32) and `acceptedRanges` (the IPv4
 `infrastructure.hub` ranges up to /32). `status.sessions` shows each node's session.
 
 ## What the hub's network must do

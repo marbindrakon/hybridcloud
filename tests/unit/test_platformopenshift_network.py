@@ -206,8 +206,10 @@ class NetworkJudge(unittest.TestCase):
     def test_attach_pending_does_not_hold_a_new_cluster(self):
         self.assertEqual(judge(networkObj=network_obj(reach=("False", "AttachPending", "")))["reason"], "")
 
-    def test_any_range_when_none_listed(self):
-        self.assertEqual(judge(fabric=fabric(ranges=()))["reason"], "")
+    def test_any_range_only_when_written_out(self):
+        # the ranges are required with the service: 0.0.0.0/0 is "any", an empty list is not offered
+        self.assertEqual(judge(fabric=fabric(ranges=("0.0.0.0/0",)))["reason"], "")
+        self.assertEqual(judge(fabric=fabric(ranges=()))["reason"], "ServiceNotOffered")
 
     def test_hub_outside_its_ranges_needs_no_endpoint(self):
         self.assertEqual(judge(fabric=fabric(endpoints=()), hubApi="https://203.0.113.9:6443")["reason"], "")

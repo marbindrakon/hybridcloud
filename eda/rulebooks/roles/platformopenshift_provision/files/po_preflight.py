@@ -263,7 +263,11 @@ def network(req):
         return result("ServiceNotOffered", f"HybridFabric {out['fabric']} offers no connection for clusters on "
                       "networks (its service routing domain is off)", **out)
     ranges = [str(r) for r in svc.get("attachableRanges") or []]
-    if ranges and not inside(subnet4, ranges):
+    if not ranges:
+        # required with the service (check-fabric); never read as "any range"
+        return result("ServiceNotOffered", f"HybridFabric {out['fabric']} names no ranges for clusters on networks",
+                      **out)
+    if not inside(subnet4, ranges):
         return result("OutsideAttachableRanges", f"NetworkPlacement {pref}: subnet {subnet4} lies outside the ranges "
                       f"the platform reaches ({', '.join(ranges)})", **out)
     sources = [s for s in svc.get("sources") or [] if v4(s)]

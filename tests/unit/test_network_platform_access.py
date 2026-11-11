@@ -107,9 +107,12 @@ class Eligibility(unittest.TestCase):
     def test_one_prefix_inside_is_enough(self):
         self.assertEqual(run(space=["172.16.0.0/16", "10.20.0.0/16"])["condition"]["reason"], "Attachable")
 
-    def test_empty_attachable_ranges_means_any(self):
+    def test_any_range_is_written_out_and_empty_is_not_offered(self):
+        # service.attachableRanges is required with the service; 0.0.0.0/0 is the explicit "any", empty never is
+        self.assertEqual(run(space=["172.16.0.0/16"], service=dict(SERVICE, attachableRanges=["0.0.0.0/0"]))
+                         ["condition"]["reason"], "Attachable")
         self.assertEqual(run(space=["172.16.0.0/16"], service=dict(SERVICE, attachableRanges=[]))["condition"]["reason"],
-                         "Attachable")
+                         "ServiceNotOffered")
 
 
 class Prefixes(unittest.TestCase):
@@ -157,7 +160,7 @@ class Prefixes(unittest.TestCase):
 
     def test_the_hub_refuses_without_a_published_row(self):
         out = run(space=["192.0.2.0/24", "10.20.0.0/16"], reserved=[], clusters=[cl("c1", "192.0.2.9/32")],
-                  service=dict(SERVICE, attachableRanges=[]))
+                  service=dict(SERVICE, attachableRanges=["0.0.0.0/0"]))
         self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
         self.assertIn("connects from", out["prefixes"][0]["message"])
 

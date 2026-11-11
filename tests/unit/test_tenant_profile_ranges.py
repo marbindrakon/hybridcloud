@@ -78,8 +78,13 @@ class Profile(unittest.TestCase):
         self.assertIsNone(out["reservedRanges"])
         self.assertIsNone(out["managedClusterRanges"])
 
-    def test_any_range_when_the_list_is_empty(self):
+    def test_absent_when_the_list_is_empty(self):
+        # the list is required with the service (check-fabric); an empty one is never published as "any range"
         self.assertIsNone(self.render([fabric(rows=ROWS[:1], service={"enabled": True, "attachableRanges": []})])["managedClusterRanges"])
+
+    def test_any_range_is_written_out(self):
+        out = self.render([fabric(rows=ROWS[:1], service={"enabled": True, "attachableRanges": ["0.0.0.0/0"]})])
+        self.assertEqual(out["managedClusterRanges"], ["0.0.0.0/0"])
 
     def test_only_the_tenants_fabric(self):
         other = fabric("other", rows=[{"prefix": "203.0.113.0/24", "purpose": "p", "rule": "Refused"}], refs=["someone"])

@@ -107,7 +107,8 @@ Your tenant profile lists the ranges the platform reserves (`oc get tenantprofil
 
 **Ranges for clusters managed by the platform** (`status.managedClusterRanges`) are the ranges a network must have
 addresses in to host clusters the platform manages: on OpenStack the floating IPs, on AWS and Google Cloud with
-Internal the placement's subnet. Without the list, any range qualifies.
+Internal the placement's subnet. `0.0.0.0/0` means any range the platform does not reserve. Without the list the
+platform does not offer clusters it manages on your networks.
 
 ## Address settings of a cluster
 

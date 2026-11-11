@@ -109,7 +109,7 @@ actions:
                   takes part with the rows of status.platformAccess.prefixes it accepted (state ready, or pending
                   with no reason), the VPN target
                   and root index (ledger kind egress) it holds; a prefix is accepted when it lies inside the network's
-                  IPv4 space, clear of the reserved ranges, inside service.attachableRanges (when set), is recorded in
+                  IPv4 space, clear of the reserved ranges, inside service.attachableRanges (required), is recorded in
                   the ledger (kind servicePrefix, owner HybridNetwork/<ns>/<name>/<prefix>; not yet: pending) and
                   overlaps no prefix accepted for another network: first come first served (a prefix realized before
                   keeps its place, then the ledger's value, the lower first); else refused (ServicePrefixInUse,
@@ -1267,7 +1267,7 @@ def network_space4(n):
 def prefix_verdict(text, space, rows, attachable):
     """A service prefix on its own (no other network considered): (network or None, reason, message); reason "" =
     acceptable. space: the network's IPv4 space (networks); rows: range rows (network, purpose, rule, site) without
-    site rows; attachable: networks (empty = any)."""
+    site rows; attachable: networks (required with the service: empty = none, never "any")."""
     try:
         net = ipaddress.ip_network(str(text).strip(), strict=True)
     except ValueError:
@@ -1279,9 +1279,9 @@ def prefix_verdict(text, space, rows, attachable):
     clash = range_clash(net, rows)
     if clash is not None:
         return net, "PrefixReserved", reserved_message("prefix", net, clash)
-    if attachable and not any(net.subnet_of(a) for a in attachable):
+    if not any(net.subnet_of(a) for a in attachable):
         return net, "OutsideAttachableRanges", (f"{net} is outside the ranges the platform reaches "
-                                                f"({', '.join(str(a) for a in attachable)})")
+                                                f"({', '.join(str(a) for a in attachable) or 'none are named'})")
     return net, "", ""
 
 
@@ -1289,7 +1289,7 @@ def service_prefix_check(req):
     """One network's service prefixes (service-prefix-check, for the network job): {prefixes: [{prefix, cluster?}],
     space: [the network's prefixes], realization (or ranges: published rows, and attachableRanges), accepted: [the
     prefixes accepted for other networks]} -> rows {prefix, cluster, state (pending|refused), reason, message}: each
-    prefix inside the network's IPv4 space, clear of the reserved ranges, inside service.attachableRanges (when set) and
+    prefix inside the network's IPv4 space, clear of the reserved ranges, inside service.attachableRanges (empty: none) and
     overlapping no prefix accepted for another network (ServicePrefixInUse). The ledger settles who came first; this
     only says whether a prefix can be accepted now."""
     real = req.get("realization")
