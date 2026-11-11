@@ -691,14 +691,16 @@ ACCOUNT_FILE_FAKES = {
 class AccountFilesGoOnFailure(unittest.TestCase):
     """Review R2 L11: the site account's clouds.yaml in /tmp is removed also when the call with it fails."""
 
-    def check(self, task_file, tag, **kw):
-        path = f"/tmp/eda-{tag}-clouds.yaml"
-        if os.path.exists(path):
-            os.unlink(path)
+    def check(self, task_file, tag, *more, **kw):
+        paths = [f"/tmp/eda-{t}-clouds.yaml" for t in (tag,) + more]
+        for path in paths:
+            if os.path.exists(path):
+                os.unlink(path)
         rc, tr, out = H.run("platformopenshift_provision", task_file, dict(BASE, **kw), fakes=ACCOUNT_FILE_FAKES)
         self.assertNotEqual(rc, 0)
         self.assertIn("the cloud did not answer", out)
-        self.assertFalse(os.path.exists(path), f"{task_file} left {path}")
+        for path in paths:
+            self.assertFalse(os.path.exists(path), f"{task_file} left {path}")
 
     def test_files(self):
         b = f"shc-oso-l11-{os.getpid()}"
@@ -710,8 +712,10 @@ class AccountFilesGoOnFailure(unittest.TestCase):
         self.check("designate_dns.yml", f"po-{b}", cb_cluster_name=b, cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16",
                    cb_ocp_name="c1", cb_cluster_domain="env1.example.org", use_designate_dns=True,
                    designate_zone_id="zone-1", designate_project_id="dnsproj-1", designate_admin_vault_path="sites/site1")
-        self.check("preflight_network_name.yml", f"po-netname-{b}", cb_app_name=b, cb_oso_project_id="proj-1",
-                   cb_fip_account="sites/site1", pnn_name="hn1", pnn_id="net-1", pnn_hybrid=True)
+        # the site account (its CA bundle) and the environment's credential (the installer's) both go
+        self.check("preflight_network_name.yml", f"po-netname-{b}", f"po-netname-env-{b}", cb_app_name=b,
+                   cb_oso_project_id="proj-1", cb_fip_account="sites/site1", pnn_name="hn1", pnn_id="net-1",
+                   pnn_hybrid=True, pnn_credential="oso/projects/env1/clouds-config")
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
