@@ -836,14 +836,7 @@
     "cliGet": "oc get {{resource}} {{name}}",
     "cliGetTitle": "Lire cet objet en ligne de commande",
     "conditionEvent": "Événement {{id}}",
-    "placementUses": "Utilisations",
-    "clusterNetworkChoice": "Réseau",
-    "clusterExternalNetwork": "Réseau externe",
-    "clusterPublish": "Publication",
-    "clusterFloatingIPs": "Adresses IP flottantes",
-    "clusterAddressRanges": "Plages d'adresses",
-    "floatingIpApi": "API {{address}}",
-    "floatingIpIngress": "Applications {{address}}"
+    "placementUses": "Utilisations"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1178,8 +1171,7 @@
     "useState_ready": "activé",
     "useState_pending": "en cours de mise en place",
     "useState_removing": "en cours de désactivation",
-    "useState_off": "désactivé",
-    "useOnlyOpenstack": "Seuls les environnements OpenStack proposent ces réglages."
+    "useState_off": "désactivé"
   },
   "callout": {
     "since": "depuis {{time}}",
@@ -1685,7 +1677,6 @@
     "allowDone": "L'accès de la plateforme est activé pour {{network}}. La plateforme vérifie le réseau dans quelques minutes.",
     "allowFailed": "L'accès de la plateforme n'a pas pu être activé",
     "openPlacement": "Ouvrir le placement",
-    "blockersNetwork": "Choisissez un réseau que le cluster peut utiliser.",
     "blockersCounts": "Corrigez le nombre de nœuds.",
     "blockersNetworking": "Corrigez les plages d'adresses.",
     "reason": {

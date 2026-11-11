@@ -836,14 +836,7 @@
     "cliGet": "oc get {{resource}} {{name}}",
     "cliGetTitle": "Read this object from the command line",
     "conditionEvent": "Event {{id}}",
-    "placementUses": "Uses",
-    "clusterNetworkChoice": "Network",
-    "clusterExternalNetwork": "External network",
-    "clusterPublish": "Published",
-    "clusterFloatingIPs": "Floating IPs",
-    "clusterAddressRanges": "Address ranges",
-    "floatingIpApi": "API {{address}}",
-    "floatingIpIngress": "Applications {{address}}"
+    "placementUses": "Uses"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1178,8 +1171,7 @@
     "useState_ready": "on",
     "useState_pending": "being set up",
     "useState_removing": "turning off",
-    "useState_off": "off",
-    "useOnlyOpenstack": "Only OpenStack environments offer these settings."
+    "useState_off": "off"
   },
   "callout": {
     "since": "since {{time}}",
@@ -1685,7 +1677,6 @@
     "allowDone": "Platform access is on for {{network}}. The platform checks the network within a few minutes.",
     "allowFailed": "Platform access could not be turned on",
     "openPlacement": "Open the placement",
-    "blockersNetwork": "Choose a network the cluster can use.",
     "blockersCounts": "Correct the node counts.",
     "blockersNetworking": "Correct the address settings.",
     "reason": {
