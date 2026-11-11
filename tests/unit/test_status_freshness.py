@@ -69,15 +69,19 @@ class RealizationDefaults(unittest.TestCase):
     def test_documented_keys_keep_behaviour(self):
         with open(DEFAULTS) as fh:
             d = yaml.safe_load(fh)["fabric_realization_defaults"]
-        # no platform reach unless sources are given; the ports the code falls back to; the site's own domain
-        self.assertEqual(d["egress"]["platformSources"], [])
-        self.assertEqual(d["egress"]["platformPorts"], [6443, 443])
+        # platform reach is retired (infrastructure.hub and the service VRF replace it, off by default; the ports the
+        # code falls back to); the site's own domain
+        self.assertNotIn("platformSources", d["egress"])
+        self.assertNotIn("platformPorts", d["egress"])
+        self.assertEqual(d["infrastructure"], {"hub": []})
+        self.assertFalse(d["service"]["enabled"])
+        self.assertEqual(d["service"]["ports"], [6443, 443])
         self.assertEqual(d["openstack"]["projectDomain"], "")
         sys.path.insert(0, os.path.join(ROOT, "eda", "common", "files"))
         import shc_fabric as F
         with open(F.__file__) as fh:
             src = fh.read()
-        self.assertIn('eg.get("platformPorts") or [6443, 443]', src)
+        self.assertIn('sv.get("ports") or [6443, 443]', src)
         with open(os.path.join(ROLES, "cloudgateway_provision", "tasks", "site_openstack.yml")) as fh:
             site = fh.read()
         self.assertIn("fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true)",

@@ -192,6 +192,26 @@ class NodeTasks(unittest.TestCase):
                     self.assertNotIn("remote_src", t[mods[0]])
         self.assertGreater(found, 60)
 
+    def test_the_service_vrf_steps_are_bounded_node_steps(self):
+        """the root's steps for the service VRF (the BGP instance removed before its kernel VRF, the apply that sets it
+        up, the readiness check that reads it) are node steps of the fabric job's node loop, through the become
+        command, and start no unit"""
+        steps = {}
+        for role, file_, t, inh in node_tasks():
+            if role == "hybridfabric_provision" and file_ == "node_root.yml":
+                steps[t.get("name")] = (t, inh)
+        want = ["{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)",
+                "{{ bgw_node.name }}: apply the root instance", "{{ bgw_node.name }}: wait for BGP and IS-IS"]
+        for name in want:
+            with self.subTest(step=name):
+                self.assertIn(name, steps)
+                t, inh = steps[name]
+                body = str(t.get("ansible.builtin.shell") or t.get("ansible.builtin.command"))
+                if "apply the root instance" not in name:   # the apply reads the service from root.json
+                    self.assertIn("service", body)
+                self.assertIsNone(UNIT_ACTION.search(body))
+                self.assertIsNot(inh.get("become", True), False)
+
     def test_node_commands_start_nothing_outside_their_process_group(self):
         units = set()
         for role, file_, t, _ in node_tasks():

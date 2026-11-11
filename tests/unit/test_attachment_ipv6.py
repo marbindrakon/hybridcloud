@@ -126,6 +126,15 @@ def plan_req(circuits, networks=None, placements=None, egress=None, attachments=
             "core": CORE if ipv6_core else {}, "translation": TRANSLATION}
 
 
+def without_platform_reach(plan):
+    """a plan of the release before without the retired platform reach key of its root VRFs (always [] there)"""
+    for vs in (plan.get("vrfs") or {}).values():
+        for v in vs:
+            if v.get("platform") == []:
+                v.pop("platform")
+    return plan
+
+
 V4_ACCEPT = ["10.50.0.0/16 le 32"]
 V6_ACCEPT = ["10.50.0.0/16 le 32", "2001:db8:50::/48 le 64"]
 
@@ -330,7 +339,7 @@ class AttachmentsPlanTest(unittest.TestCase):
                                placements=[placement(), placement("g11-x", "g11", ("10.61.2.0/24",))], egress=egress,
                                attachments=at)
                 new, old = shc_fabric.attachments_plan(copy.deepcopy(req)), BASE_MOD.attachments_plan(copy.deepcopy(req))
-                self.assertEqual(json.dumps(new, sort_keys=True), json.dumps(old, sort_keys=True))
+                self.assertEqual(json.dumps(new, sort_keys=True), json.dumps(without_platform_reach(old), sort_keys=True))
                 self.assertEqual(len(new["circuits"]), 3)
                 self.assertNotIn("ipv6", json.dumps(new["circuits"]))
 
@@ -346,7 +355,8 @@ class AttachmentsPlanTest(unittest.TestCase):
             self.assertEqual(pick(both["nodes"][n]["circuits"], "acme/c2"), pick(alone["nodes"][n]["circuits"], "acme/c2"))
         if BASE_MOD is not None:
             self.assertEqual(json.dumps(alone, sort_keys=True),
-                             json.dumps(BASE_MOD.attachments_plan(plan_req([copy.deepcopy(c2)])), sort_keys=True))
+                             json.dumps(without_platform_reach(BASE_MOD.attachments_plan(plan_req([copy.deepcopy(c2)]))),
+                                        sort_keys=True))
 
     def test_ipv6_plan_contract(self):
         out = shc_fabric.attachments_plan(plan_req([circuit("c1", realization(0, V6_ACCEPT, 3000, ipv6=True))]))
