@@ -5,6 +5,10 @@
 # leaves the IPAM (refused while a placement that still exists holds subnets in it), a platform IPv6 block goes back
 # to the fabric's public pool (hold-down; networks waiting for one are woken), the egress index and the VPN route
 # target go back to the fabric's ledger, and the job marks deletionComplete.
+# Platform access: the deletion waits while an OpenShift cluster of the namespace names the network (its teardown
+# clears its prefixes and wakes the network) and while the fabric still carries the network in its service routing
+# domain (the network's accepted prefixes are cleared first and the fabric is woken); the network's service prefixes
+# then leave the ledger.
 - block:
     - name: Read the HybridNetwork
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -21,6 +25,52 @@
       register: _hnd_fabric
       when: fab_st.fabric | default('', true) | length > 0
 
+    - name: List the clusters of the namespace
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: PlatformOpenshift
+        namespace: "{{ fab_namespace }}"
+      register: _hnd_clusters
+
+    - name: The clusters on the network
+      ansible.builtin.set_fact:
+        hnd_clusters: >-
+          {%- set out = [] -%}
+          {%- for c in _hnd_clusters.resources | default([], true) -%}
+            {%- set sp = c.spec | default({}, true) -%}
+            {%- set ty = sp.type | default('', true) -%}
+            {%- if ty and (sp[ty] | default({}, true)).network | default('', true) == fab_name
+                  and not ((c.status | default({}, true)).deletionComplete | default(false, true) | bool) -%}
+              {%- set _ = out.append(c.metadata.name) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out | sort }}
+
+    # status pending (not partial) completes the delete event; the cluster's teardown wakes the network
+    - name: Wait for the clusters on the network
+      when: hnd_clusters | length > 0
+      block:
+        - name: Mark the network waiting for its clusters
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: hybridnetworks
+            cr_name: "{{ fab_name }}"
+            cr_namespace: "{{ fab_namespace }}"
+            patch_ignore_not_found: true
+            cr_status_body:
+              status: pending
+              ready: false
+              message: "Deletion waits for the OpenShift clusters on the network: {{ hnd_clusters | join(', ') }}"
+              deletionBlockedBy: "{{ hnd_clusters | map('regex_replace', '^', 'PlatformOpenshift ' ~ fab_namespace ~ '/') | list }}"
+              lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+        - name: End the job until the clusters are gone
+          ansible.builtin.meta: end_play
+
     - name: Does the fabric still carry the network's egress
       vars:
         _eg: >-
@@ -30,6 +80,38 @@
         hnd_egress_carried: >-
           {{ _eg.networks | default([], true) | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list
              | length > 0 }}
+        hnd_service_carried: >-
+          {{ (((((_hnd_fabric.resources | default([], true) + [{}]) | first).status | default({}, true)).realization
+               | default({}, true)).service | default({}, true)).networks | default([], true)
+             | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list | length > 0 }}
+
+    # the fabric reads the accepted prefixes from status.platformAccess: none any more, so it takes the network out
+    - name: Take the network out of the service routing domain first
+      when: hnd_service_carried | bool
+      block:
+        - name: Mark the network waiting for the fabric
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: hybridnetworks
+            cr_name: "{{ fab_name }}"
+            cr_namespace: "{{ fab_namespace }}"
+            patch_ignore_not_found: true
+            cr_status_body:
+              status: pending
+              ready: false
+              message: "Deletion waits for HybridFabric {{ fab_st.fabric }} to remove the platform's connection with the network"
+              deletionBlockedBy: ["HybridFabric {{ fabric_platform_namespace }}/{{ fab_st.fabric }} (platform access)"]
+              platformAccess: {prefixes: []}
+              lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+        - name: Wake the fabric for the service routing domain
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+          vars:
+            nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ fab_st.fabric }}"}]
+
+        - name: End the job until the fabric took the network out
+          ansible.builtin.meta: end_play
 
     - name: Remove the egress first
       when: hnd_egress_carried | bool
@@ -123,6 +205,29 @@
           kind: egress
           owner: "HybridNetwork/{{ fab_namespace }}/{{ fab_name }}"
       when: fab_st.fabric | default('', true) | length > 0
+
+    - name: Read the fabric's ledger for the network's service prefixes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-get, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ fab_st.fabric }}"}
+      when: fab_st.fabric | default('', true) | length > 0
+
+    - name: Release the network's service prefixes
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger:
+          action: ledger-release
+          namespace: "{{ fabric_platform_namespace }}"
+          fabric: "{{ fab_st.fabric }}"
+          kind: servicePrefix
+          owner: "{{ hnd_owner }}"
+      loop: >-
+        {{ (((fab_ledger_result | default({}, true)).ledger | default({}, true)).alloc | default({}, true)).servicePrefix
+           | default({}, true) | list
+           | select('match', '^HybridNetwork/' ~ (fab_namespace | regex_escape) ~ '/' ~ (fab_name | regex_escape) ~ '/')
+           | list if fab_st.fabric | default('', true) | length > 0 else [] }}
+      loop_control:
+        loop_var: hnd_owner
 
     - name: Release the VPN route target
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
