@@ -652,6 +652,27 @@ class ServiceInterrupted(unittest.TestCase):
                     # (refused: a run that went on past a refused table removal may leave the table, without links)
                     self.assertEqual(repaired[2], "service" in conf)
 
+    def test_a_reused_link_address_is_given_back_first(self):
+        """Network lab leaves and lab2 takes its root index in the same run: lab's pair goes before lab2's takes the
+        /31, never two devices with one address in the service VRF (review R1 L2)."""
+        h = self.harness()
+        h.set_state(blade())
+        first = copy.deepcopy(self.both)
+        first["service"]["networks"] = [w for w in first["service"]["networks"] if w["vrf"] == "e10002"]
+        h.conf("root", first)
+        rc, _, err, _ = h.run("root")
+        self.assertEqual(rc, 0, err)
+        lab = first["service"]["networks"][0]
+        then = copy.deepcopy(self.both)
+        then["service"]["networks"] = [dict(w, seAddr=lab["seAddr"], soAddr=lab["soAddr"], seIp=lab["seIp"], soIp=lab["soIp"])
+                                       for w in then["service"]["networks"] if w["vrf"] == "e10003"]
+        h.conf("root", then)
+        rc, _, err, log = h.run("root")
+        self.assertEqual(rc, 0, err)
+        gone = A.index(log, r"^W \[root\] ip link del se10002$")
+        self.assertLess(gone, A.index(log, r"^W \[root\] ip addr add %s dev so10003" % re.escape(lab["soAddr"])))
+        self.assertLess(gone, A.index(log, r"^W \[root\] ip link add se10003 "))
+
     def test_fresh_node(self):
         self.walk(None, self.both)
 
