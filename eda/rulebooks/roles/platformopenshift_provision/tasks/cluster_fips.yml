@@ -18,24 +18,33 @@
       (CloudOSO status.projectId '{{ cf_project_id | default('') }}'), the network's id
       ('{{ cf_network_id | default('') }}') and the site account of the environment.
 
-- name: Load the site account
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
-  vars:
-    os_account_vault_path: "{{ cf_account }}"
-    os_account_tag: "po-fips-{{ cb_app_name }}"
+# the site account's clouds.yaml in /tmp goes whatever happens (Review R2 L11)
+- name: The cluster's floating IPs with the site account
+  block:
+    - name: Load the site account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ cf_account }}"
+        os_account_tag: "po-fips-{{ cb_app_name }}"
 
-- name: Find or create the cluster's floating IPs
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
-  vars:
-    os_call_no_log: false
-    os_request:
-      action: cluster-fips
-      state: present
-      project_id: "{{ cf_project_id }}"
-      network_id: "{{ cf_network_id }}"
-      descriptions:
-        api: "{{ cb_app_name }}-api"
-        ingress: "{{ cb_app_name }}-ingress"
+    - name: Find or create the cluster's floating IPs
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_request:
+          action: cluster-fips
+          state: present
+          project_id: "{{ cf_project_id }}"
+          network_id: "{{ cf_network_id }}"
+          descriptions:
+            api: "{{ cb_app_name }}-api"
+            ingress: "{{ cb_app_name }}-ingress"
+  always:
+    - name: Remove the account's temp files
+      ansible.builtin.file:
+        path: "/tmp/eda-po-fips-{{ cb_app_name }}-{{ item }}"
+        state: absent
+      loop: [clouds.yaml, ca.crt]
 
 - name: Keep the floating IPs
   ansible.builtin.set_fact:
@@ -56,9 +65,3 @@
     cr_status_partial: true
     cr_status_body:
       floatingIPs: "{{ cb_fips }}"
-
-- name: Remove the account's temp files
-  ansible.builtin.file:
-    path: "/tmp/eda-po-fips-{{ cb_app_name }}-{{ item }}"
-    state: absent
-  loop: [clouds.yaml, ca.crt]

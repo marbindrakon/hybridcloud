@@ -630,6 +630,46 @@ class DnsRecordedBeforeCreated(unittest.TestCase):
                         names.index("Create Route53 A records for the API and apps wildcard"))
 
 
+ACCOUNT_FILE_FAKES = {
+    # the account writes /tmp/eda-<tag>-clouds.yaml as the real one does; the call fails
+    "openstack_account.yml": """- ansible.builtin.copy:
+    dest: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
+    content: "clouds: {}"
+- ansible.builtin.set_fact:
+    os_account_clouds_yaml: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
+    os_account_cacert: ""
+""",
+    "openstack_call.yml": "- ansible.builtin.fail:\n    msg: the cloud did not answer\n",
+}
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class AccountFilesGoOnFailure(unittest.TestCase):
+    """Review R2 L11: the site account's clouds.yaml in /tmp is removed also when the call with it fails."""
+
+    def check(self, task_file, tag, **kw):
+        path = f"/tmp/eda-{tag}-clouds.yaml"
+        if os.path.exists(path):
+            os.unlink(path)
+        rc, tr, out = H.run("platformopenshift_provision", task_file, dict(BASE, **kw), fakes=ACCOUNT_FILE_FAKES)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the cloud did not answer", out)
+        self.assertFalse(os.path.exists(path), f"{task_file} left {path}")
+
+    def test_files(self):
+        b = f"shc-oso-l11-{os.getpid()}"
+        self.check("cluster_fips.yml", f"po-fips-{b}", cb_app_name=b, cf_project_id="proj-1", cf_network_id="net-1",
+                   cf_account="sites/site1")
+        self.check("cluster_fips_release.yml", f"po-fips-release-l11-{os.getpid()}", cfr_project_id="proj-1",
+                   cfr_account="sites/site1", cfr_ids=["fip-a"], cfr_build=b, cfr_cr_name=f"l11-{os.getpid()}",
+                   cfr_cr_namespace=NS)
+        self.check("designate_dns.yml", f"po-{b}", cb_cluster_name=b, cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16",
+                   cb_ocp_name="c1", cb_cluster_domain="env1.example.org", use_designate_dns=True,
+                   designate_zone_id="zone-1", designate_project_id="dnsproj-1", designate_admin_vault_path="sites/site1")
+        self.check("preflight_network_name.yml", f"po-netname-{b}", cb_app_name=b, cb_oso_project_id="proj-1",
+                   cb_fip_account="sites/site1", pnn_name="hn1", pnn_id="net-1", pnn_hybrid=True)
+
+
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class RouterGatewayFile(unittest.TestCase):
     def test_gateway_joins_the_prefixes(self):

@@ -126,7 +126,7 @@ def build_tree(tmp, real=(), fakes=None):
         with open(os.path.join(tmp, "eda", "common", "tasks", f), "w") as fh:
             fh.write("---\n" + body)
     for f, body in FAKE_TASKS.items():
-        if f in real:
+        if f in real or f in fakes:
             continue
         with open(os.path.join(tmp, "eda", "common", "tasks", f), "w") as fh:
             fh.write("---\n" + body)
