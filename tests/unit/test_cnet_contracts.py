@@ -626,6 +626,72 @@ class ClusterPrefixShapes(unittest.TestCase):
                 self.assertEqual(d["prefixes"][0]["state"], "refused")
 
 
+class ServiceSessionsAndTheTemplate(unittest.TestCase):
+    """With a cluster present, the rendered root configuration has two kinds of BGP neighbours in the service VRF:
+    the platform circuit's CE (eBGP) and one iBGP neighbour per network with clusters (its service link). The health
+    reader judges ServiceSessionsDown on the CEs root.json names, which are exactly the CE neighbours the template
+    renders; the networks' iBGP sessions are not counted there (they are checked at apply time by the readiness
+    check, which names both). The cluster side reads nothing of the network VRF's routes."""
+
+    def setUp(self):
+        import test_service_vrf as V
+        self.V = V
+        real, (egp, att, vrfs, svc) = V.service_setup()
+        self.out = V.T.render(V.T.RT, V.template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
+        self.conf = V.service_conf(real, egp, att, svc, "bgw-1")
+
+    def neighbours(self):
+        inst = self.out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0]
+        ce, ibgp = [], []
+        for line in inst.splitlines():
+            parts = line.split()
+            if len(parts) == 4 and parts[0] == "neighbor" and parts[2] == "remote-as":
+                (ibgp if parts[3] == "65010" else ce).append(parts[1])
+        return ce, ibgp
+
+    def summary(self, states):
+        return json.dumps({"ipv4Unicast": {"peers": {a: {"state": st} for a, st in states.items()}}})
+
+    def test_the_health_reader_counts_the_ces_the_template_renders(self):
+        import importlib.util as iu
+        spec = iu.spec_from_file_location("shc_node_health", os.path.join(ROOT, "eda", "common", "files", "shc_node_health.py"))
+        NH = iu.module_from_spec(spec)
+        spec.loader.exec_module(NH)
+        ce, ibgp = self.neighbours()
+        self.assertTrue(ce and ibgp, self.out)
+        self.assertEqual(sorted(str(c["ce"]) for c in self.conf["service"]["circuits"]), sorted(ce))
+        # CE up, the networks' sessions down: the platform circuit is healthy (the network sessions are not its)
+        states = dict({a: "Established" for a in ce}, **{a: "Idle" for a in ibgp})
+        got = NH.service_sessions(lambda argv: (0, self.summary(states)), self.conf)
+        self.assertEqual((got["established"], got["known"]), (len(ce), len(ce)))
+        self.assertEqual(sorted(r["address"] for r in got["peers"]), sorted(ce))
+        # CE down: counted as down, whatever the networks' sessions say
+        states = dict({a: "Active" for a in ce}, **{a: "Established" for a in ibgp})
+        got = NH.service_sessions(lambda argv: (0, self.summary(states)), self.conf)
+        self.assertEqual(got["established"], 0)
+
+    def test_the_readiness_check_names_both_kinds(self):
+        with open(os.path.join(ROLES, "hybridfabric_provision", "tasks", "node_root.yml")) as fh:
+            text = fh.read()
+        self.assertIn("show bgp vrf {{ hf_node_service.vrf }} neighbors {{ c.ce }} json", text)
+        self.assertIn("show bgp vrf {{ hf_node_service.vrf }} neighbors {{ w.seIp }} json", text)
+        self.assertIn("show bgp vrf {{ w.vrf }} neighbors {{ w.soIp }} json", text)
+        ce, ibgp = self.neighbours()
+        # the template's network-side neighbour is the service link's other end (so<t> in the service VRF)
+        nets = self.conf["service"]["networks"]
+        self.assertEqual(sorted(w["seIp"] for w in nets), sorted(ibgp))
+
+    def test_no_static_hub_route_the_cluster_side_could_rely_on(self):
+        self.assertNotIn("SHC-VRF-STATIC", self.out)
+        for role in ("platformopenshift_provision", "platformopenshift_teardown"):
+            for dirpath, _, files in os.walk(os.path.join(ROLES, role)):
+                for f in files:
+                    with open(os.path.join(dirpath, f), errors="replace") as fh:
+                        body = fh.read()
+                    for word in ("SHC-VRF-STATIC", "SVC-STATIC", "ip route", "show ip route"):
+                        self.assertNotIn(word, body, f"{role}/{f}")
+
+
 # ---- the UI's reads and the CRD bases -----------------------------------------------------------------------------
 BASES = os.path.join(ROOT, "operator", "config", "crd", "bases")
 
