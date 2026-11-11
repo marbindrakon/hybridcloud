@@ -13,15 +13,14 @@
 #   otherwise takes a port's MAC whenever ports change, and IS-IS on it keeps the old one: prints bridge-mac=changed
 #   when it had to set it, so FRR can be restarted), the provider-edge loopback on lo; other addresses from the
 #   fabric's core prefixes are removed.
-#   egress {vrf, table, parent, mtu, address, gateway, deny, allow, platformSources, platformPorts, networks: [{vrf,
-#   table, zone, xe, xo, xeAddr, xoAddr, nat, platform}]} (provider internet egress and platform reach; absent =
-#   none): a VRF <vrf> with a macvlan egress0 on <parent> (the site network the hand-off uses) holding <address>; per
+#   egress {vrf, table, parent, mtu, address, gateway, deny, allow, networks: [{vrf, table, zone, xe, xo, xeAddr,
+#   xoAddr, nat}]} (provider internet egress; absent = none): a VRF <vrf> with a macvlan egress0 on <parent> (the
+#   site network the hand-off uses) holding <address>; per
 #   network a VRF e<n> (FRR imports the network's VPN routes into it) and a veth xe<n> (in e<n>) / xo<n> (in <vrf>),
 #   proxy ARP on egress0 for each network's NAT address (networks with internet egress), and the nftables table ip
 #   shc_egress: conntrack zone per network, source NAT on xe<n>, nothing to deny destinations, nothing unsolicited
-#   into a network - except the platform's sources to a network's platform prefixes on platformPorts (and their
-#   replies, stateless: they may return through the other node), never source-NATed. Veths of networks no longer
-#   listed are removed. Routes are FRR's (staticd).
+#   into a network. Veths of networks no longer listed are removed. Routes are FRR's (staticd). (The table is
+#   replaced as a whole, so the platform reach rules of an earlier release go with the first run.)
 #   egress.ipv6 {address, wanMtu, mss, routed, deny6, allow6, resolvers6, platDeny6, external6, icmp6} with per
 #   network ipv6 {block, prefixes, src6} (IPv6 internet egress; absent = none, the IPv6 side is removed): the node's
 #   address on egress0 and egress0's IPv6 MTU = wanMtu (the node sends Packet Too Big), and the nftables table inet
@@ -33,12 +32,13 @@
 #   where the egress VRF forwards them to xo<n>, on forward), inbound only neighbour discovery, ICMPv6 errors and
 #   replies, and a routed source arriving on egress0 dropped (external6 excepted). The table is loaded before FRR
 #   takes the sessions' configuration (fail closed; shc-egress6-guard keeps it so). The sessions themselves are FRR's.
-#   attachments {vlanPool: [start, end], parents: [interface], platformSources, circuits: [{circuit, device, parent,
+#   attachments {vlanPool: [start, end], parents: [interface], platformSources (the hub's IPv4 ranges,
+#   infrastructure.hub), circuits: [{circuit, device, parent,
 #   vlan, mtu, vrf, table, zone, address, link, nat}]} (attachment circuits; absent = none): per circuit a VLAN
 #   device <parent>.<vlan> in the network's root VRF e<n> (created when missing; the same VRF as the network's
 #   egress) holding the node's address on the circuit's link, with strict reverse path filtering and no IPv6; the
 #   nftables table ip shc_attach: the network's conntrack zone on the device, nothing to the node itself from it but
-#   BGP from the link, BFD and ICMP, nothing to the platform's sources and, unless nat, nothing into the egress veth.
+#   BGP from the link, BFD and ICMP, nothing to the hub's ranges and, unless nat, nothing into the egress veth.
 #   A circuit with address6 (and link6, sources6, egress6; absent = IPv4 only, as above) also carries IPv6: the device
 #   takes no router advertisements or SLAAC, keeps its link-local and holds address6 (nodad), and the nftables table
 #   ip6 shc_attach6 (IPv6 rules only; the IPv4 table above is untouched; loaded before IPv6 comes on at any device,
@@ -46,8 +46,20 @@
 #   link-local dropped, nothing to the node from it but BGP from the link, BFD, ICMPv6 (echo, errors, MLD) and
 #   neighbour discovery from the link or link-local, and unless egress6 nothing into the egress veth. The table goes
 #   when no circuit has address6 (a run that never had one issues no IPv6 command), and the device's IPv6 goes off.
-#   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed.
-#   Root VRFs e<digits> that neither the egress nor a circuit lists are removed with their devices.
+#   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed (the
+#   platform circuits' devices are the service's, below).
+#   service {vrf, table, mtu, hub, ports, hubEndpoints: [{prefix, ports}], circuits: [{circuit, device, parent, vlan,
+#   mtu, address, link, ce}], networks: [{vrf, table, se, so, seAddr, soAddr, prefixes}]} (the service VRF, through
+#   which the hub reaches the clusters the platform builds on tenant networks; absent = none, and a node that had it
+#   loses it all): the nftables table ip shc_service first (see service_nft: stateless, because the two directions of
+#   a connection may cross different nodes; the hub to a network's accepted prefixes on ports, a network's prefixes to
+#   the hub endpoints, ICMP errors and the hub's echo, nothing between networks, from a platform circuit to the node
+#   only BGP and BFD from its link and ICMP), then the VRF <vrf> (table <table>, IPv4 only), per platform circuit a
+#   VLAN device <parent>.<vlan> in it with the node's address (strict reverse path filtering, no IPv6), and per network
+#   with clusters its VRF e<n> and a veth se<n> (in e<n>) / so<n> (in <vrf>) on the network's service link (no IPv6).
+#   Links and circuit devices not listed are removed; the VRF's name is remembered in <instance>.service next to the
+#   JSON, so a run without the key (or with another name) removes the VRF it applied. Routes are FRR's (staticd).
+#   Root VRFs e<digits> that neither the egress, a circuit nor the service lists are removed with their devices.
 # instance type "gateway" (a CloudGateway, network namespace <netns>):
 #   the namespace (forwarding, MPLS with transport mpls), the provider-edge loopback, the site's underlay VLAN on the trunk moved into
 #   the namespace with the gateway's site address, and a veth from the namespace's core0 (link address) to the core
@@ -92,7 +104,7 @@
 #   was loaded) and with the last VRF; an IPv6 step that failed leaves it as it was.
 #   The root VRFs' input filters (root): the same answers for what a tenant network reaches of the root itself. A
 #   packet delivered to the node in a root VRF (the egress VRF, a network's VRF e<n>) that did not arrive on one of
-#   the VRF's own legs - a network's veth xe<n>, a circuit's device (each has its own filter or session) - came from
+#   the VRF's own legs - a network's veth xe<n>, a circuit's or platform circuit's device (each has its own filter or session) - came from
 #   a network (from the core, popped from MPLS or decapsulated into e<n>, or through a network's veth xo<n> into the
 #   egress VRF) or from the hand-off network on egress0 (the other node's networks, the internet), where only the
 #   upstream routers' BGP sessions (IPv6 egress) are admitted besides the common answers. With the IPv6 core, table ip6 shc_root_in6 (IPv6 rules only, input hook only; loaded
@@ -102,7 +114,7 @@
 #   some kernels). Both stateless; each goes with the last root VRF (and the IPv6 one with the IPv6 core).
 # icmp4 (root, optional; absent or "" = none of this is read or set, but for removing such addresses a run before
 #   left): the IPv4 source of the ICMP errors the root's VRFs send toward a network, as a /32 on every root VRF device
-#   (the egress VRF, each network's VRF e<n>). For a route whose next hop device lies outside the VRF (every route back
+#   (the egress VRF, the service VRF, each network's VRF e<n>). For a route whose next hop device lies outside the VRF (every route back
 #   to a network's hosts: over the core) the kernel takes an address of the VRF device before any address of the VRF's
 #   other devices, so the root's "fragmentation needed" and "time exceeded" toward a network leave from it instead of
 #   from whichever device of the VRF comes first (the egress veth's link-local address, a circuit's address). The
@@ -485,8 +497,8 @@ local4_state() {
 # VRFs; gateway: its VRFs, table = VNI)
 want_vrfs() {
   if [ "$TYPE" = root ]; then
-    jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
-      | map("\(.table) \(.vrf)") | unique | .[]' "$CONF"
+    jq -r '[(.egress // {} | select(.vrf)), (.service // {} | select(.vrf)), ((.egress.networks // [])
+      + (.attachments.circuits // []) + (.service.networks // []))[]] | map("\(.table) \(.vrf)") | unique | .[]' "$CONF"
   else
     jq -r '.vrfs // [] | .[] | "\(.vni) \(.name)"' "$CONF"
   fi
@@ -714,7 +726,7 @@ snapshot_text() {
     cat "/sys/class/net/$BR/address" 2>/dev/null || true
     sysctl -n net.mpls.platform_labels 2>/dev/null || true
     sysctl -n "net.mpls.conf.$BR.input" net.mpls.conf.lo.input 2>/dev/null || true
-    egress_state; attach_state; local4_state; srv6_state "$BR"
+    egress_state; attach_state; service_state; local4_state; srv6_state "$BR"
     [ ! -e "$MARKI4" ] || nft -s list table ip shc_root_in 2>/dev/null || true
     ip -br -4 addr show type vrf 2>/dev/null || true
     [ ! -e "$MARKI6" ] || nft -s list table ip6 shc_root_in6 2>/dev/null || true
@@ -781,6 +793,7 @@ root_vrfs_prune() {
   for v in $(root_vrfs); do
     grep -qx -- "$v" <<<"$want" && continue
     ip link del "xe${v#e}" 2>/dev/null || true
+    [ ! -e "$MARKS" ] || ip link del "se${v#e}" 2>/dev/null || true
     for d in $(ip -j link show master "$v" type vlan | jq -r '.[].ifname // empty'); do ip link del "$d"; done
     t=$(vrf_table "$v")
     ip link del "$v"
@@ -822,9 +835,6 @@ zones = elements(f'"{n["xe"]}" : {n["zone"]}' for n in nets)
 # (it never passes output): the zone by the VRF device too
 zones_in = zones + ("".join(f', "{n["vrf"]}" : {n["zone"]}' for n in nets) if srv6 else "")
 nats = elements(f'"{n["xe"]}" : {n["nat"]}' for n in nets if n.get("nat"))
-srcs = e.get("platformSources") or []
-ports = ", ".join(str(p) for p in e.get("platformPorts") or [6443, 443])
-reach = [n for n in nets if n.get("platform") and srcs]
 # a network's traffic reaches the veth through the VRF's output path; the rules go on output and forward alike
 for hook in ("output", "prerouting"):
     out.append(f"  chain zone_{hook} {{")
@@ -835,9 +845,6 @@ for hook in ("output", "prerouting"):
 for hook in ("output", "forward"):
     out.append(f"  chain filter_{hook} {{")
     out.append(f"    type filter hook {hook} priority filter; policy accept;")
-    for n in reach:  # replies to the platform (stateless: they may return through the other node)
-        out.append(f'    oifname "{n["xe"]}" ip saddr {{ {elements(n["platform"])} }} ip daddr {{ {elements(srcs)} }} '
-                   f'tcp sport {{ {ports} }} accept')
     if e.get("allow"):
         out.append('    oifname "xe*" ip daddr @allow accept')
     if e.get("deny"):
@@ -845,15 +852,10 @@ for hook in ("output", "forward"):
     out.append("  }")
 out.append("  chain inbound {")
 out.append("    type filter hook prerouting priority filter; policy accept;")
-for n in reach:  # the platform reaches the network's platform prefixes on its ports
-    out.append(f'    iifname "{n["xe"]}" ip saddr {{ {elements(srcs)} }} ip daddr {{ {elements(n["platform"])} }} '
-               f'tcp dport {{ {ports} }} accept')
 out.append('    iifname "xe*" ct state new counter drop comment "nothing unsolicited into a network"')
 out.append("  }")
 out.append("  chain source_nat {")
 out.append("    type nat hook postrouting priority srcnat; policy accept;")
-if srcs:
-    out.append(f'    oifname "xe*" ip daddr {{ {elements(srcs)} }} accept')
 if nats:
     out.append(f"    snat ip to oifname map {{ {nats} }}")
 out.append("  }")
@@ -1052,11 +1054,15 @@ attach_devices() {
   ip -j -d link show type vlan | python3 -c '
 import json, re, sys
 parents, lo, hi = [p for p in sys.argv[1].split(",") if p], int(sys.argv[2]), int(sys.argv[3])
+service = [d for d in sys.argv[4].split(",") if d]
 for l in json.load(sys.stdin):
     vid = ((l.get("linkinfo") or {}).get("info_data") or {}).get("id")
+    if l.get("ifname") in service:
+        continue
     if re.fullmatch(r"e[0-9]+", l.get("master") or "") or (l.get("link") in parents and vid is not None and lo <= vid <= hi):
         print(l["ifname"])' "$(jq -r '(.attachments.parents // []) | join(",")' "$CONF")" \
-    "$(jq -r '.attachments.vlanPool[0] // 1' "$CONF")" "$(jq -r '.attachments.vlanPool[1] // 0' "$CONF")"
+    "$(jq -r '.attachments.vlanPool[0] // 1' "$CONF")" "$(jq -r '.attachments.vlanPool[1] // 0' "$CONF")" \
+    "$(jq -r '(.service.circuits // []) | map(.device) | join(",")' "$CONF")"
 }
 
 # a circuit asks for IPv6, or the IPv6 table was loaded (no IPv6 command otherwise)
@@ -1226,10 +1232,13 @@ e = doc.get("egress") or {}
 a = doc.get("attachments")
 nets = (e.get("networks") or []) if e.get("vrf") else []
 cs = (a.get("circuits") or []) if isinstance(a, dict) else []
-vrfs = sorted({x["vrf"] for x in nets + cs} | ({e["vrf"]} if e.get("vrf") else set()))
+sv = doc.get("service") if isinstance(doc.get("service"), dict) and doc["service"].get("vrf") else {}
+vrfs = sorted({x["vrf"] for x in nets + cs + (sv.get("networks") or [])} | ({e["vrf"]} if e.get("vrf") else set())
+              | ({sv["vrf"]} if sv else set()))
 # the legs with a filter or a session of their own: the networks' veths (stateful inbound filter), the circuits'
-# devices (shc_attach); egress0 is no such leg (it reaches the hand-off network: the other node, the internet)
-legs = [n["xe"] for n in nets] + [c["device"] for c in cs]
+# devices (shc_attach) and the platform circuits' (shc_service); egress0 is no such leg (it reaches the hand-off
+# network: the other node, the internet), nor are the service links se<t>/so<t> (a network on either side)
+legs = [n["xe"] for n in nets] + [c["device"] for c in cs] + [c["device"] for c in sv.get("circuits") or []]
 ups = [u["address"] for u in (e.get("ipv6") or {}).get("upstream") or []] if e.get("vrf") else []
 xos = [n["xo"] for n in nets]
 if not vrfs:
@@ -1284,7 +1293,7 @@ root_in4() { root_in 4 "ip shc_root_in" "$MARKI4"; }
 # address; without the key none)
 root_icmp4() {
   local v a
-  for v in $(ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^(e[0-9]+)$' || true) ${EV:+"$EV"}; do
+  for v in $(ip -j link show type vrf | jq -r '.[].ifname // empty' | grep -E '^(e[0-9]+)$' || true) ${EV:+"$EV"} ${SV:+"$SV"}; do
     ip link show "$v" >/dev/null 2>&1 || continue
     for a in $(stray "$v" 0.0.0.0/0 "${ICMP4:+$ICMP4/32}"); do ip addr del "$a" dev "$v"; done
     [ -z "$ICMP4" ] || addr_ensure "$v" "$ICMP4/32"
@@ -1331,6 +1340,178 @@ attach_up() {
   for dev in $(attach_devices); do grep -qx -- "$dev" <<<"$want" || ip link del "$dev"; done
   if [ -n "$want" ]; then attach_nft | nft -f -; else nft delete table ip shc_attach 2>/dev/null || true; fi
   [ -n "$want6" ] || attach6_down
+}
+
+# --- the service VRF (root; see the header): the hub reaches the clusters the platform builds on tenant networks
+# the service VRF's name as the last up applied it (a run without the key, or with another name, removes that one)
+MARKS=/etc/shc-fabric/$I.service
+SV=$(opt .service.vrf)
+
+# the platform circuits' devices this configuration lists (one per line)
+service_devices() { jq -r '.service.circuits // [] | .[].device' "$CONF"; }
+
+# the nftables table for the service VRF (replaced as a whole): stateless, because the two directions of a connection
+# may cross different nodes (each node announces the hub's ranges into the network and the clusters' prefixes to the
+# hub). Untracked (raw prerouting notrack on the service links and the circuits); input: from a circuit to the node
+# only BGP and BFD from the circuit's link, and ICMP; forward: the hub's ranges to a network's accepted prefixes on
+# the service ports (the replies: TCP with ACK from those ports), a network's prefixes to the hub endpoints on their
+# ports (the replies likewise), ICMP errors both ways and echo from the hub; nothing between two networks, nothing of
+# the hub's toward a network's internet egress, nothing else through the service VRF
+service_nft() {
+  python3 - "$CONF" <<'PY'
+import ipaddress, json, sys
+doc = json.load(open(sys.argv[1]))
+s = doc["service"]
+cs = s.get("circuits") or []
+ns = s.get("networks") or []
+eps = s.get("hubEndpoints") or []
+hub = [str(n) for n in ipaddress.collapse_addresses(ipaddress.ip_network(h) for h in s.get("hub") or [])]
+ports = ", ".join(str(p) for p in s.get("ports") or [6443, 443])
+def names(xs):
+    return "{ " + ", ".join(f'"{x}"' for x in xs) + " }"
+def elements(xs):
+    """a network's prefixes as set elements (an interval set refuses overlapping members: merged)"""
+    return "{ " + ", ".join(str(n) for n in ipaddress.collapse_addresses(ipaddress.ip_network(x) for x in xs)) + " }"
+cdevs = [c["device"] for c in cs]
+sos, ses = [n["so"] for n in ns], [n["se"] for n in ns]
+out = ["table ip shc_service", "delete table ip shc_service", "table ip shc_service {"]
+if hub:
+    out.append(f"  set hub {{ type ipv4_addr; flags interval; elements = {{ {', '.join(hub)} }}; }}")
+legs = sos + ses + cdevs
+out += ["  chain raw_prerouting {", "    type filter hook prerouting priority raw; policy accept;"]
+if legs:
+    out.append(f"    iifname {names(legs)} notrack")
+out.append("  }")
+# past prerouting a VRF slave's packets show the VRF as their input interface: the device is meta sdifname
+out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
+for c in cs:
+    link = str(ipaddress.ip_network(c["link"], strict=False))
+    out.append(f'    meta sdifname "{c["device"]}" ip saddr {link} tcp dport 179 accept')
+    out.append(f'    meta sdifname "{c["device"]}" ip saddr {link} tcp sport 179 accept')
+    out.append(f'    meta sdifname "{c["device"]}" ip saddr {link} udp dport {{ 3784, 3785 }} accept')
+if cdevs:
+    out += [f"    meta sdifname {names(cdevs)} icmp type {{ echo-request, echo-reply, destination-unreachable, time-exceeded }} accept",
+            f'    meta sdifname {names(cdevs)} counter drop comment "only BGP, BFD and ICMP from a platform circuit to the node"']
+out.append("  }")
+out += ["  chain forward {", "    type filter hook forward priority filter; policy accept;"]
+for n in ns:
+    p = elements(n["prefixes"])
+    if cdevs and hub:
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} accept')
+    if hub:
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & ack == ack accept')
+    for e in eps:
+        eports = ", ".join(str(x) for x in e.get("ports") or [])
+        if not eports:
+            continue
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr {e["prefix"]} tcp dport {{ {eports} }} accept')
+        if cdevs:
+            out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr {e["prefix"]} ip daddr {p} '
+                       f'tcp sport {{ {eports} }} tcp flags & ack == ack accept')
+if sos and hub:
+    out.append(f"    meta sdifname {names(sos)} ip daddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-reply }} accept")
+    if cdevs:
+        out.append(f"    meta sdifname {names(cdevs)} oifname {names(sos)} ip saddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-request }} accept")
+if sos:
+    out.append(f'    meta sdifname {names(sos)} oifname {names(sos)} counter drop comment "no network reaches another through the service VRF"')
+if ses:
+    out.append(f'    meta sdifname {names(ses)} oifname "xe*" counter drop comment "the hub\'s traffic never leaves by a network\'s internet egress"')
+if sos or cdevs:
+    out.append(f'    meta sdifname {names(sos + cdevs)} counter drop comment "nothing else through the service VRF"')
+out.append("  }")
+out.append("}")
+print("\n".join(out))
+PY
+}
+
+# the service VRF, its circuits' devices and the networks' service links as configured (for the snapshot); no command
+# at all while the service was never applied and is not asked for
+service_state() {
+  local d m="" pat='s[eo][0-9]+'
+  [ -e "$MARKS" ] || jq -e '.service.vrf' "$CONF" >/dev/null 2>&1 || return 0
+  [ ! -r "$MARKS" ] || m=$(<"$MARKS")
+  for d in $m $SV; do pat="$pat|$d"; done
+  ip -o link show 2>/dev/null | grep -E "^[0-9]+: ($pat)[@:]" \
+    | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|master [a-z0-9-]*\|state [A-Z]*' || true
+  ip -br -4 addr show 2>/dev/null | grep -E '^s[eo][0-9]+[@ ]' || true
+  for d in $(service_devices); do
+    ip -o link show dev "$d" 2>/dev/null | grep -o '^[0-9]*: [^:]*\|mtu [0-9]*\|master [a-z0-9-]*\|state [A-Z]*' || true
+    ip -br -4 addr show dev "$d" 2>/dev/null || true
+    cat "/proc/sys/net/ipv4/conf/$d/rp_filter" "/proc/sys/net/ipv6/conf/$d/disable_ipv6" 2>/dev/null || true
+  done
+  nft -s list table ip shc_service 2>/dev/null || true
+}
+
+# <vrf>: the service VRF goes, with its circuits' devices (the service links went before)
+service_vrf_del() {
+  local d t
+  [ -n "$1" ] && ip link show "$1" >/dev/null 2>&1 || return 0
+  for d in $(ip -j link show master "$1" type vlan | jq -r '.[].ifname // empty'); do ip link del "$d"; done
+  t=$(vrf_table "$1")
+  ip link del "$1"
+  vrf4_gone "$t"
+}
+
+# the service links (veths se<t>/so<t>) not listed go (wanted: one se device per line)
+service_links_prune() {
+  local x
+  for x in $(ip -j link show type veth | jq -r '.[].ifname // empty' | grep -E '^se[0-9]+$' || true); do
+    grep -qx -- "$x" <<<"$1" || ip link del "$x"
+  done
+}
+
+service_up() {
+  local st mtu c dev par vlan cmtu addr n v t se so sea soa a want wantd old
+  st=$(q .service.table); mtu=$(q .service.mtu)
+  modprobe vrf; modprobe 8021q
+  # the filter before the devices (it matches them by name), and before FRR takes the VRF's sessions
+  service_nft | nft -f -
+  old=""; [ ! -r "$MARKS" ] || old=$(<"$MARKS")
+  if [ -n "$old" ] && [ "$old" != "$SV" ]; then service_links_prune ""; service_vrf_del "$old"; fi
+  ip link show "$SV" >/dev/null 2>&1 || ip link add "$SV" type vrf table "$st"
+  ip link set "$SV" up
+  [ "$old" = "$SV" ] || printf '%s\n' "$SV" > "$MARKS"
+  for c in $(jq -r '.service.circuits // [] | .[] | [.device, .parent, .vlan, .mtu, .address] | join(":")' "$CONF"); do
+    IFS=: read -r dev par vlan cmtu addr <<<"$c"
+    wait_link "$par" "$cmtu" || { echo "bearer interface $par missing or below MTU $cmtu" >&2; exit 3; }
+    ip link show "$dev" >/dev/null 2>&1 || ip link add link "$par" name "$dev" type vlan id "$vlan"
+    # IPv4 only (sysctl names with "/": the device name holds a dot), strict reverse path filtering
+    sysctl -qw "net/ipv6/conf/$dev/disable_ipv6=1" "net/ipv4/conf/$dev/rp_filter=1"
+    [ "$(ip -j link show dev "$dev" | jq -r '.[0].master // empty')" = "$SV" ] || ip link set "$dev" master "$SV"
+    ip link set "$dev" mtu "$cmtu" up
+    for a in $(stray "$dev" 0.0.0.0/0 "$addr"); do ip addr del "$a" dev "$dev"; done
+    addr_ensure "$dev" "$addr"
+  done
+  wantd=$(service_devices)
+  for dev in $(ip -j link show master "$SV" type vlan | jq -r '.[].ifname // empty'); do
+    grep -qx -- "$dev" <<<"$wantd" || ip link del "$dev"
+  done
+  for n in $(jq -r '.service.networks // [] | .[] | [.vrf, .table, .se, .so, .seAddr, .soAddr] | join(":")' "$CONF"); do
+    IFS=: read -r v t se so sea soa <<<"$n"
+    root_vrf "$v" "$t"
+    ip link show "$se" >/dev/null 2>&1 || ip link add "$se" mtu "$mtu" type veth peer name "$so" mtu "$mtu"
+    sysctl -qw "net/ipv6/conf/$se/disable_ipv6=1" "net/ipv6/conf/$so/disable_ipv6=1"
+    ip link set "$se" master "$v" mtu "$mtu" up
+    ip link set "$so" master "$SV" mtu "$mtu" up
+    for a in $(stray "$se" 0.0.0.0/0 "$sea"); do ip addr del "$a" dev "$se"; done
+    addr_ensure "$se" "$sea"
+    for a in $(stray "$so" 0.0.0.0/0 "$soa"); do ip addr del "$a" dev "$so"; done
+    addr_ensure "$so" "$soa"
+  done
+  want=$(jq -r '.service.networks // [] | .[].se' "$CONF")
+  service_links_prune "$want"
+}
+
+# no service VRF on this node any more: the links, the VRF with its circuits' devices, the table (nothing while the
+# service was never applied)
+service_down() {
+  local old
+  [ -e "$MARKS" ] || return 0
+  old=$(<"$MARKS")
+  service_links_prune ""
+  service_vrf_del "$old"
+  nft delete table ip shc_service 2>/dev/null || true
+  rm -f "$MARKS"
 }
 
 # After the gateway's FRR starts with VRFs in its configuration, zebra's VRF setup can recreate bgpd's listen
@@ -1412,27 +1593,31 @@ root)
     fi
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
-    root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf] | unique | .[]' "$CONF")"
+    if [ -n "$SV" ]; then service_up; else service_down; fi
+    root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf,
+      (.service.networks // [])[].vrf] | unique | .[]' "$CONF")"
     step "the root VRFs' IPv4 ICMP source" root_icmp4
-    if [ -n "$V6KNOWN" ]; then  # the egress VRF and the networks' VRFs, as created above
-      for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
-          | map("\(.vrf):\(.table)") | unique | .[]' "$CONF"); do
+    if [ -n "$V6KNOWN" ]; then  # the egress VRF and the networks' VRFs, as created above (not the service VRF: IPv4 only)
+      for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // [])
+          + (.service.networks // []))[]] | map("\(.vrf):\(.table)") | unique | .[]' "$CONF"); do
         v6 "IPv6 in VRF ${v%%:*}" vrf6 "${v%%:*}" "${v#*:}"
       done
     fi
     # every root VRF's IPv4 lookup ends in its own table
-    for v in $(jq -r '[(.egress // {} | select(.vrf)), ((.egress.networks // []) + (.attachments.circuits // []))[]]
-        | map(.table | tostring) | unique | .[]' "$CONF"); do
+    for v in $(jq -r '[(.egress // {} | select(.vrf)), (.service // {} | select(.vrf)), ((.egress.networks // [])
+        + (.attachments.circuits // []) + (.service.networks // []))[]] | map(.table | tostring) | unique | .[]' "$CONF"); do
       step "the IPv4 unreachable default of table $v" vrf4_unreach "$v"
     done
     # transport srv6: no routing header on any of the instance's devices (never the management interface)
     # shellcheck disable=SC2046
     [ "$TRANSPORT" != srv6 ] || srv6_step "seg6_enabled off on the instance's devices" srv6_seg6_off \
-      $(ip -j link show | jq -r --arg br "$BR" --arg ev "$EV" '.[].ifname | select(. == "lo" or . == $br or . == "egress0"
-        or . == $ev or test("^(e|xe|xo)[0-9]+$"))') $(jq -r '.attachments.circuits // [] | .[].device' "$CONF")
+      $(ip -j link show | jq -r --arg br "$BR" --arg ev "$EV" --arg sv "$SV" '.[].ifname | select(. == "lo" or . == $br
+        or . == "egress0" or . == $ev or (. == $sv and $sv != "") or test("^(e|xe|xo|se|so)[0-9]+$"))') \
+      $(jq -r '(.attachments.circuits // []) + (.service.circuits // []) | .[].device' "$CONF")
   else
     egress_down
     attach_down
+    service_down
     root_vrfs_prune ""
     root_in_down "ip shc_root_in" "$MARKI4"; root_in_down "ip6 shc_root_in6" "$MARKI6"
     ip link show "$BR" >/dev/null 2>&1 && ip link del "$BR"
