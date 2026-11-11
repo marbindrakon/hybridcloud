@@ -105,7 +105,8 @@ def _link(src, dst):
 
 def build_tree(tmp, real=()):
     roles = os.path.join(tmp, "eda", "rulebooks", "roles")
-    for role in ("platformopenshift_provision", "platformopenshift_teardown", "cloudoso_provision", "cloudoso_teardown"):
+    for role in ("platformopenshift_provision", "platformopenshift_teardown", "cloudoso_provision", "cloudoso_teardown",
+                 "networkplacement_provision"):
         for sub in ("tasks", "files", "templates", "defaults"):
             src = os.path.join(EDA, "rulebooks", "roles", role, sub)
             if os.path.isdir(src):
@@ -120,6 +121,7 @@ def build_tree(tmp, real=()):
         with open(os.path.join(tmp, "eda", "common", "tasks", f), "w") as fh:
             fh.write("---\n" + body)
     _link(os.path.join(EDA, "common", "files"), os.path.join(tmp, "eda", "common", "files"))
+    _link(os.path.join(EDA, "common", "vars"), os.path.join(tmp, "eda", "common", "vars"))
     coll = os.path.join(tmp, "coll", "ansible_collections")
     for ns, name, mods in (("kubernetes", "core", {"k8s_info.py": K8S_INFO, "k8s.py": K8S}),
                            ("openstack", "cloud", {"routers_info.py": ROUTERS})):

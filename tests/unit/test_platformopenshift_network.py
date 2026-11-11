@@ -832,6 +832,59 @@ class TeardownPaths(unittest.TestCase):
         cr = {"metadata": {"name": "c1"}, "spec": {"type": "aws"}, "status": {}}
         self.assertEqual(self.paths(cr)[0], "c1")
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RouterAdvertisementPreflight(unittest.TestCase):
+    """The cluster preflight asks the site's router advertisement service (where the realization names one for the
+    environment's site) to hold the floating IPs' advertisement on the placed network, last before the build: no
+    service = nothing called and the build goes on; found and set = goes on; a failing or unconfirming service =
+    refused with RouterAdvertisementFailed and the service's message, before anything is created."""
+
+    REAL = {"placement": {"routerAdvertisementBySite": {"site1": {"url": "https://ra.site1.example.org"}}},
+            "openstack": {"platformProject": "platform-project", "projectDomain": "platform-domain"}}
+
+    def run_ra(self, real, answer=None):
+        place = placement(site={"networkId": "net-1", "networkName": "shc-n1", "routerId": "router-1"})
+        v = os_preflight_vars(fabric_realization=real, cb_fip_account="sites/site1",
+                              fake_os={"router-advertisement/present": answer or {}})
+        # the role's rescue records po_fail_reason (main.yml); here a rescue traces it
+        trace = {"name": "trace the refusal", "ansible.builtin.shell": "cat >> {{ trace_file }}",
+                 "args": {"stdin": "{{ {'refused': po_fail_reason} | to_json }}"}, "changed_when": False}
+        tasks = [{"block": [{"ansible.builtin.include_tasks": os.path.join(TASKS, "openstack_preflight.yml")}],
+                  "rescue": [trace, {"ansible.builtin.fail": {"msg": "{{ ansible_failed_result.msg | default('') }}"}}]}]
+        return H.run("platformopenshift_provision", "openstack_preflight.yml", v, tasks=tasks,
+                     k8s=k8s(places=[place], extra={f"CloudInfrastructure/{PLAT}/site1": SITE}), result="1")
+
+    def test_no_service_calls_nothing(self):
+        rc, tr, out = self.run_ra({})
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(tr[-1], {"result": 1})
+        self.assertFalse(H.os_calls(tr))
+
+    def test_found_and_set(self):
+        rc, tr, out = self.run_ra(self.REAL, {"service": "found", "port_id": "port-1", "nat": True, "wanted": True,
+                                              "changed": True, "restores": 0, "lastRestoredAt": "", "reason": "",
+                                              "message": ""})
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(tr[-1], {"result": 1})
+        req = H.os_calls(tr, "router-advertisement")[0]
+        self.assertEqual((req["state"], req["router_id"], req["network_id"], req["site"], req["service_url"],
+                          req["platformProject"], req["domain"]),
+                         ("present", "router-1", "net-1", "site1", "https://ra.site1.example.org", "platform-project",
+                          "platform-domain"))
+        self.assertFalse(H.patches(tr))   # nothing recorded or created by the preflight
+
+    def test_failing_or_unconfirmed(self):
+        for answer, want in (({"service": "found", "nat": False, "reason": "NotYourPort",
+                               "message": "the port is not in the token's project"}, "NotYourPort"),
+                             ({"service": "found", "nat": False, "reason": "", "message": ""}, "NotConfirmed")):
+            with self.subTest(want=want):
+                rc, tr, out = self.run_ra(self.REAL, answer)
+                self.assertNotEqual(rc, 0)
+                self.assertIn({"refused": "RouterAdvertisementFailed"}, tr)
+                self.assertIn(want, out)
+                self.assertNotIn({"result": 1}, tr)
+                self.assertFalse([t for t in tr if "os" in t and t["os"]["action"] == "cluster-fips"])
+
 
 if __name__ == "__main__":
     unittest.main()

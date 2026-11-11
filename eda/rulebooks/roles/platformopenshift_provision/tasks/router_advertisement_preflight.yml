@@ -1,0 +1,72 @@
+---
+# The site's router advertisement for the cluster's network, just before the build (DESIGN-OVN-SHIM §3): where the
+# environment's site runs a router advertisement service (realization placement.routerAdvertisementBySite[<site>].url)
+# the cluster job asks it, as the placement job does, to hold the advertisement of floating IPs on the placed network
+# (state present), because Neutron can rewrite the router port's option between the placement's runs. A site without
+# the service: nothing is called and the documented site requirement for floating IPs applies. A failure, or a
+# service that does not confirm it, refuses the build with RouterAdvertisementFailed and the service's message, before
+# anything is created. Reads networkplacement_provision/tasks/router_advertisement.yml (the shared call).
+# Inputs: pf (preflight_network.yml: fabric, networkId), pf_placement (the NetworkPlacement), cb_oso_site,
+# cb_fip_account (the site account's Vault path), cb_app_name.
+- name: The realization of the network's fabric
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+  vars:
+    fab_real_fabric: "{{ pf.fabric }}"
+
+- name: The site's router advertisement service
+  ansible.builtin.set_fact:
+    rap_url: >-
+      {{ (((fab_real.placement | default({}, true)).routerAdvertisementBySite | default({}, true))[cb_oso_site]
+          | default({}, true)).url | default('', true) | string | trim if cb_oso_site | length > 0 else '' }}
+
+- name: Ask the site's service to hold the advertisement
+  when: rap_url | length > 0
+  block:
+    - name: Require the placement's router and the site account
+      ansible.builtin.assert:
+        that:
+          - ((pf_placement.status | default({}, true)).realization | default({}, true)).site.routerId | default('', true) | length > 0
+          - pf.networkId | default('', true) | length > 0
+          - cb_fip_account | default('', true) | length > 0
+        fail_msg: >-
+          PlatformOpenshift {{ ansible_operator_meta.name }}: the router advertisement of site {{ cb_oso_site }} needs
+          the placement's router (status.realization.site.routerId), its network and the site account of the
+          environment.
+
+    - name: Read the environment's site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ cb_oso_site }}"
+        ci_ref_namespace: "{{ fabric_platform_namespace }}"
+
+    - name: Load the site account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ cb_fip_account }}"
+        os_account_tag: "po-ra-{{ cb_app_name }}"
+
+    - name: The router advertisement on the cluster's network
+      ansible.builtin.include_tasks: "{{ role_path }}/../networkplacement_provision/tasks/router_advertisement.yml"
+      vars:
+        ra_state: present
+        ra_router_id: "{{ pf_placement.status.realization.site.routerId }}"
+        ra_network_id: "{{ pf.networkId }}"
+        ra_site: "{{ cb_oso_site }}"
+        ra_domain: "{{ fab_real.openstack.projectDomain | default(((ci_spec | default({}, true)).openstack | default({}, true)).projectDomain, true) }}"
+        ra_platform_project: "{{ fab_real.openstack.platformProject }}"
+        ra_region: "{{ ((ci_spec | default({}, true)).openstack | default({}, true)).region | default('', true) }}"
+
+    - name: Remove the account's temp files
+      ansible.builtin.file:
+        path: "/tmp/eda-po-ra-{{ cb_app_name }}-{{ item }}"
+        state: absent
+      loop: [clouds.yaml, ca.crt]
+
+    - name: Refuse the build when the site does not confirm the advertisement
+      ansible.builtin.include_tasks: preflight_stop.yml
+      vars:
+        ps_reason: RouterAdvertisementFailed
+        ps_message: >-
+          PlatformOpenshift {{ ansible_operator_meta.name }}: floating IPs on network {{ oso_network }} may not be
+          reachable from outside site {{ cb_oso_site }}: {{ ra_message }}
+      when: ra_failed | length > 0

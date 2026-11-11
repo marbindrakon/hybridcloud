@@ -115,3 +115,9 @@
   when:
     - _po_build_ns.resources | default([]) | length > 0
     - (po_cr_current.resources[0].status | default({}, true)).buildName | default('', true) != cb_app_name
+
+# last before the build, on a hybrid network: the site's router advertisement service (where the site has one) holds
+# the advertisement of the cluster's floating IPs on the placed network
+- name: The site's router advertisement for the cluster's network
+  ansible.builtin.include_tasks: router_advertisement_preflight.yml
+  when: cb_platform_path | bool
