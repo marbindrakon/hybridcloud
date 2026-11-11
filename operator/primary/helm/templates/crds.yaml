@@ -6087,11 +6087,15 @@ spec:
                             CloudOSO with router attachments: whether the site advertises the floating IPs on the
                             network. mode Service = the site's router advertisement service holds the advertisement
                             on the network's router port; Assumed = the site has no such service and is expected to
-                            advertise them itself.
+                            advertise them itself; NotApplicable = the placement has no IPv4 subnet, so there are no
+                            floating IPs to advertise (message says so).
                           properties:
                             mode:
                               type: string
-                              description: Service or Assumed.
+                              description: Service, Assumed or NotApplicable.
+                            message:
+                              type: string
+                              description: Why the advertisement does not apply (mode NotApplicable).
                             nat:
                               type: boolean
                               description: The service reports the advertisement on the router port.

@@ -206,7 +206,8 @@ class RouterAdvertisementInTheJob(unittest.TestCase):
                     "_calls": []}}]
         steps += [by_name(tasks, n) for n in (
             "Record the site side", "Decide on the router advertisement", "The router advertisement on the placed network",
-            "Record the router advertisement", "No router advertisement asked", "The environment's uses of the network")]
+            "Record the router advertisement", "Nothing to advertise on a placement without IPv4",
+            "No router advertisement asked", "The environment's uses of the network")]
         return run_cases(steps, cases, "{'calls': _calls, 'site': np_backend_status, 'use': np_status.use, "
                                        "'waiting': np_use_removing, 'reason': np_use_wait_reason, "
                                        "'messages': np_use_wait_messages, 'failed': np_ra_failed, 'note': np_use_note}",
@@ -214,7 +215,9 @@ class RouterAdvertisementInTheJob(unittest.TestCase):
 
     def test_cases(self):
         site = {"site-a": {"url": URL}}
-        ra_on = {"use": {"routerAttachments": True}}
+        ra_on = {"ipv4": {"prefixLength": 24}, "use": {"routerAttachments": True}}
+        # gate F3: the IPv6-only placement of the gate (router attachments only)
+        v6_ra = {"ipv6": {"prefixLength": 64}, "use": {"virtualMachines": False, "routerAttachments": True}}
         held = {"realization": {"site": {"routerAdvertisement": {"mode": "Service", "wanted": True}}}}
         res = self.run_job([
             # 0 a placement without router attachments: no call at all, nothing recorded (with or without a service)
@@ -257,7 +260,20 @@ class RouterAdvertisementInTheJob(unittest.TestCase):
             # 14 a present that fails without an earlier hold records no hold
             {"place": os_result(ra="ready"), "spec": ra_on, "bysite": site,
              "answer": ra_answer(nat=False, wanted=False, reason="ServiceUnavailable", message="no answer")},
+            # 15 gate F3: IPv6-only, router attachments on, the site has a service: not asked, NotApplicable, ready
+            {"place": os_result(vm="off", ra="ready"), "spec": v6_ra, "bysite": site,
+             "answer": ra_answer(nat=False, wanted=False, reason="NoRouterInterface",
+                                 message="router rtr-1 has no IPv4 interface on network net-1")},
+            # 16 the same without a service
+            {"place": os_result(vm="off", ra="ready"), "spec": v6_ra, "bysite": {}, "answer": {}},
         ])
+        for r in (res[15], res[16]):
+            self.assertEqual(r["calls"], [])
+            rec = r["site"]["routerAdvertisement"]
+            self.assertEqual((rec["mode"], rec["nat"], rec["wanted"]), ("NotApplicable", False, False))
+            self.assertIn("no IPv4 subnet", rec["message"])
+            self.assertEqual(r["use"]["routerAttachments"], {"state": "ready", "reason": "", "message": ""})
+            self.assertEqual((r["failed"], r["waiting"], r["messages"]), ("", [], []))   # no Degraded, no re-run
         self.assertIs(res[12]["site"]["routerAdvertisement"]["wanted"], True)
         self.assertEqual([c["state"] for c in res[13]["calls"]], ["absent"])
         self.assertIs(res[14]["site"]["routerAdvertisement"]["wanted"], False)

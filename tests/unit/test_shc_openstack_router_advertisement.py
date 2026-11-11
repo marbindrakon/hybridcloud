@@ -336,6 +336,13 @@ class RouterAdvertisement(unittest.TestCase):
         self.assertEqual(out["reason"], "NoRouterInterface")
         self.assertEqual(self.svc.calls, [])
 
+    def test_no_ipv4_interface_and_absent_is_done(self):
+        # gate F3: an IPv6-only placement's router has no IPv4 interface: nothing can carry nat, nothing to drop
+        self.conn.ports[:] = [p for p in self.conn.ports if p.id != PORT4]
+        out = self.call(state="absent")
+        self.assertEqual((out["reason"], out["nat"], out["wanted"], out["changed"]), ("", False, False, False))
+        self.assertEqual(self.svc.calls, [])
+
     def test_unknown_port_is_reported(self):
         self.svc.ports.clear()
         out = self.call()

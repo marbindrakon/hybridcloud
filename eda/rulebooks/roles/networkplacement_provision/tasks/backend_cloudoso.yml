@@ -21,7 +21,10 @@
 # advertisement while router attachments are used (present; also while turned off but still in use) and to drop it
 # once they are off (absent, only when the service held it); a placement that never used router attachments asks
 # nothing. A failing or unconfirmed service leaves the share and the placement usable: router attachments read
-# pending, reason RouterAdvertisementFailed, and the job runs again on the reconcile period (main.yml).
+# pending, reason RouterAdvertisementFailed, and the job runs again on the reconcile period (main.yml). A placement
+# without IPv4 (no spec.ipv4: fixed for its life) has nothing to advertise (floating IPs are IPv4, and its router has
+# no IPv4 interface): the service is not asked, the record says mode NotApplicable with why, and router attachments
+# are ready as soon as the policy exists.
 # Sets np_status.use, np_use_removing (the uses that wait), np_use_wait_reason, np_use_wait_messages, np_use_note.
 - name: The site's OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
@@ -87,6 +90,8 @@
     np_ra_held: >-
       {{ ((((fab_st.realization | default({}, true)).site | default({}, true)).routerAdvertisement
           | default({}, true)).wanted | default(false)) | bool }}
+    # floating IPs are IPv4: a placement without IPv4 has no router port to advertise them from
+    np_ra_applies: "{{ 'ipv4' in (fab_spec | default({}, true)) }}"
 
 - name: The router advertisement on the placed network
   ansible.builtin.include_tasks: router_advertisement.yml
@@ -99,13 +104,25 @@
     ra_platform_project: "{{ fab_real.openstack.platformProject }}"
     ra_region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
     ra_held_before: "{{ np_ra_held | bool }}"
-  when: np_ra_want | bool or np_ra_held | bool
+  when: (np_ra_want | bool and np_ra_applies | bool) or np_ra_held | bool
 
 - name: Record the router advertisement
   ansible.builtin.set_fact:
     np_backend_status: "{{ np_backend_status | combine({'routerAdvertisement': ra_record}) }}"
     np_ra_failed: "{{ ra_failed | default('') }}"
-  when: np_ra_want | bool or np_ra_held | bool
+  when: (np_ra_want | bool and np_ra_applies | bool) or np_ra_held | bool
+
+- name: Nothing to advertise on a placement without IPv4
+  ansible.builtin.set_fact:
+    # one expression: on ansible-core 2.16 the values of a nested YAML map stay strings
+    np_backend_status: >-
+      {{ np_backend_status | combine({'routerAdvertisement': {
+           'mode': 'NotApplicable', 'nat': false, 'wanted': false,
+           'message': 'Floating IPs are IPv4 and this placement has no IPv4 subnet, so there is nothing for the site '
+                      ~ 'to advertise; routers of the environment can still take their external gateway on the network.',
+           'checkedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}}) }}
+    np_ra_failed: ""
+  when: np_ra_want | bool and not (np_ra_applies | bool) and not (np_ra_held | bool)
 
 - name: No router advertisement asked
   ansible.builtin.set_fact:

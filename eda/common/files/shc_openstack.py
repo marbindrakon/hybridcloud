@@ -911,7 +911,7 @@ def router_advertisement(req):
     NotARouterInterface, NoSuchRouterPort, NotAnAdvertisingPort, BadRequest, OvnUnavailable, IdentityUnavailable,
     NetworkUnavailable, and NotFound, MethodNotAllowed, InternalError); ServiceUnavailable = no answer (or a redirect,
     which is never followed); InvalidSetting = not an https URL, or a site credential that turns certificate
-    verification off (the call always verifies, and sends the token only to the URL's origin); NoRouterInterface = the router has no IPv4 interface on the network. absent on a port the
+    verification off (the call always verifies, and sends the token only to the URL's origin); NoRouterInterface = the router has no IPv4 interface on the network (present only: for absent there is nothing to drop). absent on a port the
     service answers NotAnAdvertisingPort for (no redistribute option: nothing advertised) is done, not a failure. Never raises for the service: a failing service is the caller's
     status, not an error. absent drops nat only where the service holds it (wanted): a nat the site set itself
     stays."""
@@ -949,6 +949,10 @@ def _router_advertisement(acct, req):
         pid = proj.id
     conn = acct.project(pid)
     port = _ra_router_port(conn, req["router_id"], req["network_id"])
+    if port is None and state == "absent":
+        # no IPv4 interface: no port that could carry nat, so nothing to drop (an IPv6-only placement, or an
+        # interface already removed)
+        return out
     if port is None:
         return {**out, "reason": "NoRouterInterface",
                 "message": f"router {req['router_id']} has no IPv4 interface on network {req['network_id']}"}
