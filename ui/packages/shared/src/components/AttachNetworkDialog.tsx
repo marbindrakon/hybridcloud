@@ -53,6 +53,9 @@ import {
   placementIpv6NoteKey,
   type PlacementIpv6State,
 } from '../forms/PlacementIpv6Fields';
+import { PlacementUseFields } from '../forms/PlacementUseFields';
+import { PLACEMENT_USE_DEFAULTS, placementUseOffered, placementUseProblem, placementUseSpec } from '../forms/placementUse';
+import type { PlacementUse } from '../types';
 
 export interface AttachEnvironmentRef {
   kind: NetworkPlacementBackendKind;
@@ -141,6 +144,7 @@ export function AttachNetworkDialog({
   const [prefixLength, setPrefixLength] = useState(String(PLACEMENT_IPV4_DEFAULT));
   const [pinned, setPinned] = useState('');
   const [v6, setV6] = useState<PlacementIpv6State>(INITIAL_PLACEMENT_IPV6);
+  const [use, setUse] = useState<Required<PlacementUse>>(PLACEMENT_USE_DEFAULTS);
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -158,6 +162,7 @@ export function AttachNetworkDialog({
     setPrefixLength(String(PLACEMENT_IPV4_DEFAULT));
     setPinned('');
     setV6(INITIAL_PLACEMENT_IPV6);
+    setUse(PLACEMENT_USE_DEFAULTS);
     setName('');
     setNameTouched(false);
     setCheckedKey(null);
@@ -261,10 +266,13 @@ export function AttachNetworkDialog({
   if (networkName && env && !nameOk) blockers.push(t('attach.nameInvalid'));
   if (env && chosenNetwork && families.block) blockers.push(t(placementIpv6NoteKey(v6Offer, families.block) ?? 'attach.needFamily'));
   if (families.ipv6 && !v6PinnedOk) blockers.push(t('attach.ipv6PinnedInvalid', { lengths: v6Offer.lengths.map((l) => `/${l}`).join(', ') }));
+  const useProblem = placementUseProblem(env?.kind, use);
+  if (useProblem) blockers.push(t('attach.useNeedOne'));
 
   const body = useMemo(() => {
     if (!networkName || !env || !nameOk || !pinnedOk || existing || pairBlock || envUnknown) return null;
     if (families.block || (families.ipv6 && (!v6Spec || !v6PinnedOk))) return null;
+    if (placementUseProblem(env.kind, use)) return null;
     return {
       name: effectiveName,
       namespace,
@@ -273,9 +281,10 @@ export function AttachNetworkDialog({
         backend: { kind: env.kind, name: env.name },
         ...(families.ipv4 ? { ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) } } : {}),
         ...(families.ipv6 && v6Spec ? { ipv6: v6Spec } : {}),
+        ...placementUseSpec(env.kind, use),
       },
     };
-  }, [networkName, env, nameOk, pinnedOk, existing, pairBlock, envUnknown, effectiveName, namespace, pinnedText, prefixLength, families.block, families.ipv4, families.ipv6, v6Spec, v6PinnedOk]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [networkName, env, nameOk, pinnedOk, existing, pairBlock, envUnknown, effectiveName, namespace, pinnedText, prefixLength, families.block, families.ipv4, families.ipv6, v6Spec, v6PinnedOk, use]); // eslint-disable-line react-hooks/exhaustive-deps
   const bodyKey = body ? JSON.stringify(body) : null;
 
   // Server dry run of the exact object (debounced); Create is offered only after it passed.
@@ -477,6 +486,10 @@ export function AttachNetworkDialog({
             pinnedOk={v6PinnedOk}
           />
           {v6Note && <p className="sc-text-muted">{t(v6Note)}</p>}
+
+          {placementUseOffered(env?.kind) && (
+            <PlacementUseFields idPrefix="attach" value={use} onChange={setUse} problem={useProblem} />
+          )}
 
           <ExpandableSection toggleText={t('form.advanced')}>
             <FormGroup label={t('attach.name')} fieldId="attach-name">

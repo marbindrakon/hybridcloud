@@ -34,6 +34,7 @@ entries=(
   "i18n/vocabulary.ts:vocabulary"
   "forms/clusterSpec.ts:clusterSpec"
   "forms/clusterNetworkChoice.ts:clusterNetworkChoice"
+  "forms/placementUse.ts:placementUse"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

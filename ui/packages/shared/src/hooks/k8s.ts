@@ -188,6 +188,7 @@ const UPDATE_METHOD: Partial<Record<HybridSovereignKind, 'PUT' | 'PATCH'>> = {
   CloudAWS: 'PATCH',
   CloudGCP: 'PATCH',
   CloudVirt: 'PATCH',
+  NetworkPlacement: 'PATCH',
   HybridNetwork: 'PATCH',
   Persona: 'PATCH',
 };

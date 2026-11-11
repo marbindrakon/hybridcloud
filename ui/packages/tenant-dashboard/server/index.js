@@ -240,6 +240,7 @@ app.delete("/api/hybridnetworks/:name", requireAuth, mutationLimiter, k8s.delete
 app.get("/api/networkplacements", requireAuth, k8s.listNetworkPlacements);
 app.get("/api/networkplacements/:name", requireAuth, k8s.getNetworkPlacement);
 app.post("/api/networkplacements", requireAuth, mutationLimiter, k8s.createNetworkPlacement);
+app.patch("/api/networkplacements/:name", requireAuth, mutationLimiter, k8s.patchNetworkPlacement);
 app.delete("/api/networkplacements/:name", requireAuth, mutationLimiter, k8s.deleteNetworkPlacement);
 
 // Project CRUD
