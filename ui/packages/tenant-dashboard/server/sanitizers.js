@@ -286,9 +286,17 @@ export function sanitizePlatformOpenshiftSpec(raw) {
       "glanceImageOverride",
       "trustBundle",
     ]);
+    // the network the cluster is published on: a HybridNetwork of this namespace (the API checks the rest)
+    if (raw.openstack.network != null && raw.openstack.network !== "") {
+      if (typeof raw.openstack.network !== "string" || !NAME_PATTERN.test(raw.openstack.network.trim())) {
+        return { error: "spec.openstack.network must be the name of a network in this namespace" };
+      }
+      os.network = raw.openstack.network.trim();
+    }
     const cp = intIn(raw.openstack.controlPlaneCount, 1, 1000);
     const workers = intIn(raw.openstack.workerCount, 0, 1000);
-    if (cp === false || workers === false) return { error: "spec.openstack node counts must be integers" };
+    if (cp === false) return { error: "spec.openstack.controlPlaneCount must be an integer from 1 to 1000" };
+    if (workers === false) return { error: "spec.openstack.workerCount must be an integer from 0 to 1000" };
     if (cp !== undefined) os.controlPlaneCount = cp;
     if (workers !== undefined) os.workerCount = workers;
     spec.openstack = os;
@@ -297,7 +305,13 @@ export function sanitizePlatformOpenshiftSpec(raw) {
     const src = raw[cloud];
     if (src == null) continue;
     if (!isObject(src)) return { error: `spec.${cloud} must be an object` };
-    const out = pickStrings(src, ["environment", "region", "controllerFlavor", "workerFlavor", "network"]);
+    const out = pickStrings(src, ["environment", "region", "controllerFlavor", "workerFlavor"]);
+    if (src.network != null && src.network !== "") {
+      if (typeof src.network !== "string" || !NAME_PATTERN.test(src.network.trim())) {
+        return { error: `spec.${cloud}.network must be the name of a network in this namespace` };
+      }
+      out.network = src.network.trim();
+    }
     if (!out.environment) return { error: `spec.${cloud}.environment is required` };
     if (src.publish != null) {
       if (src.publish !== "External" && src.publish !== "Internal") return { error: `spec.${cloud}.publish must be External or Internal` };
@@ -309,12 +323,18 @@ export function sanitizePlatformOpenshiftSpec(raw) {
       }
       out.clusterType = src.clusterType;
     }
-    const cp = intIn(src.controlPlaneCount, 0, 1000);
+    const cp = intIn(src.controlPlaneCount, 1, 1000);
     const workers = intIn(src.workerCount, 0, 1000);
-    if (cp === false || workers === false) return { error: `spec.${cloud} node counts must be integers` };
+    if (cp === false) return { error: `spec.${cloud}.controlPlaneCount must be an integer from 1 to 1000` };
+    if (workers === false) return { error: `spec.${cloud}.workerCount must be an integer from 0 to 1000` };
     if (cp !== undefined) out.controlPlaneCount = cp;
     if (workers !== undefined) out.workerCount = workers;
     spec[cloud] = out;
+  }
+  if (raw.networking != null) {
+    const networking = sanitizeClusterNetworking(raw.networking);
+    if (networking.error) return { error: networking.error };
+    if (Object.keys(networking.value).length) spec.networking = networking.value;
   }
   if (raw.toolRbac != null) {
     if (!isObject(raw.toolRbac)) return { error: "spec.toolRbac must be an object" };
@@ -330,6 +350,25 @@ export function sanitizePlatformOpenshiftSpec(raw) {
   if (viewers === false) return { error: "spec.clusterViewerRbac must be a list of access group names" };
   if (viewers) spec.clusterViewerRbac = viewers;
   return { spec };
+}
+
+/** An IPv4 prefix as text (a.b.c.d/len); the API checks the canonical form, the lengths and the overlaps. */
+const IPV4_CIDR = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\/([0-9]|[12]\d|3[0-2])$/;
+
+/** spec.networking of a cluster: the pod, service and machine networks and the per-node pod subnet size. */
+export function sanitizeClusterNetworking(raw) {
+  if (!isObject(raw)) return { error: "spec.networking must be an object" };
+  const value = {};
+  for (const key of ["clusterNetwork", "serviceNetwork", "machineNetwork"]) {
+    const v = raw[key];
+    if (v == null || v === "") continue;
+    if (typeof v !== "string" || !IPV4_CIDR.test(v.trim())) return { error: `spec.networking.${key} must be an IPv4 prefix` };
+    value[key] = v.trim();
+  }
+  const host = intIn(raw.hostPrefix, 16, 28);
+  if (host === false) return { error: "spec.networking.hostPrefix must be an integer from 16 to 28" };
+  if (host !== undefined) value.hostPrefix = host;
+  return { value };
 }
 
 /* ------------------------------------------------------------------ environments */
@@ -491,6 +530,9 @@ export function sanitizeHybridNetworkSpec(raw) {
       spec.egress = { internet: raw.egress.internet };
     }
   }
+  const access = bool(raw.platformAccess);
+  if (access === "invalid") return { error: "spec.platformAccess must be a boolean" };
+  if (access !== undefined) spec.platformAccess = access;
   return { spec };
 }
 
@@ -534,7 +576,63 @@ export function sanitizeNetworkPlacementSpec(raw) {
     spec[family] = out;
   }
   if (!spec.ipv4 && !spec.ipv6) return { error: "the placement needs spec.ipv4, spec.ipv6 or both" };
+  // how an OpenStack environment may use the network (the API refuses it on other environments)
+  if (raw.use != null) {
+    if (!isObject(raw.use)) return { error: "spec.use must be an object" };
+    const use = {};
+    for (const key of ["virtualMachines", "routerAttachments"]) {
+      const v = bool(raw.use[key]);
+      if (v === "invalid") return { error: `spec.use.${key} must be a boolean` };
+      if (v !== undefined) use[key] = v;
+    }
+    if (Object.keys(use).length) spec.use = use;
+  }
   return { spec };
+}
+
+/* ------------------------------------------------------------------ raw API writes */
+
+const CIRCUIT_PATH = /^\/apis\/hybridsovereign\.redhat\/[^/]+\/namespaces\/[^/]+\/attachmentcircuits(?:\/[^/]+)?$/;
+
+/** The spec.ceKind values a write sets: a whole object, a merge patch or the ops of a JSON patch. */
+function ceKindsWritten(body) {
+  const out = [];
+  if (Array.isArray(body)) {
+    for (const op of body) {
+      if (!isObject(op) || op.op === "remove" || op.op === "test") continue;
+      const path = typeof op.path === "string" ? op.path : "";
+      if (path === "/spec/ceKind") out.push(op.value);
+      else if (path === "/spec" && isObject(op.value)) out.push(op.value.ceKind);
+      else if (path === "" && isObject(op.value) && isObject(op.value.spec)) out.push(op.value.spec.ceKind);
+    }
+  } else if (isObject(body) && isObject(body.spec)) {
+    out.push(body.spec.ceKind);
+  }
+  return out.filter((v) => v !== undefined);
+}
+
+/**
+ * Writes through the tenant dashboard's raw API proxy: refuse what a tenant must not set. An edge
+ * connection of the platform's own kind (spec.ceKind platform) is the platform team's.
+ * Returns null, or the message of the refusal.
+ */
+export function tenantWriteRefusal(path, method, body) {
+  if (method === "GET" || method === "HEAD" || method === "DELETE") return null;
+  if (!CIRCUIT_PATH.test(String(path || "").split("?")[0])) return null;
+  if (ceKindsWritten(body).some((k) => k === "platform")) {
+    return "spec.ceKind platform is set by the platform team; tenants connect their own routers (ceKind customer)";
+  }
+  return null;
+}
+
+/** guardRequest hook of the raw proxy: tenantWriteRefusal as a 403. */
+export function guardTenantWrite(path, method, body) {
+  const message = tenantWriteRefusal(path, method, body);
+  if (message) {
+    const err = new Error(message);
+    err.status = 403;
+    throw err;
+  }
 }
 
 /* ------------------------------------------------------------------ edits */

@@ -1447,6 +1447,30 @@ export function createK8sHandlers(apiServer) {
       }
     },
 
+    async patchNetworkPlacement(req, res) {
+      const token = userAccessToken(req);
+      if (!token) return res.status(401).json({ message: "Unauthorized" });
+      const { name } = req.params;
+      const namespace = req.query.namespace;
+      const { spec } = req.body || {};
+      if (!name || !NAME_PATTERN.test(name)) return res.status(400).json({ message: "Invalid name" });
+      if (!namespace || !NS_PATTERN.test(namespace)) return res.status(400).json({ message: "Invalid namespace" });
+      if (!spec) return res.status(400).json({ message: "spec is required" });
+      const clean = sanitizeNetworkPlacementSpec(spec);
+      if (clean.error) return res.status(400).json({ message: clean.error });
+      try {
+        const urlPath = `${networkplacementsCollectionPath(namespace)}/${encodeURIComponent(name)}`;
+        // The editor sends the whole spec (only spec.use can change; the API keeps the rest fixed).
+        const patch = [{ op: "replace", path: "/spec", value: clean.spec }];
+        const resp = await k8sRequest(apiServer, urlPath, "PATCH", token, patch, "application/json-patch+json");
+        if (resp.status >= 400) return sendUpstreamError(res, resp);
+        res.json(resp.body);
+      } catch (err) {
+        console.error("NetworkPlacement patch error:", err.message);
+        sendUpstreamError(res, err);
+      }
+    },
+
     async deleteNetworkPlacement(req, res) {
       const token = userAccessToken(req);
       if (!token) return res.status(401).json({ message: "Unauthorized" });

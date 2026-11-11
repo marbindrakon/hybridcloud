@@ -12,6 +12,37 @@ import type { K8sResource, NetworkPlacement, NetworkPlacementBackendKind } from 
 import { StatusBadge } from './StatusBadge';
 import { AttachNetworkDialog, type AttachEnvironmentRef } from './AttachNetworkDialog';
 import { kindTerm } from '../i18n/vocabulary';
+import { placementUseOffered, placementUseRows } from '../forms/placementUse';
+import { reasonText } from '../forms/clusterNetworkChoice';
+
+/**
+ * The uses of a placement on an OpenStack environment: "Virtual machines: on", "Router attachments:
+ * turning off" and, while turning a use off waits, what still uses it.
+ */
+export function PlacementUses({ placement }: { placement: NetworkPlacement }): React.ReactElement | null {
+  const { t } = useTranslation();
+  const rows = placementUseRows(placement);
+  if (!rows.length) return null;
+  return (
+    <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+      {rows.map((r) => {
+        const label = t(r.use === 'virtualMachines' ? 'attach.useVmShort' : 'attach.useRoutersShort');
+        // the reported state, else what is asked for
+        const state = r.state || (r.wanted ? 'pending' : 'off');
+        return (
+          <li key={r.use}>
+            {`${label}: ${t(`attach.useState_${state}`, { defaultValue: state })}`}
+            {r.reason === 'InUse' && (
+              <div className="sc-text-muted">
+                {reasonText(t, { reason: 'InUse', message: r.message, params: r.message ? { ports: r.message } : undefined })}
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 /** Kinds a network can be attached to (environment pages show the Networks tab). */
 export const ENVIRONMENT_KINDS: NetworkPlacementBackendKind[] = ['CloudVirt', 'CloudOSO', 'CloudAWS', 'CloudGCP'];
@@ -49,6 +80,8 @@ function PlacementTable({
   from: string;
 }): React.ReactElement {
   const { t } = useTranslation();
+  // the Uses column only where an OpenStack environment has one of the placements
+  const showUses = rows.some((p) => placementUseOffered(p.spec?.backend?.kind));
   return (
     <Table variant="compact" aria-label={t('attach.placementsTable')}>
       <Thead>
@@ -56,6 +89,7 @@ function PlacementTable({
           <Th>{t('kindsOne.NetworkPlacement')}</Th>
           <Th>{otherLabel}</Th>
           <Th>{t('attach.block')}</Th>
+          {showUses && <Th>{t('attach.uses')}</Th>}
           <Th>{t('common.status')}</Th>
         </Tr>
       </Thead>
@@ -74,6 +108,7 @@ function PlacementTable({
               <Td dataLabel={t('attach.block')}>
                 <code>{placementBlock(p) || '—'}</code>
               </Td>
+              {showUses && <Td dataLabel={t('attach.uses')}>{placementUseOffered(p.spec?.backend?.kind) ? <PlacementUses placement={p} /> : '—'}</Td>}
               <Td dataLabel={t('common.status')}>
                 <StatusBadge item={p} />
                 {phase !== 'Ready' && <div className="sc-text-muted sc-status-summary">{summaryOf(p)}</div>}

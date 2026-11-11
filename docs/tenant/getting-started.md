@@ -89,6 +89,13 @@ spec:
 Save it as `example-net.yaml` and apply it with `oc apply -f example-net.yaml`, or create it on
 the **Networks** page of the dashboard.
 
+Some ranges are reserved by the platform: your tenant profile lists them
+(`oc get tenantprofile shc -n entity-example-corp -o yaml`, `status.reservedRanges`), and the network
+form and the network page show them under **Address ranges reserved by the platform**. A prefix
+inside a refused range is refused (`PrefixReserved`, naming the range and its purpose). A network
+that is to host OpenShift clusters the platform manages also needs addresses inside the **ranges for
+clusters managed by the platform** ([OpenShift clusters on your networks](clusters-on-networks.md)).
+
 ## 5. Create a VM environment and attach the network
 
 A VM environment (OpenShift Virtualization environment) is your slice of an OpenShift
@@ -135,6 +142,13 @@ spec:
 
 In the dashboard, **Attach network** on the environment page (or on the network page) creates
 this placement for you; on the command line, apply the manifest.
+
+On an OpenStack environment a placement has two settings, both changeable later: **Use for virtual
+machines** (on: the environment's VMs and ports attach directly to the network) and **Use for
+router attachments** (off: the environment's routers may use the network as their external
+network, with floating IPs from it; an OpenShift cluster on the network needs it). They are
+`spec.use.virtualMachines` and `spec.use.routerAttachments`; other environment types take the
+defaults.
 
 ## 6. Wait until it is ready, then open the site console
 
@@ -220,6 +234,8 @@ is off); it does not stop you from deleting the object itself. Details:
 - [Access and delegation](access-and-delegation.md): roles, access groups and the access fields of
   team setups and app projects.
 - [Status reasons](status-reasons.md): states, reasons, Retry now and deletion.
+- [OpenShift clusters on your networks](clusters-on-networks.md): the network choice per cloud,
+  placement settings, platform access, reserved ranges and a cluster's address settings.
 
 - [Hybrid networks tutorial](../../architecture/docs/tutorial/09-hybrid-networks.md): networks
   across several sites, OpenStack placements, internet egress, and

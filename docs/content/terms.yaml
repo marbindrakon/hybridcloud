@@ -39,7 +39,8 @@ kinds:
     state: current
     note: >-
       Read-only. One object named shc in each tenant namespace, written by the platform: the
-      tenant's display name, contacts and the sites it may use.
+      tenant's display name, contacts, the sites it may use (with an OpenStack site's external
+      networks) and the address ranges the platform reserves.
   CloudInfrastructure:
     term: site
     plural: sites

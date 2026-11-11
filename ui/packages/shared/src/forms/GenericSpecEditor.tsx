@@ -396,7 +396,8 @@ export function GenericSpecEditor({
         const hint = help ? <p className="sc-text-muted" style={{ marginTop: '0.25rem' }}>{help}</p> : null;
 
         if (field.widget === 'boolean') {
-          const checked = Boolean(raw);
+          // unset: the value the API applies (a field defaulting to true reads as on)
+          const checked = raw === undefined || raw === null ? Boolean(field.defaultValue) : Boolean(raw);
           return (
             <FormGroup key={field.path} label={label} fieldId={id}>
               <Switch

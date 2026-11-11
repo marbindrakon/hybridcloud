@@ -89,6 +89,12 @@ import {
   type PlacementIpv6State,
 } from './PlacementIpv6Fields';
 import { Ipv6NetworkChoice, addressingErrorText, initialIpv6Choice, ipv6ChoiceSpec, type Ipv6ChoiceState } from './Ipv6NetworkChoice';
+import { PlacementUseFields } from './PlacementUseFields';
+import { PLACEMENT_USE_DEFAULTS, placementUseOffered, placementUseProblem, placementUseSpec } from './placementUse';
+import type { PlacementUse } from '../types';
+import { useTenantProfile } from '../hooks/tenantProfile';
+import { refusedPrefixText } from './clusterNetworkChoice';
+import { ReservedRangesSection } from '../components/NetworkPlatformAccess';
 
 export const PLATFORM_NAMESPACE = 'sovereign-cloud';
 
@@ -861,6 +867,7 @@ export function HybridNetworkCreateFields({
   const { t } = useTranslation();
   const fabrics = useK8sResourceList<HybridFabric>('HybridFabric', { namespace: PLATFORM_NAMESPACE });
   const others = useK8sResourceList<HybridNetwork>('HybridNetwork', { namespace, enabled: !!namespace });
+  const { profile } = useTenantProfile(namespace);
   const [description, setDescription] = useState('');
   const [fabricRef, setFabricRef] = useState('');
   const [mtu, setMtu] = useState('');
@@ -909,6 +916,12 @@ export function HybridNetworkCreateFields({
     ...checkNetworkAddressing([], platformPrefixes),
   ].filter(notEmpty);
   const tenantIpv6Missing = ipv6.mode === 'Tenant' && ipv6.tenantPrefixes.length === 0;
+  // a prefix inside a range the platform reserves is refused by the API (PrefixReserved): say so before submit
+  const reservedRanges = profile?.status?.reservedRanges;
+  const reservedIpv4 = ipv4Prefixes.map((p) => refusedPrefixText(t, p, reservedRanges)).filter((x): x is string => !!x);
+  const reservedIpv6 = (ipv6.mode === 'Tenant' ? ipv6.tenantPrefixes : [])
+    .map((p) => refusedPrefixText(t, p, reservedRanges))
+    .filter((x): x is string => !!x);
   const hints = networkAddressingHints({
     prefixes,
     platform: platformPrefixes,
@@ -916,7 +929,14 @@ export function HybridNetworkCreateFields({
     offer,
     egressInternet: egress,
   });
-  const valid = mtuOk && addressingErrors.length === 0 && ipv6InIpv4.length === 0 && !tenantIpv6Missing && (!fabricRequired || !!fabricRef);
+  const valid =
+    mtuOk &&
+    addressingErrors.length === 0 &&
+    ipv6InIpv4.length === 0 &&
+    !tenantIpv6Missing &&
+    (!fabricRequired || !!fabricRef) &&
+    reservedIpv4.length === 0 &&
+    reservedIpv6.length === 0;
   const spec = valid
     ? {
         ...(prefixes.length ? { prefixes } : {}),
@@ -933,7 +953,7 @@ export function HybridNetworkCreateFields({
     ? t('ipv6.ipv6InIpv4List')
     : ipv4Prefixes.length && ipv4Errors.length
       ? ipv4Errors.map((e) => addressingErrorText(t, e)).join(' ')
-      : '';
+      : reservedIpv4.join(' ');
   const tooMany = addressingErrors.some((e) => e.code === 'tooMany') && !ipv4Errors.some((e) => e.code === 'tooMany');
   const noSpace = addressingErrors.some((e) => e.code === 'noSpace') && ipv6.mode === 'None';
 
@@ -961,6 +981,12 @@ export function HybridNetworkCreateFields({
         errors={ipv6Errors}
         hints={hints}
       />
+      {reservedIpv6.length > 0 && (
+        <p className="sc-field-error" role="alert" style={{ color: 'var(--pf-t--global--text--color--status--danger--default)' }}>
+          {reservedIpv6.join(' ')}
+        </p>
+      )}
+      <ReservedRangesSection profile={profile} collapsible />
       <FormGroup label={t('fields.description')} fieldId="hn-desc">
         <TextArea id="hn-desc" value={description} onChange={(_e, v) => setDescription(v)} rows={2} />
       </FormGroup>
@@ -1035,6 +1061,7 @@ export function NetworkPlacementCreateFields({
   const [prefixLength, setPrefixLength] = useState(String(PLACEMENT_IPV4_DEFAULT));
   const [pinned, setPinned] = useState('');
   const [v6, setV6] = useState<PlacementIpv6State>(INITIAL_PLACEMENT_IPV6);
+  const [use, setUse] = useState<Required<PlacementUse>>(PLACEMENT_USE_DEFAULTS);
   const siteCaps = useSiteIpv6Caps(namespace, { enabled });
 
   // GT-F3: an environment none of whose namespaces names the chosen network is offered greyed.
@@ -1091,14 +1118,16 @@ export function NetworkPlacementCreateFields({
 
   const pinnedOk =
     !families.ipv4 || !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
+  const useProblem = placementUseProblem(backendKind, use);
   const valid =
-    !!network && !!backendName && pinnedOk && !pairBlock && !families.block && (!families.ipv6 || (!!v6Spec && v6PinnedOk));
+    !!network && !!backendName && pinnedOk && !pairBlock && !families.block && (!families.ipv6 || (!!v6Spec && v6PinnedOk)) && !useProblem;
   const spec = valid
     ? {
         network,
         backend: { kind: backendKind, name: backendName },
         ...(families.ipv4 ? { ipv4: pinnedText ? { prefix: pinnedText } : { prefixLength: Number(prefixLength) } } : {}),
         ...(families.ipv6 && v6Spec ? { ipv6: v6Spec } : {}),
+        ...placementUseSpec(backendKind, use),
       }
     : null;
   useReportSpec(spec, onChange);
@@ -1192,6 +1221,7 @@ export function NetworkPlacementCreateFields({
         pinnedOk={v6PinnedOk}
       />
       {v6Note && <Help>{t(v6Note)}</Help>}
+      {placementUseOffered(backendKind) && <PlacementUseFields idPrefix="np" value={use} onChange={setUse} problem={useProblem} />}
       <Help>{t('form.placementImmutable')}</Help>
     </>
   );
