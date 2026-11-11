@@ -223,7 +223,10 @@ target, SID or label: it never reaches the core and no tenant network imports it
 A network's objects come with its first cluster and go with its last; a network without clusters has none of them,
 whatever its platform access says. Each pair takes one /31 from the upper half of `egress.linkPool` by the network's
 root index (egress links keep the lower half); the addresses are next hops only, forwarded packets keep their
-sources.
+sources. So with the service on there are at most as many root indexes as one half of `egress.linkPool` has /31s (and
+no more than the smallest NAT pool, as before). Where that half is the limit and a network already holds a higher
+index, turning the service on is refused by the fabric's ledger ("pool change refused: egress 0-<end> would drop
+allocated [...]"); a larger `egress.linkPool` resolves it, nothing is renumbered.
 
 Routes: in the service VRF, each accepted cluster address of a network via that network's `se` end (FRR static) and
 the hub's routes from the platform edge connections (eBGP, filtered to `infrastructure.hub`). The network's VRF
