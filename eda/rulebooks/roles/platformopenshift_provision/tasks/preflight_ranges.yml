@@ -41,23 +41,27 @@
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
   vars:
     # one expression: on ansible-core 2.16 a number templated inside a nested mapping stays a string.
-    # machineIsSubnet: the machine network is the placement's subnet (inside the network by construction)
+    # The request is shc_fabric.py's: provider (openstack|aws|gcp) and network (the cluster names a hybrid network:
+    # on AWS and Google Cloud the machine network is then the placement's subnet, checked against the reserved ranges
+    # only), ranges (the published rows) and site (a site's own rows count for that site only)
     fab_check: >-
       {{ {'action': 'check-cluster-networks',
           'clusterNetwork': cb_cluster_network, 'hostPrefix': cb_host_prefix | int,
           'serviceNetwork': cb_service_network, 'machineNetwork': cb_machine_network,
-          'machineIsSubnet': (pr_machine_from_placement | default('', true)) | length > 0,
-          'space': pr_space | default([], true), 'reserved': pr_reserved_here} }}
+          'provider': platform_spec.type | default('openstack', true),
+          'network': ((pr_machine_from_placement | default('', true)) | length > 0)
+                     or ((pr_space | default([], true)) | length > 0),
+          'space': pr_space | default([], true), 'ranges': pr_reserved_here,
+          'site': pr_site | default('', true)} }}
 
+# the helper's answer: errors (messages, the reserved ranges first) and reason (PrefixReserved, AddressConflict,
+# InvalidSpec or "")
 - name: Read the first conflict
-  vars:
-    _e: "{{ (fab_check_result.errors | default([], true) + [''])[0] }}"
   ansible.builtin.set_fact:
     pr_conflict_reason: >-
-      {{ '' if (_e | string | length == 0)
-         else ((_e.reason | default('AddressConflict', true)) if _e is mapping
-               else ('PrefixReserved' if 'reserved' in (_e | string) else 'AddressConflict')) }}
-    pr_conflict_message: "{{ (_e.message | default(_e | string)) if _e is mapping else (_e | string) }}"
+      {{ '' if (fab_check_result.errors | default([], true) | length == 0)
+         else (fab_check_result.reason | default('', true) or 'AddressConflict') }}
+    pr_conflict_message: "{{ (fab_check_result.errors | default([], true) + [''])[0] | string }}"
 
 - name: Refuse overlapping ranges
   ansible.builtin.include_tasks: preflight_stop.yml

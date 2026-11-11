@@ -169,6 +169,12 @@ test('a reserved range is refused with PrefixReserved naming the range and its p
   // a site's own range applies on that site only
   assert.equal(cs.checkClusterNetworking(net({ machineNetwork: '10.30.0.0/16' }), ctx({ reserved, site: 'site-aws' })).length, 0);
   assert.equal(cs.checkClusterNetworking(net({ machineNetwork: '10.30.0.0/16' }), ctx({ reserved, site: 'site-osp' }))[0].code, 'PrefixReserved');
+  // as the cluster job (shc_fabric.py check-cluster-networks): an AWS or Google Cloud machine network without a
+  // network is the cluster's own VPC and is not checked against the reserved ranges; the pod network still is
+  for (const provider of ['aws', 'gcp']) {
+    assert.equal(cs.checkClusterNetworking(net({ machineNetwork: '198.51.100.0/24' }), ctx({ reserved, provider, hasNetwork: false })).length, 0);
+    assert.equal(cs.checkClusterNetworking(net({ clusterNetwork: '198.51.100.0/22' }), ctx({ reserved, provider, hasNetwork: false }))[0].code, 'PrefixReserved');
+  }
   const t = (k, o) => `${k}|${JSON.stringify(o ?? {})}`;
   const text = nc.networkingProblemText(t, hit[0]);
   assert.match(text, /PrefixReserved/);

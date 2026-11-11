@@ -216,10 +216,20 @@ export function checkClusterNetworking(input: ClusterNetworkingInput, ctx: Netwo
     // machine network is the placement's subnet and is not typed here.
     const net = space4.find((s) => overlaps(cidr, s));
     if (net) out.push({ field, code: 'AddressConflict', cidr, other: `network:${net}` });
+    if (!reservedApplies(field, ctx.provider)) continue;
     const r = reservedOverlap(cidr, reserved);
     if (r) out.push({ field, code: 'PrefixReserved', cidr, range: r.prefix, purpose: r.purpose ?? '' });
   }
   return out;
+}
+
+/**
+ * Whether a range is checked against the reserved ranges, as the cluster job's preflight does: the pod and service
+ * networks always, the machine network on OpenStack (on AWS and Google Cloud without a network it is the cluster's
+ * own VPC; with a network it is the placement's subnet, which the network already keeps clear of them).
+ */
+export function reservedApplies(field: RangeField, provider: ClusterProvider): boolean {
+  return field !== 'machineNetwork' || provider === 'openstack';
 }
 
 /**
@@ -239,7 +249,7 @@ export function defaultOverlapHints(input: ClusterNetworkingInput, ctx: Networki
       out.push({ field, code: 'AddressConflict', cidr, other: `network:${net}` });
       continue;
     }
-    const r = reservedOverlap(cidr, reserved);
+    const r = reservedApplies(field, ctx.provider) ? reservedOverlap(cidr, reserved) : undefined;
     if (r) out.push({ field, code: 'PrefixReserved', cidr, range: r.prefix, purpose: r.purpose ?? '' });
   }
   return out;

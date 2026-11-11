@@ -191,7 +191,13 @@ def network(req):
         return result("PlacementHasNoIPv4", f"NetworkPlacement {pref} has no IPv4 subnet; the platform reaches "
                       "clusters over IPv4, so the network needs IPv4 space", **out)
     hst = hn.get("status") or {}
-    out["space"] = [str(x) for x in (hst.get("addressSpace") or (hn.get("spec") or {}).get("prefixes") or [])]
+    # the network's space: spec.prefixes and status.addressSpace[].prefix (rows {prefix, family, ...})
+    space = []
+    for x in ((hn.get("spec") or {}).get("prefixes") or []) + [
+            a.get("prefix") if isinstance(a, dict) else a for a in hst.get("addressSpace") or []]:
+        if x and str(x) not in space:
+            space.append(str(x))
+    out["space"] = space
     fab = req.get("fabric") or {}
     fst = fab.get("status") or {}
     out["fabric"] = (fab.get("metadata") or {}).get("name", "")

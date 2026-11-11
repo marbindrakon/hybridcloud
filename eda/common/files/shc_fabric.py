@@ -106,7 +106,8 @@ actions:
   service-plan    {realization, nodes: [node names], fabric, domainAsn, networks: [HybridNetwork objects], ledger:
                   alloc, circuits: attachments-plan platform, vrfs: attachments-plan vrfs, previous: the fabric's
                   status.realization.service}   the service VRF (realization service, infrastructure.hub): a network
-                  takes part with the prefixes of status.platformAccess.prefixes that are not refused, the VPN target
+                  takes part with the rows of status.platformAccess.prefixes it accepted (state ready, or pending
+                  with no reason), the VPN target
                   and root index (ledger kind egress) it holds; a prefix is accepted when it lies inside the network's
                   IPv4 space, clear of the reserved ranges, inside service.attachableRanges (when set), is recorded in
                   the ledger (kind servicePrefix, owner HybridNetwork/<ns>/<name>/<prefix>; not yet: pending) and
@@ -1283,6 +1284,13 @@ def service_prefix_check(req):
     return {"errors": [], "prefixes": out}
 
 
+def accepted_row(row):
+    """A row of HybridNetwork status.platformAccess.prefixes the network accepted into the service VRF: state ready,
+    or state pending with no reason."""
+    state = str(row.get("state") or "")
+    return state == "ready" or (state == "pending" and not str(row.get("reason") or ""))
+
+
 def service_link(pool, index):
     """The service link of root index i: the i-th /31 of the link pool's upper half (so even, se odd)."""
     upper = int(pool.network_address) + pool.num_addresses // 2
@@ -1325,8 +1333,10 @@ def service_plan(req):
         owner = f"HybridNetwork/{key}"
         if st.get("fabric") != fabric:
             continue
+        # the rows the network accepted: ready, or pending without a reason (a pending row with a reason waits for
+        # the network itself, e.g. its platform access is not available yet or its ledger entry is not written)
         rows_in = [r for r in ((st.get("platformAccess") or {}).get("prefixes") or []) if isinstance(r, dict)
-                   and r.get("prefix") and str(r.get("state") or "pending") != "refused"]
+                   and r.get("prefix") and accepted_row(r)]
         if not rows_in:
             continue
         t, i = (alloc.get("vpnTarget") or {}).get(owner), (alloc.get("egress") or {}).get(owner)

@@ -23,7 +23,8 @@
       state: absent
       project_id: "{{ cfr_project_id }}"
       ids: "{{ cfr_ids | default([], true) | select | list }}"
-      descriptions: "{{ ([cfr_build ~ '-api', cfr_build ~ '-ingress']) if (cfr_build | default('', true) | length > 0) else [] }}"
+      # shc_openstack.py cluster-fips takes the descriptions as {api, ingress}, as for state present
+      descriptions: "{{ {'api': cfr_build ~ '-api', 'ingress': cfr_build ~ '-ingress'} if (cfr_build | default('', true) | length > 0) else {} }}"
 
 - name: Remove the floating IPs from the record
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

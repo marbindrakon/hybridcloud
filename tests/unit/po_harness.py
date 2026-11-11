@@ -103,7 +103,7 @@ def _link(src, dst):
     os.symlink(src, dst)
 
 
-def build_tree(tmp):
+def build_tree(tmp, real=()):
     roles = os.path.join(tmp, "eda", "rulebooks", "roles")
     for role in ("platformopenshift_provision", "platformopenshift_teardown", "cloudoso_provision", "cloudoso_teardown"):
         for sub in ("tasks", "files", "templates", "defaults"):
@@ -112,9 +112,11 @@ def build_tree(tmp):
                 _link(src, os.path.join(roles, role, sub))
     ctasks = os.path.join(EDA, "common", "tasks")
     for f in os.listdir(ctasks):
-        if f not in FAKED:
+        if f not in FAKED or f in real:
             _link(os.path.join(ctasks, f), os.path.join(tmp, "eda", "common", "tasks", f))
     for f, body in FAKE_TASKS.items():
+        if f in real:
+            continue
         with open(os.path.join(tmp, "eda", "common", "tasks", f), "w") as fh:
             fh.write("---\n" + body)
     _link(os.path.join(EDA, "common", "files"), os.path.join(tmp, "eda", "common", "files"))
@@ -131,13 +133,14 @@ def build_tree(tmp):
     return roles
 
 
-def run(role, task_file, extra_vars, k8s=None, routers=None, files=None, result=None, tasks=None):
+def run(role, task_file, extra_vars, k8s=None, routers=None, files=None, result=None, tasks=None, real=()):
     """Run <role>/tasks/<task_file> (role_path = that role); with result (a Jinja expression) the trace ends with
     {"result": <its value>} when the file ran to its end; tasks (a task list) runs in place of the file, with the
-    same role_path. Returns (rc, trace list, output tail)."""
+    same role_path; real: common task files of FAKED to run unfaked (e.g. fabric_check.yml: the real helper).
+    Returns (rc, trace list, output tail)."""
     tmp = tempfile.mkdtemp(prefix="shc-po-harness-")
     try:
-        roles = build_tree(tmp)
+        roles = build_tree(tmp, real)
         role_path = os.path.join(roles, role)
         trace = os.path.join(tmp, "trace.jsonl")
         open(trace, "w").close()

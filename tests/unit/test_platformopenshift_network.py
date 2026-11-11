@@ -31,7 +31,8 @@ HUB = "198.18.0.0/15"
 
 
 def network_obj(reach=("True", "Attachable", ""), space=("192.0.2.0/24",)):
-    st = {"fabric": "f1", "addressSpace": list(space), "conditions": []}
+    st = {"fabric": "f1", "addressSpace": [{"prefix": p, "family": 6 if ":" in p else 4} for p in space],
+          "conditions": []}
     if reach:
         st["conditions"].append({"type": "PlatformReachable", "status": reach[0], "reason": reach[1], "message": reach[2]})
     return {"metadata": {"name": "n1", "namespace": NS}, "spec": {"prefixes": list(space)}, "status": st}
@@ -335,7 +336,8 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertEqual(fab["action"], "check-cluster-networks")
         self.assertEqual(fab["hostPrefix"], 23)
         self.assertEqual(fab["space"], ["192.0.2.0/24"])
-        self.assertEqual([x["prefix"] for x in fab["reserved"]], [HUB])   # another site's own rows do not count
+        self.assertEqual([x["prefix"] for x in fab["ranges"]], [HUB])   # another site's own rows do not count
+        self.assertEqual((fab["provider"], fab["site"]), ("openstack", "site1"))
         self.assertFalse([t for t in tr if "patch" in t or "os" in t])
 
     def test_external_default(self):
@@ -347,7 +349,7 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertEqual(r["record"]["externalNetwork"], "public")
         fab = [t["fabric"] for t in tr if "fabric" in t][0]
         self.assertEqual(fab["space"], [])
-        self.assertEqual([x["prefix"] for x in fab["reserved"]], [HUB, "100.64.0.0/16"])
+        self.assertEqual([x["prefix"] for x in fab["ranges"]], [HUB, "100.64.0.0/16"])
 
     def test_external_refusals_before_anything(self):
         nodefault = dict(SITE, status={"capabilities": {"api": True}, "site": {"externalNetworks": SITE_NETS[1:]}})
@@ -359,11 +361,14 @@ class OpenstackPreflightFile(unittest.TestCase):
             self.assertFalse([t for t in tr if "patch" in t or "os" in t or "fabric" in t])
 
     def test_range_conflict(self):
-        for err, want in (({"reason": "PrefixReserved", "message": "serviceNetwork 198.18.0.0/16 overlaps 198.18.0.0/15, reserved by the platform"},
-                           "overlaps 198.18.0.0/15, reserved by the platform"),
-                          ("clusterNetwork 192.0.2.0/24 overlaps the network's 192.0.2.0/24", "overlaps the network's")):
+        # shc_fabric.py check-cluster-networks answers {errors: [messages], reason}
+        for err, reason, want in (("serviceNetwork 198.18.0.0/16 overlaps 198.18.0.0/15, reserved by the platform: x",
+                                   "PrefixReserved", "overlaps 198.18.0.0/15, reserved by the platform"),
+                                  ("spec.networking.clusterNetwork 192.0.2.0/24 overlaps the network's address space "
+                                   "192.0.2.0/24", "AddressConflict", "overlaps the network's")):
             rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
-                                dict(os_preflight_vars(), fake_fabric={"check-cluster-networks": {"errors": [err]}}),
+                                dict(os_preflight_vars(), fake_fabric={"check-cluster-networks": {"errors": [err],
+                                                                                                  "reason": reason}}),
                                 k8s=k8s(), result="1")
             self.assertNotEqual(rc, 0)
             self.assertIn(want, out)
@@ -445,7 +450,8 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual(self.steps(tr)[1:], ["os:cluster-fips/present", "patch:floatingIPs", "os:cluster-fips/absent",
                                               "patch:floatingIPs"])
         rel = H.os_calls(tr, "cluster-fips")[1]
-        self.assertEqual((rel["ids"], rel["descriptions"]), (["fip-a", "fip-i"], ["shc-oso-acme-c1-api", "shc-oso-acme-c1-ingress"]))
+        self.assertEqual((rel["ids"], rel["descriptions"]),
+                         (["fip-a", "fip-i"], {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
 
     def test_refused_prefix_withdrawn_and_released(self):
@@ -529,7 +535,7 @@ class CloudNetworkFiles(unittest.TestCase):
                 self.assertEqual(pfx, [["192.0.2.0/25"]])
                 self.assertFalse([t for t in tr if "k8s" in t])   # no annotation patch any more
                 fab_req = [t["fabric"] for t in tr if "fabric" in t][0]
-                self.assertTrue(fab_req["machineIsSubnet"])
+                self.assertEqual((fab_req["provider"], fab_req["network"]), (cloud, True))
                 self.assertEqual(H.patches(tr)[-1]["body"]["conditions"][0]["reason"], "PreflightPassed")
 
     def test_internal_refused_before_the_prefix(self):
@@ -568,8 +574,8 @@ class OwnNetwork(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(tr[-1]["result"], "10.20.0.0/16")
         fab = [t["fabric"] for t in tr if "fabric" in t][0]
-        self.assertEqual((fab["space"], fab["machineIsSubnet"]), ([], False))
-        self.assertEqual([x["prefix"] for x in fab["reserved"]], [HUB, "100.64.0.0/16"])
+        self.assertEqual((fab["space"], fab["provider"], fab["network"]), ([], "aws", False))
+        self.assertEqual([x["prefix"] for x in fab["ranges"]], [HUB, "100.64.0.0/16"])
 
 
 # ---- teardown -----------------------------------------------------------------------------------------------------
@@ -614,7 +620,8 @@ class TeardownRelease(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         req = H.os_calls(tr, "cluster-fips")[0]
         self.assertEqual((req["state"], req["project_id"], req["ids"], req["descriptions"]),
-                         ("absent", "proj-1", ["fip-a", "fip-i"], ["shc-oso-acme-c1-api", "shc-oso-acme-c1-ingress"]))
+                         ("absent", "proj-1", ["fip-a", "fip-i"],
+                          {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
 
     def test_environment_gone(self):
@@ -766,7 +773,8 @@ class EnvironmentPair(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         req = H.os_calls(tr, "cluster-fips")[0]
         self.assertEqual((req["state"], req["project_id"], req["ids"], req["descriptions"]),
-                         ("absent", "proj-1", ["fip-1", "fip-2"], ["sovereign-env1-api", "sovereign-env1-ingress"]))
+                         ("absent", "proj-1", ["fip-1", "fip-2"],
+                          {"api": "sovereign-env1-api", "ingress": "sovereign-env1-ingress"}))
         body = H.patches(tr, "cloudosos")[0]["body"]
         self.assertEqual(body, {k: None for k in self.LEGACY})
 

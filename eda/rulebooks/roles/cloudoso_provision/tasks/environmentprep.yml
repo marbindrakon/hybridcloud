@@ -131,7 +131,9 @@
           state: absent
           project_id: "{{ ep_os.project.id }}"
           ids: "{{ ep_legacy_fip_ids }}"
-          descriptions: ["sovereign-{{ cloudoso_cr_name }}-api", "sovereign-{{ cloudoso_cr_name }}-ingress"]
+          descriptions:
+            api: "sovereign-{{ cloudoso_cr_name }}-api"
+            ingress: "sovereign-{{ cloudoso_cr_name }}-ingress"
 
     - name: Remove the pair from the record
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
