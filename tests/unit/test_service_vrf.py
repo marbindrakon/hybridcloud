@@ -525,6 +525,143 @@ class ServiceApply(A.ApplyCase):
         self.assertTrue(out.strip().endswith("changed=no"), out)
 
 
+class StopHarness(A.Harness):
+    """The apply stopped after the k-th write of a run, two ways: kill (the script and everything it started are killed
+    right there: the job's time limit, a node that goes down) and refuse (every later call fails, the script goes on
+    as its error handling says: a failed command under set -e, a step that fails, a bearer that never comes; the
+    calls that only read still answer)."""
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        for t in A.TOOLS:
+            with open(os.path.join(self.bin, t), "w") as f:
+                f.write('#!/bin/sh\nif [ -n "${STOP_AFTER:-}" ] && [ "$(grep -c "^W " "$FAKE_LOG")" -ge "$STOP_AFTER" ]; then\n'
+                        '  [ "$STOP_MODE" = kill ] && kill -KILL 0\n  FAKE_FAIL="$WRITES"; export FAKE_FAIL\nfi\n'
+                        'exec "%s" "%s" %s "$@"\n' % (sys.executable, A.FAKE, t))
+
+    def run_stopped(self, instance, k, mode):
+        with open(self.log) as f:
+            done = sum(1 for l in f if l.startswith("W "))
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get("PATH", ""), FAKE_STATE=self.state,
+                   FAKE_LOG=self.log, STOP_AFTER=str(done + k), STOP_MODE=mode,
+                   WRITES=r"\] (ip( -[0-9a-z]+)* (link|addr|route|rule|neigh|netns) (add|del|set|replace|flush|change)( |$)|"
+                          r"sysctl .*-q?w|nft (-f|delete|add|flush)|modprobe|wg |udevadm)")
+        for v in ("FAKE_NS", "FAKE_FAIL"):
+            env.pop(v, None)
+        p = subprocess.run(["bash", self.scripts["new"], instance, "up"], env=env, capture_output=True, text=True,
+                           timeout=300, start_new_session=True)
+        return p.returncode
+
+
+def unfiltered(st, vrf="service"):
+    """What of the service VRF's links would pass unfiltered in this state: a service link so<t> that exists while no
+    drop of table ip shc_service covers it (by name or by the wildcard), or that is up outside the service VRF; a device
+    in the service VRF that the table's last drop does not name."""
+    ns = st["ns"][""]
+    table = ns["nft"].get("ip shc_service", "")
+    lines = table.splitlines()
+
+    def drop(comment):
+        return next((l for l in lines if f'counter drop comment "{comment}' in l), "")
+    between, last = drop("no network reaches another"), drop("nothing else through the service VRF")
+    bad = []
+    for d, l in sorted(ns["links"].items()):
+        if re.fullmatch(r"so\d+", d):
+            for what, line in (("between networks", between), ("last", last)):
+                if '"so*"' not in line and f'"{d}"' not in line:
+                    bad.append(f"{d}: no {what} drop covers it")
+            if l.get("up") and l.get("master") != vrf:
+                bad.append(f"{d} is up outside the service VRF")
+        elif l.get("master") == vrf and l.get("kind") == "vlan" and f'"{d}"' not in last:
+            bad.append(f"{d} (in the service VRF): the last drop does not name it")
+    return bad
+
+
+class ServiceInterrupted(unittest.TestCase):
+    """The service section of the node script stopped at every step boundary (StopHarness): no state it leaves has a
+    service link without its filter. Up from a fresh node, a network leaving (the review's case: its link was pruned
+    only after the new table without its name was loaded), and the whole service leaving; then a complete run
+    repairs it."""
+    def setUp(self):
+        if not __import__("shutil").which("jq"):
+            self.skipTest("jq not installed")
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32"]),
+                hn("lab2", ["192.0.2.0/24"], internet=False, rows=["192.0.2.99/32"])]
+        led = copy.deepcopy(LEDGER)
+        led["vpnTarget"]["HybridNetwork/acme/lab2"] = 10003
+        led["egress"]["HybridNetwork/acme/lab2"] = 3
+        led["servicePrefix"] = {"HybridNetwork/acme/lab/192.0.2.15/32": 1, "HybridNetwork/acme/lab2/192.0.2.99/32": 2}
+        self.real = realization(CORE, service=True)
+        egp, att, vrfs, svc = pipeline(F, self.real, True, nets=nets, circuits=[platform()], ledger=led)
+        self.both = service_conf(self.real, egp, att, svc)
+        self.one = copy.deepcopy(self.both)
+        self.one["service"]["networks"] = [w for w in self.one["service"]["networks"] if w["vrf"] == "e10002"]
+        self.none = copy.deepcopy(self.both)
+        self.none.pop("service")
+
+    def harness(self):
+        tmp = tempfile.mkdtemp(prefix="svc-stop-")
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        return StopHarness(tmp)
+
+    def walk(self, start_conf, conf):
+        h = self.harness()
+        h.set_state(blade())
+        if start_conf is not None:
+            h.conf("root", start_conf)
+            rc, out, err, _ = h.run("root")
+            self.assertEqual(rc, 0, err)
+        before = h.get_state()
+        before_files = {f: open(os.path.join(h.etc, f)).read() for f in os.listdir(h.etc)}
+        h.conf("root", conf)
+        rc, out, err, log = h.run("root")
+        self.assertEqual(rc, 0, err)
+        final = h.get_state()
+        self.assertEqual(unfiltered(final), [])
+        w = A.writes(log)
+        # the service section: from the first write that touches it (service_up begins with modprobe vrf, 8021q) to
+        # the end of the run (the root VRFs' prune removes a leaving network's VRF with its link)
+        first = min(i for i, l in enumerate(w) if re.search(r"modprobe 8021q|shc_service|service|s[eo]\d+|3099", l))
+        first = max(first - 1, 0)
+        self.assertGreater(len(w) - first, 3)
+
+        def one(job):
+            k, mode = job
+            hk = self.harness()
+            hk.set_state(before)
+            for f, text in before_files.items():
+                with open(os.path.join(hk.etc, f), "w") as fh:
+                    fh.write(text)
+            hk.conf("root", conf)
+            hk.run_stopped("root", k, mode)
+            bad = unfiltered(hk.get_state())
+            rc, _, err, _ = hk.run("root")
+            after = hk.get_state()
+            return k, mode, bad, (rc, unfiltered(after), "ip shc_service" in after["ns"][""]["nft"],
+                                  sorted(d for d in after["ns"][""]["links"] if re.fullmatch(r"s[eo]\d+", d)))
+        want_links = sorted(d for d in final["ns"][""]["links"] if re.fullmatch(r"s[eo]\d+", d))
+        from concurrent.futures import ThreadPoolExecutor
+        jobs = [(k, m) for k in range(first, len(w)) for m in ("kill", "refuse")]
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            results = list(ex.map(one, jobs))
+        for k, mode, bad, repaired in results:
+            with self.subTest(stopped_after=w[k], write=k, mode=mode):
+                self.assertEqual(bad, [])
+                self.assertEqual(repaired[:2], (0, []))
+                self.assertEqual(repaired[3], want_links)
+                if mode == "kill" or "service" in conf:
+                    # (refused: a run that went on past a refused table removal may leave the table, without links)
+                    self.assertEqual(repaired[2], "service" in conf)
+
+    def test_fresh_node(self):
+        self.walk(None, self.both)
+
+    def test_a_network_leaves(self):
+        self.walk(self.both, self.one)
+
+    def test_the_service_leaves(self):
+        self.walk(self.both, self.none)
+
+
 PROBE = r'''set -e
 mount -t tmpfs tmpfs /run; mkdir -p /run/netns
 ip netns add hub; ip netns add cl; ip netns add cl2
