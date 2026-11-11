@@ -635,6 +635,9 @@
       {% for w in hf_node_service.networks %}
       [ "$(ip -j link show dev {{ w.se }} | jq -r '.[0].master')" = {{ w.vrf }} ]
       [ "$(ip -j link show dev {{ w.so }} | jq -r '.[0].master')" = {{ hf_node_service.vrf }} ]
+      # the network VRF learns the hub's routes from the service VRF over the link (configured on both sides)
+      vtysh -c 'show bgp vrf {{ hf_node_service.vrf }} neighbors {{ w.seIp }} json' | grep -q '"remoteAs":{{ fab_spec.domainAsn }}'
+      vtysh -c 'show bgp vrf {{ w.vrf }} neighbors {{ w.soIp }} json' | grep -q '"remoteAs":{{ fab_spec.domainAsn }}'
       {% endfor %}
       {% endif %}
       {% if fab_node_transport | default('mpls') == 'srv6' %}

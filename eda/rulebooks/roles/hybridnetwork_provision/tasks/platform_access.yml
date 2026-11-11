@@ -8,7 +8,9 @@
 #    and of prefixes accepted earlier for other networks) and the ledger changes. Nothing is reserved or announced for
 #    a network without such a cluster.
 # 3. The ledger (kind servicePrefix, owner HybridNetwork/<ns>/<name>/<prefix>) records each accepted prefix when it
-#    is first accepted, so the earlier of two overlapping prefixes keeps it; a prefix no longer accepted goes back.
+#    is first accepted, so the earlier of two overlapping prefixes keeps it. The entry stays while a cluster asks for
+#    the prefix, through any outage of the platform's side (kept: the row pending with the reason); it goes back when
+#    no cluster asks for it any more, for the tenant's own fault, or when it lost to an earlier one.
 # The fabric realizes the accepted prefixes and reports them in status.realization.service.networks; the job wakes it
 # when the accepted set differs from what it realized. Nothing here fails the network: a ledger error leaves the
 # prefixes waiting and says so in status.platformAccess.message.
@@ -37,11 +39,24 @@
         {%- if ty and (sp[ty] | default({}, true)).network | default('', true) == fab_name
               and not (st.deletionComplete | default(false, true) | bool) -%}
           {%- set _ = out.append({'name': c.metadata.name, 'prefixes': st.platformPrefixes | default([], true),
-                                  'deleting': c.metadata.deletionTimestamp is defined}) -%}
+                                  'deleting': c.metadata.deletionTimestamp is defined, 'type': ty}) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ out }}
     hn_service_real: "{{ fab_real.service | default({}, true) }}"
+    # the IPv4 subnets of the network's placements: an AWS or Google Cloud cluster's prefix is one of them
+    hn_placement_subnets: >-
+      {%- set out = [] -%}
+      {%- for p in _hn_placements.resources | default([], true) if (p.spec | default({}, true)).network | default('') == fab_name -%}
+        {%- set ps = p.status | default({}, true) -%}
+        {%- for r in ps.subnets | default([], true) if (r.family | default(0) | int) == 4 and r.prefix | default('', true) -%}
+          {%- set _ = out.append(r.prefix) -%}
+        {%- endfor -%}
+        {%- for x in ps.prefixes | default([], true) if x is string and ':' not in x -%}
+          {%- set _ = out.append(x) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | unique | list }}
     hn_service_status: >-
       {{ ((hn_fabric.status | default({}, true)).realization | default({}, true)).service | default({}, true) }}
 
@@ -51,14 +66,15 @@
       {{ (hn_service_status.networks | default([], true)
           | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list + [{}]) | first }}
 
-# the order of the accepted prefixes (the ledger) matters only where the service is offered and a cluster asks for
-# a prefix, or the network still holds one
+# the order of the accepted prefixes (the ledger) matters wherever a cluster asks for a prefix (also while the
+# service is off or no platform circuit is realized: an accepted prefix keeps its entry then), or the network still
+# holds one
 - name: Read the fabric's ledger
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
   vars:
     fab_ledger: {action: ledger-get, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ hn_fabric_name }}"}
   when: >-
-    (hn_service_real.enabled | default(false) | bool and hn_clusters | map(attribute='prefixes') | flatten | length > 0)
+    hn_clusters | map(attribute='prefixes') | flatten | length > 0
     or hn_service_carried | length > 0
     or (fab_st.platformAccess | default({}, true)).prefixes | default([], true) | selectattr('state', 'in', ['ready', 'pending']) | list | length > 0
 
@@ -81,7 +97,7 @@
                       'attachableRanges': hn_service_real.attachableRanges | default([], true)},
           'serviceStatus': hn_service_status,
           'reserved': (hn_fabric.status | default({}, true)).reservedRanges | default([], true),
-          'clusters': hn_clusters, 'ledger': hn_service_ledger} | to_json }}
+          'clusters': hn_clusters, 'placements': hn_placement_subnets, 'ledger': hn_service_ledger} | to_json }}
   register: _hn_access
   changed_when: false
 
@@ -134,7 +150,9 @@
       {%- endfor -%}
       {{ out }}
   ansible.builtin.set_fact:
-    hn_service_hold: "{{ (_r.accepted | reject('in', _new if _err else []) | list | length > 0) or hn_service_carried | length > 0 }}"
+    hn_service_hold: >-
+      {{ (_r.accepted | reject('in', _new if _err else []) | list | length > 0) or _r.kept | default([]) | length > 0
+         or hn_service_carried | length > 0 }}
     hn_access: >-
       {{ {'state': _r.state, 'sources': _r.sources, 'ports': _r.ports, 'prefixes': _rows,
           'reason': _r.reason, 'message': _r.message ~ ((' The platform could not record a prefix: ' ~ hn_access_error) if _err else '')} }}

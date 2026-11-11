@@ -213,6 +213,31 @@ class Prefixes(unittest.TestCase):
         self.assertEqual((out["prefixes"][0]["state"], out["prefixes"][0]["reason"]), ("refused", "InfrastructureOverlap"))
         self.assertEqual(out["accepted"], [])
 
+    def test_ineligible_keeps_the_ledger_entry(self):
+        led = {"HybridNetwork/tenant-a/net/10.20.1.5/32": 4}
+        for why, kw in (("CircuitNotDeployed", {"serviceStatus": {"circuits": []}}),
+                        ("ServiceNotOffered", {"service": dict(SERVICE, enabled=False)}),
+                        ("InfrastructureOverlap", {"overlaps": [{"prefix": "10.20.0.0/16", "range": "10.20.0.0/24",
+                                                                  "purpose": "x"}]}),
+                        ("OutsideAttachableRanges", {"service": dict(SERVICE, attachableRanges=["10.30.0.0/16"])})):
+            with self.subTest(reason=why):
+                out = run(clusters=[cl("c1", "10.20.1.5/32")], ledger=led, **kw)
+                row = out["prefixes"][0]
+                self.assertEqual((row["state"], row["reason"]), ("pending", why))
+                self.assertIn("keeps its place", row["message"])
+                self.assertEqual((out["accepted"], out["kept"], out["release"]), ([], ["10.20.1.5/32"], []))
+        # the tenant's own reasons give it back, and so does a cluster that no longer asks for it
+        out = run(clusters=[cl("c1", "10.20.1.5/32")], ledger=led, space=["10.30.0.0/16"])
+        self.assertEqual(out["release"], ["HybridNetwork/tenant-a/net/10.20.1.5/32"])
+        out = run(clusters=[], ledger=led, serviceStatus={"circuits": []})
+        self.assertEqual((out["kept"], out["release"]), ([], ["HybridNetwork/tenant-a/net/10.20.1.5/32"]))
+
+    def test_a_conflict_is_refused_during_an_outage(self):
+        led = {"HybridNetwork/tenant-b/web/10.20.1.5/32": 1}
+        out = run(clusters=[cl("c1", "10.20.1.5/32")], ledger=led, serviceStatus={"circuits": []})
+        self.assertEqual((out["prefixes"][0]["state"], out["prefixes"][0]["reason"]), ("refused", "ServicePrefixInUse"))
+        self.assertEqual((out["kept"], out["allocate"]), ([], []))
+
     def test_turning_off_waits_for_the_clusters(self):
         out = run(platformAccess=False, clusters=[cl("c2", "10.20.1.5/32"), cl("c1")])
         self.assertNotEqual(out["state"], "off")
@@ -283,7 +308,7 @@ class PlatformAccessTasks(unittest.TestCase):
     """platform_access.yml with the API calls replaced by facts."""
 
     def run_tasks(self, clusters=(), ledger=None, fabric_status=None, spec=None, st=None, ledger_fails=False,
-                  real=None, hub=None, overlaps=None):
+                  real=None, hub=None, overlaps=None, placements=None):
         tasks = replaced(tasks_of(os.path.join(HN, "platform_access.yml")), {
             "List the clusters of the namespace": {"ansible.builtin.set_fact": {"_hn_clusters": {"resources": list(clusters)}}},
             "Read the fabric's ledger": {"ansible.builtin.set_fact": {
@@ -307,7 +332,12 @@ class PlatformAccessTasks(unittest.TestCase):
              "hn_fabric": {"status": fabric_status if fabric_status is not None else
                            {"realization": {"service": CIRCUITS}, "reservedRanges": RESERVED}},
              "hn_fabric_name": "fab", "hn_space": [{"prefix": "10.20.0.0/16"}], "hn_hub": HUB if hub is None else hub,
-             "hn_hub_check": {"refused": [], "overlaps": overlaps or []}}
+             "hn_hub_check": {"refused": [], "overlaps": overlaps or []},
+             "_hn_placements": {"resources": placements if placements is not None else [
+                 {"spec": {"network": "net"}, "status": {"subnets": [{"prefix": "10.20.2.0/24", "family": 4},
+                                                                     {"prefix": "2001:db8:2::/64", "family": 6}]}},
+                 {"spec": {"network": "net"}, "status": {"prefixes": ["10.20.3.0/24", "2001:db8:3::/64"]}},
+                 {"spec": {"network": "other"}, "status": {"prefixes": ["10.20.9.0/24"]}}]}}
         return run_play(tasks + [write_out(
             "{'access': hn_access, 'cond': hn_access_condition, 'hold': hn_service_hold | bool, "
             "'wake': hn_access_result.wakeFabric | bool, 'carried': hn_service_carried, "
@@ -350,6 +380,18 @@ class PlatformAccessTasks(unittest.TestCase):
         self.assertTrue(out["wake"])
         self.assertTrue(out["ledger_read"])
         self.assertEqual(out["cond"]["reason"], "AttachPending")
+
+    def test_each_provider_announces_only_its_shape(self):
+        # an OpenStack cluster: /32s only; AWS and Google Cloud: exactly a subnet of the network's placements
+        cs = [self.poc("os1", "net", ["10.20.1.0/30"]), self.poc("aws1", "net", ["10.20.2.0/25"], kind="aws"),
+              self.poc("gcp1", "net", ["10.20.9.0/24"], kind="gcp"), self.poc("x1", "net", ["10.20.4.4/32"], kind="other")]
+        out = self.run_tasks(cs)
+        rows = {r["cluster"]: r for r in out["access"]["prefixes"]}
+        self.assertEqual({k: (r["state"], r["reason"]) for k, r in rows.items()},
+                         {k: ("refused", "InvalidSpec") for k in ("os1", "aws1", "gcp1", "x1")})
+        self.assertIn("/32", rows["os1"]["message"])
+        self.assertIn("placement's subnet", rows["aws1"]["message"])
+        self.assertEqual(out["recorded"], [])
 
     def test_a_ledger_error_never_fails_the_network(self):
         out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], ledger_fails=True)
@@ -408,6 +450,46 @@ class NetworkJobWiring(unittest.TestCase):
         self.assertNotIn("203.0.113.0/24", out)
         real.pop("infrastructure")
         self.assertEqual(len(run_play([t, write_out("hn_platform_ranges")], {"fab_real": real})), 4)
+
+    def address_checks(self, prefixes, held):
+        """The network job's address checks in its order: the platform's ranges, check-network, the hub check."""
+        m = self.main()
+        check = copy.deepcopy(by_name(m, "Check the address space against the platform's ranges and the circuits"))
+        hub = copy.deepcopy(by_name(m, "Check the address space against the ranges the platform's management connects from"))
+        real = {"attachments": {"linkPool": "169.254.64.0/18"}, "core": {"loopbackPool": "198.51.100.0/26",
+                "linkSubnet": "198.51.100.64/26"}, "egress": {"linkPool": "169.254.0.0/18"},
+                "infrastructure": {"hub": ["10.30.0.0/16"]}}
+        return run_play([by_name(m, "The platform's ranges"), check, hub, by_name(m, "Keep the hub check"),
+                         write_out("{'check': fab_check_result.errors, 'hub': hn_hub_check}")],
+                        {"role_path": ROLE, "fab_real": real, "fab_spec": {"prefixes": prefixes},
+                         "fab_st": {"addressSpace": [{"prefix": p} for p in held]}, "hn_fabric": {},
+                         "hn_exclusive": [], "_hn_circuits": {"resources": []}, "fab_name": "net"})
+
+    def test_an_existing_network_inside_the_hub_keeps_working(self):
+        # wholly inside a hub range, held by the address space before the hub grew: no refusal anywhere, reported
+        out = self.address_checks(["10.30.4.0/24"], ["10.30.4.0/24"])
+        self.assertEqual((out["check"], out["hub"]["refused"]), ([], []))
+        self.assertEqual([o["prefix"] for o in out["hub"]["overlaps"]], ["10.30.4.0/24"])
+        # a new prefix inside or around a hub range is refused (by the hub check, with the range's purpose)
+        for new in ("10.30.5.0/24", "10.0.0.0/8"):
+            with self.subTest(prefix=new):
+                out = self.address_checks(["10.30.4.0/24", new], ["10.30.4.0/24"])
+                self.assertEqual(out["check"], [])
+                self.assertEqual(len(out["hub"]["refused"]), 1)
+                self.assertIn(new, out["hub"]["refused"][0])
+        # the platform's own ranges are still refused by check-network
+        out = self.address_checks(["169.254.64.0/24"], ["169.254.64.0/24"])
+        self.assertEqual(len(out["check"]), 1)
+
+    def test_pending_and_failed_writes_keep_platform_reachable(self):
+        cond = {"type": "PlatformReachable", "status": "True", "reason": "Attached", "message": "m"}
+        st = {"conditions": [{"type": "Ready", "status": "True", "reason": "Ready"}, cond]}
+        rescue = next(t for t in self.main() if "block" in t)["rescue"]
+        for task in (by_name(self.main(), "Report what the network waits for"), by_name(rescue, "Mark the HybridNetwork failed")):
+            with self.subTest(task=task["name"]):
+                expr = task["vars"]["fab_conditions"]
+                self.assertEqual(run_play([{"ansible.builtin.set_fact": {"x": expr}}, write_out("x")], {"fab_st": st}), [cond])
+                self.assertEqual(run_play([{"ansible.builtin.set_fact": {"x": expr}}, write_out("x")], {}), [])
 
     def egress_hold(self, **kw):
         t = by_name(self.main(), "Hold an egress index")
@@ -510,6 +592,104 @@ class CrdText(unittest.TestCase):
         for word in ("DESIGN", "OD1", "2026", "fabric_realization", "infrastructure.hub", "service VRF"):
             self.assertNotIn(word, text)
 
+
+
+class FirstComeFirstServedSurvivesOutages(unittest.TestCase):
+    """Two tenants with the same address space (separate VPNs). Tenant A's cluster has 10.20.1.5/32 accepted; tenant
+    B's cluster asks for the same address. The platform's side goes away for a while (no platform circuit realized,
+    the service turned off) and comes back, with B's network job running first and fabric runs in between that
+    planned nothing: A keeps the prefix, B is refused, and the fabric's plan agrees (the order lives in the ledger)."""
+    A, B = "tenant-a/net", "tenant-b/web"
+    P = "10.20.1.5/32"
+
+    def setUp(self):
+        self.ledger = {}
+        self.realized = []  # the fabric's networks[] (previous status)
+        self.next = 1
+
+    def job(self, who, service_status, service=SERVICE):
+        cluster = cl("c1" if who == self.A else "d1", self.P)
+        out = run(network=who, clusters=[cluster], ledger=dict(self.ledger), serviceStatus=service_status,
+                  service=service)
+        for o in out["allocate"]:
+            self.ledger[o] = self.next
+            self.next += 1
+        for o in out["release"]:
+            self.ledger.pop(o, None)
+        return out
+
+    def fabric(self, rows_by_net, circuits=True):
+        """the fabric's plan (shc_fabric.service_plan) over the networks' rows"""
+        sys.path.insert(0, os.path.join(ROOT, "eda", "common", "files"))
+        import shc_fabric as F
+        nets = []
+        for key, rows in rows_by_net.items():
+            ns, name = key.split("/")
+            nets.append({"metadata": {"namespace": ns, "name": name},
+                         "spec": {"prefixes": ["10.20.0.0/16"]},
+                         "status": {"fabric": "fab", "addressSpace": [{"prefix": "10.20.0.0/16", "family": 4}],
+                                    "platformAccess": {"prefixes": rows}}})
+        real = {"infrastructure": {"hub": HUB}, "attachments": {"enabled": True, "linkPool": "100.127.0.0/20"},
+                "core": {"loopbackPool": "100.126.0.0/24", "linkSubnet": "100.126.1.0/24"},
+                "egress": {"linkPool": "169.254.0.0/16", "networkTableBase": 100000, "vrf": {"name": "egress", "table": 9000}},
+                "service": {"enabled": True, "vrf": {"name": "service", "table": 9001}, "ports": [6443, 443],
+                            "hubEndpoints": [], "attachableRanges": ["10.0.0.0/8"]}}
+        alloc = {"vpnTarget": {"HybridNetwork/" + self.A: 10001, "HybridNetwork/" + self.B: 10002},
+                 "egress": {"HybridNetwork/" + self.A: 1, "HybridNetwork/" + self.B: 2}, "servicePrefix": dict(self.ledger)}
+        circ = [{"circuit": "platform-ns/hub-a", "vlan": 3001, "nodes": {"bgw-1": "100.127.0.2"}, "device": "bond1.3001",
+                 "link": "100.127.0.0/29", "ce": "100.127.0.1", "rev": "r"}] if circuits else []
+        out = F.service_plan({"realization": real, "nodes": ["bgw-1"], "fabric": "fab", "domainAsn": 65010,
+                              "networks": nets, "ledger": alloc, "circuits": circ, "vrfs": {},
+                              "previous": {"networks": self.realized}})
+        self.assertEqual(out["errors"], [])
+        self.realized = out["status"]["networks"]
+        return out["status"]
+
+    def status(self, circuits=True):
+        return {"circuits": [{"circuit": "platform-ns/hub-a", "vlan": 3001}] if circuits else [],
+                "networks": self.realized, "refused": []}
+
+    def walk(self, outage):
+        # A first: accepted and realized; B refused
+        a = self.job(self.A, self.status())
+        self.assertEqual(a["accepted"], [self.P])
+        st = self.fabric({self.A: a["prefixes"]})
+        self.assertEqual([w["network"] for w in st["networks"]], [self.A])
+        b = self.job(self.B, self.status())
+        self.assertEqual(b["prefixes"][0]["reason"], "ServicePrefixInUse")
+        # the outage, with a fabric run that planned nothing in between
+        a = self.job(self.A, *outage())
+        self.assertEqual((a["release"], a["kept"]), ([], [self.P]))
+        st = self.fabric({self.A: a["prefixes"], self.B: b["prefixes"]}, circuits=False)
+        self.assertEqual(st["networks"], [])
+        b = self.job(self.B, *outage())
+        self.assertEqual((b["prefixes"][0]["state"], b["allocate"]), ("refused", []))
+        # the platform's side returns: B's network job runs first
+        b = self.job(self.B, self.status())
+        self.assertEqual((b["prefixes"][0]["reason"], b["allocate"]), ("ServicePrefixInUse", []))
+        a = self.job(self.A, self.status())
+        self.assertEqual((a["accepted"], a["allocate"], a["release"]), ([self.P], [], []))
+        st = self.fabric({self.B: b["prefixes"], self.A: a["prefixes"]})
+        self.assertEqual([(w["network"], w["prefixes"]) for w in st["networks"]], [(self.A, [self.P])])
+        self.assertEqual(list(self.ledger), ["HybridNetwork/" + self.A + "/" + self.P])
+
+    def test_no_platform_circuit_for_a_while(self):
+        self.walk(lambda: (self.status(circuits=False),))
+
+    def test_the_service_turned_off_and_on(self):
+        self.walk(lambda: ({"circuits": [], "networks": [], "refused": []}, dict(SERVICE, enabled=False)))
+
+    def test_a_fabric_run_that_planned_nothing(self):
+        # the fabric's status lost the network (a run without circuits) while the circuits are listed again
+        a = self.job(self.A, self.status())
+        self.fabric({self.A: a["prefixes"]})
+        self.realized = []
+        b = self.job(self.B, self.status())
+        self.assertEqual((b["prefixes"][0]["reason"], b["allocate"]), ("ServicePrefixInUse", []))
+        a = self.job(self.A, self.status())
+        self.assertEqual((a["accepted"], a["release"]), ([self.P], []))
+        st = self.fabric({self.B: b["prefixes"], self.A: a["prefixes"]})
+        self.assertEqual([w["network"] for w in st["networks"]], [self.A])
 
 if __name__ == "__main__":
     unittest.main()

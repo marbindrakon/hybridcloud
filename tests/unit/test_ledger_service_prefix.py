@@ -105,5 +105,30 @@ class ServicePrefixOrder(unittest.TestCase):
         self.assertEqual(label["metadata"]["labels"][L.ALLOCATIONS_LABEL], "1")
 
 
+
+class ServiceHalvesTheIndexPool(unittest.TestCase):
+    """Review R1, unconfirmed R12: with the service on, the root index pool is the /31s of one half of egress.linkPool
+    (egress links below, service links above); where that half is the limit, a fabric whose networks already hold a
+    higher root index is refused by ledger-ensure with the pool and the values it would drop (the fabric fails, the
+    nodes are not touched), never renumbered or cut silently."""
+
+    def test_the_pool_size(self):
+        import shc_fabric as F
+        eg = {"enabled": True, "parentInterface": "bond1.100", "gateway": "203.0.113.1", "prefixLength": 24,
+              "linkPool": "169.254.0.0/24", "vrf": {"name": "egress", "table": 9000},
+              "nodes": {"bgw-1": {"address": "203.0.113.13", "natPool": "203.0.113.128/25"}}}
+        self.assertEqual(F.egress_check(eg, ["bgw-1"])["poolSize"], 128)
+        self.assertEqual(F.egress_check(eg, ["bgw-1"], service=True)["poolSize"], 64)
+
+    def test_a_held_index_above_the_new_end_is_refused(self):
+        api = FakeApi({"egress": [0, 127]})
+        led = json.loads(api.cm["data"]["ledger.json"])
+        led["alloc"]["egress"] = {"HybridNetwork/acme/a": 3, "HybridNetwork/acme/b": 100}
+        api.cm["data"]["ledger.json"] = json.dumps(led)
+        with self.assertRaises(RuntimeError) as e:
+            L.ledger_ensure(api, {"namespace": NS, "fabric": FABRIC, "fabric_uid": "u", "pools": {"egress": [0, 63]}})
+        self.assertIn("egress 0-63 would drop allocated [100]", str(e.exception))
+        self.assertEqual(api.alloc("egress"), {"HybridNetwork/acme/a": 3, "HybridNetwork/acme/b": 100})
+
 if __name__ == "__main__":
     unittest.main()

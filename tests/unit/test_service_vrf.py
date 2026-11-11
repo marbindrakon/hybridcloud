@@ -333,32 +333,51 @@ class ServiceTemplate(unittest.TestCase):
                       "route-map AC3099-OUT permit 10\n match ip address prefix-list SVC-ACCEPTED\nexit\n", out)
         ce = svc["bgw-1"]["circuits"][0]["ce"]
         inst = out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0]
+        # its own router ID (the node's address on its platform circuit): the network VRFs peer with it; each network
+        # with clusters is a passive iBGP neighbour over its service link that gets the hub's routes only
         self.assertEqual(inst.splitlines(), [
-            " bgp router-id 10.255.0.1", " no bgp default ipv4-unicast",
+            f" bgp router-id {svc['bgw-1']['circuits'][0]['ip']}", " no bgp default ipv4-unicast",
+            " neighbor 169.254.128.5 remote-as 65010", " neighbor 169.254.128.5 description service link of acme/lab",
+            " neighbor 169.254.128.5 ttl-security hops 1", " neighbor 169.254.128.5 passive",
+            " neighbor 169.254.128.5 timers 10 30",
             f" neighbor {ce} remote-as 64600", f" neighbor {ce} description AC3099 platform/hub-a",
             f" neighbor {ce} timers 10 30", " !", " address-family ipv4 unicast",
             "  redistribute static route-map SVC-STATIC", f"  neighbor {ce} activate",
             f"  neighbor {ce} route-map AC3099-IN in", f"  neighbor {ce} route-map AC3099-OUT out",
-            f"  neighbor {ce} maximum-prefix 50 restart 2", " exit-address-family"])
+            f"  neighbor {ce} maximum-prefix 50 restart 2", "  neighbor 169.254.128.5 activate",
+            "  neighbor 169.254.128.5 next-hop-self", "  neighbor 169.254.128.5 route-map SVC-FROM-NET in",
+            "  neighbor 169.254.128.5 route-map SVC-TO-NET out", " exit-address-family"])
+        self.assertNotEqual(svc["bgw-1"]["circuits"][0]["ip"], "10.255.0.1")
+        self.assertIn("route-map SVC-TO-NET permit 10\n match ip address prefix-list SHC-HUB4\nexit\n"
+                      "route-map SVC-FROM-NET deny 10\nexit\n", out)
         # no VPN for the service VRF
         self.assertNotRegex(inst, r"rd vpn|rt vpn|label vpn|sid vpn|export vpn|import vpn")
 
     def test_network_vrfs(self):
         out, _ = self.render()
-        # the service-only network: its own vrf stanza with the route to the hub, SHC-VRF-STATIC, a label
-        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 169.254.128.4\nexit-vrf\n", out)
+        # the service-only network: the hub's routes learned over its service link (preferred over another node's in
+        # the network's VPN), never configured; a reject route at distance 254 keeps them off any other route while no
+        # node has them; nothing redistributed, a label, the VPN routes with their own next hop
+        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
+        self.assertNotRegex(out, r"ip route 198\.51\.100\.0/24 169\.254")
         lab = out.split("router bgp 65010 vrf e10002\n")[1].split("\nexit\n")[0]
-        self.assertIn("  redistribute static route-map SHC-VRF-STATIC\n", lab)
-        self.assertIn("  label vpn export auto\n", lab)
-        self.assertIn("  nexthop vpn export 10.255.0.1\n", lab)
-        self.assertIn("route-map SHC-VRF-STATIC permit 10\n match ip address prefix-list SHC-DEFAULT4\nexit\n"
-                      "route-map SHC-VRF-STATIC permit 20\n match ip address prefix-list SHC-HUB4\nexit\n", out)
+        for line in (" neighbor 169.254.128.4 remote-as 65010\n", " neighbor 169.254.128.4 ttl-security hops 1\n",
+                     "  neighbor 169.254.128.4 activate\n", "  neighbor 169.254.128.4 route-map SVC-NET-IN in\n",
+                     "  neighbor 169.254.128.4 route-map SVC-NET-OUT out\n", "  label vpn export auto\n"):
+            self.assertIn(line, lab)
+        self.assertNotIn("passive", lab)
+        self.assertNotIn("redistribute static", lab)
+        self.assertNotIn("nexthop vpn export", lab)
+        self.assertIn("route-map SVC-NET-IN permit 10\n match ip address prefix-list SHC-HUB4\n set weight 100\nexit\n"
+                      "route-map SVC-NET-OUT deny 10\nexit\n", out)
         self.assertIn("ip prefix-list SHC-HUB4 seq 5 permit 198.51.100.0/24 le 32\n", out)
+        self.assertNotIn("SHC-VRF-STATIC", out)
         self.assertIn("! HybridNetwork acme/lab: clusters the platform reaches (192.0.2.15/32,192.0.2.16/32)", out)
         # networks without clusters: as without the service
         core = out.split("router bgp 65010 vrf e10000\n")[1].split("\nexit\n")[0]
         self.assertIn("  redistribute static route-map SHC-EGRESS-DEFAULT\n", core)
-        self.assertNotIn("ip route 198.51.100.0/24", out.split("vrf e10000\n")[1].split("exit-vrf")[0])
+        self.assertIn("  nexthop vpn export 10.255.0.1\n", core)
+        self.assertNotIn("198.51.100.0/24", out.split("vrf e10000\n")[1].split("exit-vrf")[0])
         self.assertNotIn("vrf e10003", out)
 
     def test_egress_network_with_clusters(self):
@@ -366,13 +385,17 @@ class ServiceTemplate(unittest.TestCase):
         led = copy.deepcopy(LEDGER)
         led["servicePrefix"] = {"HybridNetwork/acme/core/10.60.1.15/32": 1}
         real, (egp, att, vrfs, svc) = service_setup(nets=nets, ledger=led)
-        real["service"]["attachableRanges"] = []
+        real["service"]["attachableRanges"] = ["0.0.0.0/0"]
         egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
         out = T.render(T.RT, template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
-        # one vrf stanza: the default to the egress and the hub over the service link
-        self.assertIn("vrf e10000\n ip route 0.0.0.0/0 169.254.0.0\n ip route 198.51.100.0/24 169.254.128.0\nexit-vrf\n", out)
+        # one vrf stanza: the default to the egress and the reject route that keeps the hub's ranges off it
+        self.assertIn("vrf e10000\n ip route 0.0.0.0/0 169.254.0.0\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
         self.assertEqual(out.count("vrf e10000\n"), 2)  # the stanza and the BGP instance
-        self.assertIn("  redistribute static route-map SHC-VRF-STATIC\n", out.split("router bgp 65010 vrf e10000\n")[1])
+        inst = out.split("router bgp 65010 vrf e10000\n")[1].split("\nexit\n")[0]
+        # only the default is redistributed (the reject route is not), the hub's routes come over the service link
+        self.assertIn("  redistribute static route-map SHC-EGRESS-DEFAULT\n", inst)
+        self.assertIn("  neighbor 169.254.128.0 route-map SVC-NET-IN in\n", inst)
+        self.assertNotIn("nexthop vpn export", inst)
         self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 permit 0.0.0.0/0 le 32\n", out)
 
     def test_srv6(self):
@@ -380,6 +403,10 @@ class ServiceTemplate(unittest.TestCase):
         lab = out.split("router bgp 65010 vrf e10002\n")[1].split("\nexit\n")[0]
         self.assertIn(" sid vpn per-vrf export auto\n", lab)
         self.assertNotIn("label vpn", lab)
+        # the same learned hub routes on the SRv6 core, the VPN routes with their own next hop
+        self.assertIn("  neighbor 169.254.128.4 route-map SVC-NET-IN in\n", lab)
+        self.assertNotIn("nexthop vpn export", lab)
+        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
         self.assertNotIn("sid vpn", out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0])
 
     def test_no_accepted_prefixes(self):
@@ -390,7 +417,7 @@ class ServiceTemplate(unittest.TestCase):
         self.assertIn("ip prefix-list SVC-ACCEPTED seq 5 deny 0.0.0.0/0 le 32\n", out)
         self.assertIn("route-map AC3099-OUT deny 10\nexit\n", out)
         self.assertIn("router bgp 65010 vrf service\n", out)
-        self.assertNotIn("SHC-VRF-STATIC\n", out.split("route-map SHC-VRF-STATIC")[0])
+        self.assertNotIn("neighbor 169.254", out)
 
     def test_password(self):
         real, (egp, att, vrfs, svc) = service_setup()
@@ -454,6 +481,11 @@ class ServiceApply(A.ApplyCase):
         rin = st["nft"]["ip shc_root_in"]
         self.assertIn('iifname { "e10000", "e10001", "e10002", "egress", "service" } meta sdifname { "xe10000", '
                       '"bond1.3000", "bond1.3099" } accept', rin)
+        # the network VRF's session over its service link: only from the link's other end, only as sent by the node
+        self.assertIn('iifname "service" meta sdifname "so10002" ip saddr 169.254.128.5 ip daddr 169.254.128.4 ip ttl 255 '
+                      'tcp dport 179 accept', rin)
+        self.assertLess(rin.index("tcp dport 179 accept"), rin.index("tcp flags & (ack | rst) != 0 accept"))
+        self.assertIn('meta sdifname "so*" ip ttl != 255 counter drop', st["nft"]["ip shc_service"])
         # the IPv4 ICMP source on the service VRF too
         self.assertIn("192.0.0.8", [a["local"] for a in L["service"]["addrs"]])
         self.assertTrue(os.path.exists(os.path.join(h.etc, "root.service")))
@@ -523,6 +555,164 @@ class ServiceApply(A.ApplyCase):
             self.assertNotEqual(self.h.sysctl("", f"net/ipv6/conf/{d}/seg6_enabled"), "1", d)
         out, _ = self.h.ok(self, "root")
         self.assertTrue(out.strip().endswith("changed=no"), out)
+
+
+class StopHarness(A.Harness):
+    """The apply stopped after the k-th write of a run, two ways: kill (the script and everything it started are killed
+    right there: the job's time limit, a node that goes down) and refuse (every later call fails, the script goes on
+    as its error handling says: a failed command under set -e, a step that fails, a bearer that never comes; the
+    calls that only read still answer)."""
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        for t in A.TOOLS:
+            with open(os.path.join(self.bin, t), "w") as f:
+                f.write('#!/bin/sh\nif [ -n "${STOP_AFTER:-}" ] && [ "$(grep -c "^W " "$FAKE_LOG")" -ge "$STOP_AFTER" ]; then\n'
+                        '  [ "$STOP_MODE" = kill ] && kill -KILL 0\n  FAKE_FAIL="$WRITES"; export FAKE_FAIL\nfi\n'
+                        'exec "%s" "%s" %s "$@"\n' % (sys.executable, A.FAKE, t))
+
+    def run_stopped(self, instance, k, mode):
+        with open(self.log) as f:
+            done = sum(1 for l in f if l.startswith("W "))
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get("PATH", ""), FAKE_STATE=self.state,
+                   FAKE_LOG=self.log, STOP_AFTER=str(done + k), STOP_MODE=mode,
+                   WRITES=r"\] (ip( -[0-9a-z]+)* (link|addr|route|rule|neigh|netns) (add|del|set|replace|flush|change)( |$)|"
+                          r"sysctl .*-q?w|nft (-f|delete|add|flush)|modprobe|wg |udevadm)")
+        for v in ("FAKE_NS", "FAKE_FAIL"):
+            env.pop(v, None)
+        p = subprocess.run(["bash", self.scripts["new"], instance, "up"], env=env, capture_output=True, text=True,
+                           timeout=300, start_new_session=True)
+        return p.returncode
+
+
+def unfiltered(st, vrf="service"):
+    """What of the service VRF's links would pass unfiltered in this state: a service link so<t> that exists while no
+    drop of table ip shc_service covers it (by name or by the wildcard), or that is up outside the service VRF; a device
+    in the service VRF that the table's last drop does not name."""
+    ns = st["ns"][""]
+    table = ns["nft"].get("ip shc_service", "")
+    lines = table.splitlines()
+
+    def drop(comment):
+        return "\n".join(l for l in lines if f'counter drop comment "{comment}' in l)
+    between, last = drop("no network reaches another"), drop("nothing else through the service VRF")
+    bad = []
+    for d, l in sorted(ns["links"].items()):
+        if re.fullmatch(r"so\d+", d):
+            for what, line in (("between networks", between), ("last", last)):
+                if '"so*"' not in line and f'"{d}"' not in line:
+                    bad.append(f"{d}: no {what} drop covers it")
+            if l.get("up") and l.get("master") != vrf:
+                bad.append(f"{d} is up outside the service VRF")
+        elif l.get("master") == vrf and l.get("kind") == "vlan" and f'"{d}"' not in last:
+            bad.append(f"{d} (in the service VRF): the last drop does not name it")
+    return bad
+
+
+class ServiceInterrupted(unittest.TestCase):
+    """The service section of the node script stopped at every step boundary (StopHarness): no state it leaves has a
+    service link without its filter. Up from a fresh node, a network leaving (the review's case: its link was pruned
+    only after the new table without its name was loaded), and the whole service leaving; then a complete run
+    repairs it."""
+    def setUp(self):
+        if not __import__("shutil").which("jq"):
+            self.skipTest("jq not installed")
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32"]),
+                hn("lab2", ["192.0.2.0/24"], internet=False, rows=["192.0.2.99/32"])]
+        led = copy.deepcopy(LEDGER)
+        led["vpnTarget"]["HybridNetwork/acme/lab2"] = 10003
+        led["egress"]["HybridNetwork/acme/lab2"] = 3
+        led["servicePrefix"] = {"HybridNetwork/acme/lab/192.0.2.15/32": 1, "HybridNetwork/acme/lab2/192.0.2.99/32": 2}
+        self.real = realization(CORE, service=True)
+        egp, att, vrfs, svc = pipeline(F, self.real, True, nets=nets, circuits=[platform()], ledger=led)
+        self.both = service_conf(self.real, egp, att, svc)
+        self.one = copy.deepcopy(self.both)
+        self.one["service"]["networks"] = [w for w in self.one["service"]["networks"] if w["vrf"] == "e10002"]
+        self.none = copy.deepcopy(self.both)
+        self.none.pop("service")
+
+    def harness(self):
+        tmp = tempfile.mkdtemp(prefix="svc-stop-")
+        self.addCleanup(__import__("shutil").rmtree, tmp, True)
+        return StopHarness(tmp)
+
+    def walk(self, start_conf, conf):
+        h = self.harness()
+        h.set_state(blade())
+        if start_conf is not None:
+            h.conf("root", start_conf)
+            rc, out, err, _ = h.run("root")
+            self.assertEqual(rc, 0, err)
+        before = h.get_state()
+        before_files = {f: open(os.path.join(h.etc, f)).read() for f in os.listdir(h.etc)}
+        h.conf("root", conf)
+        rc, out, err, log = h.run("root")
+        self.assertEqual(rc, 0, err)
+        final = h.get_state()
+        self.assertEqual(unfiltered(final), [])
+        w = A.writes(log)
+        # the service section: from the first write that touches it (service_up begins with modprobe vrf, 8021q) to
+        # the end of the run (the root VRFs' prune removes a leaving network's VRF with its link)
+        first = min(i for i, l in enumerate(w) if re.search(r"modprobe 8021q|shc_service|service|s[eo]\d+|3099", l))
+        first = max(first - 1, 0)
+        self.assertGreater(len(w) - first, 3)
+
+        def one(job):
+            k, mode = job
+            hk = self.harness()
+            hk.set_state(before)
+            for f, text in before_files.items():
+                with open(os.path.join(hk.etc, f), "w") as fh:
+                    fh.write(text)
+            hk.conf("root", conf)
+            hk.run_stopped("root", k, mode)
+            bad = unfiltered(hk.get_state())
+            rc, _, err, _ = hk.run("root")
+            after = hk.get_state()
+            return k, mode, bad, (rc, unfiltered(after), "ip shc_service" in after["ns"][""]["nft"],
+                                  sorted(d for d in after["ns"][""]["links"] if re.fullmatch(r"s[eo]\d+", d)))
+        want_links = sorted(d for d in final["ns"][""]["links"] if re.fullmatch(r"s[eo]\d+", d))
+        from concurrent.futures import ThreadPoolExecutor
+        jobs = [(k, m) for k in range(first, len(w)) for m in ("kill", "refuse")]
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            results = list(ex.map(one, jobs))
+        for k, mode, bad, repaired in results:
+            with self.subTest(stopped_after=w[k], write=k, mode=mode):
+                self.assertEqual(bad, [])
+                self.assertEqual(repaired[:2], (0, []))
+                self.assertEqual(repaired[3], want_links)
+                if mode == "kill" or "service" in conf:
+                    # (refused: a run that went on past a refused table removal may leave the table, without links)
+                    self.assertEqual(repaired[2], "service" in conf)
+
+    def test_a_reused_link_address_is_given_back_first(self):
+        """Network lab leaves and lab2 takes its root index in the same run: lab's pair goes before lab2's takes the
+        /31, never two devices with one address in the service VRF (review R1 L2)."""
+        h = self.harness()
+        h.set_state(blade())
+        first = copy.deepcopy(self.both)
+        first["service"]["networks"] = [w for w in first["service"]["networks"] if w["vrf"] == "e10002"]
+        h.conf("root", first)
+        rc, _, err, _ = h.run("root")
+        self.assertEqual(rc, 0, err)
+        lab = first["service"]["networks"][0]
+        then = copy.deepcopy(self.both)
+        then["service"]["networks"] = [dict(w, seAddr=lab["seAddr"], soAddr=lab["soAddr"], seIp=lab["seIp"], soIp=lab["soIp"])
+                                       for w in then["service"]["networks"] if w["vrf"] == "e10003"]
+        h.conf("root", then)
+        rc, _, err, log = h.run("root")
+        self.assertEqual(rc, 0, err)
+        gone = A.index(log, r"^W \[root\] ip link del se10002$")
+        self.assertLess(gone, A.index(log, r"^W \[root\] ip addr add %s dev so10003" % re.escape(lab["soAddr"])))
+        self.assertLess(gone, A.index(log, r"^W \[root\] ip link add se10003 "))
+
+    def test_fresh_node(self):
+        self.walk(None, self.both)
+
+    def test_a_network_leaves(self):
+        self.walk(self.both, self.one)
+
+    def test_the_service_leaves(self):
+        self.walk(self.both, self.none)
 
 
 PROBE = r'''set -e
@@ -605,6 +795,48 @@ while time.time() < end:
     seen.append("%s:%d>%d %02x" % (socket.inet_ntoa(d[12:16]), sport, dport, flags))
 print(" ".join(seen))
 PY
+cat > /tmp/svc-icmp.py <<'PY'
+import socket, struct, sys
+def csum(b):
+    if len(b) % 2: b += b"\0"
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b)); s = (s >> 16) + (s & 0xffff); s += s >> 16
+    return ~s & 0xffff
+src, dst = sys.argv[1], sys.argv[2]
+icmp = struct.pack("!BBHI", 3, 3, 0, 0) + b"\x45" + b"\0" * 27
+icmp = icmp[:2] + struct.pack("!H", csum(icmp)) + icmp[4:]
+ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(icmp), 1, 0, 64, 1, 0, socket.inet_aton(src), socket.inet_aton(dst))
+ip = ip[:10] + struct.pack("!H", csum(ip)) + ip[12:]
+socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW).sendto(ip + icmp, (dst, 0))
+PY
+cat > /tmp/svc-icap.py <<'PY'
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP); s.settimeout(0.3)
+seen, end = [], time.time() + float(sys.argv[1])
+while time.time() < end:
+    try:
+        d = s.recv(2048)
+    except socket.timeout:
+        continue
+    if d[20] == 3:
+        seen.append(socket.inet_ntoa(d[12:16]))
+print(" ".join(seen))
+PY
+cat > /tmp/svc-scan.py <<'PY'
+import socket, struct, sys
+def csum(b):
+    if len(b) % 2: b += b"\0"
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b)); s = (s >> 16) + (s & 0xffff); s += s >> 16
+    return ~s & 0xffff
+src, dst, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+r = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+for i in range(n):
+    tcp = struct.pack("!HHIIBBHHH", 6443, 23, 1000 + i, 2000, 5 << 4, 0x10, 65535, 0, 0)
+    ph = socket.inet_aton(src) + socket.inet_aton(dst) + struct.pack("!BBH", 0, 6, len(tcp))
+    tcp = tcp[:16] + struct.pack("!H", csum(ph + tcp)) + tcp[18:]
+    ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40, 1, 0, 64, 6, 0, socket.inet_aton(src), socket.inet_aton(dst))
+    ip = ip[:10] + struct.pack("!H", csum(ip)) + ip[12:]
+    r.sendto(ip + tcp, (dst, 0))
+PY
 probe() {
   $C python3 /tmp/svc-l.py 192.0.2.15:6443 192.0.2.15:22 & $C2 python3 /tmp/svc-l.py 192.0.2.99:6443 &
   $H python3 /tmp/svc-l.py 198.51.100.10:6443 198.51.100.5:22 198.51.100.10:22 & sleep 1
@@ -621,6 +853,14 @@ probe() {
   wait %4 2>/dev/null || true; sleep 2.5
   echo "raw: $(cat /tmp/svc-cap.out)"
   kill %1 %2 %3 2>/dev/null || true; wait 2>/dev/null || true
+  # ICMP errors toward the hub: from the network's own prefix, and forged with another network's prefix as source
+  $H python3 /tmp/svc-icap.py 2 > /tmp/svc-icap.out & sleep 0.5
+  $C python3 /tmp/svc-icmp.py 192.0.2.15 198.51.100.5; $C python3 /tmp/svc-icmp.py 192.0.2.99 198.51.100.5
+  wait; echo "icmp: $(cat /tmp/svc-icap.out)"
+  # an ACK scan of a hub host from the service port: the hub's resets back
+  $C python3 /tmp/svc-cap.py 2 > /tmp/svc-scan.out & sleep 0.5
+  $C python3 /tmp/svc-scan.py 192.0.2.15 198.51.100.5 60
+  wait; echo "resets: $(grep -o '198.51.100.5:23>6443' /tmp/svc-scan.out | wc -l)"
 }
 echo "--- before"; probe
 nft -f "$1"
@@ -668,11 +908,20 @@ class RealKernel(A.ApplyCase):
         self.assertEqual({k: res["after"][k] for k in ("hub-api", "hub-ssh", "cl-endpoint", "cl-other", "cl-cl2", "ping")},
                          {"hub-api": "connected", "hub-ssh": "timeout", "cl-endpoint": "connected",
                           "cl-other": "timeout", "cl-cl2": "timeout", "ping": "reply"})
+        # an ICMP error toward the hub passes from the network's own prefix only (not forged with another's)
+        self.assertEqual(res["before"]["icmp"].split(), ["192.0.2.15", "192.0.2.99"])
+        self.assertEqual(res["after"]["icmp"].split(), ["192.0.2.15"])
+        # an ACK scan from the service port: the hub's resets come back at a limited rate
+        self.assertGreaterEqual(int(res["before"]["resets"]), 50)
+        self.assertLessEqual(int(res["after"]["resets"]), 30)
+        self.assertGreaterEqual(int(res["after"]["resets"]), 1)
         # the SYN-ACK without its SYN on this node passes (stateless), the bare SYN from the service port does not
         self.assertIn("192.0.2.15:6443>40000 12", res["after"]["raw"])
         self.assertNotIn(">40001", res["after"]["raw"])
         self.assertIn("192.0.2.15:6443>40001 02", res["before"]["raw"])
-        counts = dict((c, int(n)) for n, c in re.findall(r'counter packets (\d+) bytes \d+ drop comment "([^"]+)"', p.stdout))
+        counts = {}
+        for n, c in re.findall(r'counter packets (\d+) bytes \d+ drop comment "([^"]+)"', p.stdout):
+            counts[c] = counts.get(c, 0) + int(n)
         self.assertGreaterEqual(counts.get("no network reaches another through the service VRF", 0), 1, p.stdout)
         self.assertGreaterEqual(counts.get("nothing else through the service VRF", 0), 2, p.stdout)
 

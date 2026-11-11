@@ -53,7 +53,10 @@ class CheckCircuit(unittest.TestCase):
                                            "acceptedRanges": ["198.51.100.0/24 le 32"]})
         r = copy.deepcopy(REAL)
         r["service"]["attachableRanges"] = []
-        self.assertEqual(self.check(realization=r)["ceConfig"]["advertisedRanges"], ["any"])
+        # never "any": what the platform announces is exactly the listed ranges (check-fabric requires them)
+        self.assertEqual(self.check(realization=r)["ceConfig"]["advertisedRanges"], [])
+        r["service"]["attachableRanges"] = ["0.0.0.0/0"]
+        self.assertEqual(self.check(realization=r)["ceConfig"]["advertisedRanges"], ["0.0.0.0/0 le 32"])
         self.assertTrue(self.check(advertise=["192.0.2.0/24"])["notes"])
 
     def test_refusals(self):

@@ -223,28 +223,66 @@ target, SID or label: it never reaches the core and no tenant network imports it
 A network's objects come with its first cluster and go with its last; a network without clusters has none of them,
 whatever its platform access says. Each pair takes one /31 from the upper half of `egress.linkPool` by the network's
 root index (egress links keep the lower half); the addresses are next hops only, forwarded packets keep their
-sources.
+sources. So with the service on there are at most as many root indexes as one half of `egress.linkPool` has /31s (and
+no more than the smallest NAT pool, as before). Where that half is the limit and a network already holds a higher
+index, turning the service on is refused by the fabric's ledger ("pool change refused: egress 0-<end> would drop
+allocated [...]"); a larger `egress.linkPool` resolves it, nothing is renumbered.
 
 Routes: in the service VRF, each accepted cluster address of a network via that network's `se` end (FRR static) and
-the hub's routes from the platform edge connections (eBGP, filtered to `infrastructure.hub`); in the network's VRF
-`e<t>`, each IPv4 `infrastructure.hub` range via `so` (configured, not learned, so it does not depend on the
-sessions). FRR redistributes the network VRF's statics with one route map (`SHC-VRF-STATIC`: the default route of
-internet egress and the hub ranges), so the hub ranges enter the network's VPN and the sites return cluster traffic
-to the nodes. The service VRF's sessions announce the accepted addresses only, and only inside
+the hub's routes from the platform edge connections (eBGP, filtered to `infrastructure.hub`). The network's VRF
+`e<t>` learns the hub's routes from the service VRF over its service link: an iBGP session between the two VRF
+instances on the node (the network side connects, the service VRF has a router ID of its own, the node's address on
+its first platform edge connection; TTL 255 only, `ttl-security hops 1`, and the root's input filter admits it from the
+link's other end only). The service VRF sends the hub's routes and nothing else (next hop its `so` end), the network
+VRF takes the hub's ranges and nothing else (weight 100, so its own beats the other node's in the network's VPN) and
+sends nothing. So the hub's ranges enter the network's VPN from a node only while that node holds them from a
+platform edge connection: a node whose connections are all down withdraws them, and the sites return the clusters'
+traffic to the node that can deliver it. The failover time is the time the node needs to see its sessions go down
+(at once when the connection's link goes down, at most the hold time of 30 seconds otherwise, a second with BFD on
+the connection) plus about a second for the withdrawal through the network's VPN. With every connection of every
+node down, no node announces the hub's ranges: the clusters lose the hub and nothing else changes (a reject route at
+distance 254 for each hub range in `e<t>` keeps the clusters' traffic to the hub off the network's other routes,
+its internet egress default among them). The service VRF's sessions announce the accepted addresses only, and only inside
 `service.attachableRanges`; they accept the hub's ranges only, and never a default route, the link pools, the core
 pools or an accepted address.
+
+`service.attachableRanges` is required with `service.enabled` (an empty list fails the fabric with `InvalidSpec`,
+naming the setting): there is no implicit "any". Each platform edge connection's `status.ceConfig.advertisedRanges`
+lists exactly these ranges as `<range> le 32` for the hub's network team, so the hub's router can accept the
+platform's routes with a fixed filter and a maximum prefix length of 32. A deployment that wants every range writes
+`0.0.0.0/0`: the hub's router then accepts any route inside its tenants' address spaces that the reserved ranges do
+not cover, including more-specific routes of its own networks outside `infrastructure.hub`, which it would then send
+into a tenant network. What is announced is bounded further per cluster: an OpenStack cluster's addresses are /32s
+(its floating IPs and its router's gateway), an AWS or Google Cloud cluster's the subnet of its placement on the
+network, each inside the network's accepted address space; anything else is refused on the network's prefix row.
 
 The table `ip shc_service`, loaded before FRR takes the service VRF and replaced whole on every run, filters what
 crosses it, statelessly (the two directions may cross different nodes): from the hub's ranges TCP on
 `service.ports` and ICMP echo to a network's accepted addresses only; from those addresses TCP to
-`service.hubEndpoints` only; ICMP errors both ways; nothing from one `so*` device to another, so no network reaches
+`service.hubEndpoints` only; ICMP errors both ways, a network's only from its own accepted addresses; nothing from
+one `so*` device to another (the drops match the `so*` and `se*` devices by name, never by a list, so a pair a run
+has not yet removed is dropped too), so no network reaches
 another through the service VRF. The service VRF joins the root's input filter (`shc_root_in`): its connection
 devices are legs whose input `shc_service` filters itself (BGP, BFD and ICMP from the connection's link only,
 everything else dropped), and the `se*`/`so*` pairs get the filter's common answers. Each dropping rule counts its
 packets (`nft list table ip shc_service`).
 
+What the stateless filter cannot tell apart, and what remains of it: a reply is recognised by its shape (TCP from a
+service port with ACK set), not by a connection the hub opened, because the request and its reply may cross
+different nodes. So a cluster can send ACK-shaped segments (also with RST, FIN or data) from its own accepted
+addresses and a service port to any address and port in the hub's ranges. Nothing new is opened by them: a hub host
+with a stateful stack or firewall drops them or answers with a reset. Those resets come back to the cluster (they are
+addressed to a service port), so a cluster could map which hub addresses answer; the filter passes the hub's resets
+toward a network at no more than 10 per second (burst 20) per network and node, which slows such a scan down to a
+trickle without touching the hub's own connections. The cluster can never use another network's addresses (sources
+are bound to its own prefixes), never reach a hub port with a SYN, and never reach another network. Hub hosts that
+must not be seen at all from the clusters belong outside `infrastructure.hub` or behind a firewall that drops
+unsolicited ACKs silently.
+
 The health check reads `show bgp vrf <service> summary json` and reports `ServiceSessionsDown` on the fabric when a
-node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing). The
+node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing: the
+node has withdrawn the hub's ranges from the networks already, the finding is for the platform team). The sessions
+over the service links do not count for it. The
 apply's snapshot covers the VRF, the pairs and the table, so drift is reported as for the rest of the root.
 
 ## The orphan check on a node

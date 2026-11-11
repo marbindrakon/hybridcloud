@@ -49,7 +49,7 @@
 #   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed (the
 #   platform circuits' devices are the service's, below).
 #   service {vrf, table, mtu, hub, ports, hubEndpoints: [{prefix, ports}], circuits: [{circuit, device, parent, vlan,
-#   mtu, address, link, ce}], networks: [{vrf, table, se, so, seAddr, soAddr, prefixes}]} (the service VRF, through
+#   mtu, address, link, ce}], networks: [{vrf, table, se, so, seAddr, soAddr, seIp, soIp, prefixes}]} (the service VRF, through
 #   which the hub reaches the clusters the platform builds on tenant networks; absent = none, and a node that had it
 #   loses it all): the nftables table ip shc_service first (see service_nft: stateless, because the two directions of
 #   a connection may cross different nodes; the hub to a network's accepted prefixes on ports, a network's prefixes to
@@ -1251,6 +1251,12 @@ out = [f"table {t}", f"delete table {t}", f"table {t} {{", "  chain input {",
        "    type filter hook input priority filter; policy accept;"]
 if legs:
     out.append(f'{m} meta sdifname {names(legs)} accept comment "a leg of the VRF: its own filter and sessions"')
+if fam == "4":
+    # the network VRF's BGP session with the service VRF over the service link (the network side connects): only from
+    # the link's other end, only as sent by the node itself (TTL 255: a forwarded packet has less)
+    for n in sv.get("networks") or []:
+        out.append(f'    iifname "{sv["vrf"]}" meta sdifname "{n["so"]}" ip saddr {n["seIp"]} ip daddr {n["soIp"]} '
+                   'ip ttl 255 tcp dport 179 accept comment "the network VRF\'s session over its service link"')
 if fam == "6":
     # the upstream routers' BGP sessions on the hand-off device (IPv6 egress; no other session runs there)
     for a in ups:
@@ -1356,7 +1362,10 @@ service_devices() { jq -r '.service.circuits // [] | .[].device' "$CONF"; }
 # only BGP and BFD from the circuit's link, and ICMP; forward: the hub's ranges to a network's accepted prefixes on
 # the service ports (the replies: TCP with ACK from those ports), a network's prefixes to the hub endpoints on their
 # ports (the replies likewise), ICMP errors both ways and echo from the hub; nothing between two networks, nothing of
-# the hub's toward a network's internet egress, nothing else through the service VRF
+# the hub's toward a network's internet egress, nothing else through the service VRF. The drops name the service
+# links by wildcard ("so*", "se*"), never by the list of this configuration: a link the list no longer holds (a
+# network leaving, a run that stopped part-way) is dropped like any other, and the table is in place before the
+# first link exists and goes only after the last one (service_up, service_down)
 service_nft() {
   python3 - "$CONF" <<'PY'
 import ipaddress, json, sys
@@ -1373,14 +1382,14 @@ def elements(xs):
     """a network's prefixes as set elements (an interval set refuses overlapping members: merged)"""
     return "{ " + ", ".join(str(n) for n in ipaddress.collapse_addresses(ipaddress.ip_network(x) for x in xs)) + " }"
 cdevs = [c["device"] for c in cs]
-sos, ses = [n["so"] for n in ns], [n["se"] for n in ns]
 out = ["table ip shc_service", "delete table ip shc_service", "table ip shc_service {"]
 if hub:
     out.append(f"  set hub {{ type ipv4_addr; flags interval; elements = {{ {', '.join(hub)} }}; }}")
-legs = sos + ses + cdevs
-out += ["  chain raw_prerouting {", "    type filter hook prerouting priority raw; policy accept;"]
-if legs:
-    out.append(f"    iifname {names(legs)} notrack")
+# (each wildcard in a rule of its own: a wildcard inside a set needs a newer nftables than a single one)
+out += ["  chain raw_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
+        '    iifname "so*" notrack', '    iifname "se*" notrack']
+if cdevs:
+    out.append(f"    iifname {names(cdevs)} notrack")
 out.append("  }")
 # past prerouting a VRF slave's packets show the VRF as their input interface: the device is meta sdifname
 out += ["  chain input {", "    type filter hook input priority filter; policy accept;"]
@@ -1392,14 +1401,22 @@ for c in cs:
 if cdevs:
     out += [f"    meta sdifname {names(cdevs)} icmp type {{ echo-request, echo-reply, destination-unreachable, time-exceeded }} accept",
             f'    meta sdifname {names(cdevs)} counter drop comment "only BGP, BFD and ICMP from a platform circuit to the node"']
+# to the node over a service link: the network VRF's own session only (sent by the node itself, TTL 255); nothing a
+# network forwards toward the service VRF's addresses
+out.append('    meta sdifname "so*" ip ttl != 255 counter drop comment "to the node over a service link: only its own session"')
 out.append("  }")
 out += ["  chain forward {", "    type filter hook forward priority filter; policy accept;"]
 for n in ns:
     p = elements(n["prefixes"])
     if cdevs and hub:
-        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} accept')
+        # (a reset from the hub toward the service ports at a limited rate: the reply rule below is stateless, so a
+        # cluster can send ACK-shaped segments from those ports to any hub address and port, and each closed port
+        # answers with a reset; the hub's own resets to a cluster are rare)
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == 0 accept')
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == rst limit rate 10/second burst 20 packets accept')
     if hub:
-        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & ack == ack accept')
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & (syn | ack) == ack accept')
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & (syn | ack | rst) == syn | ack accept')
     for e in eps:
         eports = ", ".join(str(x) for x in e.get("ports") or [])
         if not eports:
@@ -1408,16 +1425,20 @@ for n in ns:
         if cdevs:
             out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr {e["prefix"]} ip daddr {p} '
                        f'tcp sport {{ {eports} }} tcp flags & ack == ack accept')
-if sos and hub:
-    out.append(f"    meta sdifname {names(sos)} ip daddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-reply }} accept")
-    if cdevs:
-        out.append(f"    meta sdifname {names(cdevs)} oifname {names(sos)} ip saddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-request }} accept")
-if sos:
-    out.append(f'    meta sdifname {names(sos)} oifname {names(sos)} counter drop comment "no network reaches another through the service VRF"')
-if ses:
-    out.append(f'    meta sdifname {names(ses)} oifname "xe*" counter drop comment "the hub\'s traffic never leaves by a network\'s internet egress"')
-if sos or cdevs:
-    out.append(f'    meta sdifname {names(sos + cdevs)} counter drop comment "nothing else through the service VRF"')
+# ICMP: a network's errors and echo replies toward the hub only from its own prefixes; the hub's errors and echo
+# requests toward a network only to its prefixes
+for n in ns:
+    p = elements(n["prefixes"])
+    if hub:
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-reply }} accept')
+    if cdevs and hub:
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} icmp type {{ destination-unreachable, time-exceeded, echo-request }} accept')
+# the drops: every service link by its name's form, whichever networks this configuration lists
+out.append('    meta sdifname "so*" oifname "so*" counter drop comment "no network reaches another through the service VRF"')
+out.append('    meta sdifname "se*" oifname "xe*" counter drop comment "the hub\'s traffic never leaves by a network\'s internet egress"')
+out.append('    meta sdifname "so*" counter drop comment "nothing else through the service VRF"')
+if cdevs:
+    out.append(f'    meta sdifname {names(cdevs)} counter drop comment "nothing else through the service VRF"')
 out.append("  }")
 out.append("}")
 print("\n".join(out))
@@ -1460,17 +1481,32 @@ service_links_prune() {
   done
 }
 
+# The order keeps every service link filtered whatever step a run stops at (a failed command, a bearer that never
+# comes, the job's time limit): what goes, goes first, while the table that filtered it is still loaded (links and
+# circuit devices no longer listed, a renamed VRF with all it held); then the new table (its drops name the links by
+# wildcard, its accepts the networks listed); then the VRF, the circuits' devices and the links, each new link up only
+# once it is in the VRF. service_down removes the links before the table.
 service_up() {
   local st mtu c dev par vlan cmtu addr n v t se so sea soa a want wantd old
   st=$(q .service.table); mtu=$(q .service.mtu)
   modprobe vrf; modprobe 8021q
-  # the filter before the devices (it matches them by name), and before FRR takes the VRF's sessions
-  service_nft | nft -f -
   old=""; [ ! -r "$MARKS" ] || old=$(<"$MARKS")
   if [ -n "$old" ] && [ "$old" != "$SV" ]; then service_links_prune ""; service_vrf_del "$old"; fi
+  want=$(jq -r '.service.networks // [] | .[].se' "$CONF")
+  service_links_prune "$want"
+  wantd=$(service_devices)
+  if ip link show "$SV" >/dev/null 2>&1; then
+    for dev in $(ip -j link show master "$SV" type vlan | jq -r '.[].ifname // empty'); do
+      grep -qx -- "$dev" <<<"$wantd" || ip link del "$dev"
+    done
+  fi
+  # (the name first: a run that stops after the table is loaded leaves the marker, so a later run without the
+  # service removes the table)
+  [ "$old" = "$SV" ] || printf '%s\n' "$SV" > "$MARKS"
+  # the filter before the devices, and before FRR takes the VRF's sessions
+  service_nft | nft -f -
   ip link show "$SV" >/dev/null 2>&1 || ip link add "$SV" type vrf table "$st"
   ip link set "$SV" up
-  [ "$old" = "$SV" ] || printf '%s\n' "$SV" > "$MARKS"
   for c in $(jq -r '.service.circuits // [] | .[] | [.device, .parent, .vlan, .mtu, .address] | join(":")' "$CONF"); do
     IFS=: read -r dev par vlan cmtu addr <<<"$c"
     wait_link "$par" "$cmtu" || { echo "bearer interface $par missing or below MTU $cmtu" >&2; exit 3; }
@@ -1481,10 +1517,6 @@ service_up() {
     ip link set "$dev" mtu "$cmtu" up
     for a in $(stray "$dev" 0.0.0.0/0 "$addr"); do ip addr del "$a" dev "$dev"; done
     addr_ensure "$dev" "$addr"
-  done
-  wantd=$(service_devices)
-  for dev in $(ip -j link show master "$SV" type vlan | jq -r '.[].ifname // empty'); do
-    grep -qx -- "$dev" <<<"$wantd" || ip link del "$dev"
   done
   for n in $(jq -r '.service.networks // [] | .[] | [.vrf, .table, .se, .so, .seAddr, .soAddr] | join(":")' "$CONF"); do
     IFS=: read -r v t se so sea soa <<<"$n"
@@ -1498,8 +1530,6 @@ service_up() {
     for a in $(stray "$so" 0.0.0.0/0 "$soa"); do ip addr del "$a" dev "$so"; done
     addr_ensure "$so" "$soa"
   done
-  want=$(jq -r '.service.networks // [] | .[].se' "$CONF")
-  service_links_prune "$want"
 }
 
 # no service VRF on this node any more: the links, the VRF with its circuits' devices, the table (nothing while the
@@ -1510,7 +1540,8 @@ service_down() {
   old=$(<"$MARKS")
   service_links_prune ""
   service_vrf_del "$old"
-  nft delete table ip shc_service 2>/dev/null || true
+  # (the marker goes only once the table is gone: a run that stops before tries again)
+  if nft list table ip shc_service >/dev/null 2>&1; then nft delete table ip shc_service; fi
   rm -f "$MARKS"
 }
 

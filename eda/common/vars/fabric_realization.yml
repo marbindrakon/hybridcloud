@@ -267,8 +267,9 @@ fabric_realization_defaults:
   # off to the hub's network by AttachmentCircuits of ceKind platform (an eBGP session per node and circuit: the hub's
   # IPv4 ranges in, the clusters' prefixes out). A network takes part from its first cluster on: its VRF on every node
   # gets a veth pair (se<vpnTarget> in the network's VRF, so<vpnTarget> in the service VRF) on its root index's
-  # service link (the upper half of egress.linkPool), a route to each IPv4 hub range (announced into the network's
-  # VPN), and the service VRF a route to each of the cluster's prefixes; the nftables table ip shc_service admits only
+  # service link (the upper half of egress.linkPool) over which it learns the hub's IPv4 ranges from the service VRF
+  # (announced into the network's VPN only while the node holds them from a platform circuit), and the service VRF a
+  # route to each of the cluster's prefixes; the nftables table ip shc_service admits only
   # the hub to the clusters' prefixes on ports and the clusters to hubEndpoints, statelessly (the two directions may
   # cross different nodes). IPv4 only. Needs attachments.enabled and an IPv4 infrastructure.hub range.
   service:
@@ -282,8 +283,11 @@ fabric_realization_defaults:
     # API). Empty = none: the clusters reach the hub by their network's own outbound path
     hubEndpoints: []
     # IPv4 ranges a cluster's prefixes must lie in to enter the service VRF; the platform circuit announces nothing
-    # outside them, so the hub's network can accept them with a fixed filter. Empty = any range that passes the other
-    # checks
+    # outside them, and its status.ceConfig gives them to the hub's network ("<range> le 32") to accept with a fixed
+    # filter. Required with service.enabled (check-fabric names it when empty): there is no implicit "any". A
+    # deployment that wants every range writes 0.0.0.0/0, and then the hub's network accepts any route inside its
+    # tenants' address spaces that the reserved ranges do not cover (more-specifics of its own networks outside
+    # infrastructure.hub included)
     attachableRanges: []
   # attachment circuits (AttachmentCircuit on a ProviderEdge of platform frr): each circuit gets a VLAN from vlanPool
   # on its bearer and the next /linkPrefixLength of linkPool (node i takes host address i+1, the CE the next one);
