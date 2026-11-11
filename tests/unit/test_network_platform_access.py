@@ -332,6 +332,12 @@ class PlatformAccessTasks(unittest.TestCase):
         self.assertFalse(out["ledger_read"])
         self.assertEqual(out["recorded"], [])
 
+    def test_accepted_rows_carry_no_reason(self):
+        out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32", "10.30.0.1/32"])])
+        rows = {r["prefix"]: r for r in out["access"]["prefixes"]}
+        self.assertEqual((rows["10.20.1.5/32"]["state"], rows["10.20.1.5/32"]["reason"]), ("pending", ""))
+        self.assertEqual((rows["10.30.0.1/32"]["state"], rows["10.30.0.1/32"]["reason"]), ("refused", "OutsideAddressSpace"))
+
     def test_clusters_of_every_provider_naming_the_network(self):
         cs = [self.poc("os1", "net", ["10.20.1.5/32"]), self.poc("aws1", "net", ["10.20.2.0/24"], kind="aws"),
               self.poc("gcp1", "net", ["10.20.3.0/24"], kind="gcp"), self.poc("x", "other", ["10.20.9.9/32"]),
@@ -348,6 +354,8 @@ class PlatformAccessTasks(unittest.TestCase):
     def test_a_ledger_error_never_fails_the_network(self):
         out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], ledger_fails=True)
         self.assertEqual(out["access"]["prefixes"][0]["state"], "pending")
+        # not accepted: the fabric realizes only rows without a reason
+        self.assertEqual(out["access"]["prefixes"][0]["reason"], "AttachPending")
         self.assertIn("ledger refused", out["access"]["prefixes"][0]["message"])
         self.assertIn("could not record", out["access"]["message"])
         self.assertFalse(out["hold"])

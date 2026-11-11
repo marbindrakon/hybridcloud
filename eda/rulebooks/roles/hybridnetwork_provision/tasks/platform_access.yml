@@ -115,7 +115,8 @@
         hn_access_error: "{{ (ansible_failed_result.msg | default('the ledger could not be written', true) | string)[:300] }}"
 
 # a ledger error: nothing new is accepted this time (the fabric must not realize a prefix the ledger does not
-# order), the rows say why and the next run tries again
+# order), the rows say why (AttachPending) and the next run tries again. The fabric realizes the rows the network
+# accepted: state ready or pending with no reason
 - name: The status of the network's platform access
   vars:
     _r: "{{ hn_access_result }}"
@@ -125,7 +126,8 @@
       {%- set out = [] -%}
       {%- for row in _r.prefixes -%}
         {%- if _err and row.prefix in _new and row.state != 'refused' -%}
-          {%- set _ = out.append(row | combine({'state': 'pending', 'message': 'not recorded yet: ' ~ hn_access_error})) -%}
+          {%- set _ = out.append(row | combine({'state': 'pending', 'reason': 'AttachPending',
+                                                'message': 'not recorded yet: ' ~ hn_access_error})) -%}
         {%- else -%}
           {%- set _ = out.append(row) -%}
         {%- endif -%}
