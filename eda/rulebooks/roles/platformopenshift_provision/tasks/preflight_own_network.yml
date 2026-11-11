@@ -1,0 +1,41 @@
+---
+# An AWS or Google Cloud cluster without a hybrid network (DESIGN cnet §2.2, §5): its own network's ranges
+# (spec.networking over the installation's defaults) checked against the ranges reserved by the platform as the
+# tenant's profile publishes them (TenantProfile shc status.reservedRanges), then recorded. Input: pon_site.
+- name: Read the tenant's published reserved ranges
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: TenantProfile
+    name: shc
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _pon_tp
+
+- name: Check the cluster's address ranges
+  ansible.builtin.include_tasks: preflight_ranges.yml
+  vars:
+    pr_machine_from_placement: ""
+    pr_space: []
+    pr_reserved: >-
+      {{ ((_pon_tp.resources | default([]) | first | default({})).status | default({}, true)).reservedRanges
+         | default([], true) }}
+    pr_site: "{{ pon_site }}"
+
+- name: The cluster's own machine network
+  ansible.builtin.set_fact:
+    cb_machine_cidr: "{{ cb_machine_network }}"
+
+- name: Record the ranges
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      machineNetwork: "{{ cb_machine_network }}"
+      clusterNetwork: "{{ cb_cluster_network }}"
+      serviceNetwork: "{{ cb_service_network }}"

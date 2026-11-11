@@ -1,0 +1,50 @@
+---
+# Release an OpenStack cluster's floating IPs (DESIGN cnet §4.3), after Hive's deprovision and after its prefixes
+# left the service routing domain: the recorded ids and the build's descriptions, with the site account of the
+# cluster's environment scoped to its project (a missing id counts as released). An environment that is gone took its
+# project with it (its teardown refuses a project that still holds floating IPs): nothing is left to release.
+- name: Read the cluster's environment
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: CloudOSO
+    name: "{{ po_oso_env }}"
+    namespace: "{{ platformopenshift_cr_namespace }}"
+  register: _rf_oso
+  when: po_oso_env | length > 0
+
+- name: Resolve the environment's site account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloudoso_accounts.yml"
+  vars:
+    rca_cr: "{{ _rf_oso.resources[0] }}"
+  when: _rf_oso is not skipped and _rf_oso.resources | default([]) | length > 0
+
+- name: Require the account when floating IPs are recorded
+  ansible.builtin.fail:
+    msg: >-
+      Cannot release the cluster's floating IPs {{ po_fip_ids | join(', ') }}: its OpenStack environment
+      {{ po_oso_env }} has no project or site account on record; the platform team must check them before the
+      delete continues.
+  when:
+    - po_fip_ids | length > 0
+    - _rf_oso is not skipped
+    - _rf_oso.resources | default([]) | length > 0
+    - (((_rf_oso.resources[0].status | default({}, true)).projectId | default('', true)) | length == 0
+       or (rca_account_vault_path | default('', true)) | length == 0)
+
+- name: Release them
+  ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/cluster_fips_release.yml"
+  vars:
+    cfr_project_id: "{{ _rf_oso.resources[0].status.projectId }}"
+    cfr_account: "{{ rca_account_vault_path }}"
+    cfr_ids: "{{ po_fip_ids }}"
+    cfr_build: "{{ po_build_name }}"
+    cfr_cr_name: "{{ platformopenshift_cr_name }}"
+    cfr_cr_namespace: "{{ platformopenshift_cr_namespace }}"
+  when:
+    - _rf_oso is not skipped
+    - _rf_oso.resources | default([]) | length > 0
+    - ((_rf_oso.resources[0].status | default({}, true)).projectId | default('', true)) | length > 0
+    - (rca_account_vault_path | default('', true)) | length > 0

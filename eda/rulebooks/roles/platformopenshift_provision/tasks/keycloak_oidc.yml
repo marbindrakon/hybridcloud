@@ -5,6 +5,7 @@
 # Inputs (must be set by caller):
 #   cluster_name       - PlatformOpenshift CR name (e.g. ocp-ses4); the ManagedCluster's name
 #   cluster_ocp_name   - optional: the OpenShift cluster name when it differs (shc AWS builds: shc-aws-<entity>-<name>)
+#   cluster_cr_name    - optional: the PlatformOpenshift's name when it differs from cluster_name (read by cluster_rbac.yml)
 #   cluster_console_url - https://console-openshift-console.apps.<slug>.<domain>
 #   cluster_api_url     - https://api.<slug>.<domain>:6443
 #   cluster_apps_url    - https://apps.<slug>.<domain>

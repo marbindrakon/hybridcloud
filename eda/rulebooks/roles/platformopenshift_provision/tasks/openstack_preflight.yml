@@ -1,0 +1,117 @@
+---
+# Preflight of an OpenStack cluster (DESIGN cnet §4.2), before anything is created (no floating IP, DNS record, Vault
+# path, Helm release): the cluster's network (a hybrid network placed on the environment with router attachments on,
+# or one of the site's global external networks: the one named, else the site's default), the cluster's address
+# ranges, and its build name being free on the hub. Refusals and waits through preflight_stop.yml.
+# Sets cb_external_network (the installer's externalNetwork), cb_fip_network_id, cb_publish, cb_network_record (the
+# status keys of the network choice), cb_platform_path (true: the platform reaches the cluster through the network).
+- name: The hybrid network path
+  when: oso_network | length > 0
+  block:
+    - name: Check the hybrid network
+      ansible.builtin.include_tasks: preflight_network.yml
+      vars:
+        pn_kind: CloudOSO
+        pn_env: "{{ oso_env_name }}"
+        pn_network: "{{ oso_network }}"
+        pn_need_platform: true
+        pn_need_router_attachments: true
+
+    - name: The cluster on the hybrid network
+      ansible.builtin.set_fact:
+        cb_external_network: "{{ pf.networkName }}"
+        cb_fip_network_id: "{{ pf.networkId }}"
+        cb_publish: Internal
+        cb_platform_path: true
+        cb_network_record:
+          network: "{{ oso_network }}"
+          externalNetwork: null
+          placement: "{{ pf.placement }}"
+          publish: Internal
+        po_reserved_ranges: "{{ pf.reserved }}"
+        po_network_space: "{{ pf.space }}"
+
+- name: The global external network path
+  when: oso_network | length == 0
+  block:
+    - name: Read the environment's site
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
+      vars:
+        ci_ref_name: "{{ cb_oso_site }}"
+        ci_ref_namespace: "{{ fabric_platform_namespace }}"
+      when: cb_oso_site | length > 0
+
+    - name: The external network in effect
+      ansible.builtin.include_tasks: po_call.yml
+      vars:
+        po_request:
+          action: external
+          choice: "{{ oso_external_choice }}"
+          site: "{{ cb_oso_site if (ci_found | default(false) | bool) else '' }}"
+          networks: >-
+            {{ (((ci_obj | default({})).status | default({}, true)).site | default({}, true)).externalNetworks
+               | default([], true) if cb_oso_site | length > 0 else [] }}
+
+    - name: Refuse a network the site does not list
+      ansible.builtin.include_tasks: preflight_stop.yml
+      vars:
+        ps_reason: "{{ po_result.reason }}"
+        ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ po_result.message }}"
+      when: po_result.reason | length > 0
+
+    - name: Read the tenant's published reserved ranges
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: TenantProfile
+        name: shc
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: _po_tp
+
+    - name: The cluster on the external network
+      ansible.builtin.set_fact:
+        cb_external_network: "{{ po_result.network.name }}"
+        cb_fip_network_id: "{{ po_result.network.id }}"
+        cb_publish: External
+        cb_platform_path: false
+        cb_network_record:
+          network: null
+          externalNetwork: "{{ po_result.network.name }}"
+          placement: null
+          publish: External
+        po_reserved_ranges: >-
+          {{ ((_po_tp.resources | default([]) | first | default({})).status | default({}, true)).reservedRanges
+             | default([], true) }}
+        po_network_space: []
+
+- name: Check the cluster's address ranges
+  ansible.builtin.include_tasks: preflight_ranges.yml
+  vars:
+    pr_machine_from_placement: ""
+    pr_space: "{{ po_network_space }}"
+    pr_reserved: "{{ po_reserved_ranges }}"
+    pr_site: "{{ cb_oso_site }}"
+
+# the build name is the hub namespace: a namespace of that name that this cluster did not record is someone else's
+- name: Look for the build's namespace on the hub
+  kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    api_version: v1
+    kind: Namespace
+    name: "{{ cb_app_name }}"
+  register: _po_build_ns
+
+- name: Refuse a build name in use
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: NamespaceTaken
+    ps_message: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: the build name {{ cb_app_name }} is already in use on the
+      platform; create the cluster with another name
+  when:
+    - _po_build_ns.resources | default([]) | length > 0
+    - (po_cr_current.resources[0].status | default({}, true)).buildName | default('', true) != cb_app_name

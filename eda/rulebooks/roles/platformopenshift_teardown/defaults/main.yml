@@ -5,3 +5,8 @@ clusterbuild_uninstall_timeout: 65m
 keycloak_external_url: "{{ lookup('env', 'KEYCLOAK_EXTERNAL_URL') }}"
 keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants', true) }}"
 keycloak_admin_vault_path: rhbk-services-admin
+# the platform namespace (the HybridFabric), and how long the teardown waits for the fabric to drop the cluster's
+# prefixes from the service routing domain before the step fails and is retried
+fabric_platform_namespace: sovereign-cloud
+platformopenshift_service_wait_retries: 30
+platformopenshift_service_wait_delay: 20

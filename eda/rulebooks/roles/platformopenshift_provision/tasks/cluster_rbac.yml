@@ -2,7 +2,8 @@
 # Push Keycloak-group ClusterRoleBindings to the provisioned cluster via ACM ConfigurationPolicy.
 #
 # Inputs (from caller / keycloak_oidc.yml):
-#   cluster_name         - CR name (e.g. ocp-ses4)
+#   cluster_name         - the ManagedCluster's name (the build name of OpenStack, AWS and GCP builds)
+#   cluster_cr_name      - optional: the PlatformOpenshift's name when it differs from cluster_name
 #   cluster_namespace    - CR namespace (entity namespace)
 #   central_api_server   - Central cluster API URL
 #   central_token        - Bearer token for central cluster
@@ -14,7 +15,7 @@
     validate_certs: false
     api_version: hybridsovereign.redhat/v1alpha1
     kind: PlatformOpenshift
-    name: "{{ cluster_name }}"
+    name: "{{ cluster_cr_name | default(cluster_name, true) }}"
     namespace: "{{ cluster_namespace }}"
   register: _plat_cr
 

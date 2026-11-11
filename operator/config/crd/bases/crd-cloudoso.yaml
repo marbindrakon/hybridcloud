@@ -58,7 +58,7 @@ spec:
                   description: >-
                     The platform CloudInfrastructure (type openstack, namespace sovereign-cloud) the project is
                     created on. It supplies the infrastructure credential and every site setting (projectDomain,
-                    externalNetwork, DNS, region); with a cloudRef in effect those spec fields below are ignored.
+                    DNS, region); with a cloudRef in effect those spec fields below are ignored.
                     Default: the installation's default site. Immutable once set.
                   required: [name]
                   x-kubernetes-validations:
@@ -88,7 +88,9 @@ spec:
                   description: "Keystone domain for the project. Ignored with a cloudRef in effect. Default: the installation default."
                 externalNetwork:
                   type: string
-                  description: "External Neutron network for the floating IPs. Ignored with a cloudRef in effect. Default: the installation default."
+                  description: >-
+                    No effect: the environment holds no floating IPs; each OpenShift cluster chooses its own network
+                    (PlatformOpenshift spec.openstack).
                 regionName:
                   type: string
                   description: "OpenStack region. Default: the account's clouds.yaml region."
@@ -145,16 +147,6 @@ spec:
                   type: string
                 route53ZoneId:
                   description: Hosted zone of the environment when its DNS is on Route 53.
-                  type: string
-                apiVIP:
-                  description: Floating IP reserved for the API of a cluster in this environment.
-                  type: string
-                ingressVIP:
-                  description: >-
-                    Floating IP reserved for the applications of a cluster in this environment.
-                  type: string
-                externalNetwork:
-                  description: External network of the environment's floating IPs.
                   type: string
                 billingId:
                   description: The tenant's billing identifier.

@@ -56,6 +56,8 @@
     gcp_region: "{{ cloudgcp_raw.json.status.region }}"
     gcp_domain: "{{ cloudgcp_raw.json.status.domain }}"
     gcp_entity: "{{ cloudgcp_raw.json.status.entity | default(resolved_entity, true) }}"
+    # the environment's site (its own rows of the reserved ranges apply to the cluster)
+    gcp_site: "{{ ((cloudgcp_raw.json.spec | default({}, true)).cloudRef | default({}, true)).name | default('', true) }}"
 
 - name: Refuse a region other than the environment's
   ansible.builtin.assert:

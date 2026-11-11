@@ -7,7 +7,7 @@
     that:
       - cb_api_vip | length > 0
       - cb_ingress_vip | length > 0
-    fail_msg: "CloudOSO apiVIP/ingressVIP must be set before Designate DNS records can be created."
+    fail_msg: "The cluster's floating IPs (status.floatingIPs) must be allocated before its Designate DNS records."
 
 - name: Load the OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
@@ -24,8 +24,8 @@
       dns_zone_id: "{{ designate_zone_id }}"
       dns_project_id: "{{ designate_project_id }}"
       records:
-        - {name: "api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_api_vip }}"]}
-        - {name: "*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_ingress_vip }}"]}
+        - {name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_api_vip }}"]}
+        - {name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_ingress_vip }}"]}
 
 - name: Record the Designate records
   ansible.builtin.set_fact:

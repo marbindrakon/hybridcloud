@@ -45,6 +45,26 @@ spec:
             spec:
               description: The cluster.
               type: object
+              x-kubernetes-validations:
+                - rule: >-
+                    !has(self.openstack) || !(has(self.openstack.network) && has(self.openstack.externalNetwork))
+                  message: spec.openstack names a hybrid network or an external network, not both
+                - rule: >-
+                    (has(self.openstack) && has(self.openstack.network))
+                    == (has(oldSelf.openstack) && has(oldSelf.openstack.network))
+                  message: the cluster's network cannot be added, removed or changed
+                - rule: >-
+                    (has(self.openstack) && has(self.openstack.externalNetwork))
+                    == (has(oldSelf.openstack) && has(oldSelf.openstack.externalNetwork))
+                  message: the cluster's network cannot be added, removed or changed
+                - rule: has(self.networking) == has(oldSelf.networking)
+                  message: spec.networking cannot be added, removed or changed
+                - rule: >-
+                    !has(self.networking) || !has(self.networking.machineNetwork) || !has(self.type)
+                    || self.type == 'openstack'
+                    || (self.type == 'aws' ? !(has(self.aws) && has(self.aws.network))
+                        : !(has(self.gcp) && has(self.gcp.network)))
+                  message: spec.networking.machineNetwork is the placement's subnet when the cluster names a network
               properties:
                 deletionProtection:
                   type: boolean
@@ -62,6 +82,20 @@ spec:
                     environment:
                       type: string
                       description: Name of the OpenStack environment (CloudOSO) in this namespace.
+                    network:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      description: >-
+                        HybridNetwork (this namespace) the cluster is published on. The environment needs a ready
+                        NetworkPlacement of it with router attachments on (spec.use.routerAttachments) and an IPv4
+                        subnet, and the network's condition PlatformReachable must be True. The cluster keeps its own
+                        machine network behind its own router; the router's external gateway and the API and ingress
+                        floating IPs are on the network, so the API and applications are reachable from the network
+                        and from the platform only. Excludes externalNetwork. Immutable.
+                      x-kubernetes-validations:
+                        - rule: self == oldSelf
+                          message: spec.openstack.network is immutable
                     controlPlaneCount:
                       type: integer
                       description: >-
@@ -84,8 +118,15 @@ spec:
                         OpenStack flavor of the worker nodes. Default: the installation's default.
                     externalNetwork:
                       type: string
+                      maxLength: 255
                       description: >-
-                        External network of the cluster's floating IPs. Default: the environment's.
+                        An external network of the environment's site that every project may use (the site's
+                        status lists them; TenantProfile sites[].externalNetworks). The cluster's router and floating
+                        IPs are on it. When neither this nor network is set, the site's default external network
+                        applies; a site without one refuses the cluster (NetworkChoiceRequired). Immutable.
+                      x-kubernetes-validations:
+                        - rule: self == oldSelf
+                          message: spec.openstack.externalNetwork is immutable
                     ocpImageSet:
                       type: string
                       description: >-
@@ -152,10 +193,12 @@ spec:
                       type: integer
                       description: "Control plane node count"
                       default: 3
+                      minimum: 1
                     workerCount:
                       type: integer
-                      description: "Worker node count"
+                      description: "Worker node count; 0 makes a compact cluster"
                       default: 2
+                      minimum: 0
                     controllerFlavor:
                       type: string
                       description: "AWS instance type for control plane"
@@ -192,10 +235,12 @@ spec:
                       type: integer
                       description: "Control plane node count"
                       default: 3
+                      minimum: 1
                     workerCount:
                       type: integer
-                      description: "Worker node count"
+                      description: "Worker node count; 0 makes a compact cluster"
                       default: 2
+                      minimum: 0
                     controllerFlavor:
                       type: string
                       description: "Machine type for control plane"
@@ -204,6 +249,69 @@ spec:
                       type: string
                       description: "Machine type for workers"
                       default: n2-standard-4
+                networking:
+                  type: object
+                  description: >-
+                    Address ranges of the cluster's own networks. Each must stay clear of the others, of the
+                    address space of the hybrid network the cluster is on, and of the ranges reserved by the platform
+                    (TenantProfile status.reservedRanges); the platform refuses the cluster before building it
+                    otherwise. Unset fields take the installation's defaults. Immutable.
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.networking is immutable
+                    - rule: >-
+                        !has(self.hostPrefix) || !has(self.clusterNetwork) || !isCIDR(self.clusterNetwork)
+                        || self.hostPrefix > cidr(self.clusterNetwork).prefixLength()
+                      message: spec.networking.hostPrefix must be longer than the clusterNetwork prefix
+                  properties:
+                    clusterNetwork:
+                      type: string
+                      maxLength: 18
+                      description: >-
+                        IPv4 range of the cluster's pods, /8 to /22. Default: the installation's (OpenShift's
+                        default is 10.128.0.0/14).
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && string(cidr(self).masked()) == self
+                          message: >-
+                            spec.networking.clusterNetwork must be an IPv4 network prefix in canonical form (host bits
+                            zero)
+                        - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 22)"
+                          message: spec.networking.clusterNetwork must be /8 to /22
+                    hostPrefix:
+                      type: integer
+                      minimum: 16
+                      maximum: 28
+                      description: >-
+                        Prefix length of each node's share of clusterNetwork, 16 to 28 and longer than the
+                        clusterNetwork prefix. Default: the installation's (OpenShift's default is 23).
+                    serviceNetwork:
+                      type: string
+                      maxLength: 18
+                      description: >-
+                        IPv4 range of the cluster's services, /12 to /24. Default: the installation's (OpenShift's
+                        default is 172.30.0.0/16).
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && string(cidr(self).masked()) == self
+                          message: >-
+                            spec.networking.serviceNetwork must be an IPv4 network prefix in canonical form (host bits
+                            zero)
+                        - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 12 && cidr(self).prefixLength() <= 24)"
+                          message: spec.networking.serviceNetwork must be /12 to /24
+                    machineNetwork:
+                      type: string
+                      maxLength: 18
+                      description: >-
+                        IPv4 range of the cluster's nodes, /16 to /27. On OpenStack the cluster's own network behind
+                        its own router; on AWS and Google Cloud only for a cluster without a network (with one, the
+                        nodes use the placement's subnet). Default: the installation's (OpenShift's default is
+                        10.0.0.0/16).
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && string(cidr(self).masked()) == self
+                          message: >-
+                            spec.networking.machineNetwork must be an IPv4 network prefix in canonical form (host bits
+                            zero)
+                        - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 16 && cidr(self).prefixLength() <= 27)"
+                          message: spec.networking.machineNetwork must be /16 to /27
                 toolRbac:
                   description: >-
                     Access on the new cluster. Each field lists access groups (Rbac names in this
@@ -328,6 +436,70 @@ spec:
                 gcpRegion:
                   description: Google Cloud region of the cluster.
                   type: string
+                buildName:
+                  description: >-
+                    Name of the cluster's build on the platform (its management namespace, release and managed
+                    cluster). The OpenShift cluster itself keeps the object's name.
+                  type: string
+                network:
+                  description: HybridNetwork the cluster is on; empty for a cluster with a network of its own.
+                  type: string
+                externalNetwork:
+                  description: >-
+                    OpenStack cluster without a hybrid network: the site's external network its router and floating
+                    IPs are on.
+                  type: string
+                placement:
+                  description: NetworkPlacement (namespace/name) the cluster's network reaches the environment through.
+                  type: string
+                publish:
+                  description: >-
+                    How the cluster's API and ingress are published: External or Internal (reachable from its network
+                    and the platform only).
+                  type: string
+                machineNetwork:
+                  description: IPv4 range of the cluster's nodes.
+                  type: string
+                clusterNetwork:
+                  description: IPv4 range of the cluster's pods.
+                  type: string
+                serviceNetwork:
+                  description: IPv4 range of the cluster's services.
+                  type: string
+                platformPrefixes:
+                  description: >-
+                    The cluster's addresses the platform's management reaches through the hybrid network (the
+                    network lists their state in status.platformAccess.prefixes).
+                  type: array
+                  items:
+                    type: string
+                floatingIPs:
+                  description: "OpenStack: the cluster's floating IPs, allocated for it and released when it is deleted."
+                  type: object
+                  properties:
+                    network:
+                      description: Identifier of the network the floating IPs are on.
+                      type: string
+                    api:
+                      description: Floating IP of the cluster's API.
+                      type: object
+                      properties:
+                        address:
+                          description: The address.
+                          type: string
+                        id:
+                          description: Identifier of the floating IP.
+                          type: string
+                    ingress:
+                      description: Floating IP of the cluster's applications (ingress).
+                      type: object
+                      properties:
+                        address:
+                          description: The address.
+                          type: string
+                        id:
+                          description: Identifier of the floating IP.
+                          type: string
                 status:
                   type: string
                   description: Short state word written by the platform's automation.

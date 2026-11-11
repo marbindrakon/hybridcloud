@@ -1,0 +1,83 @@
+---
+# Preflight of a cluster that names a hybrid network (DESIGN cnet §4.2 steps 1-3, §5), before anything is built:
+# the network and its NetworkPlacement in the environment (ready, router attachments ready on OpenStack, an IPv4
+# subnet) and, when the platform must reach the cluster through the network, the network's condition
+# PlatformReachable, the fabric's service routing domain, the subnet inside its attachable ranges and the hub's API
+# admitted by its hub endpoints. Reads only; refuses through preflight_stop.yml. Inputs:
+#   pn_kind, pn_env               the environment (CloudOSO, CloudAWS, CloudGCP) and its name
+#   pn_network                    the HybridNetwork (this namespace)
+#   pn_need_platform              true: OpenStack on a network, AWS/GCP Internal
+#   pn_need_router_attachments    true: OpenStack (the cluster's router and floating IPs go on the network)
+# Sets pf (po_preflight.py network result: placement, placementName, subnet4, space, networkId, networkName, fabric,
+# service, reserved), pf_placement (the NetworkPlacement object), pf_network_obj (the HybridNetwork object).
+- name: Require the platform namespace setting
+  ansible.builtin.assert:
+    that: (fabric_platform_namespace | default('', true)) | length > 0
+    fail_msg: Set fabric_platform_namespace (the namespace of the platform's HybridFabric and sites).
+
+- name: Read the network
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridNetwork
+    name: "{{ pn_network }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _pn_hn
+
+- name: Read the network's placements
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: NetworkPlacement
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _pn_nps
+
+- name: Read the network's fabric
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridFabric
+    name: "{{ _pn_fabric_name }}"
+    namespace: "{{ fabric_platform_namespace }}"
+  vars:
+    _pn_fabric_name: "{{ ((_pn_hn.resources | default([]) | first | default({})).status | default({}, true)).fabric | default('', true) }}"
+  register: _pn_fab
+  when: _pn_fabric_name | length > 0
+
+- name: Judge the network for the cluster
+  ansible.builtin.include_tasks: po_call.yml
+  vars:
+    po_request:
+      action: network
+      kind: "{{ pn_kind }}"
+      environment: "{{ pn_env }}"
+      namespace: "{{ ansible_operator_meta.namespace }}"
+      network: "{{ pn_network }}"
+      networkObj: "{{ _pn_hn.resources | default([]) | first | default({}) }}"
+      placements: "{{ _pn_nps.resources | default([]) }}"
+      fabric: "{{ (_pn_fab.resources | default([]) | first | default({})) if _pn_fab is not skipped else {} }}"
+      needPlatform: "{{ pn_need_platform | default(false) | bool }}"
+      needRouterAttachments: "{{ pn_need_router_attachments | default(false) | bool }}"
+      # the hub's API as this job reaches it: the address ACM's agent on the cluster connects to
+      hubApi: "{{ central_api_host | default('', true) }}"
+
+- name: Keep the network's facts
+  ansible.builtin.set_fact:
+    pf: "{{ po_result }}"
+    pf_network_obj: "{{ _pn_hn.resources | default([]) | first | default({}) }}"
+    pf_placement: >-
+      {{ (_pn_nps.resources | default([]) | selectattr('metadata.name', 'equalto', po_result.placementName | default(''))
+          | list + [{}]) | first }}
+
+- name: Refuse or wait
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: "{{ pf.reason }}"
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pf.message }}"
+  when: pf.reason | length > 0

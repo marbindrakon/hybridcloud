@@ -254,8 +254,8 @@
 - name: Set clusterbuild output facts
   ansible.builtin.set_fact:
     cb_app_name: "{{ cb_app_name }}"
-    cb_api_url: "https://api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}:6443"
-    cb_apps_url: "*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}"
+    cb_api_url: "https://api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}:6443"
+    cb_apps_url: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}"
     cb_base_domain: "{{ cb_cluster_domain }}"
     cb_admin_password_vault: "{{ cb_vault_cluster_path | default('cluster/oso/' + cb_app_name) }}/admin-password"
     cb_kubeconfig_vault: "{{ cb_vault_cluster_path | default('cluster/oso/' + cb_app_name) }}/admin-kubeconfig"

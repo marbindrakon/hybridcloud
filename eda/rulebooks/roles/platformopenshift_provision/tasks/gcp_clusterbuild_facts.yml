@@ -23,7 +23,8 @@
     cb_issuer_base: "{{ (gcp_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
     cb_issuer_namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
     cb_member_sa: "{{ gcp_real.memberServiceAccount | default('shc-automation') }}"
-    cb_machine_cidr: "10.0.0.0/16"
+    # the machine network: the placement's subnet (on a network) or the cluster's own (preflight_own_network.yml)
+    cb_machine_cidr: ""
     cb_vpc_name: ""
     cb_subnet_name: ""
     cb_vpc_id: ""

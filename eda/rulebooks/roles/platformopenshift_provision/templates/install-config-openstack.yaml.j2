@@ -1,7 +1,8 @@
 apiVersion: v1
 metadata:
-  name: {{ cb_cluster_name }}
+  name: {{ cb_ocp_name }}
 baseDomain: {{ cb_cluster_domain }}
+# the installer's mode with floating IPs (both on a hybrid network and on a global external network)
 publish: External
 controlPlane:
   name: master
@@ -18,12 +19,12 @@ compute:
 networking:
   networkType: OVNKubernetes
   clusterNetwork:
-  - cidr: 10.128.0.0/14
-    hostPrefix: 23
+  - cidr: {{ cb_cluster_network }}
+    hostPrefix: {{ cb_host_prefix }}
   machineNetwork:
-  - cidr: 10.0.0.0/16
+  - cidr: {{ cb_machine_network }}
   serviceNetwork:
-  - 172.30.0.0/16
+  - {{ cb_service_network }}
 platform:
   openstack:
     cloud: openstack

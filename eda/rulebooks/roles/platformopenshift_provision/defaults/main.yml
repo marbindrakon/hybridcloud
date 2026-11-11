@@ -45,3 +45,19 @@ mce_cluster_build_chart_version: "{{ platformopenshift_defaults.mceClusterBuildC
 # managedClusterSet). It holds tenant-built clusters only: the Assignment policy namespace on the hub binds
 # this set alone, so an Assignment's Placement can never select the hub or a platform cluster.
 platformopenshift_managed_cluster_set: "{{ platformopenshift_defaults.managedClusterSet | default('sovereign-tenant-clusters', true) }}"
+
+# The platform namespace (HybridFabric, CloudInfrastructure), as in the fabric roles.
+fabric_platform_namespace: sovereign-cloud
+# The cluster's own address ranges when spec.networking leaves them out: platformopenshift_defaults key networking
+# ({clusterNetwork, hostPrefix, serviceNetwork, machineNetwork}) over OpenShift's documented defaults.
+platformopenshift_networking_defaults:
+  clusterNetwork: 10.128.0.0/14
+  hostPrefix: 23
+  serviceNetwork: 172.30.0.0/16
+  machineNetwork: 10.0.0.0/16
+platformopenshift_networking: >-
+  {{ platformopenshift_networking_defaults | combine(platformopenshift_defaults.networking | default({}, true)) }}
+# A cluster on a hybrid network: how long the job waits for the fabric to carry its addresses in the platform's
+# service routing domain before it reports WaitingForPlatformAccess (and re-checks on the reconcile period).
+platformopenshift_service_wait_retries: 30
+platformopenshift_service_wait_delay: 20

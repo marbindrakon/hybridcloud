@@ -5,9 +5,12 @@
 # cluster's IAM (roles, OIDC provider) and its published issuer, the central namespace (its PushSecrets
 # would re-push deleted Vault keys), the recorded Vault paths, the Keycloak client, the services viewer
 # RBAC. Any failure lands in status.deletion and the CR stays Terminating; deletionComplete only after
-# every step succeeded. The build's objects on central are named after status.buildName (AWS:
-# shc-aws-<entity>-<name>, GCP: shc-gcp-<entity>-<name>), else the CR's name. Cloud teardowns run in the shc-cloud
-# container group.
+# every step succeeded. The build's objects on central are named after status.buildName (OpenStack:
+# shc-oso-<entity>-<name>, AWS: shc-aws-<entity>-<name>, GCP: shc-gcp-<entity>-<name>); without a record OpenStack
+# derives its build name again and AWS and GCP fall back to the CR's name. A cluster on a hybrid network leaves the
+# platform's service routing domain (status.platformPrefixes cleared, the withdrawal checked) before an OpenStack
+# cluster's floating IPs are released (DESIGN cnet §4.3): the reverse of the build. Cloud teardowns run in the
+# shc-cloud container group.
 - block:
     # nothing on a site (refused at validation): delete without site cleanup
     - name: Skip the site cleanup when nothing was realized
@@ -37,12 +40,35 @@
         namespace: "{{ platformopenshift_cr_namespace }}"
       register: po_cr
 
+    - name: Read the namespace for the tenant (an OpenStack cluster's build name)
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Namespace
+        name: "{{ platformopenshift_cr_namespace }}"
+      register: _po_ns
+      when:
+        - ((po_cr.resources | default([]) | first | default({})).spec | default({}, true)).type | default(platform_spec.type | default(''), true) == 'openstack'
+        - (((po_cr.resources | default([]) | first | default({})).status | default({}, true)).buildName | default('', true)) | length == 0
+
+    - name: Derive the build name of an OpenStack cluster without a record
+      ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/build_name.yml"
+      vars:
+        bn_entity: >-
+          {{ (((_po_ns.resources | default([]) | first | default({})).metadata | default({})).labels | default({}, true))
+             ['hybridsovereign.redhat/entity'] | default('', true) }}
+        bn_name: "{{ platformopenshift_cr_name }}"
+      when: _po_ns is not skipped
+
     # Vault paths and the DNS account are derived from the cluster's identity (an object written before they left
     # the status is read from its old keys)
     - name: Resolve the cluster's Vault paths and DNS account
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_platformopenshift_paths.yml"
       vars:
         rpp_cr: "{{ po_cr.resources | default([]) | first | default({}) }}"
+        rpp_build_name: "{{ bn_build_name if _po_ns is not skipped else '' }}"
 
     - name: Set platform type and recorded status facts
       vars:
@@ -55,7 +81,7 @@
         po_vault_paths: "{{ rpp_vault_paths }}"
         po_dns_account_vault_path: "{{ rpp_dns_account_vault_path }}"
         po_oidc_client_id: "{{ _st.oidcClientId | default('', true) | default(platformopenshift_cr_name ~ '-keycloak-oidc', true) }}"
-        po_build_name: "{{ _st.buildName | default(platformopenshift_cr_name, true) }}"
+        po_build_name: "{{ rpp_build_name_in_effect }}"
         po_aws_account: "{{ _st.awsAccountId | default('', true) }}"
         po_aws_region: "{{ _st.awsRegion | default('', true) }}"
         po_gcp_project: "{{ _st.gcpProject | default('', true) }}"
@@ -67,6 +93,11 @@
         po_publish: "{{ _st.publish | default('', true) }}"
         po_machine_network: "{{ _st.machineNetwork | default('', true) }}"
         po_domain: "{{ _st.domain | default('', true) }}"
+        po_platform_prefixes: "{{ _st.platformPrefixes | default([], true) }}"
+        po_fip_ids: >-
+          {{ [((_st.floatingIPs | default({}, true)).api | default({}, true)).id | default('', true),
+              ((_st.floatingIPs | default({}, true)).ingress | default({}, true)).id | default('', true)] | select | list }}
+        po_oso_env: "{{ ((po_cr.resources | default([]) | first | default({})).spec | default({}, true)).openstack.environment | default('', true) }}"
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -203,46 +234,23 @@
             name: "oidc-static-{{ po_build_name }}"
             namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
 
-    - name: Take the cluster's prefix out of the network's platform reach
-      when: po_publish == 'Internal' and po_network | length > 0 and po_machine_network | length > 0
-      block:
-        - name: Read the network
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            api_version: hybridsovereign.redhat/v1alpha1
-            kind: HybridNetwork
-            name: "{{ po_network }}"
-            namespace: "{{ platformopenshift_cr_namespace }}"
-          register: _po_hn
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: service-prefixes
 
-        - name: Remove the prefix from the annotation
-          vars:
-            _have: >-
-              {{ ((((_po_hn.resources | default([{}]) + [{}]) | first).metadata | default({})).annotations | default({}, true))
-                 ['shc.signal9.gg/platform-reach'] | default('[]', true) | from_json }}
-          kubernetes.core.k8s:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            state: patched
-            api_version: hybridsovereign.redhat/v1alpha1
-            kind: HybridNetwork
-            name: "{{ po_network }}"
-            namespace: "{{ platformopenshift_cr_namespace }}"
-            definition:
-              metadata:
-                annotations:
-                  shc.signal9.gg/platform-reach: >-
-                    {{ (_have | reject('equalto', po_machine_network) | list | to_json) if (_have | reject('equalto', po_machine_network) | list) else none }}
-          when: _po_hn.resources | default([]) | length > 0
+    # the cluster's prefixes leave the platform's service routing domain: the record goes, the network drops them
+    # and wakes the fabric, and the withdrawal is checked
+    - name: Take the cluster's prefixes out of the platform's service routing domain
+      ansible.builtin.include_tasks: withdraw_prefixes.yml
+      when: po_network | length > 0 and po_platform_prefixes | length > 0
 
-        - name: Wake the network (the fabric drops the reach)
-          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
-          vars:
-            nudge_crs: [{kind: HybridNetwork, namespace: "{{ platformopenshift_cr_namespace }}", name: "{{ po_network }}"}]
-          when: _po_hn.resources | default([]) | length > 0
+    - name: Note the step
+      ansible.builtin.set_fact:
+        teardown_step: floating-ips
+
+    - name: Release the cluster's floating IPs
+      ansible.builtin.include_tasks: release_fips.yml
+      when: platform_type == "openstack"
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -267,10 +275,9 @@
     - name: Delete the cluster's Vault paths
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
       vars:
-        # recorded paths, plus the PushSecret keys for clusters provisioned before the record existed
-        vault_kv_delete_paths: >-
-          {{ po_vault_paths + ['admin-kubeconfig', 'admin-password', 'ssh-key', 'install-config']
-             | map('regex_replace', '^', 'cluster/oso/' ~ platformopenshift_cr_name ~ '/') | list }}
+        # the build's paths (cluster/<provider>/<build name>/...); no CR-name paths: CR names are not unique across
+        # tenants
+        vault_kv_delete_paths: "{{ po_vault_paths }}"
 
     - name: Note the step
       ansible.builtin.set_fact:

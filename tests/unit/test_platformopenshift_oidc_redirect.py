@@ -32,7 +32,7 @@ def render(**extra):
 
 class Wiring(unittest.TestCase):
     def test_every_build_path_passes_the_cluster_domain(self):
-        want = {"openstack.yml": "{{ cb_cluster_name }}.{{ cb_cluster_domain }}",
+        want = {"openstack.yml": "{{ cb_ocp_name }}.{{ cb_cluster_domain }}",
                 "aws.yml": "{{ cb_cluster_domain }}",
                 "gcp.yml": "{{ cb_cluster_domain }}"}
         for f, dom in want.items():
