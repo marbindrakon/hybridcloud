@@ -46,9 +46,10 @@ Actions (request["action"]):
                 to project_id): state present finds each by description (descriptions {api, ingress}) on
                 network_id, else creates it; state absent releases them by recorded ids and by description (a
                 missing id counts as released).
-  network-name-check  read only, site account scoped to the environment's project: the networks of a name that the
-                project sees (its own, shared, or given to it or to every project by an RBAC policy); unique when only
-                the expected network id is among them (the installer takes the external network by name).
+  network-name-check  read only, with the environment's own credential (the one the installer runs with, scoped to
+                the environment's project): the networks of a name as Neutron lists them to that project, each with
+                router:external as the project sees it; unique when only the expected network id is among them (the
+                installer takes the external network by name), external when the project may use it as one.
   router-advertisement  the site's router advertisement service (an optional site component that switches the `nat`
                 token of an EVPN router port, so the site advertises floating IPs on a placed network): state
                 present asks it to hold `nat` on the router's IPv4 interface port on the network, absent to drop
@@ -81,6 +82,7 @@ class Account:
         self.region = req.get("region") or cfg.get("region_name")
         self.interface = cfg.get("interface", "public")
         self.verify = req.get("cacert") or cfg.get("cacert") or cfg.get("verify", True)
+        self.auth_type = cfg.get("auth_type") or ""
 
     def connect(self, **scope):
         return openstack.connect(auth={**self.auth, **scope}, region_name=self.region,
@@ -90,6 +92,13 @@ class Account:
     def own_scope(self):
         return openstack.connect(auth=self.own_auth, region_name=self.region, interface=self.interface,
                                  verify=self.verify, identity_api_version="3")
+
+    def as_configured(self):
+        """The clouds.yaml entry as written, its auth type included (an application credential: its scope is its
+        own and cannot be changed)."""
+        return openstack.connect(auth=self.own_auth, region_name=self.region, interface=self.interface,
+                                 verify=self.verify, identity_api_version="3",
+                                 **({"auth_type": self.auth_type} if self.auth_type else {}))
 
     def domain(self, name):
         return self.connect(domain_name=name)
@@ -791,29 +800,36 @@ def cluster_fips(req):
 
 
 def network_name_check(req):
-    """The networks named `name` that the environment's project sees, as the installer will look them up by name
-    (install-config platform.openstack.externalNetwork takes a name only; the installer's lookup takes every network of
-    that name the project can list and fails on two). Site account scoped to project_id: the project's own networks,
-    the networks shared with every project, and the ones an RBAC policy (any action) gives to the project or to every
-    project. {project_id, name, network_id} -> {name, visible: [{id, project_id, shared}], unique: exactly one is
-    visible and it is network_id}."""
+    """The networks named `name` as the installer finds them (install-config platform.openstack.externalNetwork takes a
+    name only; the installer lists the networks of that name with the environment's credential and fails on two).
+    clouds_yaml is the environment's own credential (the installer's: an application credential of the environment's
+    project), so the list is what Neutron itself gives that project: its own networks, the shared ones, and those an
+    RBAC policy exposes to it or to every project, whether or not the project can read the policy (a project never
+    reads another project's policies, so counting policies cannot tell). router:external is the network's flag as
+    Neutron computes it for that project. {project_id (the environment's project: the credential must be scoped to
+    it), name, network_id} -> {name, project_id (the credential's), visible: [{id, project_id, shared, external}],
+    unique: exactly one is visible and it is network_id, external: network_id is visible and external for the
+    project}."""
     acct = Account(req)
-    pid = req["project_id"]
+    pid = req.get("project_id") or ""
     name = req["name"]
     want = req.get("network_id") or ""
-    conn = acct.project(pid)
+    conn = acct.as_configured()
+    _, _, scoped = token_info(conn)
+    if pid and scoped != pid:
+        raise RuntimeError(f"the environment's credential is scoped to project {scoped}, not to the environment's "
+                           f"project {pid}")
     visible = []
     for n in conn.network.networks(name=name):
         if n.name != name:
             continue
-        shared = bool(getattr(n, "is_shared", False))
-        seen = n.project_id == pid or shared or any(
-            getattr(r, "target_project_id", None) in (pid, "*")
-            for r in conn.network.rbac_policies(object_id=n.id, object_type="network"))
-        if seen:
-            visible.append({"id": n.id, "project_id": n.project_id, "shared": shared})
+        visible.append({"id": n.id, "project_id": n.project_id, "shared": bool(getattr(n, "is_shared", False)),
+                        "external": bool(getattr(n, "is_router_external", False))})
     ids = [v["id"] for v in visible]
-    return {"name": name, "visible": visible, "unique": len(ids) == 1 and (not want or ids[0] == want)}
+    mine = [v for v in visible if want and v["id"] == want]
+    return {"name": name, "project_id": scoped, "visible": visible,
+            "unique": len(ids) == 1 and (not want or ids[0] == want),
+            "external": bool(mine) and mine[0]["external"]}
 
 
 RA_KEY = "placement.routerAdvertisementBySite"

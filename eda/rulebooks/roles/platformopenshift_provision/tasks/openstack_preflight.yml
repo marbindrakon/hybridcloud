@@ -94,6 +94,8 @@
     pnn_name: "{{ cb_external_network }}"
     pnn_id: "{{ cb_fip_network_id }}"
     pnn_hybrid: "{{ cb_platform_path | bool }}"
+    # the installer's credential (openstack_clusterbuild.yml cb_provider_creds_vault)
+    pnn_credential: "oso/projects/{{ oso_env_name }}/clouds-config"
 
 - name: Check the cluster's address ranges
   ansible.builtin.include_tasks: preflight_ranges.yml

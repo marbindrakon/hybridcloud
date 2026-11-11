@@ -358,7 +358,8 @@ class PreflightNetworkFile(unittest.TestCase):
         self.assertIn("fabric_platform_namespace", out)
 
 
-NAME_OK = {"network-name-check": {"name": "x", "visible": [{"id": "net-1"}], "unique": True}}
+NAME_OK = {"network-name-check": {"name": "x", "visible": [{"id": "net-1", "project_id": "proj-platform", "shared": False,
+                                                             "external": True}], "unique": True, "external": True}}
 
 
 def os_preflight_vars(**kw):
@@ -450,13 +451,15 @@ class OpenstackPreflightFile(unittest.TestCase):
 
     def test_network_name_must_lead_to_the_network_alone(self):
         # Review R2 M3: the installer takes the external network by name
-        two = {"network-name-check": {"visible": [{"id": "net-1"}, {"id": "net-9"}], "unique": False}}
+        two = {"network-name-check": {"visible": [{"id": "net-1", "project_id": "proj-platform", "external": True},
+                                                  {"id": "net-9", "project_id": "proj-1", "external": False}],
+                                      "unique": False, "external": True}}
         rc, tr, out = self.run_op(k8s(), fake_os=two)
         self.assertNotEqual(rc, 0)
-        self.assertIn("sees 2 network(s) named shc-n1 (net-1, net-9)", out)
+        self.assertIn("sees 2 network(s) named shc-n1 (net-1; net-9, your own)", out)
         self.assertFalse([t for t in tr if "patch" in t or "create" in t or "fabric" in t])
         # a placed network the project does not see yet: wait
-        none = {"network-name-check": {"visible": [], "unique": False}}
+        none = {"network-name-check": {"visible": [], "unique": False, "external": False}}
         rc, tr, out = self.run_op(k8s(), fake_os=none)
         self.assertEqual(rc, 0, out)
         self.assertEqual(H.patches(tr)[-1]["body"]["reason"], "WaitingForPlacement")
@@ -469,6 +472,32 @@ class OpenstackPreflightFile(unittest.TestCase):
         rc, tr, out = self.run_op(ext, oso_network="", fake_os=none)
         self.assertNotEqual(rc, 0)
         self.assertIn("does not see network public (ext-1)", out)
+
+    def test_name_listed_with_the_installers_credential(self):
+        # gate F1: the site's cloud-wide external network `internet` (external, not shared, owned by the admin project,
+        # no policy the project can read) as Neutron lists it to the environment's credential: accepted
+        inet = {"network-name-check": {"name": "public", "project_id": "proj-1", "visible": [
+            {"id": "ext-1", "project_id": "proj-admin", "shared": False, "external": True}], "unique": True,
+            "external": True}}
+        ext = k8s(extra={f"CloudInfrastructure/{PLAT}/site1": SITE, f"TenantProfile/{NS}/shc": TPROFILE})
+        rc, tr, out = self.run_op(ext, oso_network="", fake_os=inet, fake_cacert={"sites/site1": "/tmp/site1-ca.crt"})
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(tr[-1]["result"]["ext"], "public")
+        call = [t for t in tr if "os" in t][0]
+        # listed as the environment's project, with the credential the installer gets, and the site's CA bundle
+        self.assertEqual((call["as"], call["cacert"]), ("oso/projects/env1/clouds-config", "/tmp/site1-ca.crt"))
+        self.assertEqual(call["os"]["project_id"], "proj-1")
+        # seen, but not as an external network: refused on the external path, a wait on a placed network
+        seen = {"network-name-check": {"visible": [{"id": "ext-1", "project_id": "proj-admin", "shared": True,
+                                                    "external": False}], "unique": True, "external": False}}
+        rc, tr, out = self.run_op(ext, oso_network="", fake_os=seen)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("does not see network public (ext-1) as an external network", out)
+        rc, tr, out = self.run_op(k8s(), fake_os={"network-name-check": dict(
+            seen["network-name-check"], visible=[{"id": "net-1", "project_id": "proj-platform", "external": False}])})
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.patches(tr)[-1]["body"]["reason"], "WaitingForPlacement")
+        self.assertIn("as an external network yet", H.patches(tr)[-1]["body"]["message"])
 
     def test_build_name_taken(self):
         ns = {f"Namespace//shc-oso-acme-c1": {"metadata": {"name": "shc-oso-acme-c1"}}}

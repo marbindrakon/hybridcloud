@@ -4,8 +4,9 @@ A temp tree mirrors eda/ (the roles' tasks, files, templates and defaults as sym
 so that the roles' "{{ role_path }}/../../../common/..." paths resolve, with these common task files faked:
   patch_cr_status.yml   records {patch: <plural>/<name>, partial, body} in the trace
   nudge_cr.yml          records {nudge: [...]}
-  openstack_account.yml sets os_account_clouds_yaml to a fake clouds.yaml, os_account_cacert ''
-  openstack_call.yml    records {os: request} and returns fake_os["<action>/<state>"] (or fake_os["<action>"])
+  openstack_account.yml sets os_account_clouds_yaml to a fake clouds.yaml, os_account_cacert fake_cacert[<vault path>]
+                        (default '')
+  openstack_call.yml    records {os: request, as: <the account's vault path>, cacert} and returns fake_os["<action>/<state>"] (or fake_os["<action>"])
   fabric_check.yml      records {fabric: request} and returns fake_fabric[<action>] (default {"errors": []})
   central_create.yml    records {create: <path>/<name>, body} and answers fake_create["<path>/<name>"] (default 201)
 and a fake kubernetes.core collection (k8s_info returns FAKE_K8S["<Kind>/<namespace>/<name>"], a list query uses
@@ -40,9 +41,11 @@ FAKE_TASKS = {
     "openstack_account.yml": """- name: fake account
   ansible.builtin.set_fact:
     os_account_clouds_yaml: "{{ fake_clouds_yaml }}"
-    os_account_cacert: ""
+    os_account_cacert: "{{ (fake_cacert | default({}))[os_account_vault_path] | default('') }}"
+    fake_account_loaded: "{{ os_account_vault_path }}"
 """,
-    "openstack_call.yml": TRACE % "{'os': os_request}" + """- name: fake result
+    "openstack_call.yml": TRACE % ("{'os': os_request, 'as': fake_account_loaded | default(''), "
+                                   "'cacert': os_account_cacert | default('')}") + """- name: fake result
   ansible.builtin.set_fact:
     os_result: >-
       {{ fake_os[os_request.action ~ '/' ~ (os_request.state | default(''))]

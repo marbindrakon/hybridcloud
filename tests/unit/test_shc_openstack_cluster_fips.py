@@ -189,45 +189,104 @@ if __name__ == "__main__":
 
 
 class NetworkNameCheck(unittest.TestCase):
-    """Review R2 M3: the networks of a name the environment's project sees (the installer takes the name)."""
+    """Review R2 M3 and gate finding F1: the networks of a name as the installer finds them. The helper lists them
+    with the environment's own credential, so the fake Neutron below answers what Neutron gave a project-scoped
+    account at the gate (evidence s5/g1-internet-visibility.txt, s3/c-os-ra-on.txt): the cloud-wide external network
+    `internet` (router:external True, shared False, owner the admin project) and `ext-net` (router:external True,
+    shared True) with NO RBAC policy readable by the project, and a placed network exposed to the project by the
+    platform's access_as_external policy (router:external True for the project; shared True only while use for
+    virtual machines is on). Ids and names are examples."""
 
-    def check(self, nets, rbac, name="hn51005", want="net-placed"):
-        conn = Obj(network=Obj(
-            networks=lambda **f: [n for n in nets if n.name == f.get("name")],
-            rbac_policies=lambda **f: [r for r in rbac if r.object_id == f.get("object_id")]))
+    ADMIN, PLATFORM, OTHER = "proj-admin", "proj-platform", "proj-other"
+
+    def net(self, nid, name, owner, shared, external):
+        return Obj(id=nid, name=name, project_id=owner, is_shared=shared, is_router_external=external)
+
+    def check(self, listed, name, want, scoped=PROJECT):
+        """listed: what Neutron returns to the environment's project for a name filter (its own filtering)."""
+        conn = mock.MagicMock()
+        conn.network.networks.side_effect = lambda **f: [n for n in listed if n.name == f.get("name")]
+        conn.network.rbac_policies.return_value = []      # a project-scoped token reads no policy of another project
+        conn.session.auth.get_access.return_value = Obj(user_id="u-app", domain_id=None, project_id=scoped)
         acct = mock.Mock()
+        acct.as_configured.return_value = conn
         acct.project.return_value = conn
         with mock.patch.object(S, "Account", return_value=acct):
-            out = S.network_name_check({"clouds_yaml": "/dev/null", "project_id": PROJECT, "name": name, "network_id": want})
-        acct.project.assert_called_with(PROJECT)
+            out = S.network_name_check({"clouds_yaml": "/dev/null", "project_id": PROJECT, "name": name,
+                                        "network_id": want})
+        acct.as_configured.assert_called_once_with()
         return out
 
-    def test_only_the_placed_network(self):
-        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False),
-                Obj(id="net-x", name="hn51005", project_id="proj-other", is_shared=False)]   # another project's own
-        rbac = [Obj(object_id="net-placed", target_project_id=PROJECT)]
-        out = self.check(nets, rbac)
-        self.assertEqual([v["id"] for v in out["visible"]], ["net-placed"])
+    def test_cloud_wide_external_not_shared(self):
+        # F1: the site's default `internet` (external for every project through the admin project's policy)
+        out = self.check([self.net("net-inet", "internet", self.ADMIN, False, True)], "internet", "net-inet")
+        self.assertEqual([v["id"] for v in out["visible"]], ["net-inet"])
         self.assertTrue(out["unique"])
+        self.assertTrue(out["external"])
 
-    def test_the_tenants_own_network_of_that_name(self):
-        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False),
-                Obj(id="net-mine", name="hn51005", project_id=PROJECT, is_shared=False)]
-        out = self.check(nets, [Obj(object_id="net-placed", target_project_id=PROJECT)])
+    def test_cloud_wide_external_and_shared(self):
+        out = self.check([self.net("net-ext", "ext-net", self.ADMIN, True, True)], "ext-net", "net-ext")
+        self.assertTrue(out["unique"] and out["external"])
+
+    def test_exposed_by_the_products_policy_only(self):
+        # router attachments on, use for virtual machines off: external for this project, not shared
+        out = self.check([self.net("net-placed", "hn51005", self.PLATFORM, False, True)], "hn51005", "net-placed")
+        self.assertTrue(out["unique"] and out["external"])
+        # both uses on (the gate's g5 placement): shared and external for the project
+        out = self.check([self.net("net-placed", "hn51005", self.PLATFORM, True, True)], "hn51005", "net-placed")
+        self.assertTrue(out["unique"] and out["external"])
+
+    def test_visible_but_neither_external_nor_the_sites(self):
+        # another project's network shared into this one under the same name: it is what the installer would find
+        other = self.net("net-x", "internet", self.OTHER, True, False)
+        out = self.check([other], "internet", "net-inet")
+        self.assertEqual([v["id"] for v in out["visible"]], ["net-x"])
         self.assertFalse(out["unique"])
-        self.assertEqual(sorted(v["id"] for v in out["visible"]), ["net-mine", "net-placed"])
+        self.assertFalse(out["external"])
+        # the expected network seen only as shared (its external policy for the project not there): not usable
+        out = self.check([self.net("net-placed", "hn51005", self.PLATFORM, True, False)], "hn51005", "net-placed")
+        self.assertTrue(out["unique"])
+        self.assertFalse(out["external"])
 
-    def test_shared_into_the_project_or_to_everyone(self):
-        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False),
-                Obj(id="net-s", name="hn51005", project_id="proj-other", is_shared=False),
-                Obj(id="net-all", name="hn51005", project_id="proj-third", is_shared=True)]
-        rbac = [Obj(object_id="net-placed", target_project_id=PROJECT), Obj(object_id="net-s", target_project_id=PROJECT)]
-        self.assertEqual(len(self.check(nets, rbac)["visible"]), 3)
-        rbac = [Obj(object_id="net-placed", target_project_id=PROJECT), Obj(object_id="net-s", target_project_id="*")]
-        self.assertEqual(len(self.check(nets[:2], rbac)["visible"]), 2)
+    def test_two_usable_networks_with_one_name(self):
+        listed = [self.net("net-inet", "internet", self.ADMIN, False, True),
+                  self.net("net-mine", "internet", PROJECT, False, False)]       # the tenant's own, same name
+        out = self.check(listed, "internet", "net-inet")
+        self.assertFalse(out["unique"])
+        self.assertTrue(out["external"])
+        self.assertEqual(sorted(v["id"] for v in out["visible"]), ["net-inet", "net-mine"])
+        self.assertEqual([v["project_id"] for v in out["visible"] if v["id"] == "net-mine"], [PROJECT])
 
-    def test_not_visible_or_another_one(self):
-        nets = [Obj(id="net-placed", name="hn51005", project_id="proj-platform", is_shared=False)]
-        self.assertEqual(self.check(nets, [])["visible"], [])
-        mine = [Obj(id="net-mine", name="hn51005", project_id=PROJECT, is_shared=False)]
-        self.assertFalse(self.check(mine, [])["unique"])
+    def test_not_visible(self):
+        out = self.check([], "hn51005", "net-placed")
+        self.assertEqual((out["visible"], out["unique"], out["external"]), ([], False, False))
+
+    def test_credential_of_another_project_refused(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self.check([self.net("net-inet", "internet", self.ADMIN, False, True)], "internet", "net-inet",
+                       scoped="proj-elsewhere")
+        self.assertIn("scoped to project proj-elsewhere", str(cm.exception))
+
+
+class AccountAsConfigured(unittest.TestCase):
+    """The environment's credential is an application credential: its auth type goes along (without it the SDK
+    takes a password plugin and refuses application_credential_id)."""
+
+    def test_auth_type_passed_only_when_written(self):
+        import tempfile
+        import yaml as Y
+        for entry, want in (({"auth_type": "v3applicationcredential",
+                              "auth": {"auth_url": "https://keystone.example.org/v3", "application_credential_id": "a",
+                                       "application_credential_secret": "s"}}, "v3applicationcredential"),
+                            ({"auth": {"auth_url": "https://keystone.example.org/v3", "username": "u",
+                                       "password": "p", "project_id": "p1"}}, None)):
+            with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+                Y.safe_dump({"clouds": {"openstack": dict(entry, region_name="r1")}}, fh)
+            try:
+                with mock.patch.object(S.openstack, "connect", create=True) as c:
+                    S.Account({"clouds_yaml": fh.name}).as_configured()
+                kw = c.call_args.kwargs
+                self.assertEqual(kw.get("auth_type"), want)
+                self.assertEqual(kw["auth"], entry["auth"])          # scope keys kept: the credential's own
+            finally:
+                os.unlink(fh.name)
