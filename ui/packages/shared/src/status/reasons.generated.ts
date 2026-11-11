@@ -102,6 +102,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "ReferenceDeleting": { actor: "T", class: "waiting", summary: "An object this one refers to is being deleted." },
   "RegionNotSupported": { actor: "T", class: "failed", summary: "This region is not supported." },
   "Registered": { actor: "A", class: "ready", summary: "Registered." },
+  "RouterAdvertisementFailed": { actor: "P", class: "failed", summary: "The site did not confirm that floating IPs on this network are reachable from outside it. The platform team is looking at it." },
   "RouterAttachmentsOff": { actor: "T", class: "failed", summary: "The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement." },
   "RoutesMissing": { actor: "P", class: "failed", summary: "Network routes are missing. The platform team is looking at it." },
   "RoutingDaemonDown": { actor: "P", class: "failed", summary: "Routing on a node is partly down. The platform team is alerted." },

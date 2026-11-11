@@ -145,6 +145,9 @@ REASONS = {
     # an OpenShift cluster's preflight where the platform's connection for clusters on networks is not ready
     "CircuitNotDeployed": _r("P", FAILED, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
     "HubEndpointNotAdmitted": _r("P", FAILED, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
+    # the site's router advertisement service did not hold the floating IPs' advertisement on a placed network: a
+    # placement stays usable (condition Degraded, router attachments pending); a cluster's preflight refuses the build
+    "RouterAdvertisementFailed": _r("P", FAILED, "The site did not confirm that floating IPs on this network are reachable from outside it. The platform team is looking at it."),
     # Warning Event on an Entity (never a condition): its operator-version annotation names an image that is not allowed
     "NamespaceOperatorImageRejected": _r("P", FAILED, "The requested operator version for this tenant is not allowed; the default version is used."),
     # ---- paused (an administrator holds the object; nothing changes until it is resumed) --
