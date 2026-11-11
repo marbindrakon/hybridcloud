@@ -105,6 +105,16 @@ spec:
                         network without IPv4 reaches IPv4-only destinations by translation where the platform offers
                         it. The platform's private address ranges are not reachable this way. Leave it off when the
                         network's default route comes from your own edge router. Can be changed at any time.
+                platformAccess:
+                  type: boolean
+                  default: true
+                  description: >-
+                    The platform's management may open connections into this network, to the API and ingress
+                    addresses of the OpenShift clusters the platform builds on it (status.platformAccess.prefixes),
+                    from its own addresses (status.platformAccess.sources) on its service ports, and those clusters
+                    may reach the platform's service endpoints. Needed by such clusters. Nothing is reserved or
+                    routed for the network until a cluster is built on it. Turning it off waits while such a cluster
+                    exists. Default true.
                 prefixes:
                   type: array
                   description: >-
@@ -328,6 +338,60 @@ spec:
                           site:
                             type: string
                             description: The site (CloudInfrastructure) of the placement's environment.
+                platformAccess:
+                  type: object
+                  description: >-
+                    Whether the platform's management can reach the OpenShift clusters it builds on this network
+                    (spec.platformAccess); the condition PlatformReachable says the same with a reason.
+                  properties:
+                    state:
+                      type: string
+                      description: >-
+                        off (spec.platformAccess is off), unavailable (the network cannot host such clusters now; see
+                        reason), attachable (it can; no cluster is connected yet) or attached (the platform reaches
+                        clusters on it).
+                    sources:
+                      type: array
+                      description: >-
+                        The IPv4 ranges the platform's management connects from, for the tenant's own firewalls.
+                      items:
+                        type: string
+                    ports:
+                      type: array
+                      description: The TCP ports the platform's management opens toward the clusters.
+                      items:
+                        type: integer
+                    prefixes:
+                      type: array
+                      description: >-
+                        The addresses the platform reaches for the clusters on this network, one row per cluster
+                        and prefix.
+                      items:
+                        type: object
+                        properties:
+                          prefix:
+                            type: string
+                            description: The address prefix, for example an API floating IP as a /32.
+                          cluster:
+                            type: string
+                            description: The PlatformOpenshift (this namespace) that asks for it.
+                          state:
+                            type: string
+                            description: >-
+                              ready (reached), pending (being connected or waiting for the platform) or refused
+                              (see reason).
+                          reason:
+                            type: string
+                            description: One-word reason when not ready.
+                          message:
+                            type: string
+                            description: What the reason means for this prefix, in plain words.
+                    reason:
+                      type: string
+                      description: One-word reason when the state is off or unavailable, or a prefix is being connected.
+                    message:
+                      type: string
+                      description: What the state means for this network, in plain words.
                 mtu:
                   type: integer
                   description: Effective MTU.
