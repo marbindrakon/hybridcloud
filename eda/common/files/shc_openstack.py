@@ -937,6 +937,8 @@ def _router_advertisement(acct, req):
         return {**out, "reason": "NoRouterInterface",
                 "message": f"router {req['router_id']} has no IPv4 interface on network {req['network_id']}"}
     out["port_id"] = port.id
+    # the site account's token scoped to the router's project: the roles the account holds there (the platform gives
+    # it member; the service needs no more). A narrower token would need a credential of its own (Review R2 L5).
     token = conn.session.get_token()
     timeout = float(req.get("timeout") or RA_TIMEOUT)
     base = f"{url}/v1/router-ports/{urllib.parse.quote(str(port.id), safe='')}"

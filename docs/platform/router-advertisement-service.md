@@ -121,6 +121,11 @@ placement:
   the CA bundle of the site's credential when it has one, otherwise with the system's trust.
 - A site without an entry is a site without the service: the platform assumes the site advertises floating IPs by
   itself.
+- The token the platform sends is the site credential's, scoped to the platform's project: it carries the roles
+  that account holds on that project. The platform gives the account `member` there; the service needs no more.
+  Where the site gives the account more on that project (an `admin` assignment, or an inherited one), the token
+  carries that too, so treat the service's host like the other control plane services that receive such tokens:
+  run it as the site's own component and admit only the platform's job sources to it.
 
 ## Verify
 
