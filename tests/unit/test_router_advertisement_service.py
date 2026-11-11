@@ -1574,6 +1574,8 @@ class CertificateReloadTest(unittest.TestCase):
 
 COMPONENT = os.path.join(ROOT, "site-components/router-advertisement")
 TEMPLATE = os.path.join(COMPONENT, "deploy/rhoso/router-advertisement.yaml")
+ROUTE_CERT = os.path.join(COMPONENT, "deploy/rhoso/route-certificate.yaml")
+README = os.path.join(COMPONENT, "deploy/rhoso/README.md")
 LAB = ("signal9", "172.18.", "75.8.222.", "2602:81f", "atuin", "rhoso-bm", "shc-", "xna-", "quay.")
 
 
@@ -1627,8 +1629,50 @@ class DeployAssetsTest(unittest.TestCase):
             self.assertIn(name, env)
         self.assertEqual(c["command"][-1], "/opt/router-advertisement/router_advertisement.py")
 
+    def test_route_certificate_is_optional_and_parameterised(self):
+        import yaml
+        params = {p["name"]: p for p in self.template["parameters"]}
+        self.assertEqual(params["ROUTE_TERMINATION"]["value"], "reencrypt", "the default stays the ingress certificate")
+        self.assertEqual(params["SERVING_CERT_SECRET"]["value"], "router-advertisement-tls")
+        self.assertEqual(self.objects["Route"]["spec"]["tls"]["termination"], "${ROUTE_TERMINATION}")
+        volumes = {v["name"]: v for v in self.objects["Deployment"]["spec"]["template"]["spec"]["volumes"]}
+        self.assertEqual(volumes["serving"]["secret"]["secretName"], "${SERVING_CERT_SECRET}")
+        with open(ROUTE_CERT) as fh:
+            rc = yaml.safe_load(fh)
+        rparams = {p["name"]: p for p in rc["parameters"]}
+        for name in ("NAMESPACE", "ROUTE_HOST", "ROUTE_CERT_ISSUER"):
+            self.assertTrue(rparams[name].get("required"), name)
+        cert = rc["objects"][0]
+        self.assertEqual(cert["kind"], "Certificate")
+        self.assertEqual(cert["spec"]["issuerRef"]["name"], "${ROUTE_CERT_ISSUER}")
+        self.assertEqual(cert["spec"]["dnsNames"], ["${ROUTE_HOST}"])
+        self.assertIn("server auth", cert["spec"]["usages"])
+        with open(README) as fh:
+            readme = fh.read()
+        self.assertIn("-p SERVING_CERT_SECRET=" + cert["spec"]["secretName"], readme)
+        self.assertIn("ROUTE_TERMINATION=passthrough", readme)
+        self.assertIn("default-ingress-cert", readme, "says which CA to trust without an issuer")
+
+    def test_removal_lists_every_object_and_secret(self):
+        import yaml
+        with open(ROUTE_CERT) as fh:
+            objects = self.template["objects"] + yaml.safe_load(fh)["objects"]
+        expected = {"configmap/router-advertisement-program"}
+        for obj in objects:
+            expected.add("%s/%s" % (obj["kind"].lower(), obj["metadata"]["name"]))
+            if obj["kind"] == "Certificate":
+                expected.add("secret/" + obj["spec"]["secretName"])
+        expected.add("secret/" + self.objects["Service"]["metadata"]["annotations"][
+            "service.beta.openshift.io/serving-cert-secret-name"])
+        with open(README) as fh:
+            readme = fh.read()
+        removal = readme[readme.index("## 5. Remove"):readme.index("## 6.")]
+        listed = [ln.strip().rstrip(" \\") for ln in removal.splitlines() if "/router-advertisement" in ln]
+        self.assertEqual(set(listed), expected)
+        self.assertLess(listed.index("deployment/router-advertisement"), listed.index("secret/router-advertisement-ovn-client"))
+
     def test_no_lab_values(self):
-        paths = [TEMPLATE, PATH, os.path.join(COMPONENT, "deploy/rhoso/README.md"),
+        paths = [TEMPLATE, ROUTE_CERT, PATH, os.path.join(COMPONENT, "deploy/rhoso/README.md"),
                  os.path.join(COMPONENT, "deploy/container/README.md"),
                  os.path.join(ROOT, "docs/platform/router-advertisement-service.md")]
         for path in paths:
