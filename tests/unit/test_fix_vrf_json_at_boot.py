@@ -6,6 +6,7 @@ apply at boot with "VRFs that share a table: table null: , , , , , , , ," and le
 prechecks must read only entries that name a device."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -29,6 +30,8 @@ class VrfJsonAtBoot(unittest.TestCase):
             self.assertNotIn("[.[] |", l)
 
     def test_fresh_boot_shape_passes_the_prechecks(self):
+        if not shutil.which("jq"):
+            self.skipTest("jq not installed")
         boot = json.dumps([{} for _ in range(9)])  # bgw-1 at boot, 2026-11-07 05:36 UTC
         prog = ('def vrfs: map(select(.ifname != null)); [vrfs | group_by(.linkinfo.info_data.table | tostring)[] '
                 '| select(length > 1) | "table \\(.[0].linkinfo.info_data.table): \\(map(.ifname) | join(", "))"] | join("; ")')

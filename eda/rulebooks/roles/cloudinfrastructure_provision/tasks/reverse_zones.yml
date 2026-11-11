@@ -23,9 +23,15 @@
     ci_reverse_wanted: >-
       {{ _zones | map('string') | map('trim') | map('lower') | map('regex_replace', '\.$', '')
          | reject('equalto', '') | unique | list }}
+    # the recorded zones ([] when none: on ansible-core 2.16 a templated none becomes "", so no none here) and
+    # whether a record exists at all ("set" or "": also an empty string an earlier run wrote is a record to remove)
     ci_reverse_prev: >-
       {{ ((((cloudinfrastructure_cr_lookup.resources | default([{}], true))[0].status | default({}, true)).realization
-           | default({}, true)).dns | default({}, true)).reverseZones | default(none) }}
+           | default({}, true)).dns | default({}, true)).reverseZones | default([], true) }}
+    ci_reverse_recorded: >-
+      {%- set d = ((((cloudinfrastructure_cr_lookup.resources | default([{}], true))[0].status | default({}, true))
+                   .realization | default({}, true)).dns | default({}, true)) -%}
+      {{ 'set' if (d.reverseZones is defined and d.reverseZones is not none) else '' }}
     ci_reverse_here: >-
       {{ (ci_dns_native | bool) and (dnscfg_usable | default(false) | bool)
          and ((ci_dns_parent | default({}, true)).zone_id | default('', true) | length > 0)
@@ -39,9 +45,12 @@
     loop_var: ci_reverse_name
   when: ci_reverse_here | bool
 
+# _keep is a reason string ("keep" or ""), and the record (the zones, or null to remove it) is built inside the one
+# expression of the status: on ansible-core 2.16 a task variable that templates to none becomes "", which would
+# write an empty string instead of removing the record
 - name: Record the reverse zones of this site
   vars:
-    _rec: "{{ ci_reverse_zones if (ci_reverse_here | bool and ci_reverse_wanted | length > 0) else none }}"
+    _keep: "{{ 'keep' if (ci_reverse_here | bool and ci_reverse_wanted | length > 0) else '' }}"
   hybridsovereign.shc.cr_status:
     host: "{{ services_api_host | trim }}"
     api_key: "{{ services_bearer_token | trim }}"
@@ -50,10 +59,12 @@
     plural: cloudinfrastructures
     name: "{{ cloudinfrastructure_cr_name }}"
     namespace: "{{ cloudinfrastructure_cr_namespace }}"
-    status: "{{ {'realization': {'dns': {'reverseZones': _rec}}} }}"
+    status: "{{ {'realization': {'dns': {'reverseZones': ci_reverse_zones if _keep | length > 0 else none}}} }}"
     action: reconcile
     partial: true
     ignore_not_found: true
   register: _ci_reverse_write
   failed_when: false
-  when: _rec != ci_reverse_prev
+  when: >-
+    (_keep | length > 0 and ci_reverse_zones != ci_reverse_prev)
+    or (_keep | length == 0 and ci_reverse_recorded | trim | length > 0)
