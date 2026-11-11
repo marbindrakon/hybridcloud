@@ -12,11 +12,19 @@
 # realization's attachments.linkPool6 at the circuit's link index) and a second session over it per node; refused
 # with FamilyUnavailable when the fabric's circuits offer no IPv6 or the network has no IPv6 address space. A circuit
 # without IPv6 entries records exactly what it did before (same revision).
+# ceKind platform (platform_circuit.yml): the hand-off of the fabric's service routing domain to the router of the
+# network the platform's management runs on. Only in the fabric's namespace (NotPlatformNamespace elsewhere: tenants
+# cannot write there), only while the realization offers the service (ServiceNotOffered), IPv4 only. No network: the
+# circuit accepts the platform's infrastructure.hub IPv4 ranges and advertises the prefixes of the clusters the
+# platform reaches (inside service.attachableRanges); status.ceConfig lists both for the hub's network team. VLAN,
+# link, password, the fabric's realization and the sessions as for a customer circuit.
 - block:
+    # a platform circuit lives in the platform namespace, which has no Entity: the Entity is read for the other kinds
+    # only (fab_read_entity is evaluated after the circuit is read)
     - name: Read the AttachmentCircuit
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:
-        fab_read_entity: true
+        fab_read_entity: "{{ (fab_spec | default({}, true)).ceKind | default('customer', true) != 'platform' }}"
 
     - name: End the job for a circuit being deleted
       ansible.builtin.meta: end_play
@@ -25,238 +33,293 @@
     - name: Start with nothing to wait for
       ansible.builtin.set_fact:
         ac_waiting: []
-        ac_status: {entity: "{{ fab_entity }}"}
+        ac_platform: "{{ fab_spec.ceKind | default('customer', true) == 'platform' }}"
+        ac_status: "{{ {} if fab_spec.ceKind | default('customer', true) == 'platform' else {'entity': fab_entity} }}"
         ac_owner: "AttachmentCircuit/{{ fab_namespace }}/{{ fab_name }}"
         ac_bgp: "{{ fab_spec.routing.bgp | default({}, true) }}"
         ac_auth_type: "{{ ((fab_spec.routing.bgp | default({}, true)).authentication | default({}, true)).type | default('md5', true) }}"
 
-    - name: Read the network and the edge
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: "{{ item.kind }}"
-        name: "{{ item.name }}"
-        namespace: "{{ item.namespace }}"
-      loop:
-        - {kind: HybridNetwork, name: "{{ fab_spec.network }}", namespace: "{{ fab_namespace }}"}
-        - {kind: ProviderEdge, name: "{{ fab_spec.edgeRef.name }}", namespace: "{{ fabric_platform_namespace }}"}
-      loop_control:
-        label: "{{ item.kind }}/{{ item.name }}"
-      register: _ac_refs
+    - name: The platform circuit
+      ansible.builtin.include_tasks: platform_circuit.yml
+      when: ac_platform | default(false) | bool
 
-    - name: Set the network and edge facts
-      ansible.builtin.set_fact:
-        ac_network: "{{ (_ac_refs.results[0].resources | default([], true) + [{}]) | first }}"
-        ac_edge: "{{ (_ac_refs.results[1].resources | default([], true) + [{}]) | first }}"
+    # a customer circuit: its network, the edge's offer to the Entity and the accept list
+    - name: The customer circuit's network and routing policy
+      when: not (ac_platform | default(false) | bool)
+      block:
+        # the CRD requires an accept entry for protocol bgp of a customer circuit no more (a platform circuit has none)
+        - name: Refuse a customer circuit without an accept entry
+          ansible.builtin.set_fact:
+            fab_fail_reason: InvalidSpec
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: routing.accept needs at least one entry (the routes accepted from the CE)
+          when: fab_spec.routing.accept | default([], true) | length == 0
 
-    - name: Refuse references that are being deleted
-      ansible.builtin.set_fact:
-        fab_fail_reason: ReferenceDeleting
-        fab_fail_msg: >-
-          AttachmentCircuit {{ fab_name }}: {{ [ac_network, ac_edge] | selectattr('metadata', 'defined')
-          | selectattr('metadata.deletionTimestamp', 'defined') | map(attribute='kind') | join(' and ') }} being deleted
-      when: >-
-        [ac_network, ac_edge] | selectattr('metadata', 'defined') | selectattr('metadata.deletionTimestamp', 'defined')
-        | list | length > 0
+        - name: Stop on a circuit without an accept entry
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_spec.routing.accept | default([], true) | length == 0
 
-    # an edge offers bearers to the Entities it lists (none listed: every Entity), each bearer to some CE kinds
-    - name: Check the circuit against the edge
-      vars:
-        _refs: "{{ (ac_edge.spec | default({}, true)).entityRefs | default([], true) | map(attribute='name') | list }}"
-        _bearer: >-
-          {{ ((ac_edge.spec | default({}, true)).bearers | default([], true)
-              | selectattr('name', 'equalto', fab_spec.edgeRef.bearer) | list + [{}]) | first }}
-        _kind: "{{ fab_spec.ceKind | default('customer') }}"
-      ansible.builtin.set_fact:
-        ac_edge_problem: >-
-          {{ ['EntityNotAllowed', 'Entity ' ~ fab_entity ~ ' may not use ProviderEdge ' ~ fab_spec.edgeRef.name]
-               if _refs | length > 0 and fab_entity not in _refs
-             else ['BearerNotFound', 'ProviderEdge ' ~ fab_spec.edgeRef.name ~ ' has no bearer ' ~ fab_spec.edgeRef.bearer]
-               if not _bearer
-             else ['CeKindNotAccepted', 'bearer ' ~ fab_spec.edgeRef.bearer ~ ' does not accept CE kind ' ~ _kind]
-               if _kind not in (_bearer.ceKinds | default([]))
-             else [] }}
-      when: ac_edge | length > 0
+        - name: Read the network and the edge
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: "{{ item.namespace }}"
+          loop:
+            - {kind: HybridNetwork, name: "{{ fab_spec.network }}", namespace: "{{ fab_namespace }}"}
+            - {kind: ProviderEdge, name: "{{ fab_spec.edgeRef.name }}", namespace: "{{ fabric_platform_namespace }}"}
+          loop_control:
+            label: "{{ item.kind }}/{{ item.name }}"
+          register: _ac_refs
 
-    - name: Refuse a circuit the edge doesn't offer
-      ansible.builtin.set_fact:
-        fab_fail_reason: "{{ ac_edge_problem[0] }}"
-        fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ ac_edge_problem[1] }}"
-      when:
-        - fab_fail_msg | default('', true) | length == 0
-        - ac_edge_problem | default([]) | length > 0
+        - name: Set the network and edge facts
+          ansible.builtin.set_fact:
+            ac_network: "{{ (_ac_refs.results[0].resources | default([], true) + [{}]) | first }}"
+            ac_edge: "{{ (_ac_refs.results[1].resources | default([], true) + [{}]) | first }}"
 
-    - name: Refuse a network on another fabric
-      ansible.builtin.set_fact:
-        fab_fail_reason: FabricMismatch
-        fab_fail_msg: >-
-          AttachmentCircuit {{ fab_name }}: ProviderEdge {{ fab_spec.edgeRef.name }} is on HybridFabric
-          {{ ac_edge.spec.fabricRef.name }}, network {{ fab_spec.network }} on {{ ac_network.status.fabric }}
-      when:
-        - fab_fail_msg | default('', true) | length == 0
-        - ac_edge | length > 0
-        - (ac_network.status | default({}, true)).fabric | default('', true) | length > 0
-        - ac_edge.spec.fabricRef.name != ac_network.status.fabric
+        - name: Refuse references that are being deleted
+          ansible.builtin.set_fact:
+            fab_fail_reason: ReferenceDeleting
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: {{ [ac_network, ac_edge] | selectattr('metadata', 'defined')
+              | selectattr('metadata.deletionTimestamp', 'defined') | map(attribute='kind') | join(' and ') }} being deleted
+          when: >-
+            [ac_network, ac_edge] | selectattr('metadata', 'defined') | selectattr('metadata.deletionTimestamp', 'defined')
+            | list | length > 0
 
-    - name: Stop on a refused circuit
-      ansible.builtin.fail:
-        msg: "{{ fab_fail_msg }}"
-      when: fab_fail_msg | default('', true) | length > 0
+        # an edge offers bearers to the Entities it lists (none listed: every Entity), each bearer to some CE kinds
+        - name: Check the circuit against the edge
+          vars:
+            _refs: "{{ (ac_edge.spec | default({}, true)).entityRefs | default([], true) | map(attribute='name') | list }}"
+            _bearer: >-
+              {{ ((ac_edge.spec | default({}, true)).bearers | default([], true)
+                  | selectattr('name', 'equalto', fab_spec.edgeRef.bearer) | list + [{}]) | first }}
+            _kind: "{{ fab_spec.ceKind | default('customer') }}"
+          ansible.builtin.set_fact:
+            ac_edge_problem: >-
+              {{ ['EntityNotAllowed', 'Entity ' ~ fab_entity ~ ' may not use ProviderEdge ' ~ fab_spec.edgeRef.name]
+                   if _refs | length > 0 and fab_entity not in _refs
+                 else ['BearerNotFound', 'ProviderEdge ' ~ fab_spec.edgeRef.name ~ ' has no bearer ' ~ fab_spec.edgeRef.bearer]
+                   if not _bearer
+                 else ['CeKindNotAccepted', 'bearer ' ~ fab_spec.edgeRef.bearer ~ ' does not accept CE kind ' ~ _kind]
+                   if _kind not in (_bearer.ceKinds | default([]))
+                 else [] }}
+          when: ac_edge | length > 0
 
-    - name: Wait for the network and the edge
-      vars:
-        _deps:
-          - {what: "HybridNetwork {{ fab_spec.network }}", obj: "{{ ac_network }}"}
-          - {what: "ProviderEdge {{ fab_spec.edgeRef.name }}", obj: "{{ ac_edge }}"}
-      ansible.builtin.set_fact:
-        ac_waiting: >-
-          {{ ac_waiting + [item.what ~ ' (' ~ (((item.obj.status | default({}, true)).status | default('not provisioned', true))
-                                               if item.obj else 'not found') ~ ')'] }}
-      loop: "{{ _deps }}"
-      loop_control:
-        label: "{{ item.what }}"
-      when: >-
-        not item.obj or not (((item.obj.status | default({}, true)).ready | default(false) | bool)
-                             or (((item.obj.status | default({}, true)).realized | default(false) | bool)
-                                 and (item.obj.status | default({}, true)).status | default('') != 'failed'))
+        - name: Refuse a circuit the edge doesn't offer
+          ansible.builtin.set_fact:
+            fab_fail_reason: "{{ ac_edge_problem[0] }}"
+            fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ ac_edge_problem[1] }}"
+          when:
+            - fab_fail_msg | default('', true) | length == 0
+            - ac_edge_problem | default([]) | length > 0
 
-    - name: Wait for the network's VPN target
-      ansible.builtin.set_fact:
-        ac_waiting: "{{ ac_waiting + ['HybridNetwork ' ~ fab_spec.network ~ ' (no VPN target yet)'] }}"
-      when:
-        - ac_network | length > 0
-        - ac_waiting | length == 0
-        - ((ac_network.status | default({}, true)).realization | default({}, true)).vpnTarget is not defined
+        - name: Refuse a network on another fabric
+          ansible.builtin.set_fact:
+            fab_fail_reason: FabricMismatch
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: ProviderEdge {{ fab_spec.edgeRef.name }} is on HybridFabric
+              {{ ac_edge.spec.fabricRef.name }}, network {{ fab_spec.network }} on {{ ac_network.status.fabric }}
+          when:
+            - fab_fail_msg | default('', true) | length == 0
+            - ac_edge | length > 0
+            - (ac_network.status | default({}, true)).fabric | default('', true) | length > 0
+            - ac_edge.spec.fabricRef.name != ac_network.status.fabric
 
-    - name: Report what the circuit waits for
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
-      vars:
-        fab_outcome: pending
-        fab_reason: WaitingForDependencies
-        fab_message: "Waiting for {{ ac_waiting | join('; ') }}"
-        fab_waiting_for: "{{ ac_waiting }}"
-        fab_status: "{{ ac_status }}"
-      when: ac_waiting | length > 0
+        - name: Stop on a refused circuit
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_fail_msg | default('', true) | length > 0
 
-    - name: End the job while waiting
-      ansible.builtin.meta: end_play
-      when: ac_waiting | length > 0
+        - name: Wait for the network and the edge
+          vars:
+            _deps:
+              - {what: "HybridNetwork {{ fab_spec.network }}", obj: "{{ ac_network }}"}
+              - {what: "ProviderEdge {{ fab_spec.edgeRef.name }}", obj: "{{ ac_edge }}"}
+          ansible.builtin.set_fact:
+            ac_waiting: >-
+              {{ ac_waiting + [item.what ~ ' (' ~ (((item.obj.status | default({}, true)).status | default('not provisioned', true))
+                                                   if item.obj else 'not found') ~ ')'] }}
+          loop: "{{ _deps }}"
+          loop_control:
+            label: "{{ item.what }}"
+          when: >-
+            not item.obj or not (((item.obj.status | default({}, true)).ready | default(false) | bool)
+                                 or (((item.obj.status | default({}, true)).realized | default(false) | bool)
+                                     and (item.obj.status | default({}, true)).status | default('') != 'failed'))
 
-    # ---- numbers and policy ----
-    - name: Read the fabric
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: HybridFabric
-        name: "{{ ac_edge.spec.fabricRef.name }}"
-        namespace: "{{ fabric_platform_namespace }}"
-      register: _ac_fabric
+        - name: Wait for the network's VPN target
+          ansible.builtin.set_fact:
+            ac_waiting: "{{ ac_waiting + ['HybridNetwork ' ~ fab_spec.network ~ ' (no VPN target yet)'] }}"
+          when:
+            - ac_network | length > 0
+            - ac_waiting | length == 0
+            - ((ac_network.status | default({}, true)).realization | default({}, true)).vpnTarget is not defined
 
-    - name: Set the fabric facts
-      ansible.builtin.set_fact:
-        ac_fabric: "{{ _ac_fabric.resources[0] }}"
-        ac_asn: "{{ _ac_fabric.resources[0].spec.domainAsn | int }}"
-        ac_status: "{{ ac_status | combine({'fabric': _ac_fabric.resources[0].metadata.name}) }}"
+        - name: Report what the circuit waits for
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+          vars:
+            fab_outcome: pending
+            fab_reason: WaitingForDependencies
+            fab_message: "Waiting for {{ ac_waiting | join('; ') }}"
+            fab_waiting_for: "{{ ac_waiting }}"
+            fab_status: "{{ ac_status }}"
+          when: ac_waiting | length > 0
 
-    - name: Refuse the fabric's own AS number for the CE
-      ansible.builtin.set_fact:
-        fab_fail_reason: AsnConflict
-        fab_fail_msg: >-
-          AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }} is the fabric's own AS number;
-          the CE needs a different one
-      when: ac_bgp.peerAsn | int == ac_asn | int
+        - name: End the job while waiting
+          ansible.builtin.meta: end_play
+          when: ac_waiting | length > 0
 
-    - name: Stop on the fabric's AS number
-      ansible.builtin.fail:
-        msg: "{{ fab_fail_msg }}"
-      when: ac_bgp.peerAsn | int == ac_asn | int
+        # ---- numbers and policy ----
+        - name: Read the fabric
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: hybridsovereign.redhat/v1alpha1
+            kind: HybridFabric
+            name: "{{ ac_edge.spec.fabricRef.name }}"
+            namespace: "{{ fabric_platform_namespace }}"
+          register: _ac_fabric
 
-    - name: The platform's realization parameters
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
-      vars:
-        fab_real_fabric: "{{ ac_fabric.metadata.name }}"
+        - name: Set the fabric facts
+          ansible.builtin.set_fact:
+            ac_fabric: "{{ _ac_fabric.resources[0] }}"
+            ac_asn: "{{ _ac_fabric.resources[0].spec.domainAsn | int }}"
+            ac_status: "{{ ac_status | combine({'fabric': _ac_fabric.resources[0].metadata.name}) }}"
 
-    # the platform's own BGP sessions (e.g. its internet hand-off) use these AS numbers; a CE on one would collide
-    - name: Refuse an AS number the platform keeps for itself
-      ansible.builtin.set_fact:
-        fab_fail_reason: PeerAsnReserved
-        fab_fail_msg: >-
-          AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }}: this AS is reserved by the
-          platform; the CE needs a different one
-      when: ac_bgp.peerAsn | int in ((fab_real.attachments | default({}, true)).reservedAsns | default([], true) | map('int') | list)
+        - name: Refuse the fabric's own AS number for the CE
+          ansible.builtin.set_fact:
+            fab_fail_reason: AsnConflict
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }} is the fabric's own AS number;
+              the CE needs a different one
+          when: ac_bgp.peerAsn | int == ac_asn | int
 
-    - name: Stop on a reserved AS number
-      ansible.builtin.fail:
-        msg: "{{ fab_fail_msg }}"
-      when: fab_fail_reason | default('') == 'PeerAsnReserved'
+        - name: Stop on the fabric's AS number
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: ac_bgp.peerAsn | int == ac_asn | int
 
-    # the network's address space (as asked for and as the IPAM holds it) is the tenant's own: no CE route in it.
-    # IPv6 entries: the platform's IPv6 ranges come from the realization (attachments, core, translation); the
-    # network has IPv6 internet egress when it wants internet access, holds a platform block and the fabric offers
-    # IPv6 egress (only the notes depend on it)
-    - name: Check the accept list
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
-      vars:
-        _st: "{{ ac_network.status | default({}, true) }}"
-        fab_check:
-          action: check-circuit
-          accept: "{{ fab_spec.routing.accept | default([]) }}"
-          space: >-
-            {{ ((ac_network.spec | default({}, true)).prefixes | default([], true))
-               + (_st.addressSpace | default([], true) | map(attribute='prefix') | list)
-               + ((_st.ipv6 | default({}, true)).prefixes | default([], true))
-               + ([((_st.ipv6 | default({}, true)).block | default({}, true)).prefix]
-                  if ((_st.ipv6 | default({}, true)).block | default({}, true)).prefix | default('', true) | length > 0
-                  else []) }}
-          reserved: >-
-            {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
-                fab_real.egress.linkPool | default('169.254.0.0/16')]
-               + (fab_real.egress.platformSources | default([], true)) }}
-          egressInternet: "{{ (ac_network.spec.egress | default({}, true)).internet | default(false) | bool }}"
-          advertiseDefault: "{{ (fab_spec.routing.advertise | default({}, true)).default | default(false) | bool }}"
-          attachments: "{{ fab_real.attachments }}"
-          core: "{{ fab_real.core | default({}, true) }}"
-          translation: "{{ fab_real.translation | default({}, true) }}"
-          egressInternet6: >-
-            {{ (ac_network.spec.egress | default({}, true)).internet | default(false) | bool
-               and (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool
-               and (_st.ipv6 | default({}, true)).mode | default('') == 'Platform' }}
+        - name: The platform's realization parameters
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+          vars:
+            fab_real_fabric: "{{ ac_fabric.metadata.name }}"
 
-    # IPv6 accept entries need IPv6 on the fabric's circuits and IPv6 address space on the network
-    - name: Refuse IPv6 the circuit can't have
-      ansible.builtin.set_fact:
-        fab_fail_reason: FamilyUnavailable
-        fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.familyErrors | join('; ') }}"
-      when: fab_check_result.familyErrors | default([]) | length > 0
+        # the platform's own BGP sessions (e.g. its internet hand-off) use these AS numbers; a CE on one would collide
+        - name: Refuse an AS number the platform keeps for itself
+          ansible.builtin.set_fact:
+            fab_fail_reason: PeerAsnReserved
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }}: this AS is reserved by the
+              platform; the CE needs a different one
+          when: ac_bgp.peerAsn | int in ((fab_real.attachments | default({}, true)).reservedAsns | default([], true) | map('int') | list)
 
-    - name: Stop on IPv6 the circuit can't have
-      ansible.builtin.fail:
-        msg: "{{ fab_fail_msg }}"
-      when: fab_check_result.familyErrors | default([]) | length > 0
+        - name: Stop on a reserved AS number
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_fail_reason | default('') == 'PeerAsnReserved'
 
-    - name: Refuse an accept list that reaches into the network or the platform
-      ansible.builtin.set_fact:
-        fab_fail_reason: PolicyRefused
-        fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
-      when: fab_check_result.errors | length > 0
+        # the network's address space (as asked for and as the IPAM holds it) is the tenant's own: no CE route in it.
+        # IPv6 entries: the platform's IPv6 ranges come from the realization (attachments, core, translation); the
+        # network has IPv6 internet egress when it wants internet access, holds a platform block and the fabric offers
+        # IPv6 egress (only the notes depend on it)
+        # the ranges the platform's management connects from are refused to customer circuits (PrefixReserved): an entry
+        # inside one is refused, one covering part of one gets a note from the full check below
+        - name: Check the accept list against the ranges the platform's management connects from
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+          vars:
+            fab_check:
+              action: check-circuit
+              accept: "{{ fab_spec.routing.accept | default([]) }}"
+              space: []
+              reserved: "{{ (fab_real.infrastructure | default({}, true)).hub | default([], true) }}"
+              attachments: {}
+              core: {}
+              translation: {}
+          when: (fab_real.infrastructure | default({}, true)).hub | default([], true) | length > 0
 
-    - name: Stop on a refused accept list
-      ansible.builtin.fail:
-        msg: "{{ fab_fail_msg }}"
-      when: fab_check_result.errors | length > 0
+        - name: Refuse an accept entry inside the hub's ranges
+          ansible.builtin.set_fact:
+            fab_fail_reason: PrefixReserved
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | map('regex_replace', 'the platform range ', '')
+              | map('regex_replace', '$', ", reserved by the platform: networks the platform's management connects from") | join('; ') }}
+          when:
+            - (fab_real.infrastructure | default({}, true)).hub | default([], true) | length > 0
+            - fab_check_result.errors | length > 0
 
-    - name: Keep the policy result
-      ansible.builtin.set_fact:
-        ac_policy: "{{ fab_check_result }}"
+        - name: Stop on an accept entry inside the hub's ranges
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_fail_reason | default('') == 'PrefixReserved'
+
+        - name: Check the accept list
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+          vars:
+            _st: "{{ ac_network.status | default({}, true) }}"
+            fab_check:
+              action: check-circuit
+              accept: "{{ fab_spec.routing.accept | default([]) }}"
+              space: >-
+                {{ ((ac_network.spec | default({}, true)).prefixes | default([], true))
+                   + (_st.addressSpace | default([], true) | map(attribute='prefix') | list)
+                   + ((_st.ipv6 | default({}, true)).prefixes | default([], true))
+                   + ([((_st.ipv6 | default({}, true)).block | default({}, true)).prefix]
+                      if ((_st.ipv6 | default({}, true)).block | default({}, true)).prefix | default('', true) | length > 0
+                      else []) }}
+              reserved: >-
+                {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
+                    fab_real.egress.linkPool | default('169.254.0.0/16')]
+                   + ((fab_real.infrastructure | default({}, true)).hub | default([], true)) }}
+              egressInternet: "{{ (ac_network.spec.egress | default({}, true)).internet | default(false) | bool }}"
+              advertiseDefault: "{{ (fab_spec.routing.advertise | default({}, true)).default | default(false) | bool }}"
+              attachments: "{{ fab_real.attachments }}"
+              core: "{{ fab_real.core | default({}, true) }}"
+              translation: "{{ fab_real.translation | default({}, true) }}"
+              egressInternet6: >-
+                {{ (ac_network.spec.egress | default({}, true)).internet | default(false) | bool
+                   and (fab_real.egress.ipv6 | default({}, true)).enabled | default(false) | bool
+                   and (_st.ipv6 | default({}, true)).mode | default('') == 'Platform' }}
+
+        # IPv6 accept entries need IPv6 on the fabric's circuits and IPv6 address space on the network
+        - name: Refuse IPv6 the circuit can't have
+          ansible.builtin.set_fact:
+            fab_fail_reason: FamilyUnavailable
+            fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.familyErrors | join('; ') }}"
+          when: fab_check_result.familyErrors | default([]) | length > 0
+
+        - name: Stop on IPv6 the circuit can't have
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_check_result.familyErrors | default([]) | length > 0
+
+        - name: Refuse an accept list that reaches into the network or the platform
+          ansible.builtin.set_fact:
+            fab_fail_reason: PolicyRefused
+            fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ fab_check_result.errors | join('; ') }}"
+          when: fab_check_result.errors | length > 0
+
+        - name: Stop on a refused accept list
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_check_result.errors | length > 0
+
+        - name: Keep the policy result
+          ansible.builtin.set_fact:
+            ac_policy: "{{ fab_check_result }}"
 
     # ---- BGP password (before the ledger: a circuit waiting for its Secret holds no VLAN) ----
     - name: The password's Vault path
       ansible.builtin.set_fact:
-        ac_vault_path: "{{ fab_real.attachments.secretPath | replace('{entity}', fab_entity) | replace('{name}', fab_name) }}"
+        # a platform circuit has no Entity: "_platform" (no Entity can have the name) stands in for it
+        ac_vault_path: >-
+          {{ fab_real.attachments.secretPath | replace('{entity}', '_platform' if ac_platform | default(false) | bool else fab_entity)
+             | replace('{name}', fab_name) }}
         ac_secret_name: >-
           {{ ((ac_bgp.authentication | default({}, true)).secretRef | default({}, true)).name
              | default(fab_name ~ '-bgp', true) }}
@@ -445,6 +508,42 @@
               'mtu': _mtu | int,
               'authentication': {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}),
               'bfd': ac_bgp.bfd | default(false) | bool} }}
+      when: not (ac_platform | default(false) | bool)
+
+    # a platform circuit: in the service routing domain (no network, no VPN target); it accepts the hub's IPv4 ranges
+    # and advertises the clusters' prefixes inside service.attachableRanges (any, when the list is empty). The hub's
+    # router can install the two lists of status.ceConfig as fixed filters
+    - name: The platform circuit's realization and the hub router's parameters
+      vars:
+        _maxp: "{{ ac_bgp.maxPrefixes | default({}, true) }}"
+        _mtu: "{{ (ac_bearer_real.mtu | default(1500)) | int }}"
+        _accept: >-
+          {%- set out = [] -%}
+          {%- for r in ac_hub4 -%}{%- set _ = out.append(r if r.endswith('/32') else r ~ ' le 32') -%}{%- endfor -%}
+          {{ out }}
+        _advertise: >-
+          {%- set out = [] -%}
+          {%- for r in ac_service.attachableRanges | default([], true) | reject('search', ':') -%}
+            {%- set _ = out.append(r if r.endswith('/32') else r ~ ' le 32') -%}
+          {%- endfor -%}
+          {{ out }}
+      ansible.builtin.set_fact:
+        ac_real: >-
+          {{ {'ceKind': 'platform', 'vlan': ac_vlan | int, 'linkIndex': ac_link_index | int, 'link': ac_plan.link,
+              'nodes': ac_plan.nodes, 'ce': ac_plan.ce, 'vrf': ac_service.vrf.name, 'bearer': fab_spec.edgeRef.bearer,
+              'interface': ac_bearer_real.interface | default(''), 'mtu': _mtu | int, 'peerAsn': ac_bgp.peerAsn | int,
+              'authentication': ac_auth_type, 'passwordPath': ac_vault_path if ac_auth_type == 'md5' else '',
+              'maxPrefixes': (_maxp.limit | default(100)) | int, 'maxPrefixAction': _maxp.action | default('teardown'),
+              'bfd': ac_bgp.bfd | default(false) | bool, 'accept': _accept, 'advertise': _advertise} }}
+        ac_ce_config: >-
+          {{ {'vlan': ac_vlan | int, 'address': ac_plan.ce ~ '/' ~ ac_plan.prefixLength,
+              'secondAddress': ac_plan.ceSecond ~ '/' ~ ac_plan.prefixLength, 'localAsn': ac_bgp.peerAsn | int,
+              'neighbors': ac_plan.nodes | map('combine', {'asn': ac_asn | int}) | list,
+              'mtu': _mtu | int,
+              'authentication': {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}),
+              'bfd': ac_bgp.bfd | default(false) | bool,
+              'advertisedRanges': _advertise if _advertise | length > 0 else ['any'], 'acceptedRanges': _accept} }}
+      when: ac_platform | default(false) | bool
 
     # a circuit with IPv6 accept entries: the IPv6 link, the CE's and each node's address on it, and the second
     # session the CE configures (nothing is added for a circuit without them, so its revision stays the same)
@@ -503,7 +602,11 @@
         _key: "{{ fab_namespace }}/{{ fab_name }}"
         _real: "{{ (ac_fabric.status | default({}, true)).realization | default({}, true) }}"
       ansible.builtin.set_fact:
-        ac_entry: "{{ (_real.attachments | default([], true) | selectattr('circuit', 'equalto', _key) | list + [{}]) | first }}"
+        # a platform circuit is reported with the service routing domain (realization.service.circuits)
+        ac_entry: >-
+          {{ ((_real.attachments | default([], true)
+               + ((_real.service | default({}, true)).circuits | default([], true) if ac_platform | default(false) | bool else []))
+              | selectattr('circuit', 'equalto', _key) | list + [{}]) | first }}
         ac_fabric_skip: >-
           {{ ((_real.attachmentsSkipped | default([], true) | selectattr('circuit', 'equalto', _key) | list + [{}])
               | first).reason | default('') }}

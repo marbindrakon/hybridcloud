@@ -29,7 +29,8 @@ spec:
           description: >-
             A tenant profile: the read-only summary of a tenant for the tenant's own users, with its
             display name, the contacts its users ask about access, the sites its environments may use
-            and the platform IPv6 address space its networks can ask for. The platform writes it; one object named shc exists in each tenant namespace and goes
+            the platform IPv6 address space its networks can ask for and the address ranges its networks
+            cannot use. The platform writes it; one object named shc exists in each tenant namespace and goes
             away with it.
           type: object
           x-kubernetes-validations:
@@ -138,6 +139,39 @@ spec:
                           type: string
                           enum: [Virtualization, HybridNetworking, DNS, IPv6, IPv6Only, IPv6NetworkSource,
                                  IPv6ProviderSource, IPv6Translation]
+                      externalNetworks:
+                        description: >-
+                          External networks of an OpenStack site that every project may use: an OpenShift cluster's
+                          router and floating IPs can be on one of them (PlatformOpenshift
+                          spec.openstack.externalNetwork).
+                        type: array
+                        maxItems: 64
+                        x-kubernetes-list-type: atomic
+                        items:
+                          description: One external network.
+                          type: object
+                          required:
+                            - name
+                          properties:
+                            name:
+                              description: Name of the network, the value of spec.openstack.externalNetwork.
+                              type: string
+                              maxLength: 255
+                            id:
+                              description: The network's identifier on the site.
+                              type: string
+                              maxLength: 64
+                            families:
+                              description: The address families of its subnets (4, 6).
+                              type: array
+                              maxItems: 2
+                              x-kubernetes-list-type: set
+                              items:
+                                type: integer
+                                enum: [4, 6]
+                            default:
+                              description: True for the site's default external network.
+                              type: boolean
                       storageClasses:
                         description: >-
                           Storage classes (OpenShift) or volume types (OpenStack) an environment on the
@@ -186,6 +220,52 @@ spec:
                       type: integer
                       minimum: 1
                       maximum: 128
+                reservedRanges:
+                  description: >-
+                    Address ranges the platform keeps for itself on the tenant's fabric. A range with rule Refused
+                    cannot be used: a network prefix, an edge connection's accepted route or a cluster network
+                    overlapping it is refused. A range with rule SteppedAround may lie inside a network prefix; the
+                    platform never allocates a placement subnet from it (at the site named, when a site is named).
+                    Absent when the platform reserves none or the tenant's fabric is not known.
+                  type: array
+                  maxItems: 512
+                  x-kubernetes-list-type: atomic
+                  items:
+                    description: One range.
+                    type: object
+                    required:
+                      - prefix
+                      - purpose
+                      - rule
+                    properties:
+                      prefix:
+                        description: The address range (IPv4 or IPv6).
+                        type: string
+                        maxLength: 43
+                      purpose:
+                        description: What the platform uses the range for, in plain words.
+                        type: string
+                        maxLength: 256
+                      rule:
+                        description: >-
+                          Refused (a network prefix, edge connection route or cluster network may not overlap it) or
+                          SteppedAround (inside a network prefix, never allocated to a placement).
+                        type: string
+                        enum: [Refused, SteppedAround]
+                      site:
+                        description: The site the range applies to; absent when it applies everywhere.
+                        type: string
+                        maxLength: 63
+                managedClusterRanges:
+                  description: >-
+                    The IPv4 ranges a network's addresses must lie in to host OpenShift clusters the platform builds
+                    and manages on it. Absent when any range not reserved will do.
+                  type: array
+                  maxItems: 64
+                  x-kubernetes-list-type: atomic
+                  items:
+                    type: string
+                    maxLength: 18
                 observedEntityGeneration:
                   description: The metadata.generation of the tenant that this profile describes.
                   type: integer

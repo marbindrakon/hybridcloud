@@ -1,0 +1,178 @@
+---
+# Platform access of the network (spec.platformAccess, default true): may the platform's management reach the
+# OpenShift clusters it builds on the network, through the fabric's service routing domain?
+# 1. The PlatformOpenshifts of the namespace that name the network (spec.<type>.network) and are not fully deleted,
+#    with the prefixes they ask for (status.platformPrefixes, written by the cluster job).
+# 2. files/shc_platform_access.py platform-access: the network's eligibility (condition PlatformReachable), each
+#    prefix checked (inside the network's IPv4 space, inside service.attachableRanges, clear of the reserved ranges
+#    and of prefixes accepted earlier for other networks) and the ledger changes. Nothing is reserved or announced for
+#    a network without such a cluster.
+# 3. The ledger (kind servicePrefix, owner HybridNetwork/<ns>/<name>/<prefix>) records each accepted prefix when it
+#    is first accepted, so the earlier of two overlapping prefixes keeps it; a prefix no longer accepted goes back.
+# The fabric realizes the accepted prefixes and reports them in status.realization.service.networks; the job wakes it
+# when the accepted set differs from what it realized. Nothing here fails the network: a ledger error leaves the
+# prefixes waiting and says so in status.platformAccess.message.
+# Inputs: fab_spec, fab_st, fab_name, fab_namespace, fab_real, hn_fabric, hn_fabric_name, hn_space, hn_hub,
+#         hn_hub_check. Sets hn_access (status.platformAccess), hn_access_condition (PlatformReachable),
+#         hn_access_result, hn_service_hold (accepted prefixes: the network needs its root index),
+#         hn_service_carried (the fabric's service entry for the network, {} when none).
+- name: List the clusters of the namespace
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    namespace: "{{ fab_namespace }}"
+  register: _hn_clusters
+
+- name: The clusters on the network
+  ansible.builtin.set_fact:
+    hn_clusters: >-
+      {%- set out = [] -%}
+      {%- for c in _hn_clusters.resources | default([], true) -%}
+        {%- set sp = c.spec | default({}, true) -%}
+        {%- set st = c.status | default({}, true) -%}
+        {%- set ty = sp.type | default('', true) -%}
+        {%- if ty and (sp[ty] | default({}, true)).network | default('', true) == fab_name
+              and not (st.deletionComplete | default(false, true) | bool) -%}
+          {%- set _ = out.append({'name': c.metadata.name, 'prefixes': st.platformPrefixes | default([], true),
+                                  'deleting': c.metadata.deletionTimestamp is defined}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    hn_service_real: "{{ fab_real.service | default({}, true) }}"
+    hn_service_status: >-
+      {{ ((hn_fabric.status | default({}, true)).realization | default({}, true)).service | default({}, true) }}
+
+- name: The fabric's service entry for the network
+  ansible.builtin.set_fact:
+    hn_service_carried: >-
+      {{ (hn_service_status.networks | default([], true)
+          | selectattr('network', 'equalto', fab_namespace ~ '/' ~ fab_name) | list + [{}]) | first }}
+
+# the order of the accepted prefixes (the ledger) matters only where the service is offered and a cluster asks for
+# a prefix, or the network still holds one
+- name: Read the fabric's ledger
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+  vars:
+    fab_ledger: {action: ledger-get, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ hn_fabric_name }}"}
+  when: >-
+    (hn_service_real.enabled | default(false) | bool and hn_clusters | map(attribute='prefixes') | flatten | length > 0)
+    or hn_service_carried | length > 0
+    or (fab_st.platformAccess | default({}, true)).prefixes | default([], true) | selectattr('state', 'in', ['ready', 'pending']) | list | length > 0
+
+- name: The network's service prefixes in the ledger
+  ansible.builtin.set_fact:
+    hn_service_ledger: >-
+      {{ (((fab_ledger_result | default({}, true)).ledger | default({}, true)).alloc | default({}, true)).servicePrefix
+         | default({}, true) if (fab_ledger_result | default({}, true)).ledger is defined else {} }}
+
+- name: Decide the network's platform access
+  ansible.builtin.command:
+    argv: [python3, "{{ role_path }}/files/shc_platform_access.py"]
+    stdin: >-
+      {{ {'action': 'platform-access', 'network': fab_namespace ~ '/' ~ fab_name, 'fabric': hn_fabric_name,
+          'platformAccess': fab_spec.platformAccess | default(true) | bool,
+          'space': (fab_spec.prefixes | default([], true)) + (hn_space | map(attribute='prefix') | list),
+          'overlaps': hn_hub_check.overlaps | default([]), 'hub': hn_hub,
+          'service': {'enabled': hn_service_real.enabled | default(false) | bool,
+                      'ports': hn_service_real.ports | default([], true),
+                      'attachableRanges': hn_service_real.attachableRanges | default([], true)},
+          'serviceStatus': hn_service_status,
+          'reserved': (hn_fabric.status | default({}, true)).reservedRanges | default([], true),
+          'clusters': hn_clusters, 'ledger': hn_service_ledger} | to_json }}
+  register: _hn_access
+  changed_when: false
+
+- name: Keep the decision
+  ansible.builtin.set_fact:
+    hn_access_result: "{{ _hn_access.stdout | from_json }}"
+    hn_access_error: ""
+
+- name: Record the accepted prefixes in the ledger
+  block:
+    - name: Record a newly accepted prefix
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-allocate, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ hn_fabric_name }}",
+                     kind: servicePrefix, owner: "{{ hn_owner }}"}
+      loop: "{{ hn_access_result.allocate }}"
+      loop_control:
+        loop_var: hn_owner
+
+    - name: Give back a prefix no longer accepted
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_ledger.yml"
+      vars:
+        fab_ledger: {action: ledger-release, namespace: "{{ fabric_platform_namespace }}", fabric: "{{ hn_fabric_name }}",
+                     kind: servicePrefix, owner: "{{ hn_owner }}"}
+      loop: "{{ hn_access_result.release }}"
+      loop_control:
+        loop_var: hn_owner
+  rescue:
+    - name: Keep the ledger error for the status
+      ansible.builtin.set_fact:
+        hn_access_error: "{{ (ansible_failed_result.msg | default('the ledger could not be written', true) | string)[:300] }}"
+
+# a ledger error: nothing new is accepted this time (the fabric must not realize a prefix the ledger does not
+# order), the rows say why (AttachPending) and the next run tries again. The fabric realizes the rows the network
+# accepted: state ready or pending with no reason
+- name: The status of the network's platform access
+  vars:
+    _r: "{{ hn_access_result }}"
+    _err: "{{ hn_access_error | length > 0 }}"
+    _new: "{{ _r.allocate | map('regex_replace', '^HybridNetwork/[^/]+/[^/]+/', '') | list }}"
+    _rows: >-
+      {%- set out = [] -%}
+      {%- for row in _r.prefixes -%}
+        {%- if _err and row.prefix in _new and row.state != 'refused' -%}
+          {%- set _ = out.append(row | combine({'state': 'pending', 'reason': 'AttachPending',
+                                                'message': 'not recorded yet: ' ~ hn_access_error})) -%}
+        {%- else -%}
+          {%- set _ = out.append(row) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  ansible.builtin.set_fact:
+    hn_service_hold: "{{ (_r.accepted | reject('in', _new if _err else []) | list | length > 0) or hn_service_carried | length > 0 }}"
+    hn_access: >-
+      {{ {'state': _r.state, 'sources': _r.sources, 'ports': _r.ports, 'prefixes': _rows,
+          'reason': _r.reason, 'message': _r.message ~ ((' The platform could not record a prefix: ' ~ hn_access_error) if _err else '')} }}
+    hn_access_condition: "{{ _r.condition }}"
+    hn_access_result: "{{ _r | combine({'wakeFabric': (_r.wakeFabric | bool) and not (_err and _r.allocate | length > 0)}) }}"
+
+# a network that predates the rule and overlaps the hub's ranges: a Warning event when it is first seen
+- name: Report a network overlapping the ranges the platform's management connects from
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Event
+      metadata:
+        name: "{{ fab_name }}-infrastructure-overlap-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+        namespace: "{{ fab_namespace }}"
+      involvedObject:
+        apiVersion: hybridsovereign.redhat/v1alpha1
+        kind: HybridNetwork
+        name: "{{ fab_name }}"
+        namespace: "{{ fab_namespace }}"
+        uid: "{{ fab_obj.metadata.uid }}"
+      type: Warning
+      reason: InfrastructureOverlap
+      message: "{{ hn_access_condition.message }}"
+      source: {component: shc-hybridnetwork}
+      reportingComponent: shc-hybridnetwork
+      firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      count: 1
+  failed_when: false
+  vars:
+    _before: >-
+      {{ ((fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'PlatformReachable') | list) + [{}])
+         | first }}
+  when:
+    - hn_access_condition.reason == 'InfrastructureOverlap'
+    - _before.reason | default('') != 'InfrastructureOverlap'

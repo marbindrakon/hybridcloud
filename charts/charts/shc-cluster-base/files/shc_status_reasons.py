@@ -103,6 +103,10 @@ REASONS = {
     "ExternalNetworkNotFound": _r("P", FAILED, "The site's external network was not found. The platform team is looking at it."),
     "PolicyRefused": _r("T", FAILED, "The request was refused by a platform policy."),
     "NotRealizable": _r("T", FAILED, "The request cannot be realized on the chosen site."),
+    # edge connections (AttachmentCircuit): the bearer and the kind of router at the other end
+    "BearerNotFound": _r("T", FAILED, "The provider edge has no bearer of that name. Ask the platform team for the bearer names."),
+    "CeKindNotAccepted": _r("T", FAILED, "The bearer does not accept this kind of router. Choose another bearer or ask the platform team."),
+    "NotPlatformNamespace": _r("T", FAILED, "Platform circuits are accepted only in the platform's namespace. Connect a network with ceKind customer."),
     # ---- failed: platform acts -----------------------------------------------------------
     "OperatorFailed": _r("P", FAILED, "The request could not be queued. The platform team is looking at it."),
     "EDAFailed": _r("P", FAILED, "Could not be completed; see the reason."),
@@ -121,6 +125,8 @@ REASONS = {
     "ClaimMissing": _r("P", FAILED, "Members of the granted access groups cannot sign in yet. The platform team is looking at it."),
     "MapperMissing": _r("P", FAILED, "Sign-in is not set up for this service yet. The platform team is looking at it."),
     "NoDefaultConfig": _r("P", FAILED, "No default connection is configured for this service. Ask the platform team."),
+    # a platform circuit where the realization offers no connection for clusters on networks (also a part reason)
+    "ServiceNotOffered": _r("P", FAILED, "The platform's connection for clusters on networks is not offered here. Ask the platform team."),
     # Warning Event on an Entity (never a condition): its operator-version annotation names an image that is not allowed
     "NamespaceOperatorImageRejected": _r("P", FAILED, "The requested operator version for this tenant is not allowed; the default version is used."),
     # ---- paused (an administrator holds the object; nothing changes until it is resumed) --
@@ -173,6 +179,20 @@ PART_REASONS = {
     "NodeRebooted": _r("A", READY, "A node restarted."),
     "NodeHealthRecovered": _r("A", READY, "Every node is healthy again."),
     "HealthWake": _r("A", READY, "A repair run was requested for what the health check found."),
+    # a HybridNetwork's PlatformReachable condition (status.platformAccess): can the platform's management reach the
+    # OpenShift clusters it builds on the network? The network stays Ready whatever it says
+    "Attachable": _r("A", READY, "Clusters the platform manages can be built on this network."),
+    "Attached": _r("A", READY, "The platform reaches the clusters it manages on this network."),
+    "NotRequested": _r("T", READY, "The platform may not reach this network. Allow platform access on the network to build clusters the platform manages."),
+    "NoIPv4": _r("T", READY, "The network has no IPv4 address space; clusters the platform manages need it."),
+    "OutsideAttachableRanges": _r("T", READY, "Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges)."),
+    "InfrastructureOverlap": _r("T", READY, "This network's addresses overlap a range the platform's management connects from; the platform cannot reach it."),
+    "ServiceNotOffered": _r("P", READY, "The platform's connection for clusters on networks is not offered here. Ask the platform team."),
+    "CircuitNotDeployed": _r("P", READY, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
+    "AttachPending": _r("A", READY, "The platform is connecting to this network; try again in a few minutes."),
+    # a row of status.platformAccess.prefixes (a cluster's address the platform should reach)
+    "ServicePrefixInUse": _r("T", READY, "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team."),
+    "OutsideAddressSpace": _r("T", READY, "The cluster's address lies outside the network's address space."),
 }
 
 # Deletion requests written by the operator are named <Kind>DeleteRequested.

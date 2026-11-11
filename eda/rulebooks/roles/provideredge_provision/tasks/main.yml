@@ -3,7 +3,9 @@
 # realization (attachments.providerEdges.<edge>: a bearer per spec bearer, with the node interface and MTU), and
 # reports the fabric's nodes, the circuits per bearer and what the edge realizes. The circuits themselves are
 # realized by the fabric job (the only writer of the border nodes' root configuration). Wakes the circuits on this
-# edge that wait for it once it is ready.
+# edge that wait for it once it is ready. status.capabilities.ceKinds lists platform (circuits handing the fabric's
+# service routing domain to the router of the network the platform's management runs on) when the realization offers
+# the service (service.enabled) and a bearer of the edge accepts ceKind platform.
 - block:
     - name: Read the ProviderEdge
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -89,6 +91,11 @@
       register: _pe_circuits
 
     - name: Count the circuits per bearer
+      vars:
+        pe_ce_kinds: >-
+          {{ ['customer'] + (['platform'] if ((fab_real.service | default({}, true)).enabled | default(false) | bool)
+                                            and (fab_spec.bearers | map(attribute='ceKinds') | flatten | select('equalto', 'platform')
+                                                 | list | length > 0) else []) }}
       ansible.builtin.set_fact:
         pe_circuits: >-
           {{ _pe_circuits.resources | default([]) | selectattr('spec.edgeRef.name', 'equalto', fab_name) | list }}
@@ -101,7 +108,7 @@
                                     'mtu': (pe_real.bearers[b.name].mtu | default(1500)) | int}) -%}
           {%- endfor -%}
           {{ pe_status | combine({'nodes': pe_nodes, 'bearers': out,
-                                  'capabilities': {'ceKinds': ['customer'], 'routing': ['bgp'],
+                                  'capabilities': {'ceKinds': pe_ce_kinds, 'routing': ['bgp'],
                                                    'authentication': ['md5', 'none'], 'bfd': true, 'maxPrefixes': true},
                                   'realization': {'platform': fab_spec.platform, 'model': fab_real.model,
                                                   'vlanPool': fab_real.attachments.vlanPool,

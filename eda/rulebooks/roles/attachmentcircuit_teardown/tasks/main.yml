@@ -5,15 +5,18 @@
 # 2. the VLAN and the link subnet go back to the fabric's ledger; the password leaves Vault (a generated Secret
 #    goes with the circuit through its owner reference);
 # 3. deletionComplete; the edge is woken (its circuit counts).
+# A platform circuit (ceKind platform, in the platform namespace, which has no Entity) is torn down the same way; the
+# fabric reports it with its service routing domain (status.realization.service.circuits).
 - block:
     # nothing on a site (refused at validation): delete without site cleanup
     - name: Skip the site cleanup when nothing was realized
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
 
+    # the Entity is read for the circuits of a tenant only (fab_read_entity is evaluated after the circuit is read)
     - name: Read the AttachmentCircuit
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
       vars:
-        fab_read_entity: true
+        fab_read_entity: "{{ (fab_spec | default({}, true)).ceKind | default('customer', true) != 'platform' }}"
 
     - name: What was realized
       ansible.builtin.set_fact:
@@ -38,11 +41,14 @@
       ansible.builtin.set_fact:
         acd_fabric: "{{ ((_acd_fabric.resources | default([], true)) + [{}]) | first }}"
 
-    # the fabric's status.realization.attachments lists the circuits it realized on the nodes
+    # the fabric's status.realization.attachments lists the circuits it realized on the nodes, and
+    # status.realization.service.circuits the platform circuits
     - name: Is the circuit still on the border nodes
+      vars:
+        _real: "{{ (acd_fabric.status | default({}, true)).realization | default({}, true) }}"
       ansible.builtin.set_fact:
         acd_on_nodes: >-
-          {{ ((acd_fabric.status | default({}, true)).realization | default({}, true)).attachments | default([], true)
+          {{ (_real.attachments | default([], true) + (_real.service | default({}, true)).circuits | default([], true))
              | selectattr('circuit', 'equalto', acd_key) | list | length > 0 }}
 
     - name: Ask the fabric to drop the circuit

@@ -1,0 +1,172 @@
+---
+# An AttachmentCircuit of ceKind platform: the hand-off of the fabric's service routing domain to the router of the
+# network the platform's management runs on. Checked here (namespace, edge, fabric, AS numbers, the service); the
+# password, the VLAN and link, the record and the sessions follow in main.yml as for a customer circuit.
+# Sets ac_edge, ac_fabric, ac_asn, ac_status, ac_policy (notes; IPv4 only), ac_service (the realization's service
+# keys) and ac_hub4 (the IPv4 infrastructure.hub ranges the circuit accepts), or fails with the reason.
+# Refusals: NotPlatformNamespace (outside the fabric's namespace: tenants cannot write there),
+# BearerNotFound / CeKindNotAccepted (the edge), AsnConflict / PeerAsnReserved, ServiceNotOffered (the realization
+# has service.enabled off), FamilyUnavailable (the hub's ranges have no IPv4 range: the circuit carries IPv4 only).
+- name: Refuse a platform circuit outside the platform namespace
+  ansible.builtin.set_fact:
+    fab_fail_reason: NotPlatformNamespace
+    fab_fail_msg: >-
+      AttachmentCircuit {{ fab_name }}: ceKind platform is only accepted in the platform's namespace; edge
+      connections of a tenant use ceKind customer with spec.network
+  when: fab_namespace != fabric_platform_namespace
+
+- name: Stop on a platform circuit outside the platform namespace
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: fab_namespace != fabric_platform_namespace
+
+- name: Read the edge
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: ProviderEdge
+    name: "{{ fab_spec.edgeRef.name }}"
+    namespace: "{{ fabric_platform_namespace }}"
+  register: _ac_edge
+
+- name: Set the edge facts
+  ansible.builtin.set_fact:
+    ac_edge: "{{ (_ac_edge.resources | default([], true) + [{}]) | first }}"
+
+# the edge's entityRefs name tenants: they do not apply to a platform circuit
+- name: Check the platform circuit against the edge
+  vars:
+    _bearer: >-
+      {{ ((ac_edge.spec | default({}, true)).bearers | default([], true)
+          | selectattr('name', 'equalto', fab_spec.edgeRef.bearer) | list + [{}]) | first }}
+  ansible.builtin.set_fact:
+    ac_edge_problem: >-
+      {{ ['ReferenceDeleting', 'ProviderEdge ' ~ fab_spec.edgeRef.name ~ ' being deleted']
+           if ac_edge.metadata.deletionTimestamp is defined
+         else ['BearerNotFound', 'ProviderEdge ' ~ fab_spec.edgeRef.name ~ ' has no bearer ' ~ fab_spec.edgeRef.bearer]
+           if not _bearer
+         else ['CeKindNotAccepted', 'bearer ' ~ fab_spec.edgeRef.bearer ~ ' does not accept CE kind platform']
+           if 'platform' not in (_bearer.ceKinds | default([]))
+         else [] }}
+  when: ac_edge | length > 0
+
+- name: Refuse a platform circuit the edge doesn't offer
+  ansible.builtin.set_fact:
+    fab_fail_reason: "{{ ac_edge_problem[0] }}"
+    fab_fail_msg: "AttachmentCircuit {{ fab_name }}: {{ ac_edge_problem[1] }}"
+  when: ac_edge_problem | default([]) | length > 0
+
+- name: Stop on a refused platform circuit
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: ac_edge_problem | default([]) | length > 0
+
+- name: Wait for the edge
+  ansible.builtin.set_fact:
+    ac_waiting: >-
+      {{ ['ProviderEdge ' ~ fab_spec.edgeRef.name ~ ' (' ~ (((ac_edge.status | default({}, true)).status
+           | default('not provisioned', true)) if ac_edge else 'not found') ~ ')'] }}
+  when: >-
+    not ac_edge or not (((ac_edge.status | default({}, true)).ready | default(false) | bool)
+                        or (((ac_edge.status | default({}, true)).realized | default(false) | bool)
+                            and (ac_edge.status | default({}, true)).status | default('') != 'failed'))
+
+- name: Report what the platform circuit waits for
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
+  vars:
+    fab_outcome: pending
+    fab_reason: WaitingForDependencies
+    fab_message: "Waiting for {{ ac_waiting | join('; ') }}"
+    fab_waiting_for: "{{ ac_waiting }}"
+    fab_status: "{{ ac_status }}"
+  when: ac_waiting | length > 0
+
+- name: End the job while the edge isn't usable
+  ansible.builtin.meta: end_play
+  when: ac_waiting | length > 0
+
+- name: Read the platform circuit's fabric
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridFabric
+    name: "{{ ac_edge.spec.fabricRef.name }}"
+    namespace: "{{ fabric_platform_namespace }}"
+  register: _ac_fabric
+
+- name: Set the platform circuit's fabric facts
+  ansible.builtin.set_fact:
+    ac_fabric: "{{ _ac_fabric.resources[0] }}"
+    ac_asn: "{{ _ac_fabric.resources[0].spec.domainAsn | int }}"
+    ac_status: "{{ ac_status | combine({'fabric': _ac_fabric.resources[0].metadata.name}) }}"
+
+- name: Refuse the fabric's own AS number for the hub's router
+  ansible.builtin.set_fact:
+    fab_fail_reason: AsnConflict
+    fab_fail_msg: >-
+      AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }} is the fabric's own AS number;
+      the router at the other end needs a different one
+  when: ac_bgp.peerAsn | int == ac_asn | int
+
+- name: Stop on the fabric's AS number
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: ac_bgp.peerAsn | int == ac_asn | int
+
+- name: The platform's realization parameters for the platform circuit
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+  vars:
+    fab_real_fabric: "{{ ac_fabric.metadata.name }}"
+
+- name: Refuse an AS number the platform keeps for itself
+  ansible.builtin.set_fact:
+    fab_fail_reason: PeerAsnReserved
+    fab_fail_msg: >-
+      AttachmentCircuit {{ fab_name }}: routing.bgp.peerAsn {{ ac_bgp.peerAsn }}: this AS is reserved by the
+      platform; the router at the other end needs a different one
+  when: ac_bgp.peerAsn | int in ((fab_real.attachments | default({}, true)).reservedAsns | default([], true) | map('int') | list)
+
+- name: Stop on a reserved AS number
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: fab_fail_reason | default('') == 'PeerAsnReserved'
+
+- name: The service routing domain of the realization
+  ansible.builtin.set_fact:
+    ac_service: "{{ fab_real.service | default({}, true) }}"
+    ac_hub4: >-
+      {{ (fab_real.infrastructure | default({}, true)).hub | default([], true) | reject('search', ':') | list }}
+
+- name: Refuse a platform circuit the fabric does not offer
+  ansible.builtin.set_fact:
+    fab_fail_reason: "{{ 'ServiceNotOffered' if not (ac_service.enabled | default(false) | bool) else 'FamilyUnavailable' }}"
+    fab_fail_msg: >-
+      AttachmentCircuit {{ fab_name }}:
+      {{ ('HybridFabric ' ~ ac_fabric.metadata.name ~ ' does not offer the service routing domain for clusters on networks '
+          ~ '(realization service.enabled)') if not (ac_service.enabled | default(false) | bool)
+         else 'a platform circuit carries IPv4 only and the realization names no IPv4 range in infrastructure.hub' }}
+  when: not (ac_service.enabled | default(false) | bool) or ac_hub4 | length == 0
+
+- name: Stop on a platform circuit the fabric does not offer
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: not (ac_service.enabled | default(false) | bool) or ac_hub4 | length == 0
+
+- name: Require the service routing domain's name
+  ansible.builtin.fail:
+    msg: "AttachmentCircuit {{ fab_name }}: the realization's service.vrf.name is not set"
+  when: (ac_service.vrf | default({}, true)).name | default('', true) | length == 0
+
+# what the policy check gives a customer circuit: notes, the families, the default route (never, here)
+- name: The platform circuit's policy
+  ansible.builtin.set_fact:
+    ac_policy:
+      ipv6: false
+      acceptsDefault: false
+      notes: >-
+        {{ ['routing.advertise does not apply to ceKind platform: the circuit advertises the prefixes of the clusters the platform reaches']
+           if (fab_spec.routing.advertise | default({}, true)) | length > 0 else [] }}

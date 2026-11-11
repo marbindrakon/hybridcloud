@@ -40,7 +40,10 @@ spec:
             refused; a default route from the CE is accepted only while the network has no provider
             internet egress of that address family. Accept entries may be IPv4 and IPv6: with at least
             one IPv6 entry the circuit also gets an IPv6 link subnet and a second BGP session over
-            IPv6 from every node.
+            IPv6 from every node. A circuit of ceKind platform (only in the platform's namespace) connects
+            the router of the network the platform's management runs on instead, with no network: it
+            accepts the platform's management ranges and advertises the addresses of the clusters the
+            platform builds on networks (status.ceConfig acceptedRanges and advertisedRanges).
           type: object
           required:
             - spec
@@ -54,13 +57,21 @@ spec:
             spec:
               description: Desired state of this object.
               type: object
-              required: [network, edgeRef, routing]
+              required: [edgeRef, routing]
+              x-kubernetes-validations:
+                - rule: (self.ceKind == 'platform') != has(self.network)
+                  message: spec.network is required for ceKind customer and not allowed for ceKind platform
+                - rule: self.ceKind != 'platform' || !has(self.routing.accept)
+                  message: >-
+                    a platform circuit accepts the platform's infrastructure ranges; routing.accept is not allowed
               properties:
                 network:
                   type: string
                   minLength: 1
                   maxLength: 253
-                  description: The HybridNetwork (this namespace) to connect. Immutable.
+                  description: >-
+                    The HybridNetwork (this namespace) to connect. Required for ceKind customer, not allowed for
+                    ceKind platform. Immutable.
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.network is immutable
@@ -86,8 +97,11 @@ spec:
                       maxLength: 63
                 ceKind:
                   type: string
-                  description: The kind of router at the other end. customer = a router the tenant operates. Immutable.
-                  enum: [customer]
+                  description: >-
+                    The kind of router at the other end. customer: a router the tenant operates, connected to
+                    spec.network. platform: the router of the network the platform's management runs on, connected
+                    to the platform's service routing domain; only in the platform namespace. Immutable.
+                  enum: [customer, platform]
                   default: customer
                   x-kubernetes-validations:
                     - rule: self == oldSelf
@@ -97,8 +111,8 @@ spec:
                   type: object
                   required: [protocol]
                   x-kubernetes-validations:
-                    - rule: self.protocol != 'bgp' || (has(self.bgp) && has(self.accept) && size(self.accept) > 0)
-                      message: protocol bgp needs routing.bgp and at least one routing.accept entry
+                    - rule: self.protocol != 'bgp' || has(self.bgp)
+                      message: protocol bgp needs routing.bgp
                   properties:
                     protocol:
                       type: string
@@ -166,7 +180,8 @@ spec:
                     accept:
                       type: array
                       description: >-
-                        Routes accepted from the CE, as prefix-list entries "<prefix>[ ge <n>][ le <n>]" of either
+                        Routes accepted from the CE (ceKind customer: at least one entry; not allowed for ceKind
+                        platform), as prefix-list entries "<prefix>[ ge <n>][ le <n>]" of either
                         address family (e.g. "10.50.0.0/16 le 24", "2001:db8:50::/48 le 64"); ge and le are at most
                         32 for an IPv4 prefix and 128 for an IPv6 prefix. Everything else from the CE is dropped. With
                         at least one IPv6 entry the circuit also carries IPv6: an IPv6 link subnet and a second BGP
@@ -204,7 +219,7 @@ spec:
                             message: ge must not exceed le
                     advertise:
                       type: object
-                      description: What the network advertises to the CE.
+                      description: What the network advertises to the CE. Does not apply to ceKind platform.
                       properties:
                         networkPrefixes:
                           type: boolean
@@ -265,8 +280,23 @@ spec:
                   type: object
                   description: >-
                     What the CE needs to configure. With IPv6 accept entries also address6, secondAddress6 and
-                    neighbors6.
+                    neighbors6; for ceKind platform also advertisedRanges and acceptedRanges.
                   properties:
+                    advertisedRanges:
+                      type: array
+                      description: >-
+                        ceKind platform: the routes the platform advertises over the circuit, as prefix-list entries
+                        the router at the other end can accept with a fixed filter ("any" when the platform does not
+                        limit them).
+                      items:
+                        type: string
+                    acceptedRanges:
+                      type: array
+                      description: >-
+                        ceKind platform: the routes the platform accepts from the router at the other end (the
+                        ranges the platform's management connects from), as prefix-list entries.
+                      items:
+                        type: string
                     address6:
                       type: string
                       description: The CE's address on the circuit's IPv6 link subnet (with its length).

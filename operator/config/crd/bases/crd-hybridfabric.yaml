@@ -197,6 +197,39 @@ spec:
                   description: Free numbers per pool.
                   additionalProperties:
                     type: integer
+                reservedRanges:
+                  description: >-
+                    The address ranges tenants may not use on this fabric, with what the platform uses them for.
+                    The tenants' profiles publish the same list.
+                  type: array
+                  maxItems: 512
+                  x-kubernetes-list-type: atomic
+                  items:
+                    description: One range.
+                    type: object
+                    required:
+                      - prefix
+                      - purpose
+                      - rule
+                    properties:
+                      prefix:
+                        description: The address range (IPv4 or IPv6).
+                        type: string
+                        maxLength: 43
+                      purpose:
+                        description: What the platform uses the range for, in plain words.
+                        type: string
+                        maxLength: 256
+                      rule:
+                        description: >-
+                          Refused (a network prefix, edge connection route or cluster network may not overlap it) or
+                          SteppedAround (inside a network prefix, never allocated to a placement).
+                        type: string
+                        enum: [Refused, SteppedAround]
+                      site:
+                        description: The site the range applies to; absent when it applies everywhere.
+                        type: string
+                        maxLength: 63
                 realization:
                   type: object
                   description: How the platform realized the fabric (informational; depends on the platform).

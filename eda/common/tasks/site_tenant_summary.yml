@@ -5,7 +5,7 @@
 #
 # Input:  sts_sites  list of CloudInfrastructure objects (as read from the API)
 # Output: site_tenant_summaries  list of {name, displayName?, type, location?, region?, billable, state,
-#                                         capabilities, storageClasses?}, in the order of sts_sites
+#                                         capabilities, storageClasses?, externalNetworks?}, in the order of sts_sites
 #   state         Available when the last probe authenticated (status.capabilities.api), the site is not failed,
 #                 not paused and not being deleted (the rule of resolve_cloud_infrastructure.yml); else Unavailable
 #   capabilities  Virtualization (openshift site with OpenShift Virtualization), HybridNetworking (evpn), DNS (dns),
@@ -15,6 +15,8 @@
 #   region        aws and gcp sites only (spec.<type>.region, else the probed region)
 #   storageClasses  OpenShift StorageClasses (status.site.storageClasses) or OpenStack public volume types
 #                   (status.site.volumeTypes)
+#   externalNetworks  openstack sites only: the external networks every project may use (status.site.externalNetworks:
+#                   name, id, families, default), sorted by name
 - name: Summarize the sites for tenants
   ansible.builtin.set_fact:
     site_tenant_summaries: >-
@@ -59,6 +61,16 @@
           {%- set _ = e.update({'location': spec.location | string}) -%}
         {%- endif -%}
         {%- if sc -%}{%- set _ = e.update({'storageClasses': sc | sort(attribute='name')}) -%}{%- endif -%}
+        {%- set xn = [] -%}
+        {%- for x in (site.externalNetworks | default([], true)) if type == 'openstack' -%}
+          {%- if x is mapping and (x.name | default('', true)) -%}
+            {%- set row = {'name': x.name | string, 'default': x.default | default(false) | bool,
+                           'families': x.families | default([], true) | map('int') | select('in', [4, 6]) | unique | sort} -%}
+            {%- if x.id | default('', true) -%}{%- set _ = row.update({'id': x.id | string}) -%}{%- endif -%}
+            {%- set _ = xn.append(row) -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- if xn -%}{%- set _ = e.update({'externalNetworks': xn | sort(attribute='name')}) -%}{%- endif -%}
         {%- set _ = out.append(e) -%}
       {%- endfor -%}
       {{ out }}
