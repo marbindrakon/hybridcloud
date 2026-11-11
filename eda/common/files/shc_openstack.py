@@ -46,12 +46,20 @@ Actions (request["action"]):
                 to project_id): state present finds each by description (descriptions {api, ingress}) on
                 network_id, else creates it; state absent releases them by recorded ids and by description (a
                 missing id counts as released).
+  router-advertisement  the site's router advertisement service (an optional site component that switches the `nat`
+                token of an EVPN router port, so the site advertises floating IPs on a placed network): state
+                present asks it to hold `nat` on the router's IPv4 interface port on the network, absent to drop
+                it; service_url empty = the site has no such service ({service: absent}, nothing else happens).
+                The calls carry a Keystone token of the router's project (never logged or returned).
   platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
                 owners in the platform project, for the fabric orphan check.
 """
 import ipaddress
 import json
+import ssl
 import sys
+import urllib.error
+import urllib.request
 
 import openstack
 import yaml
@@ -606,6 +614,17 @@ def placement_network(req):
                 conn.network.delete_rbac_policy(r)
                 out["deleted"].append(f"rbac {r.id}")
         if router is not None:
+            ra = req.get("routerAdvertisement") or {}
+            if net is not None and (ra.get("service_url") or "").strip():
+                # before the interface goes: the service drops what it holds for the port (its marker would go
+                # with the port anyway); never blocks the teardown
+                try:
+                    out["routerAdvertisement"] = _router_advertisement(acct, {
+                        "state": "absent", "router_id": router.id, "network_id": net.id, "project_id": proj.id,
+                        "service_url": ra["service_url"], "site": ra.get("site", ""), "timeout": ra.get("timeout")})
+                except Exception as e:  # noqa: BLE001 - reported, the deletion goes on
+                    out["routerAdvertisement"] = {"service": "found", "reason": "ServiceUnavailable",
+                                                  "message": f"{type(e).__name__}: {e}"}
             _delete_router(conn, router)
             out["deleted"].append(f"router {router.id}")
         if net is not None:
@@ -767,6 +786,122 @@ def cluster_fips(req):
     return out
 
 
+RA_KEY = "placement.routerAdvertisementBySite"
+RA_TIMEOUT = 10
+
+
+def _ra_http(method, url, token, verify, timeout, body=None):
+    """One call to the router advertisement service: (HTTP status, parsed JSON or {}). TLS is verified with the site
+    credential's CA bundle (a path), the system's trust (True) or not at all (False, as the site credential says)."""
+    if verify is False:
+        ctx = ssl._create_unverified_context()  # noqa: S323 - only when the site's own credential disables verification
+    elif isinstance(verify, str) and verify:
+        ctx = ssl.create_default_context(cafile=verify)
+    else:
+        ctx = ssl.create_default_context()
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"X-Auth-Token": token, "Accept": "application/json",
+                                          **({"Content-Type": "application/json"} if data is not None else {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            status, text = r.status, r.read()
+    except urllib.error.HTTPError as e:
+        status, text = e.code, e.read()
+    try:
+        return status, json.loads(text or b"{}")
+    except ValueError:
+        return status, {}
+
+
+def _ra_router_port(conn, router_id, network_id):
+    """The router's interface port on the network that carries IPv4 (the EVPN plugin's advertised interface)."""
+    for p in conn.network.ports(device_id=router_id, network_id=network_id):
+        if p.device_owner in _IFACE_OWNERS and any(":" not in (ip.get("ip_address") or ":")
+                                                  for ip in (p.fixed_ips or [])):
+            return p
+    return None
+
+
+def _ra_scrub(text, token):
+    text = str(text)
+    return text.replace(token, "<token>") if token else text
+
+
+def router_advertisement(req):
+    """state present|absent, router_id, network_id, service_url (empty = no service), project_id or
+    domain + platformProject (the router's project: the token is scoped to it, as the service authorizes by the
+    port's project), site (names the realization key in messages), timeout (seconds, default 10).
+    -> {service: found|absent, port_id, nat, wanted, changed, restores, lastRestoredAt, reason, message}; reason ""
+    = done. Service errors come back with the service's reason (Unauthenticated, NotProjectScoped, NotYourPort,
+    NotARouterInterface, NoSuchRouterPort, NotAnAdvertisingPort, BadRequest, OvnUnavailable, IdentityUnavailable,
+    NetworkUnavailable); ServiceUnavailable = no answer; InvalidSetting = not an https URL; NoRouterInterface = the
+    router has no IPv4 interface on the network. Never raises for the service: a failing service is the caller's
+    status, not an error. absent drops nat only where the service holds it (wanted): a nat the site set itself
+    stays."""
+    return _router_advertisement(None, req)
+
+
+def _router_advertisement(acct, req):
+    out = {"service": "absent", "port_id": "", "nat": False, "wanted": False, "changed": False, "restores": 0,
+           "lastRestoredAt": "", "reason": "", "message": ""}
+    url = (req.get("service_url") or "").strip().rstrip("/")
+    if not url:
+        return out
+    out["service"] = "found"
+    key = f"{RA_KEY}[{req['site']}].url" if req.get("site") else f"{RA_KEY}[<site>].url"
+    if not url.lower().startswith("https://"):
+        return {**out, "reason": "InvalidSetting", "message": f"{key} must be an https:// URL"}
+    state = req.get("state", "present")
+    if state not in ("present", "absent"):
+        raise ValueError("state must be present or absent")
+    acct = acct or Account(req)
+    pid = req.get("project_id")
+    if not pid:
+        own = acct.own_scope()
+        dom = own.identity.find_domain(req["domain"], ignore_missing=False)
+        proj = own.identity.find_project(req["platformProject"], domain_id=dom.id)
+        if proj is None:
+            raise RuntimeError(f"platform project {req['platformProject']} does not exist")
+        pid = proj.id
+    conn = acct.project(pid)
+    port = _ra_router_port(conn, req["router_id"], req["network_id"])
+    if port is None:
+        return {**out, "reason": "NoRouterInterface",
+                "message": f"router {req['router_id']} has no IPv4 interface on network {req['network_id']}"}
+    out["port_id"] = port.id
+    token = conn.session.get_token()
+    timeout = float(req.get("timeout") or RA_TIMEOUT)
+    base = f"{url}/v1/router-ports/{port.id}"
+
+    def call(method, path="", body=None):
+        try:
+            return _ra_http(method, base + path, token, acct.verify, timeout, body)
+        except Exception as e:  # noqa: BLE001 - transport errors (refused, timeout, TLS) are the service's state
+            reason = getattr(e, "reason", e)
+            return 0, {"error": "ServiceUnavailable",
+                       "message": f"router advertisement service at {url}: {_ra_scrub(reason, token)}"}
+
+    def failed(status, body):
+        return {**out, "reason": str(body.get("error") or "ServiceUnavailable"),
+                "message": _ra_scrub(body.get("message") or f"HTTP {status} from {url}", token)}
+
+    status, body = call("GET")
+    if status != 200:
+        return failed(status, body)
+    out.update({"nat": bool(body.get("nat")), "wanted": bool(body.get("wanted")),
+                "restores": int(body.get("restores") or 0), "lastRestoredAt": str(body.get("lastRestoredAt") or "")})
+    enable = state == "present"
+    # present: nat held by the service (wanted); absent: only what the service holds is dropped
+    if (enable and out["nat"] and out["wanted"]) or (not enable and not out["wanted"]):
+        return out
+    status, body = call("PUT", "/nat", {"enabled": enable})
+    if status != 200:
+        return failed(status, body)
+    after = body.get("after") or []
+    return {**out, "nat": "nat" in after, "wanted": enable, "changed": bool(body.get("changed"))}
+
+
 def platform_inventory(req):
     """The cloud admin's own scope, read only: what the platform project holds."""
     acct = Account(req)
@@ -789,7 +924,8 @@ def platform_inventory(req):
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
            "platform-project": platform_project, "placement-network": placement_network,
-           "cluster-fips": cluster_fips, "platform-inventory": platform_inventory}
+           "cluster-fips": cluster_fips, "router-advertisement": router_advertisement,
+           "platform-inventory": platform_inventory}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

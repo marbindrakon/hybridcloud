@@ -13,9 +13,10 @@
 # side (backend_<kind>.yml), the gateway asked to carry the placement's VRF (pending WaitingForGateway until it
 # does; the gateway job wakes the placement), and the site's routes checked on every border gateway node. Last, the
 # forward-confirmed name of the placement's IPv6 gateway (gateway_name.yml, design/IPV6-PLAN.md §8.3).
-# A CloudOSO placement with a use turned off but still in use (status.use, backend_cloudoso.yml) stays Ready: the
-# condition Degraded (reason InUse) names what waits, and the operator runs a ready placement whose use waits again on
-# its reconcile period until the use is gone (operator/namespace/roles/networkplacement).
+# A CloudOSO placement with a use turned off but still in use, or whose router advertisement the site's service did
+# not confirm (status.use, backend_cloudoso.yml), stays Ready: the condition Degraded (reason InUse or
+# RouterAdvertisementFailed) names what waits, and the operator runs a ready placement that waits so again on its
+# reconcile period until it is resolved (operator/namespace/roles/networkplacement).
 - block:
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -33,13 +34,16 @@
         np_reason: WaitingForDependencies
         np_status: {entity: "{{ fab_entity }}"}
         np_use_removing: []
+        np_use_wait_reason: InUse
+        np_use_wait_messages: []
         np_use_note: ""
-        # the last run left the placement ready with a use waiting to be removed: the run is a re-check, not a change
-        # the network or the fabric need to hear about
+        # the last run left the placement ready with a use waiting (condition Degraded, see the final write): the run
+        # is a re-check, not a change the network or the fabric need to hear about
         np_prev_use_wait: >-
           {{ (fab_st.ready | default(false) | bool)
-             and ((fab_st.use | default({}, true)).values() | selectattr('state', 'defined')
-                  | selectattr('state', 'equalto', 'removing') | list | length > 0) }}
+             and (fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'Degraded')
+                  | selectattr('status', 'equalto', 'True')
+                  | selectattr('reason', 'in', ['InUse', 'RouterAdvertisementFailed']) | list | length > 0) }}
         np_backend_kind: "{{ fab_spec.backend.kind }}"
         np_backend_name: "{{ fab_spec.backend.name }}"
 
@@ -512,9 +516,8 @@
         fab_conditions: >-
           {%- set now = lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') -%}
           {%- if np_use_removing | length > 0 -%}
-            {%- set rows = np_use_removing | map('extract', np_status.use) | map(attribute='message') | list -%}
-            {{ [{'type': 'Degraded', 'status': 'True', 'lastTransitionTime': now, 'reason': 'InUse',
-                 'message': (rows | join(' '))[:1000]}] }}
+            {{ [{'type': 'Degraded', 'status': 'True', 'lastTransitionTime': now, 'reason': np_use_wait_reason,
+                 'message': (np_use_wait_messages | join(' '))[:1000]}] }}
           {%- elif np_backend_kind == 'CloudOSO' and _np_degraded_before | bool -%}
             {{ [{'type': 'Degraded', 'status': 'False', 'lastTransitionTime': now, 'reason': 'Ready', 'message': ''}] }}
           {%- else -%}
