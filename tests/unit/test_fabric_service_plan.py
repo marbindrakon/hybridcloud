@@ -180,6 +180,25 @@ class Realization(unittest.TestCase):
         # an attachable range holding a stepped-around range is fine (the address management steps around it)
         self.assertEqual(self.errs(real(service={"attachableRanges": ["10.0.0.0/8"]})), [])
 
+    def test_interface_names_the_service_filter_would_catch(self):
+        # Review R3 N5 (node): the service table drops by wildcard (devices named so*, se*); an interface the realization
+        # names (and so the VLAN devices on it) may not be so named while the service is on
+        r = real(nodes={"trunkInterface": "se0"}, core={"bridge": "so-core"},
+                 egress={"parentInterface": "sonet.100"},
+                 attachments={"providerEdges": {"pe1": {"bearers": {"b1": {"interface": "se1.20", "mtu": 9000}}}}})
+        e = self.errs(r)
+        for key, name in (("nodes.trunkInterface", "se0"), ("core.bridge", "so-core"),
+                          ("egress.parentInterface", "sonet.100"),
+                          ("attachments.providerEdges.pe1.bearers.b1.interface", "se1.20")):
+            want = (f"realization {key} {name!r}: the service VRF's filter drops the traffic of devices named so* or se*"
+                    "; rename the interface")
+            self.assertIn(want, e)
+        # the service off: nothing drops by those names
+        r["service"]["enabled"] = False
+        self.assertFalse([x for x in self.errs(r) if "so* or se*" in x])
+        # other names pass
+        self.assertFalse([x for x in self.errs(real(nodes={"trunkInterface": "bond1"})) if "so* or se*" in x])
+
     def test_pools_never_overlap_the_hub(self):
         r = real(infrastructure={"hub": ["10.255.0.0/16"]})
         e = self.errs(r)

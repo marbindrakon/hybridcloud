@@ -1162,6 +1162,18 @@ def service_check(real):
         return errors
     if not (real.get("attachments") or {}).get("enabled"):
         errors.append("realization service.enabled needs attachments.enabled (the platform circuits)")
+    # the service table drops by wildcard (the service links so<n>/se<n>): an interface the realization names, and the
+    # devices made on it (<interface>.<vlan>), may not be named so
+    named = [("nodes.trunkInterface", (real.get("nodes") or {}).get("trunkInterface")),
+             ("core.bridge", (real.get("core") or {}).get("bridge")),
+             ("egress.parentInterface", eg.get("parentInterface"))]
+    for pe, p in sorted(((real.get("attachments") or {}).get("providerEdges") or {}).items()):
+        for b, bearer in sorted(((p or {}).get("bearers") or {}).items()):
+            named.append((f"attachments.providerEdges.{pe}.bearers.{b}.interface", (bearer or {}).get("interface")))
+    for key, dev in named:
+        if isinstance(dev, str) and re.match(r"s[eo]", dev):
+            errors.append(f"realization {key} {dev!r}: the service VRF's filter drops the traffic of devices named so* "
+                          "or se*; rename the interface")
     hub4 = [h for h in hub if h.version == 4]
     if not hub4:
         errors.append("realization service.enabled needs an IPv4 range in infrastructure.hub")

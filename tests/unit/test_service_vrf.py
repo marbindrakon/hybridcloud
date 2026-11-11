@@ -500,6 +500,33 @@ class ServiceApply(A.ApplyCase):
         self.assertIn("table ip shc_service", out)
         self.assertRegex(out, r"so10002\s+UP\s+169\.254\.128\.4/31")
 
+    def test_a_foreign_device_the_filter_would_catch_is_refused_first(self):
+        # Review R3 N5 (node): the service table drops by wildcard ("so*", "se*"): a device so named that the service did
+        # not create is refused before the run's first write, by name; the service's own veth pairs pass
+        st = blade()
+        k = A.F.Kernel(st)
+        k.add_link("", "sonet0", "dummy", mtu=9000, address="00:02:c9:2f:3a:d0")["up"] = True
+        k.add_link("", "se5", "dummy", mtu=9000, address="00:02:c9:2f:3a:d1")["up"] = True
+        self.h.set_state(st)
+        self.h.conf("root", self.conf())
+        rc, out, err, log = self.h.run("root")
+        self.assertEqual(rc, 4, out + err)
+        self.assertIn("sonet0, se5", err)
+        self.assertIn("so*", err)
+        self.assertEqual(A.writes(log), [])
+        # without the service in the configuration nothing is refused (the table is not loaded)
+        c = self.conf()
+        c.pop("service")
+        self.h.set_state(st)
+        self.h.conf("root", c)
+        self.h.ok(self, "root")
+        # the service's own links: a second run passes
+        self.h.set_state(blade())
+        self.h.conf("root", self.conf())
+        self.h.ok(self, "root")
+        out, _ = self.h.ok(self, "root")
+        self.assertTrue(out.strip().endswith("changed=no"), out)
+
     def test_customer_circuits_untouched(self):
         h = self.h
         h.conf("root", self.conf())

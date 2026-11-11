@@ -38,8 +38,12 @@ before it changes anything, while:
 - a VRF that is not the instance's holds a routing table the configuration gives to one of the instance's VRFs (the
   egress VRF, a network's or a circuit's VRF; in a gateway namespace, a network's VNI): the VRF the run creates would
   share that table.
+- with the service VRF on the node: the host has a device whose name starts with `so` or `se` that is not one of the
+  service's veth pairs (`so<n>`/`se<n>`) and not a VRF: the service VRF's filter names its links by those patterns and
+  would drop that device's traffic. `check-fabric` refuses the same for the interfaces the realization names
+  (`nodes.trunkInterface`, `core.bridge`, `egress.parentInterface`, the bearers' `interface`) while `service.enabled`.
 
-The same two checks run in a gateway namespace that exists already. A refusal prints `shc-fabric-apply: <reason>`
+The first two checks run in a gateway namespace that exists already as well. A refusal prints `shc-fabric-apply: <reason>`
 and exits with status 4; the job's failure and the object's status message carry that line. What only the SRv6 core
 refuses is printed as `transport srv6: <reason>` ([SRv6 core transport](srv6-core-transport.md#what-a-node-needs)).
 

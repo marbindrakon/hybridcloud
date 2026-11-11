@@ -552,6 +552,24 @@ precheck() {
   fi
 }
 
+# with the service VRF (root): the service table's drops name the service links by wildcard ("so*", "se*": any device
+# of the namespace whose name starts so). A device so named that the service did not create (a NIC, a bond, a VLAN or
+# anything an installer named) would lose its traffic: refused before the run's first write, naming the devices. The
+# service's own links are the veth pairs se<n>/so<n>; a VRF device (the service VRF itself, "service" by default) is
+# never a packet's sdifname, and the raw notrack on its name leaves a connection already tracked as it is
+service_precheck() {
+  local t
+  t=$(ip -j -d link show | jq -r '[.[] | select(.ifname != null) | select(.ifname | test("^s[eo]"))
+      | select((.linkinfo.info_kind // "") != "vrf")
+      | select(((.ifname | test("^s[eo][0-9]+$")) and ((.linkinfo.info_kind // "") == "veth")) | not) | .ifname]
+      | join(", ")') || { echo "shc-fabric-apply: the links could not be read" >&2; exit 4; }
+  if [ -n "$t" ]; then
+    echo "shc-fabric-apply: devices named like the service VRF's links (so*, se*), which its filter drops, that the" \
+      "service did not create: $t; rename them or leave the service VRF off this node" >&2
+    exit 4
+  fi
+}
+
 # --- transport srv6 (see the header), in the namespace $NSX selects
 # srv6_step <what> <helper> [args]: one step; a failure fails the apply (exit 4, "transport srv6: <what> failed")
 srv6_step() { run_step "transport srv6" "$@"; }
@@ -1584,6 +1602,7 @@ root)
   if [ "$ACT" = up ]; then
     # the refusals that depend only on the host's state, before the run's first write
     precheck root
+    [ -z "$SV" ] || service_precheck
     if [ -n "$V6" ] && ! ra_precheck; then
       [ "$TRANSPORT" != srv6 ] || { echo "transport srv6: a host interface relies on router advertisements" >&2; exit 4; }
       V6=""; LO6=""; ICMP6=""; LOPOOL6=""; ICMPPOOL6=""
