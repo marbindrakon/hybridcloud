@@ -378,8 +378,9 @@ spec:
                           state:
                             type: string
                             description: >-
-                              ready (reached), pending (being connected or waiting for the platform) or refused
-                              (see reason).
+                              ready (reached), pending (being connected or waiting for the platform; an address
+                              accepted before keeps its place while it waits, until its cluster gives it up) or
+                              refused (see reason).
                           reason:
                             type: string
                             description: One-word reason when not ready.
