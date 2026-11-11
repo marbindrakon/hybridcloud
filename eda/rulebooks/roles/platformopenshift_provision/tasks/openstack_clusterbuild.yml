@@ -85,6 +85,13 @@
       vars:
         vault_kv_path: "{{ cb_route53_vault_path }}"
 
+    - name: Record the Route53 records before they are created
+      ansible.builtin.include_tasks: dns_record.yml
+      vars:
+        dr_records:
+          - {zone: "{{ cb_base_domain }}", name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
+          - {zone: "{{ cb_base_domain }}", name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
+
     - name: Create Route53 A records for the API and apps wildcard
       amazon.aws.route53:
         state: present

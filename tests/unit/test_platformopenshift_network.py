@@ -578,6 +578,34 @@ class OpenstackAddressesFile(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class DnsRecordedBeforeCreated(unittest.TestCase):
+    """Review R2 M4: the cluster's DNS records are in status.dns before they are created."""
+
+    def test_designate(self):
+        v = dict(BASE, cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16", cb_ocp_name="c1",
+                 cb_cluster_domain="env1.example.org", cb_cluster_name="shc-oso-acme-c1", use_designate_dns=True,
+                 designate_zone_id="zone-1", designate_project_id="dnsproj-1", designate_admin_vault_path="sites/site1",
+                 fake_os={"dns-upsert": {"records": [{"zoneId": "zone-1", "zone": "env1.example.org.",
+                                                      "name": "api.c1.env1.example.org.", "type": "A", "state": "created"}]}})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="cb_dns_records")
+        self.assertEqual(rc, 0, out)
+        order = [("patch" if "patch" in t else "os:" + t["os"]["action"]) for t in tr if "patch" in t or "os" in t]
+        self.assertEqual(order, ["patch", "os:dns-upsert"])
+        dns = H.patches(tr)[0]["body"]["dns"]
+        self.assertEqual((dns["provider"], dns["projectId"]), ("designate", "dnsproj-1"))
+        self.assertEqual([(r["zoneId"], r["name"], r["type"]) for r in dns["records"]],
+                         [("zone-1", "api.c1.env1.example.org.", "A"), ("zone-1", "*.apps.c1.env1.example.org.", "A")])
+        self.assertTrue(H.patches(tr)[0]["partial"])
+
+    def test_route53(self):
+        tasks = load(os.path.join(TASKS, "openstack_clusterbuild.yml"))
+        block = by_name(tasks, "Create Route53 records for the cluster")["block"]
+        names = [t["name"] for t in block]
+        self.assertLess(names.index("Record the Route53 records before they are created"),
+                        names.index("Create Route53 A records for the API and apps wildcard"))
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class RouterGatewayFile(unittest.TestCase):
     def test_gateway_joins_the_prefixes(self):
         fab = fabric(networks=[{"network": f"{NS}/n1", "prefixes": ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]}])

@@ -1,13 +1,21 @@
 ---
 # shc (§11.6 phase C): API and apps wildcard records in the CloudOSO's Designate zone, with the
 # account, zone and zone project the CloudOSO recorded (upstream hardcoded a lab project and its
-# parent zone). Sets cb_dns_records for the PlatformOpenshift status, which teardown deletes.
+# parent zone). The records are in status.dns before they are created (dns_record.yml); sets cb_dns_records (what
+# Designate answered) for the later status writes. The teardown deletes the recorded records.
 - name: Validate VIPs before Designate DNS
   ansible.builtin.assert:
     that:
       - cb_api_vip | length > 0
       - cb_ingress_vip | length > 0
     fail_msg: "The cluster's floating IPs (status.floatingIPs) must be allocated before its Designate DNS records."
+
+- name: Record the records before they are created
+  ansible.builtin.include_tasks: dns_record.yml
+  vars:
+    dr_records:
+      - {zoneId: "{{ designate_zone_id }}", zone: "", name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}.", type: A}
+      - {zoneId: "{{ designate_zone_id }}", zone: "", name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}.", type: A}
 
 - name: Load the OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
