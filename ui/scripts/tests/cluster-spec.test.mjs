@@ -190,3 +190,14 @@ test('an empty field whose OpenShift default overlaps the network gets a hint, n
   // AWS with a network: the machine network is the placement's subnet
   assert.deepEqual(cs.defaultOverlapHints(net(), ctx({ provider: 'aws', networkSpace: ['10.0.0.0/8'] })).map((h) => h.field), ['clusterNetwork']);
 });
+
+test('Review R2 L7: an empty field whose default overlaps a typed field gets a hint (the job fills it, then refuses)', () => {
+  // clusterNetwork 10.0.0.0/14 typed, machineNetwork left empty: the default machine network 10.0.0.0/16 overlaps it
+  const hints = cs.defaultOverlapHints(net({ clusterNetwork: '10.0.0.0/14' }), ctx());
+  assert.deepEqual(hints.map((h) => [h.field, h.code, h.other]), [['machineNetwork', 'AddressConflict', 'field:clusterNetwork']]);
+  // and the other way round
+  const back = cs.defaultOverlapHints(net({ machineNetwork: '10.128.0.0/16' }), ctx());
+  assert.deepEqual(back.map((h) => [h.field, h.other]), [['clusterNetwork', 'field:machineNetwork']]);
+  // no partner, no hint: AWS with a network has no machine network to type
+  assert.equal(cs.defaultOverlapHints(net({ clusterNetwork: '10.0.0.0/14' }), ctx({ provider: 'aws', hasNetwork: true })).length, 0);
+});
