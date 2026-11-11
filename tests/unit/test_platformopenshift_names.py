@@ -134,6 +134,17 @@ class AcmNames(unittest.TestCase):
                 self.assertNotIn("cluster_name", tmpl, (path, kind, tmpl))
 
 
+class TenantRbacReadsTheCluster(unittest.TestCase):
+    def test_every_provider_names_the_cluster_object(self):
+        # cluster_rbac.yml reads the PlatformOpenshift by cluster_cr_name, else by cluster_name (the build name, not
+        # an object's name): every provider passes the object's own name
+        for f in ("openstack.yml", "aws.yml", "gcp.yml"):
+            incs = [t for t in walk(load(os.path.join(TASKS, f)))
+                    if t.get("ansible.builtin.include_tasks") == "keycloak_oidc.yml"]
+            self.assertEqual(len(incs), 1, f)
+            self.assertEqual(incs[0]["vars"].get("cluster_cr_name"), "{{ ansible_operator_meta.name }}", f)
+
+
 class TeardownAcmNames(unittest.TestCase):
     def deleted(self, build_name):
         rc, tr, out = H.run("platformopenshift_teardown", "delete_acm.yml",
