@@ -119,15 +119,10 @@
           slug: "{{ oso_slug }}"
           domain: "{{ oso_dns_domain }}"
           route53ZoneId: "{{ oso_route53_zone_id }}"
-          apiVIP: "{{ oso_api_vip }}"
-          ingressVIP: "{{ oso_ingress_vip }}"
-          externalNetwork: "{{ oso_external_network }}"
           # what provision created, for teardown: ids only. Accounts and Vault paths are derived again where they
           # are needed (eda/common/tasks/resolve_cloudoso_accounts.yml); null removes the keys older runs wrote.
           accountVaultPath: null
           appCredentialId: "{{ oso_record.appCredentialId }}"
-          apiFloatingIPId: "{{ oso_record.apiFloatingIPId }}"
-          ingressFloatingIPId: "{{ oso_record.ingressFloatingIPId }}"
           dnsProvider: "{{ oso_record.dnsProvider }}"
           dnsZoneId: "{{ oso_record.dnsZoneId }}"
           dnsZoneName: "{{ oso_record.dnsZoneName }}"
