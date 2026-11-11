@@ -8,7 +8,8 @@
 # bundle. Inputs: pnn_name, pnn_id (the placed network, or the global external network in effect), pnn_hybrid (true:
 # a placed network, whose policy for the project may still be on its way), pnn_credential (the Vault path of the
 # environment's credential). Uses cb_oso_project_id, cb_fip_account, cb_app_name. Sets pnn_reason / pnn_message
-# ("" = the name leads to the network alone) and stops through preflight_stop.yml: refuses NetworkNameNotUnique (another network of the name is
+# ("" = the name leads to the network alone) and stops through preflight_stop.yml (a wait goes to po_deferred_wait
+# instead when pnn_defer_wait is true and no earlier wait is kept: the caller stops with it later): refuses NetworkNameNotUnique (another network of the name is
 # visible: the tenant renames or removes its own, or the platform team the share), waits WaitingForPlacement (a placed
 # network not visible or not external for the project yet), or refuses ExternalNetworkNotListed (a global external
 # network the project does not see as external).
@@ -84,9 +85,19 @@
                         ~ (' as an external network' if _visible | length > 0 else '')
                         ~ (' yet' if pnn_hybrid | bool else '')))) }}
 
+- name: Keep the wait for the caller
+  ansible.builtin.set_fact:
+    po_deferred_wait: >-
+      {{ po_deferred_wait | default({}, true) or {'reason': pnn_reason | trim, 'message': pnn_message | trim} }}
+  when:
+    - pnn_reason | trim == 'WaitingForPlacement'
+    - pnn_defer_wait | default(false) | bool
+
 - name: Refuse or wait when the name does not lead to the network alone
   ansible.builtin.include_tasks: preflight_stop.yml
   vars:
     ps_reason: "{{ pnn_reason | trim }}"
     ps_message: "{{ pnn_message | trim }}"
-  when: pnn_reason | trim | length > 0
+  when:
+    - pnn_reason | trim | length > 0
+    - not (pnn_reason | trim == 'WaitingForPlacement' and pnn_defer_wait | default(false) | bool)

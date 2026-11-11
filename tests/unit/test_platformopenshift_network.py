@@ -229,6 +229,34 @@ class NetworkJudge(unittest.TestCase):
         self.assertEqual(judge(needPlatform="True", networkObj=network_obj(reach=("False", "NotRequested", "")))["reason"],
                          "PlatformAccessOff")
 
+    def test_a_refusal_wins_over_a_wait(self):
+        # gate F3 (r10): the IPv6-only placement with router attachments only, Ready with router attachments pending
+        # (the job's RouterAdvertisementFailed): refused PlacementHasNoIPv4, never WaitingForPlacement
+        v6 = placement(ra_state="pending", subnets=(("6", "2001:db8:1::/64"),))
+        v6["spec"].update(ipv6={"prefixLength": 64}, use={"virtualMachines": False, "routerAttachments": True})
+        r = judge(placements=[v6])
+        self.assertEqual((r["reason"], r["wait"]), ("PlacementHasNoIPv4", False), r["message"])
+        # the same while the placement is not ready yet (no subnet in its status at all)
+        v6["status"].update(ready=False, subnets=[])
+        self.assertEqual(judge(placements=[v6])["reason"], "PlacementHasNoIPv4")
+        # other permanent refusals while the placement is not ready
+        self.assertEqual(judge(placements=[placement(ready=False, ra=False)])["reason"], "RouterAttachmentsOff")
+        self.assertEqual(judge(placements=[placement(ready=False)],
+                               networkObj=network_obj(reach=("False", "NotRequested", "off")))["reason"],
+                         "PlatformAccessOff")
+        self.assertEqual(judge(placements=[placement(ready=False)],
+                               fabric=fabric(ranges=("203.0.113.0/24",)))["reason"], "OutsideAttachableRanges")
+        self.assertEqual(judge(placements=[placement(ra_state="pending")], fabric=fabric(endpoints=()))["reason"],
+                         "HubEndpointNotAdmitted")
+        # a placement being deleted does not come back: refused, not waited for
+        gone = placement(ready=False)
+        gone["metadata"]["deletionTimestamp"] = "2026-11-11T19:50:00Z"
+        self.assertEqual(judge(placements=[gone])["reason"], "NetworkNotFound")
+        # two waits: the first is reported, with the placement's facts
+        r = judge(placements=[placement(ready=False)], networkObj=network_obj(reach=None))
+        self.assertEqual((r["reason"], r["wait"], r["placement"]), ("WaitingForPlacement", True, f"{NS}/p1"))
+        self.assertEqual(r["space"], ["192.0.2.0/24"])
+
     def test_ipv6_only_placement(self):
         r = judge(placements=[placement(subnets=(("6", "2001:db8:1::/64"),))])
         self.assertIn("the platform reaches clusters over IPv4, so the network needs IPv4 space", r["message"])
@@ -498,6 +526,36 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(H.patches(tr)[-1]["body"]["reason"], "WaitingForPlacement")
         self.assertIn("as an external network yet", H.patches(tr)[-1]["body"]["message"])
+
+    def test_a_permanent_refusal_wins_over_a_wait(self):
+        # the placement is not ready yet (a wait), but the cluster's ranges overlap a reserved range (spec.networking
+        # cannot change): refused at once, not after the wait
+        err = {"check-cluster-networks": {"errors": ["serviceNetwork 198.18.0.0/16 overlaps 198.18.0.0/15, reserved by "
+                                                     "the platform: x"], "reason": "PrefixReserved"}}
+        rc, tr, out = self.run_op(k8s(places=[placement(ready=False, site={})]), fake_fabric=err)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("overlaps 198.18.0.0/15", out)
+        self.assertFalse(H.patches(tr))
+        self.assertFalse(H.os_calls(tr))                  # no network id yet: the name is not looked up
+        # the build name taken while the placement waits: refused
+        ns = {f"Namespace//shc-oso-acme-c1": {"metadata": {"name": "shc-oso-acme-c1"}}}
+        rc, tr, out = self.run_op(k8s(places=[placement(ready=False)], extra=ns))
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the build name shc-oso-acme-c1 is already in use", out)
+        # another network of the name while router attachments are still pending: refused, not waited for
+        two = {"network-name-check": {"visible": [{"id": "net-1", "project_id": "proj-platform", "external": False},
+                                                  {"id": "net-9", "project_id": "proj-1", "external": False}],
+                                      "unique": False, "external": False}}
+        rc, tr, out = self.run_op(k8s(places=[placement(ra_state="pending")]), fake_os=two)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("sees 2 network(s) named shc-n1", out)
+        # nothing refuses: the wait is recorded once, after every check ran, and nothing after it runs
+        rc, tr, out = self.run_op(k8s(places=[placement(ready=False)]))
+        self.assertEqual(rc, 0, out)
+        p = H.patches(tr)
+        self.assertEqual([x["body"]["reason"] for x in p], ["WaitingForPlacement"])
+        self.assertTrue([t for t in tr if "fabric" in t])          # the ranges were checked first
+        self.assertNotIn("result", tr[-1])
 
     def test_build_name_taken(self):
         ns = {f"Namespace//shc-oso-acme-c1": {"metadata": {"name": "shc-oso-acme-c1"}}}
@@ -1404,7 +1462,8 @@ class PlatformSideDownWaits(unittest.TestCase):
         self.assertNotIn({"result": 1}, tr)            # the job ended there
         body = H.patches(tr)[-1]["body"]
         self.assertEqual((body["status"], body["reason"]), ("pending", "WaitingForPlatformAccess"))
-        self.assertFalse(H.os_calls(tr))
+        # only the read of the network's name ran (a refusal there would win over the wait): nothing released or made
+        self.assertEqual([c["action"] for c in H.os_calls(tr)], ["network-name-check"])
 
     def test_new_cluster_refused(self):
         rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml", os_preflight_vars(),

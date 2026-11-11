@@ -3,9 +3,16 @@
 # path, Helm release): the cluster's network (a hybrid network placed on the environment with router attachments on,
 # or one of the site's global external networks: the one named, else the site's default), the network's name being
 # unique for the environment's project (the installer takes it by name), the cluster's address ranges, and its build
-# name being free on the hub. Refusals and waits through preflight_stop.yml.
+# name being free on the hub. Refusals and waits through preflight_stop.yml. A refusal wins over a wait: a wait (the
+# placement or the platform's side not ready yet) is kept while the checks that can refuse for good still run (the
+# network's own refusals, the name, the address ranges, the build name), and the job stops with it only when none
+# refuses; nothing that writes (the router advertisement) runs before that.
 # Sets cb_external_network (the installer's externalNetwork), cb_fip_network_id, cb_publish, cb_network_record (the
 # status keys of the network choice), cb_platform_path (true: the platform reaches the cluster through the network).
+- name: No wait kept yet
+  ansible.builtin.set_fact:
+    po_deferred_wait: {}
+
 - name: The hybrid network path
   when: oso_network | length > 0
   block:
@@ -18,6 +25,7 @@
         pn_need_platform: true
         pn_need_router_attachments: true
         pn_held: ["{{ cb_api_vip | default('', true) }}", "{{ cb_ingress_vip | default('', true) }}"]
+        pn_defer_wait: true
 
     - name: The cluster on the hybrid network
       ansible.builtin.set_fact:
@@ -88,9 +96,14 @@
              | default([], true) }}
         po_network_space: []
 
+# a placement not ready yet has no network id or name to look for: its wait stands
 - name: The network's name leads the installer to this network alone
   ansible.builtin.include_tasks: preflight_network_name.yml
+  when:
+    - cb_external_network | length > 0
+    - cb_fip_network_id | length > 0
   vars:
+    pnn_defer_wait: true
     pnn_name: "{{ cb_external_network }}"
     pnn_id: "{{ cb_fip_network_id }}"
     pnn_hybrid: "{{ cb_platform_path | bool }}"
@@ -143,6 +156,13 @@
       PlatformOpenshift {{ ansible_operator_meta.name }}: the build name {{ cb_app_name }} is already in use on the
       platform; create the cluster with another name
   when: po_result.reason == 'NamespaceTaken'
+
+- name: Wait (nothing refused the cluster)
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: "{{ po_deferred_wait.reason }}"
+    ps_message: "{{ po_deferred_wait.message }}"
+  when: (po_deferred_wait | default({}, true)).reason | default('', true) | length > 0
 
 # last before the build, on a hybrid network: the site's router advertisement service (where the site has one) holds
 # the advertisement of the cluster's floating IPs on the placed network

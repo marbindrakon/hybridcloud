@@ -39,6 +39,8 @@ Actions (request["action"]):
                  admitted by service.hubEndpoints when it lies in the hub's ranges (service.sources). While the
                  platform's side is down (ServiceNotOffered, CircuitNotDeployed) a cluster the network keeps rows
                  for (status.platformAccess.prefixes, its name, pending or ready) waits; a new one is refused.
+                 Every check runs that its inputs allow, and a refusal wins over a wait (a wait is reported only when
+                 nothing refuses): a cluster never waits for a placement or a network that would refuse it anyway.
                  -> {reason, message, wait, placement (namespace/name), subnet4, space, networkId, networkName,
                      fabric, service, reserved}
   external       {choice, site, networks: CloudInfrastructure status.site.externalNetworks}  the global external
@@ -254,27 +256,43 @@ def network(req):
     if not mine:
         return result("NetworkNotFound", f"HybridNetwork {name} has no NetworkPlacement in {kind} {env}")
     p = mine[0]
+    pspec = p.get("spec") or {}
     pst = p.get("status") or {}
     pref = f"{p['metadata'].get('namespace', ns)}/{p['metadata']['name']}"
     out = {"placement": pref, "placementName": p["metadata"]["name"]}
-    if not pst.get("ready") is True:
-        return result("WaitingForPlacement", f"NetworkPlacement {pref} of HybridNetwork {name} in {kind} {env} is "
-                      "not ready yet", **out)
+    if p["metadata"].get("deletionTimestamp"):
+        return result("NetworkNotFound", f"NetworkPlacement {pref} of HybridNetwork {name} in {kind} {env} is being "
+                      "deleted", **out)
+    # a refusal wins over a wait: the first wait is kept and returned only when no later check refuses
+    waits = []
+
+    def hold(reason, message):
+        waits.append((reason, message))
+
+    def done():
+        return result(*waits[0], **out) if waits else result(**out)
+    nov4 = (f"NetworkPlacement {pref} has no IPv4 subnet; the platform reaches clusters over IPv4, so the network "
+            "needs IPv4 space")
+    # spec.ipv4 cannot be added later: an IPv6-only placement never gets an IPv4 subnet
+    if "ipv6" in pspec and "ipv4" not in pspec:
+        return result("PlacementHasNoIPv4", nov4, **out)
+    ready = pst.get("ready") is True
+    if not ready:
+        hold("WaitingForPlacement", f"NetworkPlacement {pref} of HybridNetwork {name} in {kind} {env} is not ready yet")
     site = ((pst.get("realization") or {}).get("site") or {})
     out.update(networkId=str(site.get("networkId") or ""), networkName=str(site.get("networkName") or ""))
     if flag(req.get("needRouterAttachments")):
-        if not (((p.get("spec") or {}).get("use") or {}).get("routerAttachments") is True):
+        if not ((pspec.get("use") or {}).get("routerAttachments") is True):
             return result("RouterAttachmentsOff", f"NetworkPlacement {pref} does not allow router attachments "
                           "(spec.use.routerAttachments); an OpenShift cluster on the network needs them", **out)
         state = (((pst.get("use") or {}).get("routerAttachments") or {}).get("state") or "")
-        if state != "ready" or not out["networkId"] or not out["networkName"]:
-            return result("WaitingForPlacement", f"NetworkPlacement {pref}: router attachments are not ready yet"
-                          + (f" (state {state})" if state else ""), **out)
+        if ready and (state != "ready" or not out["networkId"] or not out["networkName"]):
+            hold("WaitingForPlacement", f"NetworkPlacement {pref}: router attachments are not ready yet"
+                 + (f" (state {state})" if state else ""))
     subnet4 = placement_subnet4(p)
     out["subnet4"] = subnet4
-    if not subnet4:
-        return result("PlacementHasNoIPv4", f"NetworkPlacement {pref} has no IPv4 subnet; the platform reaches "
-                      "clusters over IPv4, so the network needs IPv4 space", **out)
+    if ready and not subnet4:
+        return result("PlacementHasNoIPv4", nov4, **out)
     hst = hn.get("status") or {}
     # the network's space: spec.prefixes and status.addressSpace[].prefix (rows {prefix, family, ...})
     space = []
@@ -290,39 +308,48 @@ def network(req):
     svc = ((fst.get("realization") or {}).get("service") or {})
     out["service"] = svc
     if not flag(req.get("needPlatform")):
-        return result(**out)
+        return done()
     me = str(req.get("cluster") or "")
     held = [r.get("prefix") for r in ((hst.get("platformAccess") or {}).get("prefixes") or [])
             if isinstance(r, dict) and me and r.get("cluster") == me and r.get("state") in ("pending", "ready")]
 
     def side_down(reason, message):
+        """None when the cluster waits (the network keeps its addresses), else the refusal."""
         if held:
-            return result("WaitingForPlatformAccess", f"HybridNetwork {name} keeps the cluster's addresses "
-                          f"({', '.join(map(str, held))}) while the platform's side is down: {message}", **out)
+            hold("WaitingForPlatformAccess", f"HybridNetwork {name} keeps the cluster's addresses "
+                 f"({', '.join(map(str, held))}) while the platform's side is down: {message}")
+            return None
         return result(reason, message, **out)
     cond = condition(hn, "PlatformReachable")
     if cond is None:
-        return result("WaitingForPlatformAccess", f"HybridNetwork {name} does not report PlatformReachable yet", **out)
-    if str(cond.get("status")) != "True":
+        hold("WaitingForPlatformAccess", f"HybridNetwork {name} does not report PlatformReachable yet")
+    elif str(cond.get("status")) != "True":
         why = cond.get("reason") or ""
         if why != "AttachPending":
             mapped = PLATFORM_REASONS.get(why, "WaitingForPlatformAccess")
             text = (f"HybridNetwork {name}: the platform cannot reach the network ({why}"
                     + (f": {cond.get('message')}" if cond.get("message") else "") + ")")
             if mapped in PLATFORM_SIDE:
-                return side_down(mapped, text)
-            return result(mapped, text, **out)
+                refused = side_down(mapped, text)
+                if refused:
+                    return refused
+            elif mapped in WAITING:
+                hold(mapped, text)
+            else:
+                return result(mapped, text, **out)
     if not fab:
-        return result("WaitingForPlatformAccess", f"HybridNetwork {name}: its fabric {hst.get('fabric') or '(none)'} "
-                      "could not be read", **out)
+        hold("WaitingForPlatformAccess", f"HybridNetwork {name}: its fabric {hst.get('fabric') or '(none)'} "
+             "could not be read")
+        return done()
     if not svc.get("enabled"):
         return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} offers no connection for clusters on "
-                         "networks (its service routing domain is off)")
+                         "networks (its service routing domain is off)") or done()
     ranges = [str(r) for r in svc.get("attachableRanges") or []]
     if not ranges:
         # required with the service (check-fabric); never read as "any range"
-        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} names no ranges for clusters on networks")
-    if not inside(subnet4, ranges):
+        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} names no ranges for clusters on "
+                         "networks") or done()
+    if subnet4 and not inside(subnet4, ranges):
         return result("OutsideAttachableRanges", f"NetworkPlacement {pref}: subnet {subnet4} lies outside the ranges "
                       f"the platform reaches ({', '.join(ranges)})", **out)
     sources = [s for s in svc.get("sources") or [] if v4(s)]
@@ -339,7 +366,7 @@ def network(req):
                 return result("HubEndpointNotAdmitted", f"The hub's API {a} port {port} lies in the hub's ranges and no "
                               "hub endpoint of the fabric admits it; a cluster on the network could not reach the hub",
                               **out)
-    return result(**out)
+    return done()
 
 
 def external(req):

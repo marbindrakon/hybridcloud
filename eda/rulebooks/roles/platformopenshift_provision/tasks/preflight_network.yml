@@ -9,6 +9,9 @@
 #   pn_need_platform              true: OpenStack on a network, AWS/GCP Internal
 #   pn_need_router_attachments    true: OpenStack (the cluster's router and floating IPs go on the network)
 #   pn_held                       optional: the addresses the cluster already holds on the network (named in a refusal)
+#   pn_defer_wait                 optional, default false: true = a wait does not stop the job here; it goes to
+#                                 po_deferred_wait ({reason, message}) and the caller stops with it after its other
+#                                 checks (a refusal there wins over the wait)
 # Sets pf (po_preflight.py network result: placement, placementName, subnet4, space, networkId, networkName, fabric,
 # service, reserved), pf_placement (the NetworkPlacement object), pf_network_obj (the HybridNetwork object).
 - name: Require the platform namespace setting
@@ -80,15 +83,31 @@
 
 # a cluster that already holds addresses on the network keeps them through a refusal (the teardown releases them);
 # the message says so and how to go on (Review R2 L10)
-- name: Refuse or wait
-  ansible.builtin.include_tasks: preflight_stop.yml
+- name: The refusal or wait in words
   vars:
     _held: "{{ pn_held | default([], true) | select | list }}"
-    ps_reason: "{{ pf.reason }}"
-    ps_message: >-
+  ansible.builtin.set_fact:
+    pn_stop_message: >-
       PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pf.message }}{{
       ('. The cluster keeps its floating IPs ' ~ (_held | join(' and ')) ~ ' on the network; '
        ~ ('turn router attachments back on for the placement, or delete the cluster'
           if pf.reason == 'RouterAttachmentsOff' else 'the next run continues with them'))
       if _held | length > 0 and not (pf.wait | default(false) | bool) else '' }}
   when: pf.reason | length > 0
+
+- name: Keep the wait for the caller
+  ansible.builtin.set_fact:
+    po_deferred_wait: "{{ {'reason': pf.reason, 'message': pn_stop_message | trim} }}"
+  when:
+    - pf.reason | length > 0
+    - pf.wait | default(false) | bool
+    - pn_defer_wait | default(false) | bool
+
+- name: Refuse or wait
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: "{{ pf.reason }}"
+    ps_message: "{{ pn_stop_message | trim }}"
+  when:
+    - pf.reason | length > 0
+    - not (pf.wait | default(false) | bool and pn_defer_wait | default(false) | bool)
