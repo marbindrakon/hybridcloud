@@ -1129,6 +1129,77 @@ class OvsdbappStoreTest(unittest.TestCase):
         self.assertEqual(cm.exception.reason, "OvnUnavailable")
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# The deployment assets
+
+COMPONENT = os.path.join(ROOT, "site-components/router-advertisement")
+TEMPLATE = os.path.join(COMPONENT, "deploy/rhoso/router-advertisement.yaml")
+LAB = ("signal9", "172.18.", "75.8.222.", "2602:81f", "atuin", "rhoso-bm", "shc-", "xna-", "quay.")
+
+
+class DeployAssetsTest(unittest.TestCase):
+    def setUp(self):
+        try:
+            import yaml
+        except ImportError:  # pragma: no cover
+            self.skipTest("PyYAML is not installed")
+        with open(TEMPLATE) as fh:
+            self.text = fh.read()
+        self.template = yaml.safe_load(self.text)
+        self.objects = {o["kind"]: o for o in self.template["objects"]}
+
+    def test_every_deployment_name_is_a_parameter(self):
+        params = {p["name"]: p for p in self.template["parameters"]}
+        for name in ("NAMESPACE", "IMAGE", "OVN_CA_ISSUER", "ROUTE_HOST", "OVN_NB_CONNECTION", "KEYSTONE_URL",
+                     "NEUTRON_URL"):
+            self.assertIn(name, params)
+        for name in ("NAMESPACE", "IMAGE", "OVN_CA_ISSUER", "OVN_NB_CONNECTION", "KEYSTONE_URL", "NEUTRON_URL"):
+            self.assertTrue(params[name].get("required"), name)
+            self.assertNotIn("value", params[name], name)
+        for obj in self.template["objects"]:
+            self.assertEqual(obj["metadata"]["namespace"], "${NAMESPACE}")
+        pod = self.objects["Deployment"]["spec"]["template"]["spec"]
+        self.assertEqual(pod["containers"][0]["image"], "${IMAGE}")
+        self.assertEqual(self.objects["Certificate"]["spec"]["issuerRef"]["name"], "${OVN_CA_ISSUER}")
+        self.assertEqual(self.objects["Route"]["spec"]["host"], "${ROUTE_HOST}")
+
+    def test_pod_hardening(self):
+        self.assertFalse(self.objects["ServiceAccount"]["automountServiceAccountToken"])
+        pod = self.objects["Deployment"]["spec"]["template"]["spec"]
+        self.assertFalse(pod["automountServiceAccountToken"])
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+        c = pod["containers"][0]
+        self.assertTrue(c["securityContext"]["readOnlyRootFilesystem"])
+        self.assertFalse(c["securityContext"]["allowPrivilegeEscalation"])
+        self.assertEqual(c["securityContext"]["capabilities"]["drop"], ["ALL"])
+        for kind in ("requests", "limits"):
+            self.assertEqual(set(c["resources"][kind]), {"cpu", "memory"})
+        self.assertEqual(c["livenessProbe"]["httpGet"]["path"], "/healthz")
+        self.assertNotIn("Role", self.objects)
+        self.assertNotIn("RoleBinding", self.objects)
+
+    def test_the_settings_the_program_requires_are_set(self):
+        c = self.objects["Deployment"]["spec"]["template"]["spec"]["containers"][0]
+        env = {e["name"] for e in c["env"]}
+        for name in ("OVN_NB_CONNECTION", "OVN_NB_PRIVATE_KEY", "OVN_NB_CERTIFICATE", "OVN_NB_CA_CERT",
+                     "KEYSTONE_URL", "NEUTRON_URL", "TLS_CERTIFICATE", "TLS_PRIVATE_KEY"):
+            self.assertIn(name, env)
+        self.assertEqual(c["command"][-1], "/opt/router-advertisement/router_advertisement.py")
+
+    def test_no_lab_values(self):
+        paths = [TEMPLATE, PATH, os.path.join(COMPONENT, "deploy/rhoso/README.md"),
+                 os.path.join(COMPONENT, "deploy/container/README.md"),
+                 os.path.join(ROOT, "docs/platform/router-advertisement-service.md")]
+        for path in paths:
+            with open(path) as fh:
+                text = fh.read().lower()
+            for word in LAB:
+                self.assertNotIn(word, text, (path, word))
+            # the service is not registered in Keystone: the realization names its URL per site
+            for word in ("service create", "endpoint create", "hybrid-fabric-ovn", "catalog"):
+                self.assertNotIn(word, text.replace("nocatalog", ""), (path, word))
+
+
 import unittest.mock  # noqa: E402  (used by OvsdbappStoreTest)
 
 if __name__ == "__main__":
