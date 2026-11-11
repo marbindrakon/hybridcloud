@@ -1407,11 +1407,14 @@ for n in ns:
         if cdevs:
             out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr {e["prefix"]} ip daddr {p} '
                        f'tcp sport {{ {eports} }} tcp flags & ack == ack accept')
-sos = [n["so"] for n in ns]
-if sos and hub:
-    out.append(f"    meta sdifname {names(sos)} ip daddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-reply }} accept")
-    if cdevs:
-        out.append(f"    meta sdifname {names(cdevs)} oifname {names(sos)} ip saddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-request }} accept")
+# ICMP: a network's errors and echo replies toward the hub only from its own prefixes; the hub's errors and echo
+# requests toward a network only to its prefixes
+for n in ns:
+    p = elements(n["prefixes"])
+    if hub:
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-reply }} accept')
+    if cdevs and hub:
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} icmp type {{ destination-unreachable, time-exceeded, echo-request }} accept')
 # the drops: every service link by its name's form, whichever networks this configuration lists
 out.append('    meta sdifname "so*" oifname "so*" counter drop comment "no network reaches another through the service VRF"')
 out.append('    meta sdifname "se*" oifname "xe*" counter drop comment "the hub\'s traffic never leaves by a network\'s internet egress"')

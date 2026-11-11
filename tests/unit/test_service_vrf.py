@@ -742,6 +742,32 @@ while time.time() < end:
     seen.append("%s:%d>%d %02x" % (socket.inet_ntoa(d[12:16]), sport, dport, flags))
 print(" ".join(seen))
 PY
+cat > /tmp/svc-icmp.py <<'PY'
+import socket, struct, sys
+def csum(b):
+    if len(b) % 2: b += b"\0"
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b)); s = (s >> 16) + (s & 0xffff); s += s >> 16
+    return ~s & 0xffff
+src, dst = sys.argv[1], sys.argv[2]
+icmp = struct.pack("!BBHI", 3, 3, 0, 0) + b"\x45" + b"\0" * 27
+icmp = icmp[:2] + struct.pack("!H", csum(icmp)) + icmp[4:]
+ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(icmp), 1, 0, 64, 1, 0, socket.inet_aton(src), socket.inet_aton(dst))
+ip = ip[:10] + struct.pack("!H", csum(ip)) + ip[12:]
+socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW).sendto(ip + icmp, (dst, 0))
+PY
+cat > /tmp/svc-icap.py <<'PY'
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP); s.settimeout(0.3)
+seen, end = [], time.time() + float(sys.argv[1])
+while time.time() < end:
+    try:
+        d = s.recv(2048)
+    except socket.timeout:
+        continue
+    if d[20] == 3:
+        seen.append(socket.inet_ntoa(d[12:16]))
+print(" ".join(seen))
+PY
 probe() {
   $C python3 /tmp/svc-l.py 192.0.2.15:6443 192.0.2.15:22 & $C2 python3 /tmp/svc-l.py 192.0.2.99:6443 &
   $H python3 /tmp/svc-l.py 198.51.100.10:6443 198.51.100.5:22 198.51.100.10:22 & sleep 1
@@ -758,6 +784,10 @@ probe() {
   wait %4 2>/dev/null || true; sleep 2.5
   echo "raw: $(cat /tmp/svc-cap.out)"
   kill %1 %2 %3 2>/dev/null || true; wait 2>/dev/null || true
+  # ICMP errors toward the hub: from the network's own prefix, and forged with another network's prefix as source
+  $H python3 /tmp/svc-icap.py 2 > /tmp/svc-icap.out & sleep 0.5
+  $C python3 /tmp/svc-icmp.py 192.0.2.15 198.51.100.5; $C python3 /tmp/svc-icmp.py 192.0.2.99 198.51.100.5
+  wait; echo "icmp: $(cat /tmp/svc-icap.out)"
 }
 echo "--- before"; probe
 nft -f "$1"
@@ -805,6 +835,9 @@ class RealKernel(A.ApplyCase):
         self.assertEqual({k: res["after"][k] for k in ("hub-api", "hub-ssh", "cl-endpoint", "cl-other", "cl-cl2", "ping")},
                          {"hub-api": "connected", "hub-ssh": "timeout", "cl-endpoint": "connected",
                           "cl-other": "timeout", "cl-cl2": "timeout", "ping": "reply"})
+        # an ICMP error toward the hub passes from the network's own prefix only (not forged with another's)
+        self.assertEqual(res["before"]["icmp"].split(), ["192.0.2.15", "192.0.2.99"])
+        self.assertEqual(res["after"]["icmp"].split(), ["192.0.2.15"])
         # the SYN-ACK without its SYN on this node passes (stateless), the bare SYN from the service port does not
         self.assertIn("192.0.2.15:6443>40000 12", res["after"]["raw"])
         self.assertNotIn(">40001", res["after"]["raw"])

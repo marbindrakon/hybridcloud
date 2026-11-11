@@ -247,7 +247,9 @@ network, each inside the network's accepted address space; anything else is refu
 The table `ip shc_service`, loaded before FRR takes the service VRF and replaced whole on every run, filters what
 crosses it, statelessly (the two directions may cross different nodes): from the hub's ranges TCP on
 `service.ports` and ICMP echo to a network's accepted addresses only; from those addresses TCP to
-`service.hubEndpoints` only; ICMP errors both ways; nothing from one `so*` device to another, so no network reaches
+`service.hubEndpoints` only; ICMP errors both ways, a network's only from its own accepted addresses; nothing from
+one `so*` device to another (the drops match the `so*` and `se*` devices by name, never by a list, so a pair a run
+has not yet removed is dropped too), so no network reaches
 another through the service VRF. The service VRF joins the root's input filter (`shc_root_in`): its connection
 devices are legs whose input `shc_service` filters itself (BGP, BFD and ICMP from the connection's link only,
 everything else dropped), and the `se*`/`so*` pairs get the filter's common answers. Each dropping rule counts its
