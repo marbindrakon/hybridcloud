@@ -809,6 +809,7 @@ def make_handler(service, request_timeout=15.0):
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = False
     block_on_close = True  # server_close() waits for the requests in flight
+    request_queue_size = 128  # the listen backlog: the default of 5 resets connections under a burst
 
     def handle_error(self, request, client_address):
         LOG.warning("connection from %s: %s", client_address[0], describe(sys.exc_info()[1]))

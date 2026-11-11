@@ -248,6 +248,10 @@ def get(svc, port_id, token=TOKEN):
     return svc.handle("GET", "/v1/router-ports/%s" % port_id, {"X-Auth-Token": token}, None)
 
 
+def describe_exc(exc):
+    return "%s: %s" % (type(exc).__name__, exc)
+
+
 def drain(guard, turns=5):
     """Run the guard's queued work synchronously (as its thread would)."""
     for _ in range(turns):
@@ -925,14 +929,18 @@ class HttpTest(Base):
 
         def worker(i):
             port_id = PORT if i % 2 else PORT2
-            results.append(self.call("PUT", "/v1/router-ports/%s/nat" % port_id, b'{"enabled": true}')[0])
+            try:
+                results.append(self.call("PUT", "/v1/router-ports/%s/nat" % port_id, b'{"enabled": true}')[0])
+            except Exception as exc:
+                results.append(describe_exc(exc))
 
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(30)]
+        self.assertGreaterEqual(self.server.request_queue_size, 64)
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(60)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        self.assertEqual(results, [200] * 30)
+        self.assertEqual(results, [200] * 60)
         self.assertEqual(self.db.options("lrp-" + PORT)[RA.OPTION], "connected-as-host,nat")
 
     def test_a_slow_dependency_does_not_block_other_requests(self):
