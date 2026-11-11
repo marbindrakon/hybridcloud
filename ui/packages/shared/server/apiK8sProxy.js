@@ -21,6 +21,9 @@
  *   hook, an answer that is not valid JSON is refused with 502 (never sent
  *   unchecked), and a body (or one watch event) larger than `maxBodyBytes`
  *   (default 8 MiB) is refused with 502 or ends the stream.
+ * - `guardRequest(path, method, body, req)` (optional) sees every write
+ *   (any method but GET and HEAD) before it is forwarded; throwing an error
+ *   that carries `status` (and optionally `message`) refuses it.
  * - /can-i/<namespace>/<resource>/<verb> is a lightweight SelfSubjectAccessReview
  *   shim kept for one release (use /api/permissions instead).
  */
@@ -355,11 +358,11 @@ function canIShim(apiServer, token, namespace, resource, verb, res) {
 
 /**
  * @param {string} apiServer
- * @param {{ transformBody?: (path: string, obj: any, req: import('express').Request) => any, maxBodyBytes?: number }} [options]
+ * @param {{ transformBody?: (path: string, obj: any, req: import('express').Request) => any, guardRequest?: (path: string, method: string, body: any, req: import('express').Request) => void, maxBodyBytes?: number }} [options]
  * @returns {import('express').RequestHandler}
  */
 export function createApiK8sProxy(apiServer, options = {}) {
-  const { transformBody } = options;
+  const { transformBody, guardRequest } = options;
   const maxBody = Number(options.maxBodyBytes) > 0 ? Number(options.maxBodyBytes) : DEFAULT_MAX_BODY_BYTES;
   return (req, res) => {
     const token = userToken(req);
@@ -396,6 +399,13 @@ export function createApiK8sProxy(apiServer, options = {}) {
       req.method !== "GET" && req.method !== "HEAD" && req.body && Object.keys(req.body).length
         ? req.body
         : undefined;
+    if (guardRequest && req.method !== "GET" && req.method !== "HEAD") {
+      try {
+        guardRequest(norm.pathname, req.method, body, req);
+      } catch (err) {
+        return refuse(res, err);
+      }
+    }
     const incomingType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
     const contentType = req.method === "PATCH" && PATCH_TYPES.includes(incomingType) ? incomingType : undefined;
     return proxyRequest(apiServer, k8sPath, norm.watch, req, token, body, res, contentType, transformBody, maxBody);
