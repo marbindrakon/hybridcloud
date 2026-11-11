@@ -36,8 +36,8 @@ Actions (request["action"]):
   service-wait   {network (namespace/name), prefixes, service, rows: HybridNetwork status.platformAccess.prefixes}
                  -> {done, reason, message}: done when every prefix is carried for the network; a refusal (on the
                  fabric's refused list or a refused row of the network) gives its reason.
-  router-gateway {routers: [router objects], name}  the IPv4 address of the named router's external gateway.
-                 -> {address}
+  router-gateway {routers: [router objects], name, network_id}  the IPv4 address of the named router's external
+                 gateway, when exactly one router has the name and its gateway is on network_id. -> {address, note}
 """
 import hashlib
 import ipaddress
@@ -353,15 +353,20 @@ def service_wait(req):
 
 
 def router_gateway(req):
-    for r in req.get("routers") or []:
-        if not isinstance(r, dict) or r.get("name") != req.get("name"):
-            continue
-        gw = r.get("external_gateway_info") or {}
-        for f in gw.get("external_fixed_ips") or []:
-            a = str((f or {}).get("ip_address") or "")
-            if a and ":" not in a:
-                return {"address": a}
-    return {"address": ""}
+    """The router is found by name in a project the tenant writes to: only a name that is unique there, and a router
+    whose gateway is on the cluster's network (network_id), gives an address (Review R2 L9)."""
+    named = [r for r in req.get("routers") or [] if isinstance(r, dict) and r.get("name") == req.get("name")]
+    if len(named) != 1:
+        return {"address": "", "note": f"{len(named)} routers named {req.get('name')}" if named else ""}
+    gw = named[0].get("external_gateway_info") or {}
+    want = str(req.get("network_id") or "")
+    if want and str(gw.get("network_id") or "") != want:
+        return {"address": "", "note": f"router {req.get('name')} has its gateway on another network"}
+    for f in gw.get("external_fixed_ips") or []:
+        a = str((f or {}).get("ip_address") or "")
+        if a and ":" not in a:
+            return {"address": a, "note": ""}
+    return {"address": "", "note": ""}
 
 
 ACTIONS = {"build-name": build_name, "hub-owner": hub_owner, "networking": networking, "network": network, "external": external,

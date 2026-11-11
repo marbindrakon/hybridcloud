@@ -281,10 +281,25 @@ class FipsAndWait(unittest.TestCase):
         self.assertEqual((r["reason"], r["message"]), ("PrefixReserved", "192.0.2.16/32 overlaps a reserved range"))
 
     def test_router_gateway(self):
-        routers = [{"name": "infra-x-external-router", "external_gateway_info": {"external_fixed_ips": [
+        routers = [{"name": "infra-x-external-router", "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [
             {"ip_address": "2001:db8::5"}, {"ip_address": "192.0.2.30"}]}}, {"name": "other"}]
-        self.assertEqual(P.router_gateway({"routers": routers, "name": "infra-x-external-router"}), {"address": "192.0.2.30"})
-        self.assertEqual(P.router_gateway({"routers": routers, "name": "infra-y-external-router"}), {"address": ""})
+        gw = lambda rs, n="infra-x-external-router": P.router_gateway({"routers": rs, "name": n, "network_id": "net-1"})["address"]  # noqa: E731
+        self.assertEqual(gw(routers), "192.0.2.30")
+        self.assertEqual(gw(routers, "infra-y-external-router"), "")
+
+    def test_router_gateway_a_planted_router_counts_for_nothing(self):
+        # Review R2 L9: the tenant's project can hold another router of the installer's router name
+        mine = {"name": "infra-x-external-router",
+                "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}
+        planted = {"name": "infra-x-external-router",
+                   "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.99"}]}}
+        r = P.router_gateway({"routers": [planted, mine], "name": "infra-x-external-router", "network_id": "net-1"})
+        self.assertEqual(r["address"], "")
+        self.assertIn("2 routers", r["note"])
+        elsewhere = dict(planted, external_gateway_info={"network_id": "net-9", "external_fixed_ips": [{"ip_address": "203.0.113.9"}]})
+        r = P.router_gateway({"routers": [elsewhere], "name": "infra-x-external-router", "network_id": "net-1"})
+        self.assertEqual(r["address"], "")
+        self.assertIn("another network", r["note"])
 
 
 # ---- task files end to end ----------------------------------------------------------------------------------------
@@ -457,7 +472,7 @@ def addr_vars(**kw):
              cb_fip_network_id="net-1", cb_fip_account="sites/site1", cb_external_network="shc-n1",
              cb_network_record={"network": "n1", "externalNetwork": None, "placement": f"{NS}/p1", "publish": "Internal"},
              cb_cluster_network="10.128.0.0/14", cb_service_network="172.30.0.0/16", cb_machine_network="10.0.0.0/16",
-             pf={"fabric": "f1", "service": fabric()["status"]["realization"]["service"]},
+             pf={"fabric": "f1", "networkId": "net-1", "service": fabric()["status"]["realization"]["service"]},
              po_cr_current={"resources": [{"status": {}}]},
              fake_os={"cluster-fips/present": {"network": "net-1", "api": {"address": "192.0.2.15", "id": "fip-a"},
                                                "ingress": {"address": "192.0.2.16", "id": "fip-i"}}})
@@ -611,7 +626,7 @@ class RouterGatewayFile(unittest.TestCase):
         fab = fabric(networks=[{"network": f"{NS}/n1", "prefixes": ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]}])
         v = dict(addr_vars(), rg_infra_id="c1-x7k2p", cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16")
         routers = [{"name": "c1-x7k2p-external-router",
-                    "external_gateway_info": {"external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}]
+                    "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}]
         rc, tr, out = H.run("platformopenshift_provision", "router_gateway.yml", v, k8s=k8s(fab=fab), routers=routers,
                             result="rg_address")
         self.assertEqual(rc, 0, out)
@@ -624,7 +639,7 @@ class RouterGatewayFile(unittest.TestCase):
         fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.30/32", "reason": "ServicePrefixInUse"}])
         v = dict(addr_vars(), rg_infra_id="c1-x7k2p", cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16")
         routers = [{"name": "c1-x7k2p-external-router",
-                    "external_gateway_info": {"external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}]
+                    "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}]
         rc, tr, out = H.run("platformopenshift_provision", "router_gateway.yml", v, k8s=k8s(fab=fab), routers=routers,
                             result="rg_address")
         self.assertEqual(rc, 0, out)
