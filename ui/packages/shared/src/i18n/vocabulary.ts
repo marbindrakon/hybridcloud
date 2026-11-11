@@ -250,13 +250,19 @@ function keyWords(t: VocabT, key: string): string[] {
   return key
     .replace(/[_-]+/g, ' ')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    // "HTTPServer" -> "HTTP Server", but a plural acronym stays whole: "floatingIPs" -> "floating IPs"
+    .replace(/([A-Z]+)([A-Z][a-z])/g, (all: string, a: string, b: string, at: number, str: string) => {
+      const next = str.charAt(at + all.length);
+      return b === `${b.charAt(0)}s` && (next === '' || /[A-Z\s_-]/.test(next)) ? all : `${a} ${b}`;
+    })
     .split(/\s+/)
     .filter(Boolean)
     .map((w) => {
       const lower = w.toLowerCase();
       const mapped = t(`fieldWords.${lower}`, { defaultValue: '' });
       if (mapped) return mapped;
+      // a plural acronym: the acronym in upper case, the plural s in lower case ("IPs", "IDs", "URLs")
+      if (lower.length > 2 && lower.endsWith('s') && ACRONYMS.has(lower.slice(0, -1))) return `${lower.slice(0, -1).toUpperCase()}s`;
       if (ACRONYMS.has(lower)) return lower.toUpperCase();
       return lower;
     });

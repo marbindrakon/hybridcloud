@@ -859,10 +859,13 @@ export function HybridNetworkCreateFields({
   namespace,
   entityName,
   onChange,
+  onBlockers,
 }: {
   namespace: string;
   entityName: string;
   onChange: SpecChange;
+  /** What stops the network from being created, in words (a prefix in a reserved range names the range). */
+  onBlockers?: (blockers: string[]) => void;
 }): React.ReactElement {
   const { t } = useTranslation();
   const fabrics = useK8sResourceList<HybridFabric>('HybridFabric', { namespace: PLATFORM_NAMESPACE });
@@ -948,6 +951,13 @@ export function HybridNetworkCreateFields({
       }
     : null;
   useReportSpec(spec, onChange);
+  // the form's summary names a reserved range instead of "Fill in the required fields"
+  const reservedBlockers = [...reservedIpv4, ...reservedIpv6];
+  const reservedKey = JSON.stringify(reservedBlockers);
+  useEffect(() => {
+    onBlockers?.(reservedBlockers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reservedKey]);
 
   const ipv4Message = ipv6InIpv4.length
     ? t('ipv6.ipv6InIpv4List')

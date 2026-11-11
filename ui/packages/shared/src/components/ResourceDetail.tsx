@@ -77,6 +77,22 @@ function formatValue(val: unknown): React.ReactNode {
     return <span className="sc-text-muted">—</span>;
   }
   if (typeof val === 'boolean') return val ? 'true' : 'false';
+  // a list of named records (DNS records, ...): one line each, its type and state after the name
+  if (Array.isArray(val) && val.length > 0 && val.every((v) => !!v && typeof v === 'object' && typeof (v as { name?: unknown }).name === 'string')) {
+    return (
+      <ul style={{ margin: 0, paddingLeft: '1rem' }}>
+        {(val as Array<Record<string, unknown>>).map((r, i) => {
+          const extra = [r.type, r.state].filter((x): x is string => typeof x === 'string' && x.length > 0).join(', ');
+          return (
+            <li key={`${String(r.name)}-${i}`}>
+              {String(r.name)}
+              {extra ? <span className="sc-text-muted"> ({extra})</span> : null}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
   if (typeof val === 'object') {
     return <code style={{ fontSize: '0.8125rem' }}>{JSON.stringify(val)}</code>;
   }
@@ -286,6 +302,12 @@ export function ResourceDetail({
     const statusRaw = { ...(shown.status ?? {}) } as Record<string, unknown>;
     for (const key of [...COMMON_STATUS_KEYS, ...(KIND_STATUS_KEYS[kind] ?? []), ...CONTRACT_KEYS, ...DIAGNOSTIC_KEYS, ...LEGACY_STATUS_KEYS]) {
       delete statusRaw[key];
+    }
+    // the jobs copy the tenant's description onto the objects of the tenant: say whose it is
+    if (kind !== 'Entity' && 'description' in statusRaw) {
+      const tenantDescription = statusRaw.description;
+      delete statusRaw.description;
+      statusRaw[t('detail.tenantDescription')] = tenantDescription;
     }
     return {
       [t('detail.name')]: resource.metadata.name,

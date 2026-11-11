@@ -348,6 +348,7 @@ export function CreateResourceForm({
   const [personaRbacs, setPersonaRbacs] = useState<string[]>([]);
   /** Spec reported by a network create section (null while incomplete or invalid) */
   const [networkSpec, setNetworkSpec] = useState<Record<string, unknown> | null>(null);
+  const [networkBlockers, setNetworkBlockers] = useState<string[]>([]);
 
   const { t } = useTranslation();
   const type = formType;
@@ -734,6 +735,8 @@ export function CreateResourceForm({
   if (name && !nameIssue && !canSubmit()) {
     // the cluster form names what stops it (network, counts, address settings) instead of the generic line
     if (type === 'platformopenshift' && clusterEnv && clusterFields?.blockers.length) blockers.push(...clusterFields.blockers);
+    // the network form names a prefix in a reserved range and the range
+    else if (type === 'hybridnetwork' && networkBlockers.length) blockers.push(...networkBlockers);
     else blockers.push(t('form.blockRequired'));
   }
   if (checkText) blockers.push(t('form.blockServer', { reason: [checkText.body || checkText.title, ...causeLines(checkErrors.other)].filter(Boolean).join(' ') }));
@@ -1411,6 +1414,7 @@ export function CreateResourceForm({
                   namespace={entityNs}
                   entityName={currentEntityName}
                   onChange={setNetworkSpec}
+                  onBlockers={setNetworkBlockers}
                 />
               )}
 
