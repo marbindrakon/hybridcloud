@@ -322,15 +322,17 @@ spec:
                                   type: string
                                   description: >-
                                     The area: Reachability, Start (the configuration's start at boot), Service,
-                                    RoutingDaemon, Configuration (the node differs from its configuration) or
-                                    SiteSessions.
+                                    RoutingDaemon, Configuration (the node differs from its configuration),
+                                    SiteSessions or ServiceSessions.
                                 reason:
                                   type: string
                                   description: >-
                                     NodeUnreachable, ReadFailed (the node answered, its check did not complete),
                                     StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
                                     RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
-                                    routing configuration the node does not take) or SiteSessionsDown.
+                                    routing configuration the node does not take), SiteSessionsDown or
+                                    ServiceSessionsDown (no session with the platform's router for clusters on
+                                    networks).
                                 message:
                                   type: string
                                 since:

@@ -197,7 +197,7 @@ objects read Unknown/`NotChecked` and the stale alerts stay quiet. Two alerts wa
 schedule, AAP or the job is broken), and `ShcFabricNodesNotRead`, lower, when runs report but have not read the nodes
 (`checkedAt`) for `ops.fabricHealth.alerts.notReadIntervals` intervals because changes to the nodes held them off. Events
 come on transitions only (`NodeStartFailed`, `NodeServiceFailed`, `RoutingDaemonDown`, `RoutingDaemonRestarted`,
-`ConfigurationDrift`, `SiteSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
+`ConfigurationDrift`, `SiteSessionsDown`, `ServiceSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
 
 What a full run repairs wakes the job of the object it belongs to (the fabric for the root, the gateway for its
 instance) when that object is ready: a failed or inactive start, a unit not running or not started at boot at once,
