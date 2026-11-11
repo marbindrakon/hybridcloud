@@ -420,8 +420,8 @@ spec:
                 installStarted:
                   type: boolean
                   description: >-
-                    True once the installation was started; the cluster's floating IPs are then part of it and are
-                    kept until the cluster is deleted.
+                    True once the installation was started; the cluster's floating IPs and its prefixes in the
+                    platform's service routing domain are then part of it and are kept until the cluster is deleted.
                 oidcConfigured:
                   type: boolean
                   description: >-

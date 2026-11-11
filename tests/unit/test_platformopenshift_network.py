@@ -748,6 +748,35 @@ class CloudNetworkFiles(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertFalse([p for p in H.patches(tr) if "platformPrefixes" in p["body"]])
 
+    def test_installed_or_started_cluster_keeps_its_prefix_on_a_refusal(self):
+        # Review R3 N2 (R2 M1 on AWS/GCP): a refused row for a cluster whose install was started or is done reports the
+        # refusal and keeps the prefix (and with it its place); before the install the prefix is withdrawn
+        fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.0/25", "reason": "ServicePrefixInUse"}])
+        for cloud, kind in (("aws", "CloudAWS"), ("gcp", "CloudGCP")):
+            for st in ({"clusterInstalled": True, "platformPrefixes": ["192.0.2.0/25"]}, {"installStarted": True}):
+                with self.subTest(cloud=cloud, st=st):
+                    rc, tr, out = H.run("platformopenshift_provision", f"{cloud}_clusterbuild_network.yml",
+                                        cloud_vars(cloud, "Internal",
+                                                   platformopenshift_cr={"resources": [{"status": dict(st)}]}),
+                                        k8s=k8s(places=self.placements(kind), fab=fab))
+                    self.assertNotEqual(rc, 0)
+                    self.assertFalse([p for p in H.patches(tr)
+                                      if "platformPrefixes" in p["body"] and p["body"]["platformPrefixes"] is None])
+                    self.assertIn("keeps its prefix 192.0.2.0/25", out)
+            with self.subTest(cloud=cloud, st="before the install"):
+                rc, tr, out = H.run("platformopenshift_provision", f"{cloud}_clusterbuild_network.yml",
+                                    cloud_vars(cloud, "Internal"), k8s=k8s(places=self.placements(kind), fab=fab))
+                self.assertNotEqual(rc, 0)
+                self.assertTrue([p for p in H.patches(tr)
+                                 if "platformPrefixes" in p["body"] and p["body"]["platformPrefixes"] is None])
+
+    def test_cloud_install_started_is_recorded_before_the_helm_release(self):
+        tasks = load(os.path.join(TASKS, "aws_clusterbuild_deploy.yml"))
+        names = [t.get("name") for t in tasks]
+        rec = [i for i, t in enumerate(tasks) if "installStarted" in str(t.get("vars", {}).get("cr_status_body", {}))]
+        self.assertTrue(rec)
+        self.assertLess(rec[0], names.index("Deploy mce-cluster-build chart"))
+
     def test_internal_waits_while_not_carried(self):
         rc, tr, out = H.run("platformopenshift_provision", "aws_clusterbuild_network.yml", cloud_vars("aws", "Internal"),
                             k8s=k8s(places=self.placements("CloudAWS")), result="1")
