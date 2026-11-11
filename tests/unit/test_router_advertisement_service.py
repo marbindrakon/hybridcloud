@@ -855,6 +855,18 @@ class SettingsTest(unittest.TestCase):
                 RA.load_settings(dict(self.env(), **{name: value}))
             self.assertIn(name, str(ctx.exception))
 
+    def test_probe_port(self):
+        # Review R3 N5: the probes have a listener of their own (none unless PROBE_PORT is set)
+        self.assertIsNone(RA.load_settings(self.env()).probe_port)
+        self.assertEqual(RA.load_settings(self.env(PROBE_PORT="8081")).probe_port, 8081)
+        for value in ("0", "x"):
+            with self.assertRaises(RA.ConfigError) as cm:
+                RA.load_settings(self.env(PROBE_PORT=value))
+            self.assertTrue(str(cm.exception).startswith("PROBE_PORT:"), str(cm.exception))
+        with self.assertRaises(RA.ConfigError) as cm:
+            RA.load_settings(self.env(PROBE_PORT="8080"))
+        self.assertTrue(str(cm.exception).startswith("PROBE_PORT:"), str(cm.exception))
+
     def test_tcp_needs_no_certificates(self):
         s = RA.load_settings(self.env(OVN_NB_CONNECTION="tcp:192.0.2.10:6641,tcp:192.0.2.11:6641",
                                       OVN_NB_PRIVATE_KEY=None, OVN_NB_CERTIFICATE=None, OVN_NB_CA_CERT=None))
@@ -996,6 +1008,43 @@ class HttpTest(Base):
         conn.request("GET", "/healthz")
         self.assertEqual(conn.getresponse().status, 200)
         conn.close()
+
+    def test_probes_answer_while_every_request_slot_is_held(self):
+        # Review R3 N5: a client holding every slot of the service's listener does not starve the probes: they have a
+        # listener of their own, which answers /healthz and /readyz only
+        server = RA.build_server(self.svc, "127.0.0.1", 0, max_connections=2, deadline=30.0)
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        probes = RA.build_probe_server(self.svc, "127.0.0.1", 0)
+        threading.Thread(target=probes.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True).start()
+        self.addCleanup(probes.server_close)
+        self.addCleanup(probes.shutdown)
+        port, pport = server.server_address[1], probes.server_address[1]
+        idle = [socket.create_connection(("127.0.0.1", port), timeout=10) for _ in range(2)]
+        self.addCleanup(lambda: [x.close() for x in idle])
+        time.sleep(0.3)
+        extra = socket.create_connection(("127.0.0.1", port), timeout=10)
+        self.assertEqual(extra.recv(1024), b"")            # the service's listener is full
+        extra.close()
+        for path, status in (("/healthz", 200), ("/readyz", 200)):
+            conn = http.client.HTTPConnection("127.0.0.1", pport, timeout=5)
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, status, path)
+            resp.read()
+            conn.close()
+        self.store.up = False
+        conn = http.client.HTTPConnection("127.0.0.1", pport, timeout=5)
+        conn.request("GET", "/readyz")
+        self.assertEqual(conn.getresponse().status, 503)
+        conn.close()
+        # nothing but the probes on that listener, not even with a token
+        conn = http.client.HTTPConnection("127.0.0.1", pport, timeout=5)
+        conn.request("GET", "/v1/router-ports/%s" % PORT, headers={"X-Auth-Token": TOKEN})
+        self.assertEqual(conn.getresponse().status, 404)
+        conn.close()
+        self.assertEqual(probes.max_connections, RA.PROBE_CONNECTIONS)
 
     def test_concurrent_http_requests(self):
         results = []
@@ -1672,6 +1721,30 @@ class DeployAssetsTest(unittest.TestCase):
                          "${ROUTE_ALLOWED_SOURCES}")
         with open(README) as fh:
             self.assertIn("-p ROUTE_ALLOWED_SOURCES=", fh.read())
+
+    def test_only_the_ingress_routers_reach_the_pod(self):
+        # Review R3 N5: a pod of the same cluster cannot reach the service (and hold its request slots); the routers
+        # reach its https port, the kubelet its probe port (node traffic, which a NetworkPolicy never blocks)
+        params = {p["name"]: p for p in self.template["parameters"]}
+        self.assertEqual(params["INGRESS_NAMESPACE"]["value"], "openshift-ingress")
+        np = self.objects["NetworkPolicy"]
+        self.assertEqual(np["spec"]["podSelector"], {"matchLabels": {"app.kubernetes.io/name": "router-advertisement"}})
+        self.assertEqual(np["spec"]["policyTypes"], ["Ingress"])
+        rules = np["spec"]["ingress"]
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0]["ports"], [{"port": "https", "protocol": "TCP"}])
+        self.assertEqual(rules[0]["from"], [
+            {"namespaceSelector": {"matchLabels": {"policy-group.network.openshift.io/ingress": ""}}},
+            {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "${INGRESS_NAMESPACE}"}}}])
+        c = self.objects["Deployment"]["spec"]["template"]["spec"]["containers"][0]
+        ports = {p["name"]: p["containerPort"] for p in c["ports"]}
+        env = {e["name"]: e.get("value") for e in c["env"]}
+        self.assertEqual(env["PROBE_PORT"], str(ports["probe"]))
+        self.assertNotEqual(ports["probe"], ports["https"])
+        for probe in ("livenessProbe", "readinessProbe"):
+            self.assertEqual((c[probe]["httpGet"]["port"], c[probe]["httpGet"]["scheme"]), ("probe", "HTTP"), probe)
+        # the Service exposes the https port only
+        self.assertEqual([p["targetPort"] for p in self.objects["Service"]["spec"]["ports"]], ["https"])
 
     def test_every_deployment_name_is_a_parameter(self):
         params = {p["name"]: p for p in self.template["parameters"]}

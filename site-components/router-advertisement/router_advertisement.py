@@ -14,6 +14,9 @@ Python bindings). It holds no OpenStack credential: every call is authorized by 
 API (JSON):
   GET  /healthz                              no authentication; always 200 with the state
   GET  /readyz                               no authentication; 200 while the database is connected, else 503
+With PROBE_PORT set, /healthz and /readyz are also served in plain HTTP on that port, by a listener of their own (a
+few connections, a short deadline) that serves nothing else: the kubelet's probes never wait for a slot of the
+service's listener, whoever holds those.
   GET  /v1/router-ports/{port_id}            header X-Auth-Token
   PUT  /v1/router-ports/{port_id}/nat        header X-Auth-Token, body {"enabled": true|false}
 
@@ -23,7 +26,7 @@ token); the service keeps no state of its own beyond counters since its start.
 Configuration (environment): OVN_NB_CONNECTION, OVN_NB_PRIVATE_KEY, OVN_NB_CERTIFICATE, OVN_NB_CA_CERT (the last
 three for ssl: connections), KEYSTONE_URL, NEUTRON_URL, OS_CACERT, LISTEN_ADDRESS, LISTEN_PORT, TLS_CERTIFICATE,
 TLS_PRIVATE_KEY, OVN_TIMEOUT_SECONDS, API_TIMEOUT_SECONDS, GUARD_INTERVAL_SECONDS, MAX_CONNECTIONS,
-CONNECTION_DEADLINE_SECONDS, LOG_LEVEL.
+CONNECTION_DEADLINE_SECONDS, PROBE_PORT, LOG_LEVEL.
 """
 import collections
 import datetime
@@ -70,6 +73,10 @@ MAX_BODY = 4096
 # CONNECTION_DEADLINE_SECONDS.
 MAX_CONNECTIONS = 32
 CONNECTION_DEADLINE = 60.0
+# the probe listener (PROBE_PORT): connections at once and their deadline
+PROBE_CONNECTIONS = 4
+PROBE_DEADLINE = 10.0
+PROBE_PATHS = ("/healthz", "/readyz")
 MAX_RESPONSE = 1 << 20
 
 # Guard rate limit: at most RESTORE_LIMIT restores of one port within RESTORE_WINDOW seconds.
@@ -960,6 +967,25 @@ def build_server(service, address, port, tls_cert=None, tls_key=None, max_connec
     return server
 
 
+class ProbeOnly:
+    """The service's /healthz and /readyz, and nothing else (the probe listener)."""
+
+    def __init__(self, service):
+        self.service = service
+
+    def handle(self, method, path, headers, body):
+        if urllib.parse.urlsplit(path).path not in PROBE_PATHS:
+            return 404, {"error": "NotFound", "message": "This port answers /healthz and /readyz only."}
+        return self.service.handle(method, path, {}, None)
+
+
+def build_probe_server(service, address, port):
+    """The probes' own plain HTTP listener: a client holding every slot of the service's listener (or this one's few,
+    for at most PROBE_DEADLINE seconds) never keeps the kubelet's probes waiting for long."""
+    return Server((address, port), make_handler(ProbeOnly(service), request_timeout=5.0),
+                  max_connections=PROBE_CONNECTIONS, deadline=PROBE_DEADLINE)
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Settings
 
@@ -1022,6 +1048,10 @@ def load_settings(env=None):
     if tls_key and not tls_cert:
         raise ConfigError("TLS_CERTIFICATE: required setting is missing (TLS_PRIVATE_KEY is set)")
     address = (env.get("LISTEN_ADDRESS") or "").strip() or "0.0.0.0"
+    listen_port = _number(env, "LISTEN_PORT", 8080, int, 1, 65535)
+    probe_port = _number(env, "PROBE_PORT", None, int, 1, 65535)
+    if probe_port is not None and probe_port == listen_port:
+        raise ConfigError("PROBE_PORT: must differ from LISTEN_PORT (%d)" % listen_port)
     level = (env.get("LOG_LEVEL") or "").strip().upper() or "INFO"
     if level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
         raise ConfigError("LOG_LEVEL: must be DEBUG, INFO, WARNING or ERROR")
@@ -1031,7 +1061,7 @@ def load_settings(env=None):
         ovn_certificate=_file(env, "OVN_NB_CERTIFICATE", ovn_ssl),
         ovn_ca_cert=_file(env, "OVN_NB_CA_CERT", ovn_ssl),
         keystone_url=keystone, neutron_url=neutron, cacert=_file(env, "OS_CACERT", False),
-        listen_address=address, listen_port=_number(env, "LISTEN_PORT", 8080, int, 1, 65535),
+        listen_address=address, listen_port=listen_port, probe_port=probe_port,
         tls_certificate=tls_cert, tls_private_key=tls_key,
         ovn_timeout=_number(env, "OVN_TIMEOUT_SECONDS", 10.0, float, 1, 300),
         api_timeout=_number(env, "API_TIMEOUT_SECONDS", 10.0, float, 1, 300),
@@ -1066,6 +1096,15 @@ def main(argv=None, env=None):
         LOG.error("refusing to start: cannot listen on %s:%d: %s", settings.listen_address, settings.listen_port,
                   describe(exc))
         return 2
+    probes = None
+    if getattr(settings, "probe_port", None):
+        try:
+            probes = build_probe_server(service, settings.listen_address, settings.probe_port)
+        except OSError as exc:
+            LOG.error("refusing to start: cannot listen on %s:%d: %s", settings.listen_address, settings.probe_port,
+                      describe(exc))
+            server.server_close()
+            return 2
     store.start(on_change=guard.notify)
     guard.start()
     stopping = threading.Event()
@@ -1077,6 +1116,9 @@ def main(argv=None, env=None):
     signal.signal(signal.SIGINT, on_signal)
     worker = threading.Thread(target=server.serve_forever, name="http", daemon=True)
     worker.start()
+    if probes is not None:
+        threading.Thread(target=probes.serve_forever, name="probes", daemon=True).start()
+        LOG.info("probes on %s:%d (http)", settings.listen_address, settings.probe_port)
     LOG.info("listening on %s:%d (%s)", settings.listen_address, settings.listen_port,
              "https" if settings.tls_certificate else "http")
     while not stopping.wait(1.0):
@@ -1084,6 +1126,9 @@ def main(argv=None, env=None):
     LOG.info("stopping: finishing the requests in flight")
     server.shutdown()
     server.server_close()
+    if probes is not None:
+        probes.shutdown()
+        probes.server_close()
     guard.stop()
     store.stop()
     LOG.info("stopped")

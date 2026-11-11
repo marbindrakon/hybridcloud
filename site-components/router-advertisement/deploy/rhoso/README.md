@@ -51,10 +51,14 @@ oc -n "$NS" logs deployment/router-advertisement | head
 Leave `OS_CACERT` out when the internal endpoints are plain HTTP or signed by a CA the image already trusts. The
 template creates a ServiceAccount without API permissions or token, the OVN client Certificate (and through it the
 Secret `router-advertisement-ovn-client`), a Service (and through its annotation the service-CA Secret
-`router-advertisement-tls`), a Route and the Deployment (non-root, read-only root file system, resource limits,
-liveness on `/healthz`, readiness on `/readyz`: a pod that cannot reach the northbound database takes no traffic).
-If the namespace has NetworkPolicies, allow ingress to port 8443 from the cluster's ingress routers and egress to
-the northbound database and the two internal endpoints.
+`router-advertisement-tls`), a Route, a NetworkPolicy and the Deployment (non-root, read-only root file system,
+resource limits, liveness on `/healthz`, readiness on `/readyz`: a pod that cannot reach the northbound database
+takes no traffic). The NetworkPolicy admits to the pod only the cluster's ingress routers (the namespace
+`INGRESS_NAMESPACE`, default `openshift-ingress`, and routers on the host network, which OpenShift labels
+`policy-group.network.openshift.io/ingress`), on port 8443: no other pod of the cluster can reach the service or hold
+its connections. The probes have a listener of their own on port 8081 (plain HTTP, `/healthz` and `/readyz` only),
+so they never wait for a request slot; the kubelet reaches it from the node, which a NetworkPolicy does not block.
+If the namespace denies egress by default, allow egress to the northbound database and the two internal endpoints.
 
 ### The Route's certificate
 
@@ -106,6 +110,7 @@ In this order:
    oc -n "$NS" delete --ignore-not-found \
      deployment/router-advertisement \
      route/router-advertisement \
+     networkpolicy/router-advertisement \
      service/router-advertisement \
      secret/router-advertisement-tls \
      certificate/router-advertisement-route \

@@ -100,6 +100,7 @@ Environment variables of the service; a missing required setting stops the start
 | `GUARD_INTERVAL_SECONDS` | default 60: the guard's full pass |
 | `MAX_CONNECTIONS` | default 32: connections served at once; a connection beyond that is closed at once |
 | `CONNECTION_DEADLINE_SECONDS` | default 60: the longest a connection stays open, however slowly its client sends |
+| `PROBE_PORT` | optional: a listener of its own, plain HTTP, for `/healthz` and `/readyz` only (4 connections, 10 seconds each), so the probes never wait for a slot of the service's listener |
 | `LOG_LEVEL` | default `INFO` |
 
 ## Install
@@ -109,10 +110,12 @@ The service has no image of its own: it runs in the site's own Neutron server im
 
 - OpenStack on OpenShift: [deploy/rhoso](../../site-components/router-advertisement/deploy/rhoso/README.md) (an
   OpenShift template: ServiceAccount without API access, the OVN client certificate from the namespace's OVN CA,
-  Service, Route, Deployment; optionally a second template for the Route's certificate from the issuer of the
-  site's public endpoints, so that the CA bundle of the platform's site credential verifies it). The template's
-  parameter `ROUTE_ALLOWED_SOURCES` is required: the address ranges the platform's jobs call the service from
-  (space-separated CIDRs); the Route admits no other source.
+  Service, Route, a NetworkPolicy, Deployment; optionally a second template for the Route's certificate from the
+  issuer of the site's public endpoints, so that the CA bundle of the platform's site credential verifies it). The
+  template's parameter `ROUTE_ALLOWED_SOURCES` is required: the address ranges the platform's jobs call the service
+  from (space-separated CIDRs); the Route admits no other source. The NetworkPolicy admits only the cluster's ingress
+  routers (`INGRESS_NAMESPACE`, default `openshift-ingress`, and host-network routers) to the pod, so no other pod
+  of the cluster can hold the service's connections; the probes use their own port (`PROBE_PORT`).
 - Control planes that run services as containers on hosts:
   [deploy/container](../../site-components/router-advertisement/deploy/container/README.md).
 

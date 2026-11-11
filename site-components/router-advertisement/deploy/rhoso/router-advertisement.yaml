@@ -66,6 +66,11 @@ parameters:
   - name: GUARD_INTERVAL_SECONDS
     description: Seconds between the guard's full passes over the marked router ports.
     value: "60"
+  - name: INGRESS_NAMESPACE
+    description: >-
+      The namespace of the cluster's ingress routers (the only pods admitted to the service, besides the routers on the
+      host network, which OpenShift labels policy-group.network.openshift.io/ingress).
+    value: openshift-ingress
 objects:
   - apiVersion: v1
     kind: ServiceAccount
@@ -120,6 +125,33 @@ objects:
           port: 8443
           targetPort: https
           protocol: TCP
+
+  # Only the cluster's ingress routers reach the service (no other pod can hold its connections); the kubelet's probes
+  # come from the node, which a NetworkPolicy never blocks.
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: router-advertisement
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+    spec:
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: router-advertisement
+      policyTypes:
+        - Ingress
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  policy-group.network.openshift.io/ingress: ""
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: ${INGRESS_NAMESPACE}
+          ports:
+            - port: https
+              protocol: TCP
 
   - apiVersion: route.openshift.io/v1
     kind: Route
@@ -179,6 +211,10 @@ objects:
                 - name: https
                   containerPort: 8443
                   protocol: TCP
+                # the probes' own listener (plain HTTP, /healthz and /readyz only): never waits for a request slot
+                - name: probe
+                  containerPort: 8081
+                  protocol: TCP
               env:
                 - name: OVN_NB_CONNECTION
                   value: ${OVN_NB_CONNECTION}
@@ -198,6 +234,8 @@ objects:
                   value: 0.0.0.0
                 - name: LISTEN_PORT
                   value: "8443"
+                - name: PROBE_PORT
+                  value: "8081"
                 - name: TLS_CERTIFICATE
                   value: /etc/router-advertisement/tls/tls.crt
                 - name: TLS_PRIVATE_KEY
@@ -222,8 +260,8 @@ objects:
               livenessProbe:
                 httpGet:
                   path: /healthz
-                  port: https
-                  scheme: HTTPS
+                  port: probe
+                  scheme: HTTP
                 initialDelaySeconds: 10
                 periodSeconds: 20
                 timeoutSeconds: 5
@@ -232,8 +270,8 @@ objects:
               readinessProbe:
                 httpGet:
                   path: /readyz
-                  port: https
-                  scheme: HTTPS
+                  port: probe
+                  scheme: HTTP
                 periodSeconds: 10
                 timeoutSeconds: 5
               volumeMounts:
