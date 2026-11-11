@@ -341,10 +341,14 @@ class PreflightNetworkFile(unittest.TestCase):
         self.assertIn("fabric_platform_namespace", out)
 
 
+NAME_OK = {"network-name-check": {"name": "x", "visible": [{"id": "net-1"}], "unique": True}}
+
+
 def os_preflight_vars(**kw):
     v = dict(BASE, oso_env_name="env1", oso_network="n1", oso_external_choice="", cb_oso_site="site1",
              cb_app_name="shc-oso-acme-c1", platform_spec={"type": "openstack", "openstack": {"environment": "env1"}},
-             po_cr_current={"resources": [{"status": {}}]})
+             po_cr_current={"resources": [{"status": {}}]}, cb_oso_project_id="proj-1", cb_fip_account="sites/site1",
+             fake_os=NAME_OK)
     v.update(kw)
     return v
 
@@ -379,7 +383,10 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertEqual(fab["space"], ["192.0.2.0/24"])
         self.assertEqual([x["prefix"] for x in fab["ranges"]], [HUB])   # another site's own rows do not count
         self.assertEqual((fab["provider"], fab["site"]), ("openstack", "site1"))
-        self.assertFalse([t for t in tr if "patch" in t or "os" in t])
+        self.assertFalse([t for t in tr if "patch" in t])
+        # the only OpenStack call is the read of the network's name (Review R2 M3)
+        self.assertEqual(H.os_calls(tr), [{"action": "network-name-check", "project_id": "proj-1", "name": "shc-n1",
+                                           "network_id": "net-1"}])
 
     def test_external_default(self):
         rc, tr, out = self.run_op(k8s(extra={f"CloudInfrastructure/{PLAT}/site1": SITE, f"TenantProfile/{NS}/shc": TPROFILE}),
@@ -413,6 +420,28 @@ class OpenstackPreflightFile(unittest.TestCase):
                                 k8s=k8s(), result="1")
             self.assertNotEqual(rc, 0)
             self.assertIn(want, out)
+
+    def test_network_name_must_lead_to_the_network_alone(self):
+        # Review R2 M3: the installer takes the external network by name
+        two = {"network-name-check": {"visible": [{"id": "net-1"}, {"id": "net-9"}], "unique": False}}
+        rc, tr, out = self.run_op(k8s(), fake_os=two)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("sees 2 network(s) named shc-n1 (net-1, net-9)", out)
+        self.assertFalse([t for t in tr if "patch" in t or "create" in t or "fabric" in t])
+        # a placed network the project does not see yet: wait
+        none = {"network-name-check": {"visible": [], "unique": False}}
+        rc, tr, out = self.run_op(k8s(), fake_os=none)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.patches(tr)[-1]["body"]["reason"], "WaitingForPlacement")
+        # the global external network path: the name the tenant chose, unique in what the project sees
+        ext = k8s(extra={f"CloudInfrastructure/{PLAT}/site1": SITE, f"TenantProfile/{NS}/shc": TPROFILE})
+        rc, tr, out = self.run_op(ext, oso_network="", fake_os=two)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(H.os_calls(tr)[0]["name"], "public")
+        self.assertEqual(H.os_calls(tr)[0]["network_id"], "ext-1")
+        rc, tr, out = self.run_op(ext, oso_network="", fake_os=none)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("does not see network public (ext-1)", out)
 
     def test_build_name_taken(self):
         ns = {f"Namespace//shc-oso-acme-c1": {"metadata": {"name": "shc-oso-acme-c1"}}}

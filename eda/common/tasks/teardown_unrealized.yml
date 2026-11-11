@@ -62,6 +62,7 @@
       - PrefixReserved
       - NetworkChoiceRequired
       - ExternalNetworkNotListed
+      - NetworkNameNotUnique
 
 - name: Delete without site cleanup
   when: teardown_nothing_realized | bool

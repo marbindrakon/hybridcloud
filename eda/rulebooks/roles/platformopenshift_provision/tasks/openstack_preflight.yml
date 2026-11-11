@@ -1,8 +1,9 @@
 ---
 # Preflight of an OpenStack cluster (DESIGN cnet §4.2), before anything is created (no floating IP, DNS record, Vault
 # path, Helm release): the cluster's network (a hybrid network placed on the environment with router attachments on,
-# or one of the site's global external networks: the one named, else the site's default), the cluster's address
-# ranges, and its build name being free on the hub. Refusals and waits through preflight_stop.yml.
+# or one of the site's global external networks: the one named, else the site's default), the network's name being
+# unique for the environment's project (the installer takes it by name), the cluster's address ranges, and its build
+# name being free on the hub. Refusals and waits through preflight_stop.yml.
 # Sets cb_external_network (the installer's externalNetwork), cb_fip_network_id, cb_publish, cb_network_record (the
 # status keys of the network choice), cb_platform_path (true: the platform reaches the cluster through the network).
 - name: The hybrid network path
@@ -85,6 +86,13 @@
           {{ ((_po_tp.resources | default([]) | first | default({})).status | default({}, true)).reservedRanges
              | default([], true) }}
         po_network_space: []
+
+- name: The network's name leads the installer to this network alone
+  ansible.builtin.include_tasks: preflight_network_name.yml
+  vars:
+    pnn_name: "{{ cb_external_network }}"
+    pnn_id: "{{ cb_fip_network_id }}"
+    pnn_hybrid: "{{ cb_platform_path | bool }}"
 
 - name: Check the cluster's address ranges
   ansible.builtin.include_tasks: preflight_ranges.yml

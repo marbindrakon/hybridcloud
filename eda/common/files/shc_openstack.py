@@ -46,6 +46,9 @@ Actions (request["action"]):
                 to project_id): state present finds each by description (descriptions {api, ingress}) on
                 network_id, else creates it; state absent releases them by recorded ids and by description (a
                 missing id counts as released).
+  network-name-check  read only, site account scoped to the environment's project: the networks of a name that the
+                project sees (its own, shared, or given to it or to every project by an RBAC policy); unique when only
+                the expected network id is among them (the installer takes the external network by name).
   router-advertisement  the site's router advertisement service (an optional site component that switches the `nat`
                 token of an EVPN router port, so the site advertises floating IPs on a placed network): state
                 present asks it to hold `nat` on the router's IPv4 interface port on the network, absent to drop
@@ -787,6 +790,32 @@ def cluster_fips(req):
     return out
 
 
+def network_name_check(req):
+    """The networks named `name` that the environment's project sees, as the installer will look them up by name
+    (install-config platform.openstack.externalNetwork takes a name only; the installer's lookup takes every network of
+    that name the project can list and fails on two). Site account scoped to project_id: the project's own networks,
+    the networks shared with every project, and the ones an RBAC policy (any action) gives to the project or to every
+    project. {project_id, name, network_id} -> {name, visible: [{id, project_id, shared}], unique: exactly one is
+    visible and it is network_id}."""
+    acct = Account(req)
+    pid = req["project_id"]
+    name = req["name"]
+    want = req.get("network_id") or ""
+    conn = acct.project(pid)
+    visible = []
+    for n in conn.network.networks(name=name):
+        if n.name != name:
+            continue
+        shared = bool(getattr(n, "is_shared", False))
+        seen = n.project_id == pid or shared or any(
+            getattr(r, "target_project_id", None) in (pid, "*")
+            for r in conn.network.rbac_policies(object_id=n.id, object_type="network"))
+        if seen:
+            visible.append({"id": n.id, "project_id": n.project_id, "shared": shared})
+    ids = [v["id"] for v in visible]
+    return {"name": name, "visible": visible, "unique": len(ids) == 1 and (not want or ids[0] == want)}
+
+
 RA_KEY = "placement.routerAdvertisementBySite"
 RA_TIMEOUT = 10
 
@@ -976,6 +1005,7 @@ ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teard
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
            "platform-project": platform_project, "placement-network": placement_network,
            "cluster-fips": cluster_fips, "router-advertisement": router_advertisement,
+           "network-name-check": network_name_check,
            "platform-inventory": platform_inventory}
 
 if __name__ == "__main__":
