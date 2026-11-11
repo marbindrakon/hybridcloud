@@ -98,6 +98,7 @@
     ra_domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
     ra_platform_project: "{{ fab_real.openstack.platformProject }}"
     ra_region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
+    ra_held_before: "{{ np_ra_held | bool }}"
   when: np_ra_want | bool or np_ra_held | bool
 
 - name: Record the router advertisement
