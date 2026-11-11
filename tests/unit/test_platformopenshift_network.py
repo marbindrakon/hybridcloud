@@ -1213,7 +1213,7 @@ class RouterAdvertisementPreflight(unittest.TestCase):
     def run_ra(self, real, answer=None):
         place = placement(site={"networkId": "net-1", "networkName": "shc-n1", "routerId": "router-1"})
         v = os_preflight_vars(fabric_realization=real, cb_fip_account="sites/site1",
-                              fake_os={"router-advertisement/present": answer or {}})
+                              fake_os=dict(NAME_OK, **{"router-advertisement/present": answer or {}}))
         # the role's rescue records po_fail_reason (main.yml); here a rescue traces it
         trace = {"name": "trace the refusal", "ansible.builtin.shell": "cat >> {{ trace_file }}",
                  "args": {"stdin": "{{ {'refused': po_fail_reason} | to_json }}"}, "changed_when": False}
@@ -1226,7 +1226,7 @@ class RouterAdvertisementPreflight(unittest.TestCase):
         rc, tr, out = self.run_ra({})
         self.assertEqual(rc, 0, out)
         self.assertEqual(tr[-1], {"result": 1})
-        self.assertFalse(H.os_calls(tr))
+        self.assertFalse(H.os_calls(tr, "router-advertisement"))
 
     def test_found_and_set(self):
         rc, tr, out = self.run_ra(self.REAL, {"service": "found", "port_id": "port-1", "nat": True, "wanted": True,
