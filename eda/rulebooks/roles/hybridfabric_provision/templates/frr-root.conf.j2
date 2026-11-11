@@ -335,12 +335,18 @@ exit
 !
 {% for c in _svc.circuits %}
 ! platform circuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): the hub's ranges in, the
-! accepted cluster prefixes out
+! accepted cluster prefixes out. The hub's routes enter without the hub router's own AS number and without any
+! community (a route target among them would import them into another network's VRF; no-export or no-advertise would
+! keep them from the networks)
 route-map {{ c.id }}-IN deny 10
  match ip address prefix-list SVC-DENY
 exit
 route-map {{ c.id }}-IN permit 20
  match ip address prefix-list SVC-HUB
+ set as-path exclude {{ c.peerAsn }}
+ set community none
+ set extcommunity none
+ set large-community none
 exit
 {% if _svc.advertise %}
 route-map {{ c.id }}-OUT permit 10

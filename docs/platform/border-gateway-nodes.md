@@ -247,6 +247,17 @@ its internet egress default among them). The service VRF's sessions announce the
 `service.attachableRanges`; they accept the hub's ranges only, and never a default route, the link pools, the core
 pools or an accepted address.
 
+What the networks and their sites see of the hub's routes: the hub's routes enter the service VRF without any
+community of the hub's router (standard, extended and large communities are removed on the platform edge connection:
+a route target among them would import the hub's ranges into another network's VRF, `no-export` or `no-advertise`
+would keep them from the networks) and without the hub router's own AS number (the edge connection's peer AS is
+removed from the AS path). The AS numbers the hub's router learned them through, if any, stay in the AS path: a
+tenant's site sees them behind the fabric's AS, and a site whose eBGP peer uses one of those numbers drops the hub's
+routes as an AS path loop. FRR 8.5 removes AS numbers only by name (`set as-path exclude <asn>`; there is no "all"),
+and replacing every AS number would put the fabric's own AS in the path, which the other nodes then drop as a loop.
+So a deployment whose hub routes carry further AS numbers keeps those numbers off its tenants' sites' peers, or has
+the hub's router originate (or aggregate) the hub's ranges itself.
+
 `service.attachableRanges` is required with `service.enabled` (an empty list fails the fabric with `InvalidSpec`,
 naming the setting): there is no implicit "any". Each platform edge connection's `status.ceConfig.advertisedRanges`
 lists exactly these ranges as `<range> le 32` for the hub's network team, so the hub's router can accept the

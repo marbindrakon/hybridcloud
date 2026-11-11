@@ -329,7 +329,11 @@ class ServiceTemplate(unittest.TestCase):
         self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 permit 192.0.2.0/24 le 32\n", out)
         self.assertIn("route-map SVC-STATIC permit 10\n match ip address prefix-list SVC-ATTACHABLE\nexit\n", out)
         self.assertIn("route-map AC3099-IN deny 10\n match ip address prefix-list SVC-DENY\nexit\n"
-                      "route-map AC3099-IN permit 20\n match ip address prefix-list SVC-HUB\nexit\n"
+                      "route-map AC3099-IN permit 20\n match ip address prefix-list SVC-HUB\n"
+                      # Review R3 N3: the hub's routes enter without the hub router's communities (a route target among
+                      # them would import them into another network's VRF) and without its own AS number
+                      " set as-path exclude 64600\n set community none\n set extcommunity none\n"
+                      " set large-community none\nexit\n"
                       "route-map AC3099-OUT permit 10\n match ip address prefix-list SVC-ACCEPTED\nexit\n", out)
         ce = svc["bgw-1"]["circuits"][0]["ce"]
         inst = out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0]
