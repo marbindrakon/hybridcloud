@@ -167,7 +167,7 @@
 # there, which stays when the site reports none)
 - name: The IPv6 gateways the site assigned
   vars:
-    _gws: "{{ np_place_result.gateways | default({}, true) }}"
+    _gws: "{{ (np_place_result | default(os_result)).gateways | default({}, true) }}"
     _rows: >-
       {%- set out = [] -%}
       {%- for r in np_subnets | default([], true) -%}
