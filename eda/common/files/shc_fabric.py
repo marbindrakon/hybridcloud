@@ -6,6 +6,8 @@ unless the request itself is malformed. Pure computation: no API calls, nothing 
 
 actions:
   check-fabric    {spec, realization}                      core prefixes and the VPN pool (realization), node names;
+                  infrastructure.hub and the service VRF (service_check); the root index pool (poolSize.egressPool)
+                  with the service VRF on;
                   the core's IPv6 transport when set: loopbackPool6 an IPv6 network of at least /120, icmpSource6 one of
                   at least /96, the two apart, sidOffset6 above the highest provider-edge index and offset + index
                   inside the SRGB; the core's transport, one for the fabric: core.transport mpls (also when empty) or
@@ -19,11 +21,15 @@ actions:
                   VLAN outside the attachment circuits' pool,
                   site subnet clear of the core prefixes; transport wireguard: the peers' addresses inside the
                   site subnet and clear of the nodes' tunnel addresses
-  check-network   {prefixes, reserved: [cidr], exclusive: [cidr], circuits: [{name, accept}]}   a HybridNetwork's
+  check-network   {prefixes, reserved: [cidr], exclusive: [cidr], ranges?: [reserved-ranges rows], site?,
+                  circuits: [{name, accept}]}   a HybridNetwork's
                   address space: no prefix wholly inside a platform range (reserved; the IPAM steps around the ones
                   inside a prefix), none overlapping an exclusive range in either direction (address space the
                   platform keeps for itself, e.g. its own globally routed space), none holding an accept entry of the
-                  network's attachment circuits; reserved (also the exclusive ones) / circuits: the errors of each kind
+                  network's attachment circuits; ranges: the published rows, named with their purpose (a Refused one
+                  overlapped in either direction, a SteppedAround one holding a prefix; site rows only for site);
+                  reserved (also the exclusive ones and the rows) / circuits: the errors of each kind; overlaps:
+                  [{prefix, range, purpose, rule}] every overlap with a Refused row; reason PrefixReserved or ""
   pe-addresses    {core, index, nodeOrdinal?}   a provider edge's loopback (/32), core link address, IS-IS NET and
                   node SID label (index 1 is the border gateway root; the same addresses on every node); with
                   core.loopbackPool6 also its IPv6 loopback (loopback6 /128, loopbackIp6) and the IPv6 loopback's SID
@@ -39,13 +45,12 @@ actions:
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
   orphan-report   {crs, ledgers, sites, nodes}  the fabric orphan check's findings (see orphan_report)
   egress-plan     {egress: realization egress, nodes: [node names], networks: [{network, vpnTarget, index,
-                  internet?, ipv4?, platform?, ipv6?: {block, prefixes, edgeSources6?}}], domainAsn, core?,
-                  translation?}
+                  internet?, ipv4?, ipv6?: {block, prefixes, edgeSources6?}}], domainAsn, core?, translation?,
+                  service? (the service VRF is on: the egress links use the link pool's lower half)}
                   per node: the hand-off (egress VRF on the node's site network) and per network a VRF e<vpnTarget>
                   with a veth pair xe/xo into the egress VRF; internet (default true) with ipv4 (default true): a
                   default route and one source NAT address per node (the node's natPool + the network's egress
-                  index); platform: [CIDRs of the network] the platform's sources (egress.platformSources) may reach
-                  on egress.platformPorts (default 6443, 443). With egress.ipv6.enabled (needs core.loopbackPool6):
+                  index). With egress.ipv6.enabled (needs core.loopbackPool6):
                   per node the hand-off's IPv6 side (address, the upstream sessions, the filter's lists; the
                   translator-embedded deny list from translation.<site>.pref64 and egress.denyDestinations; the
                   resolvers on port 53, egress.ipv6.resolverDestinations6 and every translation.<site>.dns64Resolvers)
@@ -62,17 +67,24 @@ actions:
                   attachments.linkPool6, the same host numbers), an error with reason FamilyUnavailable when there is
                   none
   check-circuit   {accept: [prefix-list entries], space: [the network's prefixes], reserved: [cidr], egressInternet,
-                  advertiseDefault, attachments?, core?, translation?, egressInternet6?}  entries of either family
-                  inside the network's address space or a platform range (reserved; IPv6: platform_ranges6) are
-                  refused (errors); IPv6 entries on a fabric without attachments.linkPool6 or on a network without
+                  advertiseDefault, attachments?, core?, translation?, egressInternet6?, ranges?: [reserved-ranges
+                  rows], hub6?: [the IPv6 infrastructure.hub ranges]}  entries of either family
+                  inside the network's address space or a platform range (reserved, ranges; IPv6: platform_ranges6)
+                  are refused (errors; reason PrefixReserved for a published range, named with its purpose); IPv6
+                  entries on a fabric without attachments.linkPool6 or on a network without
                   IPv6 address space are refused (familyErrors); notes for policy that doesn't apply now;
-                  acceptsDefault (0.0.0.0/0), acceptsDefault6 (::/0), ipv6 (the list has IPv6 entries)
+                  acceptsDefault (0.0.0.0/0), acceptsDefault6 (::/0), ipv6 (the list has IPv6 entries).
+                  ceKind platform: see check_platform_circuit ({namespace, fabricNamespace, accept, advertise?,
+                  family?, realization} -> errors, reason NotPlatformNamespace | ServiceNotOffered | InvalidSpec |
+                  FamilyUnavailable, ceConfig {advertisedRanges, acceptedRanges})
   (check-fabric also validates the realization's attachments: poolSize.attachVlanPool, poolSize.attachLinks, and
   the optional linkPool6 and reserved6)
   attachments-plan {fabric, attachments: realization attachments, nodes: [node names], tableBase, domainAsn,
                   circuits, networks, placements: [CR objects], ledger: alloc, egress: egress-plan networks,
-                  egressNodes: egress-plan nodes, reserved: [cidr], platformSources: [cidr], passwords: [circuits
-                  (namespace/name) whose BGP password the job holds], core?, translation?}  the circuits the fabric's
+                  egressNodes: egress-plan nodes, reserved: [cidr], platformSources: [the IPv4 infrastructure.hub
+                  ranges: a customer circuit's traffic never reaches them], hub6?: [the IPv6 ones], passwords: [circuits
+                  (namespace/name) whose BGP password the job holds], core?, translation?, service?: realization
+                  service, fabricNamespace?}  the circuits the fabric's
                   nodes realize: per circuit its VRF (the
                   network's root VRF e<vpnTarget>), VLAN device, conntrack zone (the network's egress zone, else its
                   VPN target) and routing policy (accept list; deny = the network's address space (spec.prefixes and
@@ -85,7 +97,38 @@ actions:
                   and ::/0 when asked for and the network has IPv6 internet egress; sources = the accepted prefixes and the link (what the
                   nodes admit as source from the CE). A circuit without IPv6 entries plans exactly as before. Per
                   node the root's attachments (root.json); circuits it can't realize under skipped; vrfs: per node
-                  the networks with a root VRF (egress entry and/or circuits), for the node's FRR configuration
+                  the networks with a root VRF (egress entry and/or circuits), for the node's FRR configuration.
+                  Circuits of ceKind platform (in the fabric's namespace, with the service VRF on) are planned under
+                  platform (VRF = the service VRF, no network, nothing in the circuits' filter table): their link,
+                  device, session settings and nodes; service-plan gives them their routing policy
+  reserved-ranges {realization, sites?: [{name, kind, ranges}]}  ranges: every range a tenant prefix is refused in or
+                  stepped around (reserved_ranges): [{prefix, purpose, rule (Refused|SteppedAround), site?}]
+  service-plan    {realization, nodes: [node names], fabric, domainAsn, networks: [HybridNetwork objects], ledger:
+                  alloc, circuits: attachments-plan platform, vrfs: attachments-plan vrfs, previous: the fabric's
+                  status.realization.service}   the service VRF (realization service, infrastructure.hub): a network
+                  takes part with the prefixes of status.platformAccess.prefixes that are not refused, the VPN target
+                  and root index (ledger kind egress) it holds; a prefix is accepted when it lies inside the network's
+                  IPv4 space, clear of the reserved ranges, inside service.attachableRanges (when set), is recorded in
+                  the ledger (kind servicePrefix, owner HybridNetwork/<ns>/<name>/<prefix>; not yet: pending) and
+                  overlaps no prefix accepted for another network: first come first served (a prefix realized before
+                  keeps its place, then the ledger's value, the lower first); else refused (ServicePrefixInUse,
+                  PrefixReserved, OutsideAttachableRanges, OutsideAddressSpace, FamilyUnavailable). Per node with a
+                  platform circuit the root's service (root.json): the VRF, the hub's IPv4 ranges, ports, hub
+                  endpoints, the circuits with the node's address, the IN policy (accept the hub ranges le 32; deny
+                  0.0.0.0/0, the link and core pools, the accepted prefixes), the accepted prefixes announced to the
+                  hub, the attachable ranges, and per network with accepted prefixes its service link (the root index's
+                  /31 in the upper half of egress.linkPool: so<t> in the service VRF the even address, se<t> in e<t>
+                  the odd one); vrfs: the root VRFs with each such network's link under service (a network without
+                  egress or circuits gets an entry of its own); status: HybridFabric status.realization.service
+                  {enabled, vrf, sources, ports, hubEndpoints, attachableRanges, circuits: [{circuit, vlan, nodes, rev,
+                  policy, device}], networks: [{network, vpnTarget, index, prefixes}], refused: [{network, prefix,
+                  reason, message}]}; pending: what waits (not in status)
+  service-prefix-check {prefixes: [{prefix, cluster?}], space, realization | ranges + attachableRanges, accepted}
+                  one network's prefixes judged on their own (rows {prefix, cluster, state pending|refused, reason,
+                  message}), for the network job
+  check-cluster-networks {clusterNetwork, serviceNetwork, machineNetwork, provider, network, space, ranges |
+                  realization + sites, site}  a cluster's own networks against each other, the network's space and the
+                  reserved ranges (see check_cluster_networks)
 """
 import hashlib
 import ipaddress
@@ -155,10 +198,12 @@ def check_fabric(req):
     errors += icmp4_check(core)
     node_names = [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []]
     errors += srv6_check(core, real, node_names, pe_max)
+    service_on = bool((real.get("service") or {}).get("enabled")) if isinstance(real.get("service"), dict) else False
     eg = egress_check(real.get("egress") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []],
-                      spec.get("domainAsn"), core)
+                      spec.get("domainAsn"), core, service_on)
     errors += eg["errors"]
     size["egressPool"] = eg["poolSize"]
+    errors += service_check(real)
     at = attachments_check(real.get("attachments") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []], core)
     errors += at["errors"]
     size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
@@ -326,11 +371,23 @@ def core6_check(core, srgb, pe_max, node_count):
 EGRESS_RESERVED_TABLES = {253, 254, 255}
 
 
-def egress_check(eg, node_names, domain_asn=0, core=None):
-    """Validate the realization's egress settings for the fabric's nodes. poolSize = networks with egress (0 when
-    egress is off): the smallest node NAT pool, and no more than the link pool's /31s."""
+def egress_check(eg, node_names, domain_asn=0, core=None, service=False):
+    """Validate the realization's egress settings for the fabric's nodes. poolSize = the root indexes (a network with
+    internet egress or, with the service VRF on, with service prefixes holds one): the smallest node NAT pool, and no
+    more than the link pool's /31s; with the service VRF on (service) the link pool is split in halves, egress links
+    in the lower, service links in the upper, so no more than the /31s of one half. Egress off: 0, or with the service
+    VRF on the /31s of the link pool's upper half (the service links alone need the index)."""
     if not eg.get("enabled"):
-        return {"errors": [], "poolSize": 0}
+        if not service:
+            return {"errors": [], "poolSize": 0}
+        try:
+            link = ipaddress.ip_network(str(eg.get("linkPool") or "169.254.0.0/16"), strict=True)
+        except ValueError as e:
+            return {"errors": [f"realization egress.linkPool: {e}"], "poolSize": 0}
+        if link.version != 4 or link.prefixlen > 29:
+            return {"errors": [f"realization egress.linkPool {link} must be an IPv4 network of at least a /29 for the "
+                               "service links"], "poolSize": 0}
+        return {"errors": [], "poolSize": link.num_addresses // 4}
     errors, sizes = [], []
     for k in ("parentInterface", "gateway"):
         if not eg.get(k):
@@ -362,7 +419,10 @@ def egress_check(eg, node_names, domain_asn=0, core=None):
         sizes.append(pool.num_addresses)
     try:
         link = ipaddress.ip_network(str(eg.get("linkPool") or "169.254.0.0/16"), strict=True)
-        sizes.append(link.num_addresses // 2)
+        sizes.append(link.num_addresses // (4 if service else 2))
+        if service and (link.version != 4 or link.prefixlen > 29):
+            errors.append(f"realization egress.linkPool {link} must be an IPv4 network of at least a /29 for the "
+                          "service links")
     except ValueError as e:
         errors.append(f"realization egress.linkPool: {e}")
     vrf = eg.get("vrf") or {}
@@ -630,7 +690,7 @@ def edge_sources6(v6, core):
 
 def egress_plan(req):
     eg, node_names = req.get("egress") or {}, req.get("nodes") or []
-    chk = egress_check(eg, node_names, req.get("domainAsn"), req.get("core"))
+    chk = egress_check(eg, node_names, req.get("domainAsn"), req.get("core"), bool(req.get("service")))
     if chk["errors"]:
         return {"errors": chk["errors"], "poolSize": 0, "nodes": {}, "networks": {}}
     if not eg.get("enabled"):
@@ -640,30 +700,11 @@ def egress_plan(req):
     base = int(eg.get("networkTableBase") or 100000)
     plen = int(eg.get("prefixLength") or 24)
     errors, nodes, networks = [], {}, {}
-    sources = [str(ipaddress.ip_network(str(c), strict=True)) for c in eg.get("platformSources") or []]
-    ports = [int(x) for x in eg.get("platformPorts") or [6443, 443]]
     v6_on = bool((eg.get("ipv6") or {}).get("enabled"))
     nodes6, nets6 = egress6_plan(eg, req, node_names, errors) if v6_on else ({}, {})
     icmp_slices = icmp6_slices(req.get("core") or {}, node_names, errors) if v6_on else {}
     edge6 = {w["network"]: edge_sources6(w["ipv6"], req.get("core")) for w in req.get("networks") or []
              if v6_on and w.get("ipv6")}
-    seen = []
-    for w in req.get("networks") or []:
-        for c in w.get("platform") or []:
-            try:
-                net = ipaddress.ip_network(str(c), strict=True)
-            except ValueError as e:
-                errors.append(f"{w['network']}: platform prefix {c}: {e}")
-                continue
-            if not sources:
-                errors.append(f"{w['network']}: platform reach needs realization egress.platformSources")
-            for other, o in seen:
-                if net.overlaps(o):
-                    errors.append(f"{w['network']}: platform prefix {net} overlaps {other}'s {o}")
-            for src in sources:
-                if net.overlaps(ipaddress.ip_network(src)):
-                    errors.append(f"{w['network']}: platform prefix {net} overlaps the platform's sources {src}")
-            seen.append((w["network"], net))
     for name in node_names:
         n = eg["nodes"][name]
         pool = ipaddress.ip_network(str(n["natPool"]), strict=True)
@@ -677,11 +718,10 @@ def egress_plan(req):
             # internet: the IPv4 default route and source NAT (only for a network with IPv4 address space)
             internet = bool(w.get("internet", True)) and bool(w.get("ipv4", True))
             nat = str(pool.network_address + i) if internet else ""
-            platform = [str(ipaddress.ip_network(str(c), strict=True)) for c in w.get("platform") or []]
             v6 = nets6.get(w["network"])
             e = {"network": w["network"], "vpnTarget": t, "vrf": f"e{t}", "table": base + t, "zone": i + 1,
                  "xe": f"xe{t}", "xo": f"xo{t}", "xeAddr": f"{xe}/31", "xoAddr": f"{xo}/31",
-                 "xeIp": str(xe), "xoIp": str(xo), "nat": nat, "internet": internet, "platform": platform,
+                 "xeIp": str(xe), "xoIp": str(xo), "nat": nat, "internet": internet,
                  # RD type 0 (2-byte AS : 4-byte number) when the AS allows, else the loopback form at render
                  "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""}
             if v6:
@@ -696,7 +736,7 @@ def egress_plan(req):
                              + edge6.get(w["network"], [])}
             out.append(e)
             entry = networks.setdefault(w["network"], {"vpnTarget": t, "index": i, "sourceAddresses": [],
-                                                       "internet": internet, "platform": platform,
+                                                       "internet": internet,
                                                        "ipv6": bool(v6),
                                                        "prefixes6": v6["prefixes"] if v6 else [],
                                                        "primary": v6["primary"] if v6 else ""})
@@ -707,7 +747,6 @@ def egress_plan(req):
                        "address": f"{n['address']}/{plen}", "gateway": str(eg["gateway"]),
                        "deny": [str(c) for c in eg.get("denyDestinations") or []],
                        "allow": [str(c) for c in eg.get("allowDestinations") or []],
-                       "platformSources": sources, "platformPorts": ports,
                        "networks": out}
         if v6_on:
             nodes[name]["ipv6"] = nodes6[name]
@@ -875,6 +914,21 @@ def check_network(req):
         for a in mine:
             if a.version == rn.version and a.overlaps(rn):
                 reserved.append(f"prefix {a} overlaps address space the platform keeps for itself ({rn})")
+    # the published ranges (reserved_ranges rows), named with their purpose: a Refused one overlapped in either
+    # direction, a SteppedAround one holding a prefix; overlaps lists every overlap with a Refused range (a network
+    # from before a range became exclusive keeps working, the network job tells)
+    overlaps_out = []
+    for n, purpose, rule, site in rows_of(req.get("ranges")):
+        if site and site != str(req.get("site") or ""):
+            continue
+        for a in mine:
+            if a.version != n.version:
+                continue
+            if rule == REFUSED and a.overlaps(n):
+                overlaps_out.append({"prefix": str(a), "range": str(n), "purpose": purpose, "rule": rule})
+                reserved.append(reserved_message("prefix", a, (n, purpose, rule)))
+            elif rule != REFUSED and a.subnet_of(n):
+                reserved.append(reserved_message("prefix", a, (n, purpose, rule)))
     # the circuits accept routes from their CE; the network's space never holds one (as check-circuit refuses)
     for c in req.get("circuits") or []:
         for e in c.get("accept") or []:
@@ -882,7 +936,560 @@ def check_network(req):
             for a in mine:
                 if entry and entry[0].version == a.version and entry[0].subnet_of(a):
                     circuits.append(f"prefix {a} holds accept entry '{e}' of AttachmentCircuit {c.get('name')}")
-    return {"errors": reserved + circuits, "reserved": reserved, "circuits": circuits}
+    out = {"errors": reserved + circuits, "reserved": reserved, "circuits": circuits}
+    if req.get("ranges") is not None:
+        out.update({"overlaps": overlaps_out, "reason": "PrefixReserved" if reserved else ""})
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- reserved ranges
+# The ranges a tenant prefix is refused in or stepped around (reserved_ranges): the realization key, the purpose shown
+# to tenants and the rule. Refused: no tenant prefix, circuit route or cluster network may overlap them; SteppedAround:
+# the address management steps around them (a prefix inside one has nothing to give out)
+REFUSED, STEPPED = "Refused", "SteppedAround"
+PURPOSE_HUB = "Networks the platform's management connects from"
+RANGE_KEYS = (
+    ("infrastructure.hub", PURPOSE_HUB, REFUSED),
+    ("network.exclusiveRanges", "Address space the platform keeps for itself", REFUSED),
+    ("ipam.publicPools", "The platform's assignable IPv6 space", REFUSED),
+    ("core.srv6.block", "The platform's transport addresses", REFUSED),
+    ("core.icmpSource6", "Addresses of the platform's network nodes", REFUSED),
+    ("core.icmpSource4", "Addresses of the platform's network nodes", REFUSED),
+    ("core.loopbackPool", "Addresses inside the platform's network nodes", STEPPED),
+    ("core.linkSubnet", "Addresses inside the platform's network nodes", STEPPED),
+    ("attachments.linkPool", "Addresses inside the platform's network nodes", STEPPED),
+    ("egress.linkPool", "Addresses inside the platform's network nodes", STEPPED),
+)
+PURPOSE_SITE = "Addresses the site uses itself"
+# a site's type (CloudInfrastructure spec.type) -> the backend kind of placement.siteReserved
+SITE_KINDS = {"openshift": "CloudVirt", "openstack": "CloudOSO", "aws": "CloudAWS", "gcp": "CloudGCP"}
+
+
+def _values(real, key):
+    """The realization's values of one RANGE_KEYS key, as text (empty values left out)."""
+    real = real or {}
+    if key == "infrastructure.hub":
+        vals = (real.get("infrastructure") or {}).get("hub") or []
+    elif key == "network.exclusiveRanges":
+        vals = (real.get("network") or {}).get("exclusiveRanges") or []
+    elif key == "ipam.publicPools":
+        pools = (real.get("ipam") or {}).get("publicPools") or {}
+        vals = [c for name in sorted(pools) for c in ((pools[name] or {}).get("prefixes") or [])] \
+            if isinstance(pools, dict) else []
+    elif key == "core.srv6.block":
+        s = (real.get("core") or {}).get("srv6")
+        vals = [s.get("block")] if isinstance(s, dict) else []
+    else:
+        top, sub = key.split(".")
+        vals = [((real.get(top) or {}).get(sub))]
+    if isinstance(vals, (str, bytes)):
+        vals = [vals]
+    return [str(v).strip() for v in vals if v is not None and str(v).strip()]
+
+
+def _net(text):
+    """A network of either family (a bare address is its /32 or /128), None when unusable."""
+    try:
+        return ipaddress.ip_network(str(text).strip(), strict=True)
+    except ValueError:
+        return None
+
+
+def range_rows(real, sites=None):
+    """[(key, network, purpose, rule, site)] in the order of reserved_ranges; unusable values are left out (the
+    realization check names them), duplicates once."""
+    out, seen = [], set()
+    for key, purpose, rule in RANGE_KEYS:
+        for v in _values(real, key):
+            n = _net(v)
+            if n is not None and (n, rule, "") not in seen:
+                seen.add((n, rule, ""))
+                out.append((key, n, purpose, rule, ""))
+    siteres = ((real or {}).get("placement") or {}).get("siteReserved") or {}
+    for s in sites or []:
+        name = str(s.get("name") or "")
+        kind = SITE_KINDS.get(str(s.get("kind") or ""), str(s.get("kind") or ""))
+        own = list(s.get("ranges") or []) + list(siteres.get(kind) or [] if isinstance(siteres, dict) else [])
+        for v in own:
+            n = _net(v)
+            if n is not None and name and (n, STEPPED, name) not in seen:
+                seen.add((n, STEPPED, name))
+                out.append(("placement.siteReserved", n, PURPOSE_SITE, STEPPED, name))
+    return out
+
+
+def reserved_ranges(real, sites=None):
+    """Every range a tenant prefix is refused in (rule Refused) or stepped around (rule SteppedAround), each with its
+    purpose in words and, for a site's own ranges, the site: infrastructure.hub, network.exclusiveRanges, the
+    ipam.publicPools prefixes, core.srv6.block, core.icmpSource6 and core.icmpSource4 (Refused); core.loopbackPool,
+    core.linkSubnet, attachments.linkPool and egress.linkPool (SteppedAround); per site (sites: [{name, kind (the
+    site's type or the backend kind), ranges (its underlay)}]) its underlay and placement.siteReserved of its kind
+    (SteppedAround, site). The published list (no realization key names in it)."""
+    rows = []
+    for _, n, purpose, rule, site in range_rows(real, sites):
+        r = {"prefix": str(n), "purpose": purpose, "rule": rule}
+        if site:
+            r["site"] = site
+        rows.append(r)
+    return rows
+
+
+def reserved_ranges_action(req):
+    return {"errors": [], "ranges": reserved_ranges(req.get("realization") or {}, req.get("sites") or [])}
+
+
+def rows_of(ranges):
+    """Published range rows ({prefix, purpose, rule, site?}) as [(network, purpose, rule, site)]; unusable rows left out."""
+    out = []
+    for r in ranges or []:
+        n = _net((r or {}).get("prefix"))
+        if n is not None:
+            out.append((n, str(r.get("purpose") or ""), str(r.get("rule") or REFUSED), str(r.get("site") or "")))
+    return out
+
+
+def lower_first(text):
+    return text[:1].lower() + text[1:] if text else text
+
+
+def range_clash(net, rows, site=None):
+    """The first row the network clashes with, as (row network, purpose, rule), or None: a Refused range overlapped in
+    either direction, a SteppedAround range the network lies inside. Site rows count only for that site (site None:
+    none of them)."""
+    for n, purpose, rule, s in rows:
+        if s and s != site:
+            continue
+        if n.version != net.version:
+            continue
+        if (rule == REFUSED and n.overlaps(net)) or (rule != REFUSED and net.subnet_of(n)):
+            return n, purpose, rule
+    return None
+
+
+def reserved_message(what, net, clash):
+    n, purpose, _ = clash
+    return f"{what} {net} overlaps {n}, reserved by the platform: {lower_first(purpose)}"
+
+
+# ---------------------------------------------------------------------------------------------------- service VRF
+SERVICE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,14}$")
+SERVICE_PREFIX_REASONS = ("ServicePrefixInUse", "PrefixReserved", "OutsideAttachableRanges", "OutsideAddressSpace",
+                          "FamilyUnavailable")
+
+
+def _ports(v, what, errors):
+    try:
+        ports = [int(p) for p in (v or [])]
+    except (TypeError, ValueError):
+        errors.append(f"realization {what} must be a list of TCP ports")
+        return []
+    if not ports or not all(1 <= p <= 65535 for p in ports):
+        errors.append(f"realization {what} must hold TCP ports (1-65535)")
+        return []
+    return sorted(set(ports))
+
+
+def hub_nets(real, version=None):
+    """infrastructure.hub as networks (unusable entries left out), of one family when version is given"""
+    out = [n for n in (_net(v) for v in _values(real, "infrastructure.hub")) if n is not None]
+    return [n for n in out if version is None or n.version == version]
+
+
+def realization_pools(real):
+    """The realization's own address pools, [(key, network)]: what no hub range may overlap."""
+    real = real or {}
+    core, at, eg = real.get("core") or {}, real.get("attachments") or {}, real.get("egress") or {}
+    out = []
+    for key, v in (("core.loopbackPool", core.get("loopbackPool")), ("core.linkSubnet", core.get("linkSubnet")),
+                   ("core.loopbackPool6", core.get("loopbackPool6")), ("core.icmpSource6", core.get("icmpSource6")),
+                   ("core.icmpSource4", core.get("icmpSource4")),
+                   ("attachments.linkPool", at.get("linkPool") if at.get("enabled") else None),
+                   ("attachments.linkPool6", at.get("linkPool6") if at.get("enabled") else None),
+                   ("egress.linkPool", eg.get("linkPool") if (eg.get("enabled") or (real.get("service") or {}).get("enabled")) else None)):
+        n = _net(v) if v is not None and str(v).strip() else None
+        if n is not None:
+            out.append((key, n))
+    for v in _values(real, "core.srv6.block"):
+        n = _net(v)
+        if n is not None:
+            out.append(("core.srv6.block", n))
+    for v in _values(real, "ipam.publicPools"):
+        n = _net(v)
+        if n is not None:
+            out.append(("ipam.publicPools", n))
+    for name, node in sorted(((eg.get("nodes") or {}) if eg.get("enabled") else {}).items()):
+        n = _net((node or {}).get("natPool"))
+        if n is not None:
+            out.append((f"egress.nodes.{name}.natPool", n))
+    return out
+
+
+def service_check(real):
+    """The realization's infrastructure ranges and service VRF (check-fabric). Always: infrastructure.hub entries are
+    networks of either family, no realization pool overlaps one, and the retired egress.platformSources and
+    egress.platformPorts are not set. With service.enabled: attachments.enabled, an IPv4 hub range, a VRF name (a
+    Linux device name, not the egress VRF's, not e<digits>), a table not 253-255, not the egress table and below
+    egress.networkTableBase, the ports, every hubEndpoints prefix an IPv4 network inside a hub range with its ports,
+    every attachableRanges entry an IPv4 network clear of the reserved ranges."""
+    real = real or {}
+    errors = []
+    inf = real.get("infrastructure") or {}
+    if not isinstance(inf, dict):
+        return ["realization infrastructure must be a mapping"]
+    hub = []
+    raw = inf.get("hub") or []
+    if isinstance(raw, (str, bytes)):
+        raw = [raw]
+    for v in raw:
+        try:
+            hub.append(ipaddress.ip_network(str(v).strip(), strict=True))
+        except ValueError as e:
+            errors.append(f"realization infrastructure.hub: {v}: {e}")
+    eg = real.get("egress") or {}
+    for k in ("platformSources", "platformPorts"):
+        if k in eg:
+            errors.append(f"realization egress.{k} is replaced by infrastructure.hub and service.ports: remove it")
+    for key, n in realization_pools(real):
+        for h in hub:
+            if h.version == n.version and h.overlaps(n):
+                errors.append(f"realization {key} {n} overlaps infrastructure.hub {h}")
+    sv = real.get("service") or {}
+    if not isinstance(sv, dict):
+        return errors + ["realization service must be a mapping"]
+    if not bool(sv.get("enabled")):
+        return errors
+    if not (real.get("attachments") or {}).get("enabled"):
+        errors.append("realization service.enabled needs attachments.enabled (the platform circuits)")
+    hub4 = [h for h in hub if h.version == 4]
+    if not hub4:
+        errors.append("realization service.enabled needs an IPv4 range in infrastructure.hub")
+    vrf = sv.get("vrf") or {}
+    name = str(vrf.get("name") or "")
+    ev = eg.get("vrf") or {}
+    if not name:
+        errors.append("realization service.vrf.name is required")
+    elif not SERVICE_NAME.match(name) or re.fullmatch(r"e\d+", name) or name == str(ev.get("name") or "egress") \
+            or re.fullmatch(r"(se|so|xe|xo)\d+", name) or name in ("egress0", "lo"):
+        errors.append(f"realization service.vrf.name {name!r} must be a device name of at most 15 characters, other "
+                      "than the egress VRF's and not of the form e<digits>")
+    try:
+        table = int(vrf.get("table"))
+    except (TypeError, ValueError):
+        table = -1
+    base = int(eg.get("networkTableBase") or 100000)
+    if table < 1 or table in EGRESS_RESERVED_TABLES or table == int(ev.get("table") or 9000) or table >= base:
+        errors.append(f"realization service.vrf.table {vrf.get('table')!r} must be a table other than 253-255 and the "
+                      f"egress VRF's, below egress.networkTableBase {base}")
+    _ports(sv.get("ports"), "service.ports", errors)
+    for i, ep in enumerate(sv.get("hubEndpoints") or []):
+        n = _net((ep or {}).get("prefix")) if isinstance(ep, dict) else None
+        if n is None or n.version != 4:
+            errors.append(f"realization service.hubEndpoints[{i}].prefix {(ep or {}).get('prefix') if isinstance(ep, dict) else ep!r} "
+                          "is not an IPv4 network")
+        elif not any(n.subnet_of(h) for h in hub4):
+            errors.append(f"realization service.hubEndpoints[{i}].prefix {n} is not inside infrastructure.hub")
+        _ports((ep or {}).get("ports") if isinstance(ep, dict) else None, f"service.hubEndpoints[{i}].ports", errors)
+    rows = [(n, purpose, rule, "") for key, n, purpose, rule, site in range_rows(real) if not site]
+    for i, v in enumerate(sv.get("attachableRanges") or []):
+        n = _net(v)
+        if n is None or n.version != 4:
+            errors.append(f"realization service.attachableRanges[{i}] {v!r} is not an IPv4 network")
+            continue
+        clash = range_clash(n, rows)
+        if clash is not None:
+            errors.append(f"realization service.attachableRanges[{i}] {n} overlaps {clash[0]} ({lower_first(clash[1])})")
+    return errors
+
+
+def service_settings(real):
+    """The service VRF's settings as the plan uses them (after service_check): {vrf, table, hub (IPv4, collapsed),
+    hub6, ports, hubEndpoints [{prefix, ports}], attachable}."""
+    sv = (real or {}).get("service") or {}
+    vrf = sv.get("vrf") or {}
+    hub4 = sorted(ipaddress.collapse_addresses(hub_nets(real, 4)), key=lambda n: (int(n.network_address), n.prefixlen))
+    eps = []
+    for ep in sv.get("hubEndpoints") or []:
+        n = _net((ep or {}).get("prefix"))
+        if n is not None and n.version == 4:
+            eps.append({"prefix": str(n), "ports": sorted({int(p) for p in (ep.get("ports") or [])})})
+    att = [n for n in (_net(v) for v in sv.get("attachableRanges") or []) if n is not None and n.version == 4]
+    return {"vrf": str(vrf.get("name") or "service"), "table": int(vrf.get("table") or 9001),
+            "hub": [str(n) for n in hub4], "ports": sorted({int(p) for p in sv.get("ports") or [6443, 443]}),
+            "hubEndpoints": eps, "attachable": [str(n) for n in att]}
+
+
+def service_status_off():
+    return {"enabled": False, "vrf": "", "sources": [], "ports": [], "hubEndpoints": [], "attachableRanges": [],
+            "circuits": [], "networks": [], "refused": []}
+
+
+def network_space4(n):
+    """A HybridNetwork object's IPv4 address space: spec.prefixes and status.addressSpace."""
+    out = []
+    st = n.get("status") or {}
+    for c in ((n.get("spec") or {}).get("prefixes") or []) + [a.get("prefix") for a in st.get("addressSpace") or []
+                                                              if isinstance(a, dict)]:
+        x = _net(c) if c is not None else None
+        if x is not None and x.version == 4 and x not in out:
+            out.append(x)
+    return out
+
+
+def prefix_verdict(text, space, rows, attachable):
+    """A service prefix on its own (no other network considered): (network or None, reason, message); reason "" =
+    acceptable. space: the network's IPv4 space (networks); rows: range rows (network, purpose, rule, site) without
+    site rows; attachable: networks (empty = any)."""
+    try:
+        net = ipaddress.ip_network(str(text).strip(), strict=True)
+    except ValueError:
+        return None, "OutsideAddressSpace", f"{text} is not an address prefix"
+    if net.version != 4:
+        return net, "FamilyUnavailable", f"{net}: the platform reaches clusters over IPv4 only"
+    if not any(net.subnet_of(s) for s in space):
+        return net, "OutsideAddressSpace", f"{net} is not inside the network's IPv4 address space"
+    clash = range_clash(net, rows)
+    if clash is not None:
+        return net, "PrefixReserved", reserved_message("prefix", net, clash)
+    if attachable and not any(net.subnet_of(a) for a in attachable):
+        return net, "OutsideAttachableRanges", (f"{net} is outside the ranges the platform reaches "
+                                                f"({', '.join(str(a) for a in attachable)})")
+    return net, "", ""
+
+
+def service_prefix_check(req):
+    """One network's service prefixes (service-prefix-check, for the network job): {prefixes: [{prefix, cluster?}],
+    space: [the network's prefixes], realization (or ranges: published rows, and attachableRanges), accepted: [the
+    prefixes accepted for other networks]} -> rows {prefix, cluster, state (pending|refused), reason, message}: each
+    prefix inside the network's IPv4 space, clear of the reserved ranges, inside service.attachableRanges (when set) and
+    overlapping no prefix accepted for another network (ServicePrefixInUse). The ledger settles who came first; this
+    only says whether a prefix can be accepted now."""
+    real = req.get("realization")
+    if real is not None:
+        rows = [(n, p, r, "") for _, n, p, r, s in range_rows(real) if not s]
+        attachable = [ipaddress.ip_network(a) for a in service_settings(real)["attachable"]]
+    else:
+        rows = [r for r in rows_of(req.get("ranges")) if not r[3]]
+        attachable = [n for n in (_net(a) for a in req.get("attachableRanges") or []) if n is not None and n.version == 4]
+    space = [n for n in (_net(c) for c in req.get("space") or []) if n is not None and n.version == 4]
+    others = [n for n in (_net(c) for c in req.get("accepted") or []) if n is not None]
+    out = []
+    for p in req.get("prefixes") or []:
+        p = p if isinstance(p, dict) else {"prefix": p}
+        net, reason, msg = prefix_verdict(p.get("prefix"), space, rows, attachable)
+        if not reason and any(net.overlaps(o) for o in others if o.version == net.version):
+            reason, msg = "ServicePrefixInUse", f"{net} is already in use by another network on the platform's service routing domain"
+        out.append({"prefix": str(net) if net is not None else str(p.get("prefix")), "cluster": str(p.get("cluster") or ""),
+                    "state": "refused" if reason else "pending", "reason": reason, "message": msg})
+    return {"errors": [], "prefixes": out}
+
+
+def service_link(pool, index):
+    """The service link of root index i: the i-th /31 of the link pool's upper half (so even, se odd)."""
+    upper = int(pool.network_address) + pool.num_addresses // 2
+    so = ipaddress.ip_address(upper + 2 * index)
+    return so, so + 1
+
+
+def service_plan(req):
+    """The service VRF on the border gateway nodes' root instance (service-plan, see the module docstring)."""
+    real = req.get("realization") or {}
+    sv = real.get("service") or {}
+    node_names = req.get("nodes") or []
+    vrfs_in = req.get("vrfs") or {}
+    if not sv.get("enabled"):
+        return {"errors": [], "enabled": False, "nodes": {}, "status": service_status_off(),
+                "vrfs": {n: list(vrfs_in.get(n) or []) for n in node_names}, "pending": []}
+    errors = service_check(real)
+    if errors:
+        return {"errors": errors, "enabled": True, "nodes": {}, "status": service_status_off(), "vrfs": vrfs_in,
+                "pending": []}
+    cfg = service_settings(real)
+    eg, at, core = real.get("egress") or {}, real.get("attachments") or {}, real.get("core") or {}
+    base = int(eg.get("networkTableBase") or 100000)
+    pool = ipaddress.ip_network(str(eg.get("linkPool") or "169.254.0.0/16"), strict=True)
+    slots = pool.num_addresses // 4
+    asn = int(req.get("domainAsn") or 0)
+    fabric = req.get("fabric")
+    alloc = req.get("ledger") or {}
+    rows = [(n, p, r, "") for _, n, p, r, s in range_rows(real) if not s]
+    attachable = [ipaddress.ip_network(a) for a in cfg["attachable"]]
+    prev = {(str(w.get("network")), str(p)) for w in ((req.get("previous") or {}).get("networks") or [])
+            for p in w.get("prefixes") or []}
+    sprefix = alloc.get("servicePrefix") or {}
+    pending, refused, cands = [], [], []
+    nets = {}
+    for n in sorted(req.get("networks") or [], key=lambda o: ((o.get("metadata") or {}).get("namespace", ""),
+                                                             (o.get("metadata") or {}).get("name", ""))):
+        md, st = n.get("metadata") or {}, n.get("status") or {}
+        key = f"{md.get('namespace')}/{md.get('name')}"
+        owner = f"HybridNetwork/{key}"
+        if st.get("fabric") != fabric:
+            continue
+        rows_in = [r for r in ((st.get("platformAccess") or {}).get("prefixes") or []) if isinstance(r, dict)
+                   and r.get("prefix") and str(r.get("state") or "pending") != "refused"]
+        if not rows_in:
+            continue
+        t, i = (alloc.get("vpnTarget") or {}).get(owner), (alloc.get("egress") or {}).get(owner)
+        if t is None or i is None:
+            pending.append({"network": key, "why": "the network holds no VPN target or root index yet"})
+            continue
+        if not 0 <= int(i) < slots:
+            pending.append({"network": key, "why": f"root index {i} is outside the service links (0-{slots - 1})"})
+            continue
+        space = network_space4(n)
+        nets[key] = {"owner": owner, "vpnTarget": int(t), "index": int(i)}
+        seen = set()
+        for r in rows_in:
+            net, reason, msg = prefix_verdict(r["prefix"], space, rows, attachable)
+            text = str(net) if net is not None else str(r["prefix"])
+            if text in seen:
+                continue
+            seen.add(text)
+            if reason:
+                refused.append({"network": key, "prefix": text, "reason": reason, "message": msg})
+                continue
+            led = sprefix.get(f"{owner}/{text}")
+            if led is None:
+                pending.append({"network": key, "prefix": text, "why": "not recorded in the fabric's ledger yet"})
+                continue
+            cands.append({"network": key, "net": net, "text": text, "order": ((key, text) not in prev, int(led), key, text)})
+    # first come first served: a prefix realized before keeps its place, then the ledger's order
+    accepted = {}
+    for c in sorted(cands, key=lambda c: c["order"]):
+        if any(o["net"].overlaps(c["net"]) for k, lst in accepted.items() if k != c["network"] for o in lst):
+            refused.append({"network": c["network"], "prefix": c["text"], "reason": "ServicePrefixInUse",
+                            "message": f"{c['text']} is already in use by another network on the platform's service "
+                                       "routing domain"})
+            continue
+        accepted.setdefault(c["network"], []).append(c)
+    circuits = [c for c in req.get("circuits") or [] if c.get("nodes")]
+    with_circuit = {n for c in circuits for n in c["nodes"]}
+    networks, status_nets = [], []
+    for key in sorted(accepted, key=lambda k: nets[k]["vpnTarget"]):
+        w = nets[key]
+        t, i = w["vpnTarget"], w["index"]
+        so, se = service_link(pool, i)
+        prefixes = sorted({x["net"] for x in accepted[key]}, key=lambda n: (int(n.network_address), n.prefixlen))
+        entry = {"network": key, "vpnTarget": t, "index": i, "vrf": f"e{t}", "table": base + t,
+                 "se": f"se{t}", "so": f"so{t}", "seAddr": f"{se}/31", "soAddr": f"{so}/31", "seIp": str(se),
+                 "soIp": str(so), "prefixes": [str(p) for p in prefixes],
+                 "rd": f"{asn}:{t}" if 0 < asn <= 65535 else ""}
+        networks.append(entry)
+        if with_circuit:
+            status_nets.append({"network": key, "vpnTarget": t, "index": i, "prefixes": entry["prefixes"]})
+    all_prefixes = sorted({p for w in networks for p in w["prefixes"]},
+                          key=lambda s: (int(ipaddress.ip_network(s).network_address), ipaddress.ip_network(s).prefixlen))
+
+    def le32(n):
+        n = ipaddress.ip_network(str(n))
+        return entry_text(n, le=32) if n.prefixlen < 32 else str(n)
+    deny = ["0.0.0.0/0"] + [le32(c) for c in (at.get("linkPool"), core.get("loopbackPool"), core.get("linkSubnet"),
+                                               str(pool)) if _net(c) is not None and _net(c).version == 4] \
+        + [le32(p) for p in all_prefixes]
+    accept = [le32(h) for h in cfg["hub"]]
+    attach = [le32(a) for a in cfg["attachable"]] or ["0.0.0.0/0 le 32"]
+    policy = hashlib.sha1(json.dumps([deny, accept, all_prefixes, attach], sort_keys=True).encode()).hexdigest()[:12]
+    st_circuits = [{"circuit": c["circuit"], "vlan": c["vlan"], "nodes": sorted(c["nodes"]), "rev": c.get("rev", ""),
+                    "policy": policy, "device": c["device"]} for c in circuits]
+    nodes = {}
+    mtu = int(eg.get("mtu") or 9000)
+    for name in node_names:
+        mine = [c for c in circuits if name in c["nodes"]]
+        if not mine:
+            continue
+        nodes[name] = {"vrf": cfg["vrf"], "table": cfg["table"], "hub": cfg["hub"], "ports": cfg["ports"],
+                       "hubEndpoints": cfg["hubEndpoints"], "mtu": mtu, "deny": deny, "accept": accept,
+                       "advertise": [str(p) for p in all_prefixes], "attachable": attach,
+                       "circuits": [dict({k: v for k, v in c.items() if k != "nodes"},
+                                         address=f"{c['nodes'][name]}/{ipaddress.ip_network(c['link']).prefixlen}",
+                                         ip=c["nodes"][name])
+                                    for c in mine],
+                       "networks": networks}
+    # the root VRFs per node, with the service link of each network that has accepted prefixes there
+    vrfs = {}
+    for name in node_names:
+        by_vrf = {v["vrf"]: dict(v) for v in vrfs_in.get(name) or []}
+        if name in nodes:
+            for w in networks:
+                link = {k: w[k] for k in ("se", "so", "seAddr", "soAddr", "seIp", "soIp", "prefixes")}
+                v = by_vrf.setdefault(w["vrf"], {"network": w["network"], "vpnTarget": w["vpnTarget"], "vrf": w["vrf"],
+                                                 "table": w["table"], "nat": "", "egress": False, "rd": w["rd"],
+                                                 "circuits": []})
+                v["service"] = link
+        vrfs[name] = sorted(by_vrf.values(), key=lambda v: int(v["vpnTarget"]))
+    status = {"enabled": True, "vrf": cfg["vrf"], "sources": cfg["hub"], "ports": cfg["ports"],
+              "hubEndpoints": cfg["hubEndpoints"], "attachableRanges": cfg["attachable"], "circuits": st_circuits,
+              "networks": status_nets,
+              "refused": sorted(refused, key=lambda r: (r["network"], r["prefix"]))}
+    return {"errors": [], "enabled": True, "nodes": nodes, "status": status, "vrfs": vrfs, "pending": pending}
+
+
+# ------------------------------------------------------------------------------------------- cluster networks
+def check_cluster_networks(req):
+    """A cluster's own networks (check-cluster-networks): {clusterNetwork, serviceNetwork, machineNetwork, provider
+    (openstack|aws|gcp), network (the cluster names a hybrid network), space: [the hybrid network's prefixes], ranges
+    (published rows) or realization (+ sites), site (the environment's site: its own rows count)}. clusterNetwork and
+    serviceNetwork must not overlap each other, the machine network, the network's space or a reserved range; an
+    OpenStack machine network not the network's space or a reserved range; an AWS or Google Cloud machine network on a
+    network (the placement's subnet) not a reserved range. -> {errors, reason (PrefixReserved, AddressConflict,
+    InvalidSpec or ""), reserved: [...], conflicts: [...]}; a reserved range is named with its purpose."""
+    if req.get("ranges") is not None:
+        rows = rows_of(req.get("ranges"))
+    else:
+        rows = [(n, p, r, s) for _, n, p, r, s in range_rows(req.get("realization") or {}, req.get("sites") or [])]
+    site = str(req.get("site") or "")
+    provider = str(req.get("provider") or "openstack")
+    on_network = bool(req.get("network"))
+    space = [n for n in (_net(c) for c in req.get("space") or []) if n is not None]
+    nets, invalid = {}, []
+    for f in ("clusterNetwork", "serviceNetwork", "machineNetwork"):
+        v = req.get(f)
+        if v in (None, ""):
+            continue
+        n = _net(v)
+        if n is None or n.version != 4:
+            invalid.append(f"spec.networking.{f} {v!r} is not a canonical IPv4 network")
+        else:
+            nets[f] = n
+    if invalid:
+        return {"errors": invalid, "reason": "InvalidSpec", "reserved": [], "conflicts": []}
+    reserved, conflicts = [], []
+
+    def clash_with_ranges(f):
+        c = None
+        for n, purpose, rule, s in rows:
+            if s and s != site:
+                continue
+            if n.version == nets[f].version and n.overlaps(nets[f]):
+                c = (n, purpose, rule)
+                break
+        if c is not None:
+            reserved.append(reserved_message(f, nets[f], c))
+
+    for f in ("clusterNetwork", "serviceNetwork"):
+        if f not in nets:
+            continue
+        for g in ("clusterNetwork", "serviceNetwork", "machineNetwork"):
+            if g != f and g in nets and nets[f].overlaps(nets[g]):
+                pair = tuple(sorted((f, g)))
+                msg = f"spec.networking.{pair[0]} {nets[pair[0]]} overlaps spec.networking.{pair[1]} {nets[pair[1]]}"
+                if msg not in conflicts:
+                    conflicts.append(msg)
+        for s in space:
+            if s.version == 4 and s.overlaps(nets[f]):
+                conflicts.append(f"spec.networking.{f} {nets[f]} overlaps the network's address space {s}")
+        clash_with_ranges(f)
+    if "machineNetwork" in nets:
+        if provider == "openstack":
+            for s in space:
+                if s.version == 4 and s.overlaps(nets["machineNetwork"]):
+                    conflicts.append(f"spec.networking.machineNetwork {nets['machineNetwork']} overlaps the network's "
+                                     f"address space {s}")
+            clash_with_ranges("machineNetwork")
+        elif on_network:
+            clash_with_ranges("machineNetwork")
+    reason = "PrefixReserved" if reserved else ("AddressConflict" if conflicts else "")
+    return {"errors": reserved + conflicts, "reason": reason, "reserved": reserved, "conflicts": conflicts}
 
 
 def attachments_check(at, node_names, core=None):
@@ -998,7 +1605,7 @@ ACCEPT_RE = re.compile(r"^(\S+)(?: ge (\d+))?(?: le (\d+))?$")
 NO_CIRCUIT_IPV6 = "IPv6 is not offered on attachment circuits of this fabric"
 
 
-def platform_ranges6(at, core, translation):
+def platform_ranges6(at, core, translation, hub=None):
     """The platform's own IPv6 ranges a CE's routes never reach into: the circuits' IPv6 link pool
     (attachments.linkPool6), the installation's IPv6 infrastructure ranges (attachments.reserved6), the core's IPv6
     loopbacks, ICMPv6 sources and SRv6 SID block (core.loopbackPool6, core.icmpSource6, core.srv6.block) and every
@@ -1009,6 +1616,8 @@ def platform_ranges6(at, core, translation):
         (core or {}).get("loopbackPool6"), (core or {}).get("icmpSource6"),
         srv6.get("block") if isinstance(srv6, dict) else None]
     given += [((translation or {}).get(s) or {}).get("pref64") for s in sorted((translation or {}).keys())]
+    # the IPv6 ranges of the networks the platform's management connects from (infrastructure.hub)
+    given += list(hub or [])
     out = []
     for c in given:
         if not str(c or "").strip():
@@ -1028,6 +1637,8 @@ def check_circuit(req):
     only gets a note (the edge drops overlapping routes regardless). IPv6 entries also need IPv6 on the fabric's
     circuits (attachments.linkPool6) and IPv6 address space on the network (familyErrors). acceptsDefault /
     acceptsDefault6: an entry matches 0.0.0.0/0 / ::/0; ipv6: the list has IPv6 entries."""
+    if (req.get("ceKind") or "customer") == "platform":
+        return check_platform_circuit(req)
     errors, family_errors, notes, accepts_default, accepts_default6 = [], [], [], False, False
     space = []
     for p in req.get("space") or []:
@@ -1044,7 +1655,7 @@ def check_circuit(req):
         except ValueError:
             continue
     at = req.get("attachments") or {}
-    reserved += platform_ranges6(at, req.get("core"), req.get("translation"))
+    reserved += platform_ranges6(at, req.get("core"), req.get("translation"), req.get("hub6"))
     entries = []
     for e in req.get("accept") or []:
         a = accept_entry(e)
@@ -1077,6 +1688,18 @@ def check_circuit(req):
                 errors.append(f"accept entry '{e}' lies inside the platform range {q}")
             elif q.subnet_of(net) and net.prefixlen > 0:
                 notes.append(f"routes overlapping the platform range {q} are never accepted from the CE")
+    # the published ranges, named with their purpose: an entry inside a Refused or SteppedAround range is refused, one
+    # covering part of a Refused range only gets a note (as above)
+    reserved_errors = []
+    for e, (net, ge, le) in entries:
+        for q, purpose, rule, site in rows_of(req.get("ranges")):
+            if site or q.version != net.version:
+                continue
+            if net.subnet_of(q):
+                reserved_errors.append(f"accept entry '{e}' lies inside {q}, reserved by the platform: {lower_first(purpose)}")
+            elif rule == REFUSED and q.subnet_of(net) and net.prefixlen > 0:
+                notes.append(f"routes overlapping {q} ({lower_first(purpose)}) are never accepted from the CE")
+    errors += reserved_errors
     egress = bool(req.get("egressInternet"))
     if accepts_default and egress:
         notes.append("0.0.0.0/0 is not accepted from the CE while the network has provider internet egress")
@@ -1089,8 +1712,45 @@ def check_circuit(req):
         notes.append("::/0 is never accepted from the CE")
     if ipv6 and req.get("advertiseDefault") and not egress6:
         notes.append("no IPv6 default route is advertised: the network has no IPv6 internet egress")
-    return {"errors": errors, "familyErrors": family_errors, "notes": sorted(set(notes)),
-            "acceptsDefault": accepts_default, "acceptsDefault6": accepts_default6, "ipv6": ipv6}
+    out = {"errors": errors, "familyErrors": family_errors, "notes": sorted(set(notes)),
+           "acceptsDefault": accepts_default, "acceptsDefault6": accepts_default6, "ipv6": ipv6}
+    if req.get("ranges") is not None:
+        out["reason"] = "PrefixReserved" if reserved_errors else ""
+    return out
+
+
+def check_platform_circuit(req):
+    """A circuit of ceKind platform (check-circuit with ceKind platform): {namespace, fabricNamespace, accept,
+    realization (service, infrastructure), family?: [4|6]}. Refused (errors, reason): outside the fabric's namespace
+    (NotPlatformNamespace), without the service VRF (ServiceNotOffered), with accept entries (InvalidSpec: a platform
+    circuit accepts the hub's ranges only), with IPv6 (FamilyUnavailable). ceConfig: advertisedRanges (each
+    service.attachableRanges entry 'le 32', or 'any' when there is none) and acceptedRanges (each IPv4
+    infrastructure.hub range 'le 32'); notes: routing.advertise is not used."""
+    real = req.get("realization") or {}
+    sv = real.get("service") or {}
+    out = {"errors": [], "familyErrors": [], "notes": [], "acceptsDefault": False, "acceptsDefault6": False,
+           "ipv6": False, "reason": "", "ceConfig": {}}
+
+    def refuse(reason, msg):
+        out["errors"].append(msg)
+        out["reason"] = out["reason"] or reason
+    if req.get("namespace") != req.get("fabricNamespace"):
+        refuse("NotPlatformNamespace", "a circuit of ceKind platform is only offered in the platform's namespace")
+    if not sv.get("enabled"):
+        refuse("ServiceNotOffered", "the fabric offers no service routing domain for platform circuits")
+    if req.get("accept"):
+        refuse("InvalidSpec", "a platform circuit accepts the platform's infrastructure ranges; routing.accept is not "
+                              "allowed")
+    if 6 in [int(f) for f in req.get("family") or [] if str(f).isdigit()]:
+        refuse("FamilyUnavailable", "a platform circuit carries IPv4 only")
+        out["familyErrors"].append("a platform circuit carries IPv4 only")
+    if req.get("advertise"):
+        out["notes"].append("routing.advertise is not used: a platform circuit announces the clusters' prefixes only")
+    hub4 = sorted(ipaddress.collapse_addresses(hub_nets(real, 4)), key=lambda n: (int(n.network_address), n.prefixlen))
+    att = [n for n in (_net(v) for v in sv.get("attachableRanges") or []) if n is not None and n.version == 4]
+    out["ceConfig"] = {"advertisedRanges": [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in att] or ["any"],
+                       "acceptedRanges": [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in hub4]}
+    return out
 
 
 def accept_entry(e):
@@ -1134,11 +1794,13 @@ def attachments_plan(req):
     base = int(req.get("tableBase") or 100000)
     alloc = req.get("ledger") or {}
     egress = req.get("egress") or {}
-    errors, skipped, circuits, status = [], [], [], []
+    errors, skipped, circuits, status, platform = [], [], [], [], []
     nodes = {n: {"circuits": []} for n in node_names}
     if not at.get("enabled"):
         return {"errors": [], "circuits": [], "skipped": [], "nodes": {}, "status": [],
                 "vrfs": root_vrfs(req, [])}
+    service = req.get("service") or {}
+    service_on = bool(service.get("enabled"))
     vp = at.get("vlanPool") or {}
     pool = ipaddress.ip_network(str(at.get("linkPool")), strict=True)
     reserved = []
@@ -1148,7 +1810,7 @@ def attachments_plan(req):
         except ValueError as e:
             errors.append(f"reserved range {r}: {e}")
     sources = [str(ipaddress.ip_network(str(c), strict=True)) for c in req.get("platformSources") or []]
-    reserved6 = platform_ranges6(at, req.get("core"), req.get("translation"))
+    reserved6 = platform_ranges6(at, req.get("core"), req.get("translation"), req.get("hub6"))
     try:
         pool6 = ipaddress.ip_network(str(at.get("linkPool6") or ""), strict=True)
     except ValueError:
@@ -1199,6 +1861,44 @@ def attachments_plan(req):
         vlan, idx, t = int(r["vlan"]), int(r.get("linkIndex", -1)), int(r.get("vpnTarget") or 0)
         if (alloc.get("attachVlan") or {}).get(owner) != vlan or (alloc.get("attachLink") or {}).get(owner) != idx:
             skip(f"the fabric's ledger does not hold VLAN {vlan} and link {idx} for it")
+            continue
+        if (sp.get("ceKind") or "customer") == "platform":
+            # a platform circuit: the hand-off of the service VRF to the hub's network (service-plan gives it its
+            # routing policy); never in a network's VRF, never in the circuits' filter table
+            if not service_on:
+                skip("the fabric offers no service VRF (realization service.enabled)")
+                continue
+            if md.get("namespace") != req.get("fabricNamespace"):
+                skip("a platform circuit lives in the fabric's namespace only")
+                continue
+            if not int(vp.get("start", 1)) <= vlan <= int(vp.get("end", 0)):
+                skip(f"VLAN {vlan} is outside the pool {vp.get('start')}-{vp.get('end')}")
+                continue
+            if vlan in vlans:
+                skip(f"VLAN {vlan} is also {vlans[vlan]}'s")
+                continue
+            link = ipaddress.ip_network(str(r.get("link")), strict=True)
+            parent = str(r.get("interface") or "")
+            device = f"{parent}.{vlan}"
+            if not parent or len(device) > 15 or not link.subnet_of(pool):
+                skip(f"no usable interface ({device}) or link {link} outside {pool}")
+                continue
+            if (r.get("authentication") or "md5") == "md5" and key not in passwords:
+                skip("no usable BGP password in the platform's secret store")
+                continue
+            addrs = {n.get("name"): n.get("address") for n in r.get("nodes") or []}
+            vlans[vlan] = key
+            parents.add(parent)
+            platform.append({"circuit": key, "kind": "platform", "id": f"AC{vlan}",
+                             "vrf": str((service.get("vrf") or {}).get("name") or "service"),
+                             "table": int((service.get("vrf") or {}).get("table") or 9001), "vlan": vlan,
+                             "device": device, "parent": parent, "mtu": int(r.get("mtu") or 1500), "link": str(link),
+                             "ce": str(r.get("ce")), "peerAsn": int(r["peerAsn"]),
+                             "authentication": r.get("authentication") or "md5",
+                             "passwordPath": r.get("passwordPath") or "", "maxPrefixes": int(r.get("maxPrefixes") or 100),
+                             "maxPrefixAction": r.get("maxPrefixAction") or "teardown", "bfd": bool(r.get("bfd")),
+                             "rev": str(r.get("rev") or ""),
+                             "nodes": {n: addrs[n] for n in node_names if addrs.get(n)}})
             continue
         net_key = f"{md['namespace']}/{sp.get('network')}"
         if (alloc.get("vpnTarget") or {}).get(f"HybridNetwork/{net_key}") != t or net_key not in nets_by_key:
@@ -1317,8 +2017,12 @@ def attachments_plan(req):
                                                for b in ((p or {}).get("bearers") or {}).values()
                                                if (b or {}).get("interface")}),
                   "platformSources": sources})
-    return {"errors": errors, "circuits": circuits, "skipped": skipped, "nodes": nodes, "status": status,
-            "vrfs": root_vrfs(req, circuits)}
+    out = {"errors": errors, "circuits": circuits, "skipped": skipped, "nodes": nodes, "status": status,
+           "vrfs": root_vrfs(req, circuits)}
+    if platform:
+        # (only with platform circuits: a plan without them is the same answer as before)
+        out["platform"] = platform
+    return out
 
 
 def root_vrfs(req, circuits):
@@ -1335,7 +2039,7 @@ def root_vrfs(req, circuits):
             if name not in c["nodes"]:
                 continue
             v = by_vrf.setdefault(c["vrf"], {"network": c["network"], "vpnTarget": c["vpnTarget"], "vrf": c["vrf"],
-                                             "table": c["table"], "nat": "", "platform": [], "egress": False,
+                                             "table": c["table"], "nat": "", "egress": False,
                                              "rd": f"{asn}:{c['vpnTarget']}" if 0 < asn <= 65535 else "",
                                              "circuits": []})
             v["circuits"].append(dict({k: x for k, x in c.items() if k != "nodes"}, address=c["nodes"][name]))
@@ -1427,6 +2131,9 @@ def orphan_report(req):
         alloc = (led or {}).get("alloc") or {}
         for kind, entries in alloc.items():
             for owner, value in entries.items():
+                # a service prefix's owner is its network and the prefix (HybridNetwork/<ns>/<name>/<prefix>)
+                if kind == "servicePrefix" and "/".join(owner.split("/")[:3]) in owners:
+                    continue
                 if owner not in owners:
                     findings.append(f"ledger {fab}: {kind} {value} held by {owner}, which no longer exists")
         for network, state in ((led or {}).get("ipam") or {}).items():
@@ -1513,11 +2220,15 @@ def orphan_report(req):
                 want = {f"e{x.get('vpnTarget')}" for x in (real.get("egress") or {}).get("networks") or []}
                 att = [a for a in real.get("attachments") or [] if n["node"] in (a.get("nodes") or [])]
                 want |= {a.get("vrf") for a in att}
+                svc = real.get("service") or {}
+                svc_att = [c for c in svc.get("circuits") or [] if n["node"] in (c.get("nodes") or [])]
+                if svc_att:
+                    want |= {f"e{x.get('vpnTarget')}" for x in svc.get("networks") or []}
                 for v in vrfs:
                     if re.fullmatch(r"e\d+", v) and v not in want:
-                        findings.append(f"node {n['node']}: root VRF {v} belongs to no network with internet egress "
-                                        "or attachment circuit")
-                devs = {a.get("device") for a in att}
+                        findings.append(f"node {n['node']}: root VRF {v} belongs to no network with internet egress, "
+                                        "attachment circuit or cluster the platform reaches")
+                devs = {a.get("device") for a in att} | {c.get("device") for c in svc_att if c.get("device")}
                 # the circuits on this node with an IPv6 session (families 4 and 6): their devices and VRFs
                 att6 = [a for a in att if 6 in (a.get("families") or [4])]
                 devs6, vrfs6 = {a.get("device") for a in att6}, {a.get("vrf") for a in att6}
@@ -1572,7 +2283,9 @@ def orphan_report(req):
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-network": check_network,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
            "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan,
-           "circuit-plan": circuit_plan, "check-circuit": check_circuit, "attachments-plan": attachments_plan}
+           "circuit-plan": circuit_plan, "check-circuit": check_circuit, "attachments-plan": attachments_plan,
+           "reserved-ranges": reserved_ranges_action, "service-plan": service_plan,
+           "service-prefix-check": service_prefix_check, "check-cluster-networks": check_cluster_networks}
 
 
 def main():
