@@ -603,7 +603,9 @@ class RefusalTaskTest(unittest.TestCase):
         self.assertEqual(out["reason"], "ProvisionFailed")
 
     def test_refusals_before_the_ledger(self):
-        names = [t.get("name") for t in ac_tasks()[0]["block"]]
+        # every task in order, also inside the customer circuit's block
+        from play_helper import walk
+        names = [t.get("name") for t in walk(ac_tasks())]
         self.assertLess(names.index("Stop on IPv6 the circuit can't have"), names.index("The circuit's VLAN"))
         self.assertLess(names.index("Stop on IPv6 the circuit can't have"),
                         names.index("Refuse an accept list that reaches into the network or the platform"))
