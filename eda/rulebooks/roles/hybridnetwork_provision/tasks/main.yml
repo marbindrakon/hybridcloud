@@ -220,6 +220,11 @@
         fab_message: "Waiting for {{ hn_waiting | join('; ') }}"
         fab_waiting_for: "{{ hn_waiting }}"
         fab_status: "{{ hn_status | combine(hn_provider6_patch) }}"
+        # (the conditions are written whole: the platform access condition of the last run stays until a run decides
+        # it again, so the clusters' preflights do not wait while the network does)
+        fab_conditions: >-
+          {{ (fab_st | default({}, true)).conditions | default([], true) | selectattr('type', 'defined')
+             | selectattr('type', 'equalto', 'PlatformReachable') | list }}
       when: hn_waiting | length > 0
 
     - name: End the job while waiting
@@ -637,6 +642,11 @@
           {{ fab_fail_msg | default('', true) or ansible_failed_result.msg | default('HybridNetwork provision failed') }}
         # the placements' provider-assigned subnets, when the job got as far as listing them
         fab_status: "{{ hn_provider6_patch | default({}) }}"
+        # the platform access condition of the last run stays (a failure of the network's own spec decides nothing
+        # about it)
+        fab_conditions: >-
+          {{ (fab_st | default({}, true)).conditions | default([], true) | selectattr('type', 'defined')
+             | selectattr('type', 'equalto', 'PlatformReachable') | list }}
       when: fab_name is defined and services_api_host is defined
       ignore_errors: true
 

@@ -481,6 +481,16 @@ class NetworkJobWiring(unittest.TestCase):
         out = self.address_checks(["169.254.64.0/24"], ["169.254.64.0/24"])
         self.assertEqual(len(out["check"]), 1)
 
+    def test_pending_and_failed_writes_keep_platform_reachable(self):
+        cond = {"type": "PlatformReachable", "status": "True", "reason": "Attached", "message": "m"}
+        st = {"conditions": [{"type": "Ready", "status": "True", "reason": "Ready"}, cond]}
+        rescue = next(t for t in self.main() if "block" in t)["rescue"]
+        for task in (by_name(self.main(), "Report what the network waits for"), by_name(rescue, "Mark the HybridNetwork failed")):
+            with self.subTest(task=task["name"]):
+                expr = task["vars"]["fab_conditions"]
+                self.assertEqual(run_play([{"ansible.builtin.set_fact": {"x": expr}}, write_out("x")], {"fab_st": st}), [cond])
+                self.assertEqual(run_play([{"ansible.builtin.set_fact": {"x": expr}}, write_out("x")], {}), [])
+
     def egress_hold(self, **kw):
         t = by_name(self.main(), "Hold an egress index")
         expr = t["when"]
