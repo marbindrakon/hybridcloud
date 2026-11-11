@@ -205,6 +205,7 @@ def check_fabric(req):
     errors += eg["errors"]
     size["egressPool"] = eg["poolSize"]
     errors += service_check(real)
+    errors += router_advertisement_check(real)
     at = attachments_check(real.get("attachments") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []], core)
     errors += at["errors"]
     size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
@@ -1199,6 +1200,25 @@ def service_check(real):
         clash = range_clash(n, rows)
         if clash is not None:
             errors.append(f"realization service.attachableRanges[{i}] {n} overlaps {clash[0]} ({lower_first(clash[1])})")
+    return errors
+
+
+def router_advertisement_check(real):
+    """placement.routerAdvertisementBySite (check-fabric): per site name a mapping whose url is an https:// URL of the
+    site's router advertisement service (an empty map: no site has one)."""
+    by = ((real or {}).get("placement") or {}).get("routerAdvertisementBySite")
+    if by in (None, {}):
+        return []
+    if not isinstance(by, dict):
+        return ["realization placement.routerAdvertisementBySite must be a mapping of site names to {url}"]
+    errors = []
+    for site, entry in sorted(by.items(), key=lambda kv: str(kv[0])):
+        key = f"placement.routerAdvertisementBySite[{site}].url"
+        url = entry.get("url") if isinstance(entry, dict) else None
+        if not isinstance(url, str) or not url.strip():
+            errors.append(f"realization {key} is required (the site's router advertisement service)")
+        elif not re.fullmatch(r"https://[^\s/?#]+(/\S*)?", url.strip()):
+            errors.append(f"realization {key} must be an https:// URL, not {url!r}")
     return errors
 
 

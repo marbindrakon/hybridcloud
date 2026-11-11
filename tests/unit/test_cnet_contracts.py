@@ -429,6 +429,29 @@ class RefusedClusterTeardown(unittest.TestCase):
         self.assertIs(self.nothing_realized(self.refused("AddressConflict", platformPrefixes=["192.0.2.15/32"])), False)
 
 
+class RouterAdvertisementSetting(unittest.TestCase):
+    """The realization's placement.routerAdvertisementBySite: empty by default, an https:// URL per site, a wrong one
+    refused by check-fabric with the setting's name; the placement job reads the same key."""
+
+    SPEC = {"domainAsn": 65010, "vniPool": {"start": 50000, "end": 50999}, "l2vniPool": {"start": 60000, "end": 60999},
+            "borderGateway": {"nodes": [{"name": n} for n in NODES]}}
+
+    def errors(self, by):
+        r = copy.deepcopy(DEFAULTS)
+        r["placement"]["routerAdvertisementBySite"] = by
+        return [e for e in F.check_fabric({"spec": self.SPEC, "realization": r})["errors"] if "routerAdvertisement" in e]
+
+    def test_default_and_validation(self):
+        self.assertEqual(DEFAULTS["placement"]["routerAdvertisementBySite"], {})
+        self.assertEqual(self.errors({}), [])
+        self.assertEqual(self.errors({"site-a": {"url": "https://ra.site-a.example.org:8443"}}), [])
+        self.assertEqual(self.errors({"site-a": {"url": "http://ra.site-a.example.org"}}),
+                         ["realization placement.routerAdvertisementBySite[site-a].url must be an https:// URL, not "
+                          "'http://ra.site-a.example.org'"])
+        self.assertIn("placement.routerAdvertisementBySite[site-b].url is required", self.errors({"site-b": {}})[0])
+        self.assertIn("must be a mapping", self.errors(["https://x.example.org"])[0])
+
+
 # ---- the UI's reads and the CRD bases -----------------------------------------------------------------------------
 BASES = os.path.join(ROOT, "operator", "config", "crd", "bases")
 
