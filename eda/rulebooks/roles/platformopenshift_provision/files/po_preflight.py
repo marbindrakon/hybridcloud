@@ -22,11 +22,13 @@ Actions (request["action"]):
                  hostPrefix must be longer than the clusterNetwork prefix (InvalidSpec).
                  -> {clusterNetwork, hostPrefix, serviceNetwork, machineNetwork, reason, message}
   network        {kind, environment, namespace, network, networkObj, placements, fabric, needPlatform,
-                 needRouterAttachments, hubApi, hubPort}  a cluster on a hybrid network: the network and its
+                 needRouterAttachments, hubApi, hubPort, cluster}  a cluster on a hybrid network: the network and its
                  placement in the environment (ready; router attachments ready when asked; an IPv4 subnet); with
                  needPlatform the network's condition PlatformReachable, the fabric's service routing domain
                  (status.realization.service), the subnet inside service.attachableRanges and the hub's API address
-                 admitted by service.hubEndpoints when it lies in the hub's ranges (service.sources).
+                 admitted by service.hubEndpoints when it lies in the hub's ranges (service.sources). While the
+                 platform's side is down (ServiceNotOffered, CircuitNotDeployed) a cluster the network keeps rows
+                 for (status.platformAccess.prefixes, its name, pending or ready) waits; a new one is refused.
                  -> {reason, message, wait, placement (namespace/name), subnet4, space, networkId, networkName,
                      fabric, service, reserved}
   external       {choice, site, networks: CloudInfrastructure status.site.externalNetworks}  the global external
@@ -62,6 +64,9 @@ PLATFORM_REASONS = {
     "CircuitNotDeployed": "CircuitNotDeployed",
 }
 WAITING = {"WaitingForPlacement", "WaitingForPlatformAccess"}
+# the platform's side is down (no service, no platform circuit): a cluster whose prefixes the network keeps (rows
+# pending or ready, they keep their place while the platform's side is down) waits; a new cluster is refused
+PLATFORM_SIDE = {"ServiceNotOffered", "CircuitNotDeployed"}
 
 
 def flag(value):
@@ -247,6 +252,15 @@ def network(req):
     out["service"] = svc
     if not flag(req.get("needPlatform")):
         return result(**out)
+    me = str(req.get("cluster") or "")
+    held = [r.get("prefix") for r in ((hst.get("platformAccess") or {}).get("prefixes") or [])
+            if isinstance(r, dict) and me and r.get("cluster") == me and r.get("state") in ("pending", "ready")]
+
+    def side_down(reason, message):
+        if held:
+            return result("WaitingForPlatformAccess", f"HybridNetwork {name} keeps the cluster's addresses "
+                          f"({', '.join(map(str, held))}) while the platform's side is down: {message}", **out)
+        return result(reason, message, **out)
     cond = condition(hn, "PlatformReachable")
     if cond is None:
         return result("WaitingForPlatformAccess", f"HybridNetwork {name} does not report PlatformReachable yet", **out)
@@ -254,19 +268,21 @@ def network(req):
         why = cond.get("reason") or ""
         if why != "AttachPending":
             mapped = PLATFORM_REASONS.get(why, "WaitingForPlatformAccess")
-            return result(mapped, f"HybridNetwork {name}: the platform cannot reach the network ({why}"
-                          + (f": {cond.get('message')}" if cond.get("message") else "") + ")", **out)
+            text = (f"HybridNetwork {name}: the platform cannot reach the network ({why}"
+                    + (f": {cond.get('message')}" if cond.get("message") else "") + ")")
+            if mapped in PLATFORM_SIDE:
+                return side_down(mapped, text)
+            return result(mapped, text, **out)
     if not fab:
         return result("WaitingForPlatformAccess", f"HybridNetwork {name}: its fabric {hst.get('fabric') or '(none)'} "
                       "could not be read", **out)
     if not svc.get("enabled"):
-        return result("ServiceNotOffered", f"HybridFabric {out['fabric']} offers no connection for clusters on "
-                      "networks (its service routing domain is off)", **out)
+        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} offers no connection for clusters on "
+                         "networks (its service routing domain is off)")
     ranges = [str(r) for r in svc.get("attachableRanges") or []]
     if not ranges:
         # required with the service (check-fabric); never read as "any range"
-        return result("ServiceNotOffered", f"HybridFabric {out['fabric']} names no ranges for clusters on networks",
-                      **out)
+        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} names no ranges for clusters on networks")
     if not inside(subnet4, ranges):
         return result("OutsideAttachableRanges", f"NetworkPlacement {pref}: subnet {subnet4} lies outside the ranges "
                       f"the platform reaches ({', '.join(ranges)})", **out)

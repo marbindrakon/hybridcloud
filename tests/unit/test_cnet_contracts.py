@@ -505,6 +505,58 @@ class AttachableRangesRequired(unittest.TestCase):
         self.assertEqual(plan["status"]["attachableRanges"], ["0.0.0.0/0"])
 
 
+class PlatformSideDown(unittest.TestCase):
+    """While the platform's side is down (no platform circuit) the network keeps its clusters' prefixes in place
+    (rows pending with the platform's reason, the ledger entry kept, PlatformReachable False CircuitNotDeployed):
+    the cluster that holds them waits in its preflight and its wait, it is not refused; a new cluster is refused."""
+
+    def outage(self):
+        real, led = realization(), Ledger()
+        led.network("acme/n1", 10005, 3)
+        up = network_decision("acme/n1", ["192.0.2.15/32"], led, {"circuits": CIRCUIT_STATUS}, real)
+        led.apply(up)
+        down = network_decision("acme/n1", ["192.0.2.15/32"], led, {"circuits": []}, real)
+        led.apply(down)
+        return led, down
+
+    def test_rows_keep_their_place(self):
+        led, down = self.outage()
+        self.assertEqual([(r["state"], r["reason"]) for r in down["prefixes"]], [("pending", "CircuitNotDeployed")])
+        self.assertEqual(down["condition"]["reason"], "CircuitNotDeployed")
+        self.assertEqual(list(led.of("acme/n1")), ["HybridNetwork/acme/n1/192.0.2.15/32"])
+        self.assertEqual(fabric_plan(realization(), [network_object("acme/n1", down["prefixes"])], led)["status"]["networks"], [])
+
+    def judge(self, down, cluster):
+        net = network_object("acme/n1", down["prefixes"])
+        net["status"]["conditions"] = [dict(down["condition"], lastTransitionTime="2001-01-01T00:00:00Z")]
+        real = realization()
+        placement = {"metadata": {"name": "p1", "namespace": "acme"},
+                     "spec": {"network": "n1", "backend": {"kind": "CloudOSO", "name": "env1"},
+                              "use": {"routerAttachments": True}},
+                     "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
+                                "use": {"routerAttachments": {"state": "ready"}},
+                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+        fab = {"metadata": {"name": FABRIC},
+               "status": {"reservedRanges": F.reserved_ranges(real),
+                          "realization": {"service": dict(F.service_settings(real), enabled=True, sources=[HUB],
+                                                          attachableRanges=real["service"]["attachableRanges"],
+                                                          hubEndpoints=[], circuits=[])}}}
+        return P.network({"kind": "CloudOSO", "environment": "env1", "namespace": "acme", "network": "n1",
+                          "networkObj": net, "placements": [placement], "fabric": fab, "needPlatform": True,
+                          "needRouterAttachments": True, "hubApi": "", "cluster": cluster})
+
+    def test_the_holder_waits_a_new_cluster_is_refused(self):
+        _, down = self.outage()
+        mine = self.judge(down, "c1")
+        self.assertEqual((mine["reason"], mine["wait"]), ("WaitingForPlatformAccess", True))
+        self.assertIn("192.0.2.15/32", mine["message"])
+        other = self.judge(down, "c2")
+        self.assertEqual((other["reason"], other["wait"]), ("CircuitNotDeployed", False))
+        wait = P.service_wait({"network": "acme/n1", "prefixes": ["192.0.2.15/32"], "service": {"networks": [], "refused": []},
+                               "rows": down["prefixes"]})
+        self.assertEqual((wait["done"], wait["reason"]), (False, "WaitingForPlatformAccess"))
+
+
 # ---- the UI's reads and the CRD bases -----------------------------------------------------------------------------
 BASES = os.path.join(ROOT, "operator", "config", "crd", "bases")
 

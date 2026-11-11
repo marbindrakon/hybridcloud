@@ -64,6 +64,8 @@
       placements: "{{ _pn_nps.resources | default([]) }}"
       fabric: "{{ (_pn_fab.resources | default([]) | first | default({})) if _pn_fab is not skipped else {} }}"
       needPlatform: "{{ pn_need_platform | default(false) | bool }}"
+      # the cluster's rows on the network (it waits while the network keeps them and the platform's side is down)
+      cluster: "{{ ansible_operator_meta.name }}"
       needRouterAttachments: "{{ pn_need_router_attachments | default(false) | bool }}"
       # the hub's API as this job reaches it: the address ACM's agent on the cluster connects to
       hubApi: "{{ central_api_host | default('', true) }}"

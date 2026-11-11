@@ -1256,5 +1256,34 @@ class RouterAdvertisementPreflight(unittest.TestCase):
                 self.assertFalse([t for t in tr if "os" in t and t["os"]["action"] == "cluster-fips"])
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class PlatformSideDownWaits(unittest.TestCase):
+    """The preflight of a cluster whose prefixes the network keeps while the platform's side is down (rows pending
+    with the platform's reason, PlatformReachable False CircuitNotDeployed): the job ends Waiting, nothing is
+    released or created; a cluster the network holds nothing for is refused."""
+
+    def net(self, cluster):
+        n = network_obj(reach=("False", "CircuitNotDeployed", "no platform circuit"))
+        n["status"]["platformAccess"] = {"prefixes": [{"prefix": "192.0.2.15/32", "cluster": cluster, "state": "pending",
+                                                       "reason": "CircuitNotDeployed", "message": "keeps its place"}]}
+        return n
+
+    def test_holder_waits(self):
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml", os_preflight_vars(),
+                            k8s=k8s(net=self.net("c1")), result="1")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn({"result": 1}, tr)            # the job ended there
+        body = H.patches(tr)[-1]["body"]
+        self.assertEqual((body["status"], body["reason"]), ("pending", "WaitingForPlatformAccess"))
+        self.assertFalse(H.os_calls(tr))
+
+    def test_new_cluster_refused(self):
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml", os_preflight_vars(),
+                            k8s=k8s(net=self.net("another")), result="1")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("CircuitNotDeployed", out)
+        self.assertFalse(H.os_calls(tr))
+
+
 if __name__ == "__main__":
     unittest.main()
