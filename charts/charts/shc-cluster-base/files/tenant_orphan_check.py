@@ -9,7 +9,8 @@ resources of already-deleted projects (e.g. their default security groups) are o
 Checks:
   1. projects in the domain without a CloudOSO (config ignoreProjects excepted);
   2. CloudOSOs whose recorded project no longer exists;
-  3. unattached floating IPs in a CloudOSO's project other than its recorded API/ingress pair;
+  3. unattached floating IPs in a CloudOSO's project other than its recorded API/ingress pair and the floating IPs
+     the PlatformOpenshifts record (status.floatingIPs: a cluster's own pair, unattached during its install);
   4. records in the tenant zone that no PlatformOpenshift recorded, that are not the NS delegation
      a CloudOSO recorded (status.dns.zone/nameservers) and that are not a name the platform published for
      its own addresses (zone apex SOA/NS excepted). The platform's names are the AAAA records a CloudGateway
@@ -145,6 +146,9 @@ def check(cfg, acct, connect, all_osos, pos, platform_objs=()):
                 findings, problems, 2)
 
     ignore = set(cfg.get("ignoreProjects", []))
+    # the floating IPs the clusters record (their ids are unique, so the cluster's environment need not be matched)
+    cluster_fips = {((((p.get("status") or {}).get("floatingIPs") or {}).get(k) or {}).get("id"))
+                    for p in pos for k in ("api", "ingress")} - {None, ""}
     oso_by_project = {}
     for o in osos:
         st = o.get("status") or {}
@@ -163,7 +167,7 @@ def check(cfg, acct, connect, all_osos, pos, platform_objs=()):
             findings.append(f"project {name} ({pid}) in domain {cfg['domain']} has no CloudOSO")
             continue
         ref, st = oso_by_project[pid]
-        recorded = {st.get("apiFloatingIPId"), st.get("ingressFloatingIPId")}
+        recorded = {st.get("apiFloatingIPId"), st.get("ingressFloatingIPId")} | cluster_fips
         try:
             conn_p = connect(project_id=pid)
             for ip in conn_p.network.ips(project_id=pid):

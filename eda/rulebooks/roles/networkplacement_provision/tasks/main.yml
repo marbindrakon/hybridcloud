@@ -14,8 +14,8 @@
 # does; the gateway job wakes the placement), and the site's routes checked on every border gateway node. Last, the
 # forward-confirmed name of the placement's IPv6 gateway (gateway_name.yml, design/IPV6-PLAN.md §8.3).
 # A CloudOSO placement with a use turned off but still in use (status.use, backend_cloudoso.yml) stays Ready: the
-# condition Degraded (reason InUse) names what waits, and status.status pending lets the operator run it again on its
-# reconcile period until the use is gone (a ready placement is not re-run otherwise).
+# condition Degraded (reason InUse) names what waits, and the operator runs a ready placement whose use waits again on
+# its reconcile period until the use is gone (operator/namespace/roles/networkplacement).
 - block:
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -34,8 +34,8 @@
         np_status: {entity: "{{ fab_entity }}"}
         np_use_removing: []
         np_use_note: ""
-        # the last run left the placement ready with a use waiting to be removed (status.status pending, see the
-        # final write): the run is a re-check, not a change the network or the fabric need to hear about
+        # the last run left the placement ready with a use waiting to be removed: the run is a re-check, not a change
+        # the network or the fabric need to hear about
         np_prev_use_wait: >-
           {{ (fab_st.ready | default(false) | bool)
              and ((fab_st.use | default({}, true)).values() | selectattr('state', 'defined')
@@ -508,8 +508,7 @@
         _np_degraded_before: >-
           {{ fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'Degraded')
              | selectattr('status', 'equalto', 'True') | list | length > 0 }}
-        fab_status: >-
-          {{ np_final | combine({'status': 'pending'} if np_use_removing | length > 0 else {}) }}
+        fab_status: "{{ np_final }}"
         fab_conditions: >-
           {%- set now = lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') -%}
           {%- if np_use_removing | length > 0 -%}

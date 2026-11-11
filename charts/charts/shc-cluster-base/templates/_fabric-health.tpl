@@ -139,6 +139,16 @@ spec:
       annotations:
         summary: "CloudGateway {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no routing session with its site on {{ "{{" }} $labels.node {{ "}}" }}"
         description: "The node holds no session with the site. A site that is off on purpose is paused (CloudInfrastructure spec.paused), which this alert ignores."
+    # the fabric's service VRF: a node with a platform circuit but no established session with the hub's router
+    - alert: ShcFabricServiceSessionsDown
+      expr: >-
+        max by (namespace, name, node) (shc_fabric_node_reachable{customresource_kind="HybridFabric", reason="ServiceSessionsDown"})
+      for: {{ $f.alerts.serviceSessionsFor }}
+      labels:
+        severity: warning
+      annotations:
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no session with the hub's router on {{ "{{" }} $labels.node {{ "}}" }}"
+        description: "The node has a platform circuit (AttachmentCircuit ceKind platform) but no established BGP session on it; the platform reaches the clusters on tenant networks through the other nodes, or not at all when every node reports it."
     - alert: ShcFabricIPv6EgressUpstreamDown
       expr: >-
         max by (namespace, name) (shc_fabric_condition{customresource_kind="HybridFabric", type="IPv6EgressUpstream", status="False"})

@@ -158,6 +158,18 @@ class OrphanCheck(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertEqual(len(findings), 3)  # gone project, project without CloudOSO, unattached IP
 
+    def test_a_clusters_recorded_floating_ips_are_not_orphans(self):
+        ips = [NS(id="fip-api", floating_ip_address="192.0.2.15", port_id=None),
+               NS(id="fip-ing", floating_ip_address="192.0.2.16", port_id=None),
+               NS(id="fip-x", floating_ip_address="192.0.2.17", port_id=None)]
+        po = {"metadata": {"namespace": "entity-a", "name": "c1"},
+              "status": {"floatingIPs": {"network": "net-1", "api": {"address": "192.0.2.15", "id": "fip-api"},
+                                         "ingress": {"address": "192.0.2.16", "id": "fip-ing"}}}}
+        _, findings, _, rc = T.check(CFG, self.acct, connector({"p1": "a_one"}, {"p1": Conn(ips=ips)}),
+                                     [oso("one", "p1")], [po])
+        self.assertEqual(rc, 1)
+        self.assertEqual(findings, ["CloudOSO entity-a/one: unattached floating IP 192.0.2.17 (fip-x)"])
+
     def test_project_without_role_is_named_and_the_rest_is_checked(self):
         conns = {"p1": Conn(fail=unauthorized())}
         summary, findings, problems, rc = T.check(

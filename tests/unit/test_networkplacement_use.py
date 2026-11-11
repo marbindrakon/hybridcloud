@@ -2,8 +2,8 @@
 both uses with their defaults (booleans in either ansible-core), status.use per use (ready, off, removing with reason
 InUse and up to ten users named), the site record (networkName, the policy ids, routerExternalForProject), and the
 final write of a placement whose use waits to be removed: Ready stays True, condition Degraded/InUse, status.status
-pending (the operator then runs it again on its reconcile period; a ready placement is skipped otherwise), and the
-Degraded condition cleared once the use is gone. The CRD's CEL rules for spec.use are checked as text here (the
+ready (what is true; the operator runs a ready placement whose use waits again on its reconcile period, while it
+skips other ready placements), and the Degraded condition cleared once the use is gone. The CRD's CEL rules for spec.use are checked as text here (the
 envtest harness, tests/cel-ipam, runs them on an API server). The tasks run in ansible-playbook (skipped when
 absent)."""
 import os
@@ -135,7 +135,7 @@ class FinalWrite(unittest.TestCase):
             {"use": steady, "removing": [], "kind": "CloudOSO", "before": {}},
             {"use": {}, "removing": [], "kind": "CloudVirt", "before": degraded},
         ])
-        self.assertEqual(res[0]["status"]["status"], "pending")
+        self.assertNotIn("status", res[0]["status"])   # the job's ready write: status.status ready
         self.assertEqual(res[0]["conds"], [{"type": "Degraded", "status": "True", "reason": "InUse", "message": msg}])
         self.assertNotIn("status", res[1]["status"])
         self.assertEqual(res[1]["conds"], [{"type": "Degraded", "status": "False", "reason": "Ready", "message": ""}])
@@ -164,17 +164,44 @@ class PhaseOfAWaitingUse(unittest.TestCase):
         obj = {"metadata": {"name": "p", "generation": 2, "resourceVersion": "7"},
                "status": {"ready": True, "status": "ready", "observedGeneration": 2,
                           "conditions": [{"type": "Ready", "status": "True", "reason": "Ready", "message": "ok"}]}}
-        body = {"status": "pending", "ready": True, "message": "m", "observedGeneration": 2,
+        body = {"status": "ready", "ready": True, "message": "m", "observedGeneration": 2,
                 "conditions": [{"type": "Ready", "status": "True", "reason": "Ready", "message": "m"},
                                {"type": "Degraded", "status": "True", "reason": "InUse", "message": "waits"}]}
-        patch, info = ST.compute_status_patch(obj, body, {"action": "pending"})
+        patch, info = ST.compute_status_patch(obj, body, {"action": "ready"})
         st = patch["status"]
         self.assertEqual(info["phase"], "Degraded")
         self.assertTrue(st["ready"])
         ready = next(c for c in st["conditions"] if c["type"] == "Ready")
         self.assertEqual(ready["status"], "True")
-        # the operator re-publishes a placement whose status.status is not ready
-        self.assertEqual(st["status"], "pending")
+        self.assertEqual(st["status"], "ready")
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class OperatorRerunsAWaitingPlacement(unittest.TestCase):
+    """operator/namespace/roles/networkplacement: a ready placement is skipped on the reconcile period unless a use
+    waits (status.use removing, or condition Degraded True with reason InUse)."""
+
+    def test_skip_decision(self):
+        role = load(os.path.join(ROOT, "operator", "namespace", "roles", "networkplacement", "tasks", "main.yml"))
+        facts = by_name(role, "Set NetworkPlacement CR facts")["ansible.builtin.set_fact"]
+        skip = by_name(role, "Set event action and reason")["ansible.builtin.set_fact"]["networkplacement_skip_reconcile"]
+        steps = [{"ansible.builtin.set_fact": {"_hybridsovereign_redhat_networkplacement": "{{ case }}",
+                                               "reconcile_now": False}},
+                 {"ansible.builtin.set_fact": facts},
+                 {"ansible.builtin.set_fact": {"_skip": skip}}]
+        ready = {"metadata": {"generation": 2}, "spec": {},
+                 "status": {"status": "ready", "ready": True, "observedGeneration": 2,
+                            "use": {"virtualMachines": {"state": "ready"}, "routerAttachments": {"state": "off"}},
+                            "conditions": [{"type": "Ready", "status": "True", "reason": "Ready"}]}}
+        removing = {**ready, "status": {**ready["status"], "use": {"routerAttachments": {"state": "removing"}}}}
+        degraded = {**ready, "status": {**ready["status"], "conditions": ready["status"]["conditions"] + [
+            {"type": "Degraded", "status": "True", "reason": "InUse"}]}}
+        cleared = {**ready, "status": {**ready["status"], "conditions": ready["status"]["conditions"] + [
+            {"type": "Degraded", "status": "False", "reason": "Ready"}]}}
+        legacy = {"metadata": {"generation": 1}, "spec": {},
+                  "status": {"status": "ready", "ready": True, "observedGeneration": 1}}
+        self.assertEqual(run_cases(steps, [ready, removing, degraded, cleared, legacy], "_skip | bool"),
+                         [True, False, False, True, True])
 
 
 class CelRulesAsText(unittest.TestCase):

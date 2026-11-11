@@ -400,6 +400,35 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
         self.assertEqual(conn.network.fips, [])
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RefusedClusterTeardown(unittest.TestCase):
+    """eda/common/tasks/teardown_unrealized.yml: a cluster refused by its preflight before anything was built is
+    deleted without the central teardown; one that recorded floating IPs or prefixes is not."""
+
+    def nothing_realized(self, status):
+        decide = load(os.path.join(ROOT, "eda", "common", "tasks", "teardown_unrealized.yml"))[0]
+        cr = {"apiVersion": "hybridsovereign.redhat/v1alpha1", "kind": "PlatformOpenshift",
+              "metadata": {"name": "c1", "namespace": "acme"}, "status": status}
+        return run_play([decide, write_out("teardown_nothing_realized | bool")], {"shc_live_cr": cr})
+
+    def refused(self, reason, **st):
+        return dict({"status": "failed", "ready": False, "reason": reason,
+                     "conditions": [{"type": "Ready", "status": "False", "reason": reason, "message": "m"},
+                                    {"type": "Preflight", "status": "False", "reason": reason, "message": "m"}]}, **st)
+
+    def test_preflight_refusals(self):
+        for reason in ("NetworkNotFound", "RouterAttachmentsOff", "PlacementHasNoIPv4", "PlatformAccessOff",
+                       "OutsideAttachableRanges", "AddressConflict", "PrefixReserved", "NetworkChoiceRequired",
+                       "ExternalNetworkNotListed"):
+            with self.subTest(reason=reason):
+                self.assertIs(self.nothing_realized(self.refused(reason)), True)
+        # the platform team's reasons and a refusal after the allocation take the full teardown
+        self.assertIs(self.nothing_realized(self.refused("CircuitNotDeployed")), False)
+        fips = {"network": "net-1", "api": {"address": "192.0.2.15", "id": "a"}, "ingress": {"address": "192.0.2.16", "id": "b"}}
+        self.assertIs(self.nothing_realized(self.refused("ServicePrefixInUse", floatingIPs=fips)), False)
+        self.assertIs(self.nothing_realized(self.refused("AddressConflict", platformPrefixes=["192.0.2.15/32"])), False)
+
+
 # ---- the UI's reads and the CRD bases -----------------------------------------------------------------------------
 BASES = os.path.join(ROOT, "operator", "config", "crd", "bases")
 
