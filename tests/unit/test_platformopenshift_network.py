@@ -515,6 +515,30 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual(H.patches(tr)[-1]["body"]["reason"], "WaitingForPlatformAccess")
         self.assertNotIn("result", tr[-1])
 
+    def test_installed_or_started_cluster_keeps_its_addresses_on_a_refusal(self):
+        # Review R2 M1: a refused prefix (here the platform narrowed its attachable ranges) for a cluster whose install
+        # was started or is done reports the refusal and gives nothing back
+        fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.16/32", "reason": "OutsideAttachableRanges"}])
+        for st in ({"clusterInstalled": True, "platformPrefixes": ["192.0.2.15/32", "192.0.2.16/32"]},
+                   {"installStarted": True}):
+            rc, tr, out = self.run_a(k8s(fab=fab), po_cr_current={"resources": [{"status": dict(st, buildName="shc-oso-acme-c1")}]})
+            self.assertNotEqual(rc, 0)
+            steps = self.steps(tr)
+            self.assertNotIn("os:cluster-fips/absent", steps, st)
+            self.assertFalse([p for p in H.patches(tr) if "platformPrefixes" in p["body"] and p["body"]["platformPrefixes"] is None])
+            self.assertFalse([p for p in H.patches(tr) if "floatingIPs" in p["body"] and p["body"]["floatingIPs"] is None])
+            self.assertIn("keeps its floating IPs 192.0.2.15 and 192.0.2.16", out)
+        # the same refusal before the install still gives them back
+        rc, tr, out = self.run_a(k8s(fab=fab))
+        self.assertIn("os:cluster-fips/absent", self.steps(tr))
+
+    def test_install_started_is_recorded_before_the_helm_release(self):
+        names = [t.get("name") for t in load(os.path.join(TASKS, "openstack_clusterbuild.yml"))]
+        rec = [i for i, t in enumerate(load(os.path.join(TASKS, "openstack_clusterbuild.yml")))
+               if "installStarted" in str(t.get("vars", {}).get("cr_status_body", {}))]
+        self.assertTrue(rec)
+        self.assertLess(rec[0], names.index("Deploy mce-cluster-build chart"))
+
     def test_installed_cluster_keeps_its_gateway_prefix(self):
         cur = {"resources": [{"status": {"clusterInstalled": True,
                                           "platformPrefixes": ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]}}]}
