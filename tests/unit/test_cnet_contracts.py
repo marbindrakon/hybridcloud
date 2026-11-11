@@ -557,6 +557,75 @@ class PlatformSideDown(unittest.TestCase):
         self.assertEqual((wait["done"], wait["reason"]), (False, "WaitingForPlatformAccess"))
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ClusterPrefixShapes(unittest.TestCase):
+    """The prefixes the cluster job really writes (its task expressions: the floating IPs /32, the router's gateway
+    /32 after the install, an AWS/GCP Internal cluster's placement subnet), listed by the network job's own task with
+    the clusters' type and the placements' subnets, through the network job's decision (cnet-fix1: OpenStack /32 only,
+    AWS/GCP exactly a placement subnet, only the accepted address space)."""
+
+    PO = os.path.join(ROLES, "platformopenshift_provision", "tasks")
+
+    def prefixes(self, file, name, v):
+        t = by_name(load(os.path.join(self.PO, file)), name)
+        return run_play([{"ansible.builtin.set_fact": {"x": t["vars"]["pp_prefixes"]}}, write_out("x")], v)
+
+    def listed(self, clusters, placements):
+        t = by_name(load(os.path.join(ROLES, "hybridnetwork_provision", "tasks", "platform_access.yml")),
+                    "The clusters on the network")
+        v = {"_hn_clusters": {"resources": clusters}, "_hn_placements": {"resources": placements}, "fab_name": "n1",
+             "fab_real": {"service": {}}, "hn_fabric": {}}
+        return run_play([t, write_out("{'clusters': hn_clusters, 'subnets': hn_placement_subnets}")], v)
+
+    def decide(self, clusters, placements):
+        lst = self.listed(clusters, placements)
+        real, led = realization(attachable=("0.0.0.0/0",)), Ledger()
+        led.network("acme/n1", 10005, 3)
+        return PA.platform_access({
+            "network": "acme/n1", "fabric": FABRIC, "platformAccess": True, "space": [SPACE], "overlaps": [],
+            "hub": [HUB], "service": {"enabled": True, "ports": [6443], "attachableRanges": ["0.0.0.0/0"]},
+            "serviceStatus": {"circuits": CIRCUIT_STATUS}, "reserved": F.reserved_ranges(real),
+            "clusters": lst["clusters"], "placements": lst["subnets"], "ledger": {}})
+
+    def cluster(self, ty, prefixes, name="c1"):
+        return {"metadata": {"name": name, "namespace": "acme"}, "spec": {"type": ty, ty: {"network": "n1"}},
+                "status": {"platformPrefixes": prefixes}}
+
+    def placement(self, kind, prefix="192.0.2.0/25"):
+        return {"metadata": {"name": "p-" + kind.lower(), "namespace": "acme"},
+                "spec": {"network": "n1", "backend": {"kind": kind, "name": "env1"}},
+                "status": {"subnets": [{"family": 4, "prefix": prefix}, {"family": 6, "prefix": "2001:db8:1::/64"}]}}
+
+    def test_openstack_floating_ips_and_the_router_gateway(self):
+        st = {"resources": [{"status": {"clusterInstalled": False}}]}
+        fips = self.prefixes("openstack_cluster_addresses.yml", "Carry the floating IPs as the cluster's prefixes",
+                             {"cb_api_vip": "192.0.2.15", "cb_ingress_vip": "192.0.2.16", "po_cr_current": st})
+        after = self.prefixes("router_gateway.yml", "Carry the gateway address with the floating IPs",
+                              {"cb_api_vip": "192.0.2.15", "cb_ingress_vip": "192.0.2.16", "rg_address": "192.0.2.40"})
+        for got in (fips, after):
+            d = self.decide([self.cluster("openstack", got)], [self.placement("CloudOSO")])
+            self.assertEqual([(r["prefix"], r["state"], r["reason"]) for r in d["prefixes"]],
+                             [(p, "pending", "") for p in got])
+        self.assertEqual(after, ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.40/32"])
+        # a subnet is not an OpenStack cluster's shape
+        d = self.decide([self.cluster("openstack", ["192.0.2.0/25"])], [self.placement("CloudOSO")])
+        self.assertEqual(d["prefixes"][0]["state"], "refused")
+
+    def test_aws_and_gcp_internal_placement_subnet(self):
+        for ty, kind in (("aws", "CloudAWS"), ("gcp", "CloudGCP")):
+            with self.subTest(ty=ty):
+                place = self.placement(kind)
+                machine = P.placement_subnet4(place)   # what the preflight takes as the machine network
+                got = self.prefixes("cloud_internal_reach.yml", "Carry the placement's subnet as the cluster's prefix",
+                                    {"cb_machine_cidr": machine})
+                d = self.decide([self.cluster(ty, got)], [place])
+                self.assertEqual([(r["prefix"], r["state"], r["reason"]) for r in d["prefixes"]],
+                                 [("192.0.2.0/25", "pending", "")])
+                # a /32 or another range is not the placement's subnet
+                d = self.decide([self.cluster(ty, ["192.0.2.15/32"])], [place])
+                self.assertEqual(d["prefixes"][0]["state"], "refused")
+
+
 # ---- the UI's reads and the CRD bases -----------------------------------------------------------------------------
 BASES = os.path.join(ROOT, "operator", "config", "crd", "bases")
 
