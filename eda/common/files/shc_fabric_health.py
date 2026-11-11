@@ -28,10 +28,10 @@ import sys
 
 # reasons of the NodesHealthy condition, worst first
 ORDER = ("NodeUnreachable", "ReadFailed", "StartFailed", "ServiceFailed", "RoutingDaemonDown", "StartIncomplete", "SiteSessionsDown",
-         "ServiceSessionsDown", "ConfigurationDrift", "ConfigurationNotTaken", "RoutingDaemonRestarted")
+         "ServiceSessionsDown", "ServiceLinkDown", "ConfigurationDrift", "ConfigurationNotTaken", "RoutingDaemonRestarted")
 # the object works with reduced health (Degraded=True, phase Degraded)
 DEGRADING = {"NodeUnreachable", "StartFailed", "ServiceFailed", "RoutingDaemonDown", "StartIncomplete",
-             "SiteSessionsDown", "ServiceSessionsDown"}
+             "SiteSessionsDown", "ServiceSessionsDown", "ServiceLinkDown"}
 # a full run of the object's job repairs these: at once, or after the drift was seen wakeAfterChecks times
 WAKE_NOW = {"StartFailed", "StartIncomplete", "ServiceFailed"}
 WAKE_LATER = {"ConfigurationDrift"}
@@ -41,12 +41,14 @@ CONFIRM = DEGRADING | WAKE_NOW
 CHECK_OF = {"NodeUnreachable": "Reachability", "ReadFailed": "Reachability", "StartFailed": "Start", "StartIncomplete": "Start",
             "ServiceFailed": "Service", "RoutingDaemonDown": "RoutingDaemon", "RoutingDaemonRestarted": "RoutingDaemon",
             "ConfigurationDrift": "Configuration", "ConfigurationNotTaken": "Configuration",
-            "SiteSessionsDown": "SiteSessions", "ServiceSessionsDown": "ServiceSessions"}
+            "SiteSessionsDown": "SiteSessions", "ServiceSessionsDown": "ServiceSessions",
+            "ServiceLinkDown": "ServiceSessions"}
 EVENT_OF = {"NodeUnreachable": "NodeUnreachable", "ReadFailed": "NodeReadFailed", "StartFailed": "NodeStartFailed", "StartIncomplete": "NodeStartFailed",
             "ServiceFailed": "NodeServiceFailed", "RoutingDaemonDown": "RoutingDaemonDown",
             "RoutingDaemonRestarted": "RoutingDaemonRestarted", "ConfigurationDrift": "ConfigurationDrift",
             "ConfigurationNotTaken": "ConfigurationNotTaken",
-            "SiteSessionsDown": "SiteSessionsDown", "ServiceSessionsDown": "ServiceSessionsDown"}
+            "SiteSessionsDown": "SiteSessionsDown", "ServiceSessionsDown": "ServiceSessionsDown",
+            "ServiceLinkDown": "ServiceLinkDown"}
 DEFAULTS = {"intervalSeconds": 600, "wakeAfterChecks": 2, "wakeBackoffMinutes": 60, "daemonRestartWindowMinutes": 60,
             "eventRepeatMinutes": 60, "checks": {}}
 CHECKS = ("units", "routingDaemons", "drift", "upstream", "siteSessions", "serviceSessions", "pools")
@@ -170,6 +172,17 @@ def instance_findings(inst, kind, cfg):
             down = ", ".join("%s %s" % (p.get("address"), p.get("state")) for p in s.get("peers") or [])
             found.append(("ServiceSessionsDown", "no platform circuit session is established in the service VRF %s%s"
                           % (s.get("vrf") or "", (" (" + down + ")") if down else "")))
+        elif s is not None and (s.get("established") or 0) > 0:
+            # each network's service link (iBGP between the service VRF and the network's VRF): one down while the
+            # node's platform circuit is up leaves that network's VRF on the node without the hub's ranges (the other
+            # nodes still carry them). With every circuit session down the circuit's finding says it all. No wake: a
+            # run repairs only a missing link or neighbour, which the drift check reports (and wakes for) already
+            for l in s.get("links") or []:
+                if l.get("state") != "Established":
+                    found.append(("ServiceLinkDown", "the service link of %s has no session (%s %s): its VRF %s on this "
+                                  "node does not learn the hub's ranges"
+                                  % (l.get("network") or "?", l.get("address") or "?", l.get("state") or "Missing",
+                                     l.get("vrf") or "?")))
     return found
 
 

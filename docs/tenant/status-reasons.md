@@ -215,6 +215,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
 | `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
 | `ServiceFailed` | A network service on a node is not running. The platform team is alerted. | The platform team |
+| `ServiceLinkDown` | On a node, a network does not learn the platform's routes for its clusters; the other nodes carry them. The platform team is alerted. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
 | `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
 | `ServiceSessionsDown` | A node has no session with the platform's router for clusters on networks. The platform team is alerted. | The platform team |

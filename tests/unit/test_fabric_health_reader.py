@@ -269,7 +269,7 @@ class ServiceSessions(unittest.TestCase):
     def test_read(self):
         out = self.node({"10.255.128.75": {"state": "Established"}, "10.255.128.83": {"state": "Active"}}).read_node()
         self.assertEqual(out["instances"]["root"]["serviceSessions"], {
-            "vrf": "service", "established": 1, "known": 2, "read": True,
+            "vrf": "service", "established": 1, "known": 2, "read": True, "links": [],
             "peers": [{"address": "10.255.128.75", "state": "Established"}, {"address": "10.255.128.83", "state": "Active"}]})
         out = self.node({}, rc=1).read_node()
         self.assertEqual(out["instances"]["root"]["serviceSessions"]["established"], 0)

@@ -248,6 +248,9 @@ ops:
       siteSessionsFor: 10m
       # a node without a session with the hub's router on its platform circuits (the service VRF)
       serviceSessionsFor: 10m
+      # a network's session over its service link (the service VRF to the network's VRF) down on a node whose platform
+      # circuit is up
+      serviceLinksFor: 10m
       # as the realization's egress.ipv6.sessionDownAlertMinutes (default 5)
       upstreamDownFor: 5m
       # no health run reported for this many of its intervals (the schedule, AAP or the job broken)

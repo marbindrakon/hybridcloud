@@ -248,8 +248,10 @@ def egress6(run, conf):
 
 def service_sessions(run, conf):
     """The platform circuits' sessions in the service VRF as the root's own configuration names them: None without a
-    service VRF on the node, else {vrf, established, known, peers: [{address, state}]} (show bgp vrf <service> summary
-    json; a configured CE missing from it counts as known and not established)."""
+    service VRF on the node, else {vrf, established, known, peers: [{address, state}], links: [{network, vrf,
+    address, state}]} (show bgp vrf <service> summary json; a configured CE missing from it counts as known and not
+    established). links: the iBGP session of each network's service link, the service VRF's end (its neighbour is the
+    network VRF's address on the link), from the same summary; a session missing from it is "Missing"."""
     sv = (conf or {}).get("service") or {}
     if not isinstance(sv, dict) or not sv.get("vrf") or not sv.get("circuits"):
         return None
@@ -267,8 +269,11 @@ def service_sessions(run, conf):
     if isinstance(doc, dict) and isinstance(doc.get("peers"), dict):
         peers.update(doc["peers"])
     rows = [{"address": a, "state": (peers.get(a) or {}).get("state", "Missing")} for a in want]
+    links = [{"network": str(w.get("network") or ""), "vrf": str(w.get("vrf") or ""), "address": str(w["seIp"]),
+              "state": (peers.get(str(w["seIp"])) or {}).get("state", "Missing")}
+             for w in sv.get("networks") or [] if isinstance(w, dict) and w.get("seIp")]
     return {"vrf": sv["vrf"], "established": sum(1 for r in rows if r["state"] == "Established"), "known": len(rows),
-            "peers": rows, "read": rc == 0}
+            "peers": rows, "links": links, "read": rc == 0}
 
 
 def site_sessions(run, inst):

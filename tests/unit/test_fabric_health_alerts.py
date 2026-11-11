@@ -61,6 +61,8 @@ TESTS = {
              {"series": node_row("CloudGateway", "edge1", "bgw-1", "SiteSessionsDown", "no session"), "values": "1x20"},
              {"series": node_row("HybridFabric", "lab", "bgw-1", "ServiceSessionsDown", "no platform circuit session"),
               "values": "_x2 1x18"},
+             {"series": node_row("HybridFabric", "lab", "bgw-2", "ServiceLinkDown", "the service link of acme/n1 has no session"),
+              "values": "_x2 1x18"},
              {"series": cond("HybridFabric", "lab", "IPv6EgressUpstream", "False", "Degraded"), "values": "1000x20"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-1"}', "values": "1x20"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-2"}', "values": "0x20"},
@@ -93,6 +95,15 @@ TESTS = {
                       "description": "The node has a platform circuit (AttachmentCircuit ceKind platform) but no "
                                      "established BGP session on it; the platform reaches the clusters on tenant "
                                      "networks through the other nodes, or not at all when every node reports it."}}]},
+             {"eval_time": "9m", "alertname": "ShcFabricServiceLinkDown", "exp_alerts": []},
+             {"eval_time": "13m", "alertname": "ShcFabricServiceLinkDown", "exp_alerts": [
+                 {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab", "node": "bgw-2"},
+                  "exp_annotations": {
+                      "summary": "HybridFabric sovereign-cloud/lab: a network's session with the platform's connection is down on bgw-2",
+                      "description": "The node's platform circuit is up but the session over a network's service link "
+                                     "is not, so that network's VRF on the node does not learn the hub's ranges; the "
+                                     "network reaches the hub through the other nodes, or not at all when every node "
+                                     "reports it. status.health names the network."}}]},
              {"eval_time": "6m", "alertname": "ShcFabricIPv6EgressUpstreamDown", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab"},
                   "exp_annotations": {

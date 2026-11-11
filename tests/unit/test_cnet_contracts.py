@@ -670,6 +670,31 @@ class ServiceSessionsAndTheTemplate(unittest.TestCase):
         got = NH.service_sessions(lambda argv: (0, self.summary(states)), self.conf)
         self.assertEqual(got["established"], 0)
 
+    def test_the_health_reader_reads_each_networks_session(self):
+        # Review R3 N6: the networks' iBGP sessions (the service VRF's end of each service link) are read per network
+        import importlib.util as iu
+        spec = iu.spec_from_file_location("shc_node_health", os.path.join(ROOT, "eda", "common", "files", "shc_node_health.py"))
+        NH = iu.module_from_spec(spec)
+        spec.loader.exec_module(NH)
+        jspec = iu.spec_from_file_location("shc_fabric_health", os.path.join(ROOT, "eda", "common", "files", "shc_fabric_health.py"))
+        J = iu.module_from_spec(jspec)
+        jspec.loader.exec_module(J)
+        ce, ibgp = self.neighbours()
+        states = dict({a: "Established" for a in ce}, **{a: "Idle" for a in ibgp})
+        got = NH.service_sessions(lambda argv: (0, self.summary(states)), self.conf)
+        nets = self.conf["service"]["networks"]
+        self.assertEqual(sorted(l["address"] for l in got["links"]), sorted(ibgp))
+        self.assertEqual(sorted(l["network"] for l in got["links"]), sorted(w["network"] for w in nets))
+        self.assertTrue(all(l["state"] == "Idle" for l in got["links"]))
+        cfg = J.settings({"checks": {k: k == "serviceSessions" for k in J.CHECKS}})
+        found = J.instance_findings({"serviceSessions": got}, "root", cfg)
+        self.assertEqual([f[0] for f in found], ["ServiceLinkDown"])
+        # sessions missing from the summary count as down; all established: nothing
+        got = NH.service_sessions(lambda argv: (0, self.summary({a: "Established" for a in ce})), self.conf)
+        self.assertTrue(all(l["state"] == "Missing" for l in got["links"]))
+        got = NH.service_sessions(lambda argv: (0, self.summary(dict({a: "Established" for a in ce + ibgp}))), self.conf)
+        self.assertEqual(J.instance_findings({"serviceSessions": got}, "root", cfg), [])
+
     def test_the_readiness_check_names_both_kinds(self):
         with open(os.path.join(ROLES, "hybridfabric_provision", "tasks", "node_root.yml")) as fh:
             text = fh.read()

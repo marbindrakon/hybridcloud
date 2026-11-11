@@ -197,7 +197,8 @@ objects read Unknown/`NotChecked` and the stale alerts stay quiet. Two alerts wa
 schedule, AAP or the job is broken), and `ShcFabricNodesNotRead`, lower, when runs report but have not read the nodes
 (`checkedAt`) for `ops.fabricHealth.alerts.notReadIntervals` intervals because changes to the nodes held them off. Events
 come on transitions only (`NodeStartFailed`, `NodeServiceFailed`, `RoutingDaemonDown`, `RoutingDaemonRestarted`,
-`ConfigurationDrift`, `SiteSessionsDown`, `ServiceSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
+`ConfigurationDrift`, `SiteSessionsDown`, `ServiceSessionsDown`, `ServiceLinkDown`, `NodeUnreachable`, `NodeRebooted`,
+`NodeHealthRecovered`).
 
 What a full run repairs wakes the job of the object it belongs to (the fabric for the root, the gateway for its
 instance) when that object is ready: a failed or inactive start, a unit not running or not started at boot at once,
@@ -282,7 +283,12 @@ unsolicited ACKs silently.
 The health check reads `show bgp vrf <service> summary json` and reports `ServiceSessionsDown` on the fabric when a
 node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing: the
 node has withdrawn the hub's ranges from the networks already, the finding is for the platform team). The sessions
-over the service links do not count for it. The
+over the service links do not count for it: the same read gives the session of each network's service link (the
+service VRF to the network's VRF), and one that is not established while the node's platform edge session is up is
+`ServiceLinkDown` on the fabric, naming the network (confirmed on a second check, degrading, alert
+`ShcFabricServiceLinkDown` after `ops.fabricHealth.alerts.serviceLinksFor`). With every platform edge session of the
+node down, only `ServiceSessionsDown` is reported. It wakes nothing either: a full run repairs only a missing link or
+neighbour, which the drift check reports and wakes for already. The
 apply's snapshot covers the VRF, the pairs and the table, so drift is reported as for the rest of the root.
 
 ## The orphan check on a node

@@ -523,5 +523,55 @@ class ServiceSessionsTest(unittest.TestCase):
         self.assertEqual(a["fabric"]["status"]["health"]["nodes"][0]["findings"], [])
 
 
+class ServiceLinksTest(unittest.TestCase):
+    """ServiceLinkDown (Review R3 N6): per node and network, the iBGP session between the service VRF and the network's
+    VRF. A session down while the node's platform circuit is up is a finding (confirmed on a second check, degrading,
+    no wake); every circuit session down is the circuit's finding alone (ServiceSessionsDown), not one per network."""
+
+    def root(self, established=1, states=("Idle", "Established")):
+        links = [{"network": "acme/n%d" % i, "vrf": "e%d" % (10 + i), "address": "192.0.2.%d" % (2 * i), "state": st}
+                 for i, st in enumerate(states, 1)]
+        return inst(serviceSessions={"vrf": "service", "established": established, "known": 1,
+                                     "peers": [{"address": "198.51.100.1",
+                                                "state": "Established" if established else "Active"}],
+                                     "links": links})
+
+    def test_a_network_session_down_while_the_circuit_is_up(self):
+        first = J.judge(req([node("bgw-1", root=self.root())]))["fabric"]
+        f = first["status"]
+        self.assertEqual(cond(f, "NodesHealthy")["status"], "True")
+        self.assertEqual([x["reason"] for x in f["health"]["nodes"][0]["findings"]], ["ServiceLinkDown"])
+        a, _ = twice([node("bgw-1", root=self.root())])
+        f = a["fabric"]["status"]
+        self.assertEqual(cond(f, "NodesHealthy")["reason"], "ServiceLinkDown")
+        self.assertEqual(cond(f, "Degraded")["reason"], "ServiceLinkDown")
+        msg = cond(f, "NodesHealthy")["message"]
+        self.assertIn("acme/n1", msg)
+        self.assertIn("192.0.2.2 Idle", msg)
+        self.assertNotIn("acme/n2", msg)
+        finding = f["health"]["nodes"][0]["findings"][0]
+        self.assertEqual(finding["check"], "ServiceSessions")
+        self.assertEqual(f["health"]["nodes"][0]["reason"], "ServiceLinkDown")
+        self.assertFalse(a["fabric"]["wake"])
+        self.assertIn("ServiceLinkDown", [e["reason"] for e in a["fabric"]["events"]])
+
+    def test_every_network_down_with_the_circuit_is_the_circuits_finding(self):
+        a, _ = twice([node("bgw-1", root=self.root(established=0, states=("Idle", "Idle")))])
+        f = a["fabric"]["status"]
+        self.assertEqual([x["reason"] for x in f["health"]["nodes"][0]["findings"]], ["ServiceSessionsDown"])
+
+    def test_all_up_no_links_or_check_off(self):
+        for r in (self.root(states=("Established", "Established")), self.root(states=())):
+            f = J.judge(req([node("bgw-1", root=r)]))["fabric"]["status"]
+            self.assertEqual(f["health"]["nodes"][0]["findings"], [])
+        a = J.judge(req([node("bgw-1", root=self.root())], health={"checks": {"serviceSessions": False}}))
+        self.assertEqual(a["fabric"]["status"]["health"]["nodes"][0]["findings"], [])
+
+    def test_the_reason_is_registered_and_ordered(self):
+        self.assertIn("ServiceLinkDown", J.ORDER)
+        self.assertLess(J.ORDER.index("ServiceSessionsDown"), J.ORDER.index("ServiceLinkDown"))
+        self.assertNotIn("ServiceLinkDown", J.WAKE_NOW | J.WAKE_LATER)
+
+
 if __name__ == "__main__":
     unittest.main()

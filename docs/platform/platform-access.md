@@ -209,7 +209,8 @@ entity-<tenant> -o yaml`, `status.reservedRanges`, and `status.managedClusterRan
 - `HybridFabric status.realization.service`: the domain, its connections and VLANs, the networks with their
   accepted addresses, and the refused ones with their reason.
 - The fabric health check reports `ServiceSessionsDown` when a node has no established session on a platform edge
-  connection.
+  connection, and `ServiceLinkDown` when, on a node whose edge session is up, a network's session with the service
+  domain is down (that network learns the hub's ranges through the other nodes only).
 
 There is no live reachability probe: "the platform reaches this network" means the domain is offered, an edge
 connection of the platform kind is realized and the network is eligible, not that packets were seen to flow. The

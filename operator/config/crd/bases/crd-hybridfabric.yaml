@@ -330,9 +330,10 @@ spec:
                                     NodeUnreachable, ReadFailed (the node answered, its check did not complete),
                                     StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
                                     RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
-                                    routing configuration the node does not take), SiteSessionsDown or
+                                    routing configuration the node does not take), SiteSessionsDown,
                                     ServiceSessionsDown (no session with the platform's router for clusters on
-                                    networks).
+                                    networks) or ServiceLinkDown (a network's session with the platform's connection
+                                    is down while the node's own is up).
                                 message:
                                   type: string
                                 since:
