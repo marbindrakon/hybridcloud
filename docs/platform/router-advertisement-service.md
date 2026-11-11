@@ -134,6 +134,12 @@ placement:
   the CA bundle of the site's credential when it has one, otherwise with the system's trust.
 - A site without an entry is a site without the service: the platform assumes the site advertises floating IPs by
   itself.
+- A placement without IPv4 is never asked about: floating IPs are IPv4 and its router has no IPv4 interface. Its
+  `status.realization.site.routerAdvertisement` says `mode: NotApplicable` with a message, and its router attachments
+  are ready as soon as the platform's policy exists.
+- When the service does not answer, the placement keeps the service's last answer (`nat`, `restores`,
+  `lastRestoredAt`, `confirmedAt`) and marks it `stale: true`; the reason is on its router attachments
+  (`RouterAdvertisementFailed`). A placement the service never answered for shows no `nat` at all.
 
 ## Verify
 
