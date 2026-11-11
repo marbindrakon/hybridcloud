@@ -1,12 +1,23 @@
 ---
-# shc (design/P8-PLAN.md §12): the build name shc-aws-<entity>-<name> is the cluster's identity on the platform: Helm
-# release, central namespace, ClusterDeployment and ManagedCluster, issuer path, IAM role path and Vault prefix. Hive's
+# shc (design/P8-PLAN.md §12): the build name shc-aws-<entity>-<name>-<digest> (build_name.yml) is the cluster's
+# identity on the platform: Helm release, central namespace, ClusterDeployment and ManagedCluster, issuer path, IAM role path and Vault prefix. Hive's
 # install and uninstall pods in that namespace are the ones the platform's Hive role trusts (namespaces shc-aws-*).
 # The OpenShift cluster itself is <name>.<environment's domain>.
+- name: The cluster's build name
+  ansible.builtin.include_tasks: build_name.yml
+  vars:
+    bn_entity: "{{ aws_entity }}"
+    bn_name: "{{ ansible_operator_meta.name }}"
+    bn_prefix: shc-aws
+    bn_max: 40
+    bn_recorded: >-
+      {{ (((platformopenshift_cr | default({})).resources | default([{}], true) | first).status | default({}, true)).buildName
+         | default('', true) }}
+
 - name: Derive cluster identifiers
   ansible.builtin.set_fact:
-    cb_app_name: "shc-aws-{{ aws_entity }}-{{ ansible_operator_meta.name }}"
-    cb_cluster_name: "shc-aws-{{ aws_entity }}-{{ ansible_operator_meta.name }}"
+    cb_app_name: "{{ bn_build_name }}"
+    cb_cluster_name: "{{ bn_build_name }}"
     cb_ocp_name: "{{ ansible_operator_meta.name }}"
     cb_cluster_domain: "{{ ansible_operator_meta.name }}.{{ aws_domain }}"
     cb_install_base_domain: "{{ aws_domain }}"
@@ -61,7 +72,7 @@
       - cb_app_name | length <= 40
       - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
     fail_msg: >-
-      Build name {{ cb_app_name }} (shc-aws-<entity>-<name>) must be at most 40 characters of [a-z0-9-]; shorten the
+      Build name {{ cb_app_name }} (shc-aws-<entity>-<name>-<digest>) must be at most 40 characters of [a-z0-9-]; shorten the
       PlatformOpenshift name.
 
 - name: Fail without a cluster-build chart

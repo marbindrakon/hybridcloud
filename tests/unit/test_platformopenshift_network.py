@@ -70,24 +70,65 @@ def judge(**kw):
 # ---- the helper ---------------------------------------------------------------------------------------------------
 
 class BuildName(unittest.TestCase):
-    def test_tenant_qualified(self):
-        self.assertEqual(P.build_name({"prefix": "shc-oso", "entity": "acme", "name": "web1"})["buildName"],
-                         "shc-oso-acme-web1")
+    """H1: a build name is unique for every pair (tenant, cluster name), at most the limit, stable, and readable."""
 
-    def test_long_names_are_cut_with_a_hash(self):
-        a = P.build_name({"prefix": "shc-oso", "entity": "a" * 30, "name": "b" * 40})["buildName"]
-        b = P.build_name({"prefix": "shc-oso", "entity": "a" * 30, "name": "b" * 41})["buildName"]
-        self.assertLessEqual(len(a), 53)
-        self.assertNotEqual(a, b)
-        self.assertRegex(a, r"^shc-oso-a+-b*-?[0-9a-f]{8}$")
-        self.assertEqual(a, P.build_name({"prefix": "shc-oso", "entity": "a" * 30, "name": "b" * 40})["buildName"])
+    @staticmethod
+    def name(entity, cluster, **kw):
+        return P.build_name(dict({"prefix": "shc-oso", "entity": entity, "name": cluster}, **kw))["buildName"]
+
+    def test_tenant_qualified_and_readable(self):
+        self.assertRegex(self.name("acme", "web1"), r"^shc-oso-acme-web1-[0-9a-f]{8}$")
+
+    def test_a_hyphen_from_either_side_does_not_collide(self):
+        # the pair of the review: tenant acme-corp's prod and tenant acme's corp-prod read alike
+        names = {self.name("acme-corp", "prod"), self.name("acme", "corp-prod"), self.name("acme", "corp.prod")}
+        self.assertEqual(len(names), 3)
+        self.assertTrue(all(n.startswith("shc-oso-acme-corp-prod-") for n in names))
+
+    def test_one_tenant_dot_and_hyphen_do_not_collide(self):
+        self.assertNotEqual(self.name("acme", "prod.1"), self.name("acme", "prod-1"))
+
+    def test_truncation_does_not_collide(self):
+        # two pairs whose readable parts are equal after the cut
+        a, b = self.name("a" * 30, "b" * 40), self.name("a" * 30, "b" * 41)
+        c, d = self.name("a" * 30 + "-b", "b" * 39), self.name("a" * 30, "b-" + "b" * 39)
+        for n in (a, b, c, d):
+            self.assertLessEqual(len(n), 53)
+            self.assertRegex(n, r"^shc-oso-[a-z0-9-]*[a-z0-9]-[0-9a-f]{8}$")
+        self.assertEqual(a[:-9], b[:-9])
+        self.assertEqual(len({a, b, c, d}), 4)
+
+    def test_stable(self):
+        self.assertEqual(self.name("acme", "c1"), self.name("acme", "c1"))
+        self.assertEqual(self.name("a" * 30, "b" * 40), self.name("a" * 30, "b" * 40))
+
+    def test_cloud_limit(self):
+        n = self.name("acme-corp", "a-rather-long-cluster-name", prefix="shc-aws", max=40)
+        self.assertLessEqual(len(n), 40)
+        self.assertTrue(n.startswith("shc-aws-acme-corp-a-rather"))
+        self.assertNotEqual(n, self.name("acme-corp", "a-rather-long-cluster-name2", prefix="shc-aws", max=40))
 
     def test_two_tenants_same_cluster_name_differ(self):
-        self.assertNotEqual(P.build_name({"entity": "acme", "name": "c1"}), P.build_name({"entity": "beta", "name": "c1"}))
+        self.assertNotEqual(self.name("acme", "c1"), self.name("beta", "c1"))
 
     def test_needs_entity(self):
         with self.assertRaises(ValueError):
             P.build_name({"entity": "", "name": "c1"})
+
+    def test_task_file_keeps_a_recorded_name(self):
+        if not HAVE_ANSIBLE:
+            self.skipTest("ansible-playbook not installed")
+        rc, tr, out = H.run("platformopenshift_provision", "build_name.yml",
+                            dict(BASE, bn_entity="acme", bn_name="c1", bn_recorded="shc-oso-acme-c1"),
+                            result="[bn_build_name, bn_derived]")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(tr[-1]["result"][0], "shc-oso-acme-c1")
+        self.assertEqual(tr[-1]["result"][1], self.name("acme", "c1"))
+        rc, tr, out = H.run("platformopenshift_provision", "build_name.yml",
+                            dict(BASE, bn_entity="acme", bn_name="c1", bn_prefix="shc-gcp", bn_max=40),
+                            result="bn_build_name")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(tr[-1]["result"], self.name("acme", "c1", prefix="shc-gcp", max=40))
 
 
 DEFAULTS = {"clusterNetwork": "10.128.0.0/14", "hostPrefix": 23, "serviceNetwork": "172.30.0.0/16",
