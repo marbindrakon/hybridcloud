@@ -46,6 +46,8 @@ import {
   PLATFORM_NAMESPACE,
 } from '../forms/NetworkCreateFields';
 import { kindTerm } from '../i18n/vocabulary';
+import { ClusterCreateFields, type ClusterFieldsValue } from '../forms/ClusterCreateFields';
+import { buildClusterSpec, type ClusterProvider } from '../forms/clusterSpec';
 
 export type SelfServiceFormType =
   | 'team'
@@ -290,7 +292,6 @@ export function CreateResourceForm({
   const [fabricRef, setFabricRef] = useState('');
   const [gatewayRef, setGatewayRef] = useState('');
   const [tunnelType, setTunnelType] = useState('wireguard');
-  const [region, setRegion] = useState('us-east-1');
   const [healthUrl, setHealthUrl] = useState('https://');
   const [healthGroup, setHealthGroup] = useState('custom');
   const [istioEnabled, setIstioEnabled] = useState(false);
@@ -326,8 +327,8 @@ export function CreateResourceForm({
   // PlatformOpenshift
   const [platformType, setPlatformType] = useState('openstack');
   const [platformEnv, setPlatformEnv] = useState('');
-  const [cpCount, setCpCount] = useState('3');
-  const [workerCount, setWorkerCount] = useState('3');
+  /** Network, publish, node counts and address settings of the cluster (reported by its section) */
+  const [clusterFields, setClusterFields] = useState<ClusterFieldsValue | null>(null);
   const [rbacMulti, setRbacMulti] = useState<string[]>([]);
   const [rbacOperator, setRbacOperator] = useState<string[]>([]);
   const [rbacDeveloper, setRbacDeveloper] = useState<string[]>([]);
@@ -560,6 +561,12 @@ export function CreateResourceForm({
   /** Entity contacts as sent (empty rows dropped) and what is wrong with them. */
   const entityContacts = cleanContacts(type === 'entity' ? contactRows : []);
 
+  // PlatformOpenshift: the environment chosen for the cluster's type, and its object (site, region).
+  const clusterEnv = platformEnv || (platformType === 'aws' ? cloudAwsRef : platformType === 'gcp' ? cloudGcpRef : cloudosoRef);
+  const clusterEnvResource = (platformType === 'aws' ? cloudAwss.items : platformType === 'gcp' ? cloudGcps.items : cloudosos.items).find(
+    (i) => i.metadata?.name === clusterEnv,
+  );
+
   const buildSpec = (): Record<string, unknown> => {
     if (usesNetworkSection) return networkSpec ?? {};
     switch (type) {
@@ -624,52 +631,23 @@ export function CreateResourceForm({
         return { cloudRef: { name: awsSiteRef.trim() } };
       case 'cloudgcp':
         return { cloudRef: { name: gcpSiteRef.trim() } };
-      case 'platformopenshift': {
-        const toolRbac =
-          rbacMulti.length || rbacOperator.length || rbacDeveloper.length || rbacViewer.length
-            ? {
-                ...(rbacMulti.length ? { clusterAdminRbac: rbacMulti } : {}),
-                ...(rbacOperator.length ? { clusterOperatorRbac: rbacOperator } : {}),
-                ...(rbacDeveloper.length ? { clusterDeveloperRbac: rbacDeveloper } : {}),
-                ...(rbacViewer.length ? { clusterViewerRbac: rbacViewer } : {}),
-              }
-            : undefined;
-        if (platformType === 'gcp') {
-          return {
-            type: 'gcp',
-            gcp: {
-              environment: platformEnv || cloudGcpRef,
-              ...optional('region', region),
-              controlPlaneCount: Number(cpCount) || 3,
-              workerCount: Number(workerCount) || 2,
-            },
-            ...(toolRbac ? { toolRbac } : {}),
-          };
-        }
-        if (platformType === 'aws') {
-          return {
-            type: 'aws',
-            aws: {
-              environment: platformEnv || cloudAwsRef,
-              region,
-              clusterType: 'standalone',
-              controlPlaneCount: Number(cpCount) || 3,
-              workerCount: Number(workerCount) || 2,
-            },
-            ...(toolRbac ? { toolRbac } : {}),
-          };
-        }
-        return {
-          type: 'openstack',
-          openstack: {
-            environment: platformEnv || cloudosoRef,
-            controlPlaneCount: Number(cpCount) || 3,
-            workerCount: Number(workerCount) || 3,
-            ...optional('externalNetwork', externalNetwork),
+      case 'platformopenshift':
+        // The spec as the form shows it: typed counts (0 included), no region (the environment's).
+        return buildClusterSpec({
+          provider: platformType as ClusterProvider,
+          environment: clusterEnv,
+          network: clusterFields?.network ?? '',
+          publish: clusterFields?.publish ?? 'External',
+          controlPlaneCount: clusterFields?.controlPlaneCount ?? '',
+          workerCount: clusterFields?.workerCount ?? '',
+          networking: clusterFields?.networking ?? { clusterNetwork: '', hostPrefix: '', serviceNetwork: '', machineNetwork: '' },
+          toolRbac: {
+            clusterAdminRbac: rbacMulti,
+            clusterOperatorRbac: rbacOperator,
+            clusterDeveloperRbac: rbacDeveloper,
+            clusterViewerRbac: rbacViewer,
           },
-          ...(toolRbac ? { toolRbac } : {}),
-        };
-      }
+        });
       case 'migration':
         return { source, vmName, cloudoso: cloudosoRef, providerNamespace: 'openshift-mtv' };
       case 'persona':
@@ -720,7 +698,8 @@ export function CreateResourceForm({
     if (type === 'cloudoso' && !osoProject.trim()) return false;
     if (type === 'cloudaws' && !awsSiteRef.trim()) return false;
     if (type === 'cloudgcp' && !gcpSiteRef.trim()) return false;
-    if (type === 'platformopenshift' && !(platformEnv || cloudosoRef || cloudAwsRef || cloudGcpRef)) return false;
+    if (type === 'platformopenshift' && !clusterEnv) return false;
+    if (type === 'platformopenshift' && (!clusterFields || clusterFields.blockers.length > 0)) return false;
     if (type === 'persona' && (!(personaRbacs[0] || rbacRef) || !personaType)) return false;
     if (type === 'vaultkv' && !vaultRef) return false;
     if (type === 'migration' && (!vmName || !cloudosoRef)) return false;
@@ -752,7 +731,11 @@ export function CreateResourceForm({
   const blockers: string[] = [];
   if (!name) blockers.push(t('form.blockName'));
   else if (nameIssue) blockers.push(t(`form.nameRule.${nameIssue.split(':')[0]}`, { max: nameIssue.split(':')[1] }));
-  if (name && !nameIssue && !canSubmit()) blockers.push(t('form.blockRequired'));
+  if (name && !nameIssue && !canSubmit()) {
+    // the cluster form names what stops it (network, counts, address settings) instead of the generic line
+    if (type === 'platformopenshift' && clusterEnv && clusterFields?.blockers.length) blockers.push(...clusterFields.blockers);
+    else blockers.push(t('form.blockRequired'));
+  }
   if (checkText) blockers.push(t('form.blockServer', { reason: [checkText.body || checkText.title, ...causeLines(checkErrors.other)].filter(Boolean).join(' ') }));
   const canCreate = clientValid && check.passed && !submitting;
 
@@ -1231,8 +1214,6 @@ export function CreateResourceForm({
                     onChange={(v) => {
                       setPlatformType(v);
                       setPlatformEnv('');
-                      setCpCount('3');
-                      setWorkerCount(v === 'aws' || v === 'gcp' ? '2' : '3');
                     }}
                     options={[
                       { value: 'openstack', label: 'OpenStack' },
@@ -1254,27 +1235,13 @@ export function CreateResourceForm({
                     options={names(platformType === 'aws' ? cloudAwss.items : platformType === 'gcp' ? cloudGcps.items : cloudosos.items)}
                     isRequired
                   />
-                  <FormGroup label="Control plane count" fieldId="cp-count">
-                    <TextInput id="cp-count" type="number" value={cpCount} onChange={(_e, v) => setCpCount(v)} />
-                  </FormGroup>
-                  <FormGroup label="Worker count" fieldId="worker-count">
-                    <TextInput
-                      id="worker-count"
-                      type="number"
-                      value={workerCount}
-                      onChange={(_e, v) => setWorkerCount(v)}
-                    />
-                  </FormGroup>
-                  {(platformType === 'aws' || platformType === 'gcp') && (
-                    <FormGroup label="Region" fieldId="plat-region">
-                      <TextInput id="plat-region" value={region} onChange={(_e, v) => setRegion(v)} />
-                    </FormGroup>
-                  )}
-                  {platformType === 'openstack' && (
-                    <FormGroup label="External network" fieldId="plat-ext">
-                      <TextInput id="plat-ext" value={externalNetwork} onChange={(_e, v) => setExternalNetwork(v)} />
-                    </FormGroup>
-                  )}
+                  <ClusterCreateFields
+                    namespace={entityNs}
+                    provider={platformType as ClusterProvider}
+                    environment={clusterEnv}
+                    envResource={clusterEnvResource}
+                    onChange={setClusterFields}
+                  />
                   <RbacMultiSelect
                     id="plat-rbac-admin"
                     label={t('form.roles.clusterAdmins')}

@@ -33,6 +33,27 @@ export interface TenantProfileSite {
   state: 'Available' | 'Unavailable';
   capabilities?: TenantSiteCapability[];
   storageClasses?: TenantSiteStorageClass[];
+  /** OpenStack sites: external networks every project may use */
+  externalNetworks?: TenantSiteExternalNetwork[];
+}
+
+/** An external network of an OpenStack site that every project may use */
+export interface TenantSiteExternalNetwork {
+  name: string;
+  id?: string;
+  /** Address families of its subnets */
+  families?: number[];
+  /** The site's default external network */
+  default?: boolean;
+}
+
+/** An address range tenants may not use (Refused) or that the platform does not allocate from (SteppedAround) */
+export interface TenantReservedRange {
+  prefix: string;
+  purpose?: string;
+  rule?: 'Refused' | 'SteppedAround' | string;
+  /** Only on this site */
+  site?: string;
 }
 
 export interface TenantProfileCondition {
@@ -50,6 +71,10 @@ export interface TenantProfileStatus {
   sites?: TenantProfileSite[];
   /** The platform IPv6 blocks the tenant's fabric offers; absent when it offers none (or does not say) */
   ipv6Platform?: { blockLengths?: number[]; defaultBlockLength?: number };
+  /** Address ranges reserved by the platform */
+  reservedRanges?: TenantReservedRange[];
+  /** Ranges a network must lie in to host clusters the platform manages; absent = any */
+  managedClusterRanges?: string[];
   observedEntityGeneration?: number;
   lastUpdatedTime?: string;
   conditions?: TenantProfileCondition[];
