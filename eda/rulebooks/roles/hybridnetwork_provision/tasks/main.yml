@@ -243,11 +243,15 @@
       register: _hn_circuits
 
     # the platform's own ranges inside the networks' VRFs (as the circuit job and the fabric's circuit policy), and
-    # the ranges the platform's management connects from (infrastructure.hub): stepped around by the IPAM; a prefix
-    # overlapping one of the latter is refused below unless the address space already holds it
+    # the ranges the platform's management connects from (infrastructure.hub): stepped around by the IPAM. A prefix
+    # wholly inside one of the former is refused (check-network); the hub's ranges are judged by hub-check alone: a
+    # new prefix overlapping one is refused, one the address space already holds keeps working (decision 7)
     - name: The platform's ranges
       ansible.builtin.set_fact:
         hn_hub: "{{ (fab_real.infrastructure | default({}, true)).hub | default([], true) }}"
+        hn_node_ranges: >-
+          {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
+              fab_real.egress.linkPool | default('169.254.0.0/16')] }}
         hn_platform_ranges: >-
           {{ [fab_real.attachments.linkPool, fab_real.core.loopbackPool, fab_real.core.linkSubnet,
               fab_real.egress.linkPool | default('169.254.0.0/16')]
@@ -282,7 +286,7 @@
         fab_check:
           action: check-network
           prefixes: "{{ fab_spec.prefixes | default([], true) }}"
-          reserved: "{{ hn_platform_ranges }}"
+          reserved: "{{ hn_node_ranges }}"
           exclusive: "{{ hn_exclusive }}"
           circuits: >-
             {%- set out = [] -%}

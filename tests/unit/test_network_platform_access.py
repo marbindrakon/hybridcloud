@@ -434,6 +434,36 @@ class NetworkJobWiring(unittest.TestCase):
         real.pop("infrastructure")
         self.assertEqual(len(run_play([t, write_out("hn_platform_ranges")], {"fab_real": real})), 4)
 
+    def address_checks(self, prefixes, held):
+        """The network job's address checks in its order: the platform's ranges, check-network, the hub check."""
+        m = self.main()
+        check = copy.deepcopy(by_name(m, "Check the address space against the platform's ranges and the circuits"))
+        hub = copy.deepcopy(by_name(m, "Check the address space against the ranges the platform's management connects from"))
+        real = {"attachments": {"linkPool": "169.254.64.0/18"}, "core": {"loopbackPool": "198.51.100.0/26",
+                "linkSubnet": "198.51.100.64/26"}, "egress": {"linkPool": "169.254.0.0/18"},
+                "infrastructure": {"hub": ["10.30.0.0/16"]}}
+        return run_play([by_name(m, "The platform's ranges"), check, hub, by_name(m, "Keep the hub check"),
+                         write_out("{'check': fab_check_result.errors, 'hub': hn_hub_check}")],
+                        {"role_path": ROLE, "fab_real": real, "fab_spec": {"prefixes": prefixes},
+                         "fab_st": {"addressSpace": [{"prefix": p} for p in held]}, "hn_fabric": {},
+                         "hn_exclusive": [], "_hn_circuits": {"resources": []}, "fab_name": "net"})
+
+    def test_an_existing_network_inside_the_hub_keeps_working(self):
+        # wholly inside a hub range, held by the address space before the hub grew: no refusal anywhere, reported
+        out = self.address_checks(["10.30.4.0/24"], ["10.30.4.0/24"])
+        self.assertEqual((out["check"], out["hub"]["refused"]), ([], []))
+        self.assertEqual([o["prefix"] for o in out["hub"]["overlaps"]], ["10.30.4.0/24"])
+        # a new prefix inside or around a hub range is refused (by the hub check, with the range's purpose)
+        for new in ("10.30.5.0/24", "10.0.0.0/8"):
+            with self.subTest(prefix=new):
+                out = self.address_checks(["10.30.4.0/24", new], ["10.30.4.0/24"])
+                self.assertEqual(out["check"], [])
+                self.assertEqual(len(out["hub"]["refused"]), 1)
+                self.assertIn(new, out["hub"]["refused"][0])
+        # the platform's own ranges are still refused by check-network
+        out = self.address_checks(["169.254.64.0/24"], ["169.254.64.0/24"])
+        self.assertEqual(len(out["check"]), 1)
+
     def egress_hold(self, **kw):
         t = by_name(self.main(), "Hold an egress index")
         expr = t["when"]
