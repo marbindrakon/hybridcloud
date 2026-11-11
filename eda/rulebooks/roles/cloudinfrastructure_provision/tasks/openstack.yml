@@ -2,6 +2,11 @@
 # type openstack: one files/shc_openstack.py site-probe with the site's cloud-admin account.
 # Sets ci_credentials_message, ci_capabilities_out, ci_site_out, ci_type_message, ci_evpn_reason,
 # ci_evpn_message, ci_notes.
+# status.site.externalNetworks: the site's global external networks (external for every project: an
+# access_as_external RBAC policy with target "*"; a network external for some projects only is never listed),
+# [{name, id, families, default}], default true for the network spec.openstack.externalNetwork names. Refreshed on
+# every run; a probe that could not read the list leaves the recorded one as it was (status is merge-patched) and
+# says so in the message.
 - name: Set openstack section facts
   ansible.builtin.set_fact:
     ci_os: "{{ ci_cr_spec.openstack | default({}) }}"
@@ -152,6 +157,24 @@
          + (['raised the DNS project zone quota to ' ~ ci_probe.dns_project.zone_quota.zones] if ((ci_probe.dns_project | default({})).zone_quota | default({}, true)).raised | default(false) else [])
          + (['Keystone domain ' ~ ci_os.projectDomain ~ ' is disabled'] if ((ci_probe.project_domain | default({})).found | default(false)) and not ((ci_probe.project_domain | default({})).enabled | default(true)) else []) }}
 
+- name: The site's global external networks
+  ansible.builtin.set_fact:
+    ci_external_networks: >-
+      {%- set named = ci_os.externalNetwork | default('', true) | string | trim -%}
+      {%- set ext = ci_probe.external_network | default({}, true) -%}
+      {%- set named_id = (ext.id | default('', true) | string) if named | length > 0 and (ext.found | default(false) | bool) else '' -%}
+      {%- set out = [] -%}
+      {%- for n in ci_probe.external_networks | default([], true) -%}
+        {%- set _ = out.append({'name': n.name, 'id': n.id, 'families': n.families,
+                                'default': named_id | length > 0 and n.id == named_id}) -%}
+      {%- endfor -%}
+      {{ {'listed': ci_probe.external_networks is defined, 'networks': out} }}
+
+- name: Note an external network list the probe could not read
+  ansible.builtin.set_fact:
+    ci_notes: "{{ ci_notes + (ci_probe.notes | default([], true) | select('search', '^external networks') | list) }}"
+  when: not (ci_external_networks.listed | bool)
+
 - name: Set openstack result facts
   ansible.builtin.set_fact:
     ci_credentials_message: "Keystone token issued for project {{ ci_probe.project_id }} (roles {{ ci_probe.roles | join(', ') }})."
@@ -180,3 +203,8 @@
       Keystone ok, services {{ ci_probe.services | join(',') }}; tenant domain
       {{ ci_os.projectDomain | default('-', true) }}, external network {{ ci_os.externalNetwork | default('-', true) }},
       DNS {{ ('native in project ' ~ ci_dns.project) if (ci_dns_native | bool) else (ci_dns.mode | default('platform', true)) }}.
+
+- name: Publish the global external networks
+  ansible.builtin.set_fact:
+    ci_site_out: "{{ ci_site_out | combine({'externalNetworks': ci_external_networks.networks}) }}"
+  when: ci_external_networks.listed | bool

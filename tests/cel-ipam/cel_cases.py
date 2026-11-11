@@ -425,6 +425,65 @@ CASES += [
 ]
 
 
+# ─── NetworkPlacement spec.use (CloudOSO only; defaults virtualMachines true, routerAttachments false) ─────────
+U = "placement-use"
+
+
+def np_use(kind="CloudOSO", use=None, name="p"):
+    o = np(name=name, kind=kind, ipv4=V4)
+    if use is not None:
+        o["spec"]["use"] = use
+    return o
+
+
+def use_is(vm, ra):
+    def fn(o):
+        got = (o.get("spec") or {}).get("use")
+        return None if got == {"virtualMachines": vm, "routerAttachments": ra} else f"spec.use reads {got}"
+    return fn
+
+
+NEED = "spec.use needs virtualMachines, routerAttachments or both"
+ONLY = "spec.use is offered only on CloudOSO; other environments use the defaults"
+CASES += [
+    C("USE-01", U, "CloudOSO without spec.use accepted (nothing defaulted)",
+      [("create", np_use(), "ok"),
+       ("check", ("networkplacements", "p", lambda o: None if "use" not in o["spec"] else "use appeared", None), "ok")]),
+    C("USE-02", U, "CloudOSO empty spec.use takes the defaults",
+      [("create", np_use(use={}), "ok"), ("check", ("networkplacements", "p", use_is(True, False), None), "ok")]),
+    C("USE-03", U, "CloudOSO router attachments on, VMs defaulted on",
+      [("create", np_use(use={"routerAttachments": True}), "ok"),
+       ("check", ("networkplacements", "p", use_is(True, True), None), "ok")]),
+    C("USE-04", U, "CloudOSO router attachments only",
+      [("create", np_use(use={"virtualMachines": False, "routerAttachments": True}), "ok")]),
+    C("USE-05", U, "CloudOSO with no use refused",
+      [("create", np_use(use={"virtualMachines": False}), f"deny:{NEED}")]),
+    C("USE-06", U, "CloudOSO use changed later (mutable)",
+      [("create", np_use(), "ok"),
+       upd("networkplacements", "p", setk(["use"], {"routerAttachments": True}))[:2] + ("ok",),
+       upd("networkplacements", "p", setk(["use"], {"virtualMachines": False, "routerAttachments": True}))[:2] + ("ok",),
+       upd("networkplacements", "p", delk(["use"]))[:2] + ("ok",)]),
+    C("USE-07", U, "CloudOSO turning the last use off refused",
+      [("create", np_use(use={"routerAttachments": True}), "ok"),
+       upd("networkplacements", "p", setk(["use"], {"virtualMachines": False, "routerAttachments": False}))[:2]
+       + (f"deny:{NEED}",)]),
+    C("USE-08", U, "CloudVirt with the defaults accepted",
+      [("create", np_use(kind="CloudVirt", use={"virtualMachines": True}), "ok")]),
+    C("USE-09", U, "CloudVirt router attachments refused",
+      [("create", np_use(kind="CloudVirt", use={"routerAttachments": True}), f"deny:{ONLY}")]),
+    C("USE-10", U, "CloudAWS without VMs refused",
+      [("create", np_use(kind="CloudAWS", use={"virtualMachines": False, "routerAttachments": True}), f"deny:{ONLY}")]),
+    C("USE-11", U, "CloudGCP router attachments refused",
+      [("create", np_use(kind="CloudGCP", use={"routerAttachments": True}), f"deny:{ONLY}")]),
+    C("USE-12", U, "status.use round-trips",
+      [("create", np_use(use={"routerAttachments": True}), "ok")]
+      + status_roundtrip("networkplacements", "p", {
+          "use": {"virtualMachines": {"state": "ready", "reason": "", "message": ""},
+                  "routerAttachments": {"state": "removing", "reason": "InUse",
+                                        "message": "Turning this off waits until the environment no longer uses it: "
+                                                   "floating IP 192.0.2.15"}}})),
+]
+
 # ─── runner ──────────────────────────────────────────────────────────────────
 
 def expectation(exp, mode):

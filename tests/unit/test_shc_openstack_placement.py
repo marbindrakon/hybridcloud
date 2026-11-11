@@ -2,7 +2,10 @@
 dual-stack placement (one subnet per prefix with ip_version from the prefix, the RA and address mode on IPv6 subnets
 only, resolvers per family, advertise_host on the first router interface only), a re-run that creates nothing, the
 attach fallback (409 conflict; a refused plain attach raises), the resolver update of an existing subnet and the teardown
-order. Prefixes are documentation space only."""
+order. The tenant project's uses of the network (spec.use): the share (access_as_shared) and the router attachments
+(access_as_external for that project only), created, verified, pruned and removed, refused while in use; a placement
+without spec.use sends Neutron exactly the writes of the release before (golden list); the teardown blocked by router
+gateways and floating IPs. Prefixes are documentation space only."""
 import os
 import sys
 import types
@@ -49,7 +52,7 @@ class FakeNetwork:
 
     def __init__(self, conn):
         self.conn = conn
-        self.nets, self.subs, self.rtrs, self.plist, self.rbacs = [], [], [], [], []
+        self.nets, self.subs, self.rtrs, self.plist, self.rbacs, self.fips = [], [], [], [], [], []
         self.attach = None
         self.n = 0
 
@@ -76,8 +79,17 @@ class FakeNetwork:
     def rbac_policies(self, **f):
         return [r for r in self.rbacs if all(getattr(r, k) == v for k, v in f.items())]
 
+    def ips(self, **f):
+        return [i for i in self.fips if all(getattr(i, k) == v for k, v in f.items())]
+
     def get_router(self, rid):
         return next(r for r in self.rtrs if r.id == rid)
+
+    def get_network(self, nid):
+        # router:external as Neutron computes it: an access_as_external policy of the network exists
+        n = next(n for n in self.nets if n.id == nid)
+        n.is_router_external = any(r.object_id == nid and r.action == "access_as_external" for r in self.rbacs)
+        return n
 
     def get(self, path):
         rid = path.split("/")[2]
@@ -137,7 +149,7 @@ class FakeNetwork:
             return refused
         sn = next(s for s in self.subs if s.id == json["subnet_id"])
         self.plist.append(Obj(id=self._id("port"), device_id=rid, device_owner=IFACE, network_id=sn.network_id,
-                              name=f"if-{sn.cidr}", fixed_ips=[{"subnet_id": sn.id}],
+                              project_id=router.project_id, name=f"if-{sn.cidr}", fixed_ips=[{"subnet_id": sn.id}],
                               advertise_host=bool(json.get("advertise_host"))))
         return Resp(200, {"port_id": self.plist[-1].id})
 
@@ -155,7 +167,7 @@ class FakeNetwork:
     def create_rbac_policy(self, **kw):
         r = Obj(id=self._id("rbac"), **kw)
         self.rbacs.append(r)
-        self.log("create_rbac_policy", kw["target_project_id"])
+        self.log("create_rbac_policy", dict(kw))
         return r
 
     def delete_rbac_policy(self, r):
@@ -416,10 +428,10 @@ class Teardown(unittest.TestCase):
         run(conn)
         net = conn.network.nets[0]
         conn.network.plist.append(Obj(id="port-vm", device_id="vm-1", device_owner="compute:nova", network_id=net.id,
-                                      name="vm-nic", fixed_ips=[]))
+                                      project_id=TENANT, name="vm-nic", fixed_ips=[]))
         n = len(conn.calls)
         out = run(conn, state="absent")
-        self.assertEqual(out["blocked"], ["port vm-nic compute:nova"])
+        self.assertEqual(out["blocked"], ["port of server vm-1"])
         self.assertEqual(out["deleted"], [])
         self.assertEqual(conn.calls[n:], [])
 
@@ -450,12 +462,270 @@ class ReviewFixes(unittest.TestCase):
         router = conn.network.rtrs[0]
         conn.network.plist = [p for p in conn.network.plist if p.device_id != router.id]
         conn.network.plist.append(Obj(id="port-gw", device_id=router.id, device_owner="network:router_gateway",
-                                      network_id="ext-net", name="gw", fixed_ips=[{"subnet_id": "ext-subnet"}],
+                                      network_id="ext-net", project_id="", name="gw", fixed_ips=[{"subnet_id": "ext-subnet"}],
                                       advertise_host=False))
         n = len(conn.calls)
         run(conn)
         new = [d for op, d in conn.calls[n:] if op == "add_router_interface"]
         self.assertEqual([b.get("advertise_host", False) for b in new], [True, False])
+
+
+# ---- the tenant project's uses of the network (spec.use) ----
+OTHER = "proj-other"
+GW, FIP = "network:router_gateway", "network:floatingip"
+
+# the Neutron writes of placement-network as released before spec.use (shc-lab 669b781a, this fake): a first run, then
+# a run that prunes a share to another project
+GOLDEN_CREATE = [
+    ("create_network", "hn51001-site"),
+    ("set_tags", ["shc.np/51001"]),
+    ("create_subnet", {"cidr": V4, "dns_nameservers": [R4], "enable_dhcp": True, "ip_version": 4,
+                       "name": "hn51001-site-0", "network_id": "net-1", "project_id": "proj-platform"}),
+    ("create_subnet", {"cidr": V6, "dns_nameservers": [R6], "enable_dhcp": True, "ip_version": 6,
+                       "ipv6_address_mode": MODE, "ipv6_ra_mode": MODE, "name": "hn51001-site-1",
+                       "network_id": "net-1", "project_id": "proj-platform"}),
+    ("create_router", "hn51001-site"),
+    ("add_router_interface", {"advertise_host": True, "subnet_id": "sn-2"}),
+    ("add_router_interface", {"subnet_id": "sn-3"}),
+    ("create_rbac_policy", {"action": "access_as_shared", "object_id": "net-1", "object_type": "network",
+                            "project_id": "proj-platform", "target_project_id": TENANT}),
+]
+GOLDEN_PRUNE = [("delete_rbac_policy", "rbac-foreign")]
+
+
+def policy(conn, pid, action, target):
+    conn.network.rbacs.append(Obj(id=pid, object_id=conn.network.nets[0].id, object_type="network", action=action,
+                                  target_project_id=target, project_id="proj-platform"))
+
+
+def golden_run(conn, **over):
+    run(conn, **over)
+    policy(conn, "rbac-foreign", "access_as_shared", OTHER)
+    return run(conn, **over)
+
+
+def writes(conn, start=0):
+    return conn.calls[start:]
+
+
+def tenant_router(conn, rid="rtr-t", name="r1", project=TENANT, network=None):
+    conn.network.rtrs.append(Obj(id=rid, name=name, project_id=project,
+                                 external_gateway_info={"network_id": network or conn.network.nets[0].id}))
+
+
+def tenant_fip(conn, fid="fip-t", address="192.0.2.15", project=TENANT):
+    conn.network.fips.append(Obj(id=fid, floating_ip_address=address, floating_network_id=conn.network.nets[0].id,
+                                 project_id=project))
+
+
+class DefaultsUnchanged(unittest.TestCase):
+    """A placement that does not set spec.use: the same Neutron writes as before."""
+
+    def test_without_use_the_writes_are_the_released_ones(self):
+        conn = FakeConn()
+        out = golden_run(conn)
+        self.assertEqual(writes(conn), GOLDEN_CREATE + GOLDEN_PRUNE)
+        self.assertEqual(out["changed"], [f"share to {OTHER} removed"])
+
+    def test_explicit_defaults_are_the_same(self):
+        for use in ({"virtualMachines": True, "routerAttachments": False}, {"virtualMachines": "True",
+                    "routerAttachments": "false"}, {}):
+            conn = FakeConn()
+            golden_run(conn, use=use)
+            self.assertEqual(writes(conn), GOLDEN_CREATE + GOLDEN_PRUNE, use)
+
+    def test_status_of_the_defaults(self):
+        conn = FakeConn()
+        out = run(conn)
+        self.assertEqual(out["use"]["virtualMachines"], {"state": "ready", "policyId": out["shareId"], "inUse": []})
+        self.assertEqual(out["use"]["routerAttachments"], {"state": "off", "policyId": "", "inUse": []})
+        self.assertEqual((out["externalId"], out["routerExternalForProject"], out["inUse"], out["pruneInUse"]),
+                         ("", False, [], []))
+
+    def test_no_tenant_project_no_uses(self):
+        conn = FakeConn()
+        out = run(conn, shareProjectId="", use={"routerAttachments": True})
+        self.assertNotIn("use", out)
+        self.assertEqual(conn.network.rbacs, [])
+
+
+class RouterAttachments(unittest.TestCase):
+    def test_external_for_the_tenant_project_only(self):
+        conn = FakeConn()
+        out = run(conn, use={"routerAttachments": True})
+        made = [d for op, d in conn.calls if op == "create_rbac_policy"]
+        self.assertEqual(made[-1], {"action": "access_as_external", "object_id": "net-1", "object_type": "network",
+                                    "project_id": "proj-platform", "target_project_id": TENANT})
+        self.assertNotIn("*", [d["target_project_id"] for d in made])
+        # the network's own flag is never written
+        self.assertEqual([d for op, d in conn.calls if op == "update_network"], [])
+        self.assertEqual(out["created"][-2:], ["share", "external"])
+        self.assertEqual(out["use"]["routerAttachments"]["state"], "ready")
+        self.assertEqual(out["externalId"], out["use"]["routerAttachments"]["policyId"])
+        self.assertTrue(out["routerExternalForProject"])
+
+    def test_rerun_writes_nothing(self):
+        conn = FakeConn()
+        first = run(conn, use={"routerAttachments": True})
+        n = len(conn.calls)
+        again = run(conn, use={"routerAttachments": True})
+        self.assertEqual(writes(conn, n), [])
+        self.assertEqual((again["created"], again["changed"]), ([], []))
+        self.assertEqual(again["externalId"], first["externalId"])
+
+    def test_router_attachments_without_virtual_machines(self):
+        conn = FakeConn()
+        out = run(conn, use={"virtualMachines": False, "routerAttachments": True})
+        self.assertEqual([r.action for r in conn.network.rbacs], ["access_as_external"])
+        self.assertEqual(out["shareId"], "")
+        self.assertEqual(out["use"]["virtualMachines"]["state"], "off")
+        self.assertEqual(out["use"]["routerAttachments"]["state"], "ready")
+
+    def test_turned_off_unused_is_removed(self):
+        conn = FakeConn()
+        run(conn, use={"routerAttachments": True})
+        n = len(conn.calls)
+        out = run(conn)
+        self.assertEqual(ops(conn, "delete_rbac_policy")[-1:], ["delete_rbac_policy"])
+        self.assertEqual(len(writes(conn, n)), 1)
+        self.assertEqual(out["changed"], ["external removed"])
+        self.assertEqual(out["use"]["routerAttachments"], {"state": "off", "policyId": "", "inUse": []})
+        self.assertFalse(out["routerExternalForProject"])
+        self.assertEqual([r.action for r in conn.network.rbacs], ["access_as_shared"])
+
+    def test_turned_off_while_used_waits_and_names_the_users(self):
+        conn = FakeConn()
+        first = run(conn, use={"routerAttachments": True})
+        tenant_router(conn)
+        tenant_fip(conn)
+        tenant_router(conn, rid="rtr-x", name="elsewhere", network="net-other")  # gateway on another network
+        tenant_fip(conn, fid="fip-o", address="192.0.2.16", project=OTHER)        # another project's
+        n = len(conn.calls)
+        out = run(conn)
+        self.assertEqual(writes(conn, n), [])
+        ra = out["use"]["routerAttachments"]
+        self.assertEqual(ra["state"], "removing")
+        self.assertEqual(ra["inUse"], ["router gateway of router r1", "floating IP 192.0.2.15"])
+        self.assertEqual(out["inUse"], ra["inUse"])
+        self.assertEqual(out["externalId"], first["externalId"])
+        self.assertTrue(out["routerExternalForProject"])
+        # once the tenant released them, the next run removes the policy
+        conn.network.rtrs = [r for r in conn.network.rtrs if r.id not in ("rtr-t",)]
+        conn.network.fips = [f for f in conn.network.fips if f.id != "fip-t"]
+        out = run(conn)
+        self.assertEqual(out["use"]["routerAttachments"]["state"], "off")
+        self.assertEqual(out["changed"], ["external removed"])
+
+    def test_wildcard_external_is_refused_before_any_write(self):
+        conn = FakeConn()
+        run(conn)
+        policy(conn, "rbac-wild", "access_as_external", "*")
+        n = len(conn.calls)
+        with self.assertRaises(RuntimeError) as cm:
+            run(conn, use={"routerAttachments": True})
+        self.assertIn("external for every project", str(cm.exception))
+        self.assertEqual(writes(conn, n), [])
+        self.assertIn("rbac-wild", [r.id for r in conn.network.rbacs])
+
+    def test_other_projects_external_policies_are_pruned_unless_used(self):
+        conn = FakeConn()
+        run(conn, use={"routerAttachments": True})
+        policy(conn, "rbac-ext-a", "access_as_external", "proj-a")
+        policy(conn, "rbac-ext-b", "access_as_external", "proj-b")
+        tenant_fip(conn, fid="fip-b", address="192.0.2.17", project="proj-b")
+        out = run(conn, use={"routerAttachments": True})
+        ids = [r.id for r in conn.network.rbacs]
+        self.assertNotIn("rbac-ext-a", ids)
+        self.assertIn("rbac-ext-b", ids)
+        self.assertEqual(out["changed"], ["external to proj-a removed"])
+        self.assertEqual(out["pruneInUse"], ["project proj-b: floating IP 192.0.2.17"])
+
+    def test_a_failure_after_the_share_converges_on_the_next_run(self):
+        conn = FakeConn()
+        real = conn.network.create_rbac_policy
+
+        def refuse_external(**kw):
+            if kw["action"] == "access_as_external":
+                raise RuntimeError("quota exceeded")
+            return real(**kw)
+        conn.network.create_rbac_policy = refuse_external
+        with self.assertRaises(RuntimeError):
+            run(conn, use={"routerAttachments": True})
+        conn.network.create_rbac_policy = real
+        out = run(conn, use={"routerAttachments": True})
+        self.assertEqual(out["created"], ["external"])
+        self.assertEqual(sorted(r.action for r in conn.network.rbacs), ["access_as_external", "access_as_shared"])
+
+
+class VirtualMachinesOff(unittest.TestCase):
+    def test_no_share_at_create(self):
+        conn = FakeConn()
+        out = run(conn, use={"virtualMachines": False, "routerAttachments": True})
+        self.assertNotIn("share", out["created"])
+        self.assertEqual([d["action"] for op, d in conn.calls if op == "create_rbac_policy"], ["access_as_external"])
+
+    def test_turned_off_while_the_tenant_has_ports_waits(self):
+        conn = FakeConn()
+        first = run(conn)
+        net = conn.network.nets[0]
+        conn.network.plist.append(Obj(id="port-vm", device_id="vm-1", device_owner="compute:nova", network_id=net.id,
+                                      project_id=TENANT, name="vm-nic", fixed_ips=[]))
+        n = len(conn.calls)
+        out = run(conn, use={"virtualMachines": False, "routerAttachments": True})
+        vm = out["use"]["virtualMachines"]
+        self.assertEqual((vm["state"], vm["inUse"]), ("removing", ["port of server vm-1"]))
+        self.assertEqual(out["shareId"], first["shareId"])
+        self.assertEqual([op for op, _ in writes(conn, n)], ["create_rbac_policy"])  # only the external policy
+        conn.network.plist = [p for p in conn.network.plist if p.id != "port-vm"]
+        out = run(conn, use={"virtualMachines": False, "routerAttachments": True})
+        self.assertEqual(out["use"]["virtualMachines"]["state"], "off")
+        self.assertIn("share removed", out["changed"])
+        self.assertEqual(out["shareId"], "")
+
+    def test_tenant_router_gateways_do_not_hold_the_share(self):
+        conn = FakeConn()
+        run(conn, use={"routerAttachments": True})
+        tenant_router(conn)
+        net = conn.network.nets[0]
+        conn.network.plist.append(Obj(id="port-gw", device_id="rtr-t", device_owner=GW, network_id=net.id,
+                                      project_id="", name="", fixed_ips=[{"ip_address": "192.0.2.20"}]))
+        out = run(conn, use={"virtualMachines": False, "routerAttachments": True})
+        self.assertEqual(out["use"]["virtualMachines"]["state"], "off")
+
+
+class TeardownBusy(unittest.TestCase):
+    def setUp(self):
+        self.conn = FakeConn()
+        run(self.conn, use={"routerAttachments": True})
+        self.net = self.conn.network.nets[0]
+
+    def port(self, pid, owner, project, device="", ips=None, name=""):
+        self.conn.network.plist.append(Obj(id=pid, device_id=device, device_owner=owner, network_id=self.net.id,
+                                           project_id=project, name=name, fixed_ips=ips or []))
+
+    def test_gateways_and_floating_ips_of_any_project_block(self):
+        tenant_router(self.conn)
+        self.port("p-gw", GW, "", device="rtr-t")
+        self.port("p-fip", FIP, "", device="fip-t", ips=[{"subnet_id": "sn-2", "ip_address": "192.0.2.15"}])
+        n = len(self.conn.calls)
+        out = run(self.conn, state="absent")
+        self.assertEqual(out["blocked"], ["router gateway of router r1", "floating IP 192.0.2.15"])
+        self.assertEqual(writes(self.conn, n), [])
+
+    def test_tenant_router_interface_blocks(self):
+        self.port("p-if", IFACE, TENANT, device="rtr-t", name="tif")
+        out = run(self.conn, state="absent")
+        self.assertEqual(out["blocked"], ["port tif network:router_interface"])
+
+    def test_the_platforms_own_ports_do_not_block(self):
+        self.port("p-dhcp", "network:dhcp", "proj-platform")
+        self.port("p-meta", "network:distributed", "proj-platform")
+        self.port("p-dhcp-x", "network:dhcp", "")  # deleted with the network whoever owns it
+        out = run(self.conn, state="absent")
+        self.assertNotIn("blocked", out)
+        self.assertEqual(sum(1 for d in out["deleted"] if d.startswith("rbac ")), 2)
+        self.assertEqual(self.conn.network.rbacs, [])
+
 
 if __name__ == "__main__":
     unittest.main()

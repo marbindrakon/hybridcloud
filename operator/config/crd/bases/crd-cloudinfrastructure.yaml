@@ -135,7 +135,10 @@ spec:
                     externalNetwork:
                       type: string
                       maxLength: 255
-                      description: External Neutron network for tenant floating IPs.
+                      description: >-
+                        The site's default external network (a Neutron network that every project may use as
+                        external). It must exist and be external; OpenShift clusters that name no network of
+                        their own use it.
                 openshift:
                   type: object
                   description: >-
@@ -295,6 +298,28 @@ spec:
                     version:
                       type: string
                       description: Platform version where the API reports one (OpenShift version).
+                    externalNetworks:
+                      type: array
+                      description: >-
+                        OpenStack sites: the external networks every project of the site may use (networks
+                        external for some projects only are not listed), refreshed on every probe.
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            description: The network's name.
+                          id:
+                            type: string
+                            description: The network's id.
+                          families:
+                            type: array
+                            description: The address families of its subnets (4, 6).
+                            items:
+                              type: integer
+                          default:
+                            type: boolean
+                            description: True for the network spec.openstack.externalNetwork names.
                   x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
