@@ -46,6 +46,11 @@ parameters:
   - name: ROUTE_HOST
     description: The host name of the service's Route; empty lets the cluster choose one.
     value: ""
+  - name: ROUTE_ALLOWED_SOURCES
+    description: >-
+      The source addresses the Route admits, space-separated CIDRs (the networks the platform's jobs call from).
+      Required: give 0.0.0.0/0 only for a cluster whose default ingress is not reachable from outside.
+    required: true
   - name: GUARD_INTERVAL_SECONDS
     description: Seconds between the guard's full passes over the marked router ports.
     value: "60"
@@ -111,6 +116,9 @@ objects:
       namespace: ${NAMESPACE}
       labels:
         app.kubernetes.io/name: router-advertisement
+      annotations:
+        # only the platform's job sources reach the service through the cluster's ingress
+        haproxy.router.openshift.io/ip_whitelist: ${ROUTE_ALLOWED_SOURCES}
     spec:
       host: ${ROUTE_HOST}
       to:
@@ -210,7 +218,7 @@ objects:
                 failureThreshold: 3
               readinessProbe:
                 httpGet:
-                  path: /healthz
+                  path: /readyz
                   port: https
                   scheme: HTTPS
                 periodSeconds: 10

@@ -330,6 +330,29 @@ class ApiTest(Base):
         status, body = self.svc.handle("GET", "/healthz", {}, None)
         self.assertEqual((status, body["ovn"]), (200, "unreachable"))
 
+    def test_readyz_follows_the_database(self):
+        # Review R2 L4: readiness fails while OVN is unreachable (healthz stays 200 for liveness)
+        self.assertEqual(self.svc.handle("GET", "/readyz", {}, None), (200, {"ready": True}))
+        self.store.up = False
+        self.assertError(self.svc.handle("GET", "/readyz", {}, None), 502, "OvnUnavailable")
+        self.assertEqual(self.svc.handle("GET", "/healthz", {}, None)[0], 200)
+        self.assertError(self.svc.handle("PUT", "/readyz", {}, b"{}"), 405, "MethodNotAllowed")
+
+    def test_the_route_admits_only_the_listed_sources_and_readiness_reads_readyz(self):
+        import yaml
+        path = os.path.join(ROOT, "site-components", "router-advertisement", "deploy", "rhoso", "router-advertisement.yaml")
+        with open(path) as f:
+            tpl = yaml.safe_load(f)
+        params = {p["name"]: p for p in tpl["parameters"]}
+        self.assertTrue(params["ROUTE_ALLOWED_SOURCES"].get("required"))
+        route = [o for o in tpl["objects"] if o["kind"] == "Route"][0]
+        self.assertEqual(route["metadata"]["annotations"]["haproxy.router.openshift.io/ip_whitelist"],
+                         "${ROUTE_ALLOWED_SOURCES}")
+        pod = [o for o in tpl["objects"] if o["kind"] == "Deployment"][0]["spec"]["template"]["spec"]
+        c = pod["containers"][0]
+        self.assertEqual((c["readinessProbe"]["httpGet"]["path"], c["livenessProbe"]["httpGet"]["path"]),
+                         ("/readyz", "/healthz"))
+
     def test_get_port(self):
         status, body = get(self.svc, PORT)
         self.assertEqual(status, 200)

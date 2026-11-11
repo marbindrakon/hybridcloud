@@ -43,6 +43,7 @@ oc process -f site-components/router-advertisement/deploy/rhoso/router-advertise
   -p CA_BUNDLE_SECRET=<CA bundle Secret> \
   -p OS_CACERT=/etc/router-advertisement/ca/tls-ca-bundle.pem \
   -p ROUTE_HOST=<host name of the Route, or leave out> \
+  -p ROUTE_ALLOWED_SOURCES="<CIDRs the platform's jobs call from, space-separated>" \
   | oc apply -f -
 oc -n "$NS" rollout status deployment/router-advertisement
 oc -n "$NS" logs deployment/router-advertisement | head
@@ -50,7 +51,8 @@ oc -n "$NS" logs deployment/router-advertisement | head
 Leave `OS_CACERT` out when the internal endpoints are plain HTTP or signed by a CA the image already trusts. The
 template creates a ServiceAccount without API permissions or token, the OVN client Certificate, a Service with a
 serving certificate from the cluster's service CA, a re-encrypting Route and the Deployment (non-root, read-only
-root file system, resource limits, liveness and readiness on `/healthz`). If the namespace has NetworkPolicies,
+root file system, resource limits, liveness on `/healthz`, readiness on `/readyz`, which fails while the northbound
+database does not answer). The Route admits only `ROUTE_ALLOWED_SOURCES`. If the namespace has NetworkPolicies,
 allow ingress to port 8443 from the cluster's ingress routers and egress to the northbound database and the two
 internal endpoints.
 

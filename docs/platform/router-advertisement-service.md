@@ -55,7 +55,8 @@ JSON over HTTPS; an internal API of the platform, not registered in Keystone. Th
 
 | Call | Result |
 |---|---|
-| `GET /healthz` | 200 `{"ok": true, "ovn": "connected" or "unreachable", "guard": {"wanted": <n>, "restoredSinceStart": <n>, "suspended": [<port id>, ...]}}`; no authentication, port ids only |
+| `GET /healthz` | 200 `{"ok": true, "ovn": "connected" or "unreachable", "guard": {"wanted": <n>, "restoredSinceStart": <n>, "suspended": [<port id>, ...]}}`; no authentication, port ids only (liveness) |
+| `GET /readyz` | 200 `{"ready": true}`, or 502 `OvnUnavailable` while the northbound database does not answer; no authentication (readiness) |
 | `GET /v1/router-ports/{port_id}` | 200 `{"portId", "lrp", "redistribute": [...], "nat": true or false, "wanted": true or false, "restores": <n since start>, "lastRestoredAt": <time or null>}` |
 | `PUT /v1/router-ports/{port_id}/nat` with `{"enabled": true}` or `{"enabled": false}` | 200 `{"portId", "lrp", "before": [...], "after": [...], "changed": true or false}`; `true` appends `nat` and sets the marker, `false` removes both; repeating a call changes nothing |
 

@@ -12,7 +12,9 @@ It runs inside the site's own Neutron server image (Python 3.9 or later, the sta
 Python bindings). It holds no OpenStack credential: every call is authorized by the caller's own token.
 
 API (JSON):
-  GET  /healthz                              no authentication
+  GET  /healthz                              no authentication (liveness: the process answers)
+  GET  /readyz                               no authentication (readiness: 502 OvnUnavailable while the database
+                                             does not answer)
   GET  /v1/router-ports/{port_id}            header X-Auth-Token
   PUT  /v1/router-ports/{port_id}/nat        header X-Auth-Token, body {"enabled": true|false}
 
@@ -668,6 +670,13 @@ class RouterAdvertisementService:
                 raise ServiceError(405, "MethodNotAllowed", "Use GET.")
             return 200, {"ok": True, "ovn": "connected" if self.store.connected() else "unreachable",
                          "guard": self.guard.summary()}
+        if path == "/readyz":
+            # readiness: the service can do its work only while the northbound database answers
+            if method != "GET":
+                raise ServiceError(405, "MethodNotAllowed", "Use GET.")
+            if not self.store.connected():
+                raise ovn_unavailable()
+            return 200, {"ready": True}
         for kind, rx in ROUTES:
             m = rx.match(path)
             if m:
