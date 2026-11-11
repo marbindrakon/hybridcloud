@@ -1,0 +1,77 @@
+---
+# The cluster's prefixes in the platform's service routing domain (DESIGN cnet §2.3, §3.5, §4.2 step 5): record
+# them in status.platformPrefixes, wake the network (its job checks them and wakes the fabric), and wait until the
+# fabric carries them for the network (status.realization.service.networks[].prefixes) or refuses one. Inputs:
+#   pp_prefixes   every prefix of the cluster (the record is replaced as a whole)
+#   pp_network    the HybridNetwork (this namespace)
+#   pp_fabric     the network's HybridFabric (platform namespace)
+# Sets pp_outcome (po_preflight.py service-wait: done, reason, message); the caller decides what a refusal means.
+- name: Record the cluster's prefixes
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      platformPrefixes: "{{ pp_prefixes }}"
+
+- name: Wake the network (it checks the prefixes and wakes the fabric)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: HybridNetwork, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ pp_network }}"}]
+
+- name: Wait for the fabric to carry the prefixes
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridFabric
+    name: "{{ pp_fabric }}"
+    namespace: "{{ fabric_platform_namespace }}"
+  register: _pp_fab
+  until: >-
+    (pp_prefixes | difference(((((_pp_fab.resources | default([]) | first | default({})).status | default({}, true))
+       .realization | default({}, true)).service | default({}, true)).networks | default([], true)
+       | selectattr('network', 'defined')
+       | selectattr('network', 'equalto', ansible_operator_meta.namespace ~ '/' ~ pp_network)
+       | map(attribute='prefixes') | flatten | list) | length == 0)
+    or (((((_pp_fab.resources | default([]) | first | default({})).status | default({}, true))
+       .realization | default({}, true)).service | default({}, true)).refused | default([], true)
+       | selectattr('network', 'defined')
+       | selectattr('network', 'equalto', ansible_operator_meta.namespace ~ '/' ~ pp_network)
+       | selectattr('prefix', 'in', pp_prefixes) | list | length > 0)
+  retries: "{{ platformopenshift_service_wait_retries | int }}"
+  delay: "{{ platformopenshift_service_wait_delay | int }}"
+  failed_when: false
+
+- name: Read the network's view of the prefixes
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridNetwork
+    name: "{{ pp_network }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _pp_hn
+
+- name: Judge the wait
+  ansible.builtin.include_tasks: po_call.yml
+  vars:
+    po_request:
+      action: service-wait
+      network: "{{ ansible_operator_meta.namespace }}/{{ pp_network }}"
+      prefixes: "{{ pp_prefixes }}"
+      service: >-
+        {{ ((((_pp_fab.resources | default([]) | first | default({})).status | default({}, true)).realization
+             | default({}, true)).service | default({}, true)) }}
+      rows: >-
+        {{ (((_pp_hn.resources | default([]) | first | default({})).status | default({}, true)).platformAccess
+            | default({}, true)).prefixes | default([], true) }}
+
+- name: Keep the outcome
+  ansible.builtin.set_fact:
+    pp_outcome: "{{ po_result }}"

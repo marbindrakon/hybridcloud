@@ -1,0 +1,44 @@
+---
+# Release a cluster's floating IPs (DESIGN cnet §4.3) with the site account scoped to the environment's project: the
+# recorded ids, and the ones found by the cluster's descriptions (a run that created them and stopped before the
+# record); a missing id counts as released. Then status.floatingIPs goes. Included from this role (a refusal after the
+# allocation) and from platformopenshift_teardown. Inputs:
+#   cfr_project_id   the environment's project
+#   cfr_account      the site account's Vault path
+#   cfr_ids          the recorded ids
+#   cfr_build        the build name (descriptions <build>-api, <build>-ingress)
+#   cfr_cr_name, cfr_cr_namespace   the PlatformOpenshift
+- name: Load the site account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ cfr_account }}"
+    os_account_tag: "po-fips-release-{{ cfr_cr_name }}"
+
+- name: Release the cluster's floating IPs
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_request:
+      action: cluster-fips
+      state: absent
+      project_id: "{{ cfr_project_id }}"
+      ids: "{{ cfr_ids | default([], true) | select | list }}"
+      descriptions: "{{ ([cfr_build ~ '-api', cfr_build ~ '-ingress']) if (cfr_build | default('', true) | length > 0) else [] }}"
+
+- name: Remove the floating IPs from the record
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ cfr_cr_name }}"
+    cr_namespace: "{{ cfr_cr_namespace }}"
+    cr_status_partial: true
+    patch_ignore_not_found: true
+    cr_status_body:
+      floatingIPs: null
+
+- name: Remove the account's temp files
+  ansible.builtin.file:
+    path: "/tmp/eda-po-fips-release-{{ cfr_cr_name }}-{{ item }}"
+    state: absent
+  loop: [clouds.yaml, ca.crt]

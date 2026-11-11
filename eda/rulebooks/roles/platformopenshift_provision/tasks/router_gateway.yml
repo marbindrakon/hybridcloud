@@ -1,0 +1,93 @@
+---
+# After the install of a cluster on a hybrid network whose fabric admits hub endpoints (DESIGN cnet §3.7, §4.2 step
+# 7): the nodes reach the hub with the source address of the cluster's router (the installer's, named
+# <infraID>-external-router), so that address joins the cluster's prefixes as /32. Read with the site account scoped
+# to the environment's project. A refusal is reported, not fatal: the cluster is built, and ACM's agent falls back to
+# the network's own path. Inputs: rg_infra_id.
+- name: Load the site account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ cb_fip_account }}"
+    os_account_tag: "po-router-{{ cb_app_name }}"
+
+- name: Read the router with the account scoped to the environment's project
+  block:
+    - name: Read the account
+      ansible.builtin.slurp:
+        src: "{{ os_account_clouds_yaml }}"
+      register: _rg_clouds
+      no_log: true
+
+    # a clouds.yaml of its own (the module reads it by name): a secret passed as a module parameter would be masked in
+    # everything the module returns, router names and addresses included
+    - name: The account scoped to the environment's project
+      vars:
+        _cfg: "{{ ((_rg_clouds.content | b64decode | from_yaml).clouds | default({})).openstack | default({}) }}"
+        _scope: [project_name, project_id, project_domain_name, project_domain_id, domain_name, domain_id, system_scope]
+        _cacert: "{{ os_account_cacert | default('', true) or (_cfg.cacert | default('', true)) }}"
+      ansible.builtin.copy:
+        dest: "/tmp/eda-po-router-{{ cb_app_name }}-project.yaml"
+        mode: "0600"
+        content: >-
+          {{ {'clouds': {'project': _cfg
+                         | combine({'auth': (_cfg.auth | default({})) | dict2items | rejectattr('key', 'in', _scope)
+                                            | items2dict | combine({'project_id': cb_oso_project_id})})
+                         | combine({'cacert': _cacert} if _cacert | length > 0 else {})}} | to_nice_yaml }}
+      no_log: true
+
+    - name: Read the cluster's router
+      openstack.cloud.routers_info:
+        cloud: project
+        name: "{{ rg_infra_id }}-external-router"
+      environment:
+        OS_CLIENT_CONFIG_FILE: "/tmp/eda-po-router-{{ cb_app_name }}-project.yaml"
+      register: _rg_routers
+  always:
+    - name: Remove the account's temp files
+      ansible.builtin.file:
+        path: "/tmp/eda-po-router-{{ cb_app_name }}-{{ item }}"
+        state: absent
+      loop: [clouds.yaml, ca.crt, project.yaml]
+
+- name: The router's gateway address
+  ansible.builtin.include_tasks: po_call.yml
+  vars:
+    po_request:
+      action: router-gateway
+      name: "{{ rg_infra_id }}-external-router"
+      routers: "{{ _rg_routers.routers | default([]) }}"
+
+- name: Keep the gateway address
+  ansible.builtin.set_fact:
+    rg_address: "{{ po_result.address }}"
+
+- name: Carry the gateway address with the floating IPs
+  ansible.builtin.include_tasks: platform_prefixes.yml
+  vars:
+    pp_prefixes: ["{{ cb_api_vip }}/32", "{{ cb_ingress_vip }}/32", "{{ rg_address }}/32"]
+    pp_network: "{{ oso_network }}"
+    pp_fabric: "{{ pf.fabric }}"
+  when: rg_address | length > 0
+
+- name: Take a refused gateway address out again
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      platformPrefixes: ["{{ cb_api_vip }}/32", "{{ cb_ingress_vip }}/32"]
+  when:
+    - rg_address | length > 0
+    - not (pp_outcome.done | bool)
+    - not (pp_outcome.wait | bool)
+
+- name: Say what happened to the gateway address
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('Router ' ~ rg_infra_id ~ '-external-router has no IPv4 gateway address; the cluster reaches the hub by its '
+          ~ "network's own path") if rg_address | length == 0
+         else ('Gateway ' ~ rg_address ~ ': ' ~ (pp_outcome.message if pp_outcome.reason | length > 0
+               else "carried in the platform's service routing domain")) }}

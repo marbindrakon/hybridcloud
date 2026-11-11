@@ -1,0 +1,38 @@
+---
+# Stop a cluster job on a preflight refusal, before anything is built (DESIGN cnet §2.2). Input: ps_reason (never
+# empty here), ps_message. A waiting reason (nobody acts) records phase Waiting with condition Preflight False and
+# ends the job (the cluster is re-checked on its reconcile period); any other reason fails the job, and the role's
+# rescue records phase Failed with that reason and the same Preflight condition.
+- name: Note the refusal
+  ansible.builtin.set_fact:
+    po_fail_reason: "{{ ps_reason }}"
+    po_preflight_condition:
+      type: Preflight
+      status: "False"
+      reason: "{{ ps_reason }}"
+      message: "{{ ps_message | string | truncate(1000, true, '') }}"
+    po_preflight_waits: "{{ ps_reason in ['WaitingForPlacement', 'WaitingForPlatformAccess'] }}"
+
+- name: Record what the cluster waits for
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      status: pending
+      ready: false
+      reason: "{{ ps_reason }}"
+      message: "{{ ps_message }}"
+      lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+      conditions: ["{{ po_preflight_condition }}"]
+  when: po_preflight_waits | bool
+
+- name: End the job while the cluster waits
+  ansible.builtin.meta: end_play
+  when: po_preflight_waits | bool
+
+- name: Refuse the cluster
+  ansible.builtin.fail:
+    msg: "{{ ps_message }}"

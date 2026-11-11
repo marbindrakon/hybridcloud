@@ -1,0 +1,64 @@
+---
+# The cluster's two floating IPs (DESIGN cnet §4.2 step 4, §4.3): with the site account scoped to the environment's
+# project, found by description (<build>-api, <build>-ingress) or created on the chosen network, and recorded in
+# status.floatingIPs at once, before anything else uses them (the teardown releases them by the record). Inputs:
+#   cf_project_id    the environment's project (CloudOSO status.projectId)
+#   cf_network_id    the network the floating IPs come from (placement status.realization.site.networkId, or the
+#                    external network in effect)
+#   cf_account       the site account's Vault path
+# Sets cb_fips ({network, api: {address, id}, ingress: {address, id}}), cb_api_vip, cb_ingress_vip.
+- name: Require the environment's project and the network
+  ansible.builtin.assert:
+    that:
+      - cf_project_id | default('', true) | length > 0
+      - cf_network_id | default('', true) | length > 0
+      - cf_account | default('', true) | length > 0
+    fail_msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: the floating IPs need the environment's project
+      (CloudOSO status.projectId '{{ cf_project_id | default('') }}'), the network's id
+      ('{{ cf_network_id | default('') }}') and the site account of the environment.
+
+- name: Load the site account
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+  vars:
+    os_account_vault_path: "{{ cf_account }}"
+    os_account_tag: "po-fips-{{ cb_app_name }}"
+
+- name: Find or create the cluster's floating IPs
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    os_call_no_log: false
+    os_request:
+      action: cluster-fips
+      state: present
+      project_id: "{{ cf_project_id }}"
+      network_id: "{{ cf_network_id }}"
+      descriptions:
+        api: "{{ cb_app_name }}-api"
+        ingress: "{{ cb_app_name }}-ingress"
+
+- name: Keep the floating IPs
+  ansible.builtin.set_fact:
+    cb_fips:
+      network: "{{ os_result.network | default(cf_network_id, true) }}"
+      api: {address: "{{ os_result.api.address }}", id: "{{ os_result.api.id }}"}
+      ingress: {address: "{{ os_result.ingress.address }}", id: "{{ os_result.ingress.id }}"}
+    cb_api_vip: "{{ os_result.api.address }}"
+    cb_ingress_vip: "{{ os_result.ingress.address }}"
+
+- name: Record the floating IPs
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      floatingIPs: "{{ cb_fips }}"
+
+- name: Remove the account's temp files
+  ansible.builtin.file:
+    path: "/tmp/eda-po-fips-{{ cb_app_name }}-{{ item }}"
+    state: absent
+  loop: [clouds.yaml, ca.crt]

@@ -1,0 +1,20 @@
+---
+# The build name of an OpenStack cluster (DESIGN cnet §4.2, C-12): shc-oso-<entity>-<name>, the cluster's identity
+# on the hub (Helm release, namespace, ClusterDeployment, ManagedCluster, Vault cluster/oso/<build>/). Cut to 44
+# characters plus a hash when longer than 53 (a Helm release name's limit). Inputs: bn_entity, bn_name. Sets
+# bn_build_name. Included from this role and from platformopenshift_teardown.
+- name: Require the tenant of the cluster
+  ansible.builtin.assert:
+    that: bn_entity | default('', true) | length > 0
+    fail_msg: >-
+      PlatformOpenshift {{ bn_name }}: its namespace has no label hybridsovereign.redhat/entity, so the cluster has
+      no build name.
+
+- name: Derive the build name
+  ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/po_call.yml"
+  vars:
+    po_request: {action: build-name, prefix: shc-oso, entity: "{{ bn_entity }}", name: "{{ bn_name }}"}
+
+- name: Keep the build name
+  ansible.builtin.set_fact:
+    bn_build_name: "{{ po_result.buildName }}"

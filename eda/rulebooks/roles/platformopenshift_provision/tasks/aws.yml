@@ -57,6 +57,8 @@
     aws_region: "{{ cloudaws_raw.json.status.awsRegion }}"
     aws_domain: "{{ cloudaws_raw.json.status.domain }}"
     aws_entity: "{{ cloudaws_raw.json.status.entity | default(resolved_entity, true) }}"
+    # the environment's site (its own rows of the reserved ranges apply to the cluster)
+    aws_site: "{{ ((cloudaws_raw.json.spec | default({}, true)).cloudRef | default({}, true)).name | default('', true) }}"
 
 - name: Refuse a region other than the environment's
   ansible.builtin.assert:

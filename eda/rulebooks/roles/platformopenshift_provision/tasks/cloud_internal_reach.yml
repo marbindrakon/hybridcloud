@@ -1,0 +1,29 @@
+---
+# An Internal AWS or Google Cloud cluster on a hybrid network (DESIGN cnet §5): the placement's IPv4 subnet is the
+# cluster's prefix in the platform's service routing domain (preflight step 5 of §4.2). A refusal fails the cluster
+# (nothing of it is built yet); while the fabric has not carried the prefix the cluster waits. Input: cir_network.
+- name: Carry the placement's subnet as the cluster's prefix
+  ansible.builtin.include_tasks: platform_prefixes.yml
+  vars:
+    pp_prefixes: ["{{ cb_machine_cidr }}"]
+    pp_network: "{{ cir_network }}"
+    pp_fabric: "{{ pf.fabric }}"
+
+- name: Withdraw a refused prefix
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      platformPrefixes: null
+  when: not (pp_outcome.done | bool) and not (pp_outcome.wait | bool)
+
+- name: Refuse or wait
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: "{{ pp_outcome.reason }}"
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pp_outcome.message }}"
+  when: not (pp_outcome.done | bool)
